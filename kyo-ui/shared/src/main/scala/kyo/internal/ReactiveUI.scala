@@ -13,8 +13,71 @@ private[kyo] case class ReactiveUI(
     handle: (Seq[String], UIEvent) => Boolean < Async,
     svgContext: Boolean = false,
     mountedSpec: Maybe[MountedSpec] = Absent,
+    boundarySpec: Maybe[BoundarySpec] = Absent,
     mountDispatch: Maybe[MountDispatch] = Absent // set on the ROOT normalize product only; see subscribe
 )
+
+/** Normalization-time companion of a [[kyo.UI.Ast.Boundary]] node. */
+final private[kyo] case class BoundarySpec(node: UI.Ast.Boundary):
+    def fallbackUI(using Frame): UI = node.fallbackUI.getOrElse(UI.empty)
+
+/** Live pending/error aggregation of one subscribed Boundary (see [[kyo.UI.Ast.Boundary]]).
+  *
+  * `enter` counts a mount that starts while the boundary is unrevealed; `exit` (on settle) reveals — paints
+  * the child from current signal values over the fallback — when the count reaches zero. Reveal is once-only
+  * and idempotent (settles racing the initial zero-check both funnel through the same getAndSet). Boundaries
+  * chain via `parentCtx`: `tryHandle` offers an unhandled mounted failure to the nearest boundary whose error
+  * partial function matches; a match paints the error at THAT boundary (and freezes its counting).
+  */
+final private[kyo] class BoundaryCtx(
+    path: Seq[String],
+    child: UI,
+    node: UI.Ast.Boundary,
+    exchange: UIExchange,
+    mountDispatch: MountDispatch,
+    pending: AtomicInt,
+    revealed: AtomicRef[Boolean],
+    parentCtx: Maybe[BoundaryCtx]
+):
+    /** Count a newly starting mount if this boundary has not revealed yet; returns whether it was counted. */
+    def enter(using Frame): Boolean < Sync =
+        revealed.get.map(r => if r then false else pending.incrementAndGet.andThen(true))
+
+    /** A counted mount settled; reveal when the count reaches zero. */
+    def exit(using Frame): Unit < Async =
+        pending.decrementAndGet.map(n => if n <= 0 then reveal else ())
+
+    /** Paint the child over the fallback, then re-push every live mount cell under this boundary (shallowest
+      * first): the static child render emits mounted nodes as PLACEHOLDER wrappers (the renderer cannot see
+      * subscribe-time cells), and the mounts' own regions already emitted their content while the fallback was
+      * up — against DOM that did not exist. The re-push replays each cell's current value into the freshly
+      * painted wrappers.
+      */
+    def reveal(using Frame): Unit < Async =
+        revealed.getAndSet(true).map { was =>
+            if was then ()
+            else
+                exchange.onChange(path, child).andThen {
+                    mountDispatch.snapshotUnder(path).map { entries =>
+                        Kyo.foreachDiscard(entries) { (p, cell) =>
+                            cell.current.map(ui => exchange.onChange(p, ui))
+                        }
+                    }
+                }
+        }
+
+    /** Offer an unhandled mounted failure to this boundary chain; a matching boundary paints the error over
+      * its whole content and stops counting. Returns whether some boundary handled it.
+      */
+    def tryHandle(t: Throwable)(using Frame): Boolean < Async =
+        node.errorPf match
+            case Present(pf) if pf.isDefinedAt(t) =>
+                revealed.getAndSet(true).map(_ => exchange.onChange(path, pf(t)).andThen(true))
+            case _ =>
+                parentCtx match
+                    case Present(p) => p.tryHandle(t)
+                    case Absent     => Kyo.lift(false)
+end BoundaryCtx
 
 /** Session-level dispatch table for mounted nodes: path → live content cell.
   *
@@ -36,6 +99,10 @@ final private[kyo] class MountDispatch(cells: AtomicRef[Map[Seq[String], Signal[
 
     def lookup(path: Seq[String])(using Frame): Maybe[Signal[UI]] < Sync =
         cells.get.map(m => Maybe.fromOption(m.get(path)))
+
+    /** All live mount cells at or under `prefix`, shallowest path first — the boundary reveal's re-push set. */
+    def snapshotUnder(prefix: Seq[String])(using Frame): Seq[(Seq[String], Signal[UI])] < Sync =
+        cells.get.map(_.toSeq.filter((p, _) => p.startsWith(prefix)).sortBy(_._1.length))
 end MountDispatch
 
 private[kyo] object MountDispatch:
@@ -173,11 +240,28 @@ private[kyo] object ReactiveUI:
                     mountedSpec = Present(spec)
                 )
 
+            case ui: Boundary =>
+                // The boundary's reactive children are the CHILD's (they subscribe eagerly behind the fallback);
+                // its painted content is fallback-then-child, driven by BoundaryCtx notifications at subscribe
+                // time rather than a signal. Dispatch resolves through the child value (events can only
+                // originate from painted DOM, so pre-reveal there is nothing to dispatch into).
+                val spec = BoundarySpec(ui)
+                for (kids, hdl) <- walkStatic(ui.child, path, svg, mountDispatch)
+                yield ReactiveUI(
+                    path,
+                    Signal.initConst(ui.child),
+                    isConst = false,
+                    kids,
+                    hdl,
+                    svgContext = svg,
+                    boundarySpec = Present(spec)
+                )
+
             case ui =>
                 // Catch-all for static leaf nodes: Text, Fragment, KeyedChild.
                 // All interactive types extend Element (handled above) and all reactive types are
-                // Reactive, Foreach, or Mounted (also handled above). If a new UI subtype is added, the
-                // exhaustiveness checker will NOT warn here; any new type that is interactive must
+                // Reactive, Foreach, Mounted, or Boundary (also handled above). If a new UI subtype is added,
+                // the exhaustiveness checker will NOT warn here; any new type that is interactive must
                 // be added as an explicit case above before this catch-all.
                 ReactiveUI(path, Signal.initConst(ui), isConst = true, Seq.empty, (_, _) => true, svgContext = svg)
         end match
@@ -217,7 +301,7 @@ private[kyo] object ReactiveUI:
                 for childWalks <- Kyo.foreach(elem.children.toSeq.zipWithIndex) { (child, i) =>
                         val childPath = basePath :+ i.toString
                         child match
-                            case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted =>
+                            case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted | _: Boundary =>
                                 for rui <- normalizeWith(child, childPath, childSvg, mountDispatch)
                                 yield (Seq(rui), Seq.empty[(Int, Handler)])
                             case childElem: Element if collectSignalRef(childElem).nonEmpty =>
@@ -263,7 +347,7 @@ private[kyo] object ReactiveUI:
                         else true
                     (allKids, handle)
 
-            case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted =>
+            case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted | _: Boundary =>
                 // When walkStatic is called with a Reactive, Foreach, or Mounted as the top-level node
                 // (not as a child of an Element), normalize it at basePath so subscribeNode
                 // sets up a subscription for it. This handles the case where an outer reactive's
@@ -466,6 +550,9 @@ private[kyo] object ReactiveUI:
             // mounted subtree does not trigger an OUTER Form's submit-on-bubble refinement). Event dispatch
             // itself resolves fine via the node's handler indirection.
             case _: Mounted => false
+            // A Boundary's child occupies the boundary's own path (like a Reactive's content).
+            case b: Boundary =>
+                targetSatisfies(b.child, nodePath, targetPath, predicate)
 
     private def isTargetDisabled(elem: Element, myPath: Seq[String], targetPath: Seq[String])(using Frame): Boolean < Sync =
         targetSatisfies(elem, myPath, targetPath, isDisabled)
@@ -676,7 +763,7 @@ private[kyo] object ReactiveUI:
             mountDispatch <- rui.mountDispatch match
                 case Present(d) => Kyo.lift(d)
                 case Absent     => MountDispatch.init
-            _ <- subscribeScoped(rui, exchange, signalChangeTime, rootMounts, mountDispatch)
+            _ <- subscribeScoped(rui, exchange, signalChangeTime, rootMounts, mountDispatch, Absent)
         yield Subscription(rui.handle, signalChangeTime)
 
     // Each reactive region forks a Fiber.init (scoped to the enclosing Scope) running observe. Each
@@ -696,18 +783,61 @@ private[kyo] object ReactiveUI:
         exchange: UIExchange,
         signalChangeTime: AtomicRef[Instant],
         mounts: MountRegistry,
-        mountDispatch: MountDispatch
+        mountDispatch: MountDispatch,
+        boundary: Maybe[BoundaryCtx]
     )(using
         Frame
     ): Unit < (Async & Scope) =
         rui.mountedSpec match
             case Present(spec) =>
-                subscribeMounted(rui, spec, exchange, signalChangeTime, mounts, mountDispatch)
+                subscribeMounted(rui, spec, exchange, signalChangeTime, mounts, mountDispatch, boundary)
             case Absent =>
-                if rui.isConst then
-                    Kyo.foreachDiscard(rui.children)(subscribeScoped(_, exchange, signalChangeTime, mounts, mountDispatch))
-                else
-                    subscribeRegion(rui.path, rui.signal, rui.svgContext, exchange, signalChangeTime, Absent, mountDispatch)
+                rui.boundarySpec match
+                    case Present(spec) =>
+                        subscribeBoundary(rui, spec, exchange, signalChangeTime, mounts, mountDispatch, boundary)
+                    case Absent =>
+                        if rui.isConst then
+                            Kyo.foreachDiscard(rui.children)(
+                                subscribeScoped(_, exchange, signalChangeTime, mounts, mountDispatch, boundary)
+                            )
+                        else
+                            subscribeRegion(
+                                rui.path,
+                                rui.signal,
+                                rui.svgContext,
+                                exchange,
+                                signalChangeTime,
+                                Absent,
+                                mountDispatch,
+                                boundary
+                            )
+
+    /** Subscribe one Boundary node: create its live context (chained to any enclosing boundary), subscribe the
+      * child's reactive kids EAGERLY into the current scope — all mount effects below start immediately, in
+      * parallel, while the painted DOM still shows the fallback (their region patches no-op against absent DOM
+      * until the reveal repaints the boundary from current signal values). If the eager walk started nothing
+      * pending, reveal right away — still within the same task chain as the enclosing paint, so a boundary
+      * without async mounts never flashes its fallback.
+      */
+    private def subscribeBoundary(
+        rui: ReactiveUI,
+        spec: BoundarySpec,
+        exchange: UIExchange,
+        signalChangeTime: AtomicRef[Instant],
+        mounts: MountRegistry,
+        mountDispatch: MountDispatch,
+        parent: Maybe[BoundaryCtx]
+    )(using Frame): Unit < (Async & Scope) =
+        for
+            pending  <- AtomicInt.init(0)
+            revealed <- AtomicRef.init(false)
+            ctx = new BoundaryCtx(rui.path, spec.node.child, spec.node, exchange, mountDispatch, pending, revealed, parent)
+            _ <- Kyo.foreachDiscard(rui.children)(
+                subscribeScoped(_, exchange, signalChangeTime, mounts, mountDispatch, Present(ctx))
+            )
+            n <- pending.get
+            _ <- if n == 0 then ctx.reveal else Kyo.unit
+        yield ()
 
     /** Fork one region fiber observing `signal`, with a per-value Scope per emission (see subscribeScoped's
       * contract note). `presetMounts` supplies the region's MountRegistry when the caller owns it already (the
@@ -727,7 +857,8 @@ private[kyo] object ReactiveUI:
         exchange: UIExchange,
         signalChangeTime: AtomicRef[Instant],
         presetMounts: Maybe[MountRegistry],
-        mountDispatch: MountDispatch
+        mountDispatch: MountDispatch,
+        boundary: Maybe[BoundaryCtx]
     )(using Frame): Unit < (Async & Scope) =
         for
             regionMounts <- presetMounts match
@@ -741,7 +872,9 @@ private[kyo] object ReactiveUI:
                         (newKids, _) <- walkStatic(current, path, svg, mountDispatch)
                         _            <- regionMounts.evictExcept(collectMountKeys(newKids))
                         _            <- exchange.onChange(path, current)
-                        _ <- Kyo.foreachDiscard(newKids)(subscribeScoped(_, exchange, signalChangeTime, regionMounts, mountDispatch))
+                        _ <- Kyo.foreachDiscard(newKids)(
+                            subscribeScoped(_, exchange, signalChangeTime, regionMounts, mountDispatch, boundary)
+                        )
                     yield ()
                 Abort.run[Throwable] {
                     signal.observe(renderValue)
@@ -758,10 +891,15 @@ private[kyo] object ReactiveUI:
         yield ()
 
     /** The keys of the Mounted nodes among a walk's reactive children — the claims of the upcoming subscribe
-      * pass, computed up front so evictExcept can run before paint.
+      * pass, computed up front so evictExcept can run before paint. Recurses through Boundary nodes: their
+      * mounted descendants claim on the SAME enclosing region registry (a boundary is a paint gate, not a
+      * region), so their keys must count as kept.
       */
     private def collectMountKeys(kids: Seq[ReactiveUI]): Set[Any] =
-        kids.flatMap(k => k.mountedSpec.flatMap(_.node.key).toList).toSet
+        kids.flatMap { k =>
+            k.mountedSpec.flatMap(_.node.key).toList
+                ++ (if k.boundarySpec.nonEmpty then collectMountKeys(k.children) else Nil)
+        }.toSet
 
     /** Subscribe one Mounted node.
       *
@@ -783,12 +921,13 @@ private[kyo] object ReactiveUI:
         exchange: UIExchange,
         signalChangeTime: AtomicRef[Instant],
         mounts: MountRegistry,
-        mountDispatch: MountDispatch
+        mountDispatch: MountDispatch,
+        boundary: Maybe[BoundaryCtx]
     )(using Frame): Unit < (Async & Scope) =
         spec.node.key match
             case Present(key) =>
                 for
-                    inst    <- mounts.claim(key, rui.path, spec)
+                    inst    <- mounts.claim(key, rui.path, spec, boundary)
                     _       <- mountDispatch.register(rui.path, inst.cell)
                     _       <- Scope.ensure(mountDispatch.unregister(rui.path, inst.cell))
                     current <- inst.cell.current
@@ -800,37 +939,79 @@ private[kyo] object ReactiveUI:
                         exchange,
                         signalChangeTime,
                         Present(inst.childMounts),
-                        mountDispatch
+                        mountDispatch,
+                        boundary
                     )
                 yield ()
             case Absent =>
                 for
-                    _    <- mounts.noteKeylessRemount(rui.path)
-                    seed <- mounts.keepLatestSeed(rui.path, spec)
-                    cell <- Signal.initRef[UI](seed)
-                    _    <- mountDispatch.register(rui.path, cell)
-                    _    <- Scope.ensure(mountDispatch.unregister(rui.path, cell))
-                    _    <- Fiber.init(runMountEffect(spec, cell, ui => mounts.recordContent(rui.path, ui)))
-                    _    <- subscribeRegion(rui.path, cell, rui.svgContext, exchange, signalChangeTime, Absent, mountDispatch)
+                    _          <- mounts.noteKeylessRemount(rui.path)
+                    seed       <- mounts.keepLatestSeed(rui.path, spec)
+                    cell       <- Signal.initRef[UI](seed)
+                    _          <- mountDispatch.register(rui.path, cell)
+                    _          <- Scope.ensure(mountDispatch.unregister(rui.path, cell))
+                    settleOnce <- boundarySettle(boundary)
+                    // If the per-value scope tears this instance down before its effect publishes, the ensure
+                    // still balances the boundary count (the boundary would otherwise wait forever).
+                    _ <- Scope.ensure(settleOnce.run)
+                    _ <- Fiber.init(runMountEffect(spec, cell, ui => mounts.recordContent(rui.path, ui), boundary, settleOnce.run))
+                    _ <- subscribeRegion(rui.path, cell, rui.svgContext, exchange, signalChangeTime, Absent, mountDispatch, boundary)
                 yield ()
 
-    /** Run a Mounted node's effect and publish the outcome into its content cell. Abort failures and panics
-      * become the node's error rendering (logged out-of-band); the enclosing region stays alive either way.
+    /** Once-only settle of a counted boundary entry — invocable from both the publish path and a teardown
+      * ensure without double-exit (kyo's auto-flattening map cannot carry an effect as a VALUE, hence the
+      * wrapper class; `run` builds a fresh effect per call, all funneling through the same once-guard).
       */
-    private def runMountEffect(spec: MountedSpec, cell: SignalRef[UI], record: UI => Unit < Sync)(using
-        Frame
-    ): Unit < (Async & Scope) =
+    final private[kyo] class SettleOnce(action: Maybe[(BoundaryCtx, AtomicRef[Boolean])]):
+        def run(using Frame): Unit < Async =
+            action match
+                case Present((ctx, settled)) =>
+                    settled.getAndSet(true).map(was => if was then () else ctx.exit)
+                case Absent => ()
+    end SettleOnce
+
+    /** Enter the enclosing boundary (if any) for a starting mount and return its once-only settle handle. */
+    private def boundarySettle(boundary: Maybe[BoundaryCtx])(using Frame): SettleOnce < Sync =
+        boundary match
+            case Absent => Kyo.lift(new SettleOnce(Absent))
+            case Present(ctx) =>
+                ctx.enter.map { counted =>
+                    if !counted then new SettleOnce(Absent)
+                    else AtomicRef.init(false).map(ref => new SettleOnce(Present((ctx, ref))))
+                }
+
+    /** Run a Mounted node's effect and publish the outcome into its content cell, then settle the enclosing
+      * boundary. Failure routing: a node-local `.onError` wins; otherwise the failure is offered to the
+      * boundary chain (typed selection); otherwise the node's default error rendering applies. The enclosing
+      * region stays alive either way; failures are additionally logged out-of-band.
+      */
+    private def runMountEffect(
+        spec: MountedSpec,
+        cell: SignalRef[UI],
+        record: UI => Unit < Sync,
+        boundary: Maybe[BoundaryCtx],
+        onSettled: Unit < Async
+    )(using Frame): Unit < (Async & Scope) =
+        def failed(t: Throwable): Unit < Async =
+            spec.node.errorRender match
+                case Present(_) => cell.set(spec.errorUI(t)).unit
+                case Absent =>
+                    boundary match
+                        case Present(ctx) =>
+                            ctx.tryHandle(t).map(handled => if handled then () else cell.set(spec.errorUI(t)).unit)
+                        case Absent => cell.set(spec.errorUI(t)).unit
         Abort.run[Throwable](spec.node.effect).map {
-            case Result.Success(ui) => cell.set(ui).andThen(record(ui))
+            case Result.Success(ui) => cell.set(ui).andThen(record(ui)).andThen(onSettled)
             case Result.Failure(t) =>
                 Log.error(s"Mounted effect failed (frame=${spec.node.frame.position.show})", t)
-                    .andThen(cell.set(spec.errorUI(t)))
+                    .andThen(failed(t)).andThen(onSettled)
             case Result.Panic(t) =>
                 if t.isInstanceOf[Interrupted] then ()
                 else
                     Log.error(s"Mounted effect panicked (frame=${spec.node.frame.position.show})", t)
-                        .andThen(cell.set(spec.errorUI(t)))
+                        .andThen(failed(t)).andThen(onSettled)
         }.unit
+    end runMountEffect
 
     /** A live keyed mount: the content cell, the unscoped runner fiber that owns the node Scope, and the child
       * registry that carries keyed mounts nested in this instance's content across re-subscriptions.
@@ -872,7 +1053,9 @@ private[kyo] object ReactiveUI:
           * of one key within a single walk (evictExcept resets the claim set per walk) mean two slots sharing one
           * instance — a caller bug, logged loudly (Laminar's duplicate-split-key discipline).
           */
-        def claim(key: Any, path: Seq[String], spec: MountedSpec)(using Frame): MountInstance < (Async & Scope) =
+        def claim(key: Any, path: Seq[String], spec: MountedSpec, boundary: Maybe[BoundaryCtx])(using
+            Frame
+        ): MountInstance < (Async & Scope) =
             for
                 dup <- claimedThisWalk.getAndUpdate(_ + key).map(_.contains(key))
                 _ <-
@@ -890,10 +1073,14 @@ private[kyo] object ReactiveUI:
                             seed        <- keepLatestSeed(path, spec)
                             cell        <- Signal.initRef[UI](seed)
                             childMounts <- MountRegistry.init
+                            settleOnce  <- boundarySettle(boundary)
                             fiber <- Fiber.initUnscoped {
                                 Scope.run {
+                                    // The ensure balances the boundary count even if the instance is evicted
+                                    // before its effect publishes (interrupt skips the publish path).
                                     Scope.ensure(childMounts.evictAll)
-                                        .andThen(runMountEffect(spec, cell, ui => recordContent(path, ui)))
+                                        .andThen(Scope.ensure(settleOnce.run))
+                                        .andThen(runMountEffect(spec, cell, ui => recordContent(path, ui), boundary, settleOnce.run))
                                         .andThen(Async.never)
                                 }
                             }
@@ -987,6 +1174,9 @@ private[kyo] object ReactiveUI:
             case m: Mounted =>
                 // A static snapshot cannot run the mount effect; the node's static projection is its placeholder.
                 m.placeholderUI.getOrElse(UI.empty(using m.frame))
+            case b: Boundary =>
+                // Static projection of a boundary is its fallback (its mounted descendants cannot have run).
+                b.fallbackUI.getOrElse(UI.empty(using b.frame))
             case _ => ui
 
     private[kyo] def rebuildElement(elem: Element, newChildren: Chunk[UI]): UI =

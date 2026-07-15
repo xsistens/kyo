@@ -196,6 +196,15 @@ private[kyo] object HtmlRenderer:
                 w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}" data-kyo-reactive>""")
                 renderTo(sb, m.placeholderUI.getOrElse(UI.empty(using m.frame)), path, svg)
                     .andThen(w(sb, s"</$tag>"))
+
+            case b: Boundary =>
+                // A boundary paints its fallback first; the subscription (ReactiveUI.subscribeBoundary) repaints
+                // the wrapper with the child from current signal values on reveal — immediately, within the same
+                // task chain, when the eager child walk started nothing pending. SSG projection = fallback.
+                val tag = if svg then "g" else "span"
+                w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}" data-kyo-reactive>""")
+                renderTo(sb, b.fallbackUI.getOrElse(UI.empty(using b.frame)), path, svg)
+                    .andThen(w(sb, s"</$tag>"))
     end renderTo
 
     private def renderTextareaValue(sb: StringBuilder, ta: Textarea)(using Frame): Unit < Sync =
