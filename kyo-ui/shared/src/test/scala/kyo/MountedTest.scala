@@ -204,4 +204,49 @@ class MountedTest extends UITest:
         }
     }
 
+    "duplicate mounted key: the first slot mounts, the duplicate slot renders an inline error card" in {
+        val app: UI < Async =
+            for
+                runs <- AtomicInt.init(0)
+            yield UI.div(
+                UI.mounted(runs.incrementAndGet.map(r => UI.span(s"runs:$r").id("first"))).keyed("dup"),
+                UI.mounted(runs.incrementAndGet.map(r => UI.span(s"runs:$r").id("second"))).keyed("dup")
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("first"), "runs:1")
+                // The duplicate slot never runs its effect — it paints the loud error card instead of
+                // silently sharing the first slot's instance (the log warning names key and path).
+                _ <- Browser.assertText(Selector.css(".kyo-mount-error"), "kyo-ui: duplicate mounted key 'dup'")
+            yield ()
+        }
+    }
+
+    "unstable key (fresh per re-render) re-creates the instance each pass (the churn-hint path)" in {
+        val app: UI < Async =
+            for
+                runs <- AtomicInt.init(0)
+                tick <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("Tick").id("tick").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map(n =>
+                    UI.div(
+                        UI.mounted(runs.incrementAndGet.map(r => UI.span(s"runs:$r").id("content"))).keyed(("box", n))
+                    )
+                )
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("content"), "runs:1")
+                _ <- Browser.click(Selector.id("tick"))
+                _ <- Browser.assertText(Selector.id("content"), "runs:2")
+                _ <- Browser.click(Selector.id("tick"))
+                _ <- Browser.assertText(Selector.id("content"), "runs:3")
+                // Third consecutive key change — the unstable-key dev hint logs on this pass.
+                _ <- Browser.click(Selector.id("tick"))
+                _ <- Browser.assertText(Selector.id("content"), "runs:4")
+            yield ()
+        }
+    }
+
 end MountedTest

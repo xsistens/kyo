@@ -926,23 +926,38 @@ private[kyo] object ReactiveUI:
     )(using Frame): Unit < (Async & Scope) =
         spec.node.key match
             case Present(key) =>
-                for
-                    inst    <- mounts.claim(key, rui.path, spec, boundary)
-                    _       <- mountDispatch.register(rui.path, inst.cell)
-                    _       <- Scope.ensure(mountDispatch.unregister(rui.path, inst.cell))
-                    current <- inst.cell.current
-                    _       <- exchange.onChange(rui.path, current)
-                    _ <- subscribeRegion(
-                        rui.path,
-                        inst.cell,
-                        rui.svgContext,
-                        exchange,
-                        signalChangeTime,
-                        Present(inst.childMounts),
-                        mountDispatch,
-                        boundary
-                    )
-                yield ()
+                mounts.claim(key, rui.path, spec, boundary).map {
+                    case Present(inst) =>
+                        for
+                            _       <- mountDispatch.register(rui.path, inst.cell)
+                            _       <- Scope.ensure(mountDispatch.unregister(rui.path, inst.cell))
+                            current <- inst.cell.current
+                            _       <- exchange.onChange(rui.path, current)
+                            _ <- subscribeRegion(
+                                rui.path,
+                                inst.cell,
+                                rui.svgContext,
+                                exchange,
+                                signalChangeTime,
+                                Present(inst.childMounts),
+                                mountDispatch,
+                                boundary
+                            )
+                        yield ()
+                    case Absent =>
+                        // Duplicate key within this render pass (claim warned with key and path): make the
+                        // caller bug visible IN the page — this slot paints a static inline error instead of
+                        // silently sharing the first slot's instance. No cell, no dispatch wiring, no boundary
+                        // entry (boundary counting happens only at instance creation) — a dead slot until the
+                        // caller gives the nodes distinct keys.
+                        given Frame = spec.node.frame
+                        exchange
+                            .onChange(
+                                rui.path,
+                                UI.span(UI.Ast.Text(s"kyo-ui: duplicate mounted key '$key'")).cssClass("kyo-mount-error")
+                            )
+                            .unit
+                }
             case Absent =>
                 for
                     _          <- mounts.noteKeylessRemount(rui.path)
@@ -1031,7 +1046,8 @@ private[kyo] object ReactiveUI:
         instances: AtomicRef[Map[Any, MountInstance]],
         lastContent: AtomicRef[Map[Seq[String], UI]],
         keylessRemounts: AtomicRef[Map[Seq[String], Int]],
-        claimedThisWalk: AtomicRef[Set[Any]]
+        claimedThisWalk: AtomicRef[Set[Any]],
+        lastKeyByPath: AtomicRef[Map[Seq[String], (Any, Int)]]
     ):
 
         /** Content last published at a path — the KeepLatest seed: a re-mounting node at this slot starts from the
@@ -1050,44 +1066,80 @@ private[kyo] object ReactiveUI:
         /** Reuse the live instance under `key`, or create one: seed the cell (keep-latest by slot), fork the
           * UNSCOPED runner (it must survive the caller's per-value scope; this registry's owner ends it), which
           * holds the node Scope open until interrupted and evicts nested keyed mounts on the way out. Two claims
-          * of one key within a single walk (evictExcept resets the claim set per walk) mean two slots sharing one
-          * instance — a caller bug, logged loudly (Laminar's duplicate-split-key discipline).
+          * of one key within a single walk (evictExcept resets the claim set per walk) are a caller bug: the
+          * duplicate claim returns `Absent` — the caller paints a loud inline error card in that slot instead of
+          * silently sharing the first slot's instance — and the warning names key and path (Laminar's
+          * duplicate-split-key discipline, made visible in the page).
           */
         def claim(key: Any, path: Seq[String], spec: MountedSpec, boundary: Maybe[BoundaryCtx])(using
             Frame
-        ): MountInstance < (Async & Scope) =
-            for
-                dup <- claimedThisWalk.getAndUpdate(_ + key).map(_.contains(key))
-                _ <-
-                    if dup then
-                        Log.warn(
-                            s"kyo-ui: duplicate mounted key '$key' claimed at ${path.mkString(".")} within one render pass — " +
-                                "both slots share one live instance; use distinct keys"
-                        )
-                    else Kyo.unit
-                m <- instances.get
-                inst <- m.get(key) match
-                    case Some(inst) => Kyo.lift(inst)
-                    case None =>
-                        for
-                            seed        <- keepLatestSeed(path, spec)
-                            cell        <- Signal.initRef[UI](seed)
-                            childMounts <- MountRegistry.init
-                            settleOnce  <- boundarySettle(boundary)
-                            fiber <- Fiber.initUnscoped {
-                                Scope.run {
-                                    // The ensure balances the boundary count even if the instance is evicted
-                                    // before its effect publishes (interrupt skips the publish path).
-                                    Scope.ensure(childMounts.evictAll)
-                                        .andThen(Scope.ensure(settleOnce.run))
-                                        .andThen(runMountEffect(spec, cell, ui => recordContent(path, ui), boundary, settleOnce.run))
-                                        .andThen(Async.never)
-                                }
-                            }
-                            inst = new MountInstance(key, cell, fiber, childMounts)
-                            _ <- instances.getAndUpdate(_.updated(key, inst))
-                        yield inst
-            yield inst
+        ): Maybe[MountInstance] < (Async & Scope) =
+            claimedThisWalk.getAndUpdate(_ + key).map(_.contains(key)).map {
+                case true =>
+                    Log.warn(
+                        s"kyo-ui: duplicate mounted key '$key' claimed at ${path.mkString(".")} within one render pass — " +
+                            "the duplicate slot renders an inline error card; use distinct keys (e.g. .keyed(Component -> id))"
+                    ).andThen(Absent: Maybe[MountInstance])
+                case false =>
+                    for
+                        _ <- noteKeyAt(path, key)
+                        m <- instances.get
+                        inst <- m.get(key) match
+                            case Some(inst) => Kyo.lift(inst)
+                            case None =>
+                                for
+                                    seed        <- keepLatestSeed(path, spec)
+                                    cell        <- Signal.initRef[UI](seed)
+                                    childMounts <- MountRegistry.init
+                                    settleOnce  <- boundarySettle(boundary)
+                                    fiber <- Fiber.initUnscoped {
+                                        Scope.run {
+                                            // The ensure balances the boundary count even if the instance is evicted
+                                            // before its effect publishes (interrupt skips the publish path).
+                                            Scope.ensure(childMounts.evictAll)
+                                                .andThen(Scope.ensure(settleOnce.run))
+                                                .andThen(runMountEffect(
+                                                    spec,
+                                                    cell,
+                                                    ui => recordContent(path, ui),
+                                                    boundary,
+                                                    settleOnce.run
+                                                ))
+                                                .andThen(Async.never)
+                                        }
+                                    }
+                                    inst = new MountInstance(key, cell, fiber, childMounts)
+                                    _ <- instances.getAndUpdate(_.updated(key, inst))
+                                yield inst
+                    yield Present(inst)
+            }
+
+        /** Dev hint against the unstable-key anti-pattern: a key that is REBUILT per render (a fresh tuple or
+          * object identity, an inline-derived `Signal` inside the key) evicts and re-creates the instance on
+          * every enclosing re-render — keyed continuity silently degrades to remount semantics. A key that
+          * changes ONCE (`.keyed(EraPanel -> era)` on an era switch) is the intended re-creation and resets the
+          * streak; only consecutive-change streaks are flagged.
+          */
+        private def noteKeyAt(path: Seq[String], key: Any)(using Frame): Unit < Sync =
+            lastKeyByPath.getAndUpdate { m =>
+                m.get(path) match
+                    case Some((prev, streak)) if !prev.equals(key) => m.updated(path, (key, streak + 1))
+                    case _                                         => m.updated(path, (key, 0))
+            }.map { prev =>
+                prev.get(path) match
+                    case Some((prevKey, streak)) if !prevKey.equals(key) =>
+                        val n = streak + 1
+                        if n == 3 || n == 10 || n == 100 then
+                            Log.warn(
+                                s"kyo-ui: mounted key at ${path.mkString(".")} changed in $n consecutive render passes " +
+                                    s"(now '$key') — the key value is likely rebuilt per render (unstable tuple/object/" +
+                                    "Signal identity), so the instance is evicted and re-created every pass. Derive keys " +
+                                    "from stable data if the instance should live across re-renders."
+                            )
+                        else Kyo.unit
+                        end if
+                    case _ => Kyo.unit
+            }.unit
 
         /** Close-and-await every instance whose key is not in `keep` — run BEFORE the new value paints, so a
           * vanished or swapped key's resources are fully released while the OLD content is still on screen
@@ -1132,7 +1184,8 @@ private[kyo] object ReactiveUI:
                 lastContent     <- AtomicRef.init(Map.empty[Seq[String], UI])
                 keylessRemounts <- AtomicRef.init(Map.empty[Seq[String], Int])
                 claimedThisWalk <- AtomicRef.init(Set.empty[Any])
-            yield new MountRegistry(instances, lastContent, keylessRemounts, claimedThisWalk)
+                lastKeyByPath   <- AtomicRef.init(Map.empty[Seq[String], (Any, Int)])
+            yield new MountRegistry(instances, lastContent, keylessRemounts, claimedThisWalk, lastKeyByPath)
     end MountRegistry
 
     // ---- Shared UI tree utilities (used by both backends) ----
