@@ -379,6 +379,15 @@ private[kyo] object ReactiveUI:
             // multiple levels deep; their last segment may collide with a sibling's index at the
             // current level. Using prefix-match correctly routes only when the target lies inside.
             val reactiveChild = reactiveChildren.find(rc => targetPath.startsWith(rc.path))
+            // STATIC descent takes precedence: when the child at `childSegment` is a static element
+            // (it has a staticHandlers entry), the target must be routed through ITS handler chain,
+            // which recursively re-encounters any nested reactive children AND runs the bubble
+            // handlers of every intermediate element. Jumping to a DEEP reactive child directly from
+            // here would skip those intermediates — a click on a reactive label INSIDE a button
+            // (`button(I18n.t(...))`, the wrapper span is the event target) would bypass the
+            // button's own onClick entirely. Only a DIRECT reactive child (no staticHandlers entry
+            // at its index) takes the reactive jump.
+            val staticChild = childIdx.flatMap(i => staticHandlers.find(_._1 == i).map(_._2))
 
             for
                 // Disabled-target (Form submit suppression), Button-target (only Button clicks submit
@@ -401,13 +410,13 @@ private[kyo] object ReactiveUI:
                     submitOrigin = targetIsButton,
                     selectTarget = targetIsSelect
                 )
-                result <- Maybe.fromOption(reactiveChild) match
-                    case Present(child) =>
-                        safeDispatch(child.handle, targetPath, event).map(keep => if keep then bubble else false)
+                result <- Maybe.fromOption(staticChild) match
+                    case Present(childHandle) =>
+                        safeDispatch(childHandle, targetPath, event).map(keep => if keep then bubble else false)
                     case Absent =>
-                        Maybe.fromOption(childIdx).flatMap(i => Maybe.fromOption(staticHandlers.find(_._1 == i)).map(_._2))
-                            .fold(bubble)(childHandle =>
-                                safeDispatch(childHandle, targetPath, event).map(keep => if keep then bubble else false)
+                        Maybe.fromOption(reactiveChild)
+                            .fold(bubble)(child =>
+                                safeDispatch(child.handle, targetPath, event).map(keep => if keep then bubble else false)
                             )
             yield result
             end for

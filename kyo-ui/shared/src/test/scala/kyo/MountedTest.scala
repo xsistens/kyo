@@ -204,6 +204,230 @@ class MountedTest extends UITest:
         }
     }
 
+    "handler inside a nested region INSIDE mounted content dispatches (region -> mounted -> region -> button)" in {
+        // The civolution route shape: an outer region re-renders a keyed mounted node whose
+        // CONTENT wraps its interactive tree in another region (identity.render pattern).
+        def component(): UI < (Async & Scope) =
+            for
+                gate  <- Signal.initRef(true)
+                count <- Signal.initRef(0)
+            yield UI.div(
+                gate.map(g =>
+                    if g then
+                        UI.div(
+                            UI.button("Inc").id("inc").onClick(count.getAndUpdate(_ + 1).unit),
+                            count.map(c => UI.span(s"count:$c").id("count"))
+                        )
+                    else UI.span("off")
+                )
+            )
+        val app: UI < Async =
+            for
+                tick <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("Tick").id("tick").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map(_ => UI.div(UI.mounted(component()).keyed("nested")))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("count"), "count:0")
+                _ <- Browser.click(Selector.id("inc"))
+                _ <- Browser.assertText(Selector.id("count"), "count:1")
+                _ <- Browser.click(Selector.id("tick")) // outer region re-renders wholesale
+                _ <- Browser.click(Selector.id("inc"))  // handler must STILL dispatch
+                _ <- Browser.assertText(Selector.id("count"), "count:2")
+            yield ()
+        }
+    }
+
+    "handler under TWO nested regions inside mounted content dispatches (mounted -> region -> region -> button)" in {
+        // The civolution page shape: mount content = identity.render { _ => Views.remote(query) { _ => button } }
+        // — the interactive tree sits under two stacked regions inside the mounted node.
+        def component(): UI < (Async & Scope) =
+            for
+                outer <- Signal.initRef(0)
+                inner <- Signal.initRef(0)
+                count <- Signal.initRef(0)
+            yield UI.div(
+                outer.map(_ =>
+                    UI.div(
+                        inner.map(_ =>
+                            UI.div(
+                                UI.button("Inc").id("inc").onClick(count.getAndUpdate(_ + 1).unit),
+                                count.map(c => UI.span(s"count:$c").id("count"))
+                            )
+                        )
+                    )
+                )
+            )
+        val app: UI < Async =
+            Kyo.lift(UI.div(UI.mounted(component()).keyed("deep")))
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("count"), "count:0")
+                _ <- Browser.click(Selector.id("inc"))
+                _ <- Browser.assertText(Selector.id("count"), "count:1")
+            yield ()
+        }
+    }
+
+    "mount content whose ROOT is a region stays live (region-at-cell-root: patches AND dispatch)" in {
+        // The civolution page shape: the mount effect YIELDS a region directly
+        // (`session.identity.render { ... }`) — no static element wraps it, so the
+        // content-root region anchors at the same position as the mount cell itself.
+        def component(): UI < (Async & Scope) =
+            for
+                idSig <- Signal.initRef(0)
+                count <- Signal.initRef(0)
+            yield (idSig.map { _ =>
+                UI.div(
+                    UI.button("Inc").id("inc").onClick(count.getAndUpdate(_ + 1).unit),
+                    count.map(c => UI.span(s"count:$c").id("count"))
+                )
+            }: UI)
+        val app: UI < Async =
+            Kyo.lift(UI.div(UI.mounted(component()).keyed("rootregion")))
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("count"), "count:0")
+                _ <- Browser.click(Selector.id("inc"))
+                _ <- Browser.assertText(Selector.id("count"), "count:1")
+            yield ()
+        }
+    }
+
+    "mounted node as the direct ROOT of a region's content stays live (route shape: region content = Mounted)" in {
+        // The civolution route shape: `location.render { path => mountRoute(path).mount.keyed(path) }` —
+        // the REGION's content root IS the Mounted node, so the region wrapper and the mount wrapper
+        // anchor at the same path.
+        def component(runs: AtomicInt): UI < (Async & Scope) =
+            for
+                _     <- runs.incrementAndGet
+                count <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("Inc").id("inc").onClick(count.getAndUpdate(_ + 1).unit),
+                count.map(c => UI.span(s"count:$c").id("count"))
+            )
+        val app: UI < Async =
+            for
+                runs <- AtomicInt.init(0)
+                tick <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("Tick").id("tick").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map(n => (UI.mounted(component(runs)).keyed(("box", n)): UI))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("count"), "count:0")
+                _ <- Browser.click(Selector.id("inc"))
+                _ <- Browser.assertText(Selector.id("count"), "count:1") // dispatch inside root-anchored mount
+                _ <- Browser.click(Selector.id("tick"))                  // key change AT the region root
+                _ <- Browser.assertText(Selector.id("count"), "count:0") // fresh instance mounted + painted
+                _ <- Browser.click(Selector.id("inc"))
+                _ <- Browser.assertText(Selector.id("count"), "count:1") // and it is interactive
+            yield ()
+        }
+    }
+
+    "civolution route shape end-to-end: region -> Mounted(root) -> region(content root) -> element -> region -> button" in {
+        // The full failing stack from the live walk: the location region's content IS the mounted
+        // node; the mount content's ROOT is a region (identity.render); the button sits inside a
+        // FURTHER region (Views.remote) below a static element.
+        def page(count: Signal.SignalRef[Int]): UI < (Async & Scope) =
+            for
+                identity <- Signal.initRef("me")
+                query    <- Signal.initRef("loaded")
+            yield (identity.map { _ =>
+                UI.main(
+                    (query.map { _ =>
+                        UI.div(
+                            UI.button("Inc").id("inc").onClick(count.getAndUpdate(_ + 1).unit),
+                            count.map(c => UI.span(s"count:$c").id("count"))
+                        )
+                    }: UI)
+                )
+            }: UI)
+        val app: (Signal.SignalRef[String], UI < Async) < Sync =
+            for
+                count    <- Signal.initRef(0)
+                location <- Signal.initRef("/a")
+            yield (
+                location,
+                Kyo.lift(UI.div(
+                    UI.span("header").id("hdr"),
+                    UI.div((location.map(path => (UI.mounted(page(count)).keyed(path): UI)): UI))
+                ))
+            )
+        app.map { (location, ui) =>
+            withUI(ui) {
+                for
+                    _ <- Browser.assertText(Selector.id("count"), "count:0")
+                    _ <- Browser.click(Selector.id("inc"))
+                    _ <- Browser.assertText(Selector.id("count"), "count:1") // dispatch through all layers
+                    _ <- location.set("/b")                                  // navigation: key change
+                    _ <- Browser.assertText(Selector.id("count"), "count:1") // fresh page painted (count signal shared)
+                    _ <- Browser.click(Selector.id("inc"))
+                    _ <- Browser.assertText(Selector.id("count"), "count:2") // still interactive after route change
+                yield ()
+            }
+        }
+    }
+
+    "click on a REACTIVE child of a button inside mounted content bubbles to the button handler" in {
+        // The civolution i18n shape: `button(I18n.t("..."))` — the label is a Signal[String]
+        // region, so the click target is the label's own path-carrying span and the dispatch
+        // must bubble UP to the button's handler ACROSS the re-derived chain inside the mount.
+        def component(): UI < (Async & Scope) =
+            for
+                label <- Signal.initRef("Leave")
+                count <- Signal.initRef(0)
+            yield UI.div(
+                UI.button((label.map(s => (UI.Ast.Text(s): UI)): UI)).id("inc").onClick(count.getAndUpdate(_ + 1).unit),
+                count.map(c => UI.span(s"count:$c").id("count"))
+            )
+        val app: UI < Async =
+            Kyo.lift(UI.div(UI.mounted(component()).keyed("i18nbtn")))
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("count"), "count:0")
+                _ <- Browser.click(Selector.id("inc")) // centre click hits the inner reactive span
+                _ <- Browser.assertText(Selector.id("count"), "count:1")
+            yield ()
+        }
+    }
+
+    "ENGINE: dispatch targeting a reactive label INSIDE a button (below intermediate static elements) runs the button handler" in {
+        // Direct engine test of the click-on-i18n-label path: the target path is the LABEL REGION's
+        // own path (what the browser reports when the wrapper span is the event target), and the
+        // button with the handler sits one static level below the dispatching element (button-bar),
+        // mirroring civolution's `loaded div -> button-bar -> button(I18n.t(...))`.
+        Scope.run {
+            for
+                label   <- Signal.initRef("Leave")
+                clicked <- AtomicInt.init(0)
+                ui = UI.div(
+                    UI.div(UI.span("cards")),
+                    UI.div( // button-bar (static intermediate)
+                        UI.button((label.map(s => (UI.Ast.Text(s): UI)): UI))
+                            .id("leave")
+                            .onClick(clicked.incrementAndGet.unit)
+                    )
+                )
+                exchange = new kyo.internal.UIExchange:
+                    def onChange(path: Seq[String], changed: UI)(using Frame): Unit < Async = ()
+                root     <- kyo.internal.ReactiveUI.normalize(ui, Seq.empty)
+                dispatch <- kyo.internal.ReactiveUI.subscribe(root, exchange)
+                // Target = the LABEL region's path: div(0)=cards-div... button-bar=child 1, button=child 0, label=child 0.
+                labelPath = Seq("1", "0", "0")
+                handled <- dispatch.handle(
+                    labelPath,
+                    kyo.internal.UIEvent.Click(labelPath, kyo.internal.MouseEventData(UI.Modifiers.none, Absent))
+                )
+                n <- clicked.get
+            yield assert(handled && n == 1, s"handled=$handled clicks=$n (expected the BUTTON handler to run)")
+        }
+    }
+
     "duplicate mounted key: the first slot mounts, the duplicate slot renders an inline error card" in {
         val app: UI < Async =
             for
