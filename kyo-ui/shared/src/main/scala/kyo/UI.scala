@@ -238,6 +238,76 @@ object UI:
     def when[C <: UI](condition: Signal[Boolean])(body: => C)(using Frame): Reactive[C] =
         Reactive[C](condition.map(v => if v then body else UI.empty))
 
+    /** What an already-rendered mounted node shows while it re-mounts (key change): keep the last rendered content visible as a
+      * frozen snapshot until the new effect publishes (`KeepLatest`, the default — note the snapshot is inert: its nested regions
+      * and handlers are torn down with the old Scope), or drop back to the placeholder (`Placeholder` — the honest loading window,
+      * right for interactive content where a frozen-but-visible form would swallow input).
+      */
+    enum PendingPolicy derives CanEqual:
+        case KeepLatest, Placeholder
+
+    /** Embeds an effectful component mount in a pure render tree: `effect` runs when the node attaches, inside a node-lifetime
+      * `Scope` (torn down on detach), with `Abort[Throwable]` caught into the node's error state. See [[kyo.UI.Ast.Mounted]] for
+      * the lifecycle/identity contract and the [[kyo.UI.MountedOps]] extensions (`keyed`, `placeholder`, `onError`, `pending`).
+      *
+      * Effect typing: `S` must be dischargeable across a fork boundary — the same `Isolate[S, Sync, S]` gate `Fiber.init` uses.
+      * Context effects (`Env`, `Local`) derive silently and resolve at run time from the renderer fiber's inherited context
+      * (all renderer fibers descend from the `runMount`/`serveSession` caller, so an `Env.runAll` at the root reaches every
+      * mount); stateful effects (`Var`, `Emit`) do not derive and must be handled before the node is constructed. The node
+      * stores the effect with `S` erased: the `Isolate` evidence is the compile-time gate, not a runtime strategy — an
+      * explicitly provided stateful isolate is NOT applied, and such an effect fails loudly at run time (missing handler).
+      */
+    def mounted[S](effect: UI < (Abort[Throwable] & Async & Scope & S))(using
+        frame: Frame,
+        isolate: Isolate[S, Sync, S]
+    ): Mounted =
+        discard(isolate)
+        Mounted(
+            effect.asInstanceOf[UI < (Abort[Throwable] & Async & Scope)],
+            key = Absent,
+            placeholderUI = Absent,
+            errorRender = Absent,
+            pendingPolicy = PendingPolicy.KeepLatest
+        )
+    end mounted
+
+    /** Builder-style modifiers for [[kyo.UI.Ast.Mounted]], following the attrs-API idiom. */
+    object MountedOps:
+        extension (m: Mounted)
+            /** Continuity anchor: a mounted node with a key keeps its live instance (Scope, resources, published content)
+              * across re-renders of its immediately enclosing reactive region while an equal key is re-emitted; the instance
+              * is torn down (closed and awaited) when the key changes or disappears. Any `CanEqual`-comparable value works —
+              * the idiomatic key is the component's singleton object (`.keyed(ScoreboardView)`), tupled with value inputs the
+              * effect closed over when identity depends on them (`.keyed(EraPanel -> era)`): changing inputs that should
+              * UPDATE the live instance belong in `Signal` parameters, not the key; non-Signal inputs the effect captures
+              * belong IN the key, or they are silently frozen at mount time.
+              */
+            def keyed(key: Any): Mounted =
+                given Frame = m.frame
+                m.copy(key = Present(key))
+
+            /** Content rendered while the effect is pending on FIRST mount (and on re-mount under `PendingPolicy.Placeholder`).
+              * Defaults to an empty node.
+              */
+            def placeholder(ui: UI): Mounted =
+                given Frame = m.frame
+                m.copy(placeholderUI = Present(ui))
+
+            /** Renders a failed mount (`Abort` failure or panic of the effect). Defaults to a minimal inline error node; the
+              * failure is additionally logged. The enclosing region stays alive; a subsequent key change re-mounts cleanly.
+              */
+            def onError(f: Throwable => UI): Mounted =
+                given Frame = m.frame
+                m.copy(errorRender = Present(f))
+
+            /** Re-mount pending policy — see [[kyo.UI.PendingPolicy]]. Default: `KeepLatest`. */
+            def pending(p: PendingPolicy): Mounted =
+                given Frame = m.frame
+                m.copy(pendingPolicy = p)
+        end extension
+    end MountedOps
+    export MountedOps.*
+
     /** Server-push: returns HTTP handlers (SSR page GET and a WebSocket route) for this UI at the given path. Compose with other handlers
       * via HttpServer.init.
       *
@@ -971,6 +1041,29 @@ object UI:
         case class Fragment[C <: UI](children: Chunk[UI])(using val frame: Frame) extends UI
 
         private[kyo] case class KeyedChild[C <: UI](key: String, child: UI)(using val frame: Frame) extends UI
+
+        /** An effectful component mount: a first-class AST node whose content is produced by an effect.
+          *
+          * The renderer runs `effect` when the node attaches, inside a node-lifetime `Scope` that is torn down when the node
+          * detaches; `placeholderUI` renders while the effect is pending (first mount), and a `Failure`/`Panic` of the effect
+          * renders through `errorRender` while the enclosing region stays alive. The effect must follow the same prompt-return
+          * contract as reactive regions: allocate and fork, never park — the node's Scope owns anything long-lived it forks.
+          *
+          * Identity is explicit: a node without a key is remounted (Scope closed and awaited, effect re-run) whenever its
+          * enclosing reactive region re-renders; a node with [[kyo.UI.MountedOps.keyed]] keeps its live instance (Scope,
+          * resources, published content) across re-renders of the immediately enclosing region for as long as a re-render
+          * emits a mounted node with an equal key, and is torn down when the key disappears or changes. Extends `HtmlContent`
+          * so it is accepted anywhere an HTML child is (the content-model of the effect's RESULT is the caller's contract).
+          *
+          * Stored effect: `S` from [[kyo.UI.mounted]] is erased here after the `Isolate` gate — see the constructor's note.
+          */
+        case class Mounted(
+            effect: UI < (Abort[Throwable] & Async & Scope),
+            key: Maybe[Any],
+            placeholderUI: Maybe[UI],
+            errorRender: Maybe[Throwable => UI],
+            pendingPolicy: UI.PendingPolicy
+        )(using val frame: Frame) extends UI with HtmlContent
 
         // ====== Block containers ======
 
