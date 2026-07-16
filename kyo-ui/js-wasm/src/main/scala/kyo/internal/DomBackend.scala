@@ -8,6 +8,13 @@ import scala.scalajs.js
 /** Scala.js UI backend. Mounts a UI into the browser DOM. */
 private[kyo] object DomBackend:
 
+    /** Focus seeding/restore stack for `data-kyo-focus-auto` / `data-kyo-focus-restore`. Each entry is (seeded element's
+      * data-kyo-path, previously focused element's data-kyo-path if any, focus-restore flag). Mirrors the `__frs` stack in
+      * HtmlRenderer.clientJs for the server-push transport. Module-level mutable state is safe here: all mutation happens
+      * inside `Sync.defer` blocks on the single-threaded JS runtime.
+      */
+    private var focusReturnStack: List[(String, Maybe[String], Boolean)] = Nil
+
     /** Mount a UI into the page body. */
     def mount(ui: UI)(using Frame): Unit < (Async & Scope) =
         mountInto(ui, document.body)
@@ -41,7 +48,10 @@ private[kyo] object DomBackend:
             html <- HtmlRenderer.render(ui, Seq.empty)
             _    <- Sync.defer(container.innerHTML = html)
             _    <- applyJsProps(container)
-            _    <- Sync.defer(beginAnimationsSync(container))
+            // Initial-mount seeding: everything just appeared, so the old path set is empty —
+            // consistent with native autofocus (mirrors HtmlRenderer.clientJs's startup faSeed).
+            _ <- Sync.defer(seedFocusAuto(container, Set.empty))
+            _ <- Sync.defer(beginAnimationsSync(container))
             exchange = LocalExchange(root)
             dispatch <- ReactiveUI.subscribe(root, exchange)
             // Single-consumer drain owned by the ambient page Scope: every JS event effect is run by a
@@ -96,6 +106,10 @@ private[kyo] object DomBackend:
                                 else pathAttr
                             else null
                         val (selStart, selEnd) = if insideRegion then readSelection(ae) else (Absent, Absent)
+                        // Capture the focus-auto paths present BEFORE the replace so seeding only fires
+                        // for elements that newly appeared (a re-render of an already-open overlay must
+                        // not steal the user's focus).
+                        val oldFocusAuto = focusAutoPaths(el)
                         el.outerHTML = finalHtml
                         val updated = document.querySelector(s"""[data-kyo-path="$pathAttr"]""")
                         if updated != null then
@@ -103,6 +117,11 @@ private[kyo] object DomBackend:
                             beginAnimationsSync(updated)
                         if activePath != null then
                             restoreFocus(activePath, selStart, selEnd)
+                        // Seeding runs AFTER restoreFocus so a newly-appeared focus-auto element wins over
+                        // restore-to-trigger (that is the point: opening a panel moves focus into it).
+                        if updated != null then
+                            seedFocusAuto(updated, oldFocusAuto)
+                        sweepFocusAuto()
                     end if
                 }
             }
@@ -143,6 +162,64 @@ private[kyo] object DomBackend:
             end match
         end if
     end restoreFocus
+
+    /** The set of `data-kyo-path` values of every `data-kyo-focus-auto` element inside `root`, `root` itself included. */
+    private def focusAutoPaths(root: dom.Element): Set[String] =
+        val els = root.querySelectorAll("[data-kyo-focus-auto]")
+        val descendants = (0 until els.length).flatMap { i =>
+            Maybe(els(i).asInstanceOf[dom.Element].getAttribute("data-kyo-path")).toList
+        }.toSet
+        if root.hasAttribute("data-kyo-focus-auto") && root.hasAttribute("data-kyo-path") then
+            descendants + root.getAttribute("data-kyo-path")
+        else descendants
+    end focusAutoPaths
+
+    /** Seed the FIRST `data-kyo-focus-auto` element under `newRoot` whose path is not in `oldSet` (i.e. it newly
+      * appeared): record the previously focused element's path plus the focus-restore flag on the stack, then call
+      * `.focus()` on it. Mirrors `faSeed` in HtmlRenderer.clientJs.
+      */
+    private def seedFocusAuto(newRoot: dom.Element, oldSet: Set[String]): Unit =
+        val els = newRoot.querySelectorAll("[data-kyo-focus-auto]")
+        val candidates =
+            (if newRoot.hasAttribute("data-kyo-focus-auto") then Seq(newRoot) else Seq.empty) ++
+                (0 until els.length).map(els(_).asInstanceOf[dom.Element])
+        candidates.find { el =>
+            val p = el.getAttribute("data-kyo-path")
+            p != null && !oldSet.contains(p)
+        }.foreach { el =>
+            val ae = document.activeElement
+            val ret =
+                if ae != null && (ae ne document.body) then Maybe(ae.getAttribute("data-kyo-path"))
+                else Absent
+            focusReturnStack =
+                (el.getAttribute("data-kyo-path"), ret, el.hasAttribute("data-kyo-focus-restore")) :: focusReturnStack
+            val _ = el.asInstanceOf[scalajs.js.Dynamic].focus()
+        }
+    end seedFocusAuto
+
+    /** Pop stack entries whose seeded focus-auto element left the document; when the entry carried
+      * `data-kyo-focus-restore`, focus the recorded previous element (skip silently if it is gone too).
+      * Mirrors `frSweep` in HtmlRenderer.clientJs.
+      */
+    private def sweepFocusAuto(): Unit =
+        var continue = true
+        while continue do
+            focusReturnStack match
+                case (faPath, ret, restore) :: rest =>
+                    if document.querySelector(s"""[data-kyo-path="$faPath"][data-kyo-focus-auto]""") != null then
+                        continue = false
+                    else
+                        focusReturnStack = rest
+                        if restore then
+                            ret.foreach { retPath =>
+                                val re = document.querySelector(s"""[data-kyo-path="$retPath"]""")
+                                if re != null then
+                                    val _ = re.asInstanceOf[scalajs.js.Dynamic].focus()
+                            }
+                        end if
+                case Nil => continue = false
+        end while
+    end sweepFocusAuto
 
     // Bridge a Kyo Async computation from a JS callback boundary by offering it to the page-scoped drain
     // channel. The single AllowUnsafe site narrows to the offer crossing (the JS callback has no Kyo

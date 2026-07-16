@@ -781,6 +781,23 @@ object UI:
             def focusTrap(v: Boolean): Self  = withAttrs(attrs.copy(focusTrap = Present(v)))
             def focusGroup(id: String): Self = withAttrs(attrs.copy(focusGroup = Present(id)))
 
+            /** Declarative focus seeding: when a re-render inserts this element NEWLY into the DOM (its `data-kyo-path` was not
+              * present in the replaced subtree before), the client calls `.focus()` on it once. A re-render of an already-visible
+              * element (same path) does not re-seed, so the user's focus is never stolen by an echo re-render. Seeding runs after
+              * the client's focus/caret restore, so opening a panel wins over restore-to-trigger. On initial page load any
+              * focus-auto element present in the DOM is seeded (consistent with native autofocus). The element is not made
+              * focusable automatically; pair with `tabIndex(-1)` for non-natively-focusable elements. Before moving focus, the
+              * client records the previously focused element so [[focusRestore]] can return to it.
+              */
+            def focusAuto(v: Boolean): Self = withAttrs(attrs.copy(focusAuto = Present(v)))
+
+            /** Declarative focus return: when this focus-seeded element (see [[focusAuto]]) disappears from the document, the
+              * client focuses the element that was focused just before seeding (located by its `data-kyo-path`; skipped silently
+              * if it is gone). Only meaningful together with `focusAuto(true)` — typical use is a modal that seeds focus on open
+              * and returns focus to its trigger on close.
+              */
+            def focusRestore(v: Boolean): Self = withAttrs(attrs.copy(focusRestore = Present(v)))
+
             /** Runs `action` on click, ignoring the event payload. */
             def onClick[S](action: => Any < (Abort[Throwable] & Async & S))(using Isolate[S, Sync, S]): Self =
                 withAttrs(attrs.copy(onClick = Present(eraseHandler(Sync.defer(action)(using frame)))))
@@ -1037,6 +1054,8 @@ object UI:
             tabIndex: Maybe[Int] = Absent,
             focusTrap: Maybe[Boolean] = Absent,
             focusGroup: Maybe[String] = Absent,
+            focusAuto: Maybe[Boolean] = Absent,
+            focusRestore: Maybe[Boolean] = Absent,
             uiStyle: Style = Style.empty,
             onClick: Maybe[Any < Async] = Absent,
             onClickEvt: Maybe[MouseEvent => Any < Async] = Absent,
