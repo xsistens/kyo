@@ -135,7 +135,9 @@ private[kyo] object DomBackend:
     end readSelection
 
     private def restoreFocus(capturedPath: String, selStart: Maybe[Int], selEnd: Maybe[Int]): Unit =
-        val located = document.querySelector(s"""[data-kyo-path="$capturedPath"]""")
+        // Reactive wrapper spans share their data-kyo-path with the first element they wrap,
+        // so a plain path query can hit the (unfocusable) wrapper — prefer the real element.
+        val located = locateByPath(capturedPath)
         if located != null then
             val focusTarget =
                 if located.hasAttribute("data-kyo-reactive") then
@@ -162,6 +164,14 @@ private[kyo] object DomBackend:
             end match
         end if
     end restoreFocus
+
+    /** The element at `path`, preferring a non-wrapper match: reactive wrapper spans share their
+      * `data-kyo-path` with the first element they wrap, so a plain first-match query can return
+      * the transparent (unfocusable) wrapper instead of the real element.
+      */
+    private def locateByPath(path: String): dom.Element =
+        val direct = document.querySelector(s"""[data-kyo-path="$path"]:not([data-kyo-reactive])""")
+        if direct != null then direct else document.querySelector(s"""[data-kyo-path="$path"]""")
 
     /** The set of `data-kyo-path` values of every `data-kyo-focus-auto` element inside `root`, `root` itself included. */
     private def focusAutoPaths(root: dom.Element): Set[String] =
@@ -212,7 +222,7 @@ private[kyo] object DomBackend:
                         focusReturnStack = rest
                         if restore then
                             ret.foreach { retPath =>
-                                val re = document.querySelector(s"""[data-kyo-path="$retPath"]""")
+                                val re = locateByPath(retPath)
                                 if re != null then
                                     val _ = re.asInstanceOf[scalajs.js.Dynamic].focus()
                             }
@@ -290,11 +300,32 @@ private[kyo] object DomBackend:
     private def setupEventDelegation(dispatch: (Seq[String], UIEvent) => Boolean < Async, events: Channel[Unit < Async])(using
         Frame
     ): Unit < Sync = Sync.defer {
+        // Bubbling events are forwarded when ANY ancestor declared the handler (a keydown on a
+        // panel's filter input must reach the panel's own onKeyDown). Mirrors `he(el,t)` in
+        // HtmlRenderer.clientJs — checking only the target's own data-kyo-ev drops those events
+        // at the JS boundary before the server-side bubble dispatch can ever run.
+        def declaredInChain(start: dom.Element, t: String): Boolean =
+            var n: dom.Element = start
+            var found          = false
+            while !found && n != null && (n ne document.body) do
+                val ev = n.getAttribute("data-kyo-ev")
+                if ev != null && ev.split(",").contains(t) then found = true
+                else
+                    n = n.parentNode match
+                        case p: dom.Element => p
+                        case _              => null
+                end if
+            end while
+            found
+        end declaredInChain
+
+        final class ChainTypes(target: dom.Element):
+            def contains(t: String): Boolean = declaredInChain(target, t)
+
         val handler: scalajs.js.Function1[dom.Event, Unit] = (e: dom.Event) =>
             findPathElement(e.target.asInstanceOf[dom.Element]).foreach { target =>
                 val path    = parsePath(target.getAttribute("data-kyo-path"))
-                val evAttr  = target.getAttribute("data-kyo-ev")
-                val evTypes = if evAttr != null then evAttr.split(",").toSet else Set.empty[String]
+                val evTypes = ChainTypes(target)
                 val t       = e.`type`
 
                 val event: Maybe[UIEvent] =

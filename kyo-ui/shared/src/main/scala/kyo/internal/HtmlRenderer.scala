@@ -727,7 +727,7 @@ private[kyo] object HtmlRenderer:
            |      var __fa=faPaths(el);
            |      el.outerHTML=op.Replace.html;
            |      var nel=document.querySelector('[data-kyo-path="'+p+'"]');if(nel){applyJsProps(nel);ba(nel);}
-           |      if(ap){var rf=document.querySelector('[data-kyo-path="'+ap+'"]');if(rf&&rf.hasAttribute&&rf.hasAttribute('data-kyo-reactive')){var inner=rf.querySelector('input,textarea,select,[contenteditable]');if(inner)rf=inner;}if(rf){rf.focus();if(ss!==null&&typeof rf.setSelectionRange==='function'){try{rf.setSelectionRange(ss,se);}catch(e){if(e.name!=='InvalidStateError')throw e;}}}}
+           |      if(ap){var rf=lbp(ap);if(rf&&rf.hasAttribute&&rf.hasAttribute('data-kyo-reactive')){var inner=rf.querySelector('input,textarea,select,[contenteditable]');if(inner)rf=inner;}if(rf){rf.focus();if(ss!==null&&typeof rf.setSelectionRange==='function'){try{rf.setSelectionRange(ss,se);}catch(e){if(e.name!=='InvalidStateError')throw e;}}}}
            |      // Focus seeding runs AFTER the focus/caret restore so a newly-appeared focus-auto element wins
            |      // over restore-to-trigger (opening a panel moves focus into it). The morph path above never seeds.
            |      if(nel)faSeed(nel,__fa);
@@ -838,6 +838,10 @@ private[kyo] object HtmlRenderer:
            |    }
            |  }
            |}
+           |// Locate the element at a path, preferring a non-wrapper match: reactive wrapper spans share their
+           |// data-kyo-path with the first element they wrap, so a plain first-match query can return the
+           |// transparent (unfocusable) wrapper instead of the real element.
+           |function lbp(p){return document.querySelector('[data-kyo-path="'+p+'"]:not([data-kyo-reactive])')||document.querySelector('[data-kyo-path="'+p+'"]');}
            |// Pop stack entries whose seeded element left the document; focus the recorded previous element when
            |// the entry carried data-kyo-focus-restore (skip silently if that element is gone too).
            |function frSweep(){
@@ -845,7 +849,7 @@ private[kyo] object HtmlRenderer:
            |    var top=__frs[__frs.length-1];
            |    if(document.querySelector('[data-kyo-path="'+top.fa+'"][data-kyo-focus-auto]'))return;
            |    __frs.pop();
-           |    if(top.restore&&top.ret){var re=document.querySelector('[data-kyo-path="'+top.ret+'"]');if(re&&typeof re.focus==='function')re.focus();}
+           |    if(top.restore&&top.ret){var re=lbp(top.ret);if(re&&typeof re.focus==='function')re.focus();}
            |  }
            |}
            |applyJsProps(document.body);ba(document.body);
