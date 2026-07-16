@@ -1127,9 +1127,28 @@ private[kyo] object ReactiveUI:
           * object identity, an inline-derived `Signal` inside the key) evicts and re-creates the instance on
           * every enclosing re-render — keyed continuity silently degrades to remount semantics. A key that
           * changes ONCE (`.keyed(EraPanel -> era)` on an era switch) is the intended re-creation and resets the
-          * streak; only consecutive-change streaks are flagged.
+          * streak; only consecutive-change streaks of COMPOSITE keys are flagged — simple value keys
+          * (String/primitive) are exempt, since a location-driven region (route node keyed by path) re-renders
+          * exclusively on key changes and would otherwise be flagged after three navigations.
           */
         private def noteKeyAt(path: Seq[String], key: Any)(using Frame): Unit < Sync =
+            // Simple value keys (String / primitive) have well-defined equality — a
+            // change in one expresses author intent (a route path, an entity id),
+            // never the accidental identity churn this hint targets (tuples/objects/
+            // Signals rebuilt per render). Skip them, or every location-driven
+            // region (whose ONLY re-renders ARE key changes) would be flagged after
+            // three navigations.
+            if simpleValueKey(key) then lastKeyByPath.getAndUpdate(_ - path).unit
+            else noteCompositeKeyAt(path, key)
+
+        /** String / primitive / boxed-primitive keys — value equality, no identity risk. */
+        private def simpleValueKey(key: Any): Boolean = key match
+            case _: String | _: Int | _: Long | _: Boolean | _: Double | _: Float | _: Short |
+                _: Byte | _: Char =>
+                true
+            case _ => false
+
+        private def noteCompositeKeyAt(path: Seq[String], key: Any)(using Frame): Unit < Sync =
             lastKeyByPath.getAndUpdate { m =>
                 m.get(path) match
                     case Some((prev, streak)) if !prev.equals(key) => m.updated(path, (key, streak + 1))
