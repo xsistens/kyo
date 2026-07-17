@@ -23,6 +23,9 @@ private[kyo] enum UIEvent derives CanEqual, Schema:
     case ContextMenu(path: Seq[String], mouse: MouseEventData)
     case Input(path: Seq[String], value: String)
     case Change(path: Seq[String], value: String)
+    // Unit 2: full file-metadata selection (name/size/MIME/content per file). Payload is UI.FilePayload,
+    // which derives Schema, so it rides the wire directly (mirroring how UI.Modifiers is used above).
+    case FileSelect(path: Seq[String], files: Seq[UI.FilePayload])
     case ChangeChecked(path: Seq[String], checked: Boolean)
     case ChangeNumeric(path: Seq[String], value: Double)
     case Submit(path: Seq[String], mouse: MouseEventData)
