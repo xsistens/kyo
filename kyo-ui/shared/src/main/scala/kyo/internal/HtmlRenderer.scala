@@ -347,6 +347,9 @@ private[kyo] object HtmlRenderer:
         // Marker only (inspection/tooling): the stop-propagation semantics live server-side in
         // ReactiveUI.dispatchToElement, which reads the flag from the AST — the client never branches on this.
         attrs.stopPropagation.foreach(v => if v then w(sb, """ data-kyo-stop="1""""))
+        // Unit 1: enter/leave transition class lists (read client-side by the patch-application code).
+        attrs.enterTransition.foreach(c => w(sb, s""" data-kyo-enter="${esc(c)}""""))
+        attrs.leaveTransition.foreach(c => w(sb, s""" data-kyo-leave="${esc(c)}""""))
         val css = CssStyleRenderer.render(attrs.uiStyle)
         if css.nonEmpty then w(sb, s""" style="${esc(css)}"""")
         attrs.ariaAttrs.toSeq.sortBy(_._1).foreach { case (name, value) =>
@@ -729,18 +732,27 @@ private[kyo] object HtmlRenderer:
            |      var ss=(ae&&typeof ae.selectionStart==='number')?ae.selectionStart:null;
            |      var se=(ae&&typeof ae.selectionEnd==='number')?ae.selectionEnd:null;
            |      var __fa=faPaths(el);
+           |      // Unit 1: capture enter old-set + prepare leave ghosts (rect+clone) BEFORE the patch mutates the DOM.
+           |      var __en=faEnterPaths(el);
+           |      var __gh=kyoLeavePrepare(el,kyoLeaveSurv(op.Replace.html));
            |      el.outerHTML=op.Replace.html;
            |      var nel=document.querySelector('[data-kyo-path="'+p+'"]');if(nel){applyJsProps(nel);ba(nel);}
            |      if(ap){var rf=lbp(ap);if(rf&&rf.hasAttribute&&rf.hasAttribute('data-kyo-reactive')){var inner=rf.querySelector('input,textarea,select,[contenteditable]');if(inner)rf=inner;}if(rf){rf.focus();if(ss!==null&&typeof rf.setSelectionRange==='function'){try{rf.setSelectionRange(ss,se);}catch(e){if(e.name!=='InvalidStateError')throw e;}}}}
            |      // Focus seeding runs AFTER the focus/caret restore so a newly-appeared focus-auto element wins
            |      // over restore-to-trigger (opening a panel moves focus into it). The morph path above never seeds.
            |      if(nel)faSeed(nel,__fa);
+           |      // Unit 1: animate newly-appeared enter elements, then spawn the leave ghosts captured above.
+           |      if(nel)kyoEnterSeed(nel,__en);
+           |      kyoSpawnGhosts(__gh);
            |    }
            |    frSweep();
            |  }else if(op.Remove){
            |    var p=op.Remove.path.join(".");
            |    var el=document.querySelector('[data-kyo-path="'+p+'"]');
+           |    // Unit 1: everything under the removed node leaves; prepare ghosts BEFORE removal, spawn after.
+           |    var __rgh=el?kyoLeavePrepare(el,{}):[];
            |    if(el)el.remove();
+           |    kyoSpawnGhosts(__rgh);
            |    frSweep();
            |  }else if(op.InjectCss){
            |    var s=document.createElement("style");
@@ -856,10 +868,91 @@ private[kyo] object HtmlRenderer:
            |    if(top.restore&&top.ret){var re=lbp(top.ret);if(re&&typeof re.focus==='function')re.focus();}
            |  }
            |}
+           |// ---- Unit 1: enter/leave transition helpers (client-local; nothing crosses the wire) ----
+           |// Set of data-kyo-enter paths under root (root included) — the enter elements present BEFORE a patch.
+           |function faEnterPaths(root){
+           |  var s={};if(!root)return s;
+           |  if(root.hasAttribute&&root.hasAttribute("data-kyo-enter")){var rp=root.getAttribute("data-kyo-path");if(rp!==null)s[rp]=true;}
+           |  var els=root.querySelectorAll?root.querySelectorAll("[data-kyo-enter]"):[];
+           |  for(var i=0;i<els.length;i++){var ep=els[i].getAttribute("data-kyo-path");if(ep!==null)s[ep]=true;}
+           |  return s;
+           |}
+           |// For each data-kyo-enter element under newRoot (root included) whose path is NOT in oldSet (newly appeared):
+           |// add its enter classes, force a reflow (offsetWidth), then remove them next frame so the CSS transition runs.
+           |function kyoEnterSeed(newRoot,oldSet){
+           |  if(!newRoot)return;
+           |  var cand=[];
+           |  if(newRoot.hasAttribute&&newRoot.hasAttribute("data-kyo-enter"))cand.push(newRoot);
+           |  var els=newRoot.querySelectorAll?newRoot.querySelectorAll("[data-kyo-enter]"):[];
+           |  for(var i=0;i<els.length;i++)cand.push(els[i]);
+           |  for(var j=0;j<cand.length;j++){
+           |    var el=cand[j];var pth=el.getAttribute("data-kyo-path");
+           |    if(pth===null||oldSet[pth])continue;
+           |    var cls=el.getAttribute("data-kyo-enter").split(/\\s+/);
+           |    for(var k=0;k<cls.length;k++){if(cls[k])el.classList.add(cls[k]);}
+           |    void el.offsetWidth;
+           |    (function(e2,cs){requestAnimationFrame(function(){for(var m=0;m<cs.length;m++){if(cs[m])e2.classList.remove(cs[m]);}});})(el,cls);
+           |  }
+           |}
+           |// Set of paths of data-kyo-LEAVE elements in an HTML fragment (which leave-elements SURVIVE a Replace).
+           |// Keyed on leave-carrying elements, NOT all data-kyo-path: a reactive wrapper span shares its path with
+           |// the (leaving) element it wraps, so an all-path set would wrongly report the element as surviving.
+           |function kyoLeaveSurv(html){
+           |  var s={};var t=document.createElement("template");t.innerHTML=html;
+           |  var els=t.content.querySelectorAll("[data-kyo-leave]");
+           |  for(var i=0;i<els.length;i++){var pp=els[i].getAttribute("data-kyo-path");if(pp!==null)s[pp]=true;}
+           |  return s;
+           |}
+           |// Strip data-kyo-* and id from a subtree so a ghost clone is inert (no data-kyo-path/focus-auto selector collisions).
+           |function kyoStrip(el){
+           |  var all=[el];if(el.querySelectorAll){var ds=el.querySelectorAll("*");for(var i=0;i<ds.length;i++)all.push(ds[i]);}
+           |  for(var j=0;j<all.length;j++){var e2=all[j];if(!e2.getAttributeNames)continue;var ns=e2.getAttributeNames();
+           |    for(var k=0;k<ns.length;k++){if(ns[k].indexOf("data-kyo-")===0||ns[k]==="id")e2.removeAttribute(ns[k]);}}
+           |}
+           |// Prepare leave ghosts for the OUTERMOST data-kyo-leave elements under root being removed (path not in survSet).
+           |// Captures rect+clone WHILE the node is still in the DOM (getBoundingClientRect on a detached node is zero).
+           |function kyoLeavePrepare(root,survSet){
+           |  if(!root)return [];
+           |  var cand=[];
+           |  if(root.getAttribute&&root.getAttribute("data-kyo-leave")!==null)cand.push(root);
+           |  var els=root.querySelectorAll?root.querySelectorAll("[data-kyo-leave]"):[];
+           |  for(var i=0;i<els.length;i++)cand.push(els[i]);
+           |  var removed=[];
+           |  for(var j=0;j<cand.length;j++){var pp=cand[j].getAttribute("data-kyo-path");if(pp===null||!survSet[pp])removed.push(cand[j]);}
+           |  var out=[];
+           |  for(var k=0;k<removed.length;k++){var inside=false;
+           |    for(var m=0;m<removed.length;m++){if(m!==k&&removed[m].contains(removed[k])){inside=true;break;}}
+           |    if(!inside)out.push(removed[k]);}
+           |  var ghosts=[];
+           |  for(var n=0;n<out.length;n++){
+           |    var node=out[n];var rect=node.getBoundingClientRect();var leave=node.getAttribute("data-kyo-leave");
+           |    var g=node.cloneNode(true);kyoStrip(g);
+           |    g.style.position="fixed";g.style.left=rect.left+"px";g.style.top=rect.top+"px";
+           |    g.style.width=rect.width+"px";g.style.height=rect.height+"px";g.style.margin="0";g.style.pointerEvents="none";
+           |    g.setAttribute("data-kyo-ghost","1");
+           |    ghosts.push({node:g,leave:leave});
+           |  }
+           |  return ghosts;
+           |}
+           |// Append prepared ghosts to <body>, add their leave classes next frame, remove on transitionend/animationend or a 1s safety.
+           |function kyoSpawnGhosts(ghosts){
+           |  if(!ghosts)return;
+           |  for(var i=0;i<ghosts.length;i++){(function(gh){
+           |    var g=gh.node;document.body.appendChild(g);
+           |    var cls=(gh.leave||"").split(/\\s+/);
+           |    requestAnimationFrame(function(){for(var c=0;c<cls.length;c++){if(cls[c])g.classList.add(cls[c]);}});
+           |    var done=false;
+           |    function cleanup(){if(done)return;done=true;if(g.parentNode)g.parentNode.removeChild(g);}
+           |    g.addEventListener("transitionend",cleanup);g.addEventListener("animationend",cleanup);
+           |    setTimeout(cleanup,1000);
+           |  })(ghosts[i]);}
+           |}
            |applyJsProps(document.body);ba(document.body);
            |// Initial-mount seeding: the page arrived server-rendered, so any focus-auto element already present
            |// is NEW by definition (old set empty) — consistent with native autofocus.
            |faSeed(document.body,{});
+           |// Unit 1: initial-mount enter seeding — any data-kyo-enter element present at load animates in (old set empty).
+           |kyoEnterSeed(document.body,{});
            |// Dropdown helpers: close all dropdowns except the given id
            |function kyoCloseDropdown(exceptId){
            |  var all=document.querySelectorAll('[data-kyo-dropdown-options]');

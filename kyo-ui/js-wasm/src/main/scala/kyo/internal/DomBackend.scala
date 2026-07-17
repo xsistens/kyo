@@ -63,6 +63,8 @@ private[kyo] object DomBackend:
             // Initial-mount seeding: everything just appeared, so the old path set is empty —
             // consistent with native autofocus (mirrors HtmlRenderer.clientJs's startup faSeed).
             _ <- Sync.defer(seedFocusAuto(container, Set.empty))
+            // Unit 1: initial-mount enter seeding (any data-kyo-enter present at load animates in; old set empty).
+            _ <- Sync.defer(seedEnter(container, Set.empty))
             _ <- Sync.defer(beginAnimationsSync(container))
             exchange = LocalExchange(root)
             dispatch <- ReactiveUI.subscribe(root, exchange)
@@ -122,6 +124,9 @@ private[kyo] object DomBackend:
                         // for elements that newly appeared (a re-render of an already-open overlay must
                         // not steal the user's focus).
                         val oldFocusAuto = focusAutoPaths(el)
+                        // Unit 1: capture enter old-set + prepare leave ghosts (rect+clone) BEFORE the DOM mutates.
+                        val oldEnter = enterPaths(el)
+                        val ghosts   = prepareLeaveGhosts(el, leaveSurvSet(finalHtml))
                         el.outerHTML = finalHtml
                         val updated = document.querySelector(s"""[data-kyo-path="$pathAttr"]""")
                         if updated != null then
@@ -133,6 +138,10 @@ private[kyo] object DomBackend:
                         // restore-to-trigger (that is the point: opening a panel moves focus into it).
                         if updated != null then
                             seedFocusAuto(updated, oldFocusAuto)
+                        // Unit 1: animate newly-appeared enter elements, then spawn the leave ghosts captured above.
+                        if updated != null then
+                            seedEnter(updated, oldEnter)
+                        spawnGhosts(ghosts)
                         sweepFocusAuto()
                     end if
                 }
@@ -493,5 +502,118 @@ private[kyo] object DomBackend:
     private def parsePath(p: String): Seq[String] =
         if p == null || p.isEmpty then Seq.empty
         else p.split("\\.").toSeq
+
+    // ---- Unit 1: enter/leave transition mirror (SPA transport) ----
+
+    /** The set of `data-kyo-path` values of every `data-kyo-enter` element inside `root`, `root` itself included. */
+    private def enterPaths(root: dom.Element): Set[String] =
+        val els = root.querySelectorAll("[data-kyo-enter]")
+        val ds = (0 until els.length).flatMap { i =>
+            Maybe(els(i).asInstanceOf[dom.Element].getAttribute("data-kyo-path")).toList
+        }.toSet
+        if root.hasAttribute("data-kyo-enter") && root.hasAttribute("data-kyo-path") then
+            ds + root.getAttribute("data-kyo-path")
+        else ds
+    end enterPaths
+
+    /** Animate every `data-kyo-enter` element under `newRoot` (root included) whose path is not in `oldSet`: add the enter
+      * classes, force a reflow, then remove them next frame so the CSS transition runs from the enter-from state.
+      */
+    private def seedEnter(newRoot: dom.Element, oldSet: Set[String]): Unit =
+        val els = newRoot.querySelectorAll("[data-kyo-enter]")
+        val cand =
+            (if newRoot.hasAttribute("data-kyo-enter") then Seq(newRoot) else Seq.empty) ++
+                (0 until els.length).map(els(_).asInstanceOf[dom.Element])
+        cand.foreach { el =>
+            val p = el.getAttribute("data-kyo-path")
+            if p != null && !oldSet.contains(p) then
+                val cls     = el.getAttribute("data-kyo-enter").split("\\s+").filter(_.nonEmpty)
+                val clsList = el.asInstanceOf[scalajs.js.Dynamic].classList
+                cls.foreach(c => clsList.add(c))
+                val _ = el.asInstanceOf[scalajs.js.Dynamic].offsetWidth // force reflow
+                discard(dom.window.requestAnimationFrame { (_: Double) =>
+                    cls.foreach(c => clsList.remove(c))
+                })
+            end if
+        }
+    end seedEnter
+
+    /** The set of paths of `data-kyo-leave` elements in an HTML fragment (which leave-elements survive a region
+      * replace). Keyed on leave-carrying elements, NOT all `data-kyo-path`: a reactive wrapper span shares its path
+      * with the (leaving) element it wraps, so an all-path set would wrongly report the element as surviving.
+      */
+    private def leaveSurvSet(html: String): Set[String] =
+        val tpl = document.createElement("template").asInstanceOf[scalajs.js.Dynamic]
+        tpl.innerHTML = html
+        val content = tpl.content.asInstanceOf[dom.DocumentFragment]
+        val els     = content.querySelectorAll("[data-kyo-leave]")
+        (0 until els.length).flatMap { i =>
+            Maybe(els(i).asInstanceOf[dom.Element].getAttribute("data-kyo-path")).toList
+        }.toSet
+    end leaveSurvSet
+
+    /** Strip `data-kyo-*` and `id` from a subtree so a ghost clone is inert (no selector collisions). */
+    private def stripKyo(el: dom.Element): Unit =
+        def strip(e: dom.Element): Unit =
+            val dyn = e.asInstanceOf[scalajs.js.Dynamic]
+            if scalajs.js.typeOf(dyn.getAttributeNames) == "function" then
+                val names = dyn.getAttributeNames().asInstanceOf[scalajs.js.Array[String]]
+                names.foreach(n => if n.startsWith("data-kyo-") || n == "id" then e.removeAttribute(n))
+        end strip
+        strip(el)
+        val ds = el.querySelectorAll("*")
+        (0 until ds.length).foreach(i => strip(ds(i).asInstanceOf[dom.Element]))
+    end stripKyo
+
+    /** Prepare leave ghosts for the OUTERMOST `data-kyo-leave` elements under `root` being removed (path not in `surv`).
+      * Captures rect + clone WHILE the node is still in the DOM; returns (ghostNode, leaveClasses) descriptors.
+      */
+    private def prepareLeaveGhosts(root: dom.Element, surv: Set[String]): Seq[(dom.Element, String)] =
+        val els = root.querySelectorAll("[data-kyo-leave]")
+        val cand =
+            (if root.getAttribute("data-kyo-leave") != null then Seq(root) else Seq.empty) ++
+                (0 until els.length).map(els(_).asInstanceOf[dom.Element])
+        val removed = cand.filter { e =>
+            val p = e.getAttribute("data-kyo-path")
+            p == null || !surv.contains(p)
+        }
+        val outer = removed.filterNot(e => removed.exists(o => (o ne e) && o.contains(e)))
+        outer.map { node =>
+            val rect  = node.asInstanceOf[scalajs.js.Dynamic].getBoundingClientRect()
+            val leave = node.getAttribute("data-kyo-leave")
+            val g     = node.cloneNode(true).asInstanceOf[dom.Element]
+            stripKyo(g)
+            val st = g.asInstanceOf[scalajs.js.Dynamic].style
+            st.position = "fixed"
+            st.left = rect.left.asInstanceOf[Double].toString + "px"
+            st.top = rect.top.asInstanceOf[Double].toString + "px"
+            st.width = rect.width.asInstanceOf[Double].toString + "px"
+            st.height = rect.height.asInstanceOf[Double].toString + "px"
+            st.margin = "0"
+            st.pointerEvents = "none"
+            g.setAttribute("data-kyo-ghost", "1")
+            (g, if leave == null then "" else leave)
+        }
+    end prepareLeaveGhosts
+
+    /** Append prepared ghosts to `<body>`, add their leave classes next frame, remove on transitionend/animationend or a 1s safety. */
+    private def spawnGhosts(ghosts: Seq[(dom.Element, String)]): Unit =
+        ghosts.foreach { case (g, leave) =>
+            discard(document.body.appendChild(g))
+            val cls     = leave.split("\\s+").filter(_.nonEmpty)
+            val clsList = g.asInstanceOf[scalajs.js.Dynamic].classList
+            discard(dom.window.requestAnimationFrame((_: Double) => cls.foreach(c => clsList.add(c))))
+            var done = false
+            def cleanup(): Unit =
+                if !done then
+                    done = true
+                    if g.parentNode != null then discard(g.parentNode.removeChild(g))
+            val listener: scalajs.js.Function1[dom.Event, Unit] = (_: dom.Event) => cleanup()
+            g.addEventListener("transitionend", listener)
+            g.addEventListener("animationend", listener)
+            val to: scalajs.js.Function0[Unit] = () => cleanup()
+            discard(dom.window.setTimeout(to, 1000.0))
+        }
+    end spawnGhosts
 
 end DomBackend
