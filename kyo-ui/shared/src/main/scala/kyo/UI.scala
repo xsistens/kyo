@@ -811,6 +811,18 @@ object UI:
               */
             def focusRestore(v: Boolean): Self = withAttrs(attrs.copy(focusRestore = Present(v)))
 
+            /** Opt-in per-level event consumption: when an event's dispatch walk (innermost target first, then each
+              * ancestor) reaches this element AND this element declared a handler for that event's type, the event stops
+              * here — handlers declared on elements ABOVE this one do not fire. Typical use: nested overlays where one
+              * Escape must close only the innermost layer instead of the whole chain.
+              *
+              * Default (unset or `false`) keeps the bubble-through semantics: every ancestor on the path that declared a
+              * handler for the event type fires. The flag only consumes events this element actually handles (it declared
+              * a handler for that type); other event types pass through unaffected. Applies to the bubbling events
+              * (click, contextmenu, keydown, keyup, hover, unhover, scroll); focus/blur never bubble in kyo-ui anyway.
+              */
+            def stopPropagation(v: Boolean): Self = withAttrs(attrs.copy(stopPropagation = Present(v)))
+
             /** Runs `action` on click, ignoring the event payload. */
             def onClick[S](action: => Any < (Abort[Throwable] & Async & S))(using Isolate[S, Sync, S]): Self =
                 withAttrs(attrs.copy(onClick = Present(eraseHandler(Sync.defer(action)(using frame)))))
@@ -826,6 +838,7 @@ object UI:
             /** Runs `f` only when the click lands on this element itself, not on a descendant; receives the [[kyo.UI.MouseEvent]] payload. */
             def onClickSelf[S](f: MouseEvent => Any < (Abort[Throwable] & Async & S))(using Isolate[S, Sync, S]): Self =
                 withAttrs(attrs.copy(onClickSelfEvt = Present(eraseHandlerFn(f))))
+
 
             /** Runs `f` on key-down, receiving the [[kyo.UI.KeyboardEvent]] payload (typed key, modifier chord, target id). */
             def onKeyDown[S](f: KeyboardEvent => Any < (Abort[Throwable] & Async & S))(using Isolate[S, Sync, S]): Self =
@@ -1069,6 +1082,7 @@ object UI:
             focusGroup: Maybe[String] = Absent,
             focusAuto: Maybe[Boolean] = Absent,
             focusRestore: Maybe[Boolean] = Absent,
+            stopPropagation: Maybe[Boolean] = Absent,
             uiStyle: Style = Style.empty,
             onClick: Maybe[Any < Async] = Absent,
             onClickEvt: Maybe[MouseEvent => Any < Async] = Absent,

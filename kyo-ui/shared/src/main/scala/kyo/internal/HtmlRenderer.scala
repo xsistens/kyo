@@ -344,6 +344,9 @@ private[kyo] object HtmlRenderer:
         attrs.focusGroup.foreach(id => w(sb, s""" data-kyo-focus-group="${esc(id)}""""))
         attrs.focusAuto.foreach(v => if v then w(sb, """ data-kyo-focus-auto="1""""))
         attrs.focusRestore.foreach(v => if v then w(sb, """ data-kyo-focus-restore="1""""))
+        // Marker only (inspection/tooling): the stop-propagation semantics live server-side in
+        // ReactiveUI.dispatchToElement, which reads the flag from the AST — the client never branches on this.
+        attrs.stopPropagation.foreach(v => if v then w(sb, """ data-kyo-stop="1""""))
         val css = CssStyleRenderer.render(attrs.uiStyle)
         if css.nonEmpty then w(sb, s""" style="${esc(css)}"""")
         attrs.ariaAttrs.toSeq.sortBy(_._1).foreach { case (name, value) =>
