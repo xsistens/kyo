@@ -11,20 +11,32 @@ private[kyo] object FlagPlatform {
     def properties: Iterable[String] =
         java.lang.System.getProperties.propertyNames().asScala.map(_.toString).toList
 
+    // The `process` global read MUST stay inlined under `js.typeOf`: the compiler special-cases
+    // `js.typeOf(<global member>)` to emit a bare `typeof process`, which is safe when the global is
+    // undeclared. Binding `js.Dynamic.global.process` to a `val` first (the previous shape) emits a direct
+    // global `process` reference that throws `ReferenceError: process is not defined` in ESM browser
+    // bundles (strict mode) BEFORE the typeof guard ever runs. The nested `js.typeOf(...process.env)`
+    // compiles to `typeof process.env`, which would also throw on an undeclared `process`, but the
+    // short-circuit `||` guarantees it only evaluates once `process` is known to exist.
+
     def env(name: String): String = {
-        val proc = js.Dynamic.global.process
-        if (js.typeOf(proc) == "undefined" || js.typeOf(proc.env) == "undefined") null
+        if (
+            js.typeOf(js.Dynamic.global.process) == "undefined" ||
+            js.typeOf(js.Dynamic.global.process.env) == "undefined"
+        ) null
         else {
-            val value = proc.env.selectDynamic(name)
+            val value = js.Dynamic.global.process.env.selectDynamic(name)
             if (js.isUndefined(value) || value == null) null
             else value.asInstanceOf[String]
         }
     }
 
     def envNames: Iterable[String] = {
-        val proc = js.Dynamic.global.process
-        if (js.typeOf(proc) == "undefined" || js.typeOf(proc.env) == "undefined") Iterable.empty
-        else js.Object.keys(proc.env.asInstanceOf[js.Object]).toSeq
+        if (
+            js.typeOf(js.Dynamic.global.process) == "undefined" ||
+            js.typeOf(js.Dynamic.global.process.env) == "undefined"
+        ) Iterable.empty
+        else js.Object.keys(js.Dynamic.global.process.env.asInstanceOf[js.Object]).toSeq
     }
 
 }
