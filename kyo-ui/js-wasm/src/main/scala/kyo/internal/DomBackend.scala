@@ -343,6 +343,19 @@ private[kyo] object DomBackend:
                         // would also kill those.
                         if target.tagName.toLowerCase == "a" && evTypes.contains("click") then e.preventDefault()
                         Present(UIEvent.Click(path, mouse))
+                    else if t == "contextmenu" && evTypes.contains("contextmenu") then
+                        // Suppress the native context menu only when an ancestor declared a contextmenu
+                        // handler (this branch); a bare right-click elsewhere keeps the browser's own menu.
+                        e.preventDefault()
+                        val targetId = Maybe(e.target.asInstanceOf[dom.Element].id).filter(_.nonEmpty)
+                        val me       = e.asInstanceOf[dom.MouseEvent]
+                        Present(UIEvent.ContextMenu(
+                            path,
+                            MouseEventData(
+                                modifiers = UI.Modifiers(me.ctrlKey, me.altKey, me.shiftKey, me.metaKey),
+                                targetId = targetId
+                            )
+                        ))
                     else if t == "input" && evTypes.contains("input") then
                         Present(UIEvent.Input(path, e.target.asInstanceOf[dom.html.Input].value))
                     else if t == "change" && evTypes.contains("change") then
@@ -445,8 +458,9 @@ private[kyo] object DomBackend:
             }
         end handler
 
-        Seq("click", "input", "change", "submit", "keydown", "keyup", "focus", "blur", "mouseover", "mouseout").foreach { t =>
-            document.body.addEventListener(t, handler, true)
+        Seq("click", "contextmenu", "input", "change", "submit", "keydown", "keyup", "focus", "blur", "mouseover", "mouseout").foreach {
+            t =>
+                document.body.addEventListener(t, handler, true)
         }
         document.body.addEventListener(
             "wheel",

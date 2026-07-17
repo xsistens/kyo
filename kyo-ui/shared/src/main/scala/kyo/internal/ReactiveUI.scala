@@ -625,6 +625,15 @@ private[kyo] object ReactiveUI:
                         .andThen(activateToggle)
                         .andThen(formSubmit)
                         .andThen(keepBubbling(elem, declared))
+            case ev: UIEvent.ContextMenu =>
+                // Mirrors Click: a disabled or hidden target ignores its own handler but allows bubbling;
+                // every ancestor on the path that declared a context-menu handler fires (innermost first).
+                if isTarget && (isDisabled(elem) || isHidden(elem)) then true
+                else
+                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
+                    invoke(attrs.onContextMenu)
+                        .andThen(invokeWith(attrs.onContextMenuEvt, mouse))
+                        .andThen(keepBubbling(elem, attrs.onContextMenu.nonEmpty || attrs.onContextMenuEvt.nonEmpty))
             case ev: UIEvent.Focus =>
                 val isFocusable = elem.isInstanceOf[Focusable] || elem.attrs.tabIndex.nonEmpty
                 if isTarget && isFocusable then
