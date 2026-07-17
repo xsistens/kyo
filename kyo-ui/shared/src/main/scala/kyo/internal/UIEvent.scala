@@ -36,4 +36,22 @@ private[kyo] enum UIEvent derives CanEqual, Schema:
     case Scroll(path: Seq[String], deltaX: Double, deltaY: Double, modifiers: UI.Modifiers, targetId: Maybe[String])
     case Hover(path: Seq[String], mouse: MouseEventData)
     case Unhover(path: Seq[String], mouse: MouseEventData)
+    // Unit 1: pointer/drag events. `pointer` is UI.PointerEvent, which derives Schema, so (like UI.FilePayload
+    // for FileSelect) it rides the wire directly. Coordinates are pre-normalized by the client (position relative
+    // to the target plus its bounding rect) so the server can map to 0..1 without another round-trip. Bubble like Click.
+    case PointerDown(path: Seq[String], pointer: UI.PointerEvent)
+    case PointerMove(path: Seq[String], pointer: UI.PointerEvent)
+    case PointerUp(path: Seq[String], pointer: UI.PointerEvent)
+    // Unit 2: the client's reply to HtmlOp.RequestMeasure — the measured element rect plus the viewport size.
+    // Dispatched inbound like any event, but routed by the transport to the session's UI.Commands (not the
+    // element handler tree): it resolves a pending requestMeasure rather than an onXxx handler.
+    case Measure(
+        path: Seq[String],
+        rectX: Double,
+        rectY: Double,
+        rectW: Double,
+        rectH: Double,
+        viewportW: Double,
+        viewportH: Double
+    )
 end UIEvent

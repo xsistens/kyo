@@ -54,6 +54,11 @@ private[kyo] object DomBackend:
         container: dom.Element,
         onHandlerError: Maybe[Throwable => Unit < Async]
     )(using Frame): Unit < (Async & Scope) =
+        // Unit 2/3: the session's imperative op channel. `emit` applies ops straight to the local DOM (there is no
+        // wire): a Command focuses/scrolls the element; a RequestMeasure measures it and resolves the pending
+        // requestMeasure callback directly (the SPA analog of the server's op -> client -> Measure round-trip). The
+        // late-bound `sessionCommands` breaks the emit<->Commands construction cycle; it is set before any op is emitted.
+        var sessionCommands: UI.Commands = null
         for
             _    <- DomStyleSheet.injectBase()
             root <- ReactiveUI.normalize(ui, Seq.empty, onHandlerError = onHandlerError)
@@ -67,24 +72,74 @@ private[kyo] object DomBackend:
             _ <- Sync.defer(seedEnter(container, Set.empty))
             _ <- Sync.defer(beginAnimationsSync(container))
             // Unit 3: document-level beforeinput capture listener for input filter/mask.
-            _ <- setupInputMasking()
-            exchange = LocalExchange(root)
-            dispatch <- ReactiveUI.subscribe(root, exchange)
-            // Single-consumer drain owned by the ambient page Scope: every JS event effect is run by a
-            // Fiber.init consumer (interrupted on page teardown). The single consumer preserves event ordering
-            // and is scoped, so page teardown interrupt propagates to the drain via the ambient Scope.
-            events <- Channel.init[Unit < Async](256)
-            // runPartial captures only the Closed failure (the channel closed on page teardown -> stop draining); a
-            // Panic propagates rather than being silently swallowed as a clean drain end.
-            _ <- Fiber.init(Loop.foreach(Abort.runPartial[Closed](events.take).map {
-                case Result.Success(eff) => eff.andThen(Loop.continue)
-                case Result.Failure(_)   => Loop.done
-            }))
-            _ <- setupEventDelegation(dispatch.handle, events)
-            _ <- Async.never
+            _        <- setupInputMasking()
+            commands <- UI.Commands.init(op => applyOpLocal(op, () => sessionCommands))
+            _ = sessionCommands = commands
+            // Env.run so component handlers and mounted effects resolve `UI.commands` at run time (the subscribe
+            // region fibers and the event-drain fiber all fork inside this scope).
+            _ <- Env.run(commands) {
+                val exchange = LocalExchange(root)
+                for
+                    dispatch <- ReactiveUI.subscribe(root, exchange)
+                    // Single-consumer drain owned by the ambient page Scope: every JS event effect is run by a
+                    // Fiber.init consumer (interrupted on page teardown). The single consumer preserves event ordering
+                    // and is scoped, so page teardown interrupt propagates to the drain via the ambient Scope.
+                    events <- Channel.init[Unit < Async](256)
+                    // runPartial captures only the Closed failure (the channel closed on page teardown -> stop draining); a
+                    // Panic propagates rather than being silently swallowed as a clean drain end.
+                    _ <- Fiber.init(Loop.foreach(Abort.runPartial[Closed](events.take).map {
+                        case Result.Success(eff) => eff.andThen(Loop.continue)
+                        case Result.Failure(_)   => Loop.done
+                    }))
+                    _ <- setupEventDelegation(dispatch.handle, events)
+                    // Unit 1: pointer/drag delegation (setPointerCapture + rAF-coalesced move stream).
+                    _ <- setupPointerDelegation(dispatch.handle, events)
+                    _ <- Async.never
+                yield ()
+                end for
+            }
         yield ()
         end for
     end mountInto
+
+    // ---- Unit 2/3: local op application for the SPA transport ----
+
+    /** Locate the element at `path`, preferring the non-wrapper match (reactive wrapper spans share the path). */
+    private def applyCommandDom(path: Seq[String], verb: String): Unit =
+        val el = locateByPath(path.mkString("."))
+        if el != null then
+            val dyn = el.asInstanceOf[scalajs.js.Dynamic]
+            verb match
+                case "focus" =>
+                    if scalajs.js.typeOf(dyn.focus) == "function" then discard(dyn.focus())
+                case "scrollIntoView" =>
+                    if scalajs.js.typeOf(dyn.scrollIntoView) == "function" then
+                        discard(dyn.scrollIntoView(scalajs.js.Dynamic.literal(block = "nearest")))
+                case _ => () // unknown verb: ignore (forward-compat)
+            end match
+        end if
+    end applyCommandDom
+
+    private def measureDom(path: Seq[String]): Maybe[UI.Rect] =
+        val el = locateByPath(path.mkString("."))
+        if el == null then Absent
+        else
+            val r = el.getBoundingClientRect()
+            Present(UI.Rect(r.left, r.top, r.width, r.height, dom.window.innerWidth, dom.window.innerHeight))
+        end if
+    end measureDom
+
+    private def applyOpLocal(op: HtmlOp, commands: () => UI.Commands)(using Frame): Unit < Async =
+        op match
+            case HtmlOp.Command(path, verb) => Sync.defer(applyCommandDom(path, verb))
+            case HtmlOp.RequestMeasure(path) =>
+                Sync.defer(measureDom(path)).map {
+                    case Present(rect) => commands().deliverMeasure(path, rect)
+                    case Absent        => Kyo.unit
+                }
+            // Replace/Remove/InjectCss reach the DOM through LocalExchange, never this imperative channel.
+            case _ => Kyo.unit
+    end applyOpLocal
 
     /** Exchange that renders UI to HTML and applies directly to the DOM. */
     private class LocalExchange(root: ReactiveUI) extends UIExchange:
@@ -530,6 +585,107 @@ private[kyo] object DomBackend:
     private def parsePath(p: String): Seq[String] =
         if p == null || p.isEmpty then Seq.empty
         else p.split("\\.").toSeq
+
+    // ---- Unit 1: pointer/drag delegation (SPA transport) ----
+
+    // Drag-session state. Module-level mutable is safe on the single-threaded JS runtime (mutated only inside JS
+    // event callbacks). A session is active between a pointerdown on a declaring element and its pointerup.
+    private var ptrActive: Boolean             = false
+    private var ptrEl: dom.Element             = null
+    private var ptrPath: Seq[String]           = Seq.empty
+    private var ptrRaf: Int                    = 0
+    private var ptrPendingEv: dom.PointerEvent = null
+
+    /** True if `start` or any ancestor up to (not including) body declares event token `t` in its data-kyo-ev. */
+    private def declaredInChainAt(start: dom.Element, t: String): Boolean =
+        var n: dom.Element = start
+        var found          = false
+        while !found && n != null && (n ne document.body) do
+            val ev = n.getAttribute("data-kyo-ev")
+            if ev != null && ev.split(",").contains(t) then found = true
+            else
+                n = n.parentNode match
+                    case p: dom.Element => p
+                    case _              => null
+            end if
+        end while
+        found
+    end declaredInChainAt
+
+    private def pointerPayload(el: dom.Element, ev: dom.PointerEvent): UI.PointerEvent =
+        val r   = el.getBoundingClientRect()
+        val tid = Maybe(ev.target.asInstanceOf[dom.Element].id).filter(_.nonEmpty)
+        UI.PointerEvent(
+            x = ev.clientX - r.left,
+            y = ev.clientY - r.top,
+            rectX = r.left,
+            rectY = r.top,
+            rectW = r.width,
+            rectH = r.height,
+            buttons = ev.buttons,
+            targetId = tid
+        )
+    end pointerPayload
+
+    private def setupPointerDelegation(
+        dispatch: (Seq[String], UIEvent) => Boolean < Async,
+        events: Channel[Unit < Async]
+    )(using Frame): Unit < Sync = Sync.defer {
+        val down: scalajs.js.Function1[dom.Event, Unit] = (e0: dom.Event) =>
+            val e = e0.asInstanceOf[dom.PointerEvent]
+            findPathElement(e.target.asInstanceOf[dom.Element]).foreach { el =>
+                if declaredInChainAt(el, "pointerdown") then
+                    try
+                        val d = el.asInstanceOf[scalajs.js.Dynamic]
+                        if scalajs.js.typeOf(d.setPointerCapture) == "function" then discard(d.setPointerCapture(e.pointerId))
+                    catch case _: Throwable => ()
+                    end try
+                    ptrActive = true
+                    ptrEl = el
+                    ptrPath = parsePath(el.getAttribute("data-kyo-path"))
+                    fireFromJs(events, dispatch(ptrPath, UIEvent.PointerDown(ptrPath, pointerPayload(el, e))).unit)
+                end if
+            }
+
+        val move: scalajs.js.Function1[dom.Event, Unit] = (e0: dom.Event) =>
+            // Only stream during an active session; coalesce to at most one dispatch per animation frame.
+            if ptrActive && ptrEl != null then
+                ptrPendingEv = e0.asInstanceOf[dom.PointerEvent]
+                if ptrRaf == 0 then
+                    ptrRaf = dom.window.requestAnimationFrame { (_: Double) =>
+                        ptrRaf = 0
+                        if ptrActive && ptrEl != null && ptrPendingEv != null then
+                            val ev = ptrPendingEv
+                            ptrPendingEv = null
+                            fireFromJs(events, dispatch(ptrPath, UIEvent.PointerMove(ptrPath, pointerPayload(ptrEl, ev))).unit)
+                        end if
+                    }
+                end if
+
+        val up: scalajs.js.Function1[dom.Event, Unit] = (e0: dom.Event) =>
+            if ptrActive && ptrEl != null then
+                val e = e0.asInstanceOf[dom.PointerEvent]
+                try
+                    val d = ptrEl.asInstanceOf[scalajs.js.Dynamic]
+                    if scalajs.js.typeOf(d.releasePointerCapture) == "function" then discard(d.releasePointerCapture(e.pointerId))
+                catch case _: Throwable => ()
+                end try
+                if ptrRaf != 0 then
+                    dom.window.cancelAnimationFrame(ptrRaf)
+                    ptrRaf = 0
+                ptrPendingEv = null
+                val el   = ptrEl
+                val path = ptrPath
+                ptrActive = false
+                ptrEl = null
+                ptrPath = Seq.empty
+                fireFromJs(events, dispatch(path, UIEvent.PointerUp(path, pointerPayload(el, e))).unit)
+
+        document.body.addEventListener("pointerdown", down, true)
+        document.body.addEventListener("pointermove", move, true)
+        document.body.addEventListener("pointerup", up, true)
+    }
+    end setupPointerDelegation
 
     // ---- Unit 1: enter/leave transition mirror (SPA transport) ----
 

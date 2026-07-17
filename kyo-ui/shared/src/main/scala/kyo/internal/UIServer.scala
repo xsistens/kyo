@@ -37,14 +37,24 @@ private[kyo] object UIServer:
     )(using Frame): Unit < (Async & Abort[Closed]) =
         Scope.run {
             for
-                uiTree <- ui
-                root   <- ReactiveUI.normalize(uiTree, Seq.empty, onHandlerError = onHandlerError)
-                exchange = wsExchange(root, ws)
-                sub <- ReactiveUI.subscribe(root, exchange)
-                _ <- Async.race(
-                    ws.stream.foreach(payload => dispatchEvent(sub.handle, payload)),
-                    ws.onPeerClose
+                // Unit 2/3: the session's imperative op channel. `emit` serializes an HtmlOp over this session's socket
+                // (a Closed mid-send just drops the op). Provided via Env.run so component handlers and mounted effects
+                // resolve `UI.commands` at run time (renderer/dispatch fibers all fork inside this scope).
+                commands <- UI.Commands.init(op =>
+                    Abort.runPartial[Closed](ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](op)))).unit
                 )
+                _ <- Env.run(commands) {
+                    for
+                        uiTree <- ui
+                        root   <- ReactiveUI.normalize(uiTree, Seq.empty, onHandlerError = onHandlerError)
+                        exchange = wsExchange(root, ws)
+                        sub <- ReactiveUI.subscribe(root, exchange)
+                        _ <- Async.race(
+                            ws.stream.foreach(payload => dispatchEvent(sub.handle, commands, payload)),
+                            ws.onPeerClose
+                        )
+                    yield ()
+                }
             yield ()
         }
 
@@ -72,13 +82,24 @@ private[kyo] object UIServer:
                 }
             end onChange
 
-    private def dispatchEvent(handle: (Seq[String], UIEvent) => Boolean < Async, payload: HttpWebSocket.Payload)(using
-        Frame
-    ): Unit < Async =
+    private def dispatchEvent(
+        handle: (Seq[String], UIEvent) => Boolean < Async,
+        commands: UI.Commands,
+        payload: HttpWebSocket.Payload
+    )(using Frame): Unit < Async =
         payload match
             case HttpWebSocket.Payload.Text(data) =>
                 Json.decode[UIEvent](data) match
-                    case Result.Success(event) => handle(event.path, event).unit
+                    case Result.Success(event) =>
+                        event match
+                            // Unit 2: the Measure reply is not an element event — route it to the session channel,
+                            // which resolves the pending requestMeasure callback (not the ReactiveUI handler tree).
+                            case m: UIEvent.Measure =>
+                                commands.deliverMeasure(
+                                    m.path,
+                                    UI.Rect(m.rectX, m.rectY, m.rectW, m.rectH, m.viewportW, m.viewportH)
+                                )
+                            case _ => handle(event.path, event).unit
                     // A malformed inbound frame (DecodeException) is dropped: a buggy client must not be able to tear
                     // down the session. A Panic is a decoder defect, not bad input, and must propagate.
                     case Result.Failure(_) => ()

@@ -26,6 +26,10 @@ private[kyo] object EventHandler:
     case class KeyUp(f: UI.KeyboardEvent => Unit < Async)         extends EventHandler
     case class Focus(f: Unit < Async)                             extends EventHandler
     case class Blur(f: Unit < Async)                              extends EventHandler
+    // Unit 1: pointer/drag handlers (carry the UI.PointerEvent payload).
+    case class PointerDown(f: UI.PointerEvent => Unit < Async) extends EventHandler
+    case class PointerMove(f: UI.PointerEvent => Unit < Async) extends EventHandler
+    case class PointerUp(f: UI.PointerEvent => Unit < Async)   extends EventHandler
 
     /** The event type string used in data-kyo-ev attributes and handler map keys. */
     def eventType(handler: EventHandler): String = handler match
@@ -42,5 +46,8 @@ private[kyo] object EventHandler:
         case _: KeyUp         => "keyup"
         case _: Focus         => "focus"
         case _: Blur          => "blur"
+        case _: PointerDown   => "pointerdown"
+        case _: PointerMove   => "pointermove"
+        case _: PointerUp     => "pointerup"
 
 end EventHandler
