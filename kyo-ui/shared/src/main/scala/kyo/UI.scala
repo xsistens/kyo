@@ -357,6 +357,15 @@ object UI:
     def runHandlers(basePath: String)(ui: => UI < Async)(using Frame): Seq[HttpHandler[?, ?, ?]] < Sync =
         UIServer.handlers(basePath)(ui)
 
+    /** [[runHandlers]] with a per-session HANDLER-ERROR POLICY — the LiveView counterpart of the `runMount`
+      * overload: the one central decision what happens with an event-handler failure/panic nothing below
+      * consumed. Logged out-of-band either way; the bubble chain never stops.
+      */
+    def runHandlers(basePath: String, onHandlerError: Throwable => Unit < Async)(ui: => UI < Async)(using
+        Frame
+    ): Seq[HttpHandler[?, ?, ?]] < Sync =
+        UIServer.handlers(basePath, Present(onHandlerError))(ui)
+
     /** Read-only stream of the full rendered HTML. Emits whenever any signal changes. First emission is the initial render. Useful for
       * testing, SSR, export, or custom transports.
       */
