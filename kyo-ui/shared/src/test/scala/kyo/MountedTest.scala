@@ -473,4 +473,61 @@ class MountedTest extends UITest:
         }
     }
 
+    "background fiber failure after publish flips the mounted node to its error render (node-scope supervision)" in {
+        val setup =
+            for gate <- Promise.init[Unit, Any]
+            yield (
+                gate,
+                UI.div(
+                    UI.span("sibling").id("sibling"),
+                    UI.mounted(
+                        Fiber.init(gate.get.andThen(Abort.fail(new RuntimeException("feed-died"))))
+                            .map(_ => UI.span("live").id("content"))
+                    ).keyed("game")
+                        .onError(t => UI.span(s"error:${t.getMessage}").id("content"))
+                )
+            )
+        setup.map { (gate, ui) =>
+            withUI(Kyo.lift(ui)) {
+                for
+                    _ <- Browser.assertText(Selector.id("content"), "live")    // published, feed still healthy
+                    _ <- gate.completeUnitDiscard                              // the live feed dies AFTER publish
+                    _ <- Browser.assertText(Selector.id("content"), "error:feed-died")
+                    _ <- Browser.assertText(Selector.id("sibling"), "sibling") // enclosing region stays alive
+                yield ()
+            }
+        }
+    }
+
+    "keyed instance kept across region re-renders still flips on a later feed failure (supervision survives adoption)" in {
+        val app: UI < Async =
+            for
+                gate <- Promise.init[Unit, Any]
+                tick <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("Tick").id("tick").onClick(tick.getAndUpdate(_ + 1).unit),
+                UI.button("Kill").id("kill").onClick(gate.completeUnitDiscard),
+                tick.map(n =>
+                    UI.div(
+                        UI.span(s"tick:$n").id("tick-val"),
+                        UI.mounted(
+                            Fiber.init(gate.get.andThen(Abort.fail(new RuntimeException("late-fail"))))
+                                .map(_ => UI.span("live").id("content"))
+                        ).keyed("stable")
+                            .onError(t => UI.span(s"error:${t.getMessage}").id("content"))
+                    )
+                )
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("content"), "live")
+                _ <- Browser.click(Selector.id("tick")) // region re-render: instance is ADOPTED, not re-created
+                _ <- Browser.assertText(Selector.id("tick-val"), "tick:1")
+                _ <- Browser.assertText(Selector.id("content"), "live")
+                _ <- Browser.click(Selector.id("kill")) // the adopted instance's feed dies
+                _ <- Browser.assertText(Selector.id("content"), "error:late-fail")
+            yield ()
+        }
+    }
+
 end MountedTest

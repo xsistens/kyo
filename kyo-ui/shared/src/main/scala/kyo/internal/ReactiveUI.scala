@@ -977,8 +977,18 @@ private[kyo] object ReactiveUI:
                     settleOnce <- boundarySettle(boundary)
                     // If the per-value scope tears this instance down before its effect publishes, the ensure
                     // still balances the boundary count (the boundary would otherwise wait forever).
-                    _ <- Scope.ensure(settleOnce.run)
-                    _ <- Fiber.init(runMountEffect(spec, cell, ui => mounts.recordContent(rui.path, ui), boundary, settleOnce.run))
+                    _           <- Scope.ensure(settleOnce.run)
+                    supervision <- MountSupervision.init
+                    // The runner now parks on supervision after publishing (runMountEffect never returns), so
+                    // this fiber lives until the per-value scope interrupts it — like the keyed runner.
+                    _ <- Fiber.init(runMountEffect(
+                        spec,
+                        cell,
+                        ui => mounts.recordContent(rui.path, ui),
+                        boundary,
+                        settleOnce.run,
+                        supervision
+                    ))
                     _ <- subscribeRegion(rui.path, cell, rui.svgContext, exchange, signalChangeTime, Absent, mountDispatch, boundary)
                 yield ()
 
@@ -1004,18 +1014,78 @@ private[kyo] object ReactiveUI:
                     else AtomicRef.init(false).map(ref => new SettleOnce(Present((ctx, ref))))
                 }
 
+    /** A supervised background fiber of a mounted node failed with a non-Throwable `Abort` value; the node's
+      * error rendering needs a Throwable, so the value is carried in this wrapper.
+      */
+    final private[kyo] case class MountFiberFailure(value: Any)(using Frame)
+        extends KyoException(s"Mounted background fiber failed: $value")
+
+    /** The node-scope supervision seam of one mount instance: collects the FIRST non-interrupt failure of any
+      * supervised background fiber (see [[Fiber.Supervisor]]) and lets the node runner park on it AFTER the
+      * effect outcome — flipping an already-published node into its error rendering retroactively.
+      *
+      * Publish→flip is serialized on the node's own fiber (the park runs after [[runMountEffect]]'s outcome
+      * handling), so a supervised failure can never be overwritten by a late `cell.set(ui)` of the success
+      * path. The `routed` once-guard is shared between the effect-failure path and the park, so an effect
+      * failure racing a supervised failure routes exactly once.
+      */
+    final private[kyo] class MountSupervision(
+        firstFailure: Fiber.Promise.Unsafe[Throwable, Any],
+        routed: AtomicRef[Boolean]
+    ):
+        /** Installed around the USER effect only (engine fibers never see it): maps the fiber error to a
+          * Throwable and completes the once-only failure promise; later failures are dropped by the promise.
+          */
+        val supervisor: Fiber.Supervisor = new Fiber.Supervisor:
+            def onFailure(error: Result.Error[Any])(using AllowUnsafe): Unit =
+                val t = error match
+                    case failure: Result.Failure[Any] =>
+                        failure.failure match
+                            case t: Throwable => t
+                            case other        => MountFiberFailure(other)(using Frame.internal)
+                    case panic: Result.Panic => panic.exception
+                discard(firstFailure.complete(Result.succeed(t)))
+            end onFailure
+
+        /** Route a failure through `route` at most once across effect-fail and supervised-fail paths. */
+        def routeOnce(t: Throwable)(route: Throwable => Unit < Async)(using Frame): Unit < Async =
+            routed.getAndSet(true).map(was => if was then () else route(t))
+
+        /** Park the node fiber until a supervised failure arrives, then log + route it. Never returns — the
+          * park (interrupted on teardown) is what holds the node Scope open for the instance's lifetime.
+          */
+        def park(spec: MountedSpec, route: Throwable => Unit < Async)(using Frame): Nothing < Async =
+            firstFailure.safe.get.map { t =>
+                Log.error(s"Mounted background fiber failed (frame=${spec.node.frame.position.show})", t)
+                    .andThen(routeOnce(t)(route))
+            }.andThen(Async.never)
+    end MountSupervision
+
+    private[kyo] object MountSupervision:
+        def init(using Frame): MountSupervision < Sync =
+            AtomicRef.init(false).map { routed =>
+                Sync.Unsafe.defer {
+                    new MountSupervision(Fiber.Promise.Unsafe.init[Throwable, Any](), routed)
+                }
+            }
+    end MountSupervision
+
     /** Run a Mounted node's effect and publish the outcome into its content cell, then settle the enclosing
-      * boundary. Failure routing: a node-local `.onError` wins; otherwise the failure is offered to the
-      * boundary chain (typed selection); otherwise the node's default error rendering applies. The enclosing
-      * region stays alive either way; failures are additionally logged out-of-band.
+      * boundary — and then PARK on `supervision` for the instance's lifetime (this method never returns; the
+      * park is interrupted by the node's teardown). Failure routing — shared by the effect outcome and a later
+      * supervised background-fiber failure, at most once per instance: a node-local `.onError` wins; otherwise
+      * the failure is offered to the boundary chain (typed selection); otherwise the node's default error
+      * rendering applies. The enclosing region stays alive either way (a flip keeps the node Scope open, like
+      * a pending-phase failure always has); failures are additionally logged out-of-band.
       */
     private def runMountEffect(
         spec: MountedSpec,
         cell: SignalRef[UI],
         record: UI => Unit < Sync,
         boundary: Maybe[BoundaryCtx],
-        onSettled: Unit < Async
-    )(using Frame): Unit < (Async & Scope) =
+        onSettled: Unit < Async,
+        supervision: MountSupervision
+    )(using Frame): Nothing < (Async & Scope) =
         def failed(t: Throwable): Unit < Async =
             spec.node.errorRender match
                 case Present(_) => cell.set(spec.errorUI(t)).unit
@@ -1024,17 +1094,17 @@ private[kyo] object ReactiveUI:
                         case Present(ctx) =>
                             ctx.tryHandle(t).map(handled => if handled then () else cell.set(spec.errorUI(t)).unit)
                         case Absent => cell.set(spec.errorUI(t)).unit
-        Abort.run[Throwable](spec.node.effect).map {
+        Abort.run[Throwable](Fiber.Supervisor.let(supervision.supervisor)(spec.node.effect)).map {
             case Result.Success(ui) => cell.set(ui).andThen(record(ui)).andThen(onSettled)
             case Result.Failure(t) =>
                 Log.error(s"Mounted effect failed (frame=${spec.node.frame.position.show})", t)
-                    .andThen(failed(t)).andThen(onSettled)
+                    .andThen(supervision.routeOnce(t)(failed)).andThen(onSettled)
             case Result.Panic(t) =>
                 if t.isInstanceOf[Interrupted] then ()
                 else
                     Log.error(s"Mounted effect panicked (frame=${spec.node.frame.position.show})", t)
-                        .andThen(failed(t)).andThen(onSettled)
-        }.unit
+                        .andThen(supervision.routeOnce(t)(failed)).andThen(onSettled)
+        }.map(_ => supervision.park(spec, failed))
     end runMountEffect
 
     /** A live keyed mount: the content cell, the unscoped runner fiber that owns the node Scope, and the child
@@ -1101,10 +1171,14 @@ private[kyo] object ReactiveUI:
                                     cell        <- Signal.initRef[UI](seed)
                                     childMounts <- MountRegistry.init
                                     settleOnce  <- boundarySettle(boundary)
+                                    supervision <- MountSupervision.init
                                     fiber <- Fiber.initUnscoped {
                                         Scope.run {
                                             // The ensure balances the boundary count even if the instance is evicted
                                             // before its effect publishes (interrupt skips the publish path).
+                                            // runMountEffect parks on `supervision` after the outcome (it never
+                                            // returns), which is what holds this node Scope open — interrupted by
+                                            // teardown, exactly like the former trailing Async.never.
                                             Scope.ensure(childMounts.evictAll)
                                                 .andThen(Scope.ensure(settleOnce.run))
                                                 .andThen(runMountEffect(
@@ -1112,9 +1186,9 @@ private[kyo] object ReactiveUI:
                                                     cell,
                                                     ui => recordContent(path, ui),
                                                     boundary,
-                                                    settleOnce.run
+                                                    settleOnce.run,
+                                                    supervision
                                                 ))
-                                                .andThen(Async.never)
                                         }
                                     }
                                     inst = new MountInstance(key, cell, fiber, childMounts)

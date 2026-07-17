@@ -123,4 +123,38 @@ class BoundaryTest extends UITest:
         }
     }
 
+    "a supervised tail failure routes to the boundary post-reveal and replaces the revealed content" in {
+        val setup =
+            for gate <- Promise.init[Unit, Any]
+            yield (
+                gate,
+                UI.div(
+                    UI.boundary
+                        .fallback(UI.span("loading").id("fb"))
+                        .onError { case e: DataError => UI.span(s"boundary-caught:${e.getMessage}").id("berr") }(
+                            UI.div(
+                                UI.span("revealed-sibling").id("sib"),
+                                UI.mounted(
+                                    Fiber.init(gate.get.andThen(Abort.fail(new DataError("tail-nope"))))
+                                        .map(_ => UI.span("live").id("content"))
+                                ).keyed("feed")
+                            )
+                        )
+                )
+            )
+        setup.map { (gate, ui) =>
+            withUI(Kyo.lift(ui)) {
+                for
+                    // The area reveals normally — the feed is healthy at publish time.
+                    _ <- Browser.assertText(Selector.id("sib"), "revealed-sibling")
+                    _ <- Browser.assertText(Selector.id("content"), "live")
+                    // The feed dies AFTER the reveal: no node-local .onError, so the failure walks to
+                    // the boundary, whose error rendering replaces the whole revealed area.
+                    _ <- gate.completeUnitDiscard
+                    _ <- Browser.assertText(Selector.id("berr"), "boundary-caught:tail-nope")
+                yield ()
+            }
+        }
+    }
+
 end BoundaryTest

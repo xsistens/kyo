@@ -250,6 +250,19 @@ object UI:
       * `Scope` (torn down on detach), with `Abort[Throwable]` caught into the node's error state. See [[kyo.UI.Ast.Mounted]] for
       * the lifecycle/identity contract and the [[kyo.UI.MountedOps]] extensions (`keyed`, `placeholder`, `onError`, `pending`).
       *
+      * '''Node-scope supervision.''' The node's error state is not limited to the mount phase: every fiber the effect forks via
+      * the scoped `Fiber.init` (directly or transitively — a data feed forked by a library the effect calls) is SUPERVISED. A
+      * non-interrupt terminal failure of such a fiber retroactively flips the ALREADY-PUBLISHED node into the same error routing
+      * a failed mount takes: node-local `.onError` render, else the enclosing [[UI.boundary]] chain (typed selection), else the
+      * default inline error. First failure wins (at most one flip per instance, shared with the effect-failure path); teardown
+      * interrupts are exempt; the node `Scope` stays open on a flip (sibling fibers keep running, exactly like a pending-phase
+      * failure). The flip REPLACES the node's content — an app that wants "keep the content, surface the error elsewhere" routes
+      * that failure to a value/side channel (e.g. a toast) instead of failing the fiber; an `.onError` render may offer retry by
+      * swapping the node's key (a key change mounts a fresh instance). Escape hatches: `Fiber.initUnscoped` for fire-and-forget
+      * fibers whose failure must NOT flip the node — and note the sharp edge: a fiber whose failure the effect observes and
+      * handles itself (`Abort.run(f.getResult)`) still reports to supervision if forked with the scoped `Fiber.init`; use
+      * `Fiber.use`/`initUnscoped` for those.
+      *
       * Effect typing: `S` must be dischargeable across a fork boundary — the same `Isolate[S, Sync, S]` gate `Fiber.init` uses.
       * Context effects (`Env`, `Local`) derive silently and resolve at run time from the renderer fiber's inherited context
       * (all renderer fibers descend from the `runMount`/`serveSession` caller, so an `Env.runAll` at the root reaches every
