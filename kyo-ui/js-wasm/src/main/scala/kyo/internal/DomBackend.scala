@@ -66,6 +66,8 @@ private[kyo] object DomBackend:
             // Unit 1: initial-mount enter seeding (any data-kyo-enter present at load animates in; old set empty).
             _ <- Sync.defer(seedEnter(container, Set.empty))
             _ <- Sync.defer(beginAnimationsSync(container))
+            // Unit 3: document-level beforeinput capture listener for input filter/mask.
+            _ <- setupInputMasking()
             exchange = LocalExchange(root)
             dispatch <- ReactiveUI.subscribe(root, exchange)
             // Single-consumer drain owned by the ambient page Scope: every JS event effect is run by a
@@ -641,5 +643,174 @@ private[kyo] object DomBackend:
             discard(dom.window.setTimeout(to, 1000.0))
         }
     end spawnGhosts
+
+    // ---- Unit 3: input filter/mask mirror (SPA transport) ----
+
+    private def filterStr(pat: String, str: String, curVal: String): String =
+        val sb     = new StringBuilder
+        var hasSep = pat == "decimal" && (curVal.contains(".") || curVal.contains(","))
+        str.foreach { ch =>
+            if pat == "int" then
+                if ch >= '0' && ch <= '9' then sb.append(ch)
+            else if pat == "decimal" then
+                if ch >= '0' && ch <= '9' then sb.append(ch)
+                else if (ch == '.' || ch == ',') && !hasSep then
+                    sb.append(ch); hasSep = true
+            else if pat.contains(ch) then sb.append(ch)
+        }
+        sb.toString
+    end filterStr
+
+    private def maskClassAt(mask: String, idx: Int): Maybe[Char] =
+        var c   = 0
+        var i   = 0
+        var res = Maybe.empty[Char]
+        while i < mask.length && res.isEmpty do
+            val mc = mask.charAt(i)
+            if mc == '9' || mc == 'a' || mc == '*' then
+                if c == idx then res = Present(mc)
+                c += 1
+            i += 1
+        end while
+        res
+    end maskClassAt
+
+    private def maskOk(cls: Char, ch: Char): Boolean =
+        if cls == '9' then ch >= '0' && ch <= '9'
+        else if cls == 'a' then (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+        else (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+
+    private def maskFormat(mask: String, raw: String): String =
+        val sb   = new StringBuilder
+        var ri   = 0
+        var i    = 0
+        var stop = false
+        while i < mask.length && !stop do
+            val mc = mask.charAt(i)
+            if mc == '9' || mc == 'a' || mc == '*' then
+                if ri < raw.length then
+                    sb.append(raw.charAt(ri)); ri += 1
+                else stop = true
+            else if ri < raw.length then sb.append(mc)
+            else stop = true
+            end if
+            i += 1
+        end while
+        sb.toString
+    end maskFormat
+
+    private def maskRaw(mask: String, value: String): String =
+        val sb = new StringBuilder
+        var vi = 0
+        var i  = 0
+        while i < mask.length && vi < value.length do
+            val mc = mask.charAt(i)
+            if mc == '9' || mc == 'a' || mc == '*' then
+                sb.append(value.charAt(vi)); vi += 1
+            else if value.charAt(vi) == mc then vi += 1
+            else
+                sb.append(value.charAt(vi)); vi += 1
+            end if
+            i += 1
+        end while
+        sb.toString
+    end maskRaw
+
+    private def dispatchInput(t: dom.EventTarget): Unit =
+        val ctor = scalajs.js.Dynamic.global.Event
+        val ev   = scalajs.js.Dynamic.newInstance(ctor)("input", scalajs.js.Dynamic.literal(bubbles = true))
+        discard(t.asInstanceOf[scalajs.js.Dynamic].dispatchEvent(ev))
+    end dispatchInput
+
+    private def setMasked(t: dom.html.Input, v: String): Unit =
+        t.value = v
+        val dyn = t.asInstanceOf[scalajs.js.Dynamic]
+        if scalajs.js.typeOf(dyn.setSelectionRange) == "function" then
+            try discard(dyn.setSelectionRange(v.length, v.length))
+            catch case _: Throwable => ()
+        dispatchInput(t)
+    end setMasked
+
+    private def setFilteredAt(t: dom.html.Input, txt: String, s: Int, e: Int): Unit =
+        val v = t.value
+        t.value = v.substring(0, s) + txt + v.substring(e)
+        val np  = s + txt.length
+        val dyn = t.asInstanceOf[scalajs.js.Dynamic]
+        if scalajs.js.typeOf(dyn.setSelectionRange) == "function" then
+            try discard(dyn.setSelectionRange(np, np))
+            catch case _: Throwable => ()
+        dispatchInput(t)
+    end setFilteredAt
+
+    private def setupInputMasking()(using Frame): Unit < Sync = Sync.defer {
+        val handler: scalajs.js.Function1[dom.Event, Unit] = (e: dom.Event) =>
+            val tRaw = e.target
+            if tRaw != null then
+                val el   = tRaw.asInstanceOf[dom.Element]
+                val filt = el.getAttribute("data-kyo-filter")
+                val mask = el.getAttribute("data-kyo-mask")
+                if filt != null || mask != null then
+                    val t   = tRaw.asInstanceOf[dom.html.Input]
+                    val dyn = e.asInstanceOf[scalajs.js.Dynamic]
+                    val it  = if scalajs.js.typeOf(dyn.inputType) == "string" then dyn.inputType.asInstanceOf[String] else ""
+                    def selStart: Int =
+                        val d = t.asInstanceOf[scalajs.js.Dynamic]
+                        if scalajs.js.typeOf(d.selectionStart) == "number" then d.selectionStart.asInstanceOf[Int] else t.value.length
+                    def selEnd: Int =
+                        val d = t.asInstanceOf[scalajs.js.Dynamic]
+                        if scalajs.js.typeOf(d.selectionEnd) == "number" then d.selectionEnd.asInstanceOf[Int] else selStart
+                    def transferText: String =
+                        val dt = dyn.dataTransfer
+                        if dt != null && scalajs.js.typeOf(dt) == "object" then dt.getData("text").asInstanceOf[String]
+                        else if scalajs.js.typeOf(dyn.data) == "string" then dyn.data.asInstanceOf[String]
+                        else ""
+                    end transferText
+                    if filt != null then
+                        if it.startsWith("delete") then ()
+                        else if it == "insertText" || it == "insertReplacementText" || it == "insertCompositionText" then
+                            if scalajs.js.typeOf(dyn.data) == "string" then
+                                val ds = dyn.data.asInstanceOf[String]
+                                val f1 = filterStr(filt, ds, t.value)
+                                if f1 != ds then
+                                    e.preventDefault()
+                                    if f1.nonEmpty then setFilteredAt(t, f1, selStart, selEnd)
+                        else if it == "insertFromPaste" || it == "insertFromDrop" then
+                            e.preventDefault()
+                            val f2 = filterStr(filt, transferText, t.value)
+                            if f2.nonEmpty then setFilteredAt(t, f2, selStart, selEnd)
+                        end if
+                    else if mask != null then
+                        if it.startsWith("delete") then
+                            e.preventDefault()
+                            val raw = maskRaw(mask, t.value)
+                            val nr  = if raw.nonEmpty then raw.substring(0, raw.length - 1) else raw
+                            setMasked(t, maskFormat(mask, nr))
+                        else if it == "insertText" || it == "insertReplacementText" || it == "insertCompositionText" ||
+                            it == "insertFromPaste" || it == "insertFromDrop"
+                        then
+                            e.preventDefault()
+                            val ins = if it == "insertFromPaste" || it == "insertFromDrop" then transferText
+                            else if scalajs.js.typeOf(dyn.data) == "string" then dyn.data.asInstanceOf[String]
+                            else ""
+                            var raw2 = maskRaw(mask, t.value)
+                            var ci   = 0
+                            var full = false
+                            while ci < ins.length && !full do
+                                maskClassAt(mask, raw2.length) match
+                                    case Present(cls) =>
+                                        val ch = ins.charAt(ci)
+                                        if maskOk(cls, ch) then raw2 = raw2 + ch
+                                    case Absent => full = true
+                                end match
+                                ci += 1
+                            end while
+                            setMasked(t, maskFormat(mask, raw2))
+                        end if
+                    end if
+                end if
+            end if
+        document.body.addEventListener("beforeinput", handler, true)
+    }
+    end setupInputMasking
 
 end DomBackend

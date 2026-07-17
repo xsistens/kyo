@@ -362,6 +362,9 @@ private[kyo] object HtmlRenderer:
         attrs.jsProps.toSeq.sortBy(_._1).foreach { case (name, value) =>
             w(sb, s""" data-kyo-prop-$name="${esc(value)}"""")
         }
+        // Unit 3: input filter/mask patterns (read by the client-local beforeinput listener).
+        attrs.inputFilter.foreach(p => w(sb, s""" data-kyo-filter="${esc(p)}""""))
+        attrs.inputMask.foreach(m => w(sb, s""" data-kyo-mask="${esc(m)}""""))
     end renderCommonAttrs
 
     // ---- Element-specific attributes ----
@@ -1178,10 +1181,59 @@ private[kyo] object HtmlRenderer:
            |  // Do NOT auto-call preventDefault: leave native-scroll suppression to the handler, matching DomBackend. Server-side rendering cannot synchronously decline the event, so the default is to NOT prevent.
            |  else if(t==="wheel"&&he(el,"wheel")){var whtid=e.target&&e.target.id?e.target.id:null;var sc={path:p,deltaX:e.deltaX,deltaY:e.deltaY,modifiers:{ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey}};if(whtid)sc.targetId=whtid;post({Scroll:sc});}
            |}
+           |// ---- Unit 3: client-local input filter/mask (document-level beforeinput capture listener) ----
+           |function kyoFilterStr(pat,str,t){
+           |  var out="";var hasSep=(pat==="decimal")&&(t.value.indexOf(".")>=0||t.value.indexOf(",")>=0);
+           |  for(var i=0;i<str.length;i++){var ch=str.charAt(i);
+           |    if(pat==="int"){if(ch>="0"&&ch<="9")out+=ch;}
+           |    else if(pat==="decimal"){if(ch>="0"&&ch<="9")out+=ch;else if((ch==="."||ch===",")&&!hasSep){out+=ch;hasSep=true;}}
+           |    else{if(pat.indexOf(ch)>=0)out+=ch;}}
+           |  return out;
+           |}
+           |function kyoMaskClassAt(mask,idx){var c=0;for(var i=0;i<mask.length;i++){var mc=mask.charAt(i);if(mc==="9"||mc==="a"||mc==="*"){if(c===idx)return mc;c++;}}return null;}
+           |function kyoMaskOk(cls,ch){if(cls==="9")return ch>="0"&&ch<="9";if(cls==="a")return (ch>="a"&&ch<="z")||(ch>="A"&&ch<="Z");return (ch>="0"&&ch<="9")||(ch>="a"&&ch<="z")||(ch>="A"&&ch<="Z");}
+           |function kyoMaskFormat(mask,raw){var out="";var ri=0;for(var i=0;i<mask.length;i++){var mc=mask.charAt(i);
+           |  if(mc==="9"||mc==="a"||mc==="*"){if(ri<raw.length){out+=raw.charAt(ri);ri++;}else break;}
+           |  else{if(ri<raw.length)out+=mc;else break;}}
+           |  return out;}
+           |function kyoMaskRaw(mask,val){var raw="";var vi=0;for(var i=0;i<mask.length&&vi<val.length;i++){var mc=mask.charAt(i);
+           |  if(mc==="9"||mc==="a"||mc==="*"){raw+=val.charAt(vi);vi++;}
+           |  else{if(val.charAt(vi)===mc)vi++;else{raw+=val.charAt(vi);vi++;}}}
+           |  return raw;}
+           |function kyoSetVal(t,v){t.value=v;if(typeof t.setSelectionRange==="function"){try{t.setSelectionRange(v.length,v.length);}catch(er){}}t.dispatchEvent(new Event("input",{bubbles:true}));}
+           |function kyoSetValAt(t,txt,s,en){var v=t.value;t.value=v.slice(0,s)+txt+v.slice(en);var np=s+txt.length;if(typeof t.setSelectionRange==="function"){try{t.setSelectionRange(np,np);}catch(er){}}t.dispatchEvent(new Event("input",{bubbles:true}));}
+           |function kyoBeforeInput(e){
+           |  var t=e.target;if(!t||!t.getAttribute)return;
+           |  var filt=t.getAttribute("data-kyo-filter");var mask=t.getAttribute("data-kyo-mask");
+           |  if(!filt&&!mask)return;
+           |  var it=e.inputType||"";
+           |  if(filt){
+           |    if(it.indexOf("delete")===0)return;
+           |    if(it==="insertText"||it==="insertReplacementText"||it==="insertCompositionText"){
+           |      var data=e.data;if(data==null)return;
+           |      var f1=kyoFilterStr(filt,data,t);
+           |      if(f1!==data){e.preventDefault();if(f1){var s=(typeof t.selectionStart==="number")?t.selectionStart:t.value.length;var en=(typeof t.selectionEnd==="number")?t.selectionEnd:s;kyoSetValAt(t,f1,s,en);}}
+           |    }else if(it==="insertFromPaste"||it==="insertFromDrop"){
+           |      e.preventDefault();var pasted=e.dataTransfer?e.dataTransfer.getData("text"):(e.data||"");
+           |      var f2=kyoFilterStr(filt,pasted,t);if(f2){var s2=(typeof t.selectionStart==="number")?t.selectionStart:t.value.length;var e2=(typeof t.selectionEnd==="number")?t.selectionEnd:s2;kyoSetValAt(t,f2,s2,e2);}
+           |    }
+           |    return;
+           |  }
+           |  if(mask){
+           |    if(it.indexOf("delete")===0){e.preventDefault();var raw=kyoMaskRaw(mask,t.value);raw=raw.slice(0,raw.length-1);kyoSetVal(t,kyoMaskFormat(mask,raw));return;}
+           |    if(it==="insertText"||it==="insertReplacementText"||it==="insertCompositionText"||it==="insertFromPaste"||it==="insertFromDrop"){
+           |      e.preventDefault();var ins=e.data;if((it==="insertFromPaste"||it==="insertFromDrop")&&e.dataTransfer)ins=e.dataTransfer.getData("text");if(ins==null)ins="";
+           |      var raw2=kyoMaskRaw(mask,t.value);
+           |      for(var ci=0;ci<ins.length;ci++){var cls=kyoMaskClassAt(mask,raw2.length);if(cls===null)break;var ch=ins.charAt(ci);if(kyoMaskOk(cls,ch))raw2+=ch;}
+           |      kyoSetVal(t,kyoMaskFormat(mask,raw2));return;
+           |    }
+           |  }
+           |}
            |["click","contextmenu","input","change","submit","keydown","keyup","focus","blur","mouseover","mouseout"].forEach(function(t){
            |  document.body.addEventListener(t,handle,true);
            |});
            |document.body.addEventListener("wheel",handle,{capture:true,passive:false});
+           |document.body.addEventListener("beforeinput",kyoBeforeInput,true);
            |})();""".stripMargin
 
     // ---- SVG tag and attribute rendering ----

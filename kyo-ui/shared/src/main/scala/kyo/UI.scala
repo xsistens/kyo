@@ -1104,6 +1104,21 @@ object UI:
 
             /** Binds the input to a `SignalRef` two-way: edits write the new text back into the ref, and ref changes update the input. */
             def value(v: SignalRef[String]): Self
+
+            /** Declarative client-local input FILTER (Unit 3): rejects disallowed characters as they are typed or pasted, via a
+              * document-level `beforeinput` capture listener. `pattern` is `"int"` (digits only), `"decimal"` (digits plus one
+              * separator), or a literal set of allowed characters. The server only ever sees the filtered value through the
+              * normal input/change events. Emits `data-kyo-filter="..."`.
+              */
+            def inputFilter(pattern: String): Self = withAttrs(attrs.copy(inputFilter = Present(pattern)))
+
+            /** Declarative client-local input MASK (Unit 3): formats the field progressively (auto-inserting literals,
+              * restricting each position's character class, handling backspace over literals, keeping the caret correct) via a
+              * document-level `beforeinput` capture listener. Prime-style tokens: `9`=digit, `a`=letter, `*`=alphanumeric; any
+              * other character is a literal (e.g. `"(999) 999-9999"`). The server receives the MASKED value through the normal
+              * input/change events. Emits `data-kyo-mask="..."`.
+              */
+            def inputMask(mask: String): Self = withAttrs(attrs.copy(inputMask = Present(mask)))
         end TextInput
 
         /** Capability trait for picker inputs that carry a `String` `value` and an `onChange` but no free-text typing (`select`, date/time/color, ...). */
@@ -1174,7 +1189,10 @@ object UI:
             dataAttrs: Map[String, String] = Map.empty,
             jsProps: Map[String, String] = Map.empty,
             cssClasses: Chunk[String] = Chunk.empty,
-            role: Maybe[String] = Absent
+            role: Maybe[String] = Absent,
+            // Unit 3: declarative client-local input filtering/masking on text inputs.
+            inputFilter: Maybe[String] = Absent,
+            inputMask: Maybe[String] = Absent
         )
 
         // ---- Non-element AST cases ----
