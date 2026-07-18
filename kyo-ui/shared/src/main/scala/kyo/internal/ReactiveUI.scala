@@ -940,7 +940,11 @@ private[kyo] object ReactiveUI:
         signalChangeTime: AtomicRef[Instant],
         presetMounts: Maybe[MountRegistry],
         mountDispatch: MountDispatch,
-        boundary: Maybe[BoundaryCtx]
+        boundary: Maybe[BoundaryCtx],
+        // True when this region IS a keyless mount's content cell: its paint flags the DOM node as a mount root so a
+        // parent's in-place update leaves the subtree alone (the mount repaints it itself). Keyed mounts stay false —
+        // their reset semantics rely on the parent painting the placeholder over the stale content.
+        mount: Boolean = false
     )(using Frame): Unit < (Async & Scope) =
         for
             regionMounts <- presetMounts match
@@ -953,7 +957,7 @@ private[kyo] object ReactiveUI:
                         _            <- signalChangeTime.set(now)
                         (newKids, _) <- walkStatic(current, path, svg, mountDispatch)
                         _            <- regionMounts.evictExcept(collectMountKeys(newKids))
-                        _            <- exchange.onChange(path, current)
+                        _            <- exchange.onChange(path, current, mount)
                         _ <- Kyo.foreachDiscard(newKids)(
                             subscribeScoped(_, exchange, signalChangeTime, regionMounts, mountDispatch, boundary)
                         )
@@ -1062,7 +1066,17 @@ private[kyo] object ReactiveUI:
                         settleOnce.run,
                         supervision
                     ))
-                    _ <- subscribeRegion(rui.path, cell, rui.svgContext, exchange, signalChangeTime, Absent, mountDispatch, boundary)
+                    _ <- subscribeRegion(
+                        rui.path,
+                        cell,
+                        rui.svgContext,
+                        exchange,
+                        signalChangeTime,
+                        Absent,
+                        mountDispatch,
+                        boundary,
+                        mount = true
+                    )
                 yield ()
 
     /** Once-only settle of a counted boundary entry — invocable from both the publish path and a teardown

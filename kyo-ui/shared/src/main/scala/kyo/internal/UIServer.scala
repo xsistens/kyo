@@ -72,7 +72,7 @@ private[kyo] object UIServer:
             private def svgContextAt(path: Seq[String]): Boolean =
                 ReactiveUI.findNode(root, path).map(_.svgContext).getOrElse(false)
 
-            def onChange(path: Seq[String], ui: UI)(using Frame): Unit < Async =
+            def onChange(path: Seq[String], ui: UI, mount: Boolean)(using Frame): Unit < Async =
                 HtmlRenderer.render(ui, path).map { html =>
                     val finalHtml = HtmlRenderer.wrapReactiveRegion(path, svgContextAt(path), html)
                     val op        = HtmlOp.Replace(path, finalHtml)

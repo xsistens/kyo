@@ -253,7 +253,7 @@ private[kyo] object DomBackend:
         private def svgContextAt(path: Seq[String]): Boolean =
             ReactiveUI.findNode(root, path).map(_.svgContext).getOrElse(false)
 
-        def onChange(path: Seq[String], ui: UI)(using Frame): Unit < Async =
+        def onChange(path: Seq[String], ui: UI, mount: Boolean)(using Frame): Unit < Async =
             HtmlRenderer.render(ui, path).map { html =>
                 // Always wrap the rendered html in the reactive boundary element so the node carrying
                 // data-kyo-path=path survives subsequent replacements. A Fragment, Text, or RawHtml value
@@ -261,12 +261,24 @@ private[kyo] object DomBackend:
                 // the next update could not locate the node. In SVG context the boundary is a <g> (a <span>
                 // is invalid inside <svg>); otherwise a <span> (CSS sets `display: contents` so it is layout-
                 // transparent).
-                val tag       = if svgContextAt(path) then "g" else "span"
-                val pathAttr  = path.mkString(".")
-                val finalHtml = s"""<$tag data-kyo-path="$pathAttr" data-kyo-reactive>$html</$tag>"""
+                val tag      = if svgContextAt(path) then "g" else "span"
+                val pathAttr = path.mkString(".")
+                // A keyless mount's content paint flags its root with data-kyo-mount so a parent region's morph treats
+                // it as opaque and never wipes the live subtree (the mount repaints it here). Client-only marker —
+                // never emitted by the server render, so golden HTML stays byte-identical.
+                val mountAttr = if mount then " data-kyo-mount" else ""
+                val finalHtml = s"""<$tag data-kyo-path="$pathAttr" data-kyo-reactive$mountAttr>$html</$tag>"""
                 Sync.defer {
                     val el = document.querySelector(s"""[data-kyo-path="$pathAttr"]""")
-                    if el != null && el.outerHTML != finalHtml then
+                    // An enclosing region (a `when`/gate that wraps the mount at the mount's own path) repaints this
+                    // slot on every re-render. While it still yields content, the live node is the mount root — which
+                    // owns its subtree and repaints it via its own mount=true paint — so leave it untouched. An EMPTY
+                    // repaint means the gate closed (open -> false): fall through so the morph empties the slot and the
+                    // panel is removed.
+                    if el != null && !mount && html.trim.nonEmpty &&
+                        el.asInstanceOf[dom.Element].hasAttribute("data-kyo-mount")
+                    then ()
+                    else if el != null && el.outerHTML != finalHtml then
                         // Capture focus and caret of the active element inside the replaced region,
                         // keyed on data-kyo-path identity (mirrors HtmlRenderer.clientJs:576-583 on
                         // the JS DOM API). Plain DOM inside the already-suspended Sync.defer; no new
@@ -506,6 +518,13 @@ private[kyo] object DomBackend:
             if el.hasAttribute("data-kyo-path") then el.getAttribute("data-kyo-path") else null
         else null
 
+    /** A live keyless-mount content root, flagged by the mount's own paint (data-kyo-mount). A parent region's morph
+      * reuses and repositions such a node but never reconciles its subtree — the mount owns it and repaints it in
+      * place — even though the parent's top-down HTML shows only the mount placeholder at that path.
+      */
+    private def isMountRoot(node: dom.Node): Boolean =
+        node.nodeType == 1 && node.asInstanceOf[dom.Element].hasAttribute("data-kyo-mount")
+
     /** Parse a single-wrapper HTML string to a detached root element. In SVG context the fragment is parsed inside a
       * throwaway `<svg>` so the parser produces real SVG elements (a bare `<g>` in an HTML template becomes an unknown
       * HTML element) — mirroring how `el.outerHTML =` parses against the live element's namespace.
@@ -519,15 +538,70 @@ private[kyo] object DomBackend:
     private def parseNewRoot(fromEl: dom.Element, html: String): dom.Element =
         val tpl = document.createElement("template").asInstanceOf[dom.HTMLTemplateElement]
         val svg = fromEl.namespaceURI == SvgNs && fromEl.tagName.toLowerCase != "svg"
-        if svg then
-            tpl.innerHTML = "<svg>" + html + "</svg>"
-            val outer = firstElementChildOf(tpl.content)
-            if outer == null then null else firstElementChildOf(outer)
-        else
-            tpl.innerHTML = html
-            firstElementChildOf(tpl.content)
-        end if
+        val root =
+            if svg then
+                tpl.innerHTML = "<svg>" + html + "</svg>"
+                val outer = firstElementChildOf(tpl.content)
+                if outer == null then null else firstElementChildOf(outer)
+            else
+                tpl.innerHTML = html
+                firstElementChildOf(tpl.content)
+        if root != null then collapseReactiveWrappers(root)
+        root
     end parseNewRoot
+
+    private def hasElementChild(el: dom.Element): Boolean =
+        var c     = el.firstChild
+        var found = false
+        while !found && c != null do
+            if c.nodeType == 1 then found = true
+            c = c.nextSibling
+        found
+    end hasElementChild
+
+    private def onlyElementChild(el: dom.Element): dom.Element =
+        var found: dom.Element = null
+        var count              = 0
+        var c                  = el.firstChild
+        while c != null do
+            if c.nodeType == 1 then
+                count += 1
+                found = c.asInstanceOf[dom.Element]
+            c = c.nextSibling
+        end while
+        if count == 1 then found else null
+    end onlyElementChild
+
+    /** Collapse a chain of transparent same-path reactive wrappers to a single wrapper. Nested reactive regions at one
+      * position (e.g. `open.render { hi.render { q.render { … } } }`) each emit a `<span data-kyo-path=P data-kyo-reactive>`
+      * around the same content, and a given region's paint carries only its own depth — so consecutive paints at path P
+      * arrive with different wrapper counts. Left as-is, morphing a shallow paint against a deep live subtree (or vice
+      * versa) forces a tag mismatch that replaces the whole subtree. The wrappers are `display: contents`, so collapsing
+      * them changes nothing visible and makes every paint at P present the same depth. A mount wrapper is never collapsed
+      * (its marker is load-bearing).
+      */
+    private def collapseReactiveWrappers(el: dom.Element): Unit =
+        if el.hasAttribute("data-kyo-reactive") && !el.hasAttribute("data-kyo-mount") then
+            val p    = el.getAttribute("data-kyo-path")
+            var cont = true
+            while cont do
+                val child = onlyElementChild(el)
+                if child != null && child.hasAttribute("data-kyo-reactive") &&
+                    child.getAttribute("data-kyo-path") == p && !child.hasAttribute("data-kyo-mount")
+                then
+                    while child.firstChild != null do discard(el.insertBefore(child.firstChild, child))
+                    discard(el.removeChild(child))
+                else cont = false
+                end if
+            end while
+        end if
+        var c = el.firstChild
+        while c != null do
+            val next = c.nextSibling
+            if c.nodeType == 1 then collapseReactiveWrappers(c.asInstanceOf[dom.Element])
+            c = next
+        end while
+    end collapseReactiveWrappers
 
     /** Patch `fromEl` in place toward `newHtml` (a single reactive-wrapper element string). A change of the root tag
       * cannot preserve identity, so it falls back to a replace.
@@ -535,9 +609,15 @@ private[kyo] object DomBackend:
     private def morph(fromEl: dom.Element, newHtml: String): Unit =
         val toEl = parseNewRoot(fromEl, newHtml)
         if toEl == null then ()
-        else if fromEl.tagName != toEl.tagName then
-            discard(fromEl.parentNode.replaceChild(document.importNode(toEl, true), fromEl))
-        else morphEl(fromEl, toEl)
+        else
+            // Normalize the live side the same way the parsed side was normalized, so a subtree that arrived from the
+            // server render (or an earlier paint) with redundant nested same-path wrappers aligns instead of forcing a
+            // whole-subtree replace.
+            collapseReactiveWrappers(fromEl)
+            if fromEl.tagName != toEl.tagName then
+                discard(fromEl.parentNode.replaceChild(document.importNode(toEl, true), fromEl))
+            else morphEl(fromEl, toEl)
+            end if
         end if
     end morph
 
@@ -550,6 +630,7 @@ private[kyo] object DomBackend:
             if fromEl.tagName != toEl.tagName then
                 discard(fromEl.parentNode.replaceChild(document.importNode(toEl, true), fromEl))
             else morphEl(fromEl, toEl)
+            end if
     end morphNode
 
     private def morphEl(fromEl: dom.Element, toEl: dom.Element): Unit =
@@ -621,7 +702,11 @@ private[kyo] object DomBackend:
                 if m != null then
                     if m ne curFrom then discard(fromParent.insertBefore(m, curFrom))
                     else curFrom = curFrom.nextSibling
-                    morphNode(m, curTo)
+                    // Opaque mount boundary: while the top-down slot still carries content, leave the live mount root's
+                    // subtree alone — the mount owns it and repaints it itself, so reconciling against the placeholder
+                    // would wipe the panel. An EMPTY slot means the enclosing gate closed (the mount tore down): morph
+                    // it normally so the panel is emptied and removed.
+                    if !(isMountRoot(m) && hasElementChild(curTo.asInstanceOf[dom.Element])) then morphNode(m, curTo)
                 else
                     discard(fromParent.insertBefore(document.importNode(curTo, true), curFrom))
                 end if
