@@ -99,6 +99,12 @@ private[kyo] object UIServer:
                                     m.path,
                                     UI.Rect(m.rectX, m.rectY, m.rectW, m.rectH, m.viewportW, m.viewportH)
                                 )
+                            // Self-addressing: the id-addressed measure reply routes by `id` to the id-keyed pending map.
+                            case m: UIEvent.MeasureById =>
+                                commands.deliverMeasureById(
+                                    m.id,
+                                    UI.Rect(m.rectX, m.rectY, m.rectW, m.rectH, m.viewportW, m.viewportH)
+                                )
                             case _ => handle(event.path, event).unit
                     // A malformed inbound frame (DecodeException) is dropped: a buggy client must not be able to tear
                     // down the session. A Panic is a decoder defect, not bad input, and must propagate.

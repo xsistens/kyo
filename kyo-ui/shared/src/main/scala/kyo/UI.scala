@@ -396,7 +396,9 @@ object UI:
       */
     final class Commands private[kyo] (
         private[kyo] val emit: internal.HtmlOp => Unit < Async,
-        private[kyo] val pending: AtomicRef[Map[Seq[String], Rect => Unit < Async]]
+        private[kyo] val pending: AtomicRef[Map[Seq[String], Rect => Unit < Async]],
+        private[kyo] val pendingById: AtomicRef[Map[String, Rect => Unit < Async]],
+        private[kyo] val idCounter: AtomicInt
     ):
         // ---- Unit 3: imperative command ----
 
@@ -430,12 +432,53 @@ object UI:
                     case Some(sink) => sink(rect)
                     case None       => ()
             }
+
+        // ---- Self-addressing: id minting + id-addressed command/measure ----
+
+        /** Mint a session-unique element id (`"kyo-uic-N"`, N monotonically increasing from 1). Deterministic within a
+          * session and unique across the page (no clock/random). The self-addressing pattern: a reusable component mints
+          * an id here, stamps it on one of its own elements (`.id(theId)` — id is a settable prop), and then drives
+          * [[focusId]] / [[scrollIntoViewId]] / [[requestMeasureById]] at that id — so it can self-focus/scroll/measure
+          * without ever learning its structural render path (which a component has no API to discover).
+          */
+        def freshId(using Frame): String < Sync = idCounter.incrementAndGet.map(n => s"kyo-uic-$n")
+
+        /** Id-addressed twin of [[command]]: send a whitelisted `verb` to the element with DOM id `id` (resolved client-side
+          * via `document.getElementById`). Same verb whitelist as [[command]]; unknown verbs are ignored (forward-compat).
+          */
+        def commandById(id: String, verb: String)(using Frame): Unit < Async =
+            emit(internal.HtmlOp.CommandById(id, verb))
+
+        /** `commandById(id, "focus")` — move DOM focus to the element with id `id`. */
+        def focusId(id: String)(using Frame): Unit < Async = commandById(id, "focus")
+
+        /** `commandById(id, "scrollIntoView")` — scroll the element with id `id` into view (`{block:"nearest"}`). */
+        def scrollIntoViewId(id: String)(using Frame): Unit < Async = commandById(id, "scrollIntoView")
+
+        /** Id-addressed twin of [[requestMeasure]]: measure the element with DOM id `id`. The reply (`UIEvent.MeasureById`)
+          * carries the `id`, so [[deliverMeasureById]] matches it against a SEPARATE id-keyed pending map (kept side by side
+          * with the path-keyed [[pending]] map for clarity). A second request for the same id replaces the pending callback.
+          */
+        def requestMeasureById(id: String)(sink: Rect => Unit < Async)(using Frame): Unit < Async =
+            pendingById.getAndUpdate(_.updated(id, sink)).andThen(emit(internal.HtmlOp.RequestMeasureById(id)))
+
+        /** Transport hook: resolve the pending [[requestMeasureById]] for `id` with `rect` (run + drop its callback). */
+        private[kyo] def deliverMeasureById(id: String, rect: Rect)(using Frame): Unit < Async =
+            pendingById.getAndUpdate(_.removed(id)).map { m =>
+                m.get(id) match
+                    case Some(sink) => sink(rect)
+                    case None       => ()
+            }
     end Commands
 
     private[kyo] object Commands:
         /** Create a session channel over `emit` (the per-transport op sink: `ws.put` server-side, direct DOM apply in the SPA). */
         def init(emit: internal.HtmlOp => Unit < Async)(using Frame): Commands < Sync =
-            AtomicRef.init(Map.empty[Seq[String], Rect => Unit < Async]).map(new Commands(emit, _))
+            for
+                pending     <- AtomicRef.init(Map.empty[Seq[String], Rect => Unit < Async])
+                pendingById <- AtomicRef.init(Map.empty[String, Rect => Unit < Async])
+                idCounter   <- AtomicInt.init(0)
+            yield new Commands(emit, pending, pendingById, idCounter)
     end Commands
 
     /** The session's [[kyo.UI.Commands]] channel (imperative commands + measure requests). Available inside any event handler

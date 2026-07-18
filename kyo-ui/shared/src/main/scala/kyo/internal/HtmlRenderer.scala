@@ -770,13 +770,10 @@ private[kyo] object HtmlRenderer:
            |    document.head.appendChild(s);
            |  }else if(op.Command){
            |    // Unit 3: whitelisted imperative command. Unknown verbs are ignored (forward-compat).
-           |    var cp=op.Command.path.join(".");
-           |    var cel=lbp(cp);
-           |    if(cel){
-           |      var cv=op.Command.verb;
-           |      if(cv==="focus"){if(typeof cel.focus==="function")cel.focus();}
-           |      else if(cv==="scrollIntoView"){if(typeof cel.scrollIntoView==="function")cel.scrollIntoView({block:"nearest"});}
-           |    }
+           |    kyoApplyVerb(lbp(op.Command.path.join(".")),op.Command.verb);
+           |  }else if(op.CommandById){
+           |    // Self-addressing: same verb whitelist, but resolve the target by DOM id (getElementById).
+           |    kyoApplyVerb(document.getElementById(op.CommandById.id),op.CommandById.verb);
            |  }else if(op.RequestMeasure){
            |    // Unit 2: measure the element and reply with a Measure event (element rect + viewport size).
            |    var rmp=op.RequestMeasure.path.join(".");
@@ -785,8 +782,22 @@ private[kyo] object HtmlRenderer:
            |      var rmr=rmel.getBoundingClientRect();
            |      post({Measure:{path:op.RequestMeasure.path,rectX:rmr.left,rectY:rmr.top,rectW:rmr.width,rectH:rmr.height,viewportW:window.innerWidth,viewportH:window.innerHeight}});
            |    }
+           |  }else if(op.RequestMeasureById){
+           |    // Self-addressing: measure by DOM id and reply with a MeasureById event carrying the id back (path is
+           |    // vestigial for id-routing, sent empty). The server routes it to Commands.deliverMeasureById(id).
+           |    var rmiel=document.getElementById(op.RequestMeasureById.id);
+           |    if(rmiel){
+           |      var rmir=rmiel.getBoundingClientRect();
+           |      post({MeasureById:{path:[],id:op.RequestMeasureById.id,rectX:rmir.left,rectY:rmir.top,rectW:rmir.width,rectH:rmir.height,viewportW:window.innerWidth,viewportH:window.innerHeight}});
+           |    }
            |  }
            |};
+           |// Self-addressing: shared whitelist for Command / CommandById. Unknown verbs are ignored (forward-compat).
+           |function kyoApplyVerb(el,verb){
+           |  if(!el)return;
+           |  if(verb==="focus"){if(typeof el.focus==="function")el.focus();}
+           |  else if(verb==="scrollIntoView"){if(typeof el.scrollIntoView==="function")el.scrollIntoView({block:"nearest"});}
+           |}
            |function fp(el){
            |  while(el&&el!==document.body){
            |    if(el.hasAttribute("data-kyo-path"))return el;

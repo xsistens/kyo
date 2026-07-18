@@ -54,4 +54,18 @@ private[kyo] enum UIEvent derives CanEqual, Schema:
         viewportW: Double,
         viewportH: Double
     )
+    // Self-addressing: the client's reply to HtmlOp.RequestMeasureById. Carries the `id` (not a render path), so the
+    // transport can resolve it against the session's id-keyed pending map via UI.Commands.deliverMeasureById. Routed
+    // by type in UIServer.dispatchEvent exactly like Measure — so `path` is never read for this case; it exists only
+    // to satisfy the enum's abstract `path` member and the client always sends it empty.
+    case MeasureById(
+        path: Seq[String],
+        id: String,
+        rectX: Double,
+        rectY: Double,
+        rectW: Double,
+        rectH: Double,
+        viewportW: Double,
+        viewportH: Double
+    )
 end UIEvent

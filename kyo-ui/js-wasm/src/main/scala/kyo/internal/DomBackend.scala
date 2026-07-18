@@ -104,9 +104,8 @@ private[kyo] object DomBackend:
 
     // ---- Unit 2/3: local op application for the SPA transport ----
 
-    /** Locate the element at `path`, preferring the non-wrapper match (reactive wrapper spans share the path). */
-    private def applyCommandDom(path: Seq[String], verb: String): Unit =
-        val el = locateByPath(path.mkString("."))
+    /** Apply a whitelisted `verb` to `el` (shared by path- and id-addressed commands). Unknown verbs are ignored. */
+    private def applyVerbDom(el: dom.Element, verb: String): Unit =
         if el != null then
             val dyn = el.asInstanceOf[scalajs.js.Dynamic]
             verb match
@@ -118,16 +117,28 @@ private[kyo] object DomBackend:
                 case _ => () // unknown verb: ignore (forward-compat)
             end match
         end if
-    end applyCommandDom
+    end applyVerbDom
 
-    private def measureDom(path: Seq[String]): Maybe[UI.Rect] =
-        val el = locateByPath(path.mkString("."))
+    /** Locate the element at `path`, preferring the non-wrapper match (reactive wrapper spans share the path). */
+    private def applyCommandDom(path: Seq[String], verb: String): Unit =
+        applyVerbDom(locateByPath(path.mkString(".")), verb)
+
+    /** Self-addressing: resolve the command target by DOM id (getElementById) instead of the render path. */
+    private def applyCommandDomById(id: String, verb: String): Unit =
+        applyVerbDom(document.getElementById(id), verb)
+
+    private def measureRect(el: dom.Element): Maybe[UI.Rect] =
         if el == null then Absent
         else
             val r = el.getBoundingClientRect()
             Present(UI.Rect(r.left, r.top, r.width, r.height, dom.window.innerWidth, dom.window.innerHeight))
-        end if
-    end measureDom
+
+    private def measureDom(path: Seq[String]): Maybe[UI.Rect] =
+        measureRect(locateByPath(path.mkString(".")))
+
+    /** Self-addressing: measure the element with DOM id `id` (getElementById). */
+    private def measureDomById(id: String): Maybe[UI.Rect] =
+        measureRect(document.getElementById(id))
 
     private def applyOpLocal(op: HtmlOp, commands: () => UI.Commands)(using Frame): Unit < Async =
         op match
@@ -135,6 +146,13 @@ private[kyo] object DomBackend:
             case HtmlOp.RequestMeasure(path) =>
                 Sync.defer(measureDom(path)).map {
                     case Present(rect) => commands().deliverMeasure(path, rect)
+                    case Absent        => Kyo.unit
+                }
+            // Self-addressing: id-addressed twins resolve the element via getElementById.
+            case HtmlOp.CommandById(id, verb) => Sync.defer(applyCommandDomById(id, verb))
+            case HtmlOp.RequestMeasureById(id) =>
+                Sync.defer(measureDomById(id)).map {
+                    case Present(rect) => commands().deliverMeasureById(id, rect)
                     case Absent        => Kyo.unit
                 }
             // Replace/Remove/InjectCss reach the DOM through LocalExchange, never this imperative channel.

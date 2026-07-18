@@ -16,4 +16,12 @@ private[kyo] object HtmlOp:
     // "focus" (element.focus()) and "scrollIntoView" (element.scrollIntoView({block:"nearest"})). Unknown verbs
     // are ignored by the client (forward-compat). Emitted imperatively via UI.Commands.command.
     case class Command(path: Seq[String], verb: String) extends HtmlOp derives Schema
+    // Self-addressing: id-addressed twins of Command / RequestMeasure. The client resolves the target with
+    // document.getElementById(id) instead of the data-kyo-path querySelector, so a reusable component that minted
+    // an id via UI.Commands.freshId and stamped it on its own element (id is a settable prop) can drive commands
+    // at itself without ever learning its structural render path. Same verb whitelist as Command.
+    case class CommandById(id: String, verb: String) extends HtmlOp derives Schema
+    // Id-addressed twin of RequestMeasure (see above). The client measures getElementById(id) and replies with a
+    // UIEvent.MeasureById carrying the same id, which the transport routes to UI.Commands.deliverMeasureById.
+    case class RequestMeasureById(id: String) extends HtmlOp derives Schema
 end HtmlOp
