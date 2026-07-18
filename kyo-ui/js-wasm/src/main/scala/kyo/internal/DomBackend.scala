@@ -15,6 +15,19 @@ private[kyo] object DomBackend:
       */
     private var focusReturnStack: List[(String, Maybe[String], Boolean)] = Nil
 
+    /** Unit 8: the page-scoped drain channel, captured once per mount so the viewport scroll/resize listeners (raw JS
+      * callbacks, outside any Kyo context) can bridge their `deliverMeasureById` effect back in via [[fireFromJs]]. Set
+      * in `mountInto` before any op can be emitted. Module-level mutable state is safe on the single-threaded JS runtime.
+      */
+    private var sessionEvents: Maybe[Channel[Unit < Async]] = Absent
+
+    /** Unit 8: live viewport observers for the SPA transport, keyed by element id. Each entry is the single handler
+      * registered for BOTH `window` scroll (capture phase) and resize; Unobserve removes it from both and drops the
+      * entry. Backed by a native `js.Map` (mirrors `UIMouseEventOps`), giving `contains`/`apply`/`update`/`remove`.
+      */
+    private val viewportObservers: js.WrappedMap[String, js.Function1[dom.Event, Unit]] =
+        new js.WrappedMap(js.Map.empty[String, js.Function1[dom.Event, Unit]])
+
     /** Mount a UI into the page body. */
     def mount(ui: UI)(using Frame): Unit < (Async & Scope) =
         mountInto(ui, document.body, Absent)
@@ -85,6 +98,8 @@ private[kyo] object DomBackend:
                     // Fiber.init consumer (interrupted on page teardown). The single consumer preserves event ordering
                     // and is scoped, so page teardown interrupt propagates to the drain via the ambient Scope.
                     events <- Channel.init[Unit < Async](256)
+                    // Unit 8: capture the drain so viewport listener callbacks can bridge deliverMeasureById back in.
+                    _ = sessionEvents = Present(events)
                     // runPartial captures only the Closed failure (the channel closed on page teardown -> stop draining); a
                     // Panic propagates rather than being silently swallowed as a clean drain end.
                     _ <- Fiber.init(Loop.foreach(Abort.runPartial[Closed](events.take).map {
@@ -155,9 +170,73 @@ private[kyo] object DomBackend:
                     case Present(rect) => commands().deliverMeasureById(id, rect)
                     case Absent        => Kyo.unit
                 }
+            // Unit 8: toggle a class in place (element stays in the DOM, so CSS transitions on the class fire).
+            case HtmlOp.SetClassById(id, className, on) =>
+                Sync.defer {
+                    val el = document.getElementById(id)
+                    if el != null then discard(el.classList.toggle(className, on))
+                }
+            // Unit 8: merge an inline-style declaration string over the element's existing inline props (no clobber).
+            case HtmlOp.SetStyleById(id, css) =>
+                Sync.defer(mergeStyleDomById(id, css))
+            // Unit 8: measure now + deliver, then attach the continuous scroll/resize observer for `id`.
+            case HtmlOp.ObserveViewportById(id) =>
+                Sync.defer(registerViewportObserver(id, commands)).andThen(
+                    Sync.defer(measureDomById(id)).map {
+                        case Present(rect) => commands().deliverMeasureById(id, rect)
+                        case Absent        => Kyo.unit
+                    }
+                )
+            // Unit 8: detach the scroll/resize observer previously registered for `id`.
+            case HtmlOp.UnobserveViewportById(id) =>
+                Sync.defer(unregisterViewportObserver(id))
             // Replace/Remove/InjectCss reach the DOM through LocalExchange, never this imperative channel.
             case _ => Kyo.unit
     end applyOpLocal
+
+    /** Unit 8: merge a serialized `Style` declaration string ("prop:val;prop:val") onto getElementById(id) via
+      * setProperty per declaration, so it MERGES over other inline props rather than clobbering them (unlike a full
+      * `style=""` replace). Blank declarations and those without a `:` are skipped.
+      */
+    private def mergeStyleDomById(id: String, css: String): Unit =
+        val el = document.getElementById(id)
+        if el != null then
+            val style = el.asInstanceOf[dom.HTMLElement].style
+            css.split(';').foreach { decl =>
+                val trimmed = decl.trim
+                if trimmed.nonEmpty then
+                    val colon = trimmed.indexOf(':')
+                    if colon > 0 then
+                        style.setProperty(trimmed.substring(0, colon).trim, trimmed.substring(colon + 1).trim)
+                end if
+            }
+        end if
+    end mergeStyleDomById
+
+    /** Unit 8: attach a single handler to `window` scroll (capture) + resize that re-measures getElementById(id) and
+      * bridges the deliver back into the drain via [[fireFromJs]]. Guards against double-registration for the same id.
+      */
+    private def registerViewportObserver(id: String, commands: () => UI.Commands)(using Frame): Unit =
+        if !viewportObservers.contains(id) then
+            val handler: js.Function1[dom.Event, Unit] = (_: dom.Event) =>
+                measureDomById(id) match
+                    case Present(rect) => sessionEvents.foreach(ev => fireFromJs(ev, commands().deliverMeasureById(id, rect)))
+                    case Absent        => ()
+            viewportObservers(id) = handler
+            dom.window.addEventListener("scroll", handler, true)
+            dom.window.addEventListener("resize", handler)
+        end if
+    end registerViewportObserver
+
+    /** Unit 8: remove the scroll/resize handler registered for `id` (from both listeners) and drop the map entry. */
+    private def unregisterViewportObserver(id: String): Unit =
+        if viewportObservers.contains(id) then
+            val handler = viewportObservers(id)
+            dom.window.removeEventListener("scroll", handler, true)
+            dom.window.removeEventListener("resize", handler)
+            discard(viewportObservers.remove(id))
+        end if
+    end unregisterViewportObserver
 
     /** Exchange that renders UI to HTML and applies directly to the DOM. */
     private class LocalExchange(root: ReactiveUI) extends UIExchange:

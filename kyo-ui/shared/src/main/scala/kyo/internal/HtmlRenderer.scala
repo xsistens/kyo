@@ -790,6 +790,33 @@ private[kyo] object HtmlRenderer:
            |      var rmir=rmiel.getBoundingClientRect();
            |      post({MeasureById:{path:[],id:op.RequestMeasureById.id,rectX:rmir.left,rectY:rmir.top,rectW:rmir.width,rectH:rmir.height,viewportW:window.innerWidth,viewportH:window.innerHeight}});
            |    }
+           |  }else if(op.SetClassById){
+           |    // Unit 8: toggle a class in place (element stays in the DOM, so CSS transitions on the class fire).
+           |    var scel=document.getElementById(op.SetClassById.id);if(scel)scel.classList.toggle(op.SetClassById.className,op.SetClassById.on);
+           |  }else if(op.SetStyleById){
+           |    // Unit 8: merge inline-style declarations (setProperty each) so other inline props are not clobbered.
+           |    var ssel=document.getElementById(op.SetStyleById.id);
+           |    if(ssel){var ssd=op.SetStyleById.css.split(";");for(var ssi=0;ssi<ssd.length;ssi++){var ssc=ssd[ssi].trim();if(!ssc)continue;var sso=ssc.indexOf(":");if(sso>0)ssel.style.setProperty(ssc.substring(0,sso).trim(),ssc.substring(sso+1).trim());}}
+           |  }else if(op.ObserveViewportById){
+           |    // Unit 8: measure now + attach capturing scroll + resize listeners that each reply with a MeasureById(id).
+           |    var vid=op.ObserveViewportById.id;
+           |    window.__kyoVpObs=window.__kyoVpObs||{};
+           |    if(!window.__kyoVpObs[vid]){
+           |      var vh=function(){var ve=document.getElementById(vid);if(ve){var vr=ve.getBoundingClientRect();post({MeasureById:{path:[],id:vid,rectX:vr.left,rectY:vr.top,rectW:vr.width,rectH:vr.height,viewportW:window.innerWidth,viewportH:window.innerHeight}});}};
+           |      window.__kyoVpObs[vid]=vh;
+           |      window.addEventListener("scroll",vh,true);
+           |      window.addEventListener("resize",vh);
+           |      vh();
+           |    }
+           |  }else if(op.UnobserveViewportById){
+           |    // Unit 8: detach the scroll/resize listeners registered for this id.
+           |    var uid=op.UnobserveViewportById.id;
+           |    if(window.__kyoVpObs&&window.__kyoVpObs[uid]){
+           |      var uh=window.__kyoVpObs[uid];
+           |      window.removeEventListener("scroll",uh,true);
+           |      window.removeEventListener("resize",uh);
+           |      delete window.__kyoVpObs[uid];
+           |    }
            |  }
            |};
            |// Self-addressing: shared whitelist for Command / CommandById. Unknown verbs are ignored (forward-compat).

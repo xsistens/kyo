@@ -24,4 +24,21 @@ private[kyo] object HtmlOp:
     // Id-addressed twin of RequestMeasure (see above). The client measures getElementById(id) and replies with a
     // UIEvent.MeasureById carrying the same id, which the transport routes to UI.Commands.deliverMeasureById.
     case class RequestMeasureById(id: String) extends HtmlOp derives Schema
+    // Unit 8 (in-place reactive patching): toggle a class on getElementById(id) WITHOUT replacing the element, so CSS
+    // transitions on that class fire (a full outerHTML replace loses the from-state). Client: el.classList.toggle(
+    // className, on) — the boolean-force form, so the op is idempotent with any baked-in initial class. Emitted by
+    // UI.Commands.bindClassById, which drives it from a Signal[Boolean].
+    case class SetClassById(id: String, className: String, on: Boolean) extends HtmlOp derives Schema
+    // Unit 8: merge an inline-style declaration string ("prop:val;prop:val") into getElementById(id) WITHOUT replacing
+    // the element. Client parses each `prop:val` and setProperty's it, so it MERGES over other inline props rather than
+    // clobbering them (unlike a full style="" replace). `css` is a serialized kyo.Style (CssStyleRenderer.render).
+    // Emitted by UI.Commands.bindStyleById from a Signal[Style].
+    case class SetStyleById(id: String, css: String) extends HtmlOp derives Schema
+    // Unit 8 (viewport observation): begin continuously measuring getElementById(id). The client measures now and
+    // attaches capturing scroll + resize listeners keyed by id; each fires a UIEvent.MeasureById(id) reply, routed to a
+    // PERSISTENT sink in UI.Commands.observers (kept, not consumed). Emitted by UI.Commands.observeViewportById.
+    case class ObserveViewportById(id: String) extends HtmlOp derives Schema
+    // Unit 8: stop the observation started by ObserveViewportById(id) — the client detaches the scroll/resize listeners
+    // registered for id. Emitted by observeViewportById's scope finalizer (which also drops the server-side sink).
+    case class UnobserveViewportById(id: String) extends HtmlOp derives Schema
 end HtmlOp
