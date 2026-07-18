@@ -28,6 +28,12 @@ private[kyo] object DomBackend:
     private val viewportObservers: js.WrappedMap[String, js.Function1[dom.Event, Unit]] =
         new js.WrappedMap(js.Map.empty[String, js.Function1[dom.Event, Unit]])
 
+    /** Ids whose `class`/`style` is owned by the imperative SetClassById/SetStyleById channel (applied out of the
+      * render pass so CSS transitions on the toggled class fire). The morph must not reconcile those attributes back
+      * to server HTML, which never carries the client-set class/style. Mirrors `__kyoOwned` in HtmlRenderer.clientJs.
+      */
+    private val clientOwnedIds = scala.collection.mutable.HashSet.empty[String]
+
     /** Mount a UI into the page body. */
     def mount(ui: UI)(using Frame): Unit < (Async & Scope) =
         mountInto(ui, document.body, Absent)
@@ -173,12 +179,16 @@ private[kyo] object DomBackend:
             // Unit 8: toggle a class in place (element stays in the DOM, so CSS transitions on the class fire).
             case HtmlOp.SetClassById(id, className, on) =>
                 Sync.defer {
+                    discard(clientOwnedIds.add(id))
                     val el = document.getElementById(id)
                     if el != null then discard(el.classList.toggle(className, on))
                 }
             // Unit 8: merge an inline-style declaration string over the element's existing inline props (no clobber).
             case HtmlOp.SetStyleById(id, css) =>
-                Sync.defer(mergeStyleDomById(id, css))
+                Sync.defer {
+                    discard(clientOwnedIds.add(id))
+                    mergeStyleDomById(id, css)
+                }
             // Unit 8: measure now + deliver, then attach the continuous scroll/resize observer for `id`.
             case HtmlOp.ObserveViewportById(id) =>
                 Sync.defer(registerViewportObserver(id, commands)).andThen(
@@ -281,7 +291,10 @@ private[kyo] object DomBackend:
                         // Unit 1: capture enter old-set + prepare leave ghosts (rect+clone) BEFORE the DOM mutates.
                         val oldEnter = enterPaths(el)
                         val ghosts   = prepareLeaveGhosts(el, leaveSurvSet(finalHtml))
-                        el.outerHTML = finalHtml
+                        // Morph the existing subtree toward finalHtml instead of replacing it, so focus/caret/scroll/
+                        // in-flight transitions on reused nodes survive the update. The surrounding capture-restore
+                        // ceremony is retained: it now largely no-ops (identity is preserved) but stays correct.
+                        morph(el, finalHtml)
                         val updated = document.querySelector(s"""[data-kyo-path="$pathAttr"]""")
                         if updated != null then
                             applyJsPropsSync(updated)
@@ -470,6 +483,184 @@ private[kyo] object DomBackend:
             })
         end if
     end beginAnimationsSync
+
+    // ---- DOM morphing: patch an existing subtree in place toward new HTML, preserving element identity ----
+    //
+    // Replacing a reactive region with `el.outerHTML = html` discards every DOM-local state the browser keeps on the
+    // nodes: focus, caret/selection, scroll offset, in-flight CSS transitions and `setPointerCapture` sessions. Morphing
+    // reuses the existing nodes and patches only what differs, so that state survives an update.
+    //
+    // Reconciliation is SIBLING-SCOPED and keyed on `data-kyo-path`: within one parent's child list a `data-kyo-path`
+    // is unique (Foreach items get `path :+ key`, element children `path :+ i`), so it is a stable per-child key that
+    // survives reordering. Across the wrapper/inner nesting the SAME path repeats at different levels, so the keyed
+    // lookup is rebuilt per child list and is never global — a document-wide id set (Idiomorph's optimization) would
+    // mis-match a wrapper against its own child. Twin of `__kyoMorph` in HtmlRenderer.clientJs; keep the two in lockstep.
+    private val SvgNs = "http://www.w3.org/2000/svg"
+
+    /** The reconciliation key of a node: its `data-kyo-path` when it is an element carrying one, else null (text,
+      * comment, and unkeyed elements reconcile positionally).
+      */
+    private def kyoKey(node: dom.Node): String =
+        if node.nodeType == 1 then
+            val el = node.asInstanceOf[dom.Element]
+            if el.hasAttribute("data-kyo-path") then el.getAttribute("data-kyo-path") else null
+        else null
+
+    /** Parse a single-wrapper HTML string to a detached root element. In SVG context the fragment is parsed inside a
+      * throwaway `<svg>` so the parser produces real SVG elements (a bare `<g>` in an HTML template becomes an unknown
+      * HTML element) — mirroring how `el.outerHTML =` parses against the live element's namespace.
+      */
+    private def firstElementChildOf(parent: dom.Node): dom.Element =
+        var c = parent.firstChild
+        while c != null && c.nodeType != 1 do c = c.nextSibling
+        if c == null then null else c.asInstanceOf[dom.Element]
+    end firstElementChildOf
+
+    private def parseNewRoot(fromEl: dom.Element, html: String): dom.Element =
+        val tpl = document.createElement("template").asInstanceOf[dom.HTMLTemplateElement]
+        val svg = fromEl.namespaceURI == SvgNs && fromEl.tagName.toLowerCase != "svg"
+        if svg then
+            tpl.innerHTML = "<svg>" + html + "</svg>"
+            val outer = firstElementChildOf(tpl.content)
+            if outer == null then null else firstElementChildOf(outer)
+        else
+            tpl.innerHTML = html
+            firstElementChildOf(tpl.content)
+        end if
+    end parseNewRoot
+
+    /** Patch `fromEl` in place toward `newHtml` (a single reactive-wrapper element string). A change of the root tag
+      * cannot preserve identity, so it falls back to a replace.
+      */
+    private def morph(fromEl: dom.Element, newHtml: String): Unit =
+        val toEl = parseNewRoot(fromEl, newHtml)
+        if toEl == null then ()
+        else if fromEl.tagName != toEl.tagName then
+            discard(fromEl.parentNode.replaceChild(document.importNode(toEl, true), fromEl))
+        else morphEl(fromEl, toEl)
+        end if
+    end morph
+
+    private def morphNode(fromNode: dom.Node, toNode: dom.Node): Unit =
+        if toNode.nodeType != 1 then
+            if fromNode.nodeValue != toNode.nodeValue then fromNode.nodeValue = toNode.nodeValue
+        else
+            val fromEl = fromNode.asInstanceOf[dom.Element]
+            val toEl   = toNode.asInstanceOf[dom.Element]
+            if fromEl.tagName != toEl.tagName then
+                discard(fromEl.parentNode.replaceChild(document.importNode(toEl, true), fromEl))
+            else morphEl(fromEl, toEl)
+    end morphNode
+
+    private def morphEl(fromEl: dom.Element, toEl: dom.Element): Unit =
+        morphAttrs(fromEl, toEl)
+        // A focused contenteditable would lose its caret if its children were rewritten mid-edit; leave its subtree
+        // alone (INPUT/TEXTAREA have no element children, so they need no such guard).
+        val editing = (fromEl eq document.activeElement) && fromEl.hasAttribute("contenteditable")
+        if !editing then morphChildren(fromEl, toEl)
+    end morphEl
+
+    private def morphAttrs(fromEl: dom.Element, toEl: dom.Element): Unit =
+        val id      = fromEl.getAttribute("id")
+        val ownedCS = id != null && clientOwnedIds.contains(id)
+        val tag     = fromEl.tagName
+        val activeInput =
+            (fromEl eq document.activeElement) && (tag == "INPUT" || tag == "TEXTAREA")
+        val toAttrs = toEl.attributes
+        var i       = 0
+        while i < toAttrs.length do
+            val a    = toAttrs(i)
+            val name = a.name
+            if !(ownedCS && (name == "class" || name == "style")) && fromEl.getAttribute(name) != a.value then
+                fromEl.setAttribute(name, a.value)
+            i += 1
+        end while
+        val fromNames = (0 until fromEl.attributes.length).map(fromEl.attributes(_).name)
+        fromNames.foreach { name =>
+            if !(ownedCS && (name == "class" || name == "style")) && !toEl.hasAttribute(name) then
+                fromEl.removeAttribute(name)
+        }
+        // Active-input preservation: two-way binding echoes each keystroke back as a re-render. Never overwrite the
+        // focused field's live `.value` (and thus its caret) with its own echo — that value already matches, so assign
+        // only a genuine external change (submit-clear, programmatic update). Subsumes the HtmlRenderer.clientJs input hack.
+        if activeInput then
+            val nv =
+                if tag == "TEXTAREA" then toEl.textContent
+                else
+                    val v = toEl.getAttribute("value")
+                    if v == null then "" else v
+            val dyn = fromEl.asInstanceOf[scalajs.js.Dynamic]
+            if nv != dyn.value.asInstanceOf[String] then dyn.value = nv
+        end if
+    end morphAttrs
+
+    private def morphChildren(fromParent: dom.Element, toParent: dom.Element): Unit =
+        // Sibling-scoped keyed lookups over the DIRECT children only (keys are unique among siblings). `toKeyed`
+        // records which stale from-children are reused elsewhere so an unkeyed slot does not destroy them.
+        val fromKeyed = js.Dictionary.empty[dom.Node]
+        val toKeyed   = js.Dictionary.empty[Boolean]
+        var scan      = fromParent.firstChild
+        while scan != null do
+            val k = kyoKey(scan)
+            if k != null then fromKeyed(k) = scan
+            scan = scan.nextSibling
+        end while
+        scan = toParent.firstChild
+        while scan != null do
+            val k = kyoKey(scan)
+            if k != null then toKeyed(k) = true
+            scan = scan.nextSibling
+        end while
+        var curFrom = fromParent.firstChild
+        var curTo   = toParent.firstChild
+        while curTo != null do
+            val toNext = curTo.nextSibling
+            val tKey   = kyoKey(curTo)
+            if tKey != null then
+                val m = fromKeyed.get(tKey).orNull
+                if m != null then
+                    if m ne curFrom then discard(fromParent.insertBefore(m, curFrom))
+                    else curFrom = curFrom.nextSibling
+                    morphNode(m, curTo)
+                else
+                    discard(fromParent.insertBefore(document.importNode(curTo, true), curFrom))
+                end if
+            else
+                var handled = false
+                var loop    = true
+                while loop && curFrom != null do
+                    val fNext = curFrom.nextSibling
+                    val fKey  = kyoKey(curFrom)
+                    if fKey != null then
+                        // A keyed from-child sitting at an unkeyed slot: keep it if `to` reuses it (its own slot will
+                        // move it into place), otherwise it is stale and removed here.
+                        if !toKeyed.contains(fKey) then discard(fromParent.removeChild(curFrom))
+                        curFrom = fNext
+                    else if compatible(curFrom, curTo) then
+                        morphNode(curFrom, curTo)
+                        curFrom = fNext
+                        handled = true
+                        loop = false
+                    else
+                        discard(fromParent.removeChild(curFrom))
+                        curFrom = fNext
+                    end if
+                end while
+                if !handled then discard(fromParent.insertBefore(document.importNode(curTo, true), curFrom))
+            end if
+            curTo = toNext
+        end while
+        while curFrom != null do
+            val fNext = curFrom.nextSibling
+            discard(fromParent.removeChild(curFrom))
+            curFrom = fNext
+        end while
+    end morphChildren
+
+    /** Two nodes may be patched into each other positionally: same node kind, and for elements the same tag. */
+    private def compatible(a: dom.Node, b: dom.Node): Boolean =
+        a.nodeType == b.nodeType &&
+            (a.nodeType != 1 || a.asInstanceOf[dom.Element].tagName == b.asInstanceOf[dom.Element].tagName)
 
     /** Set up capture-phase event delegation on document.body. */
     private def setupEventDelegation(dispatch: (Seq[String], UIEvent) => Boolean < Async, events: Channel[Unit < Async])(using
