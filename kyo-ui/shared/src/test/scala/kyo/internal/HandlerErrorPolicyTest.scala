@@ -11,7 +11,7 @@ class HandlerErrorPolicyTest extends kyo.test.Test[Any]:
     private val boom = new RuntimeException("action failed")
 
     private val silentExchange = new UIExchange:
-        def onChange(path: Seq[String], changed: UI)(using Frame): Unit < Async = ()
+        def onChange(path: Seq[String], changed: UI, mount: Boolean)(using Frame): Unit < Async = ()
 
     private def click(path: Seq[String]): UIEvent =
         UIEvent.Click(path, MouseEventData(UI.Modifiers.none, Absent))
