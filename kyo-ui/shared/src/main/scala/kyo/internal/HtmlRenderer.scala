@@ -584,6 +584,7 @@ private[kyo] object HtmlRenderer:
         if attrs.onHover.nonEmpty || attrs.onHoverEvt.nonEmpty then events += "mouseover"
         if attrs.onUnhover.nonEmpty || attrs.onUnhoverEvt.nonEmpty then events += "mouseout"
         if attrs.onScroll.nonEmpty || attrs.onScrollEvt.nonEmpty then events += "wheel"
+        if attrs.onScrollPos.nonEmpty then events += "scroll"
         // "input" event: when handler is set OR when .value(SignalRef) auto-binding is in use
         elem match
             case ti: TextInput if ti.onInput.nonEmpty || hasSignalRefValue(ti.value) => events += "input"
@@ -1035,6 +1036,10 @@ private[kyo] object HtmlRenderer:
            |function mkMouse(mods,tid){var m={modifiers:mods};if(tid)m.targetId=tid;return m;}
            |// Build a keyboard payload, omitting targetId when absent.
            |function mkKbd(key,mods,tid){var k={key:key,modifiers:mods};if(tid)k.targetId=tid;return k;}
+           |// Native scroll POSITION (onScrollPosition): rAF-coalesce bursts to one post per frame. Scroll does not
+           |// bubble, but the capture-phase body listener catches descendant viewport scrolls.
+           |var __scrRaf=0,__scrEl=null,__scrPath=null;
+           |function __scrFlush(){__scrRaf=0;if(__scrEl){var stid=__scrEl.id?__scrEl.id:null;var sp={path:__scrPath,scrollTop:__scrEl.scrollTop,scrollLeft:__scrEl.scrollLeft};if(stid)sp.targetId=stid;post({ScrollPosition:sp});}}
            |function handle(e){
            |  var el=fp(e.target);
            |  if(!el)return;
@@ -1102,6 +1107,15 @@ private[kyo] object HtmlRenderer:
            |    else post({Change:{path:p,value:tgt.value}});
            |  }else if(t==="submit"){e.preventDefault();if(!window._kyoClickSubmit&&he(el,"submit")){var smid=e.target&&e.target.id?e.target.id:null;post({Submit:{path:p,mouse:mkMouse({ctrl:false,alt:false,shift:false,meta:false},smid)}});}}
            |  else if(t==="keydown"){
+           |    // preventScrollKeys: suppress the browser's native page-scroll for navigation keys inside a region that
+           |    // declared preventScrollKeys (data-kyo-scroll-keys). Vertical keys always; horizontal/edge keys only when
+           |    // the target is not text-editable (so a filter input keeps caret movement). The keydown still posts below.
+           |    if(e.target&&e.target.closest&&e.target.closest('[data-kyo-scroll-keys]')){
+           |      var __sk=e.target,__ed=(/^(INPUT|TEXTAREA|SELECT)$$/.test(__sk.tagName)||__sk.isContentEditable);
+           |      var __vk=(e.key==="ArrowUp"||e.key==="ArrowDown"||e.key==="PageUp"||e.key==="PageDown");
+           |      var __hk=(e.key==="ArrowLeft"||e.key==="ArrowRight"||e.key==="Home"||e.key==="End");
+           |      if(__vk||(__hk&&!__ed))e.preventDefault();
+           |    }
            |    // Focus-trap: when Tab is pressed inside a [data-kyo-focus-trap="1"] container,
            |    // wrap focus within the trap's focusable children instead of escaping to the page.
            |    // Escape falls through so the element's onKeyDown handler can close the modal.
@@ -1244,6 +1258,7 @@ private[kyo] object HtmlRenderer:
            |  else if(t==="mouseout"&&he(el,"mouseout")){var uhotid=e.target&&e.target.id?e.target.id:null;post({Unhover:{path:p,mouse:mkMouse({ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},uhotid)}});}
            |  // Do NOT auto-call preventDefault: leave native-scroll suppression to the handler, matching DomBackend. Server-side rendering cannot synchronously decline the event, so the default is to NOT prevent.
            |  else if(t==="wheel"&&he(el,"wheel")){var whtid=e.target&&e.target.id?e.target.id:null;var sc={path:p,deltaX:e.deltaX,deltaY:e.deltaY,modifiers:{ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey}};if(whtid)sc.targetId=whtid;post({Scroll:sc});}
+           |  else if(t==="scroll"&&he(el,"scroll")){__scrEl=el;__scrPath=p;if(!__scrRaf)__scrRaf=requestAnimationFrame(__scrFlush);}
            |}
            |// ---- Unit 3: client-local input filter/mask (document-level beforeinput capture listener) ----
            |function kyoFilterStr(pat,str,t){
@@ -1297,6 +1312,7 @@ private[kyo] object HtmlRenderer:
            |  document.body.addEventListener(t,handle,true);
            |});
            |document.body.addEventListener("wheel",handle,{capture:true,passive:false});
+           |document.body.addEventListener("scroll",handle,{capture:true,passive:true});
            |document.body.addEventListener("beforeinput",kyoBeforeInput,true);
            |// ---- Unit 1: pointer/drag session (setPointerCapture + rAF-coalesced move stream) ----
            |var __ptrActive=false,__ptrEl=null,__ptrPath=null,__ptrRaf=0,__ptrPendingEv=null;

@@ -498,6 +498,16 @@ private[kyo] object DomBackend:
             def contains(t: String): Boolean = declaredInChain(target, t)
 
         val handler: scalajs.js.Function1[dom.Event, Unit] = (e: dom.Event) =>
+            // preventScrollKeys: suppress the browser's native page-scroll for navigation keys inside a region that
+            // declared `preventScrollKeys` (data-kyo-scroll-keys). Runs before path resolution so it fires even when
+            // the focused descendant is not itself a path element; the keydown is still forwarded below so the
+            // region's onKeyDown (highlight move) runs. Mirrors PrimeReact's per-handler preventDefault.
+            if e.`type` == "keydown" then
+                val ke  = e.asInstanceOf[dom.KeyboardEvent]
+                val tgt = e.target.asInstanceOf[dom.Element]
+                if tgt != null && scrollKeyPrevented(ke.key, tgt) && tgt.closest("[data-kyo-scroll-keys]") != null then
+                    e.preventDefault()
+            end if
             findPathElement(e.target.asInstanceOf[dom.Element]).foreach { target =>
                 val path    = parsePath(target.getAttribute("data-kyo-path"))
                 val evTypes = ChainTypes(target)
@@ -668,6 +678,33 @@ private[kyo] object DomBackend:
             handler,
             js.Dynamic.literal(capture = true, passive = false).asInstanceOf[dom.EventListenerOptions]
         )
+        // Native scroll POSITION (onScrollPosition): a separate rAF-coalesced listener so a scroll burst collapses to
+        // one dispatch per frame. Scroll does not bubble, but the capture-phase body listener catches descendant
+        // viewport scrolls; a page-level scroll (target has no data-kyo-path) resolves to Absent and is ignored.
+        var scrRaf               = 0
+        var scrEl: dom.Element   = null
+        var scrPath: Seq[String] = Seq.empty
+        val scrollHandler: scalajs.js.Function1[dom.Event, Unit] = (e: dom.Event) =>
+            findPathElement(e.target.asInstanceOf[dom.Element]).foreach { target =>
+                if declaredInChain(target, "scroll") then
+                    scrEl = target
+                    scrPath = parsePath(target.getAttribute("data-kyo-path"))
+                    if scrRaf == 0 then
+                        scrRaf = dom.window.requestAnimationFrame { (_: Double) =>
+                            scrRaf = 0
+                            val sid = Maybe(scrEl.id).filter(_.nonEmpty)
+                            fireFromJs(
+                                events,
+                                dispatch(scrPath, UIEvent.ScrollPosition(scrPath, scrEl.scrollTop, scrEl.scrollLeft, sid)).unit
+                            )
+                        }
+                    end if
+            }
+        document.body.addEventListener(
+            "scroll",
+            scrollHandler,
+            js.Dynamic.literal(capture = true, passive = true).asInstanceOf[dom.EventListenerOptions]
+        )
     }
     end setupEventDelegation
 
@@ -682,6 +719,23 @@ private[kyo] object DomBackend:
     private def parsePath(p: String): Seq[String] =
         if p == null || p.isEmpty then Seq.empty
         else p.split("\\.").toSeq
+
+    /** True when `key` is a page-scrolling navigation key a `preventScrollKeys` region should suppress on `target`.
+      * Vertical keys are always suppressed; horizontal/edge keys only when `target` is not text-editable, so a filter
+      * input keeps caret movement.
+      */
+    private def scrollKeyPrevented(key: String, target: dom.Element): Boolean =
+        def editable =
+            val tag = target.tagName
+            tag == "INPUT" || tag == "TEXTAREA" || tag == "SELECT" ||
+            target.asInstanceOf[scalajs.js.Dynamic].isContentEditable.asInstanceOf[Boolean]
+        end editable
+        key match
+            case "ArrowUp" | "ArrowDown" | "PageUp" | "PageDown" => true
+            case "ArrowLeft" | "ArrowRight" | "Home" | "End"     => !editable
+            case _                                               => false
+        end match
+    end scrollKeyPrevented
 
     // ---- Unit 1: pointer/drag delegation (SPA transport) ----
 

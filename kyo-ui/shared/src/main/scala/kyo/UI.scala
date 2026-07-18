@@ -838,6 +838,17 @@ object UI:
         modifiers: Modifiers
     ) derives CanEqual
 
+    /** The payload delivered to an `onScrollPosition` handler: the element's resulting native scroll offset
+      * (`scrollTop`/`scrollLeft`) after a scroll gesture, plus the scrolled element's `id` (`Absent` when it has
+      * none). Unlike [[WheelEvent]] (a per-notch mouse-wheel delta), this reports the browser-owned scroll POSITION
+      * and fires for every scroll input — wheel, scrollbar drag, touch, keyboard.
+      */
+    final case class ScrollPositionEvent(
+        scrollTop: Double,
+        scrollLeft: Double,
+        targetId: Maybe[String]
+    ) derives CanEqual
+
     /** The payload delivered to an `onPointerDown`/`onPointerMove`/`onPointerUp` handler (Unit 1), and the wire payload of the
       * corresponding `UIEvent` cases.
       *
@@ -1055,6 +1066,22 @@ object UI:
               */
             def stopPropagation(v: Boolean): Self = withAttrs(attrs.copy(stopPropagation = Present(v)))
 
+            /** Marks this element (and its subtree) as a keyboard-navigation region whose page-scrolling keys are
+              * suppressed. While focus is on this element or a descendant, the client calls `preventDefault()`
+              * synchronously for the navigation keys so the browser does not ALSO scroll the page; the keydown is
+              * still forwarded, so this element's own `onKeyDown` (e.g. moving an option highlight) runs unchanged.
+              *
+              * Vertical keys (`ArrowUp`/`ArrowDown`/`PageUp`/`PageDown`) are always suppressed. Horizontal/edge keys
+              * (`ArrowLeft`/`ArrowRight`/`Home`/`End`) are suppressed only when the focused target is NOT a text-editable
+              * field, so caret movement inside a filter input keeps working.
+              *
+              * Declarative by necessity: a kyo-ui handler runs asynchronously (and remotely on the server-push
+              * transport), so it cannot decline the browser default in time. Both transports therefore read the emitted
+              * `data-kyo-scroll-keys` attribute in the browser before posting the event — the fork-native equivalent of
+              * the imperative `event.preventDefault()` PrimeReact/PrimeVue call in every arrow-key handler.
+              */
+            def preventScrollKeys: Self = withAttrs(attrs.copy(dataAttrs = attrs.dataAttrs.updated("kyo-scroll-keys", "1")))
+
             /** Runs `action` on click, ignoring the event payload. */
             def onClick[S](action: => Any < (Abort[Throwable] & Async & S))(using Isolate[S, Sync, S]): Self =
                 withAttrs(attrs.copy(onClick = Present(eraseHandler(Sync.defer(action)(using frame)))))
@@ -1121,6 +1148,19 @@ object UI:
             /** Runs `f` when the mouse wheel is used over this element, receiving the [[kyo.UI.WheelEvent]] payload. */
             def onScroll[S](f: WheelEvent => Any < (Abort[Throwable] & Async & S))(using Isolate[S, Sync, S]): Self =
                 withAttrs(attrs.copy(onScrollEvt = Present(eraseHandlerFn(f))))
+
+            /** Runs `f` when this element is natively scrolled (a real `overflow:auto`/`scroll` viewport), receiving the
+              * [[kyo.UI.ScrollPositionEvent]] payload (`scrollTop`/`scrollLeft`). Unlike [[onScroll]] (a per-notch wheel
+              * delta), this fires for ALL scroll input — wheel, scrollbar drag, touch, keyboard — because the browser
+              * owns the scroll and reports the resulting position; the client rAF-coalesces bursts to one event per frame.
+              * Intended for server-authoritative virtual scrolling: the browser scrolls a full-height spacer natively and
+              * the server repositions the rendered window from the reported `scrollTop`. Emits the `scroll` token in
+              * `data-kyo-ev`.
+              */
+            def onScrollPosition[S](f: ScrollPositionEvent => Any < (Abort[Throwable] & Async & S))(using
+                Isolate[S, Sync, S]
+            ): Self =
+                withAttrs(attrs.copy(onScrollPos = Present(eraseHandlerFn(f))))
 
             /** Runs `f` when files are selected on a descendant file input (Unit 2), receiving the full list of
               * [[kyo.UI.FilePayload]] (name, size, MIME type, and text content of every selected file). The client reads all
@@ -1394,6 +1434,7 @@ object UI:
             onUnhoverEvt: Maybe[MouseEvent => Any < Async] = Absent,
             onScroll: Maybe[Any < Async] = Absent,
             onScrollEvt: Maybe[WheelEvent => Any < Async] = Absent,
+            onScrollPos: Maybe[ScrollPositionEvent => Any < Async] = Absent,
             // Unit 2: file-metadata selection handler (receives name/size/MIME/content for all selected files).
             onFileSelect: Maybe[Seq[UI.FilePayload] => Any < Async] = Absent,
             // Unit 1: pointer/drag handlers (receive the UI.PointerEvent payload).

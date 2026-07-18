@@ -34,6 +34,9 @@ private[kyo] enum UIEvent derives CanEqual, Schema:
     case Focus(path: Seq[String], mouse: MouseEventData)
     case Blur(path: Seq[String], mouse: MouseEventData)
     case Scroll(path: Seq[String], deltaX: Double, deltaY: Double, modifiers: UI.Modifiers, targetId: Maybe[String])
+    // Native scroll POSITION (onScrollPosition): the browser-owned scrollTop/scrollLeft after a scroll gesture on a
+    // real overflow:auto/scroll viewport. Distinct from Scroll (a per-notch wheel delta); client rAF-coalesced.
+    case ScrollPosition(path: Seq[String], scrollTop: Double, scrollLeft: Double, targetId: Maybe[String])
     case Hover(path: Seq[String], mouse: MouseEventData)
     case Unhover(path: Seq[String], mouse: MouseEventData)
     // Unit 1: pointer/drag events. `pointer` is UI.PointerEvent, which derives Schema, so (like UI.FilePayload

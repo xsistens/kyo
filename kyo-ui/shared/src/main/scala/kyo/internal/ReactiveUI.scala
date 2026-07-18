@@ -808,6 +808,10 @@ private[kyo] object ReactiveUI:
                 val wheel = UI.WheelEvent(ev.deltaX, ev.deltaY, ev.targetId, ev.modifiers)
                 invoke(attrs.onScroll).andThen(invokeWith(attrs.onScrollEvt, wheel))
                     .andThen(keepBubbling(elem, attrs.onScroll.nonEmpty || attrs.onScrollEvt.nonEmpty))
+            case ev: UIEvent.ScrollPosition =>
+                val sp = UI.ScrollPositionEvent(ev.scrollTop, ev.scrollLeft, ev.targetId)
+                invokeWith(attrs.onScrollPos, sp)
+                    .andThen(keepBubbling(elem, attrs.onScrollPos.nonEmpty))
             // Unit 1: pointer/drag events. The payload (UI.PointerEvent) is already the handler value (it rides the
             // wire directly, like FileSelect), so nothing is read from the element. Bubble like Click.
             case ev: UIEvent.PointerDown =>
