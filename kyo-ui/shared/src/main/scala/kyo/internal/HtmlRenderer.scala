@@ -993,7 +993,12 @@ private[kyo] object HtmlRenderer:
            |    var node=out[n];var rect=node.getBoundingClientRect();var leave=node.getAttribute("data-kyo-leave");
            |    var g=node.cloneNode(true);kyoStrip(g);
            |    g.style.position="fixed";g.style.left=rect.left+"px";g.style.top=rect.top+"px";
-           |    g.style.width=rect.width+"px";g.style.height=rect.height+"px";g.style.margin="0";g.style.pointerEvents="none";
+           |    g.style.width=rect.width+"px";g.style.height=rect.height+"px";
+           |    // Neutralize any %-based min/max size the clone's classes carry (e.g. an
+           |    // overlay panel's min-width:100%) — at <body> it resolves to the viewport
+           |    // and would OVERRIDE the pinned width, ballooning the ghost full-width.
+           |    g.style.minWidth="0";g.style.maxWidth="none";g.style.minHeight="0";g.style.maxHeight="none";
+           |    g.style.margin="0";g.style.pointerEvents="none";
            |    g.setAttribute("data-kyo-ghost","1");
            |    ghosts.push({node:g,leave:leave});
            |  }
