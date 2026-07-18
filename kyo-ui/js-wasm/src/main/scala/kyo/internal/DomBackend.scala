@@ -305,9 +305,9 @@ private[kyo] object DomBackend:
                         val ghosts   = prepareLeaveGhosts(el, leaveSurvSet(finalHtml))
                         // Morph the existing subtree toward finalHtml instead of replacing it, so focus/caret/scroll/
                         // in-flight transitions on reused nodes survive the update. The surrounding capture-restore
-                        // ceremony is retained: it now largely no-ops (identity is preserved) but stays correct.
-                        morph(el, finalHtml)
-                        val updated = document.querySelector(s"""[data-kyo-path="$pathAttr"]""")
+                        // ceremony is retained: it now largely no-ops (identity is preserved) but stays correct. morph
+                        // returns the region root, so the caller does not re-query the document for the path.
+                        val updated = morph(el, finalHtml)
                         if updated != null then
                             applyJsPropsSync(updated)
                             beginAnimationsSync(updated)
@@ -603,20 +603,25 @@ private[kyo] object DomBackend:
         end while
     end collapseReactiveWrappers
 
-    /** Patch `fromEl` in place toward `newHtml` (a single reactive-wrapper element string). A change of the root tag
-      * cannot preserve identity, so it falls back to a replace.
+    /** Patch `fromEl` in place toward `newHtml` (a single reactive-wrapper element string) and return the resulting
+      * region root — `fromEl` itself when identity is preserved (the common case), or the replacement node when a root
+      * tag change forced a replace. The caller reuses this instead of re-querying the document for the path.
       */
-    private def morph(fromEl: dom.Element, newHtml: String): Unit =
+    private def morph(fromEl: dom.Element, newHtml: String): dom.Element =
         val toEl = parseNewRoot(fromEl, newHtml)
-        if toEl == null then ()
+        if toEl == null then fromEl
         else
             // Normalize the live side the same way the parsed side was normalized, so a subtree that arrived from the
             // server render (or an earlier paint) with redundant nested same-path wrappers aligns instead of forcing a
             // whole-subtree replace.
             collapseReactiveWrappers(fromEl)
             if fromEl.tagName != toEl.tagName then
-                discard(fromEl.parentNode.replaceChild(document.importNode(toEl, true), fromEl))
-            else morphEl(fromEl, toEl)
+                val replacement = document.importNode(toEl, true).asInstanceOf[dom.Element]
+                discard(fromEl.parentNode.replaceChild(replacement, fromEl))
+                replacement
+            else
+                morphEl(fromEl, toEl)
+                fromEl
             end if
         end if
     end morph
@@ -656,11 +661,16 @@ private[kyo] object DomBackend:
                 fromEl.setAttribute(name, a.value)
             i += 1
         end while
-        val fromNames = (0 until fromEl.attributes.length).map(fromEl.attributes(_).name)
-        fromNames.foreach { name =>
+        // Remove attributes gone from `to`. Walk the live NamedNodeMap backward so an in-place removal never shifts an
+        // index still to be visited — no intermediate collection is allocated per element.
+        val fromAttrs = fromEl.attributes
+        var j         = fromAttrs.length - 1
+        while j >= 0 do
+            val name = fromAttrs(j).name
             if !(ownedCS && (name == "class" || name == "style")) && !toEl.hasAttribute(name) then
                 fromEl.removeAttribute(name)
-        }
+            j -= 1
+        end while
         // Active-input preservation: two-way binding echoes each keystroke back as a re-render. Never overwrite the
         // focused field's live `.value` (and thus its caret) with its own echo — that value already matches, so assign
         // only a genuine external change (submit-clear, programmatic update). Subsumes the HtmlRenderer.clientJs input hack.
@@ -677,19 +687,25 @@ private[kyo] object DomBackend:
 
     private def morphChildren(fromParent: dom.Element, toParent: dom.Element): Unit =
         // Sibling-scoped keyed lookups over the DIRECT children only (keys are unique among siblings). `toKeyed`
-        // records which stale from-children are reused elsewhere so an unkeyed slot does not destroy them.
-        val fromKeyed = js.Dictionary.empty[dom.Node]
-        val toKeyed   = js.Dictionary.empty[Boolean]
-        var scan      = fromParent.firstChild
+        // records which stale from-children are reused elsewhere so an unkeyed slot does not destroy them. Both
+        // dictionaries are allocated lazily on the first keyed child seen — leaf-ish subtrees (the majority) carry
+        // no `data-kyo-path` child and pay no allocation; a null dictionary means "no keyed children on that side".
+        var fromKeyed: js.Dictionary[dom.Node] = null
+        var toKeyed: js.Dictionary[Boolean]    = null
+        var scan                               = fromParent.firstChild
         while scan != null do
             val k = kyoKey(scan)
-            if k != null then fromKeyed(k) = scan
+            if k != null then
+                if fromKeyed == null then fromKeyed = js.Dictionary.empty[dom.Node]
+                fromKeyed(k) = scan
             scan = scan.nextSibling
         end while
         scan = toParent.firstChild
         while scan != null do
             val k = kyoKey(scan)
-            if k != null then toKeyed(k) = true
+            if k != null then
+                if toKeyed == null then toKeyed = js.Dictionary.empty[Boolean]
+                toKeyed(k) = true
             scan = scan.nextSibling
         end while
         var curFrom = fromParent.firstChild
@@ -698,7 +714,7 @@ private[kyo] object DomBackend:
             val toNext = curTo.nextSibling
             val tKey   = kyoKey(curTo)
             if tKey != null then
-                val m = fromKeyed.get(tKey).orNull
+                val m = if fromKeyed != null then fromKeyed.get(tKey).orNull else null
                 if m != null then
                     if m ne curFrom then discard(fromParent.insertBefore(m, curFrom))
                     else curFrom = curFrom.nextSibling
@@ -718,8 +734,9 @@ private[kyo] object DomBackend:
                     val fKey  = kyoKey(curFrom)
                     if fKey != null then
                         // A keyed from-child sitting at an unkeyed slot: keep it if `to` reuses it (its own slot will
-                        // move it into place), otherwise it is stale and removed here.
-                        if !toKeyed.contains(fKey) then discard(fromParent.removeChild(curFrom))
+                        // move it into place), otherwise it is stale and removed here. A null toKeyed means `to` has no
+                        // keyed child at all, so this one is unquestionably stale.
+                        if toKeyed == null || !toKeyed.contains(fKey) then discard(fromParent.removeChild(curFrom))
                         curFrom = fNext
                     else if compatible(curFrom, curTo) then
                         morphNode(curFrom, curTo)
