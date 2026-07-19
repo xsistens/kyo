@@ -714,10 +714,12 @@ private[kyo] object HtmlRenderer:
         s"""(function(){
            |var base="$basePath";
            |var __q=[];
-           |// Ids whose class/style is owned by the imperative SetClassById/SetStyleById channel (applied out of the
-           |// render pass so CSS transitions fire). __kyoMorph must not reconcile those attributes back to server HTML,
-           |// which never carries the client-set class/style. Mirrors clientOwnedIds in DomBackend.
-           |var __kyoOwned=Object.create(null);
+           |// Per-element ownership of specific attributes by the imperative id-addressed channel
+           |// (SetClassById/SetStyleById/SetAttrById), applied out of the render pass so CSS transitions fire. The owned
+           |// attr names live in a __kyoOwn expando dict ON the element, reclaimed with the node (no session-lived set
+           |// that only grows) and shielding each owned attr BY NAME. __kyoMorphAttrs reads it so an owned attribute is
+           |// never reconciled back to server HTML (which never carries the client-set value). Mirrors markOwned in DomBackend.
+           |function __kyoMark(el,n){(el.__kyoOwn||(el.__kyoOwn={}))[n]=true;}
            |var ws=new WebSocket((location.protocol===\"https:\"?\"wss:\":\"ws:\")+"//"+location.host+base+"/_kyo/ws");
            |ws.onopen=function(){__q.forEach(function(m){ws.send(m);});__q=[];};
            |ws.onmessage=function(e){
@@ -787,17 +789,14 @@ private[kyo] object HtmlRenderer:
            |    }
            |  }else if(op.SetClassById){
            |    // Unit 8: toggle a class in place (element stays in the DOM, so CSS transitions on the class fire).
-           |    __kyoOwned[op.SetClassById.id]=true;
-           |    var scel=document.getElementById(op.SetClassById.id);if(scel)scel.classList.toggle(op.SetClassById.className,op.SetClassById.on);
+           |    var scel=document.getElementById(op.SetClassById.id);if(scel){__kyoMark(scel,"class");scel.classList.toggle(op.SetClassById.className,op.SetClassById.on);}
            |  }else if(op.SetStyleById){
            |    // Unit 8: merge inline-style declarations (setProperty each) so other inline props are not clobbered.
-           |    __kyoOwned[op.SetStyleById.id]=true;
            |    var ssel=document.getElementById(op.SetStyleById.id);
-           |    if(ssel){var ssd=op.SetStyleById.css.split(";");for(var ssi=0;ssi<ssd.length;ssi++){var ssc=ssd[ssi].trim();if(!ssc)continue;var sso=ssc.indexOf(":");if(sso>0)ssel.style.setProperty(ssc.substring(0,sso).trim(),ssc.substring(sso+1).trim());}}
+           |    if(ssel){__kyoMark(ssel,"style");var ssd=op.SetStyleById.css.split(";");for(var ssi=0;ssi<ssd.length;ssi++){var ssc=ssd[ssi].trim();if(!ssc)continue;var sso=ssc.indexOf(":");if(sso>0)ssel.style.setProperty(ssc.substring(0,sso).trim(),ssc.substring(sso+1).trim());}}
            |  }else if(op.SetAttrById){
            |    // Unit 8: set an attribute in place (element stays put, so a CSS `>` anchored on it keeps matching).
-           |    __kyoOwned[op.SetAttrById.id]=true;
-           |    var sael=document.getElementById(op.SetAttrById.id);if(sael)sael.setAttribute(op.SetAttrById.name,op.SetAttrById.value);
+           |    var sael=document.getElementById(op.SetAttrById.id);if(sael){__kyoMark(sael,op.SetAttrById.name);sael.setAttribute(op.SetAttrById.name,op.SetAttrById.value);}
            |  }else if(op.ObserveViewportById){
            |    // Unit 8: measure now + attach capturing scroll + resize listeners that each reply with a MeasureById(id).
            |    var vid=op.ObserveViewportById.id;
@@ -1014,14 +1013,13 @@ private[kyo] object HtmlRenderer:
            |}
            |function __kyoCompat(a,b){return a.nodeType===b.nodeType&&(a.nodeType!==1||a.tagName===b.tagName);}
            |function __kyoMorphAttrs(fromEl,toEl){
-           |  var id=fromEl.getAttribute("id");
-           |  var owned=id!==null&&!!__kyoOwned[id];
+           |  var own=fromEl.__kyoOwn;
            |  var tag=fromEl.tagName;
            |  var activeInput=(fromEl===document.activeElement)&&(tag==="INPUT"||tag==="TEXTAREA");
            |  var ta=toEl.attributes,i;
-           |  for(i=0;i<ta.length;i++){var a=ta[i];if(!(owned&&(a.name==="class"||a.name==="style"))&&fromEl.getAttribute(a.name)!==a.value)fromEl.setAttribute(a.name,a.value);}
+           |  for(i=0;i<ta.length;i++){var a=ta[i];if(!(own&&own[a.name])&&fromEl.getAttribute(a.name)!==a.value)fromEl.setAttribute(a.name,a.value);}
            |  var fa=fromEl.attributes,j;
-           |  for(j=fa.length-1;j>=0;j--){var fn=fa[j].name;if(!(owned&&(fn==="class"||fn==="style"))&&!toEl.hasAttribute(fn))fromEl.removeAttribute(fn);}
+           |  for(j=fa.length-1;j>=0;j--){var fn=fa[j].name;if(!(own&&own[fn])&&!toEl.hasAttribute(fn))fromEl.removeAttribute(fn);}
            |  if(activeInput){var nv=(tag==="TEXTAREA")?toEl.textContent:(toEl.getAttribute("value")||"");if(nv!==fromEl.value)fromEl.value=nv;}
            |}
            |function __kyoMorphChildren(fromParent,toParent){

@@ -134,4 +134,62 @@ class DomBackendTest extends UITest:
         }
     }
 
+    // Ownership guard (Unit 8 imperative id-addressed channel): a class/attribute set in place via bindClassById /
+    // bindAttrById is owned by the client and must SURVIVE a later morph of that element — server HTML never carries
+    // the client-set value, so reconciling it back would clobber the imperative write. Both apps drive the host
+    // element through a real re-render (a sibling signal bumps the reactive region that contains it) so morphAttrs
+    // runs against server HTML that lacks the owned value. The attr case is the regression that pins the per-name
+    // shield: before the __kyoOwn-per-attribute ownership, the channel registered the id but morphAttrs shielded
+    // only class/style, so a bound attribute was reconciled away on the next morph.
+
+    "imperatively-bound class survives a re-render morph of its element" in {
+        val app: UI < Async =
+            for
+                tick <- Signal.initRef(0)
+                on   <- Signal.initRef(true)
+            yield UI.div(
+                UI.button("tick").id("tick").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map(t => UI.div.id("host")(UI.span(s"t:$t").id("txt"))),
+                UI.mounted {
+                    for
+                        cmds <- UI.commands
+                        _    <- cmds.bindClassById("host", "owned-cls", on)
+                    yield UI.empty
+                }.placeholder(UI.empty)
+            )
+        withUI(app) {
+            for
+                _ <- Browser.waitForAttribute(Selector.id("host"), "class", "owned-cls")
+                _ <- Browser.click(Selector.id("tick"))
+                _ <- Browser.assertText(Selector.id("txt"), "t:1")                      // the element was morphed
+                _ <- Browser.assertAttribute(Selector.id("host"), "class", "owned-cls") // ...and the owned class survived
+            yield ()
+        }
+    }
+
+    "imperatively-bound attribute survives a re-render morph of its element" in {
+        val app: UI < Async =
+            for
+                tick <- Signal.initRef(0)
+                v    <- Signal.initRef("yes")
+            yield UI.div(
+                UI.button("tick").id("atick").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map(t => UI.div.id("ahost")(UI.span(s"t:$t").id("atxt"))),
+                UI.mounted {
+                    for
+                        cmds <- UI.commands
+                        _    <- cmds.bindAttrById("ahost", "data-owned", v)
+                    yield UI.empty
+                }.placeholder(UI.empty)
+            )
+        withUI(app) {
+            for
+                _ <- Browser.waitForAttribute(Selector.id("ahost"), "data-owned", "yes")
+                _ <- Browser.click(Selector.id("atick"))
+                _ <- Browser.assertText(Selector.id("atxt"), "t:1")
+                _ <- Browser.assertAttribute(Selector.id("ahost"), "data-owned", "yes") // owned attr survives the morph
+            yield ()
+        }
+    }
+
 end DomBackendTest

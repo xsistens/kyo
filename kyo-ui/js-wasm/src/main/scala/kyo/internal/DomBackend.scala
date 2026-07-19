@@ -28,11 +28,24 @@ private[kyo] object DomBackend:
     private val viewportObservers: js.WrappedMap[String, js.Function1[dom.Event, Unit]] =
         new js.WrappedMap(js.Map.empty[String, js.Function1[dom.Event, Unit]])
 
-    /** Ids whose `class`/`style` is owned by the imperative SetClassById/SetStyleById channel (applied out of the
-      * render pass so CSS transitions on the toggled class fire). The morph must not reconcile those attributes back
-      * to server HTML, which never carries the client-set class/style. Mirrors `__kyoOwned` in HtmlRenderer.clientJs.
+    /** Per-element ownership of specific attributes by the imperative id-addressed channel
+      * (SetClassById/SetStyleById/SetAttrById), applied out of the render pass so CSS transitions on the toggled
+      * class/attribute fire. The owned attribute names live in a `__kyoOwn` expando dict ON the element, so the flag
+      * is reclaimed with the node (no session-lived set that only ever grows) and shields each owned attribute BY
+      * NAME — `class`/`style` for the class/style ops, the given name for the attribute op. `morphAttrs` reads it so
+      * an owned attribute is never reconciled back to server HTML, which never carries the client-set value. Mirrors
+      * `__kyoMark`/`__kyoOwn` in HtmlRenderer.clientJs.
       */
-    private val clientOwnedIds = scala.collection.mutable.HashSet.empty[String]
+    private def markOwned(el: dom.Element, name: String): Unit =
+        val d = el.asInstanceOf[js.Dynamic]
+        val own =
+            if js.isUndefined(d.__kyoOwn) then
+                val fresh = js.Dictionary.empty[Boolean]
+                d.__kyoOwn = fresh.asInstanceOf[js.Any]
+                fresh
+            else d.__kyoOwn.asInstanceOf[js.Dictionary[Boolean]]
+        own.update(name, true)
+    end markOwned
 
     /** Mount a UI into the page body. */
     def mount(ui: UI)(using Frame): Unit < (Async & Scope) =
@@ -179,22 +192,26 @@ private[kyo] object DomBackend:
             // Unit 8: toggle a class in place (element stays in the DOM, so CSS transitions on the class fire).
             case HtmlOp.SetClassById(id, className, on) =>
                 Sync.defer {
-                    discard(clientOwnedIds.add(id))
                     val el = document.getElementById(id)
-                    if el != null then discard(el.classList.toggle(className, on))
+                    if el != null then
+                        markOwned(el, "class")
+                        discard(el.classList.toggle(className, on))
                 }
             // Unit 8: merge an inline-style declaration string over the element's existing inline props (no clobber).
             case HtmlOp.SetStyleById(id, css) =>
                 Sync.defer {
-                    discard(clientOwnedIds.add(id))
-                    mergeStyleDomById(id, css)
+                    val el = document.getElementById(id)
+                    if el != null then
+                        markOwned(el, "style")
+                        mergeStyleDomById(id, css)
                 }
             // Unit 8: set an attribute in place (element stays in the DOM, so a CSS `>` anchored on it keeps matching).
             case HtmlOp.SetAttrById(id, name, value) =>
                 Sync.defer {
-                    discard(clientOwnedIds.add(id))
                     val el = document.getElementById(id)
-                    if el != null then el.setAttribute(name, value)
+                    if el != null then
+                        markOwned(el, name)
+                        el.setAttribute(name, value)
                 }
             // Unit 8: measure now + deliver, then attach the continuous scroll/resize observer for `id`.
             case HtmlOp.ObserveViewportById(id) =>
@@ -654,9 +671,12 @@ private[kyo] object DomBackend:
     end morphEl
 
     private def morphAttrs(fromEl: dom.Element, toEl: dom.Element): Unit =
-        val id      = fromEl.getAttribute("id")
-        val ownedCS = id != null && clientOwnedIds.contains(id)
-        val tag     = fromEl.tagName
+        // An attribute the imperative id-addressed channel owns (its name is in the element's `__kyoOwn` expando dict)
+        // is never reconciled: server HTML never carries the client-set value, so reconciling would clobber it.
+        val own                         = fromEl.asInstanceOf[js.Dynamic].__kyoOwn
+        val ownDict                     = if js.isUndefined(own) then null else own.asInstanceOf[js.Dictionary[Boolean]]
+        def owns(name: String): Boolean = ownDict != null && ownDict.contains(name)
+        val tag                         = fromEl.tagName
         val activeInput =
             (fromEl eq document.activeElement) && (tag == "INPUT" || tag == "TEXTAREA")
         val toAttrs = toEl.attributes
@@ -664,7 +684,7 @@ private[kyo] object DomBackend:
         while i < toAttrs.length do
             val a    = toAttrs(i)
             val name = a.name
-            if !(ownedCS && (name == "class" || name == "style")) && fromEl.getAttribute(name) != a.value then
+            if !owns(name) && fromEl.getAttribute(name) != a.value then
                 fromEl.setAttribute(name, a.value)
             i += 1
         end while
@@ -674,7 +694,7 @@ private[kyo] object DomBackend:
         var j         = fromAttrs.length - 1
         while j >= 0 do
             val name = fromAttrs(j).name
-            if !(ownedCS && (name == "class" || name == "style")) && !toEl.hasAttribute(name) then
+            if !owns(name) && !toEl.hasAttribute(name) then
                 fromEl.removeAttribute(name)
             j -= 1
         end while
