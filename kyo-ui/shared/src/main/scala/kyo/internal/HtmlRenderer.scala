@@ -725,33 +725,11 @@ private[kyo] object HtmlRenderer:
            |  if(op.Replace){
            |    var p=op.Replace.path.join(".");
            |    var el=document.querySelector('[data-kyo-path="'+p+'"]');
-           |    // Two-way binding echoes each keystroke back as a Replace. An outerHTML replace of the focused field
-           |    // resets its caret (email/number inputs do not support selectionStart, so it cannot be restored),
-           |    // reversing typed text. So when the focused editable element is inside this Replace, MORPH it in place
-           |    // instead: sync attributes (the value attribute keeps mirroring the signal) but assign the live .value
-           |    // only on a genuine change. The user's own keystroke echo carries the value the field already holds, so
-           |    // .value is left alone and the caret is preserved; a submit-clear or external update carries a different
-           |    // value and is applied. The re-render is wrapped in <span data-kyo-reactive>, so the field is inside `el`.
-           |    // Only morph the field's OWN value echo: its data-kyo-path equals this Replace's path (the bound input
-           |    // and its wrapper span share the path). A larger subtree re-render (a foreach reorder, a `when` swap)
-           |    // has a shorter path and merely CONTAINS the focused field; that must fall through to the normal
-           |    // replace so focus-follows-item and structural changes still work.
-           |    var __ae=document.activeElement;
-           |    var __morphed=false;
-           |    if(el&&__ae&&(__ae.tagName==="INPUT"||__ae.tagName==="TEXTAREA")&&__ae.getAttribute("data-kyo-path")===p&&el.contains(__ae)){
-           |      var __t=document.createElement("template");__t.innerHTML=op.Replace.html.trim();
-           |      var __ni=__t.content.querySelector(__ae.tagName.toLowerCase());
-           |      if(__ni){
-           |        for(var __i=0;__i<__ni.attributes.length;__i++){var __a=__ni.attributes[__i];if(__ae.getAttribute(__a.name)!==__a.value)__ae.setAttribute(__a.name,__a.value);}
-           |        var __names=[];for(var __j=0;__j<__ae.attributes.length;__j++)__names.push(__ae.attributes[__j].name);
-           |        for(var __k=0;__k<__names.length;__k++){if(!__ni.hasAttribute(__names[__k]))__ae.removeAttribute(__names[__k]);}
-           |        var __nv=(__ae.tagName==="TEXTAREA")?__ni.textContent:(__ni.getAttribute("value")||"");
-           |        if(__nv!==__ae.value)__ae.value=__nv;
-           |        applyJsProps(__ae);
-           |        __morphed=true;
-           |      }
-           |    }
-           |    if(el&&!__morphed&&el.outerHTML!==op.Replace.html){
+           |    // A focused input keeps its value and caret across a Replace because __kyoMorph patches in place and
+           |    // its active-input rule leaves the live .value untouched on a self-echo (the field already holds that
+           |    // value), applying only a genuine external change (submit-clear, programmatic update). So the former
+           |    // focused-field fast path here is redundant and has been removed — __kyoMorph handles it uniformly.
+           |    if(el&&el.outerHTML!==op.Replace.html){
            |      var ae=document.activeElement;
            |      var ap=ae&&ae!==document.body&&ae.getAttribute?ae.getAttribute("data-kyo-path"):null;
            |      var ss=(ae&&typeof ae.selectionStart==='number')?ae.selectionStart:null;
