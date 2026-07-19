@@ -278,7 +278,10 @@ private[kyo] object DomBackend:
             ReactiveUI.findNode(root, path).map(_.svgContext).getOrElse(false)
 
         def onChange(path: Seq[String], ui: UI, mount: Boolean)(using Frame): Unit < Async =
-            HtmlRenderer.render(ui, path).map { html =>
+            // Render the content at its (possibly nested-reactive) sub-path so a reactive-valued region
+            // wraps a DISTINCT inner wrapper — matching SSR/walkStatic. The wrapper stays at `path`, so
+            // the morph still keys/addresses this region's node.
+            HtmlRenderer.render(ui, HtmlRenderer.contentPath(path, ui)).map { html =>
                 // Always wrap the rendered html in the reactive boundary element so the node carrying
                 // data-kyo-path=path survives subsequent replacements. A Fragment, Text, or RawHtml value
                 // renders without a path-carrying root, so an unwrapped replace would drop the marker and

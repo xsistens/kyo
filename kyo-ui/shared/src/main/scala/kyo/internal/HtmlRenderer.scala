@@ -178,7 +178,7 @@ private[kyo] object HtmlRenderer:
                 val tag = if svg then "g" else "span"
                 w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}" data-kyo-reactive>""")
                 for current <- r.signal.current(using r.frame)
-                yield renderTo(sb, current, path, svg).andThen(w(sb, s"</$tag>"))
+                yield renderTo(sb, current, contentPath(path, current), svg).andThen(w(sb, s"</$tag>"))
 
             case fe: Foreach[?, ?] @unchecked =>
                 val tag = if svg then "g" else "span"
@@ -204,7 +204,8 @@ private[kyo] object HtmlRenderer:
                 // the node's server-side projection.
                 val tag = if svg then "g" else "span"
                 w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}" data-kyo-reactive>""")
-                renderTo(sb, m.placeholderUI.getOrElse(UI.empty(using m.frame)), path, svg)
+                val mph = m.placeholderUI.getOrElse(UI.empty(using m.frame))
+                renderTo(sb, mph, contentPath(path, mph), svg)
                     .andThen(w(sb, s"</$tag>"))
 
             case b: Boundary =>
@@ -213,7 +214,8 @@ private[kyo] object HtmlRenderer:
                 // task chain, when the eager child walk started nothing pending. SSG projection = fallback.
                 val tag = if svg then "g" else "span"
                 w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}" data-kyo-reactive>""")
-                renderTo(sb, b.fallbackUI.getOrElse(UI.empty(using b.frame)), path, svg)
+                val bfb = b.fallbackUI.getOrElse(UI.empty(using b.frame))
+                renderTo(sb, bfb, contentPath(path, bfb), svg)
                     .andThen(w(sb, s"</$tag>"))
     end renderTo
 
@@ -639,6 +641,29 @@ private[kyo] object HtmlRenderer:
           |""".stripMargin
 
     private def pathAttr(path: Seq[String]): String = path.mkString(".")
+
+    /** Reserved path segment for a reactive region whose current value is ITSELF a reactive
+      * region (`Reactive`/`Foreach`/`Mounted`/`Boundary`). Nested reactive wrappers used to
+      * collapse onto one `data-kyo-path`, so the patcher (first-match `querySelector` / the
+      * morph's same-path keying) could only address the OUTERMOST — an inner region could not
+      * patch its own node and lost the race. Appending this segment gives each nesting level a
+      * distinct, stable wrapper path. It contains no '.' (the path separator) and is not a
+      * decimal index, so it cannot collide with Element/Fragment child indices; it only ever
+      * appears as the sole content of a reactive wrapper, so it cannot collide with
+      * Foreach/KeyedChild keys.
+      */
+    private[kyo] val reactiveContentSegment: String = "$r"
+
+    /** Path at which a reactive region renders its current value: a distinct sub-path when the
+      * value is itself a reactive region, else `path` unchanged (flat content stays
+      * byte-identical). SINGLE SOURCE OF TRUTH — `renderTo` (SSR), `ReactiveUI.walkStatic`
+      * (client normalize), and both patch exchanges (`DomBackend`/`UIServer` `onChange`) MUST
+      * all route content through this, or SSR and client paths diverge and hydration breaks.
+      */
+    private[kyo] def contentPath(path: Seq[String], current: UI): Seq[String] =
+        current match
+            case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted | _: Boundary => path :+ reactiveContentSegment
+            case _                                                            => path
 
     private def fmtD(v: Double): String = NumberFormat.double(v)
 

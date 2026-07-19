@@ -362,10 +362,12 @@ private[kyo] object ReactiveUI:
 
             case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted | _: Boundary =>
                 // When walkStatic is called with a Reactive, Foreach, or Mounted as the top-level node
-                // (not as a child of an Element), normalize it at basePath so subscribeNode
-                // sets up a subscription for it. This handles the case where an outer reactive's
-                // signal value is itself a Reactive or Foreach (e.g. outer.map { _ => inner.map(UI.span(_)) }).
-                for rui <- normalizeWith(ui, basePath, svg, mountDispatch)
+                // (not as a child of an Element), normalize it so subscribeNode sets up a subscription
+                // for it. This handles the case where an outer reactive's signal value is itself a
+                // Reactive or Foreach (e.g. outer.map { _ => inner.map(UI.span(_)) }). The inner region
+                // owns a DISTINCT sub-path (HtmlRenderer.contentPath) so its wrapper is addressable
+                // independently of the enclosing region — MUST match the SSR/patch descents or paths diverge.
+                for rui <- normalizeWith(ui, HtmlRenderer.contentPath(basePath, ui), svg, mountDispatch)
                 yield (Seq(rui), rui.handle)
 
             case _ =>

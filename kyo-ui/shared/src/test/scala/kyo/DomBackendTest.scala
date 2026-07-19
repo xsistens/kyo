@@ -63,6 +63,35 @@ class DomBackendTest extends UITest:
         }
     }
 
+    "nested reactive directly inside a reactive patches independently (no path collision)" in {
+        // Regression for the same-data-kyo-path collision: when a reactive's value is ITSELF a
+        // reactive (no element between — the shape `open.render(hi.render(...))` that mounted
+        // components like Select use), both regions used to share one path, so the patcher could
+        // only ever address the outer node and the inner region's update was lost. With distinct
+        // sub-paths the inner region patches its own node. The `: UI` ascription lifts the inner
+        // Signal[SpanElement] into a Reactive so the outer region's value is itself reactive.
+        val app: UI < Async =
+            for
+                outer <- Signal.initRef("o0")
+                inner <- Signal.initRef("i0")
+            yield UI.div(
+                UI.button("set-inner").id("set-inner").onClick(inner.set("i1")),
+                UI.button("set-outer").id("set-outer").onClick(outer.set("o1")),
+                outer.map(o => (inner.map(i => UI.span(s"$o/$i").id("cell")): UI))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("cell"), "o0/i0")
+                // change ONLY inner: before the fix the inner region could not patch and stayed "o0/i0".
+                _ <- Browser.click(Selector.id("set-inner"))
+                _ <- Browser.assertText(Selector.id("cell"), "o0/i1")
+                // change outer: its repaint regenerates the inner region, carrying the latest inner value.
+                _ <- Browser.click(Selector.id("set-outer"))
+                _ <- Browser.assertText(Selector.id("cell"), "o1/i1")
+            yield ()
+        }
+    }
+
     "click on nested element fires its handler and bubbles to parent" in {
         val app: UI < Async =
             for
