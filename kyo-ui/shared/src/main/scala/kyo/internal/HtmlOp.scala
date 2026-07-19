@@ -34,6 +34,11 @@ private[kyo] object HtmlOp:
     // clobbering them (unlike a full style="" replace). `css` is a serialized kyo.Style (CssStyleRenderer.render).
     // Emitted by UI.Commands.bindStyleById from a Signal[Style].
     case class SetStyleById(id: String, css: String) extends HtmlOp derives Schema
+    // Unit 8: set an attribute on getElementById(id) WITHOUT replacing the element, so a reactive attribute (e.g.
+    // aria-expanded on a toggle button) can track a signal in place — needed where wrapping the element in a Reactive
+    // region would insert a data-kyo-reactive wrapper and break a CSS `>` child-combinator anchored on that element.
+    // Client: el.setAttribute(name, value). Emitted by UI.Commands.bindAttrById from a Signal[String].
+    case class SetAttrById(id: String, name: String, value: String) extends HtmlOp derives Schema
     // Unit 8 (viewport observation): begin continuously measuring getElementById(id). The client measures now and
     // attaches capturing scroll + resize listeners keyed by id; each fires a UIEvent.MeasureById(id) reply, routed to a
     // PERSISTENT sink in UI.Commands.observers (kept, not consumed). Emitted by UI.Commands.observeViewportById.

@@ -794,6 +794,10 @@ private[kyo] object HtmlRenderer:
            |    __kyoOwned[op.SetStyleById.id]=true;
            |    var ssel=document.getElementById(op.SetStyleById.id);
            |    if(ssel){var ssd=op.SetStyleById.css.split(";");for(var ssi=0;ssi<ssd.length;ssi++){var ssc=ssd[ssi].trim();if(!ssc)continue;var sso=ssc.indexOf(":");if(sso>0)ssel.style.setProperty(ssc.substring(0,sso).trim(),ssc.substring(sso+1).trim());}}
+           |  }else if(op.SetAttrById){
+           |    // Unit 8: set an attribute in place (element stays put, so a CSS `>` anchored on it keeps matching).
+           |    __kyoOwned[op.SetAttrById.id]=true;
+           |    var sael=document.getElementById(op.SetAttrById.id);if(sael)sael.setAttribute(op.SetAttrById.name,op.SetAttrById.value);
            |  }else if(op.ObserveViewportById){
            |    // Unit 8: measure now + attach capturing scroll + resize listeners that each reply with a MeasureById(id).
            |    var vid=op.ObserveViewportById.id;

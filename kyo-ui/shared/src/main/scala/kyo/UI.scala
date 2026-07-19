@@ -501,6 +501,16 @@ object UI:
         def bindStyleById(id: String, style: Signal[Style])(using Frame): Unit < (Async & Scope) =
             Fiber.init(style.observe(v => emit(internal.HtmlOp.SetStyleById(id, internal.CssStyleRenderer.render(v))))).unit
 
+        /** Bind an attribute `name` on the element with DOM id `id` to `value`: fork a mount-lifetime fiber that observes
+          * the signal and emits [[internal.HtmlOp.SetAttrById]]`(id, name, value)` on every emission (including the current
+          * value at subscribe). The client sets the attribute WITHOUT replacing the element, so the element keeps its DOM
+          * position — needed for a reactive attribute (e.g. `aria-expanded`) on an element that must stay a direct child
+          * for a CSS `>` child-combinator, where a `Reactive` re-render's wrapper would break the selector. Cancelled on
+          * scope close.
+          */
+        def bindAttrById(id: String, name: String, value: Signal[String])(using Frame): Unit < (Async & Scope) =
+            Fiber.init(value.observe(v => emit(internal.HtmlOp.SetAttrById(id, name, v)))).unit
+
         /** Continuously observe the viewport geometry of the element with DOM id `id`: register `sink` in the persistent
           * [[observers]] map, emit [[internal.HtmlOp.ObserveViewportById]] (the client measures now and attaches
           * scroll+resize listeners that each reply with a `MeasureById(id)`), and register a [[kyo.Scope]] finalizer that

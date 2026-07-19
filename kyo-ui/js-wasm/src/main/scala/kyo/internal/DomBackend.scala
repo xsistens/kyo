@@ -189,6 +189,13 @@ private[kyo] object DomBackend:
                     discard(clientOwnedIds.add(id))
                     mergeStyleDomById(id, css)
                 }
+            // Unit 8: set an attribute in place (element stays in the DOM, so a CSS `>` anchored on it keeps matching).
+            case HtmlOp.SetAttrById(id, name, value) =>
+                Sync.defer {
+                    discard(clientOwnedIds.add(id))
+                    val el = document.getElementById(id)
+                    if el != null then el.setAttribute(name, value)
+                }
             // Unit 8: measure now + deliver, then attach the continuous scroll/resize observer for `id`.
             case HtmlOp.ObserveViewportById(id) =>
                 Sync.defer(registerViewportObserver(id, commands)).andThen(
