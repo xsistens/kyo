@@ -28,9 +28,19 @@ private[kyo] object HtmlRenderer:
       * @return
       *   the full placeholder HTML string with data-kyo-path and data-kyo-reactive attributes
       */
-    private[kyo] def wrapReactiveRegion(path: Seq[String], svgContext: Boolean, innerHtml: String): String =
+    private[kyo] def wrapReactiveRegion(
+        path: Seq[String],
+        svgContext: Boolean,
+        innerHtml: String,
+        mount: Boolean = false
+    ): String =
         val tag = if svgContext then "g" else "span"
-        s"""<$tag data-kyo-path="${path.mkString(".")}" data-kyo-reactive>$innerHtml</$tag>"""
+        // A keyless mount's content paint flags its root with data-kyo-mount so a parent region's __kyoMorph treats it
+        // as opaque and never wipes the live subtree. Only ever added to a per-region Replace op (never to the initial
+        // full-page render, which does not go through this method), so golden HTML stays byte-identical.
+        val mountAttr = if mount then " data-kyo-mount" else ""
+        s"""<$tag data-kyo-path="${path.mkString(".")}" data-kyo-reactive$mountAttr>$innerHtml</$tag>"""
+    end wrapReactiveRegion
 
     /** Wrap body HTML in a full page with inline JS client. */
     def renderPage(title: String, body: String, css: String, basePath: String): String =
@@ -704,6 +714,10 @@ private[kyo] object HtmlRenderer:
         s"""(function(){
            |var base="$basePath";
            |var __q=[];
+           |// Ids whose class/style is owned by the imperative SetClassById/SetStyleById channel (applied out of the
+           |// render pass so CSS transitions fire). __kyoMorph must not reconcile those attributes back to server HTML,
+           |// which never carries the client-set class/style. Mirrors clientOwnedIds in DomBackend.
+           |var __kyoOwned=Object.create(null);
            |var ws=new WebSocket((location.protocol===\"https:\"?\"wss:\":\"ws:\")+"//"+location.host+base+"/_kyo/ws");
            |ws.onopen=function(){__q.forEach(function(m){ws.send(m);});__q=[];};
            |ws.onmessage=function(e){
@@ -746,8 +760,10 @@ private[kyo] object HtmlRenderer:
            |      // Unit 1: capture enter old-set + prepare leave ghosts (rect+clone) BEFORE the patch mutates the DOM.
            |      var __en=faEnterPaths(el);
            |      var __gh=kyoLeavePrepare(el,kyoLeaveSurv(op.Replace.html));
-           |      el.outerHTML=op.Replace.html;
-           |      var nel=document.querySelector('[data-kyo-path="'+p+'"]');if(nel){applyJsProps(nel);ba(nel);}
+           |      // Morph in place toward the pushed HTML (preserves focus/caret/scroll/transitions on reused nodes);
+           |      // __kyoMorph returns the region root, so no re-query for the path is needed.
+           |      var nel=__kyoMorph(el,op.Replace.html);
+           |      if(nel){applyJsProps(nel);ba(nel);}
            |      if(ap){var rf=lbp(ap);if(rf&&rf.hasAttribute&&rf.hasAttribute('data-kyo-reactive')){var inner=rf.querySelector('input,textarea,select,[contenteditable]');if(inner)rf=inner;}if(rf){rf.focus();if(ss!==null&&typeof rf.setSelectionRange==='function'){try{rf.setSelectionRange(ss,se);}catch(e){if(e.name!=='InvalidStateError')throw e;}}}}
            |      // Focus seeding runs AFTER the focus/caret restore so a newly-appeared focus-auto element wins
            |      // over restore-to-trigger (opening a panel moves focus into it). The morph path above never seeds.
@@ -793,9 +809,11 @@ private[kyo] object HtmlRenderer:
            |    }
            |  }else if(op.SetClassById){
            |    // Unit 8: toggle a class in place (element stays in the DOM, so CSS transitions on the class fire).
+           |    __kyoOwned[op.SetClassById.id]=true;
            |    var scel=document.getElementById(op.SetClassById.id);if(scel)scel.classList.toggle(op.SetClassById.className,op.SetClassById.on);
            |  }else if(op.SetStyleById){
            |    // Unit 8: merge inline-style declarations (setProperty each) so other inline props are not clobbered.
+           |    __kyoOwned[op.SetStyleById.id]=true;
            |    var ssel=document.getElementById(op.SetStyleById.id);
            |    if(ssel){var ssd=op.SetStyleById.css.split(";");for(var ssi=0;ssi<ssd.length;ssi++){var ssc=ssd[ssi].trim();if(!ssc)continue;var sso=ssc.indexOf(":");if(sso>0)ssel.style.setProperty(ssc.substring(0,sso).trim(),ssc.substring(sso+1).trim());}}
            |  }else if(op.ObserveViewportById){
@@ -974,6 +992,106 @@ private[kyo] object HtmlRenderer:
            |  var all=[el];if(el.querySelectorAll){var ds=el.querySelectorAll("*");for(var i=0;i<ds.length;i++)all.push(ds[i]);}
            |  for(var j=0;j<all.length;j++){var e2=all[j];if(!e2.getAttributeNames)continue;var ns=e2.getAttributeNames();
            |    for(var k=0;k<ns.length;k++){if(ns[k].indexOf("data-kyo-")===0||ns[k]==="id")e2.removeAttribute(ns[k]);}}
+           |}
+           |// ---- DOM morphing (twin of DomBackend.morph; keep the two in lockstep) ----
+           |// Patch an existing subtree in place toward new HTML instead of el.outerHTML= replacing it, so focus, caret,
+           |// scroll offset and in-flight transitions on reused nodes survive a server-pushed Replace. Reconciliation is
+           |// SIBLING-SCOPED and keyed on data-kyo-path (unique among siblings; the wrapper/inner nesting repeats it, so
+           |// the keyed lookup is per child list, never a global id set). Objects use Object.create(null) so a path that
+           |// equals a prototype name (e.g. "constructor") cannot false-match.
+           |function __kyoKey(n){return (n.nodeType===1&&n.hasAttribute("data-kyo-path"))?n.getAttribute("data-kyo-path"):null;}
+           |function __kyoIsMount(n){return n.nodeType===1&&n.hasAttribute("data-kyo-mount");}
+           |function __kyoFirstEl(p){var c=p.firstChild;while(c&&c.nodeType!==1)c=c.nextSibling;return c;}
+           |function __kyoHasElChild(el){var c=el.firstChild;while(c){if(c.nodeType===1)return true;c=c.nextSibling;}return false;}
+           |function __kyoOnlyElChild(el){var f=null,n=0,c=el.firstChild;while(c){if(c.nodeType===1){n++;f=c;}c=c.nextSibling;}return n===1?f:null;}
+           |// Collapse a chain of transparent same-path reactive wrappers to one (nested reactive regions at one position
+           |// each emit a wrapper at the same path, and a paint carries only its own depth; left as-is a shallow paint
+           |// morphed against a deep live subtree forces a tag mismatch that wipes the subtree). A mount wrapper is never
+           |// collapsed (its marker is load-bearing).
+           |function __kyoCollapse(el){
+           |  if(el.hasAttribute("data-kyo-reactive")&&!el.hasAttribute("data-kyo-mount")){
+           |    var p=el.getAttribute("data-kyo-path"),cont=true;
+           |    while(cont){
+           |      var ch=__kyoOnlyElChild(el);
+           |      if(ch&&ch.hasAttribute("data-kyo-reactive")&&ch.getAttribute("data-kyo-path")===p&&!ch.hasAttribute("data-kyo-mount")){
+           |        while(ch.firstChild)el.insertBefore(ch.firstChild,ch);
+           |        el.removeChild(ch);
+           |      }else cont=false;
+           |    }
+           |  }
+           |  var c=el.firstChild;while(c){var nx=c.nextSibling;if(c.nodeType===1)__kyoCollapse(c);c=nx;}
+           |}
+           |function __kyoParseRoot(fromEl,html){
+           |  var t=document.createElement("template");
+           |  var svg=fromEl.namespaceURI==="http://www.w3.org/2000/svg"&&fromEl.tagName.toLowerCase()!=="svg";
+           |  var root;
+           |  if(svg){t.innerHTML="<svg>"+html+"</svg>";var o=__kyoFirstEl(t.content);root=o?__kyoFirstEl(o):null;}
+           |  else{t.innerHTML=html;root=__kyoFirstEl(t.content);}
+           |  if(root)__kyoCollapse(root);
+           |  return root;
+           |}
+           |function __kyoCompat(a,b){return a.nodeType===b.nodeType&&(a.nodeType!==1||a.tagName===b.tagName);}
+           |function __kyoMorphAttrs(fromEl,toEl){
+           |  var id=fromEl.getAttribute("id");
+           |  var owned=id!==null&&!!__kyoOwned[id];
+           |  var tag=fromEl.tagName;
+           |  var activeInput=(fromEl===document.activeElement)&&(tag==="INPUT"||tag==="TEXTAREA");
+           |  var ta=toEl.attributes,i;
+           |  for(i=0;i<ta.length;i++){var a=ta[i];if(!(owned&&(a.name==="class"||a.name==="style"))&&fromEl.getAttribute(a.name)!==a.value)fromEl.setAttribute(a.name,a.value);}
+           |  var fa=fromEl.attributes,j;
+           |  for(j=fa.length-1;j>=0;j--){var fn=fa[j].name;if(!(owned&&(fn==="class"||fn==="style"))&&!toEl.hasAttribute(fn))fromEl.removeAttribute(fn);}
+           |  if(activeInput){var nv=(tag==="TEXTAREA")?toEl.textContent:(toEl.getAttribute("value")||"");if(nv!==fromEl.value)fromEl.value=nv;}
+           |}
+           |function __kyoMorphChildren(fromParent,toParent){
+           |  var fromKeyed=null,toKeyed=null,scan=fromParent.firstChild;
+           |  while(scan){var k=__kyoKey(scan);if(k!==null){if(!fromKeyed)fromKeyed=Object.create(null);fromKeyed[k]=scan;}scan=scan.nextSibling;}
+           |  scan=toParent.firstChild;
+           |  while(scan){var k2=__kyoKey(scan);if(k2!==null){if(!toKeyed)toKeyed=Object.create(null);toKeyed[k2]=true;}scan=scan.nextSibling;}
+           |  var curFrom=fromParent.firstChild,curTo=toParent.firstChild;
+           |  while(curTo){
+           |    var toNext=curTo.nextSibling,tKey=__kyoKey(curTo);
+           |    if(tKey!==null){
+           |      var m=(fromKeyed&&fromKeyed[tKey])?fromKeyed[tKey]:null;
+           |      if(m){
+           |        if(m!==curFrom)fromParent.insertBefore(m,curFrom);else curFrom=curFrom.nextSibling;
+           |        // Opaque mount boundary: while the top-down slot still carries content, leave the live mount root's
+           |        // subtree alone (it owns and repaints itself); an EMPTY slot means the gate closed, so morph it out.
+           |        if(!(__kyoIsMount(m)&&__kyoHasElChild(curTo)))__kyoMorphNode(m,curTo);
+           |      }else fromParent.insertBefore(document.importNode(curTo,true),curFrom);
+           |    }else{
+           |      var handled=false,loop=true;
+           |      while(loop&&curFrom){
+           |        var fNext=curFrom.nextSibling,fKey=__kyoKey(curFrom);
+           |        if(fKey!==null){
+           |          if(!toKeyed||!toKeyed[fKey])fromParent.removeChild(curFrom);
+           |          curFrom=fNext;
+           |        }else if(__kyoCompat(curFrom,curTo)){__kyoMorphNode(curFrom,curTo);curFrom=fNext;handled=true;loop=false;}
+           |        else{fromParent.removeChild(curFrom);curFrom=fNext;}
+           |      }
+           |      if(!handled)fromParent.insertBefore(document.importNode(curTo,true),curFrom);
+           |    }
+           |    curTo=toNext;
+           |  }
+           |  while(curFrom){var fN=curFrom.nextSibling;fromParent.removeChild(curFrom);curFrom=fN;}
+           |}
+           |function __kyoMorphEl(fromEl,toEl){
+           |  __kyoMorphAttrs(fromEl,toEl);
+           |  var editing=(fromEl===document.activeElement)&&fromEl.hasAttribute("contenteditable");
+           |  if(!editing)__kyoMorphChildren(fromEl,toEl);
+           |}
+           |function __kyoMorphNode(fromNode,toNode){
+           |  if(toNode.nodeType!==1){if(fromNode.nodeValue!==toNode.nodeValue)fromNode.nodeValue=toNode.nodeValue;}
+           |  else if(fromNode.tagName!==toNode.tagName)fromNode.parentNode.replaceChild(document.importNode(toNode,true),fromNode);
+           |  else __kyoMorphEl(fromNode,toNode);
+           |}
+           |// Returns the region root (fromEl when identity is preserved, or the replacement on a root-tag change), so
+           |// the caller reuses it instead of re-querying the document for the path.
+           |function __kyoMorph(fromEl,newHtml){
+           |  var toEl=__kyoParseRoot(fromEl,newHtml);
+           |  if(!toEl)return fromEl;
+           |  __kyoCollapse(fromEl);
+           |  if(fromEl.tagName!==toEl.tagName){var rep=document.importNode(toEl,true);fromEl.parentNode.replaceChild(rep,fromEl);return rep;}
+           |  __kyoMorphEl(fromEl,toEl);return fromEl;
            |}
            |// Prepare leave ghosts for the OUTERMOST data-kyo-leave elements under root being removed (path not in survSet).
            |// Captures rect+clone WHILE the node is still in the DOM (getBoundingClientRect on a detached node is zero).

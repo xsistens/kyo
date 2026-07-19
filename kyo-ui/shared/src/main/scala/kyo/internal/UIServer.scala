@@ -74,7 +74,7 @@ private[kyo] object UIServer:
 
             def onChange(path: Seq[String], ui: UI, mount: Boolean)(using Frame): Unit < Async =
                 HtmlRenderer.render(ui, path).map { html =>
-                    val finalHtml = HtmlRenderer.wrapReactiveRegion(path, svgContextAt(path), html)
+                    val finalHtml = HtmlRenderer.wrapReactiveRegion(path, svgContextAt(path), html, mount)
                     val op        = HtmlOp.Replace(path, finalHtml)
                     // runPartial drops only a Closed (the socket closed mid-render -> the op is moot); a Panic
                     // propagates to the region fiber rather than being swallowed by the discard.
