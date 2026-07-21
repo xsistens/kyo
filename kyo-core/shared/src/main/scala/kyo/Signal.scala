@@ -78,6 +78,20 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
       */
     def nextWith[B, S](f: A => B < S)(using Frame): B < (S & Async)
 
+    /** The CHANGE channel — like [[nextWith]], but for the race-based combinators ([[Signal.awaitAny]],
+      * [[combineLatest]], [[combineLatestAll]]) and the [[observe]] repair loop, which must react only to an
+      * ACTUAL value change. It differs from [[nextWith]] only for signals whose `next` reports the current
+      * value without a change: a constant ([[Signal.initConst]]) returns `Async.never` here so it drops out
+      * of an `awaitAny` race (a value that never changes must never win the race), while `next`/`nextWith`
+      * still yield it immediately for direct callers. Defaults to [[nextWith]] — correct for a mutable
+      * [[SignalRef]], whose `next` already blocks until an actual write; derived signals (e.g. [[map]]) route
+      * this through their source's change channel. Racing `nextWith` here instead would let a constant input
+      * complete the race on every arm, spinning `observe`'s repair loop at full speed.
+      */
+    private[kyo] def nextChangeWith[B, S](f: A => B < S)(using Frame): B < (S & Async) = nextWith(f)
+
+    final private[kyo] def nextChange(using Frame): Unit < Async = nextChangeWith(_ => ())
+
     /** Runs `f` for the current value and for every subsequent change, each inside a fresh [[Scope]] that closes when the next value arrives.
       *
       * This is a live subscription: `f` runs once for the current value, then again on every change, and the computation runs forever (fork it
@@ -123,13 +137,13 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
         // differs from the value `f` set up, so an idle repair timer NEVER closes a still-current value's scope. The scope
         // closes (releasing what `f` forked) only when the value actually changes; then the outer loop re-reads `current`.
         def holdUntilChanged(cur: A): Unit < (S & Async) =
-            Async.race(Seq(nextWith(_ => ()), Async.sleep(repairInterval))).andThen {
+            Async.race(Seq(nextChangeWith(_ => ()), Async.sleep(repairInterval))).andThen {
                 currentWith(c => if c == cur then holdUntilChanged(cur) else (): Unit < (S & Async))
             }
         def loop(last: Maybe[A]): Unit < (S & Async) =
             currentWith { cur =>
                 if last.exists(_ == cur) then
-                    Async.race(Seq(nextWith(_ => ()), Async.sleep(repairInterval))).andThen(loop(last))
+                    Async.race(Seq(nextChangeWith(_ => ()), Async.sleep(repairInterval))).andThen(loop(last))
                 else
                     Scope.run(f(cur).andThen(holdUntilChanged(cur))).andThen(loop(Present(cur)))
             }
@@ -151,6 +165,7 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
         Signal._initRawF(
             [C, S] => g => self.currentWith(a => g(f(a))),
             [C, S] => g => self.nextWith(a => g(f(a))),
+            [C, S] => g => self.nextChangeWith(a => g(f(a))),
             [S] => (ri, g) => self.observe[S](ri)(a => g(f(a)))
         )
 
@@ -241,7 +256,7 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                     if last.forall(_ != curr) then
                         Emit.valueWith(Chunk(curr))(Loop.continue(Present(curr)))
                     else
-                        nextWith { a =>
+                        nextChangeWith { a =>
                             Emit.valueWith(Chunk(a))(Loop.continue(Present(a)))
                         }
                 }
@@ -271,7 +286,10 @@ object Signal:
       */
     def awaitAny(signals: Seq[Signal[?]])(using Frame): Unit < Async =
         if signals.isEmpty then ()
-        else Async.race(signals.map(_.next)).unit
+        // `nextChange`, not `next`: a constant input's `next` completes immediately, which would win this
+        // race on every arm and spin an enclosing `observe` loop. `nextChange` is `Async.never` for a
+        // constant, so it simply drops out of the race (a value that never changes can never wake it).
+        else Async.race(signals.map(_.nextChange)).unit
 
     /** Zips a sequence of signals, waiting for all to change before emitting.
       *
@@ -379,16 +397,23 @@ object Signal:
       * @tparam A
       *   The type of value contained in the signal. Must have an instance of `CanEqual[A, A]`
       */
+    @nowarn("msg=anonymous")
     def initConst[A](value: A)(
         using
         frame: Frame,
         @implicitNotFound(missingCanEqual)
         canEqual: CanEqual[A, A]
     ): Signal[A] =
-        initRaw(
-            currentWith = [B, S] => f => f(value),
-            nextWith = [B, S] => f => f(value)
-        )
+        new Signal[A]:
+            def currentWith[B, S](f: A => B < S)(using frame: Frame): B < (S & Sync) = f(value)
+            def nextWith[B, S](f: A => B < S)(using frame: Frame): B < (S & Async)   = f(value)
+            // A constant never changes, so its CHANGE channel must never fire — otherwise it would win
+            // every `awaitAny` race and spin an enclosing `observe` loop (see `Signal.nextChangeWith`).
+            // `current`/`next` still return the value immediately for direct callers.
+            override private[kyo] def nextChangeWith[B, S](f: A => B < S)(using frame: Frame): B < (S & Async) =
+                Async.never[B]
+        end new
+    end initConst
 
     /** Creates a new immutable signal with a constant value and applies a transformation function.
       *
@@ -500,6 +525,7 @@ object Signal:
     private inline def _initRawF[A](
         inline _currentWith: [B, S] => (A => B < S) => B < (S & Sync),
         inline _nextWith: [B, S] => (A => B < S) => B < (S & Async),
+        inline _nextChangeWith: [B, S] => (A => B < S) => B < (S & Async),
         inline _observe: [S] => (Duration, A => Unit < (S & Async & Scope)) => Unit < (S & Async)
     )(
         using
@@ -511,6 +537,8 @@ object Signal:
                 _currentWith(f)
             def nextWith[B, S](f: A => B < S)(using frame: Frame): B < (S & Async) =
                 _nextWith(f)
+            override private[kyo] def nextChangeWith[B, S](f: A => B < S)(using frame: Frame): B < (S & Async) =
+                _nextChangeWith(f)
             override def observe[S](repairInterval: Duration)(f: A => Unit < (S & Async & Scope))(using frame: Frame): Unit < (S & Async) =
                 _observe(repairInterval, f)
         end new

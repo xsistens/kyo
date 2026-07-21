@@ -480,6 +480,24 @@ class SignalTest extends kyo.test.Test[Any]:
             yield assert(v == (0, 2))
         }
 
+        "a constant input never drives a change (does not fire until the mutable input changes)" in {
+            // Regression: a constant signal's `next` completes immediately, so racing it in
+            // `awaitAny` made `combineLatest(ref, const).next` fire instantly on every arm —
+            // an `observe` over such a signal then busy-loops (re-arming a discarded repair
+            // timer thousands of times a second), leaking the heap until the tab is OOM-killed.
+            // The constant must be excluded from the change race: `.next` blocks until `ref` changes.
+            for
+                refA <- Signal.initRef(0)
+                cl = refA.combineLatest(Signal.initConst(99))
+                f <- Fiber.initUnscoped(cl.next)
+                // With the bug, the const wins the race and `cl.next` completes before ever
+                // arming refA — so refA.waiters would stay 0 and this times out.
+                _ <- assertEventually(refA.waiters.map(_ == 1))
+                _ <- refA.set(1)
+                v <- f.get
+            yield assert(v == (1, 99))
+        }
+
         "successive other changes each emit" in {
             for
                 refA <- Signal.initRef(0)
