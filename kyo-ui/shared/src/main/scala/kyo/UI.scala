@@ -1027,14 +1027,16 @@ object UI:
               */
             def cssClass(name: String): Self = withAttrs(attrs.copy(cssClasses = attrs.cssClasses :+ name))
 
-            /** REACTIVE class toggle: `name` is present on the element while `on` is true and toggled IN PLACE
-              * on emission (`classList.toggle`, CSS transitions on it fire) — no re-render and no inserted
-              * `data-kyo-reactive` wrapper. The declarative, path-addressed twin of `UI.Commands.bindClassById`.
-              * Returns `Self`, so it stays chainable. Bind one per swappable class (e.g. a severity variant:
-              * `cssClass("p-badge-success", sev.map(_ == Success))`).
+            /** Constant-gated OR reactive class through a single union setter. A `Boolean` adds `name` when
+              * true and leaves the element unchanged when false (static — byte-identical to `cssClass(name)`
+              * resp. omitting it). A `Signal[Boolean]` toggles `name` IN PLACE on emission (`classList.toggle`,
+              * CSS transitions fire) — no re-render, no `data-kyo-reactive` wrapper. Stays chainable (`Self`);
+              * the declarative twin of `UI.Commands.bindClassById`. Bind one per swappable class (e.g. a
+              * severity variant: `cssClass("p-badge-success", sev.map(_ == Success))`).
               */
-            def cssClass(name: String, on: Signal[Boolean]): Self =
-                withReactiveClass(name, on)
+            def cssClass(name: String, on: Boolean | Signal[Boolean]): Self = on match
+                case b: Boolean                    => if b then cssClass(name) else withAttrs(attrs)
+                case s: Signal[Boolean] @unchecked => withReactiveClass(name, s)
 
             /** Declarative ENTER transition (Unit 1, client-local): when a patch inserts this element NEWLY into the DOM
               * (its `data-kyo-path` was not present in the replaced subtree before, and at initial mount), the client adds
@@ -1389,14 +1391,15 @@ object UI:
             def disabled: Maybe[Boolean]
             def disabled(v: Boolean): Self
 
-            /** REACTIVE disabled: the `disabled` boolean attribute is toggled IN PLACE on emission
-              * (setAttribute("")/removeAttribute) via the reactive-attribute patch channel — NO re-render of
-              * the element (and no inserted `data-kyo-reactive` wrapper, unlike the former `Reactive[Self]`
-              * overload). Returns `Self`, so it stays chainable. Use for an enablement that tracks another
-              * field's state (e.g. disable submit until valid).
+            /** Constant OR reactive disabled through a single union setter. A plain `Boolean` sets the
+              * attribute statically (via the per-element `disabled(Boolean)` setter); a `Signal[Boolean]`
+              * toggles the `disabled` attribute IN PLACE on emission (setAttribute("")/removeAttribute) via
+              * the reactive boolean-attribute channel — NO re-render, no `data-kyo-reactive` wrapper, still
+              * chainable (`Self`). Lets a `Const`-or-`Signal` carrier be applied with one call.
               */
-            def disabled(v: Signal[Boolean]): Self =
-                withReactiveBoolAttr("disabled", v)
+            def disabled(v: Boolean | Signal[Boolean]): Self = v match
+                case b: Boolean                    => disabled(b)
+                case s: Signal[Boolean] @unchecked => withReactiveBoolAttr("disabled", s)
         end HasDisabled
 
         /** Capability trait for free-text form inputs: a `String` `value` (constant or `SignalRef`), placeholder, read-only, and `onInput`/`onChange`. */
@@ -1404,6 +1407,7 @@ object UI:
             def value: Maybe[Bound[String]]
             def placeholder: Maybe[String]
             def readOnly: Maybe[Boolean]
+            def readOnly(v: Boolean): Self
             def onInput: Maybe[String => Any < Async]
             def onChange: Maybe[String => Any < Async]
             def value(v: String): Self
@@ -1434,12 +1438,14 @@ object UI:
             def placeholder(sig: Signal[String]): Self =
                 withReactiveAttr("placeholder", sig)
 
-            /** REACTIVE readonly: the `readonly` boolean attribute is toggled IN PLACE on emission
-              * (setAttribute("")/removeAttribute) via the boolean-attribute channel — no re-render of the
-              * field (so caret/focus survive). The browser handles `:read-only` styling and edit-blocking.
+            /** Constant OR reactive readonly through a single union setter: a `Boolean` sets it statically
+              * (via the per-element `readOnly(Boolean)` setter); a `Signal[Boolean]` toggles the `readonly`
+              * attribute IN PLACE on emission (setAttribute("")/removeAttribute) via the boolean-attribute
+              * channel — no re-render (caret/focus survive). The browser handles `:read-only` styling.
               */
-            def readOnly(v: Signal[Boolean]): Self =
-                withReactiveBoolAttr("readonly", v)
+            def readOnly(v: Boolean | Signal[Boolean]): Self = v match
+                case b: Boolean                    => readOnly(b)
+                case s: Signal[Boolean] @unchecked => withReactiveBoolAttr("readonly", s)
         end TextInput
 
         /** Capability trait for picker inputs that carry a `String` `value` and an `onChange` but no free-text typing (`select`, date/time/color, ...). */
