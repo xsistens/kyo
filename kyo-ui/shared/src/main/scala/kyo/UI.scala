@@ -1422,6 +1422,13 @@ object UI:
               */
             def placeholder(sig: Signal[String]): Self =
                 withAttrs(attrs.copy(reactiveAttrs = attrs.reactiveAttrs.updated("placeholder", sig)))
+
+            /** REACTIVE readonly: the `readonly` boolean attribute is toggled IN PLACE on emission
+              * (setAttribute("")/removeAttribute) via the boolean-attribute channel — no re-render of the
+              * field (so caret/focus survive). The browser handles `:read-only` styling and edit-blocking.
+              */
+            def readOnly(v: Signal[Boolean]): Self =
+                withAttrs(attrs.copy(reactiveBoolAttrs = attrs.reactiveBoolAttrs.updated("readonly", v)))
         end TextInput
 
         /** Capability trait for picker inputs that carry a `String` `value` and an `onChange` but no free-text typing (`select`, date/time/color, ...). */
