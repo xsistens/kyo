@@ -987,6 +987,16 @@ private[kyo] object ReactiveUI:
                         (newKids, _) <- walkStatic(current, path, svg, mountDispatch)
                         _            <- regionMounts.evictExcept(collectMountKeys(newKids))
                         _            <- exchange.onChange(path, current, mount)
+                        // walkStatic only forks attr observers for reactive-attr CHILD elements; the region's
+                        // painted ROOT element (a mount body's or a reactive value's top node) carries its own
+                        // reactiveAttrs at `path` and is not otherwise represented among newKids, so start its
+                        // in-place observers here — scoped to this per-value fiber like the child subscriptions.
+                        _ <- current match
+                            case el: Element if el.attrs.reactiveAttrs.nonEmpty =>
+                                Kyo.foreachDiscard(el.attrs.reactiveAttrs.toSeq) { case (name, sig) =>
+                                    Fiber.init(sig.observe(v => exchange.onAttrPatch(path, name, v))).unit
+                                }
+                            case _ => Kyo.unit
                         _ <- Kyo.foreachDiscard(newKids)(
                             subscribeScoped(_, exchange, signalChangeTime, regionMounts, mountDispatch, boundary)
                         )

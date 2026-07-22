@@ -247,4 +247,27 @@ class DomBackendTest extends UITest:
         }
     }
 
+    "declarative reactive attribute on an element produced INSIDE a UI.mounted block patches in place" in {
+        // Component topology (DatePicker/AutoComplete/Select build their field inside an effectful
+        // UI.mounted region). The reactive-attr element is NOT at the top level — it is produced by
+        // the mount body. This pins that ReactiveUI forks the attr observer while walking mounted
+        // content, so the aria-label still patches in place (no re-mount) when the signal emits.
+        val app: UI < Async =
+            for lbl <- Signal.initRef("m-first")
+            yield UI.div(
+                UI.button("relabel").id("mrelabel").onClick(lbl.set("m-second")),
+                UI.mounted {
+                    Signal.initRef(0).map(_ => UI.div.id("mhost").aria("label", lbl)(UI.span("y").id("mchild")))
+                }.placeholder(UI.empty)
+            )
+        withUI(app) {
+            for
+                _ <- Browser.waitForAttribute(Selector.id("mhost"), "aria-label", "m-first")
+                _ <- Browser.click(Selector.id("mrelabel"))
+                _ <- Browser.assertAttribute(Selector.id("mhost"), "aria-label", "m-second")
+                _ <- Browser.assertText(Selector.id("mchild"), "y") // child untouched — no re-mount
+            yield ()
+        }
+    }
+
 end DomBackendTest
