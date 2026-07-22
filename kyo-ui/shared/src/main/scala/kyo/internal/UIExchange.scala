@@ -16,5 +16,6 @@ private[kyo] trait UIExchange:
       * `title(sig)`. Defaulted so exchanges that don't support in-place attr patching (plain-HTML render)
       * need not override it.
       */
-    def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async = Kyo.unit
+    def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async      = Kyo.unit
+    def onBoolAttrPatch(path: Seq[String], name: String, value: Boolean)(using Frame): Unit < Async = Kyo.unit
 end UIExchange

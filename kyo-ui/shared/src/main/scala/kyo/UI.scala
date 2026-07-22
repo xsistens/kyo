@@ -557,6 +557,8 @@ object UI:
                             override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
                                 // Plain-HTML transport has no in-place patch; re-emit full HTML like onChange.
                                 Abort.runPartial[Closed](channel.put(())).unit
+                            override def onBoolAttrPatch(path: Seq[String], name: String, value: Boolean)(using Frame): Unit < Async =
+                                Abort.runPartial[Closed](channel.put(())).unit
                     // Scope.run owns the root region Fiber.init: when the stream consumer stops draining,
                     // the consume loop ends, the Scope closes, and the subscription tree cascade-tears-down.
                     Scope.run {
@@ -1365,10 +1367,14 @@ object UI:
             def disabled: Maybe[Boolean]
             def disabled(v: Boolean): Self
 
-            /** Reactive `disabled`: re-renders when the signal emits. */
-            def disabled(v: Signal[Boolean]): Reactive[Self] =
-                given Frame = frame
-                Reactive[Self](v.map(b => this.disabled(b): UI))
+            /** REACTIVE disabled: the `disabled` boolean attribute is toggled IN PLACE on emission
+              * (setAttribute("")/removeAttribute) via the reactive-attribute patch channel — NO re-render of
+              * the element (and no inserted `data-kyo-reactive` wrapper, unlike the former `Reactive[Self]`
+              * overload). Returns `Self`, so it stays chainable. Use for an enablement that tracks another
+              * field's state (e.g. disable submit until valid).
+              */
+            def disabled(v: Signal[Boolean]): Self =
+                withAttrs(attrs.copy(reactiveBoolAttrs = attrs.reactiveBoolAttrs.updated("disabled", v)))
         end HasDisabled
 
         /** Capability trait for free-text form inputs: a `String` `value` (constant or `SignalRef`), placeholder, read-only, and `onInput`/`onChange`. */
@@ -1488,7 +1494,11 @@ object UI:
             // "title") -> Signal[String]. The element renders the signal's current value as an ordinary
             // attribute; an observer (ReactiveUI.subscribeScoped) patches it IN PLACE on emission via
             // setAttribute — no re-render, no re-mount. Bound via aria(name, sig)/placeholder(sig)/title(sig).
-            reactiveAttrs: Map[String, Signal[String]] = Map.empty
+            reactiveAttrs: Map[String, Signal[String]] = Map.empty,
+            // Declarative reactive BOOLEAN attributes: attr name (e.g. "disabled") -> Signal[Boolean]. The
+            // element renders the attribute as PRESENT while the signal is true; an observer toggles it IN
+            // PLACE on emission (setAttribute("")/removeAttribute) — no re-render. Bound via disabled(sig).
+            reactiveBoolAttrs: Map[String, Signal[Boolean]] = Map.empty
         )
 
         // ---- Non-element AST cases ----

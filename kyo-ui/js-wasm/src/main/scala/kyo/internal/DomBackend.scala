@@ -305,6 +305,15 @@ private[kyo] object DomBackend:
                     el.setAttribute(name, value)
             }
 
+        // Presence-based boolean twin: toggle the attribute in place, ownership-marked so a morph won't undo it.
+        override def onBoolAttrPatch(path: Seq[String], name: String, value: Boolean)(using Frame): Unit < Async =
+            Sync.defer {
+                val el = locateByPath(path.mkString("."))
+                if el != null then
+                    markOwned(el, name)
+                    if value then el.setAttribute(name, "") else el.removeAttribute(name)
+            }
+
         def onChange(path: Seq[String], ui: UI, mount: Boolean)(using Frame): Unit < Async =
             // Render the content at its (possibly nested-reactive) sub-path so a reactive-valued region
             // wraps a DISTINCT inner wrapper — matching SSR/walkStatic. The wrapper stays at `path`, so

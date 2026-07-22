@@ -17,7 +17,10 @@ private[kyo] case class ReactiveUI(
     mountDispatch: Maybe[MountDispatch] = Absent, // set on the ROOT normalize product only; see subscribe
     // Declaratively-bound reactive attributes carried from the element's Attrs.reactiveAttrs; observers
     // that patch them in place are forked in subscribeScoped (empty for non-element / attribute-less nodes).
-    reactiveAttrs: Map[String, Signal[String]] = Map.empty
+    reactiveAttrs: Map[String, Signal[String]] = Map.empty,
+    // Declaratively-bound reactive BOOLEAN attributes (Attrs.reactiveBoolAttrs); observers toggle them in
+    // place (setAttribute("")/removeAttribute), forked alongside reactiveAttrs in subscribeScoped.
+    reactiveBoolAttrs: Map[String, Signal[Boolean]] = Map.empty
 )
 
 /** Normalization-time companion of a [[kyo.UI.Ast.Boundary]] node. */
@@ -234,7 +237,8 @@ private[kyo] object ReactiveUI:
                     kids,
                     hdl,
                     svgContext = svg,
-                    reactiveAttrs = ui.attrs.reactiveAttrs
+                    reactiveAttrs = ui.attrs.reactiveAttrs,
+                    reactiveBoolAttrs = ui.attrs.reactiveBoolAttrs
                 )
 
             case ui: Mounted =>
@@ -328,7 +332,10 @@ private[kyo] object ReactiveUI:
                             case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted | _: Boundary =>
                                 for rui <- normalizeWith(child, childPath, childSvg, mountDispatch)
                                 yield (Seq(rui), Seq.empty[(Int, Handler)])
-                            case childElem: Element if collectSignalRef(childElem).nonEmpty || childElem.attrs.reactiveAttrs.nonEmpty =>
+                            case childElem: Element
+                                if collectSignalRef(
+                                    childElem
+                                ).nonEmpty || childElem.attrs.reactiveAttrs.nonEmpty || childElem.attrs.reactiveBoolAttrs.nonEmpty =>
                                 // Element with SignalRef-bound attributes (reactive over those signals) OR
                                 // declaratively-bound reactive attributes (aria/placeholder/title) — normalize it
                                 // so it gets a ReactiveUI node whose subscribeScoped wires the updates (a re-render
@@ -896,7 +903,11 @@ private[kyo] object ReactiveUI:
             Kyo.foreachDiscard(rui.reactiveAttrs.toSeq) { case (name, sig) =>
                 Fiber.init(sig.observe(v => exchange.onAttrPatch(rui.path, name, v))).unit
             }
-        startAttrObservers.andThen {
+        val startBoolAttrObservers: Unit < (Async & Scope) =
+            Kyo.foreachDiscard(rui.reactiveBoolAttrs.toSeq) { case (name, sig) =>
+                Fiber.init(sig.observe(v => exchange.onBoolAttrPatch(rui.path, name, v))).unit
+            }
+        startAttrObservers.andThen(startBoolAttrObservers).andThen {
             rui.mountedSpec match
                 case Present(spec) =>
                     subscribeMounted(rui, spec, exchange, signalChangeTime, mounts, mountDispatch, boundary)
@@ -992,10 +1003,12 @@ private[kyo] object ReactiveUI:
                         // reactiveAttrs at `path` and is not otherwise represented among newKids, so start its
                         // in-place observers here — scoped to this per-value fiber like the child subscriptions.
                         _ <- current match
-                            case el: Element if el.attrs.reactiveAttrs.nonEmpty =>
+                            case el: Element if el.attrs.reactiveAttrs.nonEmpty || el.attrs.reactiveBoolAttrs.nonEmpty =>
                                 Kyo.foreachDiscard(el.attrs.reactiveAttrs.toSeq) { case (name, sig) =>
                                     Fiber.init(sig.observe(v => exchange.onAttrPatch(path, name, v))).unit
-                                }
+                                }.andThen(Kyo.foreachDiscard(el.attrs.reactiveBoolAttrs.toSeq) { case (name, sig) =>
+                                    Fiber.init(sig.observe(v => exchange.onBoolAttrPatch(path, name, v))).unit
+                                })
                             case _ => Kyo.unit
                         _ <- Kyo.foreachDiscard(newKids)(
                             subscribeScoped(_, exchange, signalChangeTime, regionMounts, mountDispatch, boundary)

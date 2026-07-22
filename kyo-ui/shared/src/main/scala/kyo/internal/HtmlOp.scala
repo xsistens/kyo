@@ -45,7 +45,8 @@ private[kyo] object HtmlOp:
     // no re-mount. Client marks ownership (the __kyoOwn shield, so a parent re-render's morph won't
     // reconcile the live value back) then el.setAttribute(name, value). Emitted by the reactive-attr
     // observers started in ReactiveUI.subscribeScoped from Attrs.reactiveAttrs.
-    case class SetAttrByPath(path: Seq[String], name: String, value: String) extends HtmlOp derives Schema
+    case class SetAttrByPath(path: Seq[String], name: String, value: String)      extends HtmlOp derives Schema
+    case class SetBoolAttrByPath(path: Seq[String], name: String, value: Boolean) extends HtmlOp derives Schema
     // Unit 8 (viewport observation): begin continuously measuring getElementById(id). The client measures now and
     // attaches capturing scroll + resize listeners keyed by id; each fires a UIEvent.MeasureById(id) reply, routed to a
     // PERSISTENT sink in UI.Commands.observers (kept, not consumed). Emitted by UI.Commands.observeViewportById.

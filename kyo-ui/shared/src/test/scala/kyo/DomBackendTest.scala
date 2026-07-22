@@ -270,4 +270,32 @@ class DomBackendTest extends UITest:
         }
     }
 
+    "declarative reactive boolean attribute (disabled) toggles in place, survives a sibling morph" in {
+        // bhost is a CONST button (no ref-bound value; only a declaratively-bound reactive `disabled`). The
+        // only way its disabled attribute can change is the presence-based in-place patch — proving no
+        // re-render — and it must survive a sibling region's morph via the __kyoOwn shield.
+        val app: UI < Async =
+            for
+                tick <- Signal.initRef(0)
+                off  <- Signal.initRef(false)
+            yield UI.div(
+                UI.button("tick").id("btick").onClick(tick.getAndUpdate(_ + 1).unit),
+                UI.button("target").id("bhost").disabled(off),
+                tick.map(t => UI.span(s"t:$t").id("btxt")),
+                UI.button("toggle").id("btoggle").onClick(off.getAndUpdate(b => !b).unit)
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertNoAttribute(Selector.id("bhost"), "disabled")
+                _ <- Browser.click(Selector.id("btoggle"))
+                _ <- Browser.assertAttribute(Selector.id("bhost"), "disabled", "") // patched present in place
+                _ <- Browser.click(Selector.id("btick"))
+                _ <- Browser.assertText(Selector.id("btxt"), "t:1")                // a sibling region re-rendered
+                _ <- Browser.assertAttribute(Selector.id("bhost"), "disabled", "") // owned attr survived the morph
+                _ <- Browser.click(Selector.id("btoggle"))
+                _ <- Browser.assertNoAttribute(Selector.id("bhost"), "disabled")   // toggled back off, removed in place
+            yield ()
+        }
+    }
+
 end DomBackendTest

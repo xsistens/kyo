@@ -121,6 +121,7 @@ private[kyo] object HtmlRenderer:
                 for
                     _ <- renderElementAttrs(sb, elem)
                     _ <- renderReactiveAttrs(sb, elem.attrs)
+                    _ <- renderReactiveBoolAttrs(sb, elem.attrs)
                 yield
                     if void then
                         w(sb, " />")
@@ -391,6 +392,15 @@ private[kyo] object HtmlRenderer:
     private def renderReactiveAttrs(sb: StringBuilder, attrs: Attrs)(using Frame): Unit < Sync =
         Kyo.foreachDiscard(attrs.reactiveAttrs.toSeq.sortBy(_._1)) { case (name, sig) =>
             sig.current.map(v => w(sb, s""" $name="${esc(v)}""""))
+        }
+
+    /** Emits each declaratively-bound reactive BOOLEAN attribute (Attrs.reactiveBoolAttrs) as a bare present
+      * attribute while its signal's current value is true (mirrors `boolAttr`); the client toggles it in place
+      * on subsequent emissions (HtmlOp.SetBoolAttrByPath). Sorted for deterministic output.
+      */
+    private def renderReactiveBoolAttrs(sb: StringBuilder, attrs: Attrs)(using Frame): Unit < Sync =
+        Kyo.foreachDiscard(attrs.reactiveBoolAttrs.toSeq.sortBy(_._1)) { case (name, sig) =>
+            sig.current.map(v => if v then w(sb, s" $name"))
         }
 
     private def renderElementAttrs(sb: StringBuilder, elem: Element)(using Frame): Unit < Sync =
@@ -837,6 +847,9 @@ private[kyo] object HtmlRenderer:
            |  }else if(op.SetAttrByPath){
            |    // Declarative path-addressed twin of SetAttrById: patch an attribute in place on the element at data-kyo-path.
            |    var sapp=op.SetAttrByPath.path.join(".");var sapel=document.querySelector('[data-kyo-path="'+sapp+'"]:not([data-kyo-reactive])')||document.querySelector('[data-kyo-path="'+sapp+'"]');if(sapel){__kyoMark(sapel,op.SetAttrByPath.name);sapel.setAttribute(op.SetAttrByPath.name,op.SetAttrByPath.value);}
+           |  }else if(op.SetBoolAttrByPath){
+           |    // Presence-based boolean twin: toggle the attribute in place (present when true) on the element at data-kyo-path.
+           |    var sbpp=op.SetBoolAttrByPath.path.join(".");var sbpel=document.querySelector('[data-kyo-path="'+sbpp+'"]:not([data-kyo-reactive])')||document.querySelector('[data-kyo-path="'+sbpp+'"]');if(sbpel){__kyoMark(sbpel,op.SetBoolAttrByPath.name);if(op.SetBoolAttrByPath.value){sbpel.setAttribute(op.SetBoolAttrByPath.name,'');}else{sbpel.removeAttribute(op.SetBoolAttrByPath.name);}}
            |  }else if(op.ObserveViewportById){
            |    // Unit 8: measure now + attach capturing scroll + resize listeners that each reply with a MeasureById(id).
            |    var vid=op.ObserveViewportById.id;
