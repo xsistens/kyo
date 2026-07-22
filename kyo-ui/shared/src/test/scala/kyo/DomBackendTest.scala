@@ -221,4 +221,30 @@ class DomBackendTest extends UITest:
         }
     }
 
+    "declarative reactive attribute patches a const element in place (no re-render), survives a sibling morph" in {
+        val app: UI < Async =
+            for
+                tick <- Signal.initRef(0)
+                lbl  <- Signal.initRef("first")
+            yield UI.div(
+                UI.button("tick").id("dtick").onClick(tick.getAndUpdate(_ + 1).unit),
+                // dhost is a CONST node (no ref-bound value; only a declaratively-bound reactive aria-label). The
+                // framework forks no region observer for it, so the only way its aria-label can change is the
+                // in-place attr patch — this proves no re-render/re-mount.
+                UI.div.id("dhost").aria("label", lbl)(UI.span("x").id("dchild")),
+                tick.map(t => UI.span(s"t:$t").id("dtxt")),
+                UI.button("relabel").id("drelabel").onClick(lbl.set("second"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.waitForAttribute(Selector.id("dhost"), "aria-label", "first")
+                _ <- Browser.click(Selector.id("drelabel"))
+                _ <- Browser.assertAttribute(Selector.id("dhost"), "aria-label", "second") // patched in place on a const node
+                _ <- Browser.click(Selector.id("dtick"))
+                _ <- Browser.assertText(Selector.id("dtxt"), "t:1")                        // a sibling region re-rendered
+                _ <- Browser.assertAttribute(Selector.id("dhost"), "aria-label", "second") // owned attr unaffected by the morph
+            yield ()
+        }
+    }
+
 end DomBackendTest

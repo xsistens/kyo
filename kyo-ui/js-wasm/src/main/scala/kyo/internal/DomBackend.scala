@@ -138,13 +138,31 @@ private[kyo] object DomBackend:
 
     // ---- Unit 2/3: local op application for the SPA transport ----
 
+    /** A conservative "focusable" CSS selector — what a focus command may land on. Mirrors
+      * the reactive-focus-restore query used elsewhere in this backend / HtmlRenderer.
+      */
+    private val FocusableSelector = "input,textarea,select,button,a[href],[tabindex],[contenteditable]"
+
+    /** Focus `el` if it is itself focusable, else its FIRST focusable descendant. Lets a
+      * focus command target a non-focusable WRAPPER (e.g. an InputGroup around several
+      * fields) and land on the first field inside it. A focusable element (an `<input>`,
+      * …) matches the selector and focuses itself, so existing focus targets are unchanged.
+      */
+    private def focusInto(el: dom.Element): Unit =
+        if el != null then
+            val dyn         = el.asInstanceOf[scalajs.js.Dynamic]
+            val selfMatches = scalajs.js.typeOf(dyn.matches) == "function" && dyn.matches(FocusableSelector).asInstanceOf[Boolean]
+            val target      = if selfMatches then el else el.querySelector(FocusableSelector)
+            if target != null then
+                val tdyn = target.asInstanceOf[scalajs.js.Dynamic]
+                if scalajs.js.typeOf(tdyn.focus) == "function" then discard(tdyn.focus())
+
     /** Apply a whitelisted `verb` to `el` (shared by path- and id-addressed commands). Unknown verbs are ignored. */
     private def applyVerbDom(el: dom.Element, verb: String): Unit =
         if el != null then
             val dyn = el.asInstanceOf[scalajs.js.Dynamic]
             verb match
-                case "focus" =>
-                    if scalajs.js.typeOf(dyn.focus) == "function" then discard(dyn.focus())
+                case "focus" => focusInto(el)
                 case "scrollIntoView" =>
                     if scalajs.js.typeOf(dyn.scrollIntoView) == "function" then
                         discard(dyn.scrollIntoView(scalajs.js.Dynamic.literal(block = "nearest")))
@@ -276,6 +294,16 @@ private[kyo] object DomBackend:
     private class LocalExchange(root: ReactiveUI) extends UIExchange:
         private def svgContextAt(path: Seq[String]): Boolean =
             ReactiveUI.findNode(root, path).map(_.svgContext).getOrElse(false)
+
+        // Declarative reactive-attribute patch: set the attribute in place on the element at `path`, marking
+        // ownership so a parent region's morph won't reconcile the live value back (the __kyoOwn shield).
+        override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
+            Sync.defer {
+                val el = locateByPath(path.mkString("."))
+                if el != null then
+                    markOwned(el, name)
+                    el.setAttribute(name, value)
+            }
 
         def onChange(path: Seq[String], ui: UI, mount: Boolean)(using Frame): Unit < Async =
             // Render the content at its (possibly nested-reactive) sub-path so a reactive-valued region

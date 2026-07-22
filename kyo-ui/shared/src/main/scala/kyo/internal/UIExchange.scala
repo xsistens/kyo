@@ -10,4 +10,11 @@ import kyo.*
   */
 private[kyo] trait UIExchange:
     def onChange(path: Seq[String], ui: UI, mount: Boolean = false)(using Frame): Unit < Async
+
+    /** Declarative reactive-attribute patch: set `name=value` on the element at `path` IN PLACE (no
+      * content replace), driven by a `Signal[String]` bound via `aria(name, sig)` / `placeholder(sig)` /
+      * `title(sig)`. Defaulted so exchanges that don't support in-place attr patching (plain-HTML render)
+      * need not override it.
+      */
+    def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async = Kyo.unit
 end UIExchange

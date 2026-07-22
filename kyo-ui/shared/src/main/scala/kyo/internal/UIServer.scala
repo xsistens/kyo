@@ -84,6 +84,12 @@ private[kyo] object UIServer:
                 }
             end onChange
 
+            // Declarative reactive-attribute patch over the websocket: the client sets the attribute in place
+            // (marking ownership) — no content Replace, no re-render.
+            override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
+                val op = HtmlOp.SetAttrByPath(path, name, value)
+                Abort.runPartial[Closed](ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](op)))).unit
+
     private def dispatchEvent(
         handle: (Seq[String], UIEvent) => Boolean < Async,
         commands: UI.Commands,

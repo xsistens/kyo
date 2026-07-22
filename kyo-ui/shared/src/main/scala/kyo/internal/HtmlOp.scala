@@ -39,6 +39,13 @@ private[kyo] object HtmlOp:
     // region would insert a data-kyo-reactive wrapper and break a CSS `>` child-combinator anchored on that element.
     // Client: el.setAttribute(name, value). Emitted by UI.Commands.bindAttrById from a Signal[String].
     case class SetAttrById(id: String, name: String, value: String) extends HtmlOp derives Schema
+    // Declarative, path-addressed twin of SetAttrById: set an attribute on the element at `path`
+    // (its data-kyo-path) WITHOUT replacing it, so a declaratively-bound reactive attribute (a
+    // Signal[String] aria-label / placeholder / title) tracks its signal IN PLACE — no re-render,
+    // no re-mount. Client marks ownership (the __kyoOwn shield, so a parent re-render's morph won't
+    // reconcile the live value back) then el.setAttribute(name, value). Emitted by the reactive-attr
+    // observers started in ReactiveUI.subscribeScoped from Attrs.reactiveAttrs.
+    case class SetAttrByPath(path: Seq[String], name: String, value: String) extends HtmlOp derives Schema
     // Unit 8 (viewport observation): begin continuously measuring getElementById(id). The client measures now and
     // attaches capturing scroll + resize listeners keyed by id; each fires a UIEvent.MeasureById(id) reply, routed to a
     // PERSISTENT sink in UI.Commands.observers (kept, not consumed). Emitted by UI.Commands.observeViewportById.

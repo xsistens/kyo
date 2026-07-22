@@ -554,6 +554,9 @@ object UI:
                             def onChange(path: Seq[String], changedUI: UI, mount: Boolean)(using Frame): Unit < Async =
                                 // runPartial drops only a Closed (the consumer stopped draining); a Panic propagates.
                                 Abort.runPartial[Closed](channel.put(())).unit
+                            override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
+                                // Plain-HTML transport has no in-place patch; re-emit full HTML like onChange.
+                                Abort.runPartial[Closed](channel.put(())).unit
                     // Scope.run owns the root region Fiber.init: when the stream consumer stops draining,
                     // the consume loop ends, the Scope closes, and the subscription tree cascade-tears-down.
                     Scope.run {
@@ -952,6 +955,20 @@ object UI:
             /** Sets several `aria-*` attributes at once from name/value pairs. */
             def aria(pairs: (String, String)*): Self =
                 withAttrs(attrs.copy(ariaAttrs = attrs.ariaAttrs ++ pairs))
+
+            /** REACTIVE `aria-*`: the `aria-$name` attribute tracks `sig` and is patched IN PLACE on
+              * emission (via `setAttribute`) — NOT a re-render of the element (unlike the
+              * `Reactive[Self]`-returning value overloads like `disabled(Signal[Boolean])`). Use for a
+              * locale-driven accessible name/description that must re-translate without re-mounting.
+              */
+            def aria(name: String, sig: Signal[String]): Self =
+                withAttrs(attrs.copy(reactiveAttrs = attrs.reactiveAttrs.updated(s"aria-$name", sig)))
+
+            /** REACTIVE native `title` (tooltip): the `title` attribute tracks `sig`, patched in place on
+              * emission — no re-render.
+              */
+            def title(sig: Signal[String]): Self =
+                withAttrs(attrs.copy(reactiveAttrs = attrs.reactiveAttrs.updated("title", sig)))
 
             /** Sets the WAI-ARIA `role` attribute (emitted as the bare `role="..."` HTML attribute). */
             def role(v: String): Self =
@@ -1380,6 +1397,14 @@ object UI:
               * input/change events. Emits `data-kyo-mask="..."`.
               */
             def inputMask(mask: String): Self = withAttrs(attrs.copy(inputMask = Present(mask)))
+
+            /** REACTIVE placeholder: the `placeholder` attribute tracks `sig` and is patched IN PLACE on
+              * emission (via `setAttribute`) — no re-render of the field (unlike the element's
+              * `Reactive[Self]`-returning reactive overloads). Owns the `placeholder` attribute name, so
+              * do not combine with the constant `placeholder(String)` on the same input.
+              */
+            def placeholder(sig: Signal[String]): Self =
+                withAttrs(attrs.copy(reactiveAttrs = attrs.reactiveAttrs.updated("placeholder", sig)))
         end TextInput
 
         /** Capability trait for picker inputs that carry a `String` `value` and an `onChange` but no free-text typing (`select`, date/time/color, ...). */
@@ -1458,7 +1483,12 @@ object UI:
             role: Maybe[String] = Absent,
             // Unit 3: declarative client-local input filtering/masking on text inputs.
             inputFilter: Maybe[String] = Absent,
-            inputMask: Maybe[String] = Absent
+            inputMask: Maybe[String] = Absent,
+            // Declarative reactive attributes: fully-qualified attr name (e.g. "aria-label", "placeholder",
+            // "title") -> Signal[String]. The element renders the signal's current value as an ordinary
+            // attribute; an observer (ReactiveUI.subscribeScoped) patches it IN PLACE on emission via
+            // setAttribute — no re-render, no re-mount. Bound via aria(name, sig)/placeholder(sig)/title(sig).
+            reactiveAttrs: Map[String, Signal[String]] = Map.empty
         )
 
         // ---- Non-element AST cases ----

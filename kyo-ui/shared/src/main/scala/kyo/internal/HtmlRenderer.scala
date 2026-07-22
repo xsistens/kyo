@@ -118,7 +118,9 @@ private[kyo] object HtmlRenderer:
                 w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}"""")
                 renderCommonAttrs(sb, elem.attrs)
                 renderEventAttr(sb, elem)
-                for _ <- renderElementAttrs(sb, elem)
+                for
+                    _ <- renderElementAttrs(sb, elem)
+                    _ <- renderReactiveAttrs(sb, elem.attrs)
                 yield
                     if void then
                         w(sb, " />")
@@ -380,6 +382,16 @@ private[kyo] object HtmlRenderer:
     end renderCommonAttrs
 
     // ---- Element-specific attributes ----
+
+    /** Emits the CURRENT value of each declaratively-bound reactive attribute (Attrs.reactiveAttrs) as an
+      * ordinary `name="value"` attribute, so SSR / initial mount carries the correct value; the client then
+      * patches it in place on subsequent emissions (HtmlOp.SetAttrByPath). Effectful — reads each Signal's
+      * current value (same as the reactive-content region renderer). Sorted for deterministic output.
+      */
+    private def renderReactiveAttrs(sb: StringBuilder, attrs: Attrs)(using Frame): Unit < Sync =
+        Kyo.foreachDiscard(attrs.reactiveAttrs.toSeq.sortBy(_._1)) { case (name, sig) =>
+            sig.current.map(v => w(sb, s""" $name="${esc(v)}""""))
+        }
 
     private def renderElementAttrs(sb: StringBuilder, elem: Element)(using Frame): Unit < Sync =
         elem match
@@ -822,6 +834,9 @@ private[kyo] object HtmlRenderer:
            |  }else if(op.SetAttrById){
            |    // Unit 8: set an attribute in place (element stays put, so a CSS `>` anchored on it keeps matching).
            |    var sael=document.getElementById(op.SetAttrById.id);if(sael){__kyoMark(sael,op.SetAttrById.name);sael.setAttribute(op.SetAttrById.name,op.SetAttrById.value);}
+           |  }else if(op.SetAttrByPath){
+           |    // Declarative path-addressed twin of SetAttrById: patch an attribute in place on the element at data-kyo-path.
+           |    var sapp=op.SetAttrByPath.path.join(".");var sapel=document.querySelector('[data-kyo-path="'+sapp+'"]:not([data-kyo-reactive])')||document.querySelector('[data-kyo-path="'+sapp+'"]');if(sapel){__kyoMark(sapel,op.SetAttrByPath.name);sapel.setAttribute(op.SetAttrByPath.name,op.SetAttrByPath.value);}
            |  }else if(op.ObserveViewportById){
            |    // Unit 8: measure now + attach capturing scroll + resize listeners that each reply with a MeasureById(id).
            |    var vid=op.ObserveViewportById.id;
@@ -847,7 +862,7 @@ private[kyo] object HtmlRenderer:
            |// Self-addressing: shared whitelist for Command / CommandById. Unknown verbs are ignored (forward-compat).
            |function kyoApplyVerb(el,verb){
            |  if(!el)return;
-           |  if(verb==="focus"){if(typeof el.focus==="function")el.focus();}
+           |  if(verb==="focus"){var fs='input,textarea,select,button,a[href],[tabindex],[contenteditable]';var ft=(el.matches&&el.matches(fs))?el:(el.querySelector?el.querySelector(fs):null);if(ft&&typeof ft.focus==="function")ft.focus();}
            |  else if(verb==="scrollIntoView"){if(typeof el.scrollIntoView==="function")el.scrollIntoView({block:"nearest"});}
            |}
            |function fp(el){
