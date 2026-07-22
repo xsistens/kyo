@@ -298,4 +298,32 @@ class DomBackendTest extends UITest:
         }
     }
 
+    "declarative reactive class toggles in place, survives a sibling morph" in {
+        // chost is a CONST div carrying a static class plus a declaratively-bound reactive class. The reactive
+        // class can only change via the in-place classList.toggle patch (proving no re-render), and it must
+        // survive a sibling region's morph via the __kyoOwn "class" shield.
+        val app: UI < Async =
+            for
+                tick <- Signal.initRef(0)
+                on   <- Signal.initRef(false)
+            yield UI.div(
+                UI.button("tick").id("ctick").onClick(tick.getAndUpdate(_ + 1).unit),
+                UI.div.id("chost").cssClass("base").cssClass("hot", on)(UI.span("z").id("cchild")),
+                tick.map(t => UI.span(s"t:$t").id("ctxt")),
+                UI.button("toggle").id("ctoggle").onClick(on.getAndUpdate(b => !b).unit)
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertAttributeSatisfies(Selector.id("chost"), "class", "no hot initially")(c => !c.contains("hot"))
+                _ <- Browser.click(Selector.id("ctoggle"))
+                _ <- Browser.assertAttributeSatisfies(Selector.id("chost"), "class", "hot added in place")(_.contains("hot"))
+                _ <- Browser.click(Selector.id("ctick"))
+                _ <- Browser.assertText(Selector.id("ctxt"), "t:1") // sibling re-rendered
+                _ <- Browser.assertAttributeSatisfies(Selector.id("chost"), "class", "hot survives morph")(_.contains("hot"))
+                _ <- Browser.click(Selector.id("ctoggle"))
+                _ <- Browser.assertAttributeSatisfies(Selector.id("chost"), "class", "hot removed in place")(c => !c.contains("hot"))
+            yield ()
+        }
+    }
+
 end DomBackendTest

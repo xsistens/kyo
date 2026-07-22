@@ -314,6 +314,15 @@ private[kyo] object DomBackend:
                     if value then el.setAttribute(name, "") else el.removeAttribute(name)
             }
 
+        // Reactive class twin: toggle the class in place (CSS transitions fire), own "class" against the morph.
+        override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
+            Sync.defer {
+                val el = locateByPath(path.mkString("."))
+                if el != null then
+                    markOwned(el, "class")
+                    discard(el.classList.toggle(name, on))
+            }
+
         def onChange(path: Seq[String], ui: UI, mount: Boolean)(using Frame): Unit < Async =
             // Render the content at its (possibly nested-reactive) sub-path so a reactive-valued region
             // wraps a DISTINCT inner wrapper — matching SSR/walkStatic. The wrapper stays at `path`, so

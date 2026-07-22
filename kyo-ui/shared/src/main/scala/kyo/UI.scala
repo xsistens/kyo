@@ -559,6 +559,8 @@ object UI:
                                 Abort.runPartial[Closed](channel.put(())).unit
                             override def onBoolAttrPatch(path: Seq[String], name: String, value: Boolean)(using Frame): Unit < Async =
                                 Abort.runPartial[Closed](channel.put(())).unit
+                            override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
+                                Abort.runPartial[Closed](channel.put(())).unit
                     // Scope.run owns the root region Fiber.init: when the stream consumer stops draining,
                     // the consume loop ends, the Scope closes, and the subscription tree cascade-tears-down.
                     Scope.run {
@@ -1013,6 +1015,15 @@ object UI:
               * coexist on one element.
               */
             def cssClass(name: String): Self = withAttrs(attrs.copy(cssClasses = attrs.cssClasses :+ name))
+
+            /** REACTIVE class toggle: `name` is present on the element while `on` is true and toggled IN PLACE
+              * on emission (`classList.toggle`, CSS transitions on it fire) — no re-render and no inserted
+              * `data-kyo-reactive` wrapper. The declarative, path-addressed twin of `UI.Commands.bindClassById`.
+              * Returns `Self`, so it stays chainable. Bind one per swappable class (e.g. a severity variant:
+              * `cssClass("p-badge-success", sev.map(_ == Success))`).
+              */
+            def cssClass(name: String, on: Signal[Boolean]): Self =
+                withAttrs(attrs.copy(reactiveClasses = attrs.reactiveClasses.updated(name, on)))
 
             /** Declarative ENTER transition (Unit 1, client-local): when a patch inserts this element NEWLY into the DOM
               * (its `data-kyo-path` was not present in the replaced subtree before, and at initial mount), the client adds
@@ -1498,7 +1509,11 @@ object UI:
             // Declarative reactive BOOLEAN attributes: attr name (e.g. "disabled") -> Signal[Boolean]. The
             // element renders the attribute as PRESENT while the signal is true; an observer toggles it IN
             // PLACE on emission (setAttribute("")/removeAttribute) — no re-render. Bound via disabled(sig).
-            reactiveBoolAttrs: Map[String, Signal[Boolean]] = Map.empty
+            reactiveBoolAttrs: Map[String, Signal[Boolean]] = Map.empty,
+            // Declarative reactive CLASSES: class name -> Signal[Boolean]. Merged into the rendered `class`
+            // while true; an observer toggles it in place (classList.toggle) — no re-render. Bound via
+            // cssClass(name, sig); the declarative twin of UI.Commands.bindClassById.
+            reactiveClasses: Map[String, Signal[Boolean]] = Map.empty
         )
 
         // ---- Non-element AST cases ----

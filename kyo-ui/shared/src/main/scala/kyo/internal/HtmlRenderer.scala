@@ -115,10 +115,18 @@ private[kyo] object HtmlRenderer:
             case elem: Element =>
                 val tag  = tagName(elem)
                 val void = elem.isInstanceOf[Void]
-                w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}"""")
-                renderCommonAttrs(sb, elem.attrs)
-                renderEventAttr(sb, elem)
                 for
+                    // Fold declaratively-bound reactive classes that are CURRENTLY true into the rendered class
+                    // list (effectful: reads each Signal). Empty for elements without reactive classes, so the
+                    // `class` attribute is byte-identical there; the client toggles them in place afterwards.
+                    extraClasses <- reactiveTrueClasses(elem.attrs)
+                    _ = w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}"""")
+                    _ = renderCommonAttrs(
+                        sb,
+                        if extraClasses.isEmpty then elem.attrs
+                        else elem.attrs.copy(cssClasses = elem.attrs.cssClasses ++ extraClasses)
+                    )
+                    _ = renderEventAttr(sb, elem)
                     _ <- renderElementAttrs(sb, elem)
                     _ <- renderReactiveAttrs(sb, elem.attrs)
                     _ <- renderReactiveBoolAttrs(sb, elem.attrs)
@@ -402,6 +410,17 @@ private[kyo] object HtmlRenderer:
         Kyo.foreachDiscard(attrs.reactiveBoolAttrs.toSeq.sortBy(_._1)) { case (name, sig) =>
             sig.current.map(v => if v then w(sb, s" $name"))
         }
+
+    /** The declaratively-bound reactive classes (Attrs.reactiveClasses) whose signal is CURRENTLY true — folded
+      * into the element's rendered class list so SSR / initial mount is correct; the client toggles them in
+      * place on subsequent emissions (HtmlOp.SetClassByPath). Empty (and cheap) when none are bound.
+      */
+    private def reactiveTrueClasses(attrs: Attrs)(using Frame): Seq[String] < Sync =
+        if attrs.reactiveClasses.isEmpty then Seq.empty
+        else
+            Kyo.foreach(attrs.reactiveClasses.toSeq.sortBy(_._1)) { case (name, sig) =>
+                sig.current.map(v => if v then name else "")
+            }.map(_.filter(_.nonEmpty))
 
     private def renderElementAttrs(sb: StringBuilder, elem: Element)(using Frame): Unit < Sync =
         elem match
@@ -850,6 +869,9 @@ private[kyo] object HtmlRenderer:
            |  }else if(op.SetBoolAttrByPath){
            |    // Presence-based boolean twin: toggle the attribute in place (present when true) on the element at data-kyo-path.
            |    var sbpp=op.SetBoolAttrByPath.path.join(".");var sbpel=document.querySelector('[data-kyo-path="'+sbpp+'"]:not([data-kyo-reactive])')||document.querySelector('[data-kyo-path="'+sbpp+'"]');if(sbpel){__kyoMark(sbpel,op.SetBoolAttrByPath.name);if(op.SetBoolAttrByPath.value){sbpel.setAttribute(op.SetBoolAttrByPath.name,'');}else{sbpel.removeAttribute(op.SetBoolAttrByPath.name);}}
+           |  }else if(op.SetClassByPath){
+           |    // Path-addressed reactive class: toggle in place so CSS transitions fire; own "class" so a morph won't reconcile it.
+           |    var scpp=op.SetClassByPath.path.join(".");var scpel=document.querySelector('[data-kyo-path="'+scpp+'"]:not([data-kyo-reactive])')||document.querySelector('[data-kyo-path="'+scpp+'"]');if(scpel){__kyoMark(scpel,'class');scpel.classList.toggle(op.SetClassByPath.name,op.SetClassByPath.on);}
            |  }else if(op.ObserveViewportById){
            |    // Unit 8: measure now + attach capturing scroll + resize listeners that each reply with a MeasureById(id).
            |    var vid=op.ObserveViewportById.id;
