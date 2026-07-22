@@ -933,6 +933,17 @@ object UI:
             def children: Chunk[UI]
             private[kyo] def withAttrs(a: Attrs): Self
 
+            // Shared bodies of the declarative reactive-channel setters (aria/title/placeholder →
+            // reactiveAttrs; disabled/readOnly → reactiveBoolAttrs; cssClass → reactiveClasses). `inline`
+            // so each setter compiles to the bare `withAttrs(attrs.copy(...))` it hand-wrote before — DRY
+            // source, no extra dispatch (only `withAttrs` itself stays virtual, per element).
+            private[kyo] inline def withReactiveAttr(name: String, sig: Signal[String]): Self =
+                withAttrs(attrs.copy(reactiveAttrs = attrs.reactiveAttrs.updated(name, sig)))
+            private[kyo] inline def withReactiveBoolAttr(name: String, sig: Signal[Boolean]): Self =
+                withAttrs(attrs.copy(reactiveBoolAttrs = attrs.reactiveBoolAttrs.updated(name, sig)))
+            private[kyo] inline def withReactiveClass(name: String, on: Signal[Boolean]): Self =
+                withAttrs(attrs.copy(reactiveClasses = attrs.reactiveClasses.updated(name, on)))
+
             // Identity & visibility
             def id(v: String): Self      = withAttrs(attrs.copy(identifier = Present(v)))
             def hidden(v: Boolean): Self = withAttrs(attrs.copy(hidden = Present(v)))
@@ -966,13 +977,13 @@ object UI:
               * locale-driven accessible name/description that must re-translate without re-mounting.
               */
             def aria(name: String, sig: Signal[String]): Self =
-                withAttrs(attrs.copy(reactiveAttrs = attrs.reactiveAttrs.updated(s"aria-$name", sig)))
+                withReactiveAttr(s"aria-$name", sig)
 
             /** REACTIVE native `title` (tooltip): the `title` attribute tracks `sig`, patched in place on
               * emission — no re-render.
               */
             def title(sig: Signal[String]): Self =
-                withAttrs(attrs.copy(reactiveAttrs = attrs.reactiveAttrs.updated("title", sig)))
+                withReactiveAttr("title", sig)
 
             /** Sets the WAI-ARIA `role` attribute (emitted as the bare `role="..."` HTML attribute). */
             def role(v: String): Self =
@@ -1023,7 +1034,7 @@ object UI:
               * `cssClass("p-badge-success", sev.map(_ == Success))`).
               */
             def cssClass(name: String, on: Signal[Boolean]): Self =
-                withAttrs(attrs.copy(reactiveClasses = attrs.reactiveClasses.updated(name, on)))
+                withReactiveClass(name, on)
 
             /** Declarative ENTER transition (Unit 1, client-local): when a patch inserts this element NEWLY into the DOM
               * (its `data-kyo-path` was not present in the replaced subtree before, and at initial mount), the client adds
@@ -1385,7 +1396,7 @@ object UI:
               * field's state (e.g. disable submit until valid).
               */
             def disabled(v: Signal[Boolean]): Self =
-                withAttrs(attrs.copy(reactiveBoolAttrs = attrs.reactiveBoolAttrs.updated("disabled", v)))
+                withReactiveBoolAttr("disabled", v)
         end HasDisabled
 
         /** Capability trait for free-text form inputs: a `String` `value` (constant or `SignalRef`), placeholder, read-only, and `onInput`/`onChange`. */
@@ -1421,14 +1432,14 @@ object UI:
               * do not combine with the constant `placeholder(String)` on the same input.
               */
             def placeholder(sig: Signal[String]): Self =
-                withAttrs(attrs.copy(reactiveAttrs = attrs.reactiveAttrs.updated("placeholder", sig)))
+                withReactiveAttr("placeholder", sig)
 
             /** REACTIVE readonly: the `readonly` boolean attribute is toggled IN PLACE on emission
               * (setAttribute("")/removeAttribute) via the boolean-attribute channel — no re-render of the
               * field (so caret/focus survive). The browser handles `:read-only` styling and edit-blocking.
               */
             def readOnly(v: Signal[Boolean]): Self =
-                withAttrs(attrs.copy(reactiveBoolAttrs = attrs.reactiveBoolAttrs.updated("readonly", v)))
+                withReactiveBoolAttr("readonly", v)
         end TextInput
 
         /** Capability trait for picker inputs that carry a `String` `value` and an `onChange` but no free-text typing (`select`, date/time/color, ...). */
