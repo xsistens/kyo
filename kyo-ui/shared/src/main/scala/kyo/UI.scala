@@ -2,6 +2,7 @@ package kyo
 
 import kyo.internal.HtmlRenderer
 import kyo.internal.ReactiveUI
+import kyo.internal.UICommands
 import kyo.internal.UIExchange
 import kyo.internal.UIServer
 import scala.language.implicitConversions
@@ -366,6 +367,27 @@ object UI:
     ): Seq[HttpHandler[?, ?, ?]] < Sync =
         UIServer.handlers(basePath, Present(onHandlerError))(ui)
 
+    /** Scrolls the element with `id` into the client viewport, from inside an event handler.
+      *
+      * The command rides the session the handler runs in: under [[runHandlers]] it travels the same
+      * WebSocket as the reactive updates and the connected browser scrolls the element; under a
+      * browser mount (`UI.runMount`) it scrolls the local document directly. Outside any session
+      * (plain SSR, [[runRender]], render-only tests) there is no client to scroll and the call is a
+      * no-op.
+      *
+      * Fire-and-forget: an `id` with no matching element on the client is silently ignored, with no
+      * round trip or retry. The target must therefore already exist on the client when the command
+      * arrives; a scroll aimed at an element that only appears in a later re-render is dropped, since
+      * the command does not wait for pending updates beyond the frame it lands in.
+      *
+      * This is the upstream fire-and-forget entry point (installed via [[kyo.internal.UICommands]]'s
+      * `Local` sink, no `Env` in the handler's effect row); the fork's richer [[kyo.UI.Commands]]
+      * channel additionally offers path-addressed and self-addressed variants ([[Commands.scrollIntoView]] /
+      * [[Commands.scrollIntoViewId]]) alongside `focus` and the measure round-trip.
+      */
+    def scrollIntoView(id: String)(using Frame): Unit < Async =
+        UICommands.scrollIntoView(id)
+
     /** An element geometry rectangle plus the current viewport size — the reply to a [[kyo.UI.Commands.requestMeasure]]
       * (Unit 2). `x`/`y`/`width`/`height` are the element's `getBoundingClientRect` (viewport coordinates);
       * `viewportWidth`/`viewportHeight` are `window.innerWidth`/`innerHeight`. All in CSS pixels.
@@ -393,6 +415,22 @@ object UI:
       * a Signal from the callback, re-render with correct geometry". Example — an overlay that flips above its anchor when it
       * would overflow the viewport: on open, `requestMeasure` the panel; in the callback, if `rect.y + rect.height >
       * rect.viewportHeight`, set a `flip` Signal the panel reads and re-renders from.
+      *
+      * '''Two doors over one transport (the injection contract).''' kyo-ui exposes the imperative surface through two
+      * front-doors that share this single per-session op transport, split by ONE rule: '''is a lost op harmless?'''
+      *   - '''Harmless-if-dropped''' ops (a scroll that never lands is a no-op, not a wrong state) ride the lighter
+      *     [[kyo.internal.UICommands]] `Local` sink — see [[kyo.UI.scrollIntoView]], whose handler type stays `Unit < Async`
+      *     with no `Env` in the row, and whose absence outside a session is a silent no-op '''by design'''.
+      *   - '''Lost-op-is-a-bug''' ops — anything holding a waiting continuation or lifecycle-critical state: the measure
+      *     round-trip ([[requestMeasure]] / [[requestMeasureById]]), viewport observation ([[observeViewportById]]), and the
+      *     in-place reactive binders ([[bindClassById]] / [[bindStyleById]] / [[bindAttrById]], whose dropped emission would
+      *     silently leave stale UI) — live HERE, behind `Env[Commands]`, so the runner PROVIDING the channel is a
+      *     compile-time fact rather than a runtime `Maybe`. That guarantee is the whole reason these are not on the `Local`
+      *     door: a silently-absent sink would turn a scoping mistake into an invisible dropped callback instead of a type error.
+      *
+      * The two doors are composable: a handler using both unions their effect rows to `Async & Env[Commands]`; a handler that
+      * only scrolls stays `Unit < Async`. [[command]] (`focus`, `scrollIntoView`) remains here for the generic/self-addressed
+      * path; the blessed fire-and-forget scroll is [[kyo.UI.scrollIntoView]] on the `Local` door.
       */
     final class Commands private[kyo] (
         private[kyo] val emit: internal.HtmlOp => Unit < Async,

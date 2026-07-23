@@ -9,6 +9,9 @@ private[kyo] object HtmlOp:
     case class Replace(path: Seq[String], html: String) extends HtmlOp derives Schema
     case class Remove(path: Seq[String])                extends HtmlOp derives Schema
     case class InjectCss(css: String)                   extends HtmlOp derives Schema
+    // Imperative one-shot command from the session-scoped scroll sink (kyo.internal.UICommands / UI.scrollIntoView):
+    // scroll the element with DOM id `id` into view. The embedded client resolves it after the frame's DOM writes.
+    case class ScrollIntoView(id: String) extends HtmlOp derives Schema
     // Unit 2 (measure round-trip): instructs the client to measure the element at `path` and reply with a
     // UIEvent.Measure. Emitted imperatively via UI.Commands.requestMeasure, outside the normal render diff.
     case class RequestMeasure(path: Seq[String]) extends HtmlOp derives Schema
