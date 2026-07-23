@@ -23,9 +23,14 @@ private[kyo] object UIServer:
     private def getPage(base: String, pagePath: String, ui: => UI < Async)(using Frame): HttpHandler[?, ?, ?] =
         HttpRoute.getText(pagePath).handler { _ =>
             for
-                uiTree <- ui
-                html   <- HtmlRenderer.render(uiTree, Seq.empty)
-                page = HtmlRenderer.renderPage("kyo-ui", html, "", base)
+                uiTree        <- ui
+                (html, rules) <- HtmlRenderer.renderWithCss(uiTree, Seq.empty)
+                // Pseudo-state Style (hover/focus/active/disabled) has no inline-style channel (an
+                // inline `style="..."` attribute cannot express `:hover`), so its rules are carried
+                // here in a real stylesheet instead, after the base reset (renderPage already orders
+                // baseCss before css).
+                css  = rules.map(_._2).mkString
+                page = HtmlRenderer.renderPage("kyo-ui", html, css, base)
             yield HttpResponse.ok(page)
                 .addHeader("Content-Type", "text/html; charset=utf-8")
         }
@@ -47,12 +52,27 @@ private[kyo] object UIServer:
                     for
                         uiTree <- ui
                         root   <- ReactiveUI.normalize(uiTree, Seq.empty, onHandlerError = onHandlerError)
-                        exchange = wsExchange(root, ws)
+                        // Pre-seed the connection's sent-class tracking with every pseudo-state class the
+                        // initial SSR page already carries (rendered once more here, discarding the HTML), so
+                        // the first reactive update touching an unchanged pseudo-styled element does not
+                        // redundantly re-inject a rule the page's initial <style> block already has.
+                        (_, initialRules) <- HtmlRenderer.renderWithCss(uiTree, Seq.empty)
+                        exchange = wsExchange(root, ws, initialRules.map(_._1).toSet)
                         sub <- ReactiveUI.subscribe(root, exchange)
-                        _ <- Async.race(
-                            ws.stream.foreach(payload => dispatchEvent(sub.handle, commands, payload)),
-                            ws.onPeerClose
-                        )
+                        // Upstream (#1766) session command sink: an event handler calling UI.scrollIntoView sends the
+                        // op over this connection's socket, riding the same channel as the reactive updates. Nested
+                        // inside the fork's Env.run(commands) so both the Local scroll sink and the richer Env[Commands]
+                        // channel are live on this session. runPartial drops only a Closed (socket closed, command moot).
+                        scrollSink = (id: String) =>
+                            Abort.runPartial[Closed](
+                                ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](HtmlOp.ScrollIntoView(id))))
+                            ).unit
+                        _ <- UICommands.scrollSink.let(Present(scrollSink)) {
+                            Async.race(
+                                ws.stream.foreach(payload => dispatchEvent(sub.handle, commands, payload)),
+                                ws.onPeerClose
+                            )
+                        }
                     yield ()
                 }
             yield ()
@@ -67,20 +87,40 @@ private[kyo] object UIServer:
             serveSession(ws, ui, onHandlerError)
         }
 
-    private def wsExchange(root: ReactiveUI, ws: HttpWebSocket)(using Frame): UIExchange =
+    private def wsExchange(root: ReactiveUI, ws: HttpWebSocket, seenClasses: Set[String])(using Frame): UIExchange =
         new UIExchange:
             private def svgContextAt(path: Seq[String]): Boolean =
                 ReactiveUI.findNode(root, path).map(_.svgContext).getOrElse(false)
 
+            // Pseudo-state CSS classes already carried by this connection's <style> (seeded from the
+            // initial SSR page, then grown by every InjectCss this exchange sends), so a later
+            // re-render reusing one of these classes never re-sends its rule. Connection-scoped: each
+            // WS session gets its own set, matching the session-scoped subscription tree this exchange
+            // already belongs to.
+            private val sentClasses = scala.collection.mutable.Set.from(seenClasses)
+
             def onChange(path: Seq[String], ui: UI, mount: Boolean)(using Frame): Unit < Async =
                 // Content at its nested-reactive sub-path (matches SSR/walkStatic); the wrapper below
-                // stays at `path`, so the Replace still targets this region's node.
-                HtmlRenderer.render(ui, HtmlRenderer.contentPath(path, ui)).map { html =>
+                // stays at `path`, so the Replace still targets this region's node. renderWithCss also
+                // collects the region's pseudo-state rules so a class first seen in an update ships its
+                // stylesheet rule alongside the Replace.
+                HtmlRenderer.renderWithCss(ui, HtmlRenderer.contentPath(path, ui)).map { (html, rules) =>
+                    val newRules  = rules.filterNot(r => sentClasses.contains(r._1))
                     val finalHtml = HtmlRenderer.wrapReactiveRegion(path, svgContextAt(path), html, mount)
-                    val op        = HtmlOp.Replace(path, finalHtml)
+                    val replaceOp = HtmlOp.Replace(path, finalHtml)
                     // runPartial drops only a Closed (the socket closed mid-render -> the op is moot); a Panic
                     // propagates to the region fiber rather than being swallowed by the discard.
-                    Abort.runPartial[Closed](ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](op)))).unit
+                    val sendReplace =
+                        Abort.runPartial[Closed](ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](replaceOp)))).unit
+                    if newRules.isEmpty then sendReplace
+                    else
+                        newRules.foreach(r => sentClasses += r._1)
+                        val injectOp = HtmlOp.InjectCss(newRules.map(_._2).mkString)
+                        // Send the new pseudo-state rule(s) before the replace that introduces the class
+                        // referencing them, so the element never paints unstyled between the two frames.
+                        Abort.runPartial[Closed](ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](injectOp)))).unit
+                            .andThen(sendReplace)
+                    end if
                 }
             end onChange
 

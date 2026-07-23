@@ -121,10 +121,15 @@ private[kyo] object DomBackend:
                     _ = sessionEvents = Present(events)
                     // runPartial captures only the Closed failure (the channel closed on page teardown -> stop draining); a
                     // Panic propagates rather than being silently swallowed as a clean drain end.
-                    _ <- Fiber.init(Loop.foreach(Abort.runPartial[Closed](events.take).map {
-                        case Result.Success(eff) => eff.andThen(Loop.continue)
-                        case Result.Failure(_)   => Loop.done
-                    }))
+                    // The drain also carries the session's scroll sink: a handler calling UI.scrollIntoView scrolls the
+                    // local document, the browser-mount counterpart of the server session's WebSocket op. Nested inside
+                    // the ambient Env.run(commands) so both the upstream Local sink and the fork's Env channel are live.
+                    _ <- Fiber.init(UICommands.scrollSink.let(Present(scrollLocal)) {
+                        Loop.foreach(Abort.runPartial[Closed](events.take).map {
+                            case Result.Success(eff) => eff.andThen(Loop.continue)
+                            case Result.Failure(_)   => Loop.done
+                        })
+                    })
                     _ <- setupEventDelegation(dispatch.handle, events)
                     // Unit 1: pointer/drag delegation (setPointerCapture + rAF-coalesced move stream).
                     _ <- setupPointerDelegation(dispatch.handle, events)
@@ -135,6 +140,20 @@ private[kyo] object DomBackend:
         yield ()
         end for
     end mountInto
+
+    // The local-document scroll sink installed on the mount's event-drain fiber; mirrors the embedded
+    // client's ScrollIntoView handling exactly (missing id = no-op, smooth scroll to the block start),
+    // so the same UI.scrollIntoView command behaves the same under either runner.
+    private def scrollLocal(id: String)(using Frame): Unit < Async =
+        Sync.defer {
+            val el = document.getElementById(id)
+            if el != null then
+                discard(el.asInstanceOf[scalajs.js.Dynamic].scrollIntoView(scalajs.js.Dynamic.literal(
+                    behavior = "smooth",
+                    block = "start"
+                )))
+            end if
+        }
 
     // ---- Unit 2/3: local op application for the SPA transport ----
 
