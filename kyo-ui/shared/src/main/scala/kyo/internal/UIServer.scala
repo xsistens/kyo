@@ -103,8 +103,12 @@ private[kyo] object UIServer:
                 // Content at its nested-reactive sub-path (matches SSR/walkStatic); the wrapper below
                 // stays at `path`, so the Replace still targets this region's node. renderWithCss also
                 // collects the region's pseudo-state rules so a class first seen in an update ships its
-                // stylesheet rule alongside the Replace.
-                HtmlRenderer.renderWithCss(ui, HtmlRenderer.contentPath(path, ui)).map { (html, rules) =>
+                // stylesheet rule alongside the Replace. `mountSlot = true` stamps data-kyo-mount-slot on
+                // any Mounted placeholder in this pushed HTML so the client `__kyoMorphChildren` guard
+                // distinguishes the same mount from colliding content (twin of DomBackend.onChange). Only
+                // this region-push path opts in; the full-page renders (lines ~27/59) keep the default so
+                // golden HTML stays byte-identical.
+                HtmlRenderer.renderWithCss(ui, HtmlRenderer.contentPath(path, ui), mountSlot = true).map { (html, rules) =>
                     val newRules  = rules.filterNot(r => sentClasses.contains(r._1))
                     val finalHtml = HtmlRenderer.wrapReactiveRegion(path, svgContextAt(path), html, mount)
                     val replaceOp = HtmlOp.Replace(path, finalHtml)
@@ -159,7 +163,16 @@ private[kyo] object UIServer:
                                     m.id,
                                     UI.Rect(m.rectX, m.rectY, m.rectW, m.rectH, m.viewportW, m.viewportH)
                                 )
-                            case _ => handle(event.path, event).unit
+                            // Element events run in their OWN detached fiber rather than inline on the receive loop:
+                            // a handler that SUSPENDS — e.g. awaiting a value-returning `requestMeasure` whose reply
+                            // arrives as a LATER inbound frame — must not block this same loop from reading that reply
+                            // (that would deadlock). Forking also stops any one slow handler from stalling the whole
+                            // session's event stream. `initUnscoped` (not `init`): handlers are short-lived and self-
+                            // cleaning, so binding each to the long-lived session Scope would only pile up finalizers; a
+                            // handler still parked on a reply when the socket closes is unreachable once `commands` drops
+                            // (its pending map holds the only promise ref) and is GC'd. The measure replies above stay
+                            // inline: they only complete a Promise / push a Signal, never suspend, and must run promptly.
+                            case _ => Fiber.initUnscoped(handle(event.path, event).unit).unit
                     // A malformed inbound frame (DecodeException) is dropped: a buggy client must not be able to tear
                     // down the session. A Panic is a decoder defect, not bad input, and must propagate.
                     case Result.Failure(_) => ()

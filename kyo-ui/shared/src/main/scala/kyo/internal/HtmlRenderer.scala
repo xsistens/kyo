@@ -12,10 +12,17 @@ private[kyo] object HtmlRenderer:
     // costs nothing on the render(...) path (cssRules stays Absent there).
     private type CssCollector = scala.collection.mutable.LinkedHashMap[String, String]
 
-    /** Render a UI tree to HTML with data-kyo-path attributes. */
-    def render(ui: UI, path: Seq[String])(using Frame): String < Sync =
+    /** Render a UI tree to HTML with data-kyo-path attributes.
+      *
+      * `mountSlot` is a CLIENT-ONLY signal (set by the two region-morph exchanges, `DomBackend.onChange`
+      * and `UIServer.onChange`): it stamps a `data-kyo-mount-slot` marker on every `Mounted` placeholder
+      * in this render, so a morph can tell "the new content at this slot IS a mount" from "unrelated
+      * content that merely collided on the positional data-kyo-path key". The full-page/SSR paths keep the
+      * default `false`, so golden HTML stays byte-identical.
+      */
+    def render(ui: UI, path: Seq[String], mountSlot: Boolean = false)(using Frame): String < Sync =
         val sb = new StringBuilder
-        renderTo(sb, ui, path).andThen(sb.toString)
+        renderTo(sb, ui, path, mountSlot = mountSlot).andThen(sb.toString)
 
     /** Render a UI tree to HTML, additionally collecting the CSS rule(s) for every pseudo-state
       * (hover/focus/active/disabled) [[kyo.Style]] encountered along the way.
@@ -28,10 +35,12 @@ private[kyo] object HtmlRenderer:
       * [[kyo.internal.CssStyleRenderer.pseudoStateClass]]), so the result has one entry per distinct
       * rule, in first-encountered order.
       */
-    private[kyo] def renderWithCss(ui: UI, path: Seq[String])(using Frame): (String, Chunk[(String, String)]) < Sync =
+    private[kyo] def renderWithCss(ui: UI, path: Seq[String], mountSlot: Boolean = false)(using
+        Frame
+    ): (String, Chunk[(String, String)]) < Sync =
         val sb  = new StringBuilder
         val css = new CssCollector
-        renderTo(sb, ui, path, cssRules = Present(css)).andThen((sb.toString, Chunk.from(css)))
+        renderTo(sb, ui, path, cssRules = Present(css), mountSlot = mountSlot).andThen((sb.toString, Chunk.from(css)))
     end renderWithCss
 
     /** Wrap a reactive region's inner HTML in the appropriate placeholder tag.
@@ -130,11 +139,22 @@ private[kyo] object HtmlRenderer:
 
     // ---- Core rendering ----
 
-    private def renderTo(sb: StringBuilder, ui: UI, path: Seq[String], svg: Boolean = false, cssRules: Maybe[CssCollector] = Absent)(using
+    private def renderTo(
+        sb: StringBuilder,
+        ui: UI,
+        path: Seq[String],
+        svg: Boolean = false,
+        cssRules: Maybe[CssCollector] = Absent,
+        // Client-only: when true, stamp `data-kyo-mount-slot` on Mounted placeholders reached in this
+        // render (forwarded through every recursive call so a deeply-nested mount is still marked).
+        mountSlot: Boolean = false
+    )(using
         Frame
     ): Unit < Sync =
         ui match
             case dd: Dropdown =>
+                // Dropdown renders <select>/<option> content only — it never contains a Mounted node,
+                // so `mountSlot` need not be threaded through it.
                 renderDropdown(sb, dd, path, cssRules)
             case elem: Element =>
                 val tag  = tagName(elem)
@@ -183,7 +203,7 @@ private[kyo] object HtmlRenderer:
                             case _            => Kyo.unit
                         textChild.andThen(
                             Kyo.foreachDiscard(elem.children.toSeq.zipWithIndex) { (child, i) =>
-                                renderTo(sb, child, path :+ i.toString, childSvg, cssRules)
+                                renderTo(sb, child, path :+ i.toString, childSvg, cssRules, mountSlot)
                             }.andThen(w(sb, s"</$tag>"))
                         )
                     end if
@@ -202,11 +222,11 @@ private[kyo] object HtmlRenderer:
                     val childPath = child match
                         case kc: KeyedChild[?] => path :+ kc.key
                         case _                 => path :+ i.toString
-                    renderTo(sb, child, childPath, svg, cssRules)
+                    renderTo(sb, child, childPath, svg, cssRules, mountSlot)
                 }
 
             case KeyedChild(_, child) =>
-                renderTo(sb, child, path, svg, cssRules)
+                renderTo(sb, child, path, svg, cssRules, mountSlot)
 
             case r: Reactive[?] =>
                 // In SVG context emit a <g> placeholder (a <span> is invalid inside <svg>); the
@@ -214,7 +234,7 @@ private[kyo] object HtmlRenderer:
                 val tag = if svg then "g" else "span"
                 w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}" data-kyo-reactive>""")
                 for current <- r.signal.current(using r.frame)
-                yield renderTo(sb, current, contentPath(path, current), svg, cssRules).andThen(w(sb, s"</$tag>"))
+                yield renderTo(sb, current, contentPath(path, current), svg, cssRules, mountSlot).andThen(w(sb, s"</$tag>"))
 
             case fe: Foreach[?, ?] @unchecked =>
                 val tag = if svg then "g" else "span"
@@ -227,7 +247,7 @@ private[kyo] object HtmlRenderer:
                                 val key = keyFn match
                                     case Present(f) => f(item)
                                     case Absent     => i.toString
-                                renderTo(sb, renderFn(i, item), path :+ key, svg, cssRules)
+                                renderTo(sb, renderFn(i, item), path :+ key, svg, cssRules, mountSlot)
                             }.andThen(w(sb, s"</$tag>"))
                             end for
                 }
@@ -239,9 +259,14 @@ private[kyo] object HtmlRenderer:
                 // placeholder never reaches a paint. In a static/SSG render (no subscription) the placeholder IS
                 // the node's server-side projection.
                 val tag = if svg then "g" else "span"
-                w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}" data-kyo-reactive>""")
+                // Client-only marker (see `render`): declares that a mount belongs at this slot, so a
+                // parent morph preserves a live mount here but reconciles away a stale one when the new
+                // content at this positional key is NOT a mount. Never emitted on the SSR/full-page path
+                // (mountSlot defaults false) → golden HTML stays byte-identical.
+                val slotAttr = if mountSlot then " data-kyo-mount-slot" else ""
+                w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}" data-kyo-reactive$slotAttr>""")
                 val mph = m.placeholderUI.getOrElse(UI.empty(using m.frame))
-                renderTo(sb, mph, contentPath(path, mph), svg, cssRules)
+                renderTo(sb, mph, contentPath(path, mph), svg, cssRules, mountSlot)
                     .andThen(w(sb, s"</$tag>"))
 
             case b: Boundary =>
@@ -251,7 +276,7 @@ private[kyo] object HtmlRenderer:
                 val tag = if svg then "g" else "span"
                 w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}" data-kyo-reactive>""")
                 val bfb = b.fallbackUI.getOrElse(UI.empty(using b.frame))
-                renderTo(sb, bfb, contentPath(path, bfb), svg, cssRules)
+                renderTo(sb, bfb, contentPath(path, bfb), svg, cssRules, mountSlot)
                     .andThen(w(sb, s"</$tag>"))
     end renderTo
 
@@ -1134,8 +1159,11 @@ private[kyo] object HtmlRenderer:
            |// equals a prototype name (e.g. "constructor") cannot false-match.
            |function __kyoKey(n){return (n.nodeType===1&&n.hasAttribute("data-kyo-path"))?n.getAttribute("data-kyo-path"):null;}
            |function __kyoIsMount(n){return n.nodeType===1&&n.hasAttribute("data-kyo-mount");}
+           |// Twin of DomBackend.isMountSlot: the incoming top-down node declares a mount belongs here
+           |// (data-kyo-mount-slot, emitted only by a client region re-render). Distinguishes "same mount"
+           |// from unrelated content that collided on the positional data-kyo-path key.
+           |function __kyoIsMountSlot(n){return n.nodeType===1&&n.hasAttribute("data-kyo-mount-slot");}
            |function __kyoFirstEl(p){var c=p.firstChild;while(c&&c.nodeType!==1)c=c.nextSibling;return c;}
-           |function __kyoHasElChild(el){var c=el.firstChild;while(c){if(c.nodeType===1)return true;c=c.nextSibling;}return false;}
            |function __kyoOnlyElChild(el){var f=null,n=0,c=el.firstChild;while(c){if(c.nodeType===1){n++;f=c;}c=c.nextSibling;}return n===1?f:null;}
            |// Collapse a chain of transparent same-path reactive wrappers to one (nested reactive regions at one position
            |// each emit a wrapper at the same path, and a paint carries only its own depth; left as-is a shallow paint
@@ -1186,9 +1214,11 @@ private[kyo] object HtmlRenderer:
            |      var m=(fromKeyed&&fromKeyed[tKey])?fromKeyed[tKey]:null;
            |      if(m){
            |        if(m!==curFrom)fromParent.insertBefore(m,curFrom);else curFrom=curFrom.nextSibling;
-           |        // Opaque mount boundary: while the top-down slot still carries content, leave the live mount root's
-           |        // subtree alone (it owns and repaints itself); an EMPTY slot means the gate closed, so morph it out.
-           |        if(!(__kyoIsMount(m)&&__kyoHasElChild(curTo)))__kyoMorphNode(m,curTo);
+           |        // Opaque mount boundary: leave a live mount root's subtree alone ONLY when the incoming top-down
+           |        // node is itself a mount slot (data-kyo-mount-slot) — i.e. the same mount re-rendering, which owns
+           |        // and repaints its own subtree. Otherwise (different content collided on the positional key, or an
+           |        // empty gate-closed slot) reconcile normally so the stale mount is replaced/emptied.
+           |        if(!(__kyoIsMount(m)&&__kyoIsMountSlot(curTo)))__kyoMorphNode(m,curTo);
            |      }else fromParent.insertBefore(document.importNode(curTo,true),curFrom);
            |    }else{
            |      var handled=false,loop=true;

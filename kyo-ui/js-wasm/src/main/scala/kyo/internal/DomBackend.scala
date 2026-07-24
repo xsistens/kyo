@@ -346,7 +346,7 @@ private[kyo] object DomBackend:
             // Render the content at its (possibly nested-reactive) sub-path so a reactive-valued region
             // wraps a DISTINCT inner wrapper — matching SSR/walkStatic. The wrapper stays at `path`, so
             // the morph still keys/addresses this region's node.
-            HtmlRenderer.render(ui, HtmlRenderer.contentPath(path, ui)).map { html =>
+            HtmlRenderer.render(ui, HtmlRenderer.contentPath(path, ui), mountSlot = true).map { html =>
                 // Always wrap the rendered html in the reactive boundary element so the node carrying
                 // data-kyo-path=path survives subsequent replacements. A Fragment, Text, or RawHtml value
                 // renders without a path-carrying root, so an unwrapped replace would drop the marker and
@@ -363,11 +363,11 @@ private[kyo] object DomBackend:
                 Sync.defer {
                     val el = document.querySelector(s"""[data-kyo-path="$pathAttr"]""")
                     // An enclosing region (a `when`/gate that wraps the mount at the mount's own path) repaints this
-                    // slot on every re-render. While it still yields content, the live node is the mount root — which
-                    // owns its subtree and repaints it via its own mount=true paint — so leave it untouched. An EMPTY
-                    // repaint means the gate closed (open -> false): fall through so the morph empties the slot and the
-                    // panel is removed.
-                    if el != null && !mount && html.trim.nonEmpty &&
+                    // slot on every re-render. Leave the live mount root untouched ONLY when the new content is itself
+                    // a mount slot (its rendered root carries data-kyo-mount-slot) — the SAME mount re-rendering, which
+                    // owns and repaints its own subtree. Different content (no marker) or an EMPTY repaint (gate closed)
+                    // falls through so the morph reconciles/empties the slot.
+                    if el != null && !mount && htmlRootHasMountSlot(html) &&
                         el.asInstanceOf[dom.Element].hasAttribute("data-kyo-mount")
                     then ()
                     else if el != null && el.outerHTML != finalHtml then
@@ -617,6 +617,13 @@ private[kyo] object DomBackend:
     private def isMountRoot(node: dom.Node): Boolean =
         node.nodeType == 1 && node.asInstanceOf[dom.Element].hasAttribute("data-kyo-mount")
 
+    /** A top-down mount placeholder produced by a client region re-render (data-kyo-mount-slot). Positive
+      * signal that the incoming content at this slot IS a mount — as opposed to unrelated reactive content
+      * that merely collided on the positional data-kyo-path key. Twin of `__kyoIsMountSlot` in clientJs.
+      */
+    private def isMountSlot(node: dom.Node): Boolean =
+        node.nodeType == 1 && node.asInstanceOf[dom.Element].hasAttribute("data-kyo-mount-slot")
+
     /** Parse a single-wrapper HTML string to a detached root element. In SVG context the fragment is parsed inside a
       * throwaway `<svg>` so the parser produces real SVG elements (a bare `<g>` in an HTML template becomes an unknown
       * HTML element) — mirroring how `el.outerHTML =` parses against the live element's namespace.
@@ -642,14 +649,19 @@ private[kyo] object DomBackend:
         root
     end parseNewRoot
 
-    private def hasElementChild(el: dom.Element): Boolean =
-        var c     = el.firstChild
-        var found = false
-        while !found && c != null do
-            if c.nodeType == 1 then found = true
-            c = c.nextSibling
-        found
-    end hasElementChild
+    /** True when the FIRST tag of `html` carries data-kyo-mount-slot — i.e. the region's new content root is a
+      * mount placeholder (the SAME mount re-rendering). Bounded to the opening tag so a descendant marker deeper
+      * in the string can't false-match, and it avoids allocating a trimmed copy of a possibly-large html (the old
+      * `html.trim.nonEmpty` did).
+      */
+    private def htmlRootHasMountSlot(html: String): Boolean =
+        val i = html.indexOf('<')
+        if i < 0 then false
+        else
+            val j = html.indexOf('>', i)
+            j > i && html.substring(i, j).contains("data-kyo-mount-slot")
+        end if
+    end htmlRootHasMountSlot
 
     private def onlyElementChild(el: dom.Element): dom.Element =
         var found: dom.Element = null
@@ -813,11 +825,13 @@ private[kyo] object DomBackend:
                 if m != null then
                     if m ne curFrom then discard(fromParent.insertBefore(m, curFrom))
                     else curFrom = curFrom.nextSibling
-                    // Opaque mount boundary: while the top-down slot still carries content, leave the live mount root's
-                    // subtree alone — the mount owns it and repaints it itself, so reconciling against the placeholder
-                    // would wipe the panel. An EMPTY slot means the enclosing gate closed (the mount tore down): morph
-                    // it normally so the panel is emptied and removed.
-                    if !(isMountRoot(m) && hasElementChild(curTo.asInstanceOf[dom.Element])) then morphNode(m, curTo)
+                    // Opaque mount boundary: leave a live mount root's subtree alone ONLY when the incoming top-down
+                    // node is itself a mount slot (data-kyo-mount-slot) — the SAME mount re-rendering, which owns and
+                    // repaints its own subtree, so reconciling against the placeholder would wipe the panel. Otherwise
+                    // the slot now holds different content that merely collided on the positional key (or an empty
+                    // gate-closed slot): reconcile normally so the stale mount is replaced/emptied and its
+                    // data-kyo-mount stripped.
+                    if !(isMountRoot(m) && isMountSlot(curTo)) then morphNode(m, curTo)
                 else
                     discard(fromParent.insertBefore(document.importNode(curTo, true), curFrom))
                 end if

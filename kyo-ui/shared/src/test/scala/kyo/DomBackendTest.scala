@@ -326,4 +326,84 @@ class DomBackendTest extends UITest:
         }
     }
 
+    // Mount-slot reconciliation (Unit 9): a keyless UI.mounted and a Reactive both take the
+    // `reactiveContentSegment` path key, so a region that swaps one for the other collides on the same
+    // data-kyo-path. The live mount's data-kyo-mount used to make the morph keep it (the old guard only
+    // checked that the incoming slot had element children), so the stale mount DOM survived next to the
+    // new content — the Carousel->Galleria bug. The fix: the incoming top-down node must itself be a mount
+    // slot (data-kyo-mount-slot) for the guard to preserve the live mount; otherwise it reconciles normally.
+
+    "a region swapping a keyless mount for colliding reactive content removes the stale mount DOM" in {
+        val app: UI < Async =
+            for
+                sel   <- Signal.initRef("a")
+                inner <- Signal.initRef("B-content")
+            yield UI.div(
+                UI.button("swap").id("swap").onClick(sel.set("b")),
+                sel.map {
+                    // both branches are reactive content -> they reconcile at the SAME positional key
+                    case "a" =>
+                        UI.mounted {
+                            Signal.initRef(0).map(_ => UI.span("A-content").id("mount-a"))
+                        }.placeholder(UI.empty): UI
+                    case _ =>
+                        inner.map(v => UI.span(v).id("plain-b")): UI
+                }
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("mount-a"), "A-content") // mount painted (data-kyo-mount)
+                _ <- Browser.click(Selector.id("swap"))
+                _ <- Browser.assertText(Selector.id("plain-b"), "B-content") // new colliding content present
+                _ <- Browser.assertNotExists(Selector.id("mount-a"))         // stale mount DOM gone (the bug: it survived)
+            yield ()
+        }
+    }
+
+    "a region closing a gate over a mount removes the mount DOM" in {
+        // The "empty slot means the gate closed" path, now keyed on the ABSENCE of a mount-slot marker
+        // instead of the absence of element children: open -> false yields no mount, so the morph empties it.
+        val app: UI < Async =
+            for open <- Signal.initRef(true)
+            yield UI.div(
+                UI.button("gclose").id("gclose").onClick(open.set(false)),
+                open.map {
+                    case true  => UI.mounted { Signal.initRef(0).map(_ => UI.span("panel").id("gpanel")) }.placeholder(UI.empty): UI
+                    case false => UI.empty: UI
+                }
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("gpanel"), "panel")
+                _ <- Browser.click(Selector.id("gclose"))
+                _ <- Browser.assertNotExists(Selector.id("gpanel")) // gate closed -> mount removed
+            yield ()
+        }
+    }
+
+    "a re-rendered region keeps a mount that is still present (no wipe)" in {
+        // Safety companion: the SAME mount stays across a region re-render. Its placeholder carries the
+        // mount-slot marker, so the guard preserves the live mount rather than reconciling it against the
+        // placeholder — the legitimate case the guard exists for must keep working.
+        val app: UI < Async =
+            for tick <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("ktick").id("ktick").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map { t =>
+                    UI.div(
+                        UI.span(s"t:$t").id("ktxt"),
+                        UI.mounted { Signal.initRef(0).map(_ => UI.span("kept").id("kpanel")) }.placeholder(UI.empty)
+                    ): UI
+                }
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("kpanel"), "kept")
+                _ <- Browser.click(Selector.id("ktick"))
+                _ <- Browser.assertText(Selector.id("ktxt"), "t:1")    // region re-rendered
+                _ <- Browser.assertText(Selector.id("kpanel"), "kept") // mount preserved across the morph
+            yield ()
+        }
+    }
+
 end DomBackendTest
