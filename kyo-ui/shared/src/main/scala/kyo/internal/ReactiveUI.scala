@@ -820,6 +820,14 @@ private[kyo] object ReactiveUI:
                         .andThen(formSubmit)
                         .andThen(keepBubbling(elem, declared))
                 }
+            case ev: UIEvent.ContextMenu =>
+                // Mirrors Click: a disabled or hidden target skips its own handler but still bubbles.
+                unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isHidden(elem))) {
+                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
+                    invoke(attrs.onContextMenu)
+                        .andThen(invokeWith(attrs.onContextMenuEvt, mouse))
+                        .andThen(keepBubbling(elem, attrs.onContextMenu.nonEmpty || attrs.onContextMenuEvt.nonEmpty))
+                }
             case ev: UIEvent.Focus =>
                 val isFocusable = elem.isInstanceOf[Focusable] || elem.attrs.tabIndex.nonEmpty
                 if isTarget && isFocusable then
@@ -1182,6 +1190,7 @@ private[kyo] object ReactiveUI:
             event match
                 case event: DragProtocol.ValidatedEvent.Click         => safeDispatch(handle, path, event.wire)
                 case event: DragProtocol.ValidatedEvent.ClickSelf     => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.ContextMenu   => safeDispatch(handle, path, event.wire)
                 case event: DragProtocol.ValidatedEvent.Input         => safeDispatch(handle, path, event.wire)
                 case event: DragProtocol.ValidatedEvent.Change        => safeDispatch(handle, path, event.wire)
                 case event: DragProtocol.ValidatedEvent.ChangeChecked => safeDispatch(handle, path, event.wire)
@@ -1310,6 +1319,7 @@ private[kyo] object ReactiveUI:
             // Never reaches here: the session completes a measure reply on UI.Commands before dispatch.
             case _: DragProtocol.ValidatedEvent.Measure | _: DragProtocol.ValidatedEvent.MeasureById => true
             case _: DragProtocol.ValidatedEvent.Click | _: DragProtocol.ValidatedEvent.ClickSelf |
+                _: DragProtocol.ValidatedEvent.ContextMenu |
                 _: DragProtocol.ValidatedEvent.Input | _: DragProtocol.ValidatedEvent.Change |
                 _: DragProtocol.ValidatedEvent.ChangeChecked | _: DragProtocol.ValidatedEvent.ChangeNumeric |
                 _: DragProtocol.ValidatedEvent.Submit | _: DragProtocol.ValidatedEvent.KeyDown |
@@ -1317,7 +1327,7 @@ private[kyo] object ReactiveUI:
                 _: DragProtocol.ValidatedEvent.Blur | _: DragProtocol.ValidatedEvent.Scroll |
                 _: DragProtocol.ValidatedEvent.Hover | _: DragProtocol.ValidatedEvent.Unhover |
                 _: DragProtocol.ValidatedEvent.PointerDown | _: DragProtocol.ValidatedEvent.PointerMove |
-                _: DragProtocol.ValidatedEvent.PointerUp =>
+                _: DragProtocol.ValidatedEvent.PointerUp | _: DragProtocol.ValidatedEvent.ContextMenu =>
                 safeDispatch(handle, path, event.wire)
 
     private def wakeExpiryScheduler(expiryWake: Channel[Unit])(using Frame): Unit < Sync =

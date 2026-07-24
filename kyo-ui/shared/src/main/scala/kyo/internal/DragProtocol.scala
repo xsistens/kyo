@@ -125,6 +125,7 @@ private[kyo] object DragProtocol:
     private[kyo] object ValidatedEvent:
         final case class Click private[DragProtocol] (wire: UIEvent.Click)                              extends ValidatedEvent
         final case class ClickSelf private[DragProtocol] (wire: UIEvent.ClickSelf)                      extends ValidatedEvent
+        final case class ContextMenu private[DragProtocol] (wire: UIEvent.ContextMenu)                  extends ValidatedEvent
         final case class Input private[DragProtocol] (wire: UIEvent.Input)                              extends ValidatedEvent
         final case class Change private[DragProtocol] (wire: UIEvent.Change)                            extends ValidatedEvent
         final case class ChangeChecked private[DragProtocol] (wire: UIEvent.ChangeChecked)              extends ValidatedEvent
@@ -580,6 +581,8 @@ private[kyo] object DragProtocol:
                         validateMouse(event.mouse, limits).map(_ => ValidatedEvent.Click(event))
                     case event: UIEvent.ClickSelf =>
                         validateMouse(event.mouse, limits).map(_ => ValidatedEvent.ClickSelf(event))
+                    case event: UIEvent.ContextMenu =>
+                        validateMouse(event.mouse, limits).map(_ => ValidatedEvent.ContextMenu(event))
                     case event: UIEvent.Input =>
                         validateText(event.value, "value", limits.maxTextLength, allowEmpty = true)
                             .map(_ => ValidatedEvent.Input(event))

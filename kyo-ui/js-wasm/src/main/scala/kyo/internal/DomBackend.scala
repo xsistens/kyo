@@ -954,6 +954,18 @@ private[kyo] object DomBackend:
                         clickSubmitGuard = true
                         discard(dom.window.setTimeout(() => clickSubmitGuard = false, 0))
                         Present(UIEvent.Click(path, mouse))
+                    else if t == "contextmenu" && evTypes.contains("contextmenu") then
+                        // Suppress the native menu only when a handler was declared (this branch fired).
+                        e.preventDefault()
+                        val targetId = Maybe(e.target.asInstanceOf[dom.Element].id).filter(_.nonEmpty)
+                        val me       = e.asInstanceOf[dom.MouseEvent]
+                        Present(UIEvent.ContextMenu(
+                            path,
+                            MouseEventData(
+                                modifiers = UI.Modifiers(me.ctrlKey, me.altKey, me.shiftKey, me.metaKey),
+                                targetId = targetId
+                            )
+                        ))
                     else if t == "input" && evTypes.contains("input") then
                         Present(UIEvent.Input(path, e.target.asInstanceOf[dom.html.Input].value))
                     else if t == "change" && evTypes.contains("change") then
@@ -1062,6 +1074,7 @@ private[kyo] object DomBackend:
         val wheelOptions = js.Dynamic.literal(capture = true, passive = false).asInstanceOf[dom.EventListenerOptions]
         for
             _ <- addScopedListener("click", handler, true)
+            _ <- addScopedListener("contextmenu", handler, true)
             _ <- addScopedListener("input", handler, true)
             _ <- addScopedListener("change", handler, true)
             _ <- addScopedListener("submit", handler, true)
