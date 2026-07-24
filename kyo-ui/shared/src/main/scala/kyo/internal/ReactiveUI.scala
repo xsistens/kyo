@@ -704,6 +704,14 @@ private[kyo] object ReactiveUI:
                         .andThen(formSubmit)
                         .andThen(keepBubbling(elem, declared))
                 }
+            case ev: UIEvent.ContextMenu =>
+                // Mirrors Click: a disabled or hidden target skips its own handler but still bubbles.
+                unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isHidden(elem))) {
+                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
+                    invoke(attrs.onContextMenu)
+                        .andThen(invokeWith(attrs.onContextMenuEvt, mouse))
+                        .andThen(keepBubbling(elem, attrs.onContextMenu.nonEmpty || attrs.onContextMenuEvt.nonEmpty))
+                }
             case ev: UIEvent.Focus =>
                 val isFocusable = elem.isInstanceOf[Focusable] || elem.attrs.tabIndex.nonEmpty
                 if isTarget && isFocusable then
