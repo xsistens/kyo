@@ -291,6 +291,7 @@ lazy val kyoJVM: Project = project
         `kyo-combinators`.jvm,
         `kyo-browser`.jvm,
         `kyo-slack`.jvm,
+        `kyo-i18n`.jvm,
         `kyo-ui`.jvm,
         `kyo-case-app`.jvm,
         `kyo-pod`.jvm,
@@ -356,6 +357,7 @@ lazy val kyoJS = project
         `kyo-lsp`.js,
         `kyo-browser`.js,
         `kyo-slack`.js,
+        `kyo-i18n`.js,
         `kyo-ui`.js,
         `kyo-website`.js,
         `kyo-website-bundle`.js,
@@ -412,6 +414,7 @@ lazy val kyoNative = project
         `kyo-stats-otlp`.native,
         `kyo-browser`.native,
         `kyo-slack`.native,
+        `kyo-i18n`.native,
         `kyo-ui`.native,
         `kyo-pod`.native,
         `kyo-compat-future`.native,
@@ -464,6 +467,7 @@ lazy val kyoWasm = project
         `kyo-pod`.wasm,
         `kyo-browser`.wasm,
         `kyo-slack`.wasm,
+        `kyo-i18n`.wasm,
         `kyo-ui`.wasm,
         `kyo-test-api`.wasm,
         `kyo-test-runner`.wasm,
@@ -1817,6 +1821,25 @@ lazy val `kyo-slack` =
             `native-settings`,
             `openssl-native-settings`
         )
+        .wasmSettings(`wasm-settings`)
+
+lazy val `kyo-i18n` =
+    crossProject(JSPlatform, JVMPlatform, NativePlatform, WasmPlatform)
+        .crossType(CrossType.Full)
+        .in(file("kyo-i18n"))
+        .dependsOn(`kyo-core`)
+        .withKyoTest
+        .settings(
+            `kyo-settings`
+        )
+        .jvmSettings(
+            mimaCheck(false)
+        )
+        .jsSettings(
+            `js-settings`,
+            scalaJSLinkerConfig ~= { _.withModuleKind(ModuleKind.CommonJSModule) }
+        )
+        .nativeSettings(`native-settings`)
         .wasmSettings(`wasm-settings`)
 
 lazy val `kyo-ui` =
