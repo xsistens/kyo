@@ -18,6 +18,7 @@ private[kyo] object EventHandler:
     case class ContextMenu(f: Unit < Async)                    extends EventHandler
     case class Input(f: String => Unit < Async)                extends EventHandler
     case class Change(f: String => Unit < Async)               extends EventHandler
+    case class FileSelect(f: Seq[UI.FilePayload] => Unit < Async) extends EventHandler
     case class ChangeChecked(f: Boolean => Unit < Async)       extends EventHandler
     case class ChangeNumeric(f: Double => Unit < Async)        extends EventHandler
     case class Submit(f: Unit < Async)                         extends EventHandler
@@ -36,6 +37,7 @@ private[kyo] object EventHandler:
         case _: ContextMenu   => "contextmenu"
         case _: Input         => "input"
         case _: Change        => "change"
+        case _: FileSelect    => "fileselect"
         case _: ChangeChecked => "change"
         case _: ChangeNumeric => "change"
         case _: Submit        => "submit"
