@@ -808,6 +808,11 @@ private[kyo] object ReactiveUI:
                         case fi: FileInput => invokeWith(fi.onChange, e.value).andThen(true)
                         case _             => true
                 }
+            case e: UIEvent.FileSelect =>
+                // Bubbles like Change: the files ride the payload, nothing is read from the element here.
+                unlessInert(isTarget, isDisabled(elem)) {
+                    invokeWith(attrs.onFileSelect, e.files).andThen(keepBubbling(elem, attrs.onFileSelect.nonEmpty))
+                }
             case e: UIEvent.ChangeChecked =>
                 unlessInert(isTarget, isDisabled(elem)) {
                     elem match
