@@ -56,14 +56,22 @@ private[kyo] object DomBackend:
 
     /** Mount a UI into the page body. */
     def mount(ui: UI)(using Frame): Unit < (Async & Scope) =
-        mountInto(ui, document.body)
+        mountInto(ui, document.body, Absent)
+
+    def mount(ui: UI, onHandlerError: Throwable => Unit < Async)(using Frame): Unit < (Async & Scope) =
+        mountInto(ui, document.body, Present(onHandlerError))
 
     /** Mount a UI into a specific DOM element selected by CSS selector. */
     def mount(ui: UI, selector: String)(using Frame): Unit < (Async & Scope) =
+        mount(ui, selector, Absent)
+
+    def mount(ui: UI, selector: String, onHandlerError: Maybe[Throwable => Unit < Async])(using
+        Frame
+    ): Unit < (Async & Scope) =
         Sync.defer {
             val target = document.querySelector(selector)
             if target == null then Abort.panic(UIException(s"Element not found: $selector"))
-            else mountInto(ui, target.asInstanceOf[dom.Element])
+            else mountInto(ui, target.asInstanceOf[dom.Element], onHandlerError)
         }
     end mount
 
@@ -80,13 +88,17 @@ private[kyo] object DomBackend:
     private[kyo] def injectStylesheet(sheet: Stylesheet)(using Frame): Unit < Sync =
         DomStyleSheet.injectBase().andThen(Sync.defer(DomStyleSheet.injectStylesheet(sheet.render)))
 
-    private def mountInto(ui: UI, container: dom.Element)(using Frame): Unit < (Async & Scope) =
+    private def mountInto(
+        ui: UI,
+        container: dom.Element,
+        onHandlerError: Maybe[Throwable => Unit < Async]
+    )(using Frame): Unit < (Async & Scope) =
         // Late-bound to break the emit<->Commands construction cycle (emit resolves measure callbacks via Commands,
         // Commands needs emit). Set before any op is emitted.
         var sessionCommands: UI.Commands = null
         for
             _    <- DomStyleSheet.injectBase()
-            root <- ReactiveUI.normalize(ui, Seq.empty)
+            root <- ReactiveUI.normalize(ui, Seq.empty, onHandlerError = onHandlerError)
             // `mountSlot = true` on the BOOT render: this HTML goes straight into the live DOM and is never
             // a golden/SSR artifact, so the mount slots may carry their `s`/`k` flags from the very first
             // byte. Without them a keyed mount's region starts keyless, and the first parent re-render has
