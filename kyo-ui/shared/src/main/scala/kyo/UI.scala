@@ -916,6 +916,20 @@ object UI:
         /** The chord with no modifier keys held. */
         val none: Modifiers = Modifiers()
 
+    /** One selected file delivered to an `onFileSelect` handler, and the wire payload of `UIEvent.FileSelect`.
+      *
+      * `name` is the file name, `size` its byte length, `mimeType` the browser-reported MIME type (empty string when the
+      * browser reports none), and `content` the file's text content (read via `FileReader.readAsText`). Public in the `UI`
+      * object and `derives Schema` so it doubles as the on-wire representation, mirroring how [[kyo.UI.Modifiers]] is both a
+      * public payload type and a wire field.
+      */
+    final case class FilePayload(
+        name: String,
+        size: Long,
+        mimeType: String,
+        content: String
+    ) derives CanEqual, Schema
+
     /** The typed payload delivered to a typed `onClick`/`onClickSelf`/`onFocus`/`onBlur` handler.
       *
       * `targetId` is the `id` of the element the event fired on (`Absent` when that element has no id), and `modifiers` is the
@@ -1339,6 +1353,15 @@ object UI:
               */
             def onPointerUp[S](f: PointerEvent => Any < (Abort[Throwable] & Async & S))(using Isolate[S, Sync, S]): Self =
                 withAttrs(attrs.copy(onPointerUp = Present(eraseHandlerFn(f))))
+
+            /** Runs `f` when files are selected on a descendant file input, receiving the full list of
+              * [[kyo.UI.FilePayload]] (name, size, MIME type, and text content of every selected file). The client reads all
+              * selected files (a `FileReader` per file, aggregated once every read completes) and posts a single `FileSelect`
+              * event; it bubbles like `Change`. Declaring this emits the `fileselect` token in `data-kyo-ev`. A file input
+              * with only `onChange` keeps the legacy single-file content-only path.
+              */
+            def onFileSelect[S](f: Seq[FilePayload] => Any < (Abort[Throwable] & Async & S))(using Isolate[S, Sync, S]): Self =
+                withAttrs(attrs.copy(onFileSelect = Present(eraseHandlerFn(f))))
         end Interactive
 
         // ---- Layout traits ----
@@ -1638,6 +1661,7 @@ object UI:
             onPointerDown: Maybe[PointerEvent => Any < Async] = Absent,
             onPointerMove: Maybe[PointerEvent => Any < Async] = Absent,
             onPointerUp: Maybe[PointerEvent => Any < Async] = Absent,
+            onFileSelect: Maybe[Seq[UI.FilePayload] => Any < Async] = Absent,
             ariaAttrs: Map[String, String] = Map.empty,
             dataAttrs: Map[String, String] = Map.empty,
             jsProps: Map[String, String] = Map.empty,
@@ -2363,12 +2387,16 @@ object UI:
             attrs: Attrs = Attrs(),
             accept: Maybe[Chunk[FileAccept]] = Absent,
             disabled: Maybe[Boolean] = Absent,
+            multiple: Maybe[Boolean] = Absent,
             onChange: Maybe[String => Any < Async] = Absent
         )(using val frame: Frame) extends Inline with Interactive with Focusable with HasDisabled with Void:
             type Self = FileInput
-            def withAttrs(a: Attrs): FileInput                = copy(attrs = a)
-            def accept(vs: FileAccept*): FileInput            = copy(accept = Present(Chunk.from(vs)))
-            def disabled(v: Boolean): FileInput               = copy(disabled = Present(v))
+            def withAttrs(a: Attrs): FileInput     = copy(attrs = a)
+            def accept(vs: FileAccept*): FileInput = copy(accept = Present(Chunk.from(vs)))
+            def disabled(v: Boolean): FileInput    = copy(disabled = Present(v))
+
+            /** Allow selecting more than one file (renders the HTML `multiple` attribute). */
+            def multiple(v: Boolean): FileInput               = copy(multiple = Present(v))
             def onChange(f: String => Any < Async): FileInput = copy(onChange = Present(f))
         end FileInput
 
