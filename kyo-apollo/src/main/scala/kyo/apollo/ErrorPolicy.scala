@@ -26,7 +26,7 @@ import kyo.apollo.network.ExecutionContext
   *
   * A transport/parse `exception` always raises on `Abort`, under every policy.
   */
-enum ErrorPolicy extends ExecutionContext.Element:
+enum ErrorPolicy extends ExecutionContext.Element derives CanEqual:
     case None, Ignore, All
 
     /** Every case is keyed by the [[ErrorPolicy]] companion in the context bag. */

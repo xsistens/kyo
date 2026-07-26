@@ -1,0 +1,188 @@
+package kyo.apollo
+
+// getkyo.io library. This binding shares `package kyo.apollo` with `core` (the
+// compat model — like `kyo-http` joining `kyo-core`'s `package kyo`), so
+// `import kyo.*` resolves to the library root and pulls in Kyo's
+// `<` / `Async` / `Abort` / `Scope` / `Frame` / `Sync`.
+import kyo.*
+import kyo.apollo.ApolloCall
+import kyo.apollo.ApolloClient
+import kyo.apollo.exception.ApolloException
+import kyo.apollo.exception.ApolloGraphQLException
+import kyo.apollo.exception.DefaultApolloException
+import kyo.apollo.network.ApolloResponse
+import kyo.apollo.network.Uuid
+
+/** The **effect / one-shot** half of the `kyo-ui` binding (Phase 09, Task 4).
+  *
+  * Provides the extension methods a single `import kyo.apollo.*` brings onto
+  * every [[kyo.apollo.ApolloCall]] so app code turns a prepared operation into a Kyo
+  * effect with no per-operation glue:
+  *
+  *   - `call.data` — run once, yield the typed `data` or a typed
+  *     [[kyo.apollo.exception.ApolloException]] on Kyo's `Abort` channel;
+  *   - `call.response` — run once, yield the full [[ApolloResponse]]
+  *     (partial data + GraphQL errors preserved), no `Abort`.
+  *
+  * ==How it runs==
+  *
+  * `core` stays Kyo-free but is already effect-native: an [[ApolloCall]]'s
+  * `execute` is `ApolloResponse[D] < (Async & Scope)` over the cold interceptor
+  * stream (take-the-first-emission). These extensions only discharge that call's
+  * `Scope` (`Scope.run`) and shape the outcome — no `Future` bridge is involved.
+  *
+  * ==Failures are values, projected onto `Abort` explicitly==
+  *
+  * Per `core`'s contract, transport / HTTP / parse problems arrive **inside**
+  * `ApolloResponse.exception` (a value); the effect itself fails only for a
+  * genuine wiring error (an exhausted chain, or an empty stream). Mapping a
+  * response's failure onto Kyo's typed `Abort[ApolloException]` channel is
+  * therefore an explicit projection we choose ([[ApolloEffect.projectData]]),
+  * never a caught panic:
+  *
+  *   - `response` runs `call.execute` under `Scope.run` and `Abort.run[Throwable]`,
+  *     folding any wiring failure/panic back into an `ApolloResponse.exception`
+  *     value — so its effect set is just `Async`, matching the "failures are
+  *     values" contract.
+  *   - `data` reuses that response and then projects: a present `exception`, any
+  *     GraphQL `errors`, or absent `data` all become an `Abort.fail`, mirroring
+  *     `ApolloResponse.dataAssertNoErrors()` onto the `Abort` channel rather than
+  *     a throw. Callers that want partial data + errors use `response`.
+  */
+extension [D](call: ApolloCall[D])
+
+    /** Execute this operation once and yield its typed `data`.
+      *
+      * A one-shot effect: `D < (Async & Abort[ApolloException])`. Success yields
+      * the decoded payload; a transport/parse `exception`, any GraphQL `errors`,
+      * or missing `data` surface as a typed [[kyo.apollo.exception.ApolloException]] on
+      * the `Abort` channel (never a thrown exception). This is the strict path —
+      * for a response that keeps partial data alongside its errors, use
+      * [[response]].
+      *
+      * Honors the call's [[kyo.apollo.ErrorPolicy]] (react `errorPolicy`): under
+      * `Ignore`/`All` the GraphQL `errors` are not raised — the `data` is returned if
+      * present (a transport error or absent data still raises). `None` (default) is
+      * the strict behavior above.
+      */
+    def data(using
+        Frame,
+        Tag[Emit[Chunk[ApolloResponse[D]]]]
+    ): D < (Async & Abort[ApolloException]) =
+        val policy = call.apolloRequest.executionContext.get(ErrorPolicy).getOrElse(ErrorPolicy.Default)
+        call.response.map(resp => Abort.get(ApolloEffect.projectData(resp, policy)))
+    end data
+
+    /** Execute this operation once and yield its full [[ApolloResponse]].
+      *
+      * `ApolloResponse[D] < Async` — no `Abort`. The response preserves partial
+      * `data`, GraphQL `errors`, and any transport `exception` as values, so the
+      * caller inspects them directly. A genuine wiring failure of `call.execute`
+      * (an exhausted interceptor chain, or a stream that completes with no
+      * emission) is folded back into an `ApolloResponse.exception` value, keeping
+      * this path total.
+      */
+    def response(using
+        Frame,
+        Tag[Emit[Chunk[ApolloResponse[D]]]]
+    ): ApolloResponse[D] < Async =
+        // `call.execute` is now a Kyo effect (`ApolloResponse[D] < (Async & Scope)`);
+        // its own `Scope` (a live watcher/subscription binds teardown there — inert
+        // for a one-shot query) is discharged with `Scope.run`. A wiring failure (an
+        // empty stream's `NoSuchElementException`, an exhausted chain) surfaces on the
+        // async PANIC channel, so — per Slice 1's panic-fold rule — `Abort.run` folds
+        // BOTH failure and panic back into an `ApolloResponse.exception` value
+        // (ordinary transport errors already arrive as response values).
+        Abort.run[Throwable](Scope.run(call.execute)).map {
+            case Result.Success(resp) => resp
+            case Result.Failure(cause) =>
+                ApolloResponse.fromException[D](Uuid.random(), ApolloEffect.asApolloException(cause))
+            case Result.Panic(cause) =>
+                ApolloResponse.fromException[D](Uuid.random(), ApolloEffect.asApolloException(cause))
+        }
+
+    /** Drain this operation's stream on a `Scope`-bound fiber purely for its cache
+      * side effect, discarding every response.
+      *
+      * The one-liner for the "subscription that exists only to keep the normalized
+      * cache warm" pattern: a subscription's replies normalize into the store and
+      * re-emit every dependent `watchSignal`, but only while something consumes the
+      * stream — a live subscription with no collector delivers nothing. Fork this
+      * and the shared socket has its consumer; the fiber is bound to the current
+      * `Scope`, so the subscription is torn down (and the socket unsubscribed) when
+      * that scope is released. Yields immediately — it does not wait for the stream.
+      */
+    def keepCacheWarm(using
+        Frame,
+        Tag[Emit[Chunk[ApolloResponse[D]]]]
+    ): Unit < (Async & Scope) =
+        Fiber.init(Scope.run(call.stream.foreach(_ => ()))).unit
+end extension
+
+/** Helpers backing the effect-form extension methods, kept off the extension
+  * itself so they are unit-testable and reused by the reactive form (Task 5).
+  */
+object ApolloEffect:
+
+    /** Project a response onto the strict one-shot outcome the `.data` effect
+      * yields, under the given [[kyo.apollo.ErrorPolicy]]: `Right(data)` for a clean
+      * response, `Left(exception)` when a transport/parse `exception` is present or
+      * `data` is absent. A transport `exception` always wins. GraphQL `errors` map to
+      * `Left` only under `ErrorPolicy.None` (the default); under `Ignore`/`All` they
+      * are discarded and the `data` is returned if present. Total over `Either`
+      * rather than a throw.
+      */
+    private[kyo] def projectData[D](
+        resp: ApolloResponse[D],
+        errorPolicy: ErrorPolicy = ErrorPolicy.None
+    ): Either[ApolloException, D] =
+        resp.exception match
+            case Present(ex) => Left(ex)
+            case Absent =>
+                val raiseGraphQLErrors = errorPolicy match
+                    case ErrorPolicy.None                     => true
+                    case ErrorPolicy.Ignore | ErrorPolicy.All => false
+                if resp.errors.nonEmpty && raiseGraphQLErrors then
+                    Left(ApolloGraphQLException(resp.errors))
+                else
+                    resp.data.toRight(
+                        DefaultApolloException("The server did not return any data")
+                    )
+                end if
+
+    /** Normalize an arbitrary wiring-failure cause (a failed/panicked `execute`)
+      * into an [[kyo.apollo.exception.ApolloException]] value: an `ApolloException`
+      * passes through unchanged, anything else is wrapped in a
+      * [[DefaultApolloException]] carrying it as the cause. Used only for the rare
+      * wiring failure, since ordinary transport errors already arrive as response
+      * values.
+      */
+    private[kyo] def asApolloException(cause: Throwable): ApolloException =
+        cause match
+            case ae: ApolloException => ae
+            case other =>
+                DefaultApolloException(
+                    "Apollo call failed before producing a response",
+                    other
+                )
+end ApolloEffect
+
+/** `Scope`-managed acquisition of an [[kyo.apollo.ApolloClient]].
+  *
+  * Ties client lifecycle — in particular the shared subscription WebSocket the
+  * client tears down in `close()` — to a Kyo `Scope`, so the socket is released
+  * deterministically (LIFO, exactly once) when the enclosing scope exits, rather
+  * than relying on a caller to remember `close()`.
+  */
+object ApolloClientResource:
+
+    /** Acquire a client whose `close()` is registered with the current `Scope`.
+      *
+      * `build` is evaluated at acquisition; the resulting client's `close()` runs
+      * on scope teardown. Yields `ApolloClient < (Async & Scope)` — bind it inside
+      * a `Scope.run { … }` and the WebSocket transport is cleaned up when that
+      * block completes, even on failure.
+      */
+    def acquire(build: => ApolloClient)(using Frame): ApolloClient < (Async & Scope) =
+        Scope.acquireRelease(build)(client => Sync.defer(client.close()))
+end ApolloClientResource

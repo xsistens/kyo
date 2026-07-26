@@ -500,6 +500,7 @@ lazy val kyoJS = project
         `kyo-ui-components`.js,
         `kyo-apollo`.js,
         `kyo-apollo-testing`.js,
+        `kyo-apollo-ui`.js,
         `kyo-markdown`.js,
         `kyo-i18n`.js,
         `kyo-website`.js,
@@ -3000,6 +3001,16 @@ lazy val `kyo-apollo-codegen` =
             mimaCheck(false),
             libraryDependencies += "com.github.ghostdogpr" %% "caliban-tools" % "3.1.2"
         )
+
+// Apollo bindings for kyo-ui: reactive Signal/Var adapters over the apollo core
+// store plus query/mutation effects. JS only, depends on the apollo core and kyo-ui.
+lazy val `kyo-apollo-ui` =
+    crossProject(JSPlatform)
+        .crossType(CrossType.Pure)
+        .in(file("kyo-apollo-ui"))
+        .dependsOn(`kyo-apollo`, `kyo-ui`, `kyo-core`)
+        .settings(`kyo-settings`)
+        .jsSettings(`js-settings`)
 
 lazy val `kyo-ui` =
     crossProject(JSPlatform, JVMPlatform, NativePlatform, WasmPlatform)
