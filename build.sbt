@@ -2986,6 +2986,7 @@ lazy val `kyo-apollo-testing` =
         .crossType(CrossType.Pure)
         .in(file("kyo-apollo-testing"))
         .dependsOn(`kyo-apollo`, `kyo-core`, `kyo-data`, `kyo-schema`)
+        .withKyoTest
         .settings(`kyo-settings`)
         .jsSettings(`js-settings`)
 
