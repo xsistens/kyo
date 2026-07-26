@@ -73,10 +73,14 @@ private[kyo] object UIServer:
             // already belongs to.
             private val sentClasses = scala.collection.mutable.Set.from(seenClasses)
 
-            def onChange(path: Seq[String], ui: UI)(using Frame): Unit < Async =
-                HtmlRenderer.renderWithCss(ui, path).map { (html, rules) =>
+            def onChange(path: Seq[String], ui: UI, mount: Boolean)(using Frame): Unit < Async =
+                // Content at its nested-reactive sub-path (matches SSR/walkStatic); the wrapper below stays at `path`
+                // so the Replace still targets this node. `mountSlot = true` stamps data-kyo-mount-slot on Mounted
+                // placeholders so the client __kyoMorphChildren guard tells the same mount from colliding content
+                // (twin of DomBackend.onChange).
+                HtmlRenderer.renderWithCss(ui, HtmlRenderer.contentPath(path, ui), mountSlot = true).map { (html, rules) =>
                     val newRules  = rules.filterNot(r => sentClasses.contains(r._1))
-                    val finalHtml = HtmlRenderer.wrapReactiveRegion(path, svgContextAt(path), html)
+                    val finalHtml = HtmlRenderer.wrapReactiveRegion(path, svgContextAt(path), html, mount)
                     val replaceOp = HtmlOp.Replace(path, finalHtml)
                     // runPartial drops only a Closed (the socket closed mid-render -> the op is moot); a Panic
                     // propagates to the region fiber rather than being swallowed by the discard.
