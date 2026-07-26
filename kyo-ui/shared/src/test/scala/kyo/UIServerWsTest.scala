@@ -40,8 +40,10 @@ class UIServerWsTest extends kyo.test.Test[Any]:
                     (serverWs: HttpWebSocket) => UIServer.serveSession(serverWs, app),
                     (clientWs: HttpWebSocket) =>
                         for
-                            // Await the initial render frame to confirm the subscription is live.
-                            _ <- clientWs.take()
+                            // Subscribe repaints nothing: the SSR page already carries the region's current
+                            // content, so this socket stays silent until an event produces a frame. The barrier
+                            // is the subscription itself, which parks on the region's signal.
+                            _ <- assertEventually(ref.waiters.map(_ >= 1))
                             // Dispatch a Click on the button (path Seq("0"): first child of the div).
                             clickEvent = UIEvent.Click(Seq("0"), MouseEventData(UI.Modifiers.none, Absent))
                             _ <- clientWs.put(HttpWebSocket.Payload.Text(Json.encode[UIEvent](clickEvent)))
@@ -81,9 +83,9 @@ class UIServerWsTest extends kyo.test.Test[Any]:
                     (serverWs: HttpWebSocket) => Sync.ensure(serverEnded.set(true))(UIServer.serveSession(serverWs, app)),
                     (clientWs: HttpWebSocket) =>
                         for
-                            // Await the initial render frame, then confirm the server subscription is live: it parks on
-                            // the test-held leaf, so leafRef has exactly one waiter.
-                            _ <- clientWs.take()
+                            // Subscribe repaints nothing, so there is no frame to await here. That the server
+                            // subscription is live is witnessed directly instead: it parks on the test-held leaf,
+                            // so leafRef has exactly one waiter.
                             _ <- assertEventually(leafRef.waiters.map(_ == 1))
                             // Close the client: fires ws.onPeerClose on the server, ending the race and closing the
                             // connection's subscription Scope (cascade teardown).
@@ -128,8 +130,8 @@ class UIServerWsTest extends kyo.test.Test[Any]:
             // captured holds the frame received after the click (the command the handler sent).
             captured <- AtomicRef.init(Absent: Maybe[String])
             ref      <- Signal.initRef("static")
-            // The reactive region produces the initial render frame the client awaits before clicking;
-            // the handler never touches it, so the click's only response frame is the scroll command.
+            // The reactive region is what the client syncs on before clicking; the handler never touches
+            // it, so the click's only response frame is the scroll command.
             app = UI.div(
                 UI.button("Jump").id("btn").onClick(UI.scrollIntoView("card-7")),
                 ref.map(v => UI.span(v))
@@ -139,8 +141,8 @@ class UIServerWsTest extends kyo.test.Test[Any]:
                     (serverWs: HttpWebSocket) => UIServer.serveSession(serverWs, app),
                     (clientWs: HttpWebSocket) =>
                         for
-                            // Await the initial render frame to confirm the subscription is live.
-                            _ <- clientWs.take()
+                            // Subscribe repaints nothing, so the barrier is the subscription's own park on `ref`.
+                            _ <- assertEventually(ref.waiters.map(_ >= 1))
                             clickEvent = UIEvent.Click(Seq("0"), MouseEventData(UI.Modifiers.none, Absent))
                             _     <- clientWs.put(HttpWebSocket.Payload.Text(Json.encode[UIEvent](clickEvent)))
                             frame <- clientWs.take()
