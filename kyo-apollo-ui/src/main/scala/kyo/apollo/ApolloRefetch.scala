@@ -1,0 +1,49 @@
+package kyo.apollo
+
+import kyo.*
+import kyo.apollo.cache.normalized.apolloStore
+import kyo.apollo.exception.ApolloException
+
+/** react-apollo's imperative store operations on the client — `refetchQueries`,
+  * `resetStore`, and the `onResetStore` hook — built on the per-client
+  * [[ActiveQueryRegistry]] the kyo-ui query binding populates.
+  *
+  * Note the division of labor: for the common "refetch after a mutation" case you
+  * usually need **none of this** — a write to a shared normalized record already
+  * re-emits every dependent watcher (and `apolloStore.updateOperation` splices a
+  * new entity into a cached list without a round-trip). These helpers exist for
+  * the cases the cache genuinely cannot serve: forcing a real **network** refetch
+  * of server-computed results, and a post-login "everything fresh" reset.
+  */
+extension (client: ApolloClient)
+
+    /** Force a NETWORK refetch of the named live queries — or of **every** active
+      * query when `names` is empty (react's `client.refetchQueries()`). Each match
+      * re-runs its operation `NetworkOnly`, rewriting the store (which re-emits its
+      * `state`). Names are GraphQL operation names (e.g. `"GetTodos"`).
+      */
+    def refetchQueries(names: String*)(using Frame): Unit < (Async & Abort[ApolloException]) =
+        Kyo.foreachDiscard(client.activeQueries.selected(names.toSet))(refetch => refetch)
+
+    /** react-apollo's `client.resetStore`: clear the whole normalized cache, run any
+      * [[onResetStore]] hooks, then refetch every active query from the network so
+      * the UI rebuilds from fresh server data. (`clearAll` alone does not publish, so
+      * without this the watchers would not re-emit.)
+      */
+    def resetStore(using Frame): Unit < (Async & Abort[ApolloException]) =
+        Sync
+            .defer(client.apolloStore.clearAll())
+            .andThen(Kyo.foreachDiscard(client.activeQueries.resetHookEffects)(hook => hook))
+            .andThen(Kyo.foreachDiscard(client.activeQueries.selected(Set.empty))(refetch => refetch))
+
+    /** Register an `onResetStore` hook fired by [[resetStore]] (react's
+      * `client.onResetStore`). `Scope`-bound: the hook is unregistered automatically
+      * when the enclosing `Scope` closes — like every other subscription in this
+      * binding, there is no imperative dispose thunk for the caller to hold and
+      * remember to call.
+      */
+    def onResetStore(hook: => Unit < Async)(using Frame): Unit < (Sync & Scope) =
+        Sync.defer(client.activeQueries.registerResetHook(hook)).map { dispose =>
+            Scope.ensure(Sync.defer(dispose()))
+        }
+end extension
