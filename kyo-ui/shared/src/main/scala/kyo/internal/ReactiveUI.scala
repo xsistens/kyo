@@ -863,6 +863,10 @@ private[kyo] object ReactiveUI:
                 invokeWith(attrs.onPointerMove, ev.pointer).andThen(keepBubbling(elem, attrs.onPointerMove.nonEmpty))
             case ev: UIEvent.PointerUp =>
                 invokeWith(attrs.onPointerUp, ev.pointer).andThen(keepBubbling(elem, attrs.onPointerUp.nonEmpty))
+            case ev: UIEvent.ScrollPosition =>
+                val sp = UI.ScrollPositionEvent(ev.scrollTop, ev.scrollLeft, ev.targetId)
+                invokeWith(attrs.onScrollPos, sp)
+                    .andThen(keepBubbling(elem, attrs.onScrollPos.nonEmpty))
             case _ => true
         end match
     end dispatchToElement
