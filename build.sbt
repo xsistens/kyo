@@ -2456,6 +2456,7 @@ lazy val `kyo-apollo` =
         .crossType(CrossType.Pure)
         .in(file("kyo-apollo"))
         .dependsOn(`kyo-core`, `kyo-data`, `kyo-schema`, `kyo-schema-json`)
+        .withKyoTest
         .settings(`kyo-settings`)
         .jsSettings(
             `js-settings`,
@@ -2494,6 +2495,7 @@ lazy val `kyo-apollo-ui` =
         .crossType(CrossType.Pure)
         .in(file("kyo-apollo-ui"))
         .dependsOn(`kyo-apollo`, `kyo-ui`, `kyo-core`)
+        .withKyoTest
         .settings(`kyo-settings`)
         .jsSettings(`js-settings`)
 
