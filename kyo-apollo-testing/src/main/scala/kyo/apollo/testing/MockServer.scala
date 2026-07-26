@@ -1,4 +1,4 @@
-package apollo.testing
+package kyo.apollo.testing
 
 import kyo.*
 import kyo.apollo.network.http.HttpEngine
@@ -57,7 +57,7 @@ final class MockServer extends HttpEngine:
     /** Queue a simulated connection error (no response received) as the next
       * round-trip — the transport folds it into an `ApolloNetworkException` value.
       */
-    def enqueueError(cause: Throwable): MockServer =
+    def enqueueError(cause: Throwable)(using Frame): MockServer =
         responses.enqueue(_ => Async.fromFuture(Future.failed[HttpResponse](cause)))
         this
 
