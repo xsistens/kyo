@@ -14,7 +14,12 @@ private[kyo] case class ReactiveUI(
     svgContext: Boolean = false,
     mountedSpec: Maybe[MountedSpec] = Absent,
     boundarySpec: Maybe[BoundarySpec] = Absent,
-    mountDispatch: Maybe[MountDispatch] = Absent // set on the ROOT normalize product only; see subscribe
+    mountDispatch: Maybe[MountDispatch] = Absent, // set on the ROOT normalize product only; see subscribe
+    // Reactive channels carried from the element's Attrs; subscribeScoped forks the in-place-patch observers
+    // (empty for non-element / attribute-less nodes).
+    reactiveAttrs: Map[String, Signal[String]] = Map.empty,
+    reactiveBoolAttrs: Map[String, Signal[Boolean]] = Map.empty,
+    reactiveClasses: Map[String, Signal[Boolean]] = Map.empty
 )
 
 /** Normalization-time companion of a [[kyo.UI.Ast.Boundary]] node. */
@@ -211,7 +216,17 @@ private[kyo] object ReactiveUI:
                 val (elementSignal, isConstNode) =
                     collectSignalRef(ui).fold((Signal.initConst(ui: UI), true))(ref => (ref.map(_ => ui: UI), false))
                 for (kids, hdl) <- walkStatic(ui, path, svg, mountDispatch)
-                yield ReactiveUI(path, elementSignal, isConst = isConstNode, kids, hdl, svgContext = svg)
+                yield ReactiveUI(
+                    path,
+                    elementSignal,
+                    isConst = isConstNode,
+                    kids,
+                    hdl,
+                    svgContext = svg,
+                    reactiveAttrs = ui.attrs.reactiveAttrs,
+                    reactiveBoolAttrs = ui.attrs.reactiveBoolAttrs,
+                    reactiveClasses = ui.attrs.reactiveClasses
+                )
 
             case ui: Mounted =>
                 // The handler resolves through the MountDispatch TABLE (by path), not the node: dispatch re-normalizes
@@ -301,9 +316,13 @@ private[kyo] object ReactiveUI:
                             case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted | _: Boundary =>
                                 for rui <- normalizeWith(child, childPath, childSvg, mountDispatch)
                                 yield (Seq(rui), Seq.empty[(Int, Handler)])
-                            case childElem: Element if collectSignalRef(childElem).nonEmpty =>
-                                // Element with SignalRef-bound attributes is reactive over those signals;
-                                // normalize it so subscribeNode wires updates.
+                            case childElem: Element
+                                if collectSignalRef(
+                                    childElem
+                                ).nonEmpty || childElem.attrs.reactiveAttrs.nonEmpty || childElem.attrs.reactiveBoolAttrs.nonEmpty || childElem.attrs.reactiveClasses.nonEmpty =>
+                                // Normalize into a ReactiveUI node so subscribeScoped wires the updates. Required
+                                // even for a const element carrying ONLY reactive attrs: otherwise it is not walked
+                                // into a node and its in-place-patch observers would never start.
                                 for rui <- normalizeWith(childElem, childPath, childSvg, mountDispatch)
                                 yield (Seq(rui), Seq.empty[(Int, Handler)])
                             case _ =>
@@ -808,29 +827,47 @@ private[kyo] object ReactiveUI:
     )(using
         Frame
     ): Unit < (Async & Scope) =
-        rui.mountedSpec match
-            case Present(spec) =>
-                subscribeMounted(rui, spec, exchange, signalChangeTime, mounts, mountDispatch, boundary)
-            case Absent =>
-                rui.boundarySpec match
-                    case Present(spec) =>
-                        subscribeBoundary(rui, spec, exchange, signalChangeTime, mounts, mountDispatch, boundary)
-                    case Absent =>
-                        if rui.isConst then
-                            Kyo.foreachDiscard(rui.children)(
-                                subscribeScoped(_, exchange, signalChangeTime, mounts, mountDispatch, boundary)
-                            )
-                        else
-                            subscribeRegion(
-                                rui.path,
-                                rui.signal,
-                                rui.svgContext,
-                                exchange,
-                                signalChangeTime,
-                                Absent,
-                                mountDispatch,
-                                boundary
-                            )
+        // Start the scoped in-place-patch observers for this node's reactive channels. Runs unconditionally: a
+        // no-op for attribute-less nodes, but an element carrying ONLY reactive attrs is `isConst = true` and
+        // would otherwise fork no observer of its own.
+        val startAttrObservers: Unit < (Async & Scope) =
+            Kyo.foreachDiscard(rui.reactiveAttrs.toSeq) { case (name, sig) =>
+                Fiber.init(sig.observe(v => exchange.onAttrPatch(rui.path, name, v))).unit
+            }
+        val startBoolAttrObservers: Unit < (Async & Scope) =
+            Kyo.foreachDiscard(rui.reactiveBoolAttrs.toSeq) { case (name, sig) =>
+                Fiber.init(sig.observe(v => exchange.onBoolAttrPatch(rui.path, name, v))).unit
+            }
+        val startClassObservers: Unit < (Async & Scope) =
+            Kyo.foreachDiscard(rui.reactiveClasses.toSeq) { case (name, sig) =>
+                Fiber.init(sig.observe(v => exchange.onClassPatch(rui.path, name, v))).unit
+            }
+        startAttrObservers.andThen(startBoolAttrObservers).andThen(startClassObservers).andThen {
+            rui.mountedSpec match
+                case Present(spec) =>
+                    subscribeMounted(rui, spec, exchange, signalChangeTime, mounts, mountDispatch, boundary)
+                case Absent =>
+                    rui.boundarySpec match
+                        case Present(spec) =>
+                            subscribeBoundary(rui, spec, exchange, signalChangeTime, mounts, mountDispatch, boundary)
+                        case Absent =>
+                            if rui.isConst then
+                                Kyo.foreachDiscard(rui.children)(
+                                    subscribeScoped(_, exchange, signalChangeTime, mounts, mountDispatch, boundary)
+                                )
+                            else
+                                subscribeRegion(
+                                    rui.path,
+                                    rui.signal,
+                                    rui.svgContext,
+                                    exchange,
+                                    signalChangeTime,
+                                    Absent,
+                                    mountDispatch,
+                                    boundary
+                                )
+        }
+    end subscribeScoped
 
     /** Subscribe one Boundary node: create its live context (chained to any enclosing boundary), subscribe the
       * child's reactive kids EAGERLY into the current scope — all mount effects below start immediately, in
@@ -896,6 +933,20 @@ private[kyo] object ReactiveUI:
                         (newKids, _) <- walkStatic(current, path, svg, mountDispatch)
                         _            <- regionMounts.evictExcept(collectMountKeys(newKids))
                         _            <- exchange.onChange(path, current, mount)
+                        // walkStatic only forks observers for reactive-attr CHILD elements; the region's painted
+                        // ROOT element carries its own reactive channels at `path` and is absent from newKids, so
+                        // start its observers here — scoped to this per-value fiber like the child subscriptions.
+                        _ <- current match
+                            case el: Element
+                                if el.attrs.reactiveAttrs.nonEmpty || el.attrs.reactiveBoolAttrs.nonEmpty || el.attrs.reactiveClasses.nonEmpty =>
+                                Kyo.foreachDiscard(el.attrs.reactiveAttrs.toSeq) { case (name, sig) =>
+                                    Fiber.init(sig.observe(v => exchange.onAttrPatch(path, name, v))).unit
+                                }.andThen(Kyo.foreachDiscard(el.attrs.reactiveBoolAttrs.toSeq) { case (name, sig) =>
+                                    Fiber.init(sig.observe(v => exchange.onBoolAttrPatch(path, name, v))).unit
+                                }).andThen(Kyo.foreachDiscard(el.attrs.reactiveClasses.toSeq) { case (name, sig) =>
+                                    Fiber.init(sig.observe(v => exchange.onClassPatch(path, name, v))).unit
+                                })
+                            case _ => Kyo.unit
                         _ <- Kyo.foreachDiscard(newKids)(
                             subscribeScoped(_, exchange, signalChangeTime, regionMounts, mountDispatch, boundary)
                         )
