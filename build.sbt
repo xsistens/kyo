@@ -2494,7 +2494,7 @@ lazy val `kyo-apollo-ui` =
     crossProject(JSPlatform)
         .crossType(CrossType.Pure)
         .in(file("kyo-apollo-ui"))
-        .dependsOn(`kyo-apollo`, `kyo-ui`, `kyo-core`)
+        .dependsOn(`kyo-apollo` % "compile->compile;test->test", `kyo-ui`, `kyo-core`)
         .withKyoTest
         .settings(`kyo-settings`)
         .jsSettings(`js-settings`)
