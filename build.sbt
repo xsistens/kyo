@@ -2479,6 +2479,7 @@ lazy val `kyo-apollo-codegen` =
     crossProject(JVMPlatform)
         .crossType(CrossType.Pure)
         .in(file("kyo-apollo-codegen"))
+        .withKyoTest
         .settings(`kyo-settings`)
         .jvmSettings(
             mimaCheck(false),
