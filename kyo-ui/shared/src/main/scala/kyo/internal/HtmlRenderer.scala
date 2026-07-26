@@ -682,6 +682,9 @@ private[kyo] object HtmlRenderer:
         elem match
             case f: Form if f.onSubmit.nonEmpty || f.onSubmitEvt.nonEmpty => events += "submit"
             case _                                                        =>
+        if attrs.onPointerDown.nonEmpty then events += "pointerdown"
+        if attrs.onPointerMove.nonEmpty then events += "pointermove"
+        if attrs.onPointerUp.nonEmpty then events += "pointerup"
         val ev = events.result()
         if ev.nonEmpty then w(sb, s""" data-kyo-ev="${ev.mkString(",")}"""")
     end renderEventAttr
@@ -830,6 +833,24 @@ private[kyo] object HtmlRenderer:
            |      var el=document.getElementById(op.ScrollIntoView.id);
            |      if(el)el.scrollIntoView({behavior:"smooth",block:"start"});
            |    });
+           |  }else if(op.Command){
+           |    kyoApplyVerb(document.querySelector('[data-kyo-path="'+op.Command.path.join(".")+'"]'),op.Command.verb);
+           |  }else if(op.CommandById){
+           |    kyoApplyVerb(document.getElementById(op.CommandById.id),op.CommandById.verb);
+           |  }else if(op.RequestMeasure){
+           |    var rmp=op.RequestMeasure.path.join(".");
+           |    var rmel=document.querySelector('[data-kyo-path="'+rmp+'"]');
+           |    if(rmel){
+           |      var rmr=rmel.getBoundingClientRect();
+           |      post({Measure:{path:op.RequestMeasure.path,rectX:rmr.left,rectY:rmr.top,rectW:rmr.width,rectH:rmr.height,viewportW:window.innerWidth,viewportH:window.innerHeight}});
+           |    }
+           |  }else if(op.RequestMeasureById){
+           |    // MeasureById carries `id` back; `path` is vestigial for id-routing, sent empty.
+           |    var rmiel=document.getElementById(op.RequestMeasureById.id);
+           |    if(rmiel){
+           |      var rmir=rmiel.getBoundingClientRect();
+           |      post({MeasureById:{path:[],id:op.RequestMeasureById.id,rectX:rmir.left,rectY:rmir.top,rectW:rmir.width,rectH:rmir.height,viewportW:window.innerWidth,viewportH:window.innerHeight}});
+           |    }
            |  }
            |};
            |// ---- DOM morphing (twin of DomBackend.morph; keep in lockstep) ----
@@ -928,6 +949,12 @@ private[kyo] object HtmlRenderer:
            |  __kyoCollapse(fromEl);
            |  if(fromEl.tagName!==toEl.tagName){var rep=document.importNode(toEl,true);fromEl.parentNode.replaceChild(rep,fromEl);return rep;}
            |  __kyoMorphEl(fromEl,toEl);return fromEl;
+           |}
+           |// Shared verb whitelist for Command/CommandById; unknown verbs ignored (forward-compat).
+           |function kyoApplyVerb(el,verb){
+           |  if(!el)return;
+           |  if(verb==="focus"){if(typeof el.focus==="function")el.focus();}
+           |  else if(verb==="scrollIntoView"){if(typeof el.scrollIntoView==="function")el.scrollIntoView({block:"nearest"});}
            |}
            |function fp(el){
            |  while(el&&el!==document.body){
@@ -1194,6 +1221,46 @@ private[kyo] object HtmlRenderer:
            |  document.body.addEventListener(t,handle,true);
            |});
            |document.body.addEventListener("wheel",handle,{capture:true,passive:false});
+           |// ---- pointer/drag session (setPointerCapture + rAF-coalesced move stream) ----
+           |var __ptrActive=false,__ptrEl=null,__ptrPath=null,__ptrRaf=0,__ptrPendingEv=null;
+           |function ptrPayload(el,ev){
+           |  var r=el.getBoundingClientRect();
+           |  var tid=ev.target&&ev.target.id?ev.target.id:null;
+           |  var pl={x:ev.clientX-r.left,y:ev.clientY-r.top,rectX:r.left,rectY:r.top,rectW:r.width,rectH:r.height,buttons:ev.buttons};
+           |  if(tid)pl.targetId=tid;
+           |  return pl;
+           |}
+           |function ptrDown(e){
+           |  var el=fp(e.target);if(!el)return;
+           |  if(!he(el,"pointerdown"))return;
+           |  try{if(typeof el.setPointerCapture==="function")el.setPointerCapture(e.pointerId);}catch(_e){}
+           |  __ptrActive=true;__ptrEl=el;__ptrPath=pa(el);
+           |  post({PointerDown:{path:__ptrPath,pointer:ptrPayload(el,e)}});
+           |}
+           |function ptrMove(e){
+           |  // Only stream moves during an active capture/drag session; coalesce to at most one post per animation frame.
+           |  if(!__ptrActive||!__ptrEl)return;
+           |  __ptrPendingEv=e;
+           |  if(__ptrRaf)return;
+           |  __ptrRaf=requestAnimationFrame(function(){
+           |    __ptrRaf=0;
+           |    if(!__ptrActive||!__ptrEl||!__ptrPendingEv)return;
+           |    var ev=__ptrPendingEv;__ptrPendingEv=null;
+           |    post({PointerMove:{path:__ptrPath,pointer:ptrPayload(__ptrEl,ev)}});
+           |  });
+           |}
+           |function ptrUp(e){
+           |  if(!__ptrActive||!__ptrEl)return;
+           |  try{if(typeof __ptrEl.releasePointerCapture==="function")__ptrEl.releasePointerCapture(e.pointerId);}catch(_e){}
+           |  if(__ptrRaf){cancelAnimationFrame(__ptrRaf);__ptrRaf=0;}
+           |  __ptrPendingEv=null;
+           |  var el=__ptrEl,path=__ptrPath;
+           |  __ptrActive=false;__ptrEl=null;__ptrPath=null;
+           |  post({PointerUp:{path:path,pointer:ptrPayload(el,e)}});
+           |}
+           |document.body.addEventListener("pointerdown",ptrDown,true);
+           |document.body.addEventListener("pointermove",ptrMove,true);
+           |document.body.addEventListener("pointerup",ptrUp,true);
            |})();""".stripMargin
 
     // ---- SVG tag and attribute rendering ----
