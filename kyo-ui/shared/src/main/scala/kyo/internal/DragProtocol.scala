@@ -136,6 +136,8 @@ private[kyo] object DragProtocol:
         final case class Focus private[DragProtocol] (wire: UIEvent.Focus)                              extends ValidatedEvent
         final case class Blur private[DragProtocol] (wire: UIEvent.Blur)                                extends ValidatedEvent
         final case class Scroll private[DragProtocol] (wire: UIEvent.Scroll)                            extends ValidatedEvent
+        final case class ScrollPosition private[DragProtocol] (wire: UIEvent.ScrollPosition)            extends ValidatedEvent
+        final case class FileSelect private[DragProtocol] (wire: UIEvent.FileSelect)                    extends ValidatedEvent
         final case class Hover private[DragProtocol] (wire: UIEvent.Hover)                              extends ValidatedEvent
         final case class Unhover private[DragProtocol] (wire: UIEvent.Unhover)                          extends ValidatedEvent
         final case class Start private[DragProtocol] (wire: UIEvent.DragStart, items: Chunk[Drag.Item]) extends ValidatedEvent
@@ -604,6 +606,29 @@ private[kyo] object DragProtocol:
                             .flatMap(_ => validateNumber(event.deltaY, "deltaY"))
                             .flatMap(_ => validateOptionalIdentifier(event.targetId, "targetId", limits))
                             .map(_ => ValidatedEvent.Scroll(event))
+                    case event: UIEvent.ScrollPosition =>
+                        validateNumber(event.scrollTop, "scrollTop")
+                            .flatMap(_ => validateNumber(event.scrollLeft, "scrollLeft"))
+                            .flatMap(_ => validateOptionalIdentifier(event.targetId, "targetId", limits))
+                            .map(_ => ValidatedEvent.ScrollPosition(event))
+                    // A file-metadata selection is client-supplied text and counts; the same name, media-type and
+                    // count ceilings the drop path applies to a browser file apply here.
+                    case event: UIEvent.FileSelect =>
+                        validateCount(event.files.size, "files", limits.maxItemCount)
+                            .flatMap(_ =>
+                                validateAll(event.files) { file =>
+                                    validateText(file.name, "file.name", limits.maxNameLength, allowEmpty = false)
+                                        .flatMap(_ =>
+                                            validateText(file.mimeType, "file.mimeType", limits.maxMediaTypeLength, allowEmpty = true)
+                                        )
+                                        .flatMap(_ => validateText(file.content, "file.content", limits.maxBase64Length, allowEmpty = true))
+                                        .flatMap(_ =>
+                                            if file.size < 0 then Result.fail(ValidationFailure.InvalidCount("file.size", file.size.toInt))
+                                            else Result.unit
+                                        )
+                                }
+                            )
+                            .map(_ => ValidatedEvent.FileSelect(event))
                     case event: UIEvent.Hover   => validateMouse(event.mouse, limits).map(_ => ValidatedEvent.Hover(event))
                     case event: UIEvent.Unhover => validateMouse(event.mouse, limits).map(_ => ValidatedEvent.Unhover(event))
                     case event: UIEvent.PointerDown =>
