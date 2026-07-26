@@ -497,6 +497,7 @@ lazy val kyoJS = project
         `kyo-slack`.js,
         `kyo-ui`.js,
         `kyo-ui-components`.js,
+        `kyo-apollo`.js,
         `kyo-markdown`.js,
         `kyo-i18n`.js,
         `kyo-website`.js,
@@ -2960,6 +2961,20 @@ lazy val `kyo-i18n` =
         .nativeSettings(`native-settings`)
         .jsSettings(`js-settings`)
         .wasmSettings(`wasm-settings`)
+
+// Framework-agnostic native Apollo GraphQL client core. JS-only: the HTTP/WebSocket
+// transport issues browser `fetch` through scalajs-dom. Depends only on the value and
+// effect libraries (no kyo-ui), so it builds against trunk on its own.
+lazy val `kyo-apollo` =
+    crossProject(JSPlatform)
+        .crossType(CrossType.Pure)
+        .in(file("kyo-apollo"))
+        .dependsOn(`kyo-core`, `kyo-data`, `kyo-schema`, `kyo-schema-json`)
+        .settings(`kyo-settings`)
+        .jsSettings(
+            `js-settings`,
+            libraryDependencies += "org.scala-js" %%% "scalajs-dom" % "2.8.1"
+        )
 
 lazy val `kyo-ui` =
     crossProject(JSPlatform, JVMPlatform, NativePlatform, WasmPlatform)

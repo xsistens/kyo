@@ -1,0 +1,121 @@
+package kyo.apollo.cache.normalized.api
+
+import kyo.Maybe
+import kyo.apollo.api.CompiledField
+import kyo.apollo.json.Json
+
+/** How two stored values of the *same* field key merge when a new write lands on
+  * an existing record: given the value already stored (`existing`, `None` if the
+  * field is new) and the incoming value, produce the value to keep. The default
+  * everywhere is "incoming wins"; a [[FieldPolicy]] overrides that for one field
+  * — e.g. a connection field unions paginated edges instead of replacing them.
+  */
+type FieldValueMerger = (existing: Option[RecordValue], incoming: RecordValue) => RecordValue
+
+/** What a [[FieldPolicy]] read resolver is handed about the field being read. */
+final case class FieldPolicyReadContext(
+    field: CompiledField,
+    variables: Map[String, Json]
+)
+
+/** A declarative policy for a single field of a type, mirroring apollo-kotlin's
+  * `@fieldPolicy`. It can do three independent things, any subset of which may be
+  * configured:
+  *
+  *   - **[[keyArgs]]** — restrict which of the field's arguments form its storage
+  *     [[FieldKey]]. A connection field paginated by `first`/`after` sets
+  *     `keyArgs = Some(Nil)` so every page collapses onto one logical slot;
+  *     a field filtered by `category` sets `keyArgs = Some(List("category"))` so
+  *     each category paginates independently. `None` keeps all arguments (the
+  *     default field-key behaviour).
+  *   - **[[read]]** — a cache redirect: resolve the field to another record at
+  *     read time (the per-field analogue of a [[CacheKeyResolver]]).
+  *   - **[[merge]]** — a [[FieldValueMerger]] overriding the default
+  *     "incoming wins" union for this field.
+  *
+  * Policies are collected into [[FieldPolicies]] and consulted by the normalizer
+  * (write-side field keys), the reader (read-side field keys and redirects), and
+  * the record merger (merge).
+  *
+  * @param typeName  the parent type this field belongs to (informational; the
+  *                  field name is what the walkers key on)
+  * @param fieldName the field's schema name
+  * @param keyArgs   the argument names that form the field key, or `None` for all
+  * @param read      an optional read redirect
+  * @param merge     an optional custom merge for this field's value
+  */
+final case class FieldPolicy(
+    typeName: String,
+    fieldName: String,
+    keyArgs: Option[List[String]] = None,
+    read: Option[FieldPolicyReadContext => Maybe[CacheKey]] = None,
+    merge: Option[FieldValueMerger] = None
+)
+
+/** Builds the [[FieldPolicy]]s for a Relay-style paginated connection field so
+  * successive pages accumulate into one logical list in the cache. Mirrors the
+  * behaviour of apollo-kotlin's connection/pagination support.
+  *
+  * It emits two policies:
+  *
+  *   1. on the connection field itself — `keyArgs` drops the pagination
+  *      arguments (or keeps the `filterArgs` you name) so every page writes to
+  *      the same connection record; and
+  *   2. on the connection's `edges` field — a [[FieldValueMerger]] that unions
+  *      edge references across pages (de-duplicating by referenced record key,
+  *      preserving order), so reading the connection yields the concatenation of
+  *      every page fetched.
+  *
+  * `pageInfo` needs no special policy: it is its own record reached by a stable
+  * reference, so the default field-wise merge already lets the latest page's
+  * cursors win. For edges to survive pagination the edge (or node) type must have
+  * a stable [[TypePolicy]] key (e.g. keyed by `cursor` or the node `id`), so
+  * pages do not collide on a position-based key.
+  */
+object ConnectionFieldPolicy:
+    /** The Relay pagination arguments dropped from a connection field's key. */
+    val PaginationArgs: Set[String] = Set("first", "last", "before", "after")
+
+    /** Policies for the connection field `fieldName` on `typeName`.
+      *
+      * @param typeName   the type the connection field is declared on
+      * @param fieldName  the connection field's name (e.g. `feed`)
+      * @param filterArgs argument names that DO partition the connection (each
+      *                   value paginates on its own); pagination args are always
+      *                   dropped. Default: none — all pages share one slot.
+      * @param edgesField the connection's edge-list field name (default `edges`)
+      */
+    def apply(
+        typeName: String,
+        fieldName: String,
+        filterArgs: List[String] = Nil,
+        edgesField: String = "edges"
+    ): List[FieldPolicy] =
+        List(
+            FieldPolicy(typeName, fieldName, keyArgs = Some(filterArgs)),
+            FieldPolicy(typeName, edgesField, merge = Some(unionByReference))
+        )
+
+    /** Union two edge lists, appending incoming references not already present and
+      * de-duplicating by referenced record key; non-list values fall back to
+      * "incoming wins".
+      */
+    val unionByReference: FieldValueMerger = (existing, incoming) =>
+        (existing, incoming) match
+            case (Some(RecordValue.RList(current)), RecordValue.RList(next)) =>
+                RecordValue.RList(dedupeByReference(current ++ next))
+            case _ => incoming
+
+    /** Keep the first occurrence of each referenced record key; pass non-reference
+      * items through unchanged (they cannot be de-duplicated by key).
+      */
+    private def dedupeByReference(
+        items: kyo.Chunk[RecordValue]
+    ): kyo.Chunk[RecordValue] =
+        val seen = scala.collection.mutable.HashSet.empty[String]
+        items.filter {
+            case RecordValue.Reference(ref) => seen.add(ref.key)
+            case _                          => true
+        }
+    end dedupeByReference
+end ConnectionFieldPolicy
