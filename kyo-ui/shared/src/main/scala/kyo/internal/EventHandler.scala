@@ -15,7 +15,7 @@ sealed private[kyo] trait EventHandler derives CanEqual
 private[kyo] object EventHandler:
     case class Click(f: Unit < Async)                             extends EventHandler
     case class ClickSelf(f: Unit < Async)                         extends EventHandler
-    case class ContextMenu(f: Unit < Async)                    extends EventHandler
+    case class ContextMenu(f: Unit < Async)                       extends EventHandler
     case class Input(f: String => Unit < Async)                   extends EventHandler
     case class Change(f: String => Unit < Async)                  extends EventHandler
     case class FileSelect(f: Seq[UI.FilePayload] => Unit < Async) extends EventHandler
