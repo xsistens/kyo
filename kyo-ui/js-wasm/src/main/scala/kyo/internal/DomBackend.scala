@@ -235,13 +235,31 @@ private[kyo] object DomBackend:
         else regions.firstElementAt(path).getOrElse(null)
     end resolveElementByPath
 
+    /** A conservative "focusable" CSS selector: what a focus command may land on. Mirrors
+      * the reactive-focus-restore query used elsewhere in this backend / HtmlRenderer.
+      */
+    private val FocusableSelector = "input,textarea,select,button,a[href],[tabindex],[contenteditable]"
+
+    /** Focus `el` if it is itself focusable, else its FIRST focusable descendant. Lets a
+      * focus command target a non-focusable WRAPPER (e.g. an InputGroup around several
+      * fields) and land on the first field inside it. A focusable element (an `<input>`,
+      * …) matches the selector and focuses itself, so existing focus targets are unchanged.
+      */
+    private def focusInto(el: dom.Element): Unit =
+        if el != null then
+            val dyn         = el.asInstanceOf[scalajs.js.Dynamic]
+            val selfMatches = scalajs.js.typeOf(dyn.matches) == "function" && dyn.matches(FocusableSelector).asInstanceOf[Boolean]
+            val target      = if selfMatches then el else el.querySelector(FocusableSelector)
+            if target != null then
+                val tdyn = target.asInstanceOf[scalajs.js.Dynamic]
+                if scalajs.js.typeOf(tdyn.focus) == "function" then discard(tdyn.focus())
+
     /** Apply a whitelisted `verb` to `el` (shared by path- and id-addressed commands). Unknown verbs are ignored. */
     private def applyVerbDom(el: dom.Element, verb: String): Unit =
         if el != null then
             val dyn = el.asInstanceOf[scalajs.js.Dynamic]
             verb match
-                case "focus" =>
-                    if scalajs.js.typeOf(dyn.focus) == "function" then discard(dyn.focus())
+                case "focus" => focusInto(el)
                 case "scrollIntoView" =>
                     if scalajs.js.typeOf(dyn.scrollIntoView) == "function" then
                         discard(dyn.scrollIntoView(scalajs.js.Dynamic.literal(block = "nearest")))
@@ -298,6 +316,15 @@ private[kyo] object DomBackend:
                         markOwned(el, "style")
                         mergeStyleDomById(id, css)
                 }
+            // set an attribute in place (element stays in the DOM, so a CSS `>` anchored on it keeps matching).
+            case HtmlOp.SetAttrById(id, name, value) =>
+                Sync.defer {
+                    val el = document.getElementById(id)
+                    if el != null then
+                        markOwned(el, name)
+                        el.setAttribute(name, value)
+                }
+            // measure now + deliver, then attach the continuous scroll/resize observer for `id`.
             case HtmlOp.ObserveViewportById(id) =>
                 Sync.defer(registerViewportObserver(id, commands)).andThen(
                     Sync.defer(measureDomById(id)).map {
@@ -391,6 +418,130 @@ private[kyo] object DomBackend:
                                 end match
                         }
                     }
+
+
+        // In-place attr patch, ownership-marked (__kyoOwn) so a parent region's morph won't reconcile the live value back.
+        override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
+            Sync.defer {
+                val el = queryByPath(path)
+                if el != null then
+                    markOwned(el, name)
+                    el.setAttribute(name, value)
+            }
+
+        override def onBoolAttrPatch(path: Seq[String], name: String, value: Boolean)(using Frame): Unit < Async =
+            Sync.defer {
+                val el = queryByPath(path)
+                if el != null then
+                    markOwned(el, name)
+                    if value then el.setAttribute(name, "") else el.removeAttribute(name)
+            }
+
+        // Class twin: toggle in place (so CSS transitions fire) rather than re-render; own "class" against the morph.
+        override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
+            Sync.defer {
+                val el = queryByPath(path)
+                if el != null then
+                    markOwned(el, "class")
+                    discard(el.classList.toggle(name, on))
+            }
+
+        def onChange(path: Seq[String], ui: UI, mount: Boolean)(using Frame): Unit < Async =
+            // Render content at its nested-reactive sub-path (contentPath) so a reactive-valued region paints a
+            // DISTINCT inner marker span matching SSR/walkStatic. mountSlot=true stamps the `s` flag on Mounted
+            // placeholders for the mount guards below. The payload is a bare fragment: the region's own live
+            // markers stay in the DOM and are never re-sent, so the path stays addressable across replacements
+            // regardless of what the content is (Fragment, Text, RawHtml: none carry a path-bearing root).
+            HtmlRenderer.render(ui, HtmlRenderer.contentPath(path, ui), mountSlot = true).map { html =>
+                Sync.defer {
+                    val pathAttr = path.mkString(".")
+                    val r        = lookupRegion(pathAttr)
+                    if r == null then
+                        // No marker pair at this path: either an ELEMENT region (a signal-bound field like
+                        // `input.value(ref)`: the region root IS the live element carrying the path; no wrapper
+                        // of any kind exists) morphed 1:1 in place, or genuinely unpainted DOM, which stays a
+                        // silent no-op.
+                        val el = queryByPath(path)
+                        if el != null && el.parentNode != null then
+                            val toContainer = parseToContainer(el.parentNode.asInstanceOf[dom.Element], html)
+                            val toRoot      = if toContainer != null then firstElementChildOf(toContainer) else null
+                            if toRoot != null then
+                                morphNode(el, toRoot)
+                                val live = queryByPath(path)
+                                if live != null then
+                                    applyJsPropsSync(live)
+                                    beginAnimationsSync(live)
+                            end if
+                        end if
+                    // Leave the live mount region untouched ONLY when the new content is itself a mount slot
+                    // (`s` = the SAME mount re-rendering, which owns its subtree). Different content or an empty
+                    // gate-closed repaint falls through so the morph reconciles/empties the region.
+                    else if !mount && r.mount && payloadRootIsMountSlot(html) then ()
+                    // Text into text: assigning the node IS the whole patch. The slow path below would put
+                    // this through a <template> parse and a morph per region, which is what makes a hundred
+                    // changed labels cost a hundred HTML parses.
+                    else if !mount && !r.mount && patchLoneText(r, html) then ()
+                    else
+                        val parent = r.start.parentNode.asInstanceOf[dom.Element]
+                        // Capture focus and caret of the active element inside the replaced region (mirrors the
+                        // clientJs Replace handler on the JS DOM API). Plain DOM inside the already-suspended
+                        // Sync.defer; no new AllowUnsafe crossing.
+                        val ae           = document.activeElement
+                        val insideRegion = ae != null && (ae ne document.body) && rangeContains(r, ae)
+                        // Use the active element's own data-kyo-path when it carries one (nested element),
+                        // otherwise fall back to the region path so restoreFocus searches the range (common
+                        // case: value-bound input inside the region has no data-kyo-path of its own).
+                        val activePath =
+                            if insideRegion then
+                                if ae.hasAttribute("data-kyo-path") then ae.getAttribute("data-kyo-path")
+                                else pathAttr
+                            else null
+                        val (selStart, selEnd) = if insideRegion then readSelection(ae) else (Absent, Absent)
+                        val toContainer        = parseToContainer(parent, html)
+                        if toContainer != null then
+                            // Transition and focus-auto bookkeeping is snapshotted off the OLD range before the
+                            // morph: a morph removes departing nodes just like the outerHTML replace it took over
+                            // from, so leaving elements still have to be cloned into ghosts up front.
+                            val oldEnter = rangePaths(r)(enterPaths)
+                            // A mount cell's own republish never ghosts: the engine re-runs the mount effect
+                            // whenever an enclosing region repaints, which is bookkeeping, not user-visible
+                            // leaving. Placeholder and effect content may shape their children differently, so a
+                            // leave-marked element's path changes across the swap, the survivor set cannot match
+                            // it, and every republish would spawn a ghost. Content that genuinely leaves the page
+                            // does so through an ENCLOSING patch, which is a `mount = false` region and still
+                            // ghosts. Twin of the clientJs `op.Replace.mount` guard; keep in lockstep.
+                            val ghosts       = if mount then Seq.empty else rangeLeaveGhosts(r, leaveSurvSetIn(toContainer))
+                            val oldFocusAuto = rangePaths(r)(focusAutoPaths)
+                            // Morph the marker-delimited range instead of replacing, so focus/caret/scroll/
+                            // transitions on reused nodes survive.
+                            morphRange(parent, r.start.nextSibling, r.end, toContainer.firstChild, null)
+                            if mount && !r.mount then
+                                // The mount's own first paint claims the region: the `m` flag rides the live
+                                // start marker (source of truth, survives registry rebuilds); the registry
+                                // entry is a cache. Client-only mutation, never in server-rendered HTML.
+                                // Any `k` a parent slot render already put there is carried over: dropping
+                                // it would make the next parent paint fall through instead of skipping.
+                                val carried = RegionMarker.parse(r.start.data).flatMap(_.key)
+                                r.mount = true
+                                r.start.data = RegionMarker.openData(pathAttr, mount = true, key = carried)
+                            end if
+                            // A morph imports subtrees, which carries new nested-region markers with it:
+                            // refresh the registry for exactly this range.
+                            rescanRange(r)
+                            foreachRangeElement(r) { el =>
+                                applyJsPropsSync(el)
+                                beginAnimationsSync(el)
+                            }
+                            if activePath != null then
+                                restoreFocus(activePath, selStart, selEnd)
+                            foreachRangeElement(r)(seedEnter(_, oldEnter))
+                            // Seed AFTER restoreFocus so a newly-appeared focus-auto element wins over restore-to-trigger.
+                            seedRangeFocusAuto(r, oldFocusAuto)
+                            spawnGhosts(ghosts)
+                            sweepFocusAuto()
+                        end if
+                    end if
+                }
             }
         end onChange
 
