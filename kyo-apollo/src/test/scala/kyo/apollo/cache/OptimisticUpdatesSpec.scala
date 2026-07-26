@@ -1,0 +1,259 @@
+package kyo.apollo.cache
+
+import kyo.*
+import kyo.apollo.ApolloClient
+import kyo.apollo.StreamProbe
+import kyo.apollo.api.*
+import kyo.apollo.cache.normalized.*
+import kyo.apollo.cache.normalized.api.IdCacheKeyGenerator
+import kyo.apollo.cache.normalized.api.RecordValue
+import kyo.apollo.json.Json
+import kyo.apollo.json.SchemaJson
+import kyo.apollo.network.ApolloResponse
+import scala.collection.immutable.VectorMap
+
+/** Phase 07 Task 2: optimistic updates.
+  *
+  * Two layers of coverage. The *store* layer exercises the overlay directly —
+  * [[ApolloStore.writeOptimisticUpdates]] overlaying a mutation-id-tagged layer on
+  * top of the pristine cache at read time, `rollbackOptimisticUpdates` reverting
+  * it, `rollbackAndWrite` reconciling to server truth in one publish, and
+  * concurrent layers stacking latest-wins. The *end-to-end* layer drives the
+  * feature through the real interceptor chain and a `watch()`, proving a watcher
+  * sees the optimistic value first and then the real value (success) or reverts
+  * cleanly (failure) — all deterministic via a scripted [[kyo.apollo.network.http.HttpEngine]].
+  * On kyo-test the mutation runs on a forked [[Fiber]] while the leaf pulls the
+  * watcher's ordered emissions (optimistic, then settled) off a [[StreamProbe.Pull]].
+  */
+class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
+
+    given CanEqual[Any, Any] = CanEqual.derived
+
+    // --- fixtures ---------------------------------------------------------------
+
+    final case class User(__typename: String, id: String, name: String) derives Schema
+
+    private def userField(field: String): CompiledField =
+        CompiledField(
+            field,
+            CompiledNamedType("User"),
+            selections = List(
+                CompiledField("__typename", CompiledNamedType("String")),
+                CompiledField("id", CompiledNamedType("String")),
+                CompiledField("name", CompiledNamedType("String"))
+            )
+        )
+
+    final case class UserData(user: User) derives Schema
+
+    final case class CurrentUserQuery() extends Query[UserData]:
+        def name                         = "CurrentUser"
+        def document                     = "query CurrentUser { user { __typename id name } }"
+        def dataSchema: Schema[UserData] = summon[Schema[UserData]]
+        def rootField: CompiledField =
+            CompiledField("data", CompiledNamedType("Query"), selections = List(userField("user")))
+        def variables: Json = Json.JObj(VectorMap.empty)
+    end CurrentUserQuery
+
+    final case class UpdateUserData(updateUser: User) derives Schema
+
+    final case class UpdateUserNameMutation(newName: String) extends Mutation[UpdateUserData]:
+        def name = "UpdateUserName"
+        def document =
+            "mutation UpdateUserName($name: String!) { updateUser(name: $name) { __typename id name } }"
+        def dataSchema: Schema[UpdateUserData] = summon[Schema[UpdateUserData]]
+        def rootField: CompiledField =
+            CompiledField(
+                "data",
+                CompiledNamedType("Mutation"),
+                selections = List(userField("updateUser"))
+            )
+        def variables: Json = Json.JObj(VectorMap("name" -> SchemaJson.encode(newName)))
+    end UpdateUserNameMutation
+
+    private def userData(name: String): UserData         = UserData(User("User", "1", name))
+    private def updateData(name: String): UpdateUserData = UpdateUserData(User("User", "1", name))
+
+    private def scalar(s: String): RecordValue = RecordValue.Scalar(Json.JStr(s))
+
+    // --- store-level overlay ----------------------------------------------------
+
+    private def seededStore(): ApolloStore =
+        val s = new ApolloStore(MemoryCache(), cacheKeyGenerator = IdCacheKeyGenerator(List("id")))
+        s.writeOperation(CurrentUserQuery(), userData("Alice"))
+        s
+    end seededStore
+
+    "optimistic updates" - {
+
+        "writeOptimisticUpdates overlays the optimistic value over a read; cache stays pristine" in {
+            val s = seededStore()
+            s.writeOptimisticUpdates(UpdateUserNameMutation("Bob"), updateData("Bob"), "m1")
+            // The read reflects the optimistic overlay...
+            assert(s.readOperation(CurrentUserQuery()) == userData("Bob"))
+            // ...but the backing cache record is untouched.
+            assert(s.cache.loadRecord("User:1").flatMap(_.get("name")) == Present(scalar("Alice")))
+        }
+
+        "writeOptimisticUpdates publishes the record keys it touches" in {
+            val s    = seededStore()
+            var seen = Option.empty[Set[String]]
+            s.addChangedKeysListener(keys => seen = Some(keys))
+            val changed = s.writeOptimisticUpdates(UpdateUserNameMutation("Bob"), updateData("Bob"), "m1")
+            assert(changed.contains("User:1"))
+            assert(seen == Some(changed))
+        }
+
+        "rollbackOptimisticUpdates reverts the read and publishes the reverted keys" in {
+            val s = seededStore()
+            s.writeOptimisticUpdates(UpdateUserNameMutation("Bob"), updateData("Bob"), "m1")
+            var seen = Option.empty[Set[String]]
+            s.addChangedKeysListener(keys => seen = Some(keys))
+            val reverted = s.rollbackOptimisticUpdates("m1")
+            assert(reverted.contains("User:1"))
+            assert(seen == Some(reverted))
+            assert(s.readOperation(CurrentUserQuery()) == userData("Alice"))
+        }
+
+        "rollbackOptimisticUpdates on an unknown mutation id is a no-op" in {
+            val s    = seededStore()
+            var seen = Option.empty[Set[String]]
+            s.addChangedKeysListener(keys => seen = Some(keys))
+            assert(s.rollbackOptimisticUpdates("nope") == Set.empty[String])
+            assert(seen == None)
+        }
+
+        "rollbackAndWrite drops the optimistic layer and merges the server truth" in {
+            val s = seededStore()
+            s.writeOptimisticUpdates(UpdateUserNameMutation("Bob"), updateData("Bob"), "m1")
+            val changed = s.rollbackAndWrite(UpdateUserNameMutation("Carol"), updateData("Carol"), "m1")
+            assert(changed.contains("User:1"))
+            // The layer is gone and the persisted cache now holds the real value.
+            assert(s.readOperation(CurrentUserQuery()) == userData("Carol"))
+            assert(s.cache.loadRecord("User:1").flatMap(_.get("name")) == Present(scalar("Carol")))
+        }
+
+        "concurrent optimistic layers stack latest-wins; rolling one back keeps the other" in {
+            val s = seededStore()
+            s.writeOptimisticUpdates(UpdateUserNameMutation("Bob"), updateData("Bob"), "m1")
+            s.writeOptimisticUpdates(UpdateUserNameMutation("Dana"), updateData("Dana"), "m2")
+            // Latest layer (m2) wins.
+            assert(s.readOperation(CurrentUserQuery()) == userData("Dana"))
+            // Drop the top layer: the lower optimistic layer (m1) is now effective.
+            s.rollbackOptimisticUpdates("m2")
+            assert(s.readOperation(CurrentUserQuery()) == userData("Bob"))
+            // Drop the last layer: back to the persisted value.
+            s.rollbackOptimisticUpdates("m1")
+            assert(s.readOperation(CurrentUserQuery()) == userData("Alice"))
+        }
+
+        // --- end-to-end through the interceptor chain + watch() -------------------
+
+        "optimistic mutation: a watcher sees the optimistic value, then the real value" in {
+            val client = cachedClient()
+            // Seed Alice, then watch the query off the cache.
+            for
+                _ <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                pull <- StreamProbe.Pull.open(
+                    client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly).watch()
+                )
+                first <- pull.next
+                _ = assert(name(first) == Some("Alice"))
+                // Fire the mutation on a forked fiber with an optimistic value distinct from
+                // the server echo. The optimistic overlay is applied — and observable by the
+                // watcher — as the fiber runs the chain up to (but not including) the fetch.
+                fib <- Fiber.init(
+                    Scope.run(
+                        client
+                            .mutation(UpdateUserNameMutation("Bob"))
+                            .optimisticUpdates(updateData("BobOptimistic"))
+                            .fetchPolicy(FetchPolicy.NetworkOnly)
+                            .execute
+                    )
+                )
+                optimistic <- pull.next
+                _ = assert(name(optimistic) == Some("BobOptimistic"))
+                response <- fib.get
+                _ = assert(response.exception.isEmpty)
+                // Network truth ("Bob") replaces the optimistic value; layer is gone.
+                settled <- pull.next
+                _ = assert(name(settled) == Some("Bob"))
+                _ = assert(client.apolloStore.readOperation(CurrentUserQuery()) == userData("Bob"))
+            yield ()
+            end for
+        }
+
+        "optimistic mutation failure: the watcher reverts to the pre-optimistic value" in {
+            val client = cachedClient(mutationFails = true)
+            for
+                _ <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                pull <- StreamProbe.Pull.open(
+                    client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly).watch()
+                )
+                first <- pull.next
+                _ = assert(name(first) == Some("Alice"))
+                fib <- Fiber.init(
+                    Scope.run(
+                        client
+                            .mutation(UpdateUserNameMutation("Bob"))
+                            .optimisticUpdates(updateData("BobOptimistic"))
+                            .fetchPolicy(FetchPolicy.NetworkOnly)
+                            .execute
+                    )
+                )
+                optimistic <- pull.next
+                _ = assert(name(optimistic) == Some("BobOptimistic"))
+                response <- fib.get
+                _ = assert(response.exception.isDefined) // the scripted 500 surfaced as a value
+                // The optimistic layer rolled back cleanly: watcher is back to Alice, and
+                // the pristine cache never took the optimistic value.
+                reverted <- pull.next
+                _ = assert(name(reverted) == Some("Alice"))
+                _ = assert(client.apolloStore.readOperation(CurrentUserQuery()) == userData("Alice"))
+            yield ()
+            end for
+        }
+    }
+
+    // --- end-to-end fixtures ----------------------------------------------------
+
+    /** Routes the mutation to a scripted outcome: a 200 echoing the requested name,
+      * or a 500 to simulate a transient transport failure (surfaced as an
+      * `ApolloResponse.exception` value). The seeding query always returns Alice.
+      */
+    final private class ScriptedEngine(mutationFails: Boolean)
+        extends kyo.apollo.network.http.HttpEngine:
+        def execute(
+            request: kyo.apollo.network.http.HttpRequest
+        )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
+            val text = request.body.getOrElse("")
+            if text.contains("UpdateUserName") then
+                if mutationFails then kyo.apollo.network.http.HttpResponse(500, Nil, "boom")
+                else
+                    val name = """"name":"([^"]*)"""".r.findAllMatchIn(text).map(_.group(1)).toList.last
+                    kyo.apollo.network.http.HttpResponse(
+                        200,
+                        Nil,
+                        s"""{"data":{"updateUser":{"__typename":"User","id":"1","name":"$name"}}}"""
+                    )
+            else
+                kyo.apollo.network.http.HttpResponse(
+                    200,
+                    Nil,
+                    """{"data":{"user":{"__typename":"User","id":"1","name":"Alice"}}}"""
+                )
+            end if
+        end execute
+    end ScriptedEngine
+
+    private def cachedClient(mutationFails: Boolean = false): ApolloClient =
+        ApolloClient
+            .builder()
+            .serverUrl("https://example.com/graphql")
+            .httpEngine(ScriptedEngine(mutationFails))
+            .normalizedCache(MemoryCache(), IdCacheKeyGenerator(List("id")))
+            .build()
+
+    private def name(response: ApolloResponse[UserData]): Option[String] =
+        response.data.map(_.user.name).toOption
+end OptimisticUpdatesSpec
