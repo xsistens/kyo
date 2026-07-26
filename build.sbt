@@ -311,6 +311,7 @@ lazy val kyoJVM: Project = project
         `kyo-browser`.jvm,
         `kyo-slack`.jvm,
         `kyo-ui`.jvm,
+        `kyo-apollo-codegen`.jvm,
         `kyo-markdown`.jvm,
         `kyo-case-app`.jvm,
         `kyo-pod`.jvm,
@@ -387,6 +388,7 @@ lazy val kyoJS = project
         `kyo-slack`.js,
         `kyo-ui`.js,
         `kyo-apollo`.js,
+        `kyo-apollo-testing`.js,
         `kyo-markdown`.js,
         `kyo-website`.js,
         `kyo-website-bundle`.js,
@@ -2457,6 +2459,29 @@ lazy val `kyo-apollo` =
         .jsSettings(
             `js-settings`,
             libraryDependencies += "org.scala-js" %%% "scalajs-dom" % "2.8.1"
+        )
+
+// Promoted fake transports / scripted sockets / stream probes that apps and specs
+// depend on instead of re-declaring inline doubles. JS, depends on the apollo core.
+lazy val `kyo-apollo-testing` =
+    crossProject(JSPlatform)
+        .crossType(CrossType.Pure)
+        .in(file("kyo-apollo-testing"))
+        .dependsOn(`kyo-apollo`, `kyo-core`, `kyo-data`, `kyo-schema`)
+        .settings(`kyo-settings`)
+        .jsSettings(`js-settings`)
+
+// Build-time generator emitting typed `apollo.api.Operation` sources from a GraphQL
+// schema + documents. Plain JVM (runs inside sbt), reuses Caliban's parser. Does not
+// depend on the apollo core: it emits against that API's shape, never shares its classpath.
+lazy val `kyo-apollo-codegen` =
+    crossProject(JVMPlatform)
+        .crossType(CrossType.Pure)
+        .in(file("kyo-apollo-codegen"))
+        .settings(`kyo-settings`)
+        .jvmSettings(
+            mimaCheck(false),
+            libraryDependencies += "com.github.ghostdogpr" %% "caliban-tools" % "3.1.2"
         )
 
 lazy val `kyo-ui` =
