@@ -41,17 +41,27 @@ private[kyo] object UIServer:
                 // redundantly re-inject a rule the page's initial <style> block already has.
                 (_, initialRules) <- HtmlRenderer.renderWithCss(uiTree, Seq.empty)
                 exchange = wsExchange(root, ws, initialRules.map(_._1).toSet)
-                sub <- ReactiveUI.subscribe(root, exchange)
                 // Session command sink: an event handler calling UI.scrollIntoView sends the op over this
                 // connection's socket, riding the same channel as the reactive updates. runPartial drops
                 // only a Closed (the socket closed, so the command is moot); a Panic propagates.
                 scrollSink = (id: String) =>
                     Abort.runPartial[Closed](ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](HtmlOp.ScrollIntoView(id))))).unit
-                _ <- UICommands.scrollSink.let(Present(scrollSink)) {
-                    Async.race(
-                        ws.stream.foreach(payload => dispatchEvent(sub.handle, payload)),
-                        ws.onPeerClose
-                    )
+                // The session's imperative op channel; `emit` serializes an HtmlOp over the socket (a Closed mid-send
+                // drops the op). Env.run must wrap subscribe + dispatch so the forked region/mount fibers inherit
+                // Env[Commands] and resolve `UI.commands` at run time.
+                commands <- UI.Commands.init(op =>
+                    Abort.runPartial[Closed](ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](op)))).unit
+                )
+                _ <- Env.run(commands) {
+                    UICommands.scrollSink.let(Present(scrollSink)) {
+                        for
+                            sub <- ReactiveUI.subscribe(root, exchange)
+                            _ <- Async.race(
+                                ws.stream.foreach(payload => dispatchEvent(sub.handle, commands, payload)),
+                                ws.onPeerClose
+                            )
+                        yield ()
+                    }
                 }
             yield ()
         }
@@ -94,13 +104,39 @@ private[kyo] object UIServer:
                 }
             end onChange
 
-    private def dispatchEvent(handle: (Seq[String], UIEvent) => Boolean < Async, payload: HttpWebSocket.Payload)(using
-        Frame
-    ): Unit < Async =
+    private def dispatchEvent(
+        handle: (Seq[String], UIEvent) => Boolean < Async,
+        commands: UI.Commands,
+        payload: HttpWebSocket.Payload
+    )(using Frame): Unit < Async =
         payload match
             case HttpWebSocket.Payload.Text(data) =>
                 Json.decode[UIEvent](data) match
-                    case Result.Success(event) => handle(event.path, event).unit
+                    case Result.Success(event) =>
+                        event match
+                            // Measure replies are not element events: route to the session channel to complete the
+                            // pending requestMeasure reply (not the ReactiveUI handler tree).
+                            case m: UIEvent.Measure =>
+                                commands.deliverMeasure(
+                                    m.path,
+                                    UI.Rect(m.rectX, m.rectY, m.rectW, m.rectH, m.viewportW, m.viewportH)
+                                )
+                            // Self-addressing: the id-addressed measure reply routes by `id` to the id-keyed pending map.
+                            case m: UIEvent.MeasureById =>
+                                commands.deliverMeasureById(
+                                    m.id,
+                                    UI.Rect(m.rectX, m.rectY, m.rectW, m.rectH, m.viewportW, m.viewportH)
+                                )
+                            // Element events run in their OWN detached fiber rather than inline on the receive loop: a
+                            // handler that SUSPENDS, e.g. awaiting a value-returning `requestMeasure` whose reply arrives
+                            // as a LATER inbound frame, must not block this same loop from reading that reply (that would
+                            // deadlock). Forking also stops any one slow handler from stalling the whole session's event
+                            // stream. `initUnscoped` (not `init`): handlers are short-lived and self-cleaning, so binding
+                            // each to the long-lived session Scope would only pile up finalizers; a handler still parked on
+                            // a reply when the socket closes is unreachable once `commands` drops (its pending map holds the
+                            // only promise ref) and is GC'd. The measure replies above stay inline: they only complete a
+                            // Promise, never suspend, and must run promptly.
+                            case _ => Fiber.initUnscoped(handle(event.path, event).unit).unit
                     // A malformed inbound frame (DecodeException) is dropped: a buggy client must not be able to tear
                     // down the session. A Panic is a decoder defect, not bad input, and must propagate.
                     case Result.Failure(_) => ()
