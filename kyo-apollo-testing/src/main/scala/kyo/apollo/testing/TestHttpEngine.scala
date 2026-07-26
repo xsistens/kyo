@@ -1,4 +1,4 @@
-package apollo.testing
+package kyo.apollo.testing
 
 import kyo.*
 import kyo.apollo.network.http.HttpEngine
@@ -72,7 +72,7 @@ object TestHttpEngine:
       * connection error (no response received). The transport folds it into an
       * `ApolloNetworkException` value, mirroring a real `fetch` rejection.
       */
-    def failing(cause: Throwable): TestHttpEngine =
+    def failing(cause: Throwable)(using Frame): TestHttpEngine =
         new TestHttpEngine(_ => Async.fromFuture(Future.failed[HttpResponse](cause)))
 end TestHttpEngine
 

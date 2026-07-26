@@ -1,4 +1,4 @@
-package apollo.testing
+package kyo.apollo.testing
 
 import kyo.Schema
 import kyo.apollo.api.*

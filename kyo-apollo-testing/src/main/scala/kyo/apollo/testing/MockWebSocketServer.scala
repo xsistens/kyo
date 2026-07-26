@@ -1,4 +1,4 @@
-package apollo.testing
+package kyo.apollo.testing
 
 import kyo.apollo.exception.ApolloWebSocketClosedException
 import kyo.apollo.network.ws.WebSocketConnection
