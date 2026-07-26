@@ -919,6 +919,9 @@ private[kyo] object HtmlRenderer:
         elem match
             case f: Form if f.onSubmit.nonEmpty || f.onSubmitEvt.nonEmpty => events += "submit"
             case _                                                        =>
+        if attrs.onPointerDown.nonEmpty then events += "pointerdown"
+        if attrs.onPointerMove.nonEmpty then events += "pointermove"
+        if attrs.onPointerUp.nonEmpty then events += "pointerup"
         val ev = events.result()
         if ev.nonEmpty then w(sb, s""" data-kyo-ev="${ev.mkString(",")}"""")
     end renderEventAttr
@@ -1236,8 +1239,62 @@ private[kyo] object HtmlRenderer:
            |      var el=document.getElementById(op.ScrollIntoView.id);
            |      if(el)el.scrollIntoView({behavior:"smooth",block:"start"});
            |    });
+           |  }else if(op.Command){
+           |    kyoApplyVerb(__kyoResolveEl(op.Command.path.join(".")),op.Command.verb);
+           |  }else if(op.CommandById){
+           |    kyoApplyVerb(document.getElementById(op.CommandById.id),op.CommandById.verb);
+           |  }else if(op.RequestMeasure){
+           |    var rmp=op.RequestMeasure.path.join(".");
+           |    var rmel=__kyoResolveEl(rmp);
+           |    if(rmel){
+           |      var rmr=rmel.getBoundingClientRect();
+           |      post({Measure:{path:op.RequestMeasure.path,rectX:rmr.left,rectY:rmr.top,rectW:rmr.width,rectH:rmr.height,viewportW:window.innerWidth,viewportH:window.innerHeight}});
+           |    }
+           |  }else if(op.RequestMeasureById){
+           |    // MeasureById carries `id` back; `path` is vestigial for id-routing, sent empty.
+           |    var rmiel=document.getElementById(op.RequestMeasureById.id);
+           |    if(rmiel){
+           |      var rmir=rmiel.getBoundingClientRect();
+           |      post({MeasureById:{path:[],id:op.RequestMeasureById.id,rectX:rmir.left,rectY:rmir.top,rectW:rmir.width,rectH:rmir.height,viewportW:window.innerWidth,viewportH:window.innerHeight}});
+           |    }
            |  }
            |};
+           |// Shared verb whitelist for Command/CommandById; unknown verbs ignored (forward-compat).
+           |function kyoApplyVerb(el,verb){
+           |  if(!el)return;
+           |  if(verb==="focus"){if(typeof el.focus==="function")el.focus();}
+           |  else if(verb==="scrollIntoView"){if(typeof el.scrollIntoView==="function")el.scrollIntoView({block:"nearest"});}
+           |}
+           |// A reactive range's id encodes its own path (ReactiveRegion.htmlId: 8 hex digits of segment length,
+           |// then 4 hex digits per UTF-16 unit, optional 'n' + depth suffix), so the path is read back out of the
+           |// id rather than re-encoded here. Returns null for anything that is not a range id.
+           |function __kyoRangeIdPath(id){
+           |  if(!id||id.charAt(0)!=="r")return null;
+           |  var end=id.indexOf("n",1);if(end<0)end=id.length;
+           |  var i=1,segs=[];
+           |  while(i<end){
+           |    if(i+8>end)return null;
+           |    var len=parseInt(id.substring(i,i+8),16);i+=8;
+           |    var s="";
+           |    for(var k=0;k<len;k++){if(i+4>end)return null;s+=String.fromCharCode(parseInt(id.substring(i,i+4),16));i+=4;}
+           |    segs.push(s);
+           |  }
+           |  return segs.join(".");
+           |}
+           |function __kyoPathSel(p){var bs=String.fromCharCode(92),q=String.fromCharCode(34);var s=String(p).split(bs).join(bs+bs).split(q).join(bs+q);return '[data-kyo-path='+q+s+q+']';}
+           |// Path-addressed command/measure target: the element carrying the path, else the first element inside
+           |// the reactive range that owns the path (a range is delimited by comments, so it has no element of its own).
+           |function __kyoResolveEl(p){
+           |  var el=document.querySelector(__kyoPathSel(p));
+           |  if(el)return el;
+           |  var found=null;
+           |  if(__kyoRanges)__kyoRanges.forEach(function(pair,id){
+           |    if(found||__kyoRangeIdPath(id)!==p)return;
+           |    var n=pair.start.nextSibling;
+           |    while(n&&n!==pair.end){if(n.nodeType===1&&!found)found=n;n=n.nextSibling;}
+           |  });
+           |  return found;
+           |}
            |function fp(el){
            |  while(el&&el!==document.body){
            |    if(el.hasAttribute("data-kyo-path"))return el;
@@ -1680,6 +1737,46 @@ private[kyo] object HtmlRenderer:
            |document.body.addEventListener("wheel",handle,{capture:true,passive:false});
            |document.body.addEventListener("beforeinput",kyoBeforeInput,true);
            |document.body.addEventListener("compositionend",kyoCompositionEnd,true);
+           |// ---- pointer/drag session (setPointerCapture + rAF-coalesced move stream) ----
+           |var __ptrActive=false,__ptrEl=null,__ptrPath=null,__ptrRaf=0,__ptrPendingEv=null;
+           |function ptrPayload(el,ev){
+           |  var r=el.getBoundingClientRect();
+           |  var tid=ev.target&&ev.target.id?ev.target.id:null;
+           |  var pl={x:ev.clientX-r.left,y:ev.clientY-r.top,rectX:r.left,rectY:r.top,rectW:r.width,rectH:r.height,buttons:ev.buttons};
+           |  if(tid)pl.targetId=tid;
+           |  return pl;
+           |}
+           |function ptrDown(e){
+           |  var el=fp(e.target);if(!el)return;
+           |  if(!he(el,"pointerdown"))return;
+           |  try{if(typeof el.setPointerCapture==="function")el.setPointerCapture(e.pointerId);}catch(_e){}
+           |  __ptrActive=true;__ptrEl=el;__ptrPath=pa(el);
+           |  post({PointerDown:{path:__ptrPath,pointer:ptrPayload(el,e)}});
+           |}
+           |function ptrMove(e){
+           |  // Only stream moves during an active capture/drag session; coalesce to at most one post per animation frame.
+           |  if(!__ptrActive||!__ptrEl)return;
+           |  __ptrPendingEv=e;
+           |  if(__ptrRaf)return;
+           |  __ptrRaf=requestAnimationFrame(function(){
+           |    __ptrRaf=0;
+           |    if(!__ptrActive||!__ptrEl||!__ptrPendingEv)return;
+           |    var ev=__ptrPendingEv;__ptrPendingEv=null;
+           |    post({PointerMove:{path:__ptrPath,pointer:ptrPayload(__ptrEl,ev)}});
+           |  });
+           |}
+           |function ptrUp(e){
+           |  if(!__ptrActive||!__ptrEl)return;
+           |  try{if(typeof __ptrEl.releasePointerCapture==="function")__ptrEl.releasePointerCapture(e.pointerId);}catch(_e){}
+           |  if(__ptrRaf){cancelAnimationFrame(__ptrRaf);__ptrRaf=0;}
+           |  __ptrPendingEv=null;
+           |  var el=__ptrEl,path=__ptrPath;
+           |  __ptrActive=false;__ptrEl=null;__ptrPath=null;
+           |  post({PointerUp:{path:path,pointer:ptrPayload(el,e)}});
+           |}
+           |document.body.addEventListener("pointerdown",ptrDown,true);
+           |document.body.addEventListener("pointermove",ptrMove,true);
+           |document.body.addEventListener("pointerup",ptrUp,true);
            |})();""".stripMargin
 
     // ---- SVG tag and attribute rendering ----

@@ -106,6 +106,26 @@ final private[kyo] class DomReactiveRegions private (
         }
     end replaceWith
 
+    /** The first element inside the range that owns `path`, `Absent` when no range owns it or the range has no
+      * element in it. A range is delimited by comments, so a region path addresses no element of its own; a
+      * path-addressed command or measure resolves through here when the path carries no element. The client
+      * twin is `__kyoResolveEl` in `HtmlRenderer.clientJs`; keep the two in lockstep.
+      */
+    private[kyo] def firstElementAt(path: Seq[String]): Maybe[dom.Element] =
+        var found = Maybe.empty[dom.Element]
+        ranges.foreachEntry { (id, endpoints) =>
+            if found.isEmpty && ReactiveRegion.pathOf(id).contains(path) then
+                var current = DomReactiveRegions.next(endpoints.start)
+                while found.isEmpty && current.nonEmpty && (current.get ne endpoints.end) do
+                    current.get match
+                        case element: dom.Element => found = Present(element)
+                        case _                    => ()
+                    current = DomReactiveRegions.next(current.get)
+                end while
+        }
+        found
+    end firstElementAt
+
     private[kyo] def size(using Frame): Int < Sync =
         Sync.defer(ranges.size)
 

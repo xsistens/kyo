@@ -817,6 +817,13 @@ private[kyo] object ReactiveUI:
                             .andThen(keepBubbling(elem, attrs.onSortMove.nonEmpty || attrs.onSortMoveEvt.nonEmpty))
                     case _ => true
                 }
+            // Payload (UI.PointerEvent) rides the wire directly like FileSelect, so nothing is read from the element.
+            case ev: UIEvent.PointerDown =>
+                invokeWith(attrs.onPointerDown, ev.pointer).andThen(keepBubbling(elem, attrs.onPointerDown.nonEmpty))
+            case ev: UIEvent.PointerMove =>
+                invokeWith(attrs.onPointerMove, ev.pointer).andThen(keepBubbling(elem, attrs.onPointerMove.nonEmpty))
+            case ev: UIEvent.PointerUp =>
+                invokeWith(attrs.onPointerUp, ev.pointer).andThen(keepBubbling(elem, attrs.onPointerUp.nonEmpty))
             case _ => true
         end match
     end dispatchToElement
@@ -1006,8 +1013,15 @@ private[kyo] object ReactiveUI:
                 case event: DragProtocol.ValidatedEvent.Focus         => safeDispatch(handle, path, event.wire)
                 case event: DragProtocol.ValidatedEvent.Blur          => safeDispatch(handle, path, event.wire)
                 case event: DragProtocol.ValidatedEvent.Scroll        => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.PointerDown   => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.PointerMove   => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.PointerUp     => safeDispatch(handle, path, event.wire)
                 case event: DragProtocol.ValidatedEvent.Hover         => safeDispatch(handle, path, event.wire)
                 case event: DragProtocol.ValidatedEvent.Unhover       => safeDispatch(handle, path, event.wire)
+                // A measure reply is the client's answer to a `requestMeasure`, not an element event: the session
+                // completes the pending reply on UI.Commands before dispatch, so one never reaches the handler
+                // tree. Bubbling is the right answer for an event no element declared.
+                case _: DragProtocol.ValidatedEvent.Measure | _: DragProtocol.ValidatedEvent.MeasureById => true
                 case _: DragProtocol.ValidatedEvent.Start | _: DragProtocol.ValidatedEvent.End |
                     _: DragProtocol.ValidatedEvent.Enter | _: DragProtocol.ValidatedEvent.Leave |
                     _: DragProtocol.ValidatedEvent.Over | _: DragProtocol.ValidatedEvent.Drop |
@@ -1114,13 +1128,17 @@ private[kyo] object ReactiveUI:
                         ).andThen(true)
                     case _ => true
                 }
+            // Never reaches here: the session completes a measure reply on UI.Commands before dispatch.
+            case _: DragProtocol.ValidatedEvent.Measure | _: DragProtocol.ValidatedEvent.MeasureById => true
             case _: DragProtocol.ValidatedEvent.Click | _: DragProtocol.ValidatedEvent.ClickSelf |
                 _: DragProtocol.ValidatedEvent.Input | _: DragProtocol.ValidatedEvent.Change |
                 _: DragProtocol.ValidatedEvent.ChangeChecked | _: DragProtocol.ValidatedEvent.ChangeNumeric |
                 _: DragProtocol.ValidatedEvent.Submit | _: DragProtocol.ValidatedEvent.KeyDown |
                 _: DragProtocol.ValidatedEvent.KeyUp | _: DragProtocol.ValidatedEvent.Focus |
                 _: DragProtocol.ValidatedEvent.Blur | _: DragProtocol.ValidatedEvent.Scroll |
-                _: DragProtocol.ValidatedEvent.Hover | _: DragProtocol.ValidatedEvent.Unhover =>
+                _: DragProtocol.ValidatedEvent.Hover | _: DragProtocol.ValidatedEvent.Unhover |
+                _: DragProtocol.ValidatedEvent.PointerDown | _: DragProtocol.ValidatedEvent.PointerMove |
+                _: DragProtocol.ValidatedEvent.PointerUp =>
                 safeDispatch(handle, path, event.wire)
 
     private def wakeExpiryScheduler(expiryWake: Channel[Unit])(using Frame): Unit < Sync =

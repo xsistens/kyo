@@ -41,7 +41,6 @@ private[kyo] object UIServer:
                 // redundantly re-inject a rule the page's initial <style> block already has.
                 (_, initialRules) <- HtmlRenderer.renderWithCss(uiTree, Seq.empty)
                 exchange = wsExchange(ws, initialRules.map(_._1).toSet)
-                sub <- ReactiveUI.subscribe(root, exchange)
                 // Session command sink: an event handler calling UI.scrollIntoView sends the op over this
                 // connection's socket, riding the same channel as the reactive updates. runPartial drops
                 // only a Closed (the socket closed, so the command is moot); a Panic propagates.
@@ -56,13 +55,44 @@ private[kyo] object UIServer:
                 )
                 // Peer close (or any session end) fails every pending file read with Disconnected.
                 _ <- Scope.ensure(files.close())
-                _ <- UICommands.scrollSink.let(Present(scrollSink)) {
-                    DragCommands.resolveSink.let(Present(resolveSink)) {
-                        DragFiles.local.let(Present(files)) {
-                            Async.race(
-                                ws.stream.foreach(payload => dispatchEvent(sub.handleValidated, files, payload)),
-                                ws.onPeerClose
-                            )
+                // The session's imperative op channel; `emit` serializes an HtmlOp over the socket (a Closed mid-send
+                // drops the op). Env.run must wrap subscribe + dispatch so the forked region/mount fibers inherit
+                // Env[Commands] and resolve `UI.commands` at run time.
+                commands <- UI.Commands.init(op =>
+                    Abort.runPartial[Closed](ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](op)))).unit
+                )
+                _ <- Env.run(commands) {
+                    UICommands.scrollSink.let(Present(scrollSink)) {
+                        DragCommands.resolveSink.let(Present(resolveSink)) {
+                            DragFiles.local.let(Present(files)) {
+                                for
+                                    sub <- ReactiveUI.subscribe(root, exchange)
+                                    // Single-consumer drain: element handlers run in ARRIVAL order on one fiber, the twin of
+                                    // the browser mount's drain in DomBackend. A fiber forked per event let two handlers race,
+                                    // so a blur and the focus that followed it could be applied in either order.
+                                    //
+                                    // The reader loop still never blocks on a handler: it offers and moves on. The deadlock the
+                                    // fork existed to avoid stays avoided, because the measure replies in dispatchEvent are
+                                    // delivered INLINE on the reader; a handler parked on a reply is therefore parked on the
+                                    // drain, and the reader is still free to read the frame that completes it.
+                                    events <- Channel.init[Unit < Async](256)
+                                    // runPartial captures only a Closed (the channel closed with the session -> stop draining);
+                                    // a Panic propagates rather than passing for a clean end. Fiber.init binds the drain to the
+                                    // session Scope, so it is interrupted when the connection ends.
+                                    _ <- Fiber.init(
+                                        Loop.foreach(Abort.runPartial[Closed](events.take).map {
+                                            case Result.Success(eff) => eff.andThen(Loop.continue)
+                                            case Result.Failure(_)   => Loop.done
+                                        })
+                                    )
+                                    _ <- Async.race(
+                                        ws.stream.foreach(payload =>
+                                            dispatchEvent(sub.handleValidated, commands, events, files, payload)
+                                        ),
+                                        ws.onPeerClose
+                                    )
+                                yield ()
+                            }
                         }
                     }
                 }
@@ -175,6 +205,8 @@ private[kyo] object UIServer:
 
     private def dispatchEvent(
         handle: (Seq[String], DragProtocol.ValidatedEvent) => Boolean < Async,
+        commands: UI.Commands,
+        events: Channel[Unit < Async],
         files: DragFiles.Service,
         payload: HttpWebSocket.Payload
     )(using
@@ -182,14 +214,37 @@ private[kyo] object UIServer:
     ): Unit < Async =
         def dispatch(event: UIEvent): Unit < Async =
             DragProtocol.validateEventAndDomain(event, DragProtocol.Limits.default) match
+                // Measure replies are not element events: they complete the pending `requestMeasure` on the
+                // session's UI.Commands rather than entering the ReactiveUI handler tree. They stay INLINE on
+                // the reader: they only complete a Promise, never suspend, and are what unparks a handler
+                // waiting on the drain below.
+                case Result.Success(DragProtocol.ValidatedEvent.Measure(m)) =>
+                    commands.deliverMeasure(
+                        m.path,
+                        UI.Rect(m.rectX, m.rectY, m.rectW, m.rectH, m.viewportW, m.viewportH)
+                    )
+                // Self-addressing: the id-addressed measure reply routes by `id` to the id-keyed pending map.
+                case Result.Success(DragProtocol.ValidatedEvent.MeasureById(m)) =>
+                    commands.deliverMeasureById(
+                        m.id,
+                        UI.Rect(m.rectX, m.rectY, m.rectW, m.rectH, m.viewportW, m.viewportH)
+                    )
                 // Drop and sort dispatch forks: their handlers may await lazy file reads served by later
                 // frames on this same socket loop, so running them inline would deadlock the session. The
                 // client models concurrent decisions (AwaitingDecisionAfterEnd), and session close unblocks
                 // a forked handler because the file service fails its pending reads with Disconnected.
                 case Result.Success(validated: (DragProtocol.ValidatedEvent.Drop | DragProtocol.ValidatedEvent.SortMove)) =>
                     Fiber.initUnscoped(handle(event.path, validated).unit).unit
-                case Result.Success(validated) => handle(event.path, validated).unit
-                case _                         => ()
+                // Every other element event goes to the session's single-consumer drain, not inline on this
+                // loop: a handler that SUSPENDS, e.g. awaiting a value-returning `requestMeasure` whose reply
+                // arrives as a LATER inbound frame, must not block this loop from reading that reply. Handing
+                // them to ONE consumer instead of forking a fiber each is what keeps their arrival order,
+                // which a blur followed by the focus that replaced it depends on. `offer` rather than `put`
+                // keeps the reader non-blocking; a full drain means a backlog of 256 handlers and drops the
+                // event, the same trade the browser mount's drain makes.
+                case Result.Success(validated) =>
+                    Abort.runPartial[Closed](events.offer(handle(event.path, validated).unit)).unit
+                case _ => ()
         payload match
             case HttpWebSocket.Payload.Text(data) =>
                 Json.decode[UIEvent](data) match

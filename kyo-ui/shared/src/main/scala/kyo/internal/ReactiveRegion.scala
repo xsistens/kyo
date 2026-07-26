@@ -1,5 +1,6 @@
 package kyo.internal
 
+import kyo.*
 import kyo.UI
 import kyo.UI.Ast.*
 
@@ -139,6 +140,35 @@ private[kyo] object ReactiveRegion:
             appendHex(out, identity.transparentDepth, 8)
         out.toString
     end htmlId
+
+    /** The path an [[htmlId]] encodes, `Absent` for anything that is not a well-formed id.
+      *
+      * Inverse of [[htmlId]]: 8 hex digits of segment length, then 4 hex digits per UTF-16 unit, with the
+      * optional `n` + depth suffix ignored (a transparent nesting level does not change the path). The client
+      * twin is `__kyoRangeIdPath` in `HtmlRenderer.clientJs`; keep the two in lockstep.
+      */
+    private[kyo] def pathOf(id: String): Maybe[Seq[String]] =
+        if !isValidHtmlId(id) then Absent
+        else
+            val nestingAt = id.indexOf('n', 1)
+            val pathEnd   = if nestingAt < 0 then id.length else nestingAt
+            val segments  = Chunk.newBuilder[String]
+            var i         = 1
+            while i < pathEnd do
+                val units = Integer.parseInt(id.substring(i, i + 8), 16)
+                i += 8
+                val segment = new StringBuilder(units)
+                var u       = 0
+                while u < units do
+                    discard(segment.append(Integer.parseInt(id.substring(i, i + 4), 16).toChar))
+                    i += 4
+                    u += 1
+                end while
+                segments.addOne(segment.toString)
+            end while
+            Present(segments.result())
+        end if
+    end pathOf
 
     private[kyo] def isValidHtmlId(id: String): Boolean =
         if id.isEmpty || id.charAt(0) != 'r' then false

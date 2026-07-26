@@ -144,6 +144,11 @@ private[kyo] object DragProtocol:
         final case class Over private[DragProtocol] (wire: UIEvent.DragOver)                            extends ValidatedEvent
         final case class Drop private[DragProtocol] (wire: UIEvent.Drop)                                extends ValidatedEvent
         final case class SortMove private[DragProtocol] (wire: UIEvent.SortMove)                        extends ValidatedEvent
+        final case class PointerDown private[DragProtocol] (wire: UIEvent.PointerDown)                  extends ValidatedEvent
+        final case class PointerMove private[DragProtocol] (wire: UIEvent.PointerMove)                  extends ValidatedEvent
+        final case class PointerUp private[DragProtocol] (wire: UIEvent.PointerUp)                      extends ValidatedEvent
+        final case class Measure private[DragProtocol] (wire: UIEvent.Measure)                          extends ValidatedEvent
+        final case class MeasureById private[DragProtocol] (wire: UIEvent.MeasureById)                  extends ValidatedEvent
     end ValidatedEvent
 
     /** Browser-bound drag source configuration with safe file byte quantities. */
@@ -598,6 +603,21 @@ private[kyo] object DragProtocol:
                             .map(_ => ValidatedEvent.Scroll(event))
                     case event: UIEvent.Hover   => validateMouse(event.mouse, limits).map(_ => ValidatedEvent.Hover(event))
                     case event: UIEvent.Unhover => validateMouse(event.mouse, limits).map(_ => ValidatedEvent.Unhover(event))
+                    case event: UIEvent.PointerDown =>
+                        validatePointer(event.pointer, limits).map(_ => ValidatedEvent.PointerDown(event))
+                    case event: UIEvent.PointerMove =>
+                        validatePointer(event.pointer, limits).map(_ => ValidatedEvent.PointerMove(event))
+                    case event: UIEvent.PointerUp =>
+                        validatePointer(event.pointer, limits).map(_ => ValidatedEvent.PointerUp(event))
+                    case event: UIEvent.Measure =>
+                        validateRect(event.rectX, event.rectY, event.rectW, event.rectH, event.viewportW, event.viewportH)
+                            .map(_ => ValidatedEvent.Measure(event))
+                    case event: UIEvent.MeasureById =>
+                        validateIdentifier(event.id, "id", limits)
+                            .flatMap(_ =>
+                                validateRect(event.rectX, event.rectY, event.rectW, event.rectH, event.viewportW, event.viewportH)
+                            )
+                            .map(_ => ValidatedEvent.MeasureById(event))
                     case event: UIEvent.DragStart =>
                         validateStartAndDomain(event.event, limits).map(ValidatedEvent.Start(event, _))
                     case event: UIEvent.DragEnd => validateEnd(event.event, limits).map(_ => ValidatedEvent.End(event))
@@ -791,6 +811,33 @@ private[kyo] object DragProtocol:
 
     private def validatePoint(point: Drag.Point): Result[ValidationFailure, Unit] =
         validateNumber(point.x, "point.x").flatMap(_ => validateNumber(point.y, "point.y"))
+
+    /** A pointer payload is six client-supplied numbers plus an optional target id; every number has to be
+      * finite before it reaches a handler that will do arithmetic with it.
+      */
+    private def validatePointer(pointer: UI.PointerEvent, limits: Limits): Result[ValidationFailure, Unit] =
+        validateNumber(pointer.x, "x")
+            .flatMap(_ => validateNumber(pointer.y, "y"))
+            .flatMap(_ => validateRect(pointer.rectX, pointer.rectY, pointer.rectW, pointer.rectH))
+            .flatMap(_ => validateOptionalIdentifier(pointer.targetId, "targetId", limits))
+
+    private def validateRect(x: Double, y: Double, w: Double, h: Double): Result[ValidationFailure, Unit] =
+        validateNumber(x, "rectX")
+            .flatMap(_ => validateNumber(y, "rectY"))
+            .flatMap(_ => validateNumber(w, "rectW"))
+            .flatMap(_ => validateNumber(h, "rectH"))
+
+    private def validateRect(
+        x: Double,
+        y: Double,
+        w: Double,
+        h: Double,
+        viewportW: Double,
+        viewportH: Double
+    ): Result[ValidationFailure, Unit] =
+        validateRect(x, y, w, h)
+            .flatMap(_ => validateNumber(viewportW, "viewportW"))
+            .flatMap(_ => validateNumber(viewportH, "viewportH"))
 
     private def validateNumber(value: Double, field: String): Result[ValidationFailure, Unit] =
         if java.lang.Double.isFinite(value) then Result.unit
