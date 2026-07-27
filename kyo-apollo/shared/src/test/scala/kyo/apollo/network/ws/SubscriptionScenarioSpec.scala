@@ -138,7 +138,7 @@ class SubscriptionScenarioSpec extends kyo.test.Test[Any]:
                 end for
         }
 
-        "keepalive — a legacy server 'ka' draws no reply and the subscription keeps streaming" in Clock
+        "keepalive — a legacy server 'ka' interleaved mid-stream draws no reply and passes the surrounding data through in order" in Clock
             .withTimeControl { control =>
                 val f    = new Fixture(SubscriptionWsProtocol)
                 var seen = List.empty[Int]
@@ -148,12 +148,19 @@ class SubscriptionScenarioSpec extends kyo.test.Test[Any]:
                     _      <- Sync.defer(f.conn.server(WsTestSupport.legacy.ack))
                     _      <- settle(control)
                     before <- Sync.defer(f.conn.sent)
-                    _      <- Sync.defer(f.conn.server(WsTestSupport.legacy.ka))
-                    _      <- settle(control)
-                    _ = assert(f.conn.sent == before)
-                    _ <- Sync.defer(f.conn.server(WsTestSupport.legacy.data("0", 7)))
+                    // A `ka` *between* two data frames, not in isolation: this is how a real
+                    // server paces keepalives during an active subscription. Since the transport
+                    // treats KeepAlive and Unknown identically (both no-ops), a bare idle `ka`
+                    // asserts almost nothing; interleaving proves the frame is consumed
+                    // transparently — the data on either side still arrives, in order.
+                    _ <- Sync.defer {
+                        f.conn.server(WsTestSupport.legacy.data("0", 7))
+                        f.conn.server(WsTestSupport.legacy.ka)
+                        f.conn.server(WsTestSupport.legacy.data("0", 8))
+                    }
                     _ <- settle(control)
-                yield assert(seen == List(7))
+                    _ = assert(f.conn.sent == before) // neither the data nor the ka drew a client reply
+                yield assert(seen == List(7, 8)) // the ka neither dropped nor reordered the surrounding data
                 end for
             }
 
