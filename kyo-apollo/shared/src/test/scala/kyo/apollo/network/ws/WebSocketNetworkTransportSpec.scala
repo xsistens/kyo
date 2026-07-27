@@ -279,5 +279,47 @@ class WebSocketNetworkTransportSpec extends kyo.test.Test[Any]:
                     assert(engine.conns.size == 1) // no reopen
                 end for
             }
+
+        "cancelling the last subscription during a reconnect backoff resets to idle, not stranded" in Clock
+            .withTimeControl { control =>
+                val engine = new FreshWebSocketEngine
+                val transport = new WebSocketNetworkTransport(
+                    serverUrl = "wss://example.com/graphql",
+                    engine = engine,
+                    reconnectWhen = WebSocketNetworkTransport.reconnectAlways,
+                    backoff = WsBackoff.constant(1000)
+                )
+                var seen = List.empty[ApolloResponse[Int]]
+                for
+                    sub <- StreamProbe.drain(transport.subscribe(request()))(_ => ())
+                    _   <- settle(control)
+                    c0  <- Sync.defer(engine.conns.head)
+                    _   <- Sync.defer(c0.server(ack))
+                    _   <- settle(control)
+                    _   <- Sync.defer(c0.drop(1011, "boom")) // abnormal drop -> reconnect backoff armed
+                    _   <- settle(control)
+                    _ = assert(engine.conns.size == 1) // backoff pending, not yet reopened
+                    // Cancel the only subscription WHILE the backoff is armed.
+                    _ <- sub.interrupt
+                    _ <- settle(control)
+                    // The reconnect existed only to resubscribe the now-gone route, so
+                    // advancing past the backoff must NOT reopen — the machine reset to idle.
+                    _ <- control.advance(1.second)
+                    _ <- settle(control)
+                    _ = assert(engine.conns.size == 1)
+                    // The regression: a fresh subscribe must open a NEW socket. On the
+                    // stranded machine (reconnecting stuck true) onRegister would merely
+                    // store the route and wait on an ack that never comes — conns stays 1.
+                    _ <- StreamProbe.drain(transport.subscribe(request()))(r => seen = seen :+ r)
+                    _ <- settle(control)
+                    _ = assert(engine.conns.size == 2)
+                    c1 <- Sync.defer(engine.conns(1))
+                    _  <- Sync.defer(c1.server(ack))
+                    _  <- settle(control)
+                    _  <- Sync.defer(c1.server(next("1", 7))) // second subscription's id is "1"
+                    _  <- settle(control)
+                yield assert(seen.flatMap(_.data) == List(7))
+                end for
+            }
     }
 end WebSocketNetworkTransportSpec

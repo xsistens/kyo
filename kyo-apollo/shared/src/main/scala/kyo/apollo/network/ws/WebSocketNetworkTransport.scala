@@ -435,10 +435,24 @@ final class WebSocketNetworkTransport(
         val cur     = stateRef.get()
         val routes1 = cur.routes.removed(id)
         val s1      = cur.copy(routes = routes1)
-        if routes1.isEmpty then scheduleIdleClose(cancelReconnectTimer(s1))
-        else
+        if routes1.nonEmpty then
             stateRef.set(s1)
             ()
+        else
+            s1.conn match
+                case Present(_) =>
+                    // A live socket: hold it open for the idle window, then close.
+                    scheduleIdleClose(cancelReconnectTimer(s1))
+                case Absent =>
+                    // No live socket — a handshake is still opening or a reconnect
+                    // backoff is armed, both existing only to (re)serve routes that are
+                    // now gone. Reset straight to idle: finishTeardown interrupts the
+                    // connect fiber and every timer (including the reconnect backoff)
+                    // and clears `reconnecting`. Routing through scheduleIdleClose would
+                    // instead cancel the reconnect timer but leave `reconnecting = true`
+                    // with no timer, stranding the machine — the next subscribe would
+                    // then wait forever on a connection_ack that never arrives.
+                    finishTeardown(s1)
         end if
     end removeRoute
 
