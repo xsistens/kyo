@@ -2454,7 +2454,7 @@ lazy val `kyo-markdown` =
 // effect libraries (no kyo-ui), so it builds against trunk on its own.
 lazy val `kyo-apollo` =
     crossProject(JSPlatform, WasmPlatform)
-        .crossType(CrossType.Pure)
+        .crossType(CrossType.Full)
         .in(file("kyo-apollo"))
         .dependsOn(`kyo-core`, `kyo-data`, `kyo-schema`, `kyo-schema-json`)
         .withKyoTest
