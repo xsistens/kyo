@@ -85,7 +85,13 @@ private[ws] object KyoHttpWebSocketConnection:
     end runConnection
 
     /** Pump inbound frames into `incomingCh`; when the socket ends, settle `closed`
-      * from its close reason (success on a clean 1000, abort otherwise).
+      * from its close reason. A clean close always carries a reason — a peer close
+      * frame or a locally-initiated close both set `closeReason` `Present` — so a
+      * 1000 reason settles cleanly and any other code aborts with that code. The
+      * *absence* of a reason means the socket ended with no close frame at all (a
+      * TCP reset / EOF): an abnormal drop, settled as 1006 so the transport
+      * reconnects, matching the JS engine's browser-1006 mapping. Treating that
+      * `Absent` as a clean close would silently disable reconnection on JVM/Native.
       */
     private def drain(
         ws: HttpWebSocket,
@@ -104,8 +110,12 @@ private[ws] object KyoHttpWebSocketConnection:
                             done.completeDiscard(
                                 Result.fail(ApolloWebSocketClosedException(code, Option(why).filter(_.nonEmpty)))
                             )
-                        case _ =>
+                        case Present(_) =>
                             done.completeUnitDiscard
+                        case Absent =>
+                            done.completeDiscard(
+                                Result.fail(ApolloWebSocketClosedException(WebSocketConnection.NormalClosure + 6, None))
+                            )
                 settle.andThen(incomingCh.close.unit)
             }
         }
