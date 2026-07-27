@@ -415,6 +415,7 @@ lazy val kyoJVM: Project = project
         `kyo-ui-components-gen`,
         `kyo-apollo`.jvm,
         `kyo-apollo-testing`.jvm,
+        `kyo-apollo-ui`.jvm,
         `kyo-apollo-codegen`.jvm,
         `kyo-markdown`.jvm,
         `kyo-i18n`.jvm,
@@ -578,6 +579,7 @@ lazy val kyoNative = project
         `kyo-ui-components`.native,
         `kyo-apollo`.native,
         `kyo-apollo-testing`.native,
+        `kyo-apollo-ui`.native,
         `kyo-markdown`.native,
         `kyo-i18n`.native,
         `kyo-pod`.native,
@@ -651,6 +653,7 @@ lazy val kyoWasm = project
         `kyo-ui-components`.wasm,
         `kyo-apollo`.wasm,
         `kyo-apollo-testing`.wasm,
+        `kyo-apollo-ui`.wasm,
         `kyo-markdown`.wasm,
         `kyo-i18n`.wasm,
         `kyo-test-api`.wasm,
@@ -3041,13 +3044,16 @@ lazy val `kyo-apollo-codegen` =
 // Apollo bindings for kyo-ui: reactive Signal/Var adapters over the apollo core
 // store plus query/mutation effects. JS only, depends on the apollo core and kyo-ui.
 lazy val `kyo-apollo-ui` =
-    crossProject(JSPlatform)
+    crossProject(JSPlatform, JVMPlatform, NativePlatform, WasmPlatform)
         .crossType(CrossType.Pure)
         .in(file("kyo-apollo-ui"))
         .dependsOn(`kyo-apollo` % "compile->compile;test->test", `kyo-ui`, `kyo-core`)
         .withKyoTest
         .settings(`kyo-settings`)
+        .jvmSettings(mimaCheck(false))
+        .nativeSettings(`native-settings`, `openssl-native-settings`)
         .jsSettings(`js-settings`)
+        .wasmSettings(`wasm-settings`)
 
 lazy val `kyo-ui` =
     crossProject(JSPlatform, JVMPlatform, NativePlatform, WasmPlatform)
