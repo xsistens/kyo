@@ -33,10 +33,12 @@ import scala.util.Random
   * not thunder; set it to `0` for exact, test-friendly delays. Randomness is
   * injectable (`random`) so tests are deterministic.
   *
-  * Retrying collapses a single operation to its first/only emission per attempt,
-  * which is exactly the network query/mutation shape. A [[Subscription]] is a
-  * long-lived multi-emission stream and is therefore passed through untouched —
-  * collapsing it to a first event would break it.
+  * The retry decision rides an attempt's **first** emission — a transport failure
+  * there means the operation never produced a usable response. Every emission is
+  * otherwise forwarded unchanged: an `@defer` operation streams incrementally and a
+  * `CacheAndNetwork` query emits the cache hit then the network result, so collapsing
+  * to the first emission would silently drop the deferred patches / network refresh.
+  * A [[Subscription]] is a live stream and is passed through without any retry wrapping.
   *
   * Mirrors apollo-kotlin's `RetryOnErrorInterceptor`.
   *
@@ -62,25 +64,34 @@ final class RetryOnErrorInterceptor(
     )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
         request.operation match
             // A subscription is a live stream, not a single request/response — never
-            // collapse it to a first emission just to retry.
+            // wrap it in the retry machinery.
             case _: Subscription[?] => chain.proceed(request)
-            case _                  => Stream.init(attempt(request, chain, 1).map(Seq(_)))
+            case _                  => attempt(request, chain, 1)
 
-    /** Run attempt number `n` (1-based); on a retryable transport failure with
-      * attempts left, wait out the backoff and recurse, otherwise settle on the
-      * response as-is.
+    /** Run attempt number `n` (1-based). On a retryable transport failure in the
+      * attempt's first emission — attempts remaining — wait out the backoff and
+      * re-run; otherwise forward the first response and every later emission
+      * untouched (see the class doc on why the tail must not be collapsed).
       */
     private def attempt[D](
         request: ApolloRequest[D],
         chain: ApolloInterceptorChain,
         n: Int
-    )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ApolloResponse[D] < (Async & Scope) =
-        chain.proceed(request).take(1).run.map(_.head).flatMap { response =>
-            response.exception match
-                case Present(cause) if n < maxAttempts && retryWhen(cause) =>
-                    delay(jittered(backoff.delayMillis(n)))
-                        .andThen(attempt(request, chain, n + 1))
-                case _ => response
+    )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
+        Stream.unwrap {
+            chain.proceed(request).splitAt(1).map { case (head, rest) =>
+                if head.isEmpty then rest
+                else
+                    val first = head.head
+                    first.exception match
+                        case Present(cause) if n < maxAttempts && retryWhen(cause) =>
+                            Stream.unwrap(
+                                delay(jittered(backoff.delayMillis(n)))
+                                    .andThen(attempt(request, chain, n + 1))
+                            )
+                        case _ => Stream.init(Seq(first)).concat(rest)
+                    end match
+            }
         }
 
     /** Apply `jitterFactor` to `base`: shrink it by up to `jitterFactor` of itself,

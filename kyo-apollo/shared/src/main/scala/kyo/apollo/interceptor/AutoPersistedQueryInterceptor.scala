@@ -45,33 +45,34 @@ final class AutoPersistedQueryInterceptor extends ApolloInterceptor:
             case _: Subscription[?] => chain.proceed(request)
             case _ =>
                 val probe = request.copy(sendApqExtensions = true, sendDocument = false)
-                Stream.init(negotiate(request, probe, chain).map(Seq(_)))
+                negotiate(request, probe, chain)
 
-    /** The APQ negotiation as a single-response effect: send the hash-only probe,
-      * then re-send with the document (register), fall back to a plain call, or
-      * accept the probe response as-is.
+    /** The APQ negotiation: send the hash-only probe and read its first response —
+      * on `PersistedQueryNotFound` re-send with the document (register), on
+      * `PersistedQueryNotSupported` fall back to a plain call, otherwise forward the
+      * probe response and every later emission untouched. The negotiation rides only
+      * the first response, but an accepted probe may be an `@defer` stream whose later
+      * patches must not be dropped.
       */
     private def negotiate[D](
         request: ApolloRequest[D],
         probe: ApolloRequest[D],
         chain: ApolloInterceptorChain
-    )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ApolloResponse[D] < (Async & Scope) =
-        chain.proceed(probe).take(1).run.map(_.head).flatMap { response =>
-            if hasError(response, AutoPersistedQueryInterceptor.NotFound) then
-                // Server does not know this query yet — resend to register it.
-                chain
-                    .proceed(request.copy(sendApqExtensions = true, sendDocument = true))
-                    .take(1)
-                    .run
-                    .map(_.head)
-            else if hasError(response, AutoPersistedQueryInterceptor.NotSupported) then
-                // Server has APQ off — fall back to a plain, document-carrying call.
-                chain
-                    .proceed(request.copy(sendApqExtensions = false, sendDocument = true))
-                    .take(1)
-                    .run
-                    .map(_.head)
-            else response
+    )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
+        Stream.unwrap {
+            chain.proceed(probe).splitAt(1).map { case (head, rest) =>
+                if head.isEmpty then rest
+                else
+                    val response = head.head
+                    if hasError(response, AutoPersistedQueryInterceptor.NotFound) then
+                        // Server does not know this query yet — resend to register it.
+                        chain.proceed(request.copy(sendApqExtensions = true, sendDocument = true))
+                    else if hasError(response, AutoPersistedQueryInterceptor.NotSupported) then
+                        // Server has APQ off — fall back to a plain, document-carrying call.
+                        chain.proceed(request.copy(sendApqExtensions = false, sendDocument = true))
+                    else Stream.init(Seq(response)).concat(rest)
+                    end if
+            }
         }
 
     /** True when `response` carries a GraphQL error matching `signal`, either by
