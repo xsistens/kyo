@@ -35,6 +35,19 @@ class HttpClientEngineStreamingSpec extends kyo.test.Test[Any]:
         assert(first + second + tail == "Zoë")
     }
 
+    "Utf8ChunkDecoder replaces a malformed byte and keeps decoding (no stall, no unbounded carry)" in {
+        val decoder = new Utf8ChunkDecoder
+        // 0xFF is never a valid UTF-8 byte. A REPORT-mode decoder would stall here and
+        // retain 0xFF plus everything after it in `carry` forever; REPLACE emits U+FFFD
+        // and decodes on, matching the browser TextDecoder (fatal:false).
+        val first  = decoder.decode(Array(0x41.toByte, 0xff.toByte, 0x42.toByte)) // "A" <bad> "B"
+        val second = decoder.decode(Array(0x43.toByte, 0x44.toByte))              // "CD" — no stall
+        val tail   = decoder.flush()
+        assert(first == "A�B") // malformed byte became the replacement char (U+FFFD), not a stall
+        assert(second == "CD") // the bad byte did not poison the carry
+        assert(tail.isEmpty)
+    }
+
     "executeStreaming surfaces a multipart/mixed body as a live Chunked stream, UTF-8-exact across chunk boundaries" in {
         val boundary = "graphql"
         val fullText =
