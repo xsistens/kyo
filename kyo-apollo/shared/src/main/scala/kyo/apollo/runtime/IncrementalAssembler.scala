@@ -2,6 +2,7 @@ package kyo.apollo.runtime
 
 import kyo.*
 import kyo.apollo.api.GraphQLResponse
+import kyo.apollo.exception.ApolloNetworkException
 import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.json.Json
 import kyo.apollo.json.JsonPath
@@ -32,11 +33,21 @@ object IncrementalAssembler:
                 var data: Json                    = Json.JObj(Map.empty)
                 var errors: List[Json]            = Nil
                 var extensions: Map[String, Json] = Map.empty
+                // Each incremental payload carries `hasNext`; the terminal one is the
+                // only `false`. `awaitingMore` stays true after a `hasNext: true` part,
+                // so a stream that ends while it is still true was truncated (kyo-http
+                // maps a mid-body drop to a clean EOF, so this protocol signal is the
+                // only way apollo can tell an incomplete delivery from a complete one).
+                // A server that never sends `hasNext` leaves it false — no false alarm.
+                var awaitingMore = false
 
                 // Apply one part to the accumulator; return whether it changed anything
                 // worth emitting a response for.
                 def applyPart(part: Json): Boolean = part match
                     case Json.JObj(fields) =>
+                        fields.get("hasNext") match
+                            case Some(Json.JBool(b)) => awaitingMore = b
+                            case _                   => ()
                         var changed = false
                         fields.get("extensions") match
                             case Some(Json.JObj(ext)) => extensions = extensions ++ ext
@@ -99,9 +110,24 @@ object IncrementalAssembler:
                     end try
                 end response
 
-                parts.mapChunkPure { partChunk =>
-                    partChunk.toList.flatMap(part => if applyPart(part.json) then Seq(response()) else Nil)
-                }
+                val mapped =
+                    parts.mapChunkPure { partChunk =>
+                        partChunk.toList.flatMap(part => if applyPart(part.json) then Seq(response()) else Nil)
+                    }
+                // If the stream ended while a `hasNext: true` was still outstanding, the
+                // incremental delivery was truncated — surface a terminal exception value
+                // rather than presenting the partial data as a complete response.
+                mapped.concat(Stream.unwrap(Sync.defer {
+                    if awaitingMore then
+                        Stream.init(Seq(ApolloResponse.fromException(
+                            request.requestUuid,
+                            ApolloNetworkException(message =
+                                "Incremental delivery stream ended before its final payload (hasNext=false): the response was truncated"
+                            ),
+                            request.executionContext
+                        )))
+                    else Stream.empty[ApolloResponse[D]]
+                }))
             }
         }
 end IncrementalAssembler

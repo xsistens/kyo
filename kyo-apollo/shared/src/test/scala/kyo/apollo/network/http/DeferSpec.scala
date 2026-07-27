@@ -7,6 +7,7 @@ import kyo.apollo.api.CompiledFragment
 import kyo.apollo.api.CompiledNamedType
 import kyo.apollo.api.DeferDirective
 import kyo.apollo.api.Query
+import kyo.apollo.exception.ApolloNetworkException
 import kyo.apollo.interceptor.DefaultApolloInterceptorChain
 import kyo.apollo.interceptor.NetworkInterceptor
 import kyo.apollo.json.Json
@@ -122,6 +123,67 @@ class DeferSpec extends kyo.test.Test[Any]:
             StreamProbe.collect(t.executeStreaming(ApolloRequest(DeferQ()))).map { rs =>
                 assert(rs.size == 1)
                 assert(rs(0).exception.isDefined)
+            }
+        }
+
+        "a truncated incremental stream (last payload still hasNext:true) ends with a terminal exception value" in {
+            // Both delivered payloads promise more (hasNext:true) but the terminal
+            // hasNext:false payload never arrives — the shape kyo-http hands apollo when a
+            // @defer connection drops mid-stream (it maps the drop to a clean EOF, so the
+            // protocol's hasNext is the only signal of incompleteness). The assembler must
+            // append a terminal exception rather than present the partial data as final.
+            val truncated =
+                s"--$boundary\r\nContent-Type: application/json\r\n\r\n" +
+                    """{"data":{"country":{"code":"DE"}},"hasNext":true}""" +
+                    s"\r\n--$boundary\r\nContent-Type: application/json\r\n\r\n" +
+                    """{"incremental":[{"data":{"capital":"Berlin"},"path":["country"]}],"hasNext":true}""" +
+                    s"\r\n--$boundary--\r\n"
+            val t = transport(engineOf(respond(200, contentType, truncated)))
+            StreamProbe.collect(t.executeStreaming(ApolloRequest(DeferQ()))).map { rs =>
+                assert(rs.size == 3) // the two delivered patches, then the truncation error
+                assert(rs(0).data == Present(Data(Some(Loc("DE", None)))))
+                assert(rs(1).data == Present(Data(Some(Loc("DE", Some("Berlin"))))))
+                assert(rs(2).exception.exists {
+                    case _: ApolloNetworkException => true
+                    case _                         => false
+                })
+            }
+        }
+
+        "a complete incremental stream (terminal hasNext:false) emits no truncation error" in {
+            // The regular two-part body ends with hasNext:false, so awaitingMore is back to
+            // false at end-of-stream and no terminal error is appended (guards the new
+            // check against firing on a well-formed stream).
+            val t = transport(engineOf(respond(200, contentType, multipart)))
+            StreamProbe.collect(t.executeStreaming(ApolloRequest(DeferQ()))).map { rs =>
+                assert(rs.forall(_.exception.isEmpty))
+            }
+        }
+
+        "a live body that drops mid-stream ends with a terminal exception value, not a silent truncation" in {
+            // A Chunked engine whose body emits the initial part (flushed by the second
+            // part's leading delimiter) then aborts — the shape of a real TCP drop after
+            // the response head. The transport must fold that failure into a terminal
+            // ApolloNetworkException appended after the already-emitted part, rather than
+            // letting it escape as a panic (which would crash the caller) or vanish.
+            val boom = new RuntimeException("mid-stream drop")
+            val firstEmission =
+                s"--$boundary\r\nContent-Type: application/json\r\n\r\n" +
+                    """{"data":{"country":{"code":"DE"}},"hasNext":true}""" +
+                    s"\r\n--$boundary\r\n" // the next delimiter flushes part 1 before the drop
+            val streamingEngine = new HttpEngine:
+                def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
+                    HttpResponse(200, List(HttpHeader("Content-Type", contentType)), "")
+                override def executeStreaming(request: HttpRequest)(using Frame): HttpStreamResponse < (Async & Scope) =
+                    val body = Stream.init(Seq(firstEmission)).concat(Stream.unwrap(Sync.defer(throw boom)))
+                    HttpStreamResponse(200, List(HttpHeader("Content-Type", contentType)), HttpStreamBody.Chunked(body))
+            StreamProbe.collect(transport(streamingEngine).executeStreaming(ApolloRequest(DeferQ()))).map { rs =>
+                assert(rs.nonEmpty)
+                assert(rs.head.data == Present(Data(Some(Loc("DE", None))))) // the part before the drop still arrives
+                assert(rs.last.exception.exists {
+                    case _: ApolloNetworkException => true
+                    case _                         => false
+                })
             }
         }
     }

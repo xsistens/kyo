@@ -81,46 +81,70 @@ final class HttpNetworkTransport(
         Tag[Emit[Chunk[ApolloResponse[D]]]]
     ): ResponseStream[D] =
         val httpRequest = composer.compose(serverUrl, request)
-        Stream.unwrap {
-            Abort.run[Throwable](engine.executeStreaming(httpRequest)).map {
-                case Result.Success(resp) if !resp.isSuccessful =>
-                    Stream.init(
-                        Seq(
-                            failure(
-                                request,
-                                ApolloHttpException(
-                                    statusCode = resp.statusCode,
-                                    headers = resp.headers,
-                                    message = s"HTTP request failed with status ${resp.statusCode}"
+        foldStreamFailure(request) {
+            Stream.unwrap {
+                Abort.run[Throwable](engine.executeStreaming(httpRequest)).map {
+                    case Result.Success(resp) if !resp.isSuccessful =>
+                        Stream.init(
+                            Seq(
+                                failure(
+                                    request,
+                                    ApolloHttpException(
+                                        statusCode = resp.statusCode,
+                                        headers = resp.headers,
+                                        message = s"HTTP request failed with status ${resp.statusCode}"
+                                    )
                                 )
                             )
                         )
-                    )
-                case Result.Success(resp) =>
-                    resp.header("Content-Type") match
-                        case Some(ct) if isMultipart(ct) =>
-                            val boundary = MultipartParser.boundaryOf(ct)
-                            val partStream = resp.body match
-                                case HttpStreamBody.Chunked(chunks) => MultipartParser.parts(boundary, chunks)
-                                case HttpStreamBody.Buffered(text) =>
-                                    Stream.init(MultipartParser.parts(boundary, text))
-                            IncrementalAssembler.stream(request, partStream)
-                        case _ =>
-                            // The server ignored @defer (a plain JSON reply): one response.
-                            resp.body match
-                                case HttpStreamBody.Buffered(text) =>
-                                    Stream.init(Seq(decodeSingle(request, text)))
-                                case HttpStreamBody.Chunked(chunks) =>
-                                    Stream.unwrap(
-                                        chunks.run.map(cs => Stream.init(Seq(decodeSingle(request, cs.mkString))))
-                                    )
-                case Result.Failure(cause) =>
-                    Stream.init(Seq(failure(request, ApolloNetworkException(cause = cause))))
-                case Result.Panic(cause) =>
-                    Stream.init(Seq(failure(request, ApolloNetworkException(cause = cause))))
+                    case Result.Success(resp) =>
+                        resp.header("Content-Type") match
+                            case Some(ct) if isMultipart(ct) =>
+                                val boundary = MultipartParser.boundaryOf(ct)
+                                val partStream = resp.body match
+                                    case HttpStreamBody.Chunked(chunks) => MultipartParser.parts(boundary, chunks)
+                                    case HttpStreamBody.Buffered(text) =>
+                                        Stream.init(MultipartParser.parts(boundary, text))
+                                IncrementalAssembler.stream(request, partStream)
+                            case _ =>
+                                // The server ignored @defer (a plain JSON reply): one response.
+                                resp.body match
+                                    case HttpStreamBody.Buffered(text) =>
+                                        Stream.init(Seq(decodeSingle(request, text)))
+                                    case HttpStreamBody.Chunked(chunks) =>
+                                        Stream.unwrap(
+                                            chunks.run.map(cs => Stream.init(Seq(decodeSingle(request, cs.mkString))))
+                                        )
+                    case Result.Failure(cause) =>
+                        Stream.init(Seq(failure(request, ApolloNetworkException(cause = cause))))
+                    case Result.Panic(cause) =>
+                        Stream.init(Seq(failure(request, ApolloNetworkException(cause = cause))))
+                }
             }
         }
     end executeStreaming
+
+    /** Fold any failure raised *while the body stream is being consumed* into a
+      * terminal [[ApolloNetworkException]] response appended after whatever was already
+      * emitted — the streaming counterpart of [[execute]]'s `Abort.run`. The initial
+      * round-trip failure is already a value (see the `Result.Failure`/`Panic` arms
+      * above); this covers a live body that drops mid-stream (the JVM/Native engine
+      * re-raises such a drop through its body stream), keeping "failures are values"
+      * without buffering — chunks emitted before the drop still reach the caller.
+      */
+    private def foldStreamFailure[D](request: ApolloRequest[D])(stream: ResponseStream[D])(using
+        Frame,
+        Tag[Emit[Chunk[ApolloResponse[D]]]]
+    ): ResponseStream[D] =
+        Stream {
+            Abort.run[Throwable](stream.emit).map {
+                case Result.Success(_) => ()
+                case Result.Failure(cause) =>
+                    Emit.value(Chunk(failure(request, ApolloNetworkException(cause = cause))))
+                case Result.Panic(cause) =>
+                    Emit.value(Chunk(failure(request, ApolloNetworkException(cause = cause))))
+            }
+        }
 
     private def isMultipart(contentType: String): Boolean =
         contentType.toLowerCase.contains("multipart/mixed")
