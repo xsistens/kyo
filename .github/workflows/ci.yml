@@ -114,6 +114,42 @@ jobs:
       mode: ${{ needs.prep.outputs.mode }}
       ref: ${{ inputs.ref }}
 
+  # Cross-platform apollo interop: stand up one caliban ItServer and drive
+  # kyo.apollo.ApolloE2ESpec from every client platform against it (scripts/apollo-e2e.sh).
+  # The spec is env-gated on APOLLO_IT_URL, so nothing else in CI ever exercises the live
+  # JVM/Native (kyo-http socket) and JS/Wasm (fetch/WebSocket) engines end-to-end — a plain
+  # `sbt test` reports it Cancelled. Gated behind build so a broken build skips this
+  # expensive job. One arch (x64) is enough: this proves client-vs-server interop, not
+  # per-arch codegen, which the build matrix already covers.
+  apollo-e2e:
+    needs: [prep, build]
+    if: ${{ needs.prep.outputs.mode != 'custom' }}
+    timeout-minutes: 180
+    runs-on: ubuntu-latest
+    env:
+      SBT_TASK_LIMIT: 1
+      JAVA_OPTS: '-Xmx12G -Xss10M -XX:+UseG1GC -XX:+UseCompactObjectHeaders -XX:MaxMetaspaceSize=2G -XX:ReservedCodeCacheSize=256M -Dfile.encoding=UTF-8'
+      JVM_OPTS:  '-Xmx12G -Xss10M -XX:+UseG1GC -XX:+UseCompactObjectHeaders -XX:MaxMetaspaceSize=2G -XX:ReservedCodeCacheSize=256M -Dfile.encoding=UTF-8'
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+      # target: Native provisions the heaviest toolchain (JDK+sbt, BoringSSL, liburing,
+      # native libs) — which also covers the JVM ItServer and the JVM client engine; Node
+      # is added on top for the JS/Wasm engines. Together they satisfy all four platforms
+      # scripts/apollo-e2e.sh drives.
+      - uses: ./.github/actions/setup
+        with:
+          os: linux-x64
+          target: Native
+      - uses: actions/setup-node@v6.4.0
+        with:
+          node-version: '24'
+      - name: Run cross-platform apollo E2E (JVM/JS/Native/Wasm)
+        shell: bash
+        run: bash scripts/apollo-e2e.sh JVM JS Native Wasm
+
   custom:
     needs: prep
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'custom' }}
