@@ -1,0 +1,82 @@
+package kyo.apollo.network.http
+
+import java.nio.charset.StandardCharsets
+import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.apollo.StreamProbe
+import kyo.apollo.network.HttpHeader
+import kyo.apollo.network.HttpMethod
+
+/** The JVM/Native [[HttpClientEngine]]'s real incremental-delivery path: its
+  * `executeStreaming` override reads the response body as a live byte stream over
+  * kyo-http and decodes it to UTF-8 statefully, rather than inheriting the buffered
+  * default. Two angles:
+  *
+  *   - a direct check that [[Utf8ChunkDecoder]] carries a multibyte character split
+  *     across two byte chunks (the property the streaming path depends on), and
+  *   - an end-to-end check against a real kyo-http server that streams a
+  *     `multipart/mixed` body in pieces — the engine must surface it as a
+  *     [[HttpStreamBody.Chunked]] stream whose reassembled text is byte-exact.
+  */
+class HttpClientEngineStreamingSpec extends kyo.test.Test[Any]:
+
+    // Starts a real server (an ephemeral listener fd the NIO transport defers closing,
+    // as kyo-http's own suites note); run leaves sequentially and skip the socket leak check.
+    override def config = super.config.sequential.leakCheckSockets(false)
+
+    "Utf8ChunkDecoder carries a multibyte char split across two byte chunks" in {
+        val decoder = new Utf8ChunkDecoder
+        // 'ë' (U+00EB) is 0xC3 0xAB in UTF-8; feed the two bytes in separate chunks.
+        val first  = decoder.decode(Array(0x5a.toByte, 0x6f.toByte, 0xc3.toByte)) // "Zo" + lead byte
+        val second = decoder.decode(Array(0xab.toByte))                           // continuation byte
+        val tail   = decoder.flush()
+        assert(first == "Zo") // the partial 'ë' is held back, not corrupted
+        assert(second == "ë") // completed on the next chunk
+        assert(tail.isEmpty)
+        assert(first + second + tail == "Zoë")
+    }
+
+    "executeStreaming surfaces a multipart/mixed body as a live Chunked stream, UTF-8-exact across chunk boundaries" in {
+        val boundary = "graphql"
+        val fullText =
+            s"--$boundary\r\nContent-Type: application/json\r\n\r\n" +
+                "{\"data\":{\"name\":\"Zoë\"}}" + // 'ë' is a 2-byte UTF-8 char
+                s"\r\n--$boundary--\r\n"
+        val bytes = fullText.getBytes(StandardCharsets.UTF_8)
+        // Split the body inside the multibyte 'ë' so the server flushes its lead byte
+        // in one chunk and its continuation byte in the next — only a stateful decoder
+        // reassembles it correctly, and only a drop-free bridge delivers the tiny tail.
+        val leadIdx     = bytes.indexWhere(_ == 0xc3.toByte)
+        val (a, b)      = bytes.splitAt(leadIdx + 1)
+        val serverBody  = Stream.init(Seq(Span.fromUnsafe(a), Span.fromUnsafe(b)))
+        val contentType = s"multipart/mixed; boundary=$boundary"
+
+        val route = HttpRoute.postRaw("graphql").request(_.bodyText).response(_.bodyStream)
+        val ep = route.handler { _ =>
+            kyo.HttpResponse.ok.addField("body", serverBody).setHeader("Content-Type", contentType)
+        }
+
+        HttpServer.init(0, "127.0.0.1")(ep).map { server =>
+            val engine = new HttpClientEngine
+            val request = HttpRequest(
+                method = HttpMethod.Post,
+                url = s"http://127.0.0.1:${server.port}/graphql",
+                headers = List(HttpHeader("Content-Type", "application/json")),
+                body = Some("{}")
+            )
+            engine.executeStreaming(request).map { resp =>
+                assert(resp.statusCode == 200)
+                assert(resp.header("Content-Type").exists(_.contains("multipart/mixed")))
+                resp.body match
+                    case HttpStreamBody.Chunked(stream) =>
+                        StreamProbe.collect(stream).map { parts =>
+                            val reassembled = parts.mkString
+                            assert(reassembled == fullText, s"got ${parts.size} parts: $parts")
+                            assert(reassembled.contains("Zoë"))
+                        }
+                    case other =>
+                        fail(s"expected a Chunked streaming body, got $other")
+                end match
+            }
+        }
+    }
+end HttpClientEngineStreamingSpec
