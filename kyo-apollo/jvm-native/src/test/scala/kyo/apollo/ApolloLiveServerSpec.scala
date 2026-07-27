@@ -4,7 +4,12 @@ import kyo.*
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
 import kyo.apollo.api.Query
+import kyo.apollo.exception.ApolloWebSocketClosedException
 import kyo.apollo.json.Json
+import kyo.apollo.network.ApolloRequest
+import kyo.apollo.network.ws.KyoHttpWebSocketEngine
+import kyo.apollo.network.ws.WebSocketConnection
+import kyo.apollo.network.ws.WebSocketNetworkTransport
 import kyo.apollo.network.ws.WsTestSupport
 import scala.collection.immutable.VectorMap
 
@@ -105,6 +110,54 @@ class ApolloLiveServerSpec extends kyo.test.Test[Any]:
                 )
                 assert(values == List(10, 20, 30))
             end for
+        }
+    }
+
+    "an abnormal socket drop (no close frame) surfaces as a 1006, not a clean 1000" in {
+        // The server acks the handshake then holds the subscription open, sending
+        // nothing. Force-closing it (closeNow, a raw TCP drop) leaves the client with
+        // an EOF and NO WebSocket close frame — kyo-http reports closeReason Absent.
+        // The engine must map that to 1006 (abnormal), the value the transport's
+        // reconnect logic keys on; the pre-fix code read Absent as a clean 1000 close,
+        // silently disabling reconnection on JVM/Native (a divergence from the JS
+        // engine's browser-1006 mapping).
+        Fiber.Promise.init[Unit, Any].map { gotInit =>
+            val wsHandler =
+                HttpHandler.webSocket("graphql/ws", HttpWebSocket.Config(subprotocols = Seq("graphql-transport-ws"))) {
+                    (_, ws) =>
+                        Loop.foreach {
+                            ws.take().map {
+                                case HttpWebSocket.Payload.Text(msg) =>
+                                    if msg.contains("connection_init") then
+                                        ws.put(HttpWebSocket.Payload.Text("""{"type":"connection_ack"}"""))
+                                            .andThen(gotInit.completeUnitDiscard)
+                                            .andThen(Loop.continue)
+                                    else Loop.continue // ack, then hold open; never complete
+                                case HttpWebSocket.Payload.Binary(_) => Loop.continue
+                            }
+                        }
+                }
+            HttpServer.init(0, "127.0.0.1")(wsHandler).map { server =>
+                // reconnectWhen defaults to reconnectNever, so the drop terminates the
+                // subscription with its close value — exactly the code under test.
+                val transport = new WebSocketNetworkTransport(
+                    serverUrl = s"ws://127.0.0.1:${server.port}/graphql/ws",
+                    engine = new KyoHttpWebSocketEngine
+                )
+                val subscription = transport.subscribe(ApolloRequest(WsTestSupport.ValueSubscription()))
+                for
+                    collected <- Fiber.init(Scope.run(StreamProbe.collect(subscription)))
+                    _         <- gotInit.get     // the server got the handshake — the socket is open
+                    _         <- server.closeNow // raw TCP drop, no WS close frame
+                    seen      <- collected.get   // the subscription terminates with the drop value
+                yield assert(seen.exists(r =>
+                    r.exception.exists {
+                        case e: ApolloWebSocketClosedException => e.code == WebSocketConnection.NormalClosure + 6 // 1006
+                        case _                                 => false
+                    }
+                ))
+                end for
+            }
         }
     }
 end ApolloLiveServerSpec
