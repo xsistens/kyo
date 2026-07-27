@@ -9,7 +9,6 @@ import kyo.apollo.exception.ApolloHttpException
 import kyo.apollo.exception.DefaultApolloException
 import kyo.apollo.network.ws.FakeWebSocketConnection
 import kyo.apollo.network.ws.FakeWebSocketEngine
-import kyo.apollo.network.ws.ManualWsScheduler
 import kyo.apollo.network.ws.WebSocketConnection
 import kyo.apollo.network.ws.WsTestSupport
 
@@ -86,7 +85,6 @@ class ApolloEffectExecSpec extends kyo.test.Test[Any]:
                 .builder()
                 .serverUrl("wss://example.invalid/graphql")
                 .webSocketEngine(new FakeWebSocketEngine(conn))
-                .webSocketScheduler(new ManualWsScheduler)
                 .build()
             // Open a subscription so a live socket exists (opened lazily on consume);
             // the open Future resolves on a microtask — an Async.sleep lets it settle.

@@ -77,12 +77,15 @@ object CountryFixture:
       * the response, then `Success` after.
       */
     final class GatedEngine(responseBody: String) extends HttpEngine:
-        import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
-        private val gate = scala.concurrent.Promise[Unit]()
+        private given AllowUnsafe = AllowUnsafe.embrace.danger
+        private given Frame       = Frame.internal
+        private val gate: Fiber.Promise[Unit, Any] =
+            Sync.Unsafe.evalOrThrow(Fiber.Promise.init[Unit, Any])
         def release(): Unit =
-            val _ = gate.trySuccess(())
+            given AllowUnsafe = AllowUnsafe.embrace.danger
+            discard(gate.unsafe.completeUnitDiscard())
         def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
-            Async.fromFuture(gate.future.map(_ => HttpResponse(200, Nil, responseBody)))
+            gate.get.andThen(HttpResponse(200, Nil, responseBody))
     end GatedEngine
 
     /** A client with no cache — enough for the effect form, whose `.data` /
