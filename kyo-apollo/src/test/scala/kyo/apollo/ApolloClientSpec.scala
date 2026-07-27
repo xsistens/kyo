@@ -19,7 +19,6 @@ import kyo.apollo.network.http.HttpRequest
 import kyo.apollo.network.http.HttpResponse
 import kyo.apollo.network.ws.FakeWebSocketConnection
 import kyo.apollo.network.ws.FakeWebSocketEngine
-import kyo.apollo.network.ws.ManualWsScheduler
 import kyo.apollo.network.ws.SubscriptionWsProtocol
 import kyo.apollo.network.ws.WebSocketConnection
 import kyo.apollo.runtime.ResponseStream
@@ -101,7 +100,6 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
     /** Build a client whose subscriptions run over a scripted in-memory socket. */
     private def wsClient(
         conn: FakeWebSocketConnection,
-        scheduler: ManualWsScheduler,
         build: ApolloClient.Builder => ApolloClient.Builder = identity
     ): ApolloClient =
         build(
@@ -110,7 +108,6 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
                 .serverUrl("https://example.com/graphql")
                 .httpEngine(CapturingEngine("""{"data":{"value":0}}"""))
                 .webSocketEngine(FakeWebSocketEngine(conn))
-                .webSocketScheduler(scheduler)
         ).build()
 
     "ApolloClient" - {
@@ -253,16 +250,13 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
         // --- subscriptions ------------------------------------------------------
 
         "a subscription streams typed events over the WebSocket transport" in {
-            val conn      = new FakeWebSocketConnection
-            val scheduler = new ManualWsScheduler
-            val engine    = FakeWebSocketEngine(conn)
+            val conn   = new FakeWebSocketConnection
+            val engine = FakeWebSocketEngine(conn)
             val client = ApolloClient
                 .builder()
                 .serverUrl("https://example.com/graphql")
                 .webSocketServerUrl("wss://example.com/subscriptions")
-                .webSocketEngine(engine)
-                .webSocketScheduler(scheduler)
-                .build()
+                .webSocketEngine(engine).build()
             var seen = List.empty[Int]
             for
                 _ <- StreamProbe.drain(client.subscription(ValueSubscription()).stream)(r =>
@@ -278,57 +272,54 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
                 _ <- settle
                 _ <- Sync.defer { conn.server(next("0", 7)); conn.server(next("0", 8)) }
                 _ <- settle
+                _ <- Sync.defer(client.close())
+                _ <- settle
             yield assert(seen == List(7, 8))
             end for
         }
 
         "wsProtocol(SubscriptionWsProtocol) negotiates the legacy subprotocol" in {
-            val conn      = new FakeWebSocketConnection
-            val scheduler = new ManualWsScheduler
-            val engine    = FakeWebSocketEngine(conn)
+            val conn   = new FakeWebSocketConnection
+            val engine = FakeWebSocketEngine(conn)
             val client = ApolloClient
                 .builder()
                 .serverUrl("https://example.com/graphql")
                 .webSocketServerUrl("wss://example.com/subscriptions")
                 .wsProtocol(SubscriptionWsProtocol)
-                .webSocketEngine(engine)
-                .webSocketScheduler(scheduler)
-                .build()
+                .webSocketEngine(engine).build()
             for
                 _ <- StreamProbe.drain(client.subscription(ValueSubscription()).stream)(_ => ())
+                _ <- settle
+                _ <- Sync.defer(client.close())
                 _ <- settle
             yield assert(engine.opens.map(_._2) == List(Some("graphql-ws")))
             end for
         }
 
         "webSocketServerUrl defaults to serverUrl when unset" in {
-            val conn      = new FakeWebSocketConnection
-            val scheduler = new ManualWsScheduler
-            val engine    = FakeWebSocketEngine(conn)
+            val conn   = new FakeWebSocketConnection
+            val engine = FakeWebSocketEngine(conn)
             val client = ApolloClient
                 .builder()
                 .serverUrl("wss://example.com/graphql")
-                .webSocketEngine(engine)
-                .webSocketScheduler(scheduler)
-                .build()
+                .webSocketEngine(engine).build()
             for
                 _ <- StreamProbe.drain(client.subscription(ValueSubscription()).stream)(_ => ())
+                _ <- settle
+                _ <- Sync.defer(client.close())
                 _ <- settle
             yield assert(engine.opens.map(_._1) == List("wss://example.com/graphql"))
             end for
         }
 
         "a query routes over HTTP and never opens the subscription socket" in {
-            val conn      = new FakeWebSocketConnection
-            val scheduler = new ManualWsScheduler
-            val engine    = FakeWebSocketEngine(conn)
+            val conn   = new FakeWebSocketConnection
+            val engine = FakeWebSocketEngine(conn)
             val client = ApolloClient
                 .builder()
                 .serverUrl("https://example.com/graphql")
                 .httpEngine(CapturingEngine("""{"data":{"value":5}}"""))
-                .webSocketEngine(engine)
-                .webSocketScheduler(scheduler)
-                .build()
+                .webSocketEngine(engine).build()
             client.query(ValueQuery()).execute.map { response =>
                 assert(response.data == Present(5))
                 assert(engine.opens == Nil) // no subscription socket for a query
@@ -336,9 +327,8 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
         }
 
         "close() closes the shared subscription socket cleanly" in {
-            val conn      = new FakeWebSocketConnection
-            val scheduler = new ManualWsScheduler
-            val client    = wsClient(conn, scheduler)
+            val conn   = new FakeWebSocketConnection
+            val client = wsClient(conn)
             for
                 _ <- StreamProbe.drain(client.subscription(ValueSubscription()).stream)(_ => ())
                 _ <- settle
@@ -346,6 +336,7 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
                 _ <- settle
                 _ = assert(conn.closedWith == None) // still open while streaming
                 _ <- Sync.defer(client.close())
+                _ <- settle // close() is async (enqueues Shutdown); let the owner fiber process it
             yield assert(conn.closedWith.map(_._1) == Some(WebSocketConnection.NormalClosure))
             end for
         }

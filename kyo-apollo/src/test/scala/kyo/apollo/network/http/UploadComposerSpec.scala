@@ -1,6 +1,7 @@
 package kyo.apollo.network.http
 
 import kyo.Schema
+import kyo.Span
 import kyo.apollo.Upload
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
@@ -9,9 +10,7 @@ import kyo.apollo.api.ScalarCodec
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.HttpMethod
-import org.scalajs.dom
 import scala.collection.immutable.VectorMap
-import scala.scalajs.js as sjs
 
 /** Unit tests for the [[HttpRequestComposer]] multipart branch: an operation with
   * an `Upload` variable produces a spec-compliant `multipart/form-data` request
@@ -40,18 +39,15 @@ class UploadComposerSpec extends kyo.test.Test[Any]:
         def variables: Json          = Json.JObj(VectorMap.empty)
     end PlainMutation
 
-    private val composer = new HttpRequestComposer()
-    private def blob: dom.Blob =
-        sjs.Dynamic
-            .newInstance(sjs.Dynamic.global.Blob)(sjs.Array[sjs.Any]("hello"))
-            .asInstanceOf[dom.Blob]
+    private val composer       = new HttpRequestComposer()
+    private def upload: Upload = Upload(Span.from("hello".getBytes), "a.txt")
 
     "HttpRequestComposer multipart" - {
 
         "an Upload variable produces a multipart formBody (operations/map/part)" in {
             val req = composer.compose(
                 "http://x/graphql",
-                ApolloRequest(UploadMutation(Upload(blob, "a.txt")))
+                ApolloRequest(UploadMutation(upload))
             )
             assert(req.body.isEmpty)
             val form   = req.formBody.getOrElse(sys.error("expected a formBody"))

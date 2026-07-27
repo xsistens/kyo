@@ -1,5 +1,6 @@
 package kyo.apollo
 
+import kyo.Span
 import kyo.apollo.api.ScalarCodec
 import kyo.apollo.api.ScalarDecodeException
 import kyo.apollo.json.Json
@@ -9,23 +10,27 @@ import scala.scalajs.js as sjs
 /** Unit tests for the `Upload` scalar representation: `ScalarCodec.upload` encodes
   * an [[Upload]] to a [[Json.JUpload]] placeholder (which renders as `null` in the
   * `operations` payload), and decoding is unsupported (uploads are input-only).
+  * Also covers the JS [[UploadJs]] bridge that reads a browser `Blob` into an
+  * [[Upload]].
   */
 class UploadCodecSpec extends kyo.test.Test[Any]:
 
     given CanEqual[Any, Any] = CanEqual.derived
 
-    private def fakeBlob: dom.Blob = sjs.Dynamic.literal(size = 3).asInstanceOf[dom.Blob]
+    private def fakeUpload: Upload = Upload(Span.from("abc".getBytes), "a.txt")
+    private def realBlob: dom.Blob =
+        sjs.Dynamic.newInstance(sjs.Dynamic.global.Blob)(sjs.Array[sjs.Any]("hi")).asInstanceOf[dom.Blob]
 
     "Upload scalar codec" - {
 
-        "encode wraps the blob + filename in a Json.JUpload" in {
-            ScalarCodec.upload.encode(Upload(fakeBlob, "a.txt")) match
-                case Json.JUpload(_, name) => assert(name == "a.txt")
-                case other                 => assert(false, s"expected JUpload, got $other")
+        "encode wraps the upload in a Json.JUpload" in {
+            ScalarCodec.upload.encode(fakeUpload) match
+                case Json.JUpload(u) => assert(u.fileName == "a.txt")
+                case other           => assert(false, s"expected JUpload, got $other")
         }
 
         "a JUpload renders as null (nulled in the operations payload)" in {
-            assert(Json.JUpload(fakeBlob, "a.txt").render == "null")
+            assert(Json.JUpload(fakeUpload).render == "null")
         }
 
         "decode is unsupported (uploads are input-only)" in {
@@ -35,9 +40,14 @@ class UploadCodecSpec extends kyo.test.Test[Any]:
             assert(true)
         }
 
-        "Upload.apply(file) uses the file's own name" in {
-            val file = sjs.Dynamic.literal(name = "photo.png").asInstanceOf[dom.File]
-            assert(Upload(file).fileName == "photo.png")
+        "UploadJs.fromBlob reads the blob's bytes and carries the filename" in {
+            UploadJs.fromBlob(realBlob, "photo.png", "image/png").map { u =>
+                assert(
+                    u.fileName == "photo.png" &&
+                        u.contentType == "image/png" &&
+                        new String(u.data.toArray) == "hi"
+                )
+            }
         }
     }
 end UploadCodecSpec

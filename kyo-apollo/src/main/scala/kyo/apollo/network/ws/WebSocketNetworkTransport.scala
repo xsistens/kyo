@@ -1,5 +1,7 @@
 package kyo.apollo.network.ws
 
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kyo.*
 import kyo.apollo.api.GraphQLError
 import kyo.apollo.api.GraphQLResponse
@@ -12,68 +14,49 @@ import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.ApolloResponse
 import kyo.apollo.runtime.ResponseStream
-import scala.collection.mutable
-import scala.concurrent.Future
-import scala.concurrent.Promise
-import scala.util.Failure
-import scala.util.Success
+import scala.collection.immutable.VectorMap
 import scala.util.control.NonFatal
 
 /** The terminal transport for **subscription** operations: multiplexes many
   * long-lived subscriptions over a single shared [[WebSocketConnection]].
   *
-  * This is the WebSocket analog of [[kyo.apollo.network.http.HttpNetworkTransport]].
-  * Where the HTTP transport runs one request/one response, this one opens a
-  * socket lazily on the first subscription, performs the `connection_init` /
-  * `connection_ack` handshake once, then routes every server frame to the right
-  * subscriber by the operation id it assigned. Each call to [[subscribe]]
-  * returns a cold, long-lived `Flow[ApolloResponse[D]]`; nothing touches the
-  * socket until that flow is collected/subscribed (matching the Phase 05
-  * cold-stream contract), and cancelling a subscriber sends the protocol
-  * `stop`/`complete` for its id.
+  * The WebSocket analog of [[kyo.apollo.network.http.HttpNetworkTransport]]. It
+  * opens a socket lazily on the first subscription, performs the
+  * `connection_init` / `connection_ack` handshake once, then routes every server
+  * frame to the right subscriber by the operation id it assigned. Each
+  * [[subscribe]] returns a cold, long-lived [[ResponseStream]]; nothing touches
+  * the socket until it is collected, and cancelling a subscriber sends the
+  * protocol `stop`/`complete` for its id.
   *
-  * Lifecycle, top to bottom:
-  *   - **Lazy open + handshake.** The first active subscription opens the socket
-  *     through the [[WebSocketEngine]], sends [[WsProtocol.connectionInit]] (with
-  *     the optional [[connectionPayload]] for auth), and waits for
-  *     [[WsMessage.ConnectionAck]]. If no ack arrives within
-  *     [[ackTimeoutMillis]], the handshake fails and every pending subscription
-  *     receives that failure as a value.
-  *   - **Multiplexing.** Every subscription gets a unique integer id;
-  *     [[WsMessage.Data]] / [[WsMessage.Error]] / [[WsMessage.Complete]] frames
-  *     are dispatched to the one subscriber that owns their id, so two
-  *     subscriptions share one socket without interfering.
-  *   - **Keepalive.** A server [[WsMessage.Ping]] is answered with
-  *     [[WsProtocol.pong]] when the protocol defines one; a [[WsMessage.Pong]] or
-  *     legacy [[WsMessage.KeepAlive]] is observed as a liveness signal only.
-  *   - **Idle close.** When the last subscription ends, the socket is closed
-  *     after [[idleTimeoutMillis]] of no subscriptions; a new subscription inside
-  *     that window cancels the pending close and reuses the socket.
+  * '''Concurrency model (native kyo).''' All connection + routing state lives in a
+  * single [[State]] mutated only by one background '''owner fiber''' that consumes
+  * a command [[Channel]] mailbox. Every external interaction ([[subscribe]],
+  * [[close]]) and every socket/timer event enqueues a [[Msg]]; the owner fiber
+  * processes them one at a time, so the state machine is serialized without locks
+  * and is correct on JS, JVM and Native alike (unlike a bare event-loop
+  * assumption). The [[State]] is held in an `AtomicReference` purely for cross-
+  * carrier-thread visibility of the owner fiber's own writes.
   *
-  * **Failures are values** (the Phase 03 contract): a socket drop or a terminal
-  * server close surfaces as `ApolloResponse.exception` — an
-  * [[ApolloWebSocketClosedException]] — pushed to every active subscriber; the
-  * `Flow` itself does not fail for those conditions.
+  * '''Generation fencing.''' Each opened socket gets a monotonic `generation`.
+  * Connection-scoped commands ([[Msg.Frame]], [[Msg.SocketClosed]],
+  * [[Msg.Opened]], [[Msg.OpenFailed]], [[Msg.AckTimeout]]) carry the generation
+  * they were produced under and are ignored when it no longer matches, so a
+  * superseded socket's late events cannot re-enter the machine. Discarding a
+  * socket also interrupts its dedicated fiber (which holds the connection's
+  * `Scope` plus the incoming-drain and close-watcher fibers), tearing the socket
+  * and its producers down.
   *
-  * **Automatic reconnection** (Phase 06 Task 5) is layered on top: when an
-  * *established* socket drops abnormally and [[reconnectWhen]] agrees, the drop
-  * is surfaced to every active subscriber as an [[ApolloWebSocketClosedException]]
-  * value (the *resubscription signal* — callers can refetch any state they may
-  * have missed), and the transport transparently reopens the socket after a
-  * [[backoff]] delay, re-runs the `connection_init` handshake, and resubscribes
-  * every still-active subscription under its original operation id. The attempt
-  * counter resets to zero once a reconnection re-acknowledges, so a socket that
-  * flaps briefly does not inherit an old outage's backoff. When [[reconnectWhen]]
-  * declines (or a reconnection cycle exhausts), the drop becomes *terminal*: each
-  * subscription receives the `ApolloWebSocketClosedException` value and then
-  * completes. A clean `1000` close (idle timeout, [[close]]) is always terminal
-  * and never reconnects.
+  * '''Timers''' (ack, idle, reconnect backoff) are `Async.delay`-forked fibers
+  * that enqueue a command when they elapse and are cancelled by interrupt. Being
+  * `Clock`-driven they are deterministic under `Clock.withTimeControl` in tests.
   *
-  * Single-threaded by construction: JS has no real concurrency, so the routing
-  * table and connection state are plain mutable fields mutated only from the
-  * event loop. A monotonic `generation` counter fences a socket that has been
-  * deliberately discarded (ack timeout, reconnect) so its late `close`/`message`
-  * callbacks are ignored rather than re-entering the state machine.
+  * '''Failures are values''': a socket drop or terminal server close surfaces as
+  * `ApolloResponse.exception` (an [[ApolloWebSocketClosedException]]) pushed to
+  * every active subscriber; the stream itself does not fail. '''Reconnection''' is
+  * opt-in via [[reconnectWhen]]: an established socket's abnormal drop surfaces to
+  * every subscriber as the resubscription-signal value, then the transport
+  * reopens after a [[backoff]] delay, re-runs the handshake, and resubscribes
+  * every still-active subscription under its original id.
   *
   * @param serverUrl         the `ws(s)://` endpoint subscriptions connect to
   * @param protocol          the wire protocol (defaults to the modern
@@ -85,12 +68,9 @@ import scala.util.control.NonFatal
   *                          the handshake
   * @param idleTimeoutMillis how long to keep the socket open after the last
   *                          subscription ends
-  * @param scheduler         the timer seam for the ack/idle/backoff timeouts
-  *                          (tests inject a manual one)
   * @param reconnectWhen     decides, from the drop's exception and the 1-based
   *                          attempt number, whether to reopen a dropped socket;
   *                          defaults to [[WebSocketNetworkTransport.reconnectNever]]
-  *                          (opt-in, matching apollo-kotlin's `reopenWhen`)
   * @param backoff           how long to wait before each reconnection attempt
   */
 final class WebSocketNetworkTransport(
@@ -100,459 +80,402 @@ final class WebSocketNetworkTransport(
     connectionPayload: Option[Json] = None,
     ackTimeoutMillis: Long = 10000L,
     idleTimeoutMillis: Long = 60000L,
-    scheduler: WsScheduler = WsScheduler.default,
     reconnectWhen: (ApolloException, Long) => Boolean = WebSocketNetworkTransport.reconnectNever,
     backoff: WsBackoff = WsBackoff.default
 ):
+    import WebSocketNetworkTransport.*
 
-    import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+    private given Frame              = Frame.internal
+    private given AllowUnsafe        = AllowUnsafe.embrace.danger
+    private given CanEqual[Msg, Msg] = CanEqual.derived
 
-    /** One live subscriber's reaction to the frames it owns.
-      *
-      * `onMessage` handles the operation-scoped frames ([[WsMessage.Data]],
-      * [[WsMessage.Error]], [[WsMessage.Complete]]); `onTerminate` delivers a
-      * *terminal* connection-level failure (a drop we will not reconnect, an ack
-      * timeout) as a value and ends the subscription; `onDrop` delivers a
-      * *recoverable* drop as a value (the resubscription signal) **without** ending
-      * the subscription, so streaming resumes after the reconnect; `resend`
-      * re-issues this subscription's start frame on a freshly reopened socket.
-      */
-    final private class Subscriber(
-        val onMessage: WsMessage => Unit,
-        val onTerminate: ApolloException => Unit,
-        val onDrop: ApolloException => Unit,
-        val resend: WebSocketConnection => Unit
-    )
+    // ---- owner fiber + mailbox (started eagerly, parked until first command) ---
 
-    // ---- mutable connection + routing state (event-loop-confined) -------------
+    private val idCounter    = new AtomicLong(0L)
+    private val stateRef     = new AtomicReference[State](State.initial)
+    private val ownerStarted = new AtomicReference[Boolean](false)
 
-    /** Memoized handshake: `Some` once an open is in flight or established, so all
-      * subscriptions share the one socket. Reset to `None` on any terminal close
-      * so the next subscription reopens.
-      */
-    private var handshake: Maybe[Future[WebSocketConnection]]   = Absent
-    private var active: Maybe[WebSocketConnection]              = Absent
-    private var pendingAck: Maybe[Promise[WebSocketConnection]] = Absent
-    private var ackTimer: Maybe[() => Unit]                     = Absent
-    private var idleTimer: Maybe[() => Unit]                    = Absent
-    private var reconnectTimer: Maybe[() => Unit]               = Absent
+    // The mailbox is a plain data structure (no clock dependency), so it is created
+    // eagerly. The owner fiber, however, is forked lazily on first subscribe from
+    // WITHIN the effect runtime — never via an unsafe eval at construction — so it
+    // inherits the caller's context (notably a `Clock.withTimeControl` clock in
+    // tests), which its ack/idle/backoff timer fibers then transitively inherit.
+    private val mailbox: Channel[Msg] =
+        Sync.Unsafe.evalOrThrow(Channel.initUnscoped[Msg](Int.MaxValue))
 
-    /** `Some` while a reconnect cycle is in flight (backoff pending or attempt
-      * running). It doubles as the shared [[handshake]] future during that window
-      * so subscriptions started mid-reconnect wait for the reopen rather than
-      * racing a second socket open; it resolves when the reconnect re-acknowledges.
-      */
-    private var reconnectPromise: Maybe[Promise[WebSocketConnection]] = Absent
+    private def ensureStarted(using Frame): Unit < Async =
+        Sync.defer(ownerStarted.compareAndSet(false, true)).map { firstStart =>
+            val eff: Unit < Async =
+                if firstStart then Fiber.initUnscoped(mailbox.streamUntilClosed().foreach(handle)).unit
+                else ()
+            eff
+        }
 
-    /** 1-based reconnection attempt count, driving [[backoff]]; reset to zero on a
-      * successful re-acknowledgement and on any full teardown.
-      */
-    private var reconnectAttempt: Long = 0L
-
-    /** Bumped whenever a socket is deliberately abandoned; async callbacks captured
-      * against an older generation become no-ops, so a discarded socket's late
-      * `close`/`message` never re-enters the state machine.
-      */
-    private var generation: Long = 0L
-
-    /** id → subscriber, populated only once a subscription's start frame has been
-      * sent (i.e. after the handshake). Entries survive a recoverable drop so the
-      * subscription can be resubscribed on the reopened socket; server frames route
-      * to a live operation by this id both before and after a reconnect.
-      */
-    private val routes       = mutable.Map.empty[String, Subscriber]
-    private var nextId: Long = 0L
+    // ---- public API -----------------------------------------------------------
 
     /** A cold [[ResponseStream]] for `request`'s subscription. Consuming it (within
       * an `Async & Scope` context) registers the operation on the shared socket:
-      * server frames are pushed into a per-subscription [[Channel]] whose
-      * `streamUntilClosed` drives the stream, and the enclosing `Scope`'s teardown
-      * sends the protocol stop for this operation, drops its routing entry, and
-      * closes the channel (ending the stream). The subscription's own natural end
-      * (server `complete`/`error`, terminal drop) closes the channel too.
-      *
-      * The transport's internal Future/Promise/callback state machine is unchanged;
-      * this only bridges its `emit` callback boundary into a Kyo `Channel` (the
-      * `channel.unsafe.offer` from the event-loop callback is the idiomatic interop
-      * point, matching `kyo-ui`'s reactive bridge).
+      * server frames are decoded and pushed into a per-subscription [[Channel]]
+      * whose `streamUntilClosed` drives the stream, and the enclosing `Scope`'s
+      * teardown sends the protocol stop for this operation and closes the channel.
       */
     def subscribe[D](request: ApolloRequest[D])(using
         Frame,
         Tag[Emit[Chunk[ApolloResponse[D]]]]
     ): ResponseStream[D] =
         Stream.unwrap {
-            Channel.initUnscoped[ApolloResponse[D]](Int.MaxValue).map { channel =>
+            ensureStarted.andThen(Channel.initUnscoped[ApolloResponse[D]](Int.MaxValue)).map { channel =>
                 given AllowUnsafe = AllowUnsafe.embrace.danger
-                val cancel = register(
-                    request,
-                    resp =>
-                        val _ = channel.unsafe.offer(resp)
-                    ,
-                    () =>
-                        val _ = channel.unsafe.close()
+                val id            = idCounter.getAndIncrement().toString
+                val body          = OperationRequestBody(request.operation)
+                val startFrame    = protocol.startOperation(id, body)
+                val subscriber = Subscriber(
+                    id = id,
+                    startFrame = startFrame,
+                    emitData = payload => discard(channel.unsafe.offer(decodeData(request, payload))),
+                    emitErrorPayload = payload => discard(channel.unsafe.offer(errorResponse(request, payload))),
+                    emitException = exception => discard(channel.unsafe.offer(exceptionResponse(request, exception))),
+                    terminate = () => discard(channel.unsafe.close())
                 )
+                discard(mailbox.unsafe.offer(Msg.Register(subscriber)))
                 Scope
                     .ensure(Sync.defer {
                         given AllowUnsafe = AllowUnsafe.embrace.danger
-                        cancel()
-                        val _ = channel.unsafe.close()
+                        discard(mailbox.unsafe.offer(Msg.Cancel(id)))
+                        discard(channel.unsafe.close())
                     })
                     .andThen(channel.streamUntilClosed())
             }
         }
 
-    /** Tear the transport down: close the shared socket (if any), cancel any
-      * pending reconnect, and drop all state. The [[kyo.apollo.ApolloClient.close]] seam
-      * calls this. Active subscribers receive the close as a terminal
-      * [[ApolloWebSocketClosedException]] value.
+    /** Tear the transport down: close the shared socket, cancel any pending
+      * reconnect, and drop all state. Active subscribers receive the close as a
+      * terminal [[ApolloWebSocketClosedException]] value.
       */
     def close(): Unit =
-        terminate(ApolloWebSocketClosedException(WebSocketConnection.NormalClosure))
+        given AllowUnsafe = AllowUnsafe.embrace.danger
+        discard(mailbox.unsafe.offer(Msg.Shutdown))
+    end close
 
-    // ---- registration ---------------------------------------------------------
+    // ---- owner-fiber command handling (single-threaded by construction) --------
 
-    /** Register one subscription and return its cancel thunk. `onFinish` fires once
-      * when the subscription terminates for any reason (server `complete`/`error`,
-      * socket drop, or caller cancel).
-      */
-    private def register[D](
-        request: ApolloRequest[D],
-        emit: ApolloResponse[D] => Unit,
-        onFinish: () => Unit
-    ): () => Unit =
-        val id         = allocateId()
-        var finished   = false
-        var registered = false
+    private def handle(msg: Msg): Unit < Async =
+        val s = stateRef.get()
+        msg match
+            case Msg.Register(sub)          => onRegister(s, sub)
+            case Msg.Cancel(id)             => onCancel(s, id)
+            case Msg.Frame(gen, text)       => if gen == s.generation then dispatch(s, protocol.parse(text)) else ()
+            case Msg.Opened(gen, conn)      => onOpened(s, gen, conn)
+            case Msg.OpenFailed(gen, cause) => if gen == s.generation then handshakeFailure(s, cause) else ()
+            case Msg.SocketClosed(gen, cause) =>
+                if gen == s.generation then onSocketClosed(s, cause) else ()
+            case Msg.AckTimeout(gen) =>
+                if gen == s.generation && s.awaitingAck then handshakeFailure(s, ackTimeoutException) else ()
+            case Msg.IdleTimeout(token) =>
+                if token == s.idleToken && s.routes.isEmpty then terminate(s, normalClose) else ()
+            case Msg.DoReconnect(token) => if token == s.reconnectToken then doReconnect(s) else ()
+            case Msg.Shutdown           => terminate(s, normalClose).andThen(closeMailbox)
+        end match
+    end handle
 
-        // The start frame is fixed for this operation, so precompute it once and
-        // reuse it for both the initial send and any reconnection resubscribe.
-        val body       = OperationRequestBody(request.operation)
-        val startFrame = protocol.startOperation(id, body)
+    // Closing the mailbox ends the owner fiber's `streamUntilClosed` loop; run only
+    // after Shutdown's terminate so subscribers are notified first.
+    private def closeMailbox: Unit < Async =
+        Sync.defer(discard(mailbox.unsafe.close()))
 
-        def finish(): Unit =
-            if !finished then
-                finished = true
-                if registered then discard(routes.remove(id))
-                registered = false
-                onFinish()
-                if routes.isEmpty then
-                    cancelReconnect()
-                    scheduleIdleClose()
+    private def onRegister(s: State, sub: Subscriber): Unit < Async =
+        val s1 = cancelIdleTimer(s).copy(routes = s.routes.updated(sub.id, sub))
+        if s1.established then
+            stateRef.set(s1)
+            s1.conn.map(_.send(sub.startFrame)).getOrElse(())
+        else if s1.awaitingAck || s1.reconnecting then
+            // A handshake (or reconnect) is in flight; the start frame is sent for
+            // every route once connection_ack lands.
+            stateRef.set(s1)
+        else
+            // Idle: open the socket; the start frame is sent on ack.
+            connect(s1)
+        end if
+    end onRegister
 
-        val subscriber = new Subscriber(
-            onMessage = {
-                case WsMessage.Data(_, payload) => emit(decodeData(request, payload))
-                case WsMessage.Error(_, payload) =>
-                    emit(errorResponse(request, payload)); finish()
-                case WsMessage.Complete(_) => finish()
-                case _                     => ()
-            },
-            onTerminate = exception =>
-                emit(exceptionResponse(request, exception));
-                finish()
-            ,
-            // A recoverable drop is surfaced as a value but does not end the stream:
-            // the transport resubscribes and data resumes on the reopened socket.
-            onDrop = exception => emit(exceptionResponse(request, exception)),
-            resend = connection => connection.send(startFrame)
-        )
-
-        // A fresh subscription cancels any pending idle close so the socket is reused.
-        cancelIdleClose()
-
-        ensureConnection().onComplete {
-            case Success(connection) =>
-                if !finished then
-                    registered = true
-                    routes(id) = subscriber
-                    connection.send(startFrame)
-            case Failure(cause) =>
-                if !finished then subscriber.onTerminate(toApolloException(cause))
-        }
-
-        () =>
-            if !finished then
-                if registered then active.foreach(_.send(protocol.stopOperation(id)))
-                finish()
-    end register
-
-    private def allocateId(): String =
-        val id = nextId
-        nextId += 1
-        id.toString
-    end allocateId
-
-    // ---- shared connection + handshake ----------------------------------------
-
-    /** The shared socket, opened + handshaken on first use and memoized after.
-      * During a reconnect cycle the memoized future is the pending reconnect, so a
-      * subscription started mid-outage waits for the reopen instead of racing it.
-      */
-    private def ensureConnection(): Future[WebSocketConnection] =
-        handshake match
-            case Present(future) => future
-            case Absent =>
-                val future = connect()
-                handshake = Present(future)
-                future
-
-    /** Open a socket, wire up its incoming frames, send `connection_init`, and
-      * complete once `connection_ack` arrives (or fail on ack timeout / open
-      * failure). Manages only the socket mechanics + [[pendingAck]]; the caller
-      * (initial [[ensureConnection]] or a [[reconnect]] attempt) owns what the
-      * returned future's outcome means. Every async callback is fenced by the
-      * [[generation]] captured here, so a socket abandoned before its callbacks run
-      * cannot re-enter the state machine.
-      */
-    private def connect(): Future[WebSocketConnection] =
-        val gen = generation
-        val ack = Promise[WebSocketConnection]()
-        pendingAck = Present(ack)
-        engine.open(serverUrl, Some(protocol.name)).onComplete {
-            case Success(connection) =>
-                if gen == generation then
-                    active = Present(connection)
-                    // The single incoming sink; the `closed` future is the drop/close signal.
-                    connection.incoming(text => if gen == generation then dispatch(protocol.parse(text)))
-                    connection.closed.onComplete {
-                        case Success(_) =>
-                            if gen == generation then onSocketClosed(None)
-                        case Failure(cause) =>
-                            if gen == generation then onSocketClosed(Some(toApolloException(cause)))
-                    }
-                    connection.send(protocol.connectionInit(connectionPayload))
-                    ackTimer = Present(
-                        scheduler.schedule(ackTimeoutMillis)(() => if gen == generation then onAckTimeout())
-                    )
-                else connection.close() // superseded before it opened — discard it
-            case Failure(cause) =>
-                if gen == generation then handleHandshakeFailure(toApolloException(cause))
-        }
-        ack.future
-    end connect
+    private def onCancel(s: State, id: String): Unit < Async =
+        s.routes.get(id) match
+            case None => ()
+            case Some(_) =>
+                val sendStop: Unit < Async =
+                    if s.established then sendVia(s.conn, protocol.stopOperation(id)) else ()
+                sendStop.andThen(removeRoute(s, id))
+    end onCancel
 
     /** Route one decoded server frame to its handler. */
-    private def dispatch(message: WsMessage): Unit = message match
-        case WsMessage.ConnectionAck(_) =>
-            cancelAckTimer()
-            for connection <- active; promise <- pendingAck do discard(promise.trySuccess(connection))
-            pendingAck = Absent
+    private def dispatch(s: State, message: WsMessage): Unit < Async = message match
+        case WsMessage.ConnectionAck(_) => onAck(s)
         case WsMessage.ConnectionError(payload) =>
-            val exception = ApolloNetworkException(
-                payload.fold("WebSocket connection rejected by server")(p =>
-                    s"WebSocket connection rejected: ${p.render}"
+            terminate(
+                s,
+                ApolloNetworkException(
+                    payload.fold("WebSocket connection rejected by server")(p =>
+                        s"WebSocket connection rejected: ${p.render}"
+                    )
                 )
             )
-            // A server rejection is terminal — never reconnect through it.
-            terminate(exception)
         case WsMessage.Ping(_) =>
-            protocol.pong().foreach(text => active.foreach(_.send(text)))
-        case WsMessage.Pong(_) | WsMessage.KeepAlive =>
-            () // liveness signal only
-        case data: WsMessage.Data     => routes.get(data.id).foreach(_.onMessage(data))
-        case error: WsMessage.Error   => routes.get(error.id).foreach(_.onMessage(error))
-        case done: WsMessage.Complete => routes.get(done.id).foreach(_.onMessage(done))
-        case WsMessage.Unknown(_)     => () // stray/future frame — ignored, stays total
+            protocol.pong() match
+                case Some(text) => s.conn.map(_.send(text)).getOrElse(())
+                case None       => ()
+        case WsMessage.Pong(_) | WsMessage.KeepAlive => ()
+        case WsMessage.Data(id, payload) =>
+            s.routes.get(id).foreach(_.emitData(payload)); ()
+        case WsMessage.Error(id, payload) =>
+            s.routes.get(id) match
+                case Some(sub) => sub.emitErrorPayload(payload); sub.terminate(); removeRoute(s, id)
+                case None      => ()
+        case WsMessage.Complete(id) =>
+            s.routes.get(id) match
+                case Some(sub) => sub.terminate(); removeRoute(s, id)
+                case None      => ()
+        case WsMessage.Unknown(_) => ()
 
-    /** The socket closed. `cause` is `None` on a clean `1000` close, or the drop's
-      * [[ApolloException]] on an abnormal close. A failure *around the handshake*
-      * (before ack) is delegated to [[handleHandshakeFailure]] so the awaiter
-      * reacts; an *established* socket's abnormal drop either reconnects (when
-      * [[reconnectWhen]] agrees and subscriptions remain) or terminates them.
+    /** `connection_ack` arrived: cancel the ack timer, mark the socket established,
+      * reset the reconnect counter, and (re)send the start frame for every route —
+      * covering both freshly-pending subscriptions and a reconnect's resubscribe.
       */
-    private def onSocketClosed(cause: Option[ApolloException]): Unit =
-        if pendingAck.isDefined then
-            handleHandshakeFailure(
-                cause.getOrElse(ApolloWebSocketClosedException(WebSocketConnection.NormalClosure))
-            )
+    private def onAck(s: State): Unit < Async =
+        val s1 = cancelAckTimer(s).copy(
+            awaitingAck = false,
+            established = true,
+            reconnecting = false,
+            reconnectAttempt = 0L
+        )
+        stateRef.set(s1)
+        s1.conn match
+            case Absent => ()
+            case Present(conn) =>
+                Kyo.foreachDiscard(s1.routes.values.toSeq)(sub => conn.send(sub.startFrame))
+        end match
+    end onAck
+
+    /** The socket closed. `cause` is `Absent` on a clean `1000` close, or the
+      * drop's exception on an abnormal close. A failure around the handshake (still
+      * awaiting ack) becomes a [[handshakeFailure]]; an established socket's drop
+      * either reconnects (when [[reconnectWhen]] agrees and subscriptions remain)
+      * or terminates them.
+      */
+    private def onSocketClosed(s: State, cause: Maybe[ApolloException]): Unit < Async =
+        if s.awaitingAck then handshakeFailure(s, cause.getOrElse(normalClose))
         else
             cause match
-                case Some(drop) if routes.nonEmpty && reconnectWhen(drop, reconnectAttempt + 1) =>
-                    clearSocket()
-                    // The resubscription signal: every active subscriber sees the drop as a
-                    // value, then the transport reopens and resubscribes them.
-                    routes.values.toList.foreach(_.onDrop(drop))
-                    scheduleReconnect()
+                case Present(drop) if s.routes.nonEmpty && reconnectWhen(drop, s.reconnectAttempt + 1) =>
+                    val s1 = clearSocket(s)
+                    stateRef.set(s1)
+                    s1.routes.values.foreach(_.emitException(drop))
+                    scheduleReconnect(s1)
                 case _ =>
-                    terminate(
-                        cause.getOrElse(ApolloWebSocketClosedException(WebSocketConnection.NormalClosure))
-                    )
+                    terminate(s, cause.getOrElse(normalClose))
+    end onSocketClosed
 
-    /** `connection_ack` never arrived: discard the unresponsive socket and fail the
-      * handshake so the awaiter (a pending subscription, or a reconnect attempt)
-      * reacts.
+    // ---- connection lifecycle -------------------------------------------------
+
+    /** Open a socket in a dedicated fiber and drive its handshake. The fiber holds
+      * the connection's `Scope` open (via `Async.never`) plus the incoming-drain
+      * and close-watcher fibers; interrupting it (on discard) tears all three down.
       */
-    private def onAckTimeout(): Unit =
-        ackTimer = Absent
-        handleHandshakeFailure(
-            ApolloNetworkException(
-                s"Timed out after ${ackTimeoutMillis}ms waiting for connection_ack"
-            )
-        )
-    end onAckTimeout
+    private def connect(s: State): Unit < Async =
+        val gen = s.generation + 1
+        Fiber
+            .initUnscoped(openLoop(gen))
+            .map { fiber =>
+                stateRef.set(s.copy(
+                    generation = gen,
+                    conn = Absent,
+                    connFiber = Present(fiber.unsafeWiden),
+                    awaitingAck = true,
+                    established = false
+                ))
+            }
+    end connect
+
+    private def openLoop(gen: Long): Unit < Async =
+        Scope.run {
+            Abort.run[Throwable](engine.open(serverUrl, Some(protocol.name))).map {
+                case Result.Success(conn) =>
+                    Fiber.init(conn.incoming.foreach(text => offer(Msg.Frame(gen, text)))).andThen {
+                        Fiber.init(watchClosed(gen, conn)).andThen {
+                            offer(Msg.Opened(gen, conn)).andThen(Async.never)
+                        }
+                    }
+                case Result.Failure(cause) => offer(Msg.OpenFailed(gen, toApolloException(cause)))
+                case Result.Panic(cause)   => offer(Msg.OpenFailed(gen, toApolloException(cause)))
+            }
+        }
+
+    private def watchClosed(gen: Long, conn: WebSocketConnection): Unit < Async =
+        Abort.run[ApolloWebSocketClosedException](conn.closed).map {
+            case Result.Success(_)      => offer(Msg.SocketClosed(gen, Absent))
+            case Result.Failure(closed) => offer(Msg.SocketClosed(gen, Present(closed)))
+            case Result.Panic(cause)    => offer(Msg.SocketClosed(gen, Present(toApolloException(cause))))
+        }
+
+    private def onOpened(s: State, gen: Long, conn: WebSocketConnection): Unit < Async =
+        if gen != s.generation then conn.close() // superseded before it opened — discard it
+        else
+            conn.send(protocol.connectionInit(connectionPayload)).andThen {
+                Fiber.initUnscoped(Async.delay(ackTimeoutMillis.millis)(offer(Msg.AckTimeout(gen)))).map { timer =>
+                    stateRef.set(s.copy(conn = Present(conn), ackTimer = Present(timer.unsafeWiden)))
+                }
+            }
+    end onOpened
 
     // ---- reconnection ---------------------------------------------------------
 
-    /** Arm the next reconnection attempt on the [[backoff]] delay. Reuses the
-      * shared [[reconnectPromise]] across attempts so subscriptions awaiting the
-      * reopen stay parked until it succeeds (or the cycle gives up).
-      */
-    private def scheduleReconnect(): Unit =
-        reconnectAttempt += 1
-        cancelReconnect()
-        cancelIdleClose()
-        val promise = reconnectPromise.getOrElse {
-            val fresh = Promise[WebSocketConnection]()
-            reconnectPromise = Present(fresh)
-            fresh
-        }
-        handshake = Present(promise.future)
-        reconnectTimer = Present(
-            scheduler.schedule(backoff.delayMillis(reconnectAttempt))(() => reconnect(promise))
-        )
+    private def scheduleReconnect(s: State): Unit < Async =
+        val attempt = s.reconnectAttempt + 1
+        val token   = s.reconnectToken + 1
+        val s1      = cancelReconnectTimer(cancelIdleTimer(s))
+        Fiber
+            .initUnscoped(Async.delay(backoff.delayMillis(attempt).millis)(offer(Msg.DoReconnect(token))))
+            .map { timer =>
+                stateRef.set(s1.copy(
+                    reconnectAttempt = attempt,
+                    reconnectToken = token,
+                    reconnecting = true,
+                    reconnectTimer = Present(timer.unsafeWiden)
+                ))
+            }
     end scheduleReconnect
 
-    /** Reopen the socket for a reconnection attempt. On success, reset the attempt
-      * counter, resolve the shared promise (unparking mid-outage subscriptions),
-      * and resubscribe every still-active subscription under its original id.
-      */
-    private def reconnect(promise: Promise[WebSocketConnection]): Unit =
-        reconnectTimer = Absent
-        if routes.isEmpty then
-            reconnectPromise = Absent
-            finishTeardown() // everyone cancelled during backoff — nothing to reopen
-        else
-            connect().onComplete {
-                case Success(connection) =>
-                    reconnectAttempt = 0
-                    reconnectPromise = Absent
-                    handshake = Present(Future.successful(connection))
-                    discard(promise.trySuccess(connection))
-                    routes.values.toList.foreach(_.resend(connection))
-                case Failure(reason) =>
-                    onReconnectFailed(toApolloException(reason))
-            }
+    private def doReconnect(s: State): Unit < Async =
+        val s1 = s.copy(reconnectTimer = Absent)
+        if s1.routes.isEmpty then
+            stateRef.set(s1.copy(reconnecting = false))
+            finishTeardown(s1)
+        else connect(s1)
         end if
-    end reconnect
+    end doReconnect
 
-    /** A reconnection attempt failed to re-establish. Retry (honoring
-      * [[reconnectWhen]] for the next attempt) or give up and terminate every
-      * subscription (which also fails the shared [[reconnectPromise]]).
+    /** A reconnect attempt failed to re-establish: retry (honoring [[reconnectWhen]]
+      * for the next attempt) or give up and terminate every subscription.
       */
-    private def onReconnectFailed(cause: ApolloException): Unit =
-        if routes.isEmpty then
-            reconnectPromise = Absent
-            finishTeardown()
-        else if reconnectWhen(cause, reconnectAttempt + 1) then scheduleReconnect()
-        else terminate(cause)
+    private def reconnectFailed(s: State, cause: ApolloException): Unit < Async =
+        if s.routes.isEmpty then finishTeardown(s)
+        else if reconnectWhen(cause, s.reconnectAttempt + 1) then scheduleReconnect(s)
+        else terminate(s, cause)
 
     // ---- teardown helpers -----------------------------------------------------
 
-    /** A failure before/around a handshake ack. Discards the socket without
-      * re-entry and fails [[pendingAck]] so the awaiter reacts: a pending
-      * subscription terminates (and the next reopens, since [[handshake]] is
-      * cleared), while a reconnect attempt drops through to [[onReconnectFailed]]
-      * (its promise, and thus [[handshake]], stays pending).
+    /** A failure before/around a handshake ack. Discards the socket; if this was a
+      * reconnect attempt, route to [[reconnectFailed]]; otherwise (initial
+      * handshake) terminate the pending subscriptions with the failure value.
       */
-    private def handleHandshakeFailure(exception: ApolloException): Unit =
-        cancelAckTimer() // a discarded socket's ack timer must not linger
-        discardActiveSocket()
-        val awaiter = pendingAck
-        pendingAck = Absent
-        if reconnectPromise.isEmpty then handshake = Absent
-        awaiter.foreach(a => discard(a.tryFailure(exception)))
-    end handleHandshakeFailure
+    private def handshakeFailure(s: State, exception: ApolloException): Unit < Async =
+        val s1 = discardActiveSocket(cancelAckTimer(s))
+        if s1.reconnecting then reconnectFailed(s1, exception)
+        else terminate(s1, exception)
+    end handshakeFailure
 
-    /** Terminate every currently-routed subscription with a terminal value.
-      * Snapshots the routes first because `onTerminate` removes entries as it runs.
+    /** Full terminal shutdown: cancel timers, close + discard the socket, terminate
+      * every subscription with the value, and reset to idle.
       */
-    private def terminateAll(exception: ApolloException): Unit =
-        routes.values.toList.foreach(_.onTerminate(exception))
-
-    /** Full terminal shutdown: fail any pending handshake/reconnect, discard the
-      * socket, terminate every subscription with the value, and zero all state.
-      */
-    private def terminate(exception: ApolloException): Unit =
-        pendingAck.foreach(p => discard(p.tryFailure(exception)))
-        reconnectPromise.foreach(p => discard(p.tryFailure(exception)))
-        discardActiveSocket()
-        terminateAll(exception)
-        finishTeardown()
+    private def terminate(s: State, exception: ApolloException): Unit < Async =
+        val closeConn: Unit < Async = s.conn match
+            case Present(c) => c.close(closeCodeOf(exception))
+            case Absent     => ()
+        closeConn.andThen {
+            interruptAll(s).map { _ =>
+                s.routes.values.foreach { sub =>
+                    sub.emitException(exception)
+                    sub.terminate()
+                }
+                stateRef.set(State.initial.copy(generation = s.generation + 1))
+            }
+        }
     end terminate
 
-    /** Bump the [[generation]] and close the current socket so its late callbacks
-      * are fenced out. Leaves routing/reconnect bookkeeping to the caller.
+    /** Interrupt + close the current socket (unresponsive handshake); the next
+      * connect bumps the generation, fencing its late events.
       */
-    private def discardActiveSocket(): Unit =
-        val socket = active
-        generation += 1
-        active = Absent
-        socket.foreach(_.close())
+    private def discardActiveSocket(s: State): State =
+        s.conn.foreach(c => Sync.Unsafe.evalOrThrow(Fiber.initUnscoped(c.close()).unit))
+        interruptFiber(s.connFiber)
+        s.copy(conn = Absent, connFiber = Absent, generation = s.generation + 1, awaitingAck = false)
     end discardActiveSocket
 
-    /** Drop the socket mechanics but keep [[routes]] and the reconnect bookkeeping. */
-    private def clearSocket(): Unit =
-        active = Absent
-        handshake = Absent
-        pendingAck = Absent
-        cancelAckTimer()
+    /** Drop the socket mechanics but keep [[State.routes]] for resubscribe; the
+      * socket has already closed, so no explicit close is sent.
+      */
+    private def clearSocket(s: State): State =
+        interruptFiber(s.connFiber)
+        cancelAckTimer(s).copy(
+            conn = Absent,
+            connFiber = Absent,
+            established = false,
+            awaitingAck = false,
+            generation = s.generation + 1
+        )
     end clearSocket
 
-    /** Reset every field back to the initial idle state. */
-    private def finishTeardown(): Unit =
-        generation += 1
-        active = Absent
-        handshake = Absent
-        pendingAck = Absent
-        reconnectAttempt = 0
-        reconnectPromise = Absent
-        cancelAckTimer()
-        cancelReconnect()
-        cancelIdleClose()
-    end finishTeardown
+    private def finishTeardown(s: State): Unit < Async =
+        interruptAll(s).map(_ => stateRef.set(State.initial.copy(generation = s.generation + 1)))
 
-    private def cancelAckTimer(): Unit =
-        ackTimer.foreach(_())
-        ackTimer = Absent
+    private def removeRoute(s: State, id: String): Unit < Async =
+        val cur     = stateRef.get()
+        val routes1 = cur.routes.removed(id)
+        val s1      = cur.copy(routes = routes1)
+        if routes1.isEmpty then scheduleIdleClose(cancelReconnectTimer(s1))
+        else
+            stateRef.set(s1)
+            ()
+        end if
+    end removeRoute
 
-    private def cancelReconnect(): Unit =
-        reconnectTimer.foreach(_())
-        reconnectTimer = Absent
-
-    // ---- idle close -----------------------------------------------------------
-
-    private def scheduleIdleClose(): Unit =
-        cancelIdleClose()
-        idleTimer = Present(scheduler.schedule(idleTimeoutMillis) { () =>
-            idleTimer = Absent
-            if routes.isEmpty then
-                terminate(ApolloWebSocketClosedException(WebSocketConnection.NormalClosure))
-        })
+    private def scheduleIdleClose(s: State): Unit < Async =
+        s.conn match
+            case Absent => stateRef.set(s) // no live socket to idle-close
+            case Present(_) =>
+                val token = s.idleToken + 1
+                val s1    = cancelIdleTimer(s)
+                Fiber.initUnscoped(Async.delay(idleTimeoutMillis.millis)(offer(Msg.IdleTimeout(token)))).map { timer =>
+                    stateRef.set(s1.copy(idleToken = token, idleTimer = Present(timer.unsafeWiden)))
+                }
     end scheduleIdleClose
 
-    private def cancelIdleClose(): Unit =
-        idleTimer.foreach(_())
-        idleTimer = Absent
+    // ---- timer cancellation (pure state updates; interrupt is fire-and-forget) -
 
-    // ---- response decoding ----------------------------------------------------
+    private def cancelAckTimer(s: State): State =
+        interruptFiber(s.ackTimer); s.copy(ackTimer = Absent)
 
-    /** Decode a [[WsMessage.Data]] payload (`{ data, errors, extensions }`) into a
-      * typed [[ApolloResponse]], folding a parse failure into an exception value.
-      */
-    private def decodeData[D](
-        request: ApolloRequest[D],
-        payload: Json
-    ): ApolloResponse[D] =
+    private def cancelIdleTimer(s: State): State =
+        interruptFiber(s.idleTimer); s.copy(idleTimer = Absent)
+
+    private def cancelReconnectTimer(s: State): State =
+        interruptFiber(s.reconnectTimer); s.copy(reconnectTimer = Absent)
+
+    private def interruptAll(s: State): Unit < Async =
+        interruptFiber(s.ackTimer)
+        interruptFiber(s.idleTimer)
+        interruptFiber(s.reconnectTimer)
+        interruptFiber(s.connFiber)
+        ()
+    end interruptAll
+
+    private def interruptFiber(fiber: Maybe[Fiber[Unit, Any]]): Unit =
+        fiber.foreach(f => discard(Sync.Unsafe.evalOrThrow(f.interrupt)))
+
+    /** Send `text` over `conn` if present; a no-op when absent. */
+    private def sendVia(conn: Maybe[WebSocketConnection], text: String): Unit < Async =
+        conn match
+            case Present(c) => c.send(text)
+            case Absent     => ()
+
+    private def offer(msg: Msg): Unit < Async =
+        Abort.run[Closed](mailbox.offer(msg)).unit
+
+    // ---- response decoding (pure; per-subscription D captured at subscribe) ----
+
+    private def decodeData[D](request: ApolloRequest[D], payload: Json): ApolloResponse[D] =
         try
-            val response = GraphQLResponse.parse(
-                payload,
-                request.operation
-            )
-            ApolloResponse.fromGraphQLResponse(
-                request.requestUuid,
-                response,
-                request.executionContext
-            )
+            val response = GraphQLResponse.parse(payload, request.operation)
+            ApolloResponse.fromGraphQLResponse(request.requestUuid, response, request.executionContext)
         catch
             case NonFatal(cause) =>
                 ApolloResponse.fromException(
@@ -561,14 +484,7 @@ final class WebSocketNetworkTransport(
                     request.executionContext
                 )
 
-    /** Turn a [[WsMessage.Error]] payload into a response carrying the GraphQL
-      * errors. The modern protocol sends an array of errors; the legacy protocol a
-      * single error object — both are surfaced faithfully.
-      */
-    private def errorResponse[D](
-        request: ApolloRequest[D],
-        payload: Json
-    ): ApolloResponse[D] =
+    private def errorResponse[D](request: ApolloRequest[D], payload: Json): ApolloResponse[D] =
         ApolloResponse(
             requestUuid = request.requestUuid,
             data = Absent,
@@ -581,15 +497,8 @@ final class WebSocketNetworkTransport(
         case obj: Json.JObj   => Chunk(GraphQLError.parse(obj))
         case _                => Chunk.empty
 
-    private def exceptionResponse[D](
-        request: ApolloRequest[D],
-        exception: ApolloException
-    ): ApolloResponse[D] =
-        ApolloResponse.fromException(
-            request.requestUuid,
-            exception,
-            request.executionContext
-        )
+    private def exceptionResponse[D](request: ApolloRequest[D], exception: ApolloException): ApolloResponse[D] =
+        ApolloResponse.fromException(request.requestUuid, exception, request.executionContext)
 
     private def toApolloException(cause: Throwable): ApolloException = cause match
         case exception: ApolloException => exception
@@ -600,13 +509,90 @@ object WebSocketNetworkTransport:
 
     /** Never reopen a dropped socket: the drop terminates its subscriptions with
       * the [[ApolloWebSocketClosedException]] value. The default, matching
-      * apollo-kotlin's opt-in `reopenWhen`; the client `Builder` exposes a hook to
-      * override it (Task 6).
+      * apollo-kotlin's opt-in `reopenWhen`.
       */
     val reconnectNever: (ApolloException, Long) => Boolean = (_, _) => false
 
-    /** Always reopen on a drop, regardless of the cause or attempt count (the
+    /** Always reopen on a drop, regardless of cause or attempt count (the
       * [[WsBackoff]] still paces the attempts).
       */
     val reconnectAlways: (ApolloException, Long) => Boolean = (_, _) => true
+
+    private def normalClose: ApolloWebSocketClosedException =
+        ApolloWebSocketClosedException(WebSocketConnection.NormalClosure)
+
+    private def ackTimeoutException(using Frame): ApolloNetworkException =
+        ApolloNetworkException(s"Timed out waiting for connection_ack")
+
+    private def closeCodeOf(exception: ApolloException): Int = exception match
+        case e: ApolloWebSocketClosedException => e.code
+        case _                                 => WebSocketConnection.NormalClosure
+
+    /** One live subscriber's per-`D` reactions, captured at [[subscribe]] time and
+      * invoked by the owner fiber. The closures push into the subscription's
+      * channel via `channel.unsafe.*`; route bookkeeping stays owner-side.
+      */
+    final private class Subscriber(
+        val id: String,
+        val startFrame: String,
+        val emitData: Json => Unit,
+        val emitErrorPayload: Json => Unit,
+        val emitException: ApolloException => Unit,
+        val terminate: () => Unit
+    )
+
+    /** The owner fiber's command mailbox alphabet. Connection-scoped commands carry
+      * the `generation` of the socket that produced them for fencing.
+      */
+    private enum Msg derives CanEqual:
+        case Register(sub: Subscriber)
+        case Cancel(id: String)
+        case Frame(gen: Long, text: String)
+        case Opened(gen: Long, conn: WebSocketConnection)
+        case OpenFailed(gen: Long, cause: ApolloException)
+        case SocketClosed(gen: Long, cause: Maybe[ApolloException])
+        case AckTimeout(gen: Long)
+        case IdleTimeout(token: Long)
+        case DoReconnect(token: Long)
+        case Shutdown
+    end Msg
+
+    /** The whole transport state, mutated only by the owner fiber. */
+    final private case class State(
+        generation: Long,
+        routes: VectorMap[String, Subscriber],
+        conn: Maybe[WebSocketConnection],
+        connFiber: Maybe[Fiber[Unit, Any]],
+        awaitingAck: Boolean,
+        established: Boolean,
+        reconnecting: Boolean,
+        reconnectAttempt: Long,
+        reconnectToken: Long,
+        idleToken: Long,
+        ackTimer: Maybe[Fiber[Unit, Any]],
+        idleTimer: Maybe[Fiber[Unit, Any]],
+        reconnectTimer: Maybe[Fiber[Unit, Any]]
+    )
+
+    private object State:
+        val initial: State = State(
+            generation = 0L,
+            routes = VectorMap.empty,
+            conn = Absent,
+            connFiber = Absent,
+            awaitingAck = false,
+            established = false,
+            reconnecting = false,
+            reconnectAttempt = 0L,
+            reconnectToken = 0L,
+            idleToken = 0L,
+            ackTimer = Absent,
+            idleTimer = Absent,
+            reconnectTimer = Absent
+        )
+    end State
+
+    extension [A, S](fiber: Fiber[A, S])
+        /** Widen a fiber's phantom parameters for uniform storage in [[State]]. */
+        private def unsafeWiden: Fiber[Unit, Any] = fiber.asInstanceOf[Fiber[Unit, Any]]
 end WebSocketNetworkTransport

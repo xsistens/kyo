@@ -1,7 +1,7 @@
 package kyo.apollo.json
 
 import kyo.Chunk
-import scala.scalajs.js
+import kyo.apollo.Upload
 
 /** A minimal internal JSON AST.
   *
@@ -17,14 +17,14 @@ enum Json derives CanEqual:
     case JArr(items: Chunk[Json])
     case JObj(fields: Map[String, Json])
 
-    /** A file-upload placeholder — a JS `Blob`/`File` carried inside a request's
-      * `variables` for the graphql-multipart-request-spec. It is NOT real JSON: the
-      * request composer walks the variables, replaces each `JUpload` with `null` in
-      * the `operations` payload and carries the blob as a separate form part. It only
-      * ever appears on the request/variables path, never in response `data`; the
-      * exhaustive renderers therefore emit `null` for it defensively.
+    /** A file-upload placeholder — an [[kyo.apollo.Upload]] carried inside a
+      * request's `variables` for the graphql-multipart-request-spec. It is NOT real
+      * JSON: the request composer walks the variables, replaces each `JUpload` with
+      * `null` in the `operations` payload and carries the upload as a separate form
+      * part. It only ever appears on the request/variables path, never in response
+      * `data`; the exhaustive renderers therefore emit `null` for it defensively.
       */
-    case JUpload(blob: js.Any, fileName: String)
+    case JUpload(upload: Upload)
 
     /** Render this value as compact, valid JSON text. */
     def render: String = this match
@@ -37,7 +37,7 @@ enum Json derives CanEqual:
             fields
                 .map((k, v) => s"${Json.renderString(k)}:${v.render}")
                 .mkString("{", ",", "}")
-        case JUpload(_, _) => "null"
+        case JUpload(_) => "null"
 end Json
 
 object Json:

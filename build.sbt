@@ -519,6 +519,7 @@ lazy val kyoWasm = project
         `kyo-browser`.wasm,
         `kyo-slack`.wasm,
         `kyo-ui`.wasm,
+        `kyo-apollo`.wasm,
         `kyo-markdown`.wasm,
         `kyo-test-api`.wasm,
         `kyo-test-runner`.wasm,
@@ -2452,7 +2453,7 @@ lazy val `kyo-markdown` =
 // transport issues browser `fetch` through scalajs-dom. Depends only on the value and
 // effect libraries (no kyo-ui), so it builds against trunk on its own.
 lazy val `kyo-apollo` =
-    crossProject(JSPlatform)
+    crossProject(JSPlatform, WasmPlatform)
         .crossType(CrossType.Pure)
         .in(file("kyo-apollo"))
         .dependsOn(`kyo-core`, `kyo-data`, `kyo-schema`, `kyo-schema-json`)
@@ -2460,6 +2461,10 @@ lazy val `kyo-apollo` =
         .settings(`kyo-settings`)
         .jsSettings(
             `js-settings`,
+            libraryDependencies += "org.scala-js" %%% "scalajs-dom" % "2.8.1"
+        )
+        .wasmSettings(
+            `wasm-settings`,
             libraryDependencies += "org.scala-js" %%% "scalajs-dom" % "2.8.1"
         )
 

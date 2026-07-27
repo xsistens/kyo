@@ -8,7 +8,7 @@ import scala.concurrent.Future
 import scala.scalajs.js
 import scala.scalajs.js.Thenable.Implicits.*
 import scala.scalajs.js.annotation.JSGlobal
-import scala.scalajs.js.typedarray.Uint8Array
+import scala.scalajs.js.typedarray.*
 
 /** The production [[HttpEngine]]: issues requests through the platform `fetch`.
   *
@@ -96,7 +96,14 @@ final class FetchHttpEngine extends HttpEngine:
             case Some(form) =>
                 val data = new dom.FormData()
                 form.fields.foreach((name, value) => data.append(name, value))
-                form.files.foreach(f => data.append(f.fieldName, f.blob.asInstanceOf[dom.Blob], f.fileName))
+                form.files.foreach { f =>
+                    // Reconstruct a Blob from the portable byte payload. The bytes are raw
+                    // (signedness is irrelevant to Blob), so an Int8Array view is fine.
+                    val bag = new dom.BlobPropertyBag {}
+                    bag.`type` = f.contentType
+                    val blob = new dom.Blob(js.Array[dom.BlobPart](f.data.toArray.toTypedArray), bag)
+                    data.append(f.fieldName, blob, f.fileName)
+                }
                 init.body = data
             case None =>
                 request.body.foreach(b => init.body = b)
