@@ -1,5 +1,6 @@
 package kyo.apollo.network.http
 
+import kyo.Span
 import kyo.apollo.network.HttpHeader
 import kyo.apollo.network.HttpMethod
 import org.scalajs.dom
@@ -14,10 +15,6 @@ class FetchUploadSpec extends kyo.test.Test[Any]:
     given CanEqual[Any, Any] = CanEqual.derived
 
     private val engine = new FetchHttpEngine()
-    // A real Blob via the global constructor (Node 18+ has it), avoiding the typed
-    // BlobPart constructor — the engine casts blob back to dom.Blob for FormData.
-    private def blob: sjs.Any =
-        sjs.Dynamic.newInstance(sjs.Dynamic.global.Blob)(sjs.Array[sjs.Any]("hello"))
 
     "FetchHttpEngine.requestInit" - {
 
@@ -30,7 +27,7 @@ class FetchUploadSpec extends kyo.test.Test[Any]:
                 formBody = Some(
                     HttpForm(
                         fields = List("operations" -> "{}", "map" -> "{}"),
-                        files = List(HttpFormFile("0", blob, "a.txt"))
+                        files = List(HttpFormFile("0", Span.from("hello".getBytes), "a.txt", "text/plain"))
                     )
                 )
             )

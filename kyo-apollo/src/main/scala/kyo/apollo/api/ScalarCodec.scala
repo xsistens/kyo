@@ -88,7 +88,7 @@ object ScalarCodec:
       */
     val upload: ScalarCodec[kyo.apollo.Upload] = ScalarCodec(
         json => throw ScalarDecodeException("Upload", json),
-        value => Json.JUpload(value.blob, value.fileName)
+        value => Json.JUpload(value)
     )
 end ScalarCodec
 

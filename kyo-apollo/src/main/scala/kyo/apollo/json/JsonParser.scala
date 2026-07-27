@@ -1,37 +1,53 @@
 package kyo.apollo.json
 
-import kyo.Chunk
+import kyo.Frame
+import kyo.Structure
 import scala.collection.immutable.VectorMap
-import scala.scalajs.js
-import scala.scalajs.js.JSON
+// NB: no `import kyo.*` — a wildcard import would bring `kyo.Json` (the schema
+// format) into scope and shadow the same-package `kyo.apollo.json.Json` AST for an
+// unqualified `Json`. We reference apollo's `Json` unqualified and kyo's format as
+// the fully-qualified `kyo.Json`, mirroring SchemaJson's disambiguation.
 
 /** Parses JSON text into the internal [[Json]] AST.
   *
-  * Rather than hand-roll a lexer, this delegates to the platform's native
-  * `JSON.parse` (fast and spec-correct) and then converts the resulting
-  * `js.Any` graph into the typed [[Json]] model.
+  * Portable across every platform: decodes through kyo-schema-json's identity
+  * `Schema[Structure.Value]` — a shape-preserving parse of arbitrary JSON that
+  * reuses kyo's hand-rolled UTF-8 `JsonReader` — and maps the resulting
+  * `Structure.Value` tree onto the [[Json]] model. This replaces the former
+  * `js.JSON.parse` path, so the module builds on JVM and Native as well as
+  * JS/Wasm.
+  *
+  * A derived `Schema[Json]` would be wrong here: kyo-schema encodes a sum type
+  * as a tagged-union wrapper (`{"JStr":{"value":"x"}}`) and refuses plain JSON.
+  * `Structure.Value` is the universal any-shape type, so its identity Schema
+  * reads whatever shape the wire carries — exactly what a GraphQL response needs.
   */
 object JsonParser:
 
+    // kyo forbids auto-deriving `Frame` inside `package kyo.*`. This parse is
+    // deliberately effect-neutral, so supply an internal Frame for kyo.Json's
+    // decode-trace metadata rather than threading a `using Frame`.
+    private given Frame = Frame.internal
+
     /** Parse `input` into a [[Json]] value, throwing on malformed input. */
     def parse(input: String): Json =
-        fromJsAny(JSON.parse(input))
+        fromStructure(kyo.Json.decode[Structure.Value](input).getOrThrow)
 
-    private def fromJsAny(value: js.Any): Json =
-        js.typeOf(value) match
-            case "boolean" => Json.JBool(value.asInstanceOf[Boolean])
-            case "number"  => Json.JNum(value.asInstanceOf[Double])
-            case "string"  => Json.JStr(value.asInstanceOf[String])
-            case "object" =>
-                if value == null then Json.JNull
-                else if js.Array.isArray(value) then
-                    Json.JArr(Chunk.from(value.asInstanceOf[js.Array[js.Any]].map(fromJsAny)))
-                else
-                    val dict = value.asInstanceOf[js.Dictionary[js.Any]]
-                    // Preserve the source document's field order (JS objects and
-                    // `JSON.parse` iterate string keys in insertion order) so that a
-                    // parse → render round-trip is byte-stable and request bodies stay
-                    // deterministic. A plain `Map` would drop that order.
-                    Json.JObj(VectorMap.from(dict.toList.map((k, v) => k -> fromJsAny(v))))
-            case _ => Json.JNull
+    private def fromStructure(value: Structure.Value): Json = value match
+        case Structure.Value.Null           => Json.JNull
+        case Structure.Value.Bool(b)        => Json.JBool(b)
+        case Structure.Value.Integer(n)     => Json.JNum(n.toDouble)
+        case Structure.Value.Decimal(d)     => Json.JNum(d)
+        case Structure.Value.BigNum(d)      => Json.JNum(d.toDouble)
+        case Structure.Value.Str(s)         => Json.JStr(s)
+        case Structure.Value.Sequence(es)   => Json.JArr(es.map(fromStructure))
+        case Structure.Value.Record(fields) =>
+            // Preserve source field order (a VectorMap) so parse -> render is
+            // byte-stable and request bodies stay deterministic, matching the
+            // former JSON.parse insertion-order behaviour.
+            Json.JObj(VectorMap.from(fields.map((k, v) => k -> fromStructure(v))))
+        // VariantCase / MapEntries / Bytes / Instant / Duration never arise from a
+        // JSON parse (readStructure materializes objects as Record, arrays as
+        // Sequence, scalars unwrapped); fold defensively to null as before.
+        case _ => Json.JNull
 end JsonParser

@@ -27,7 +27,6 @@ import kyo.apollo.network.ws.JsWebSocketEngine
 import kyo.apollo.network.ws.WebSocketEngine
 import kyo.apollo.network.ws.WebSocketNetworkTransport
 import kyo.apollo.network.ws.WsProtocol
-import kyo.apollo.network.ws.WsScheduler
 import kyo.apollo.runtime.ResponseStream
 
 /** The top-level facade over the whole Phase 03 stack: it wires the two-tier
@@ -87,8 +86,6 @@ import kyo.apollo.runtime.ResponseStream
   * @param webSocketConnectionPayload optional `connection_init` payload (e.g. auth)
   * @param webSocketEngine      the socket round-trip (defaults to the real JS
   *                             engine; injectable for tests)
-  * @param webSocketScheduler   the timer seam for the ack/idle/backoff timeouts
-  *                             (injectable for deterministic tests)
   */
 final class ApolloClient private (
     serverUrl: String,
@@ -101,8 +98,7 @@ final class ApolloClient private (
     wsProtocol: WsProtocol,
     webSocketReopenWhen: (ApolloException, Long) => Boolean,
     webSocketConnectionPayload: Option[Json],
-    webSocketEngine: WebSocketEngine,
-    webSocketScheduler: WsScheduler
+    webSocketEngine: WebSocketEngine
 ):
 
     // The terminal transport, built once: the HTTP interceptor stack presented as
@@ -124,7 +120,6 @@ final class ApolloClient private (
             protocol = wsProtocol,
             engine = webSocketEngine,
             connectionPayload = webSocketConnectionPayload,
-            scheduler = webSocketScheduler,
             reconnectWhen = webSocketReopenWhen
         )
 
@@ -316,7 +311,6 @@ object ApolloClient:
             WebSocketNetworkTransport.reconnectNever
         private var _webSocketConnectionPayload: Option[Json] = None
         private var _webSocketEngine: Option[WebSocketEngine] = None
-        private var _webSocketScheduler: WsScheduler          = WsScheduler.default
 
         /** The GraphQL endpoint URL (required). */
         def serverUrl(value: String): this.type =
@@ -419,13 +413,6 @@ object ApolloClient:
             _webSocketEngine = Some(value)
             this
 
-        /** Inject the WebSocket timer scheduler — primarily for tests (a manual
-          * scheduler fired by hand). Defaults to the real `setTimeout`-backed one.
-          */
-        def webSocketScheduler(value: WsScheduler): this.type =
-            _webSocketScheduler = value
-            this
-
         /** Validate the config and build the immutable client without throwing:
           * `Left(ApolloConfigException)` when `serverUrl` was never set, `Right`
           * otherwise. The non-throwing core the effectful entry points
@@ -453,8 +440,7 @@ object ApolloClient:
                             wsProtocol = _wsProtocol,
                             webSocketReopenWhen = _webSocketReopenWhen,
                             webSocketConnectionPayload = _webSocketConnectionPayload,
-                            webSocketEngine = _webSocketEngine.getOrElse(JsWebSocketEngine()),
-                            webSocketScheduler = _webSocketScheduler
+                            webSocketEngine = _webSocketEngine.getOrElse(JsWebSocketEngine())
                         )
                     )
 

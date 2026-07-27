@@ -1,68 +1,41 @@
 package kyo.apollo.network.ws
 
-import kyo.Absent
-import kyo.Maybe
-import kyo.Present
+import kyo.*
+import kyo.apollo.exception.ApolloException
 import kyo.apollo.exception.ApolloWebSocketClosedException
-import kyo.discard
-import scala.collection.mutable
-import scala.concurrent.Future
-import scala.concurrent.Promise
 import scala.scalajs.js
 import scala.scalajs.js.annotation.JSGlobal
 import scala.util.Try
 
-/** The production [[WebSocketEngine]]: opens a real platform WebSocket.
+/** The production [[WebSocketEngine]] on JS/Wasm: opens a real platform WebSocket
+  * and bridges its browser-style callback events into the native-kyo seam.
   *
-  * Resolves the constructor at first use, in the order apollo-kotlin's engine
-  * resolves its platform socket:
-  *
-  *   1. the global `WebSocket` — present in browsers and in Node 21+ (this
-  *      project runs on Node 26, so the global is the normal path); otherwise
-  *   2. the [`ws`](https://www.npmjs.com/package/ws) npm package, `require`d
-  *      lazily as a Node fallback for older runtimes.
-  *
-  * `ws` is therefore an **optional** dependency: it is only touched when the
-  * global `WebSocket` is undefined, so it is intentionally *not* declared in
-  * `build.sbt`. Deployments on a runtime without a global `WebSocket` must
-  * `npm install ws` themselves; everyone on a modern runtime needs nothing. Both
-  * candidates expose the same browser-shaped surface this engine relies on —
-  * `new WebSocket(url, protocol)`, `send`, `close(code, reason)`, and
-  * `addEventListener("open"|"message"|"error"|"close", …)` — so one code path
-  * drives either (`ws` implements the `addEventListener`/`MessageEvent`/
-  * `CloseEvent` DOM shim in addition to its native `EventEmitter` API).
+  * Resolves the constructor at first use, as apollo-kotlin's engine does: the
+  * global `WebSocket` (browsers and Node 21+; this project runs Node 26),
+  * otherwise the [`ws`](https://www.npmjs.com/package/ws) npm package `require`d
+  * lazily. `ws` is therefore an optional dependency, only touched when the global
+  * is undefined, so it is intentionally not declared in `build.sbt`.
   */
 final class JsWebSocketEngine extends WebSocketEngine:
-
-    import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 
     def open(
         url: String,
         protocol: Option[String] = None
-    ): Future[WebSocketConnection] =
-        val socket = protocol match
-            case Some(p) => js.Dynamic.newInstance(JsWebSocketEngine.constructor)(url, p)
-            case None    => js.Dynamic.newInstance(JsWebSocketEngine.constructor)(url)
-        val connection = new JsWebSocketConnection(socket.asInstanceOf[JsWebSocket])
-        connection.opened.map(_ => connection)
-    end open
+    )(using Frame): WebSocketConnection < (Async & Scope & Abort[ApolloException]) =
+        JsWebSocketConnection.open(url, protocol)
 end JsWebSocketEngine
 
 object JsWebSocketEngine:
 
     /** Node's CommonJS `require`, faceted so the `ws` fallback can be pulled in
-      * lazily. Only ever called when the global `WebSocket` is missing, i.e. under
-      * an older Node runtime where `require` is guaranteed present.
+      * lazily. Only ever called when the global `WebSocket` is missing.
       */
     @js.native
     @JSGlobal("require")
-    private def require(module: String): js.Dynamic = js.native
+    private[ws] def require(module: String): js.Dynamic = js.native
 
-    /** The resolved WebSocket constructor — global first, `ws` package fallback.
-      * `lazy` so the lookup (and any `require("ws")`) happens on first open, not at
-      * class-load, keeping construction side-effect-free until a socket is opened.
-      */
-    private lazy val constructor: js.Dynamic =
+    /** The resolved WebSocket constructor — global first, `ws` package fallback. */
+    private[ws] lazy val constructor: js.Dynamic =
         if js.typeOf(js.Dynamic.global.WebSocket) != "undefined" then js.Dynamic.global.WebSocket
         else require("ws")
 end JsWebSocketEngine
@@ -79,94 +52,127 @@ private[ws] trait JsWebSocket extends js.Object:
 end JsWebSocket
 
 /** A [[WebSocketConnection]] backed by a platform `socket`, wiring its
-  * open/message/error/close events into the [[incoming]] `Flow` and the
-  * [[opened]] handshake signal.
-  *
-  * State is a tiny single-threaded machine (JS has no real concurrency): frames
-  * arriving before a sink attaches are buffered and flushed in order on attach;
-  * the first terminal event (clean close, abnormal close, or error) wins and is
-  * latched, so later events are ignored and the completion/failure is delivered
-  * exactly once. Package-private so the Task 3 spec can drive it with a scripted
-  * fake socket — the same seam the transport tests reuse.
+  * open/message/error/close events into the [[incoming]] channel and the [[closed]]
+  * liveness promise. The impure event callbacks push into kyo primitives via their
+  * `unsafe` handles; the effectful seam methods read those primitives.
   */
-final private[ws] class JsWebSocketConnection(socket: JsWebSocket) extends WebSocketConnection:
+final private[ws] class JsWebSocketConnection private (
+    socket: JsWebSocket,
+    incomingCh: Channel[String],
+    donePromise: Fiber.Promise[Unit, Abort[ApolloWebSocketClosedException]]
+) extends WebSocketConnection:
 
-    private val openedPromise               = Promise[Unit]()
-    private val donePromise                 = Promise[Unit]()
-    private val buffered                    = mutable.Queue.empty[String]
-    private var sink: Maybe[String => Unit] = Absent
-    private var errored                     = false
-    private var terminated                  = false
+    @volatile private var terminated = false
 
-    on("open")(_ => discard(openedPromise.trySuccess(())))
-    on("message")(e => push(messageText(e)))
-    on("error")(_ => onError())
-    on("close")(e => onClose(closeCode(e), closeReason(e)))
+    private[ws] def markTerminated(): Unit = terminated = true
 
-    /** Completes when the socket fires `open`; fails if it errors or closes first.
-      * The engine chains this into the `Future[WebSocketConnection]` it returns.
-      */
-    def opened: Future[Unit] = openedPromise.future
+    def send(text: String)(using Frame): Unit < Async =
+        Sync.defer(if !terminated then socket.send(text) else ())
 
-    def send(text: String): Unit = if !terminated then socket.send(text)
+    def incoming(using Frame): Stream[String, Async] =
+        incomingCh.streamUntilClosed()
+
+    def closed(using Frame): Unit < (Async & Abort[ApolloWebSocketClosedException]) =
+        donePromise.get
 
     def close(
         code: Int = WebSocketConnection.NormalClosure,
         reason: String = ""
-    ): Unit =
+    )(using Frame): Unit < Async =
         // Closing an already-closing/closed socket can throw in some engines; the
         // contract says close is swallow-safe, so guard it.
-        discard(Try(socket.close(code, reason)))
+        Sync.defer(discard(Try(socket.close(code, reason))))
+end JsWebSocketConnection
 
-    def incoming(onText: String => Unit): Unit = attach(onText)
+private[ws] object JsWebSocketConnection:
 
-    def closed: Future[Unit] = donePromise.future
-
-    // ---- internals -----------------------------------------------------------
-
-    private def attach(emit: String => Unit): Unit =
-        while buffered.nonEmpty do emit(buffered.dequeue())
-        sink = Present(emit)
-
-    private def push(message: String): Unit = sink match
-        case Present(emit) => emit(message)
-        case Absent        => buffered.enqueue(message)
-
-    private def onError(): Unit =
-        errored = true
-        // A socket that errors before opening never yields a connection; the
-        // following `close` (browsers and `ws` both emit one) terminates `incoming`.
-        discard(
-            openedPromise.tryFailure(
-                ApolloWebSocketClosedException(
-                    WebSocketConnection.NormalClosure + 6, // 1006 — abnormal, no close frame
-                    Some("WebSocket connection error")
-                )
-            )
-        )
-    end onError
-
-    private def onClose(code: Int, reason: String): Unit =
-        val reasonOpt = Option(reason).filter(_.nonEmpty)
-        // A close arriving before `open` fails the handshake future.
-        discard(openedPromise.tryFailure(ApolloWebSocketClosedException(code, reasonOpt)))
-        if code == WebSocketConnection.NormalClosure && !errored then terminate(p => discard(p.trySuccess(())))
-        else terminate(p => discard(p.tryFailure(ApolloWebSocketClosedException(code, reasonOpt))))
-    end onClose
-
-    private def terminate(complete: Promise[Unit] => Unit): Unit =
-        if !terminated then
-            terminated = true
-            complete(donePromise)
-
-    private def on(event: String)(handler: js.Dynamic => Unit): Unit =
-        val listener: js.Function1[js.Dynamic, Unit] = (e: js.Dynamic) => handler(e)
-        socket.addEventListener(event, listener)
-
-    /** A text frame's payload. Text frames arrive as a JS string on both the
-      * browser and `ws`; anything else (a binary `Buffer` under `ws`) is coerced
-      * to its text form so the protocol layer always sees a `String`.
+    /** Open a socket and complete once it fires `open`; abort if it errors or
+      * closes first. The connection's `Scope` closes the socket on teardown.
       */
+    def open(
+        url: String,
+        protocol: Option[String]
+    )(using Frame): WebSocketConnection < (Async & Scope & Abort[ApolloException]) =
+        Sync.defer {
+            protocol match
+                case Some(p) => js.Dynamic.newInstance(JsWebSocketEngine.constructor)(url, p)
+                case None    => js.Dynamic.newInstance(JsWebSocketEngine.constructor)(url)
+        }.map(socket => openWith(socket.asInstanceOf[JsWebSocket]))
+
+    /** Wire a connection over an already-constructed socket and await its `open`
+      * event. Split out from [[open]] so the connection state machine can be driven
+      * by a scripted fake socket in tests without a real platform `WebSocket`.
+      */
+    private[ws] def openWith(
+        socket: JsWebSocket
+    )(using Frame): JsWebSocketConnection < (Async & Scope & Abort[ApolloWebSocketClosedException]) =
+        for
+            incomingCh <- Channel.initUnscoped[String](Int.MaxValue)
+            done       <- Fiber.Promise.init[Unit, Abort[ApolloWebSocketClosedException]]
+            opened     <- Fiber.Promise.init[Unit, Abort[ApolloWebSocketClosedException]]
+            connection <- Sync.defer {
+                given AllowUnsafe = AllowUnsafe.embrace.danger
+                val conn          = new JsWebSocketConnection(socket, incomingCh, done)
+                wire(socket, conn, incomingCh, done, opened)
+                conn
+            }
+            _ <- Scope.ensure(connection.close())
+            _ <- opened.get
+        yield connection
+
+    /** Attach the socket's event listeners, translating each event into an
+      * `unsafe` push/complete on the connection's kyo primitives.
+      */
+    private def wire(
+        socket: JsWebSocket,
+        conn: JsWebSocketConnection,
+        incomingCh: Channel[String],
+        done: Fiber.Promise[Unit, Abort[ApolloWebSocketClosedException]],
+        opened: Fiber.Promise[Unit, Abort[ApolloWebSocketClosedException]]
+    )(using AllowUnsafe, Frame): Unit =
+        def on(event: String)(handler: js.Dynamic => Unit): Unit =
+            val listener: js.Function1[js.Dynamic, Unit] = (e: js.Dynamic) => handler(e)
+            socket.addEventListener(event, listener)
+
+        on("open")(_ => discard(opened.unsafe.completeUnitDiscard()))
+        on("message")(e => discard(incomingCh.unsafe.offer(messageText(e))))
+        on("error")(_ =>
+            val ex = ApolloWebSocketClosedException(
+                WebSocketConnection.NormalClosure + 6, // 1006 — abnormal, no close frame
+                Some("WebSocket connection error")
+            )
+            terminate(conn, incomingCh, done, opened, Present(ex))
+        )
+        on("close")(e =>
+            val code      = closeCode(e)
+            val reasonOpt = Option(closeReason(e)).filter(_.nonEmpty)
+            val failure =
+                if code == WebSocketConnection.NormalClosure then Absent
+                else Present(ApolloWebSocketClosedException(code, reasonOpt))
+            terminate(conn, incomingCh, done, opened, failure)
+        )
+    end wire
+
+    private def terminate(
+        conn: JsWebSocketConnection,
+        incomingCh: Channel[String],
+        done: Fiber.Promise[Unit, Abort[ApolloWebSocketClosedException]],
+        opened: Fiber.Promise[Unit, Abort[ApolloWebSocketClosedException]],
+        failure: Maybe[ApolloWebSocketClosedException]
+    )(using AllowUnsafe, Frame): Unit =
+        conn.markTerminated()
+        // A close/error arriving before `open` fails the handshake future.
+        failure match
+            case Absent =>
+                discard(opened.unsafe.completeUnitDiscard())
+                discard(done.unsafe.completeUnitDiscard())
+            case Present(ex) =>
+                discard(opened.unsafe.completeDiscard(Result.fail(ex)))
+                discard(done.unsafe.completeDiscard(Result.fail(ex)))
+        end match
+        discard(incomingCh.unsafe.close())
+    end terminate
+
     private def messageText(event: js.Dynamic): String =
         val data = event.data
         if js.typeOf(data) == "string" then data.asInstanceOf[String]

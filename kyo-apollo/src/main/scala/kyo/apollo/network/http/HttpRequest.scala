@@ -1,8 +1,8 @@
 package kyo.apollo.network.http
 
+import kyo.Span
 import kyo.apollo.network.HttpHeader
 import kyo.apollo.network.HttpMethod
-import scala.scalajs.js
 
 /** A ready-to-send HTTP request: the wire-level shape an [[ApolloRequest]] is
   * lowered to by [[HttpRequestComposer]] before an [[HttpEngine]] executes it.
@@ -36,7 +36,8 @@ final case class HttpRequest(
   */
 final case class HttpForm(fields: List[(String, String)], files: List[HttpFormFile])
 
-/** One file part of an [[HttpForm]]: the form field name, the JS `Blob`/`File`, and
-  * the filename to send.
+/** One file part of an [[HttpForm]]: the form field name, the file bytes, the
+  * filename and content type to send. Platform-neutral (`Span[Byte]`), so the same
+  * form works on every transport engine.
   */
-final case class HttpFormFile(fieldName: String, blob: js.Any, fileName: String)
+final case class HttpFormFile(fieldName: String, data: Span[Byte], fileName: String, contentType: String)

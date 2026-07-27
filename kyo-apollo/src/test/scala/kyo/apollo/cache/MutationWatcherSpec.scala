@@ -11,7 +11,6 @@ import kyo.apollo.json.SchemaJson
 import kyo.apollo.network.ApolloResponse
 import kyo.apollo.network.ws.FakeWebSocketConnection
 import kyo.apollo.network.ws.FakeWebSocketEngine
-import kyo.apollo.network.ws.ManualWsScheduler
 import scala.collection.immutable.VectorMap
 
 /** Phase 05 Task 5: mutations update the cache and fan their changed keys out to
@@ -191,14 +190,12 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
         }
 
         "a subscription event written back through the cache re-emits a query watcher" in {
-            val conn      = new FakeWebSocketConnection
-            val scheduler = new ManualWsScheduler
+            val conn = new FakeWebSocketConnection
             val client = ApolloClient
                 .builder()
                 .serverUrl("https://example.com/graphql")
                 .httpEngine(RoutingEngine())
                 .webSocketEngine(FakeWebSocketEngine(conn))
-                .webSocketScheduler(scheduler)
                 .normalizedCache(MemoryCache(), IdCacheKeyGenerator(List("id")))
                 .build()
             // Seed Alice, then watch the query off the cache.

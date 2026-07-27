@@ -101,7 +101,7 @@ object DocumentPrinter:
         case Json.JArr(items) => items.map(renderLiteral).mkString("[", ", ", "]")
         case Json.JObj(fields) =>
             fields.map((k, v) => s"$k: ${renderLiteral(v)}").mkString("{ ", ", ", " }")
-        case Json.JUpload(_, _) => "null" // uploads are never inline literals; render defensively
+        case Json.JUpload(_) => "null" // uploads are never inline literals; render defensively
 
     /** Render a [[CompiledType]] as a GraphQL type reference, e.g. `[Country!]!`. */
     private def renderType(t: CompiledType): String = t match

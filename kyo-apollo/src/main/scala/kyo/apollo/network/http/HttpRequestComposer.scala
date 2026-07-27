@@ -1,6 +1,7 @@
 package kyo.apollo.network.http
 
 import kyo.Chunk
+import kyo.apollo.Upload
 import kyo.apollo.api.Defer
 import kyo.apollo.api.OperationRequestBody
 import kyo.apollo.json.Json
@@ -8,8 +9,6 @@ import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.HttpHeader
 import kyo.apollo.network.HttpMethod
 import scala.collection.immutable.VectorMap
-import scala.scalajs.js
-import scala.scalajs.js.URIUtils
 
 /** Lowers an [[ApolloRequest]] into a wire-level [[HttpRequest]].
   *
@@ -77,11 +76,11 @@ final class HttpRequestComposer(defaultHttpMethod: HttpMethod = HttpMethod.Post)
     private def extractUploads(
         json: Json,
         path: String
-    ): (Json, List[(String, js.Any, String)]) = json match
-        case Json.JUpload(blob, fileName) => (Json.JNull, List((path, blob, fileName)))
+    ): (Json, List[(String, Upload)]) = json match
+        case Json.JUpload(upload) => (Json.JNull, List((path, upload)))
         case Json.JObj(fields) =>
             val (newFields, uploads) =
-                fields.foldLeft((VectorMap.empty[String, Json], List.empty[(String, js.Any, String)])) {
+                fields.foldLeft((VectorMap.empty[String, Json], List.empty[(String, Upload)])) {
                     case ((accFields, accUploads), (key, value)) =>
                         val childPath                = if path.isEmpty then key else s"$path.$key"
                         val (newValue, childUploads) = extractUploads(value, childPath)
@@ -90,7 +89,7 @@ final class HttpRequestComposer(defaultHttpMethod: HttpMethod = HttpMethod.Post)
             (Json.JObj(newFields), uploads)
         case Json.JArr(items) =>
             val (newItems, uploads) =
-                items.zipWithIndex.foldLeft((Vector.empty[Json], List.empty[(String, js.Any, String)])) {
+                items.zipWithIndex.foldLeft((Vector.empty[Json], List.empty[(String, Upload)])) {
                     case ((accItems, accUploads), (value, index)) =>
                         val (newValue, childUploads) = extractUploads(value, s"$path.$index")
                         (accItems :+ newValue, accUploads ++ childUploads)
@@ -103,14 +102,14 @@ final class HttpRequestComposer(defaultHttpMethod: HttpMethod = HttpMethod.Post)
       */
     private def uploadForm(
         operations: Json,
-        uploads: List[(String, js.Any, String)]
+        uploads: List[(String, Upload)]
     ): HttpForm =
         val indexed = uploads.zipWithIndex
-        val map = Json.JObj(VectorMap.from(indexed.map { case ((path, _, _), index) =>
+        val map = Json.JObj(VectorMap.from(indexed.map { case ((path, _), index) =>
             index.toString -> Json.JArr(Chunk(Json.JStr(path)))
         }))
-        val files = indexed.map { case ((_, blob, fileName), index) =>
-            HttpFormFile(index.toString, blob, fileName)
+        val files = indexed.map { case ((_, upload), index) =>
+            HttpFormFile(index.toString, upload.data, upload.fileName, upload.contentType)
         }
         HttpForm(
             fields = List("operations" -> operations.render, "map" -> map.render),
@@ -174,8 +173,20 @@ final class HttpRequestComposer(defaultHttpMethod: HttpMethod = HttpMethod.Post)
         Json.JObj(fields.result())
     end bodyWithoutDocument
 
+    /** Percent-encode `value` exactly as JavaScript's `encodeURIComponent`: leave the
+      * unreserved set `A-Za-z0-9 - _ . ! ~ * ' ( )` intact and uppercase-hex the
+      * UTF-8 bytes of everything else. Portable across JS/Wasm/JVM/Native, byte-for-
+      * byte identical to the former `js.URIUtils.encodeURIComponent`.
+      */
     private def encode(value: String): String =
-        URIUtils.encodeURIComponent(value)
+        val sb = StringBuilder()
+        value.getBytes(java.nio.charset.StandardCharsets.UTF_8).foreach { b =>
+            val c = (b & 0xff).toChar
+            if HttpRequestComposer.uriUnreserved.indexOf(c.toInt) >= 0 then sb += c
+            else sb ++= f"%%${b & 0xff}%02X"
+        }
+        sb.result()
+    end encode
 
     /** Whether the operation uses `@defer` — decides the `Accept` header, so the
       * server may reply with a `multipart/mixed` incremental stream.
@@ -196,4 +207,10 @@ final class HttpRequestComposer(defaultHttpMethod: HttpMethod = HttpMethod.Post)
     )
 
     private def getHeaders(deferring: Boolean): List[HttpHeader] = List(accept(deferring))
+end HttpRequestComposer
+
+object HttpRequestComposer:
+    /** The `encodeURIComponent` unreserved set: characters left un-escaped. */
+    private val uriUnreserved =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()"
 end HttpRequestComposer

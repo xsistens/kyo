@@ -283,7 +283,7 @@ object ApolloDevtools:
             val obj = js.Dynamic.literal()
             fields.foreach((k, v) => obj.updateDynamic(k)(jsonToJs(v)))
             obj
-        case Json.JUpload(_, _) => null // uploads never reach the cache/devtools view
+        case Json.JUpload(_) => null // uploads never reach the cache/devtools view
 
     private def defineGetter(target: js.Dynamic, prop: String, get: () => js.Any): Unit =
         val descriptor = js.Dynamic.literal(
