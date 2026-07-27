@@ -3041,6 +3041,17 @@ lazy val `kyo-apollo-codegen` =
             libraryDependencies += "com.github.ghostdogpr" %% "caliban-tools" % "3.1.2"
         )
 
+// A standalone caliban GraphQL server (JVM-only, caliban is JVM-only) used as the shared
+// backend for the cross-platform apollo E2E suite: every client platform's ApolloE2ESpec
+// runs against this one running process. Not published; run via `kyo-apollo-itserverJVM/run`.
+lazy val `kyo-apollo-itserver` =
+    crossProject(JVMPlatform)
+        .crossType(CrossType.Pure)
+        .in(file("kyo-apollo-itserver"))
+        .dependsOn(`kyo-caliban`)
+        .settings(`kyo-settings`)
+        .jvmSettings(mimaCheck(false), publish / skip := true)
+
 // Apollo bindings for kyo-ui: reactive Signal/Var adapters over the apollo core
 // store plus query/mutation effects. JS only, depends on the apollo core and kyo-ui.
 lazy val `kyo-apollo-ui` =
