@@ -2475,6 +2475,10 @@ lazy val `kyo-caliban` =
         .dependsOn(`kyo-http`)
         .dependsOn(`kyo-zio`)
         .dependsOn(`kyo-zio-test`)
+        // Test-only: the live apollo-over-real-server smoke test (ApolloLiveSmokeTest)
+        // drives the kyo-http-backed apollo engines against a caliban server; brings in
+        // the apollo client + the promoted { value } fixtures.
+        .dependsOn(`kyo-apollo-testing` % Test)
         .withKyoTest
         .settings(
             `kyo-settings`,
