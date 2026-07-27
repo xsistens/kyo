@@ -1,0 +1,128 @@
+package kyo.apollo.network.ws
+
+import kyo.*
+import kyo.apollo.exception.ApolloException
+import kyo.apollo.exception.ApolloNetworkException
+import kyo.apollo.exception.ApolloWebSocketClosedException
+
+/** The JVM/Native production [[WebSocketEngine]]: opens a socket through kyo-http's
+  * `HttpClient.webSocket` and bridges its fiber/`Channel`-based [[HttpWebSocket]]
+  * into apollo's `Stream`/`Channel` seam. The counterpart to JS/Wasm's
+  * `JsWebSocketEngine`.
+  *
+  * kyo-http's `webSocket` scopes the socket to a callback, so a background fiber
+  * holds it open: the fiber exposes the live socket via `opened`, drains inbound
+  * frames into an intermediate `incoming` channel, and completes `closed` when the
+  * socket ends (cleanly on a 1000 close, aborting otherwise). Interrupting that
+  * fiber — which the apollo transport does to discard a socket — tears the kyo-http
+  * connection down via its scope.
+  */
+final class KyoHttpWebSocketEngine extends WebSocketEngine:
+    def open(
+        url: String,
+        protocol: Option[String] = None
+    )(using Frame): WebSocketConnection < (Async & Scope & Abort[ApolloException]) =
+        KyoHttpWebSocketConnection.open(url, protocol)
+end KyoHttpWebSocketEngine
+
+final private[ws] class KyoHttpWebSocketConnection private (
+    ws: HttpWebSocket,
+    incomingCh: Channel[String],
+    donePromise: Fiber.Promise[Unit, Abort[ApolloWebSocketClosedException]]
+) extends WebSocketConnection:
+
+    def send(text: String)(using Frame): Unit < Async =
+        // A send after the socket has closed is a no-op (Abort[Closed] swallowed).
+        Abort.run[Closed](ws.put(HttpWebSocket.Payload.Text(text))).unit
+
+    def incoming(using Frame): Stream[String, Async] =
+        incomingCh.streamUntilClosed()
+
+    def closed(using Frame): Unit < (Async & Abort[ApolloWebSocketClosedException]) =
+        donePromise.get
+
+    def close(
+        code: Int = WebSocketConnection.NormalClosure,
+        reason: String = ""
+    )(using Frame): Unit < Async =
+        ws.close(code, reason)
+end KyoHttpWebSocketConnection
+
+private[ws] object KyoHttpWebSocketConnection:
+
+    def open(
+        url: String,
+        protocol: Option[String]
+    )(using Frame): WebSocketConnection < (Async & Scope & Abort[ApolloException]) =
+        for
+            incomingCh <- Channel.initUnscoped[String](Int.MaxValue)
+            done       <- Fiber.Promise.init[Unit, Abort[ApolloWebSocketClosedException]]
+            opened     <- Fiber.Promise.init[HttpWebSocket, Abort[ApolloException]]
+            // The connection lives on this scoped fiber; interrupting it (on discard)
+            // closes the kyo-http socket via its scope.
+            _  <- Fiber.init(runConnection(url, protocol, incomingCh, done, opened))
+            ws <- opened.get
+        yield new KyoHttpWebSocketConnection(ws, incomingCh, done)
+
+    /** Connect, expose the live socket, drain frames, and settle `closed`. */
+    private def runConnection(
+        url: String,
+        protocol: Option[String],
+        incomingCh: Channel[String],
+        done: Fiber.Promise[Unit, Abort[ApolloWebSocketClosedException]],
+        opened: Fiber.Promise[HttpWebSocket, Abort[ApolloException]]
+    )(using Frame): Unit < (Async & Scope) =
+        val config = HttpWebSocket.Config(subprotocols = protocol.toSeq)
+        val connect =
+            HttpClient.webSocket(url, HttpHeaders.empty, config) { ws =>
+                opened.completeDiscard(Result.succeed(ws)).andThen(drain(ws, incomingCh, done))
+            }
+        Abort.run[Throwable](connect).map {
+            case Result.Success(_) => ()
+            case Result.Failure(e) => failHandshake(e, done, opened, incomingCh)
+            case Result.Panic(e)   => failHandshake(e, done, opened, incomingCh)
+        }
+    end runConnection
+
+    /** Pump inbound frames into `incomingCh`; when the socket ends, settle `closed`
+      * from its close reason (success on a clean 1000, abort otherwise).
+      */
+    private def drain(
+        ws: HttpWebSocket,
+        incomingCh: Channel[String],
+        done: Fiber.Promise[Unit, Abort[ApolloWebSocketClosedException]]
+    )(using Frame): Unit < Async =
+        ws.stream.foreach {
+            // Drop a frame if the intermediate channel has closed (Abort[Closed] swallowed).
+            case HttpWebSocket.Payload.Text(t)   => Abort.run[Closed](incomingCh.put(t)).unit
+            case HttpWebSocket.Payload.Binary(_) => ()
+        }.andThen {
+            ws.closeReason.map { reason =>
+                val settle =
+                    reason match
+                        case Present((code, why)) if code != WebSocketConnection.NormalClosure =>
+                            done.completeDiscard(
+                                Result.fail(ApolloWebSocketClosedException(code, Option(why).filter(_.nonEmpty)))
+                            )
+                        case _ =>
+                            done.completeUnitDiscard
+                settle.andThen(incomingCh.close.unit)
+            }
+        }
+    end drain
+
+    private def failHandshake(
+        cause: Throwable,
+        done: Fiber.Promise[Unit, Abort[ApolloWebSocketClosedException]],
+        opened: Fiber.Promise[HttpWebSocket, Abort[ApolloException]],
+        incomingCh: Channel[String]
+    )(using Frame): Unit < Async =
+        val apollo = cause match
+            case e: ApolloException => e
+            case other              => ApolloNetworkException(cause = other)
+        val wsClosed = ApolloWebSocketClosedException(WebSocketConnection.NormalClosure + 6, Some(apollo.getMessage))
+        opened.completeDiscard(Result.fail(apollo))
+            .andThen(done.completeDiscard(Result.fail(wsClosed)))
+            .andThen(incomingCh.close.unit)
+    end failHandshake
+end KyoHttpWebSocketConnection

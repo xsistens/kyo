@@ -1,6 +1,6 @@
 package kyo.apollo.network.http
 
-import kyo.*
+import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
 
 /** The seam between [[HttpNetworkTransport]] and the actual wire.
   *
@@ -35,4 +35,12 @@ trait HttpEngine:
         execute(request).map(r =>
             HttpStreamResponse(r.statusCode, r.headers, HttpStreamBody.Buffered(r.body))
         )
+end HttpEngine
+
+object HttpEngine:
+    /** The platform's production engine, resolved per-platform via
+      * [[HttpEnginePlatform]]: the browser/Node `fetch`-backed `FetchHttpEngine` on
+      * JS/Wasm, a `kyo-http`-backed `HttpClientEngine` on JVM/Native.
+      */
+    def default(): HttpEngine = HttpEnginePlatform.default()
 end HttpEngine

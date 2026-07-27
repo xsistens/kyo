@@ -1,6 +1,6 @@
 package kyo.apollo.network.http
 
-import kyo.*
+import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
 import kyo.apollo.network.HttpHeader
 
 /** A received HTTP response whose body may be streamed — the streaming counterpart

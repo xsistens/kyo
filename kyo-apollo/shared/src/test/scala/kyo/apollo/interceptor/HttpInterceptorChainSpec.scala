@@ -1,6 +1,6 @@
 package kyo.apollo.interceptor
 
-import kyo.*
+import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
 import kyo.apollo.network.HttpHeader
 import kyo.apollo.network.HttpMethod
 import kyo.apollo.network.http.HttpEngine

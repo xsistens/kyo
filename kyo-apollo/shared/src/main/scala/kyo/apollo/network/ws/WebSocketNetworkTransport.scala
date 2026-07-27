@@ -76,7 +76,7 @@ import scala.util.control.NonFatal
 final class WebSocketNetworkTransport(
     serverUrl: String,
     protocol: WsProtocol = GraphQLWsProtocol,
-    engine: WebSocketEngine = JsWebSocketEngine(),
+    engine: WebSocketEngine = WebSocketEngine.default(),
     connectionPayload: Option[Json] = None,
     ackTimeoutMillis: Long = 10000L,
     idleTimeoutMillis: Long = 60000L,
@@ -123,10 +123,16 @@ final class WebSocketNetworkTransport(
         Frame,
         Tag[Emit[Chunk[ApolloResponse[D]]]]
     ): ResponseStream[D] =
+        // The operation id is assigned eagerly, at the `subscribe` call, so it is a
+        // stable property of this subscription fixed in call order — not a race at
+        // consume time. Were it assigned lazily inside the per-consumer fiber below,
+        // two subscriptions forked concurrently would grab ids in scheduler order
+        // (fine on JS's single carrier, non-deterministic on JVM/Native), misrouting
+        // every frame the fake servers script by a presumed id.
+        val id = idCounter.getAndIncrement().toString
         Stream.unwrap {
             ensureStarted.andThen(Channel.initUnscoped[ApolloResponse[D]](Int.MaxValue)).map { channel =>
                 given AllowUnsafe = AllowUnsafe.embrace.danger
-                val id            = idCounter.getAndIncrement().toString
                 val body          = OperationRequestBody(request.operation)
                 val startFrame    = protocol.startOperation(id, body)
                 val subscriber = Subscriber(
@@ -147,6 +153,7 @@ final class WebSocketNetworkTransport(
                     .andThen(channel.streamUntilClosed())
             }
         }
+    end subscribe
 
     /** Tear the transport down: close the shared socket, cancel any pending
       * reconnect, and drop all state. Active subscribers receive the close as a

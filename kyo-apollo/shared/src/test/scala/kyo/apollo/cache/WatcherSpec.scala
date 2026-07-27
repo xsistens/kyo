@@ -1,6 +1,6 @@
 package kyo.apollo.cache
 
-import kyo.*
+import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
 import kyo.apollo.ApolloClient
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.*

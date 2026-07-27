@@ -413,6 +413,7 @@ lazy val kyoJVM: Project = project
         `kyo-ui`.jvm,
         `kyo-ui-components`.jvm,
         `kyo-ui-components-gen`,
+        `kyo-apollo`.jvm,
         `kyo-apollo-codegen`.jvm,
         `kyo-markdown`.jvm,
         `kyo-i18n`.jvm,
@@ -574,6 +575,7 @@ lazy val kyoNative = project
         `kyo-slack`.native,
         `kyo-ui`.native,
         `kyo-ui-components`.native,
+        `kyo-apollo`.native,
         `kyo-markdown`.native,
         `kyo-i18n`.native,
         `kyo-pod`.native,
@@ -2970,12 +2972,27 @@ lazy val `kyo-i18n` =
 // transport issues browser `fetch` through scalajs-dom. Depends only on the value and
 // effect libraries (no kyo-ui), so it builds against trunk on its own.
 lazy val `kyo-apollo` =
-    crossProject(JSPlatform, WasmPlatform)
+    crossProject(JSPlatform, JVMPlatform, NativePlatform, WasmPlatform)
         .crossType(CrossType.Full)
         .in(file("kyo-apollo"))
-        .dependsOn(`kyo-core`, `kyo-data`, `kyo-schema`, `kyo-schema-json`)
+        .dependsOn(`kyo-core`, `kyo-data`, `kyo-schema`, `kyo-schema-json`, `kyo-http`)
         .withKyoTest
         .settings(`kyo-settings`)
+        .jvmSettings(
+            mimaCheck(false),
+            Compile / unmanagedSourceDirectories +=
+                baseDirectory.value.getParentFile / "jvm-native" / "src" / "main" / "scala",
+            Test / unmanagedSourceDirectories +=
+                baseDirectory.value.getParentFile / "jvm-native" / "src" / "test" / "scala"
+        )
+        .nativeSettings(
+            `native-settings`,
+            `openssl-native-settings`,
+            Compile / unmanagedSourceDirectories +=
+                baseDirectory.value.getParentFile / "jvm-native" / "src" / "main" / "scala",
+            Test / unmanagedSourceDirectories +=
+                baseDirectory.value.getParentFile / "jvm-native" / "src" / "test" / "scala"
+        )
         .jsSettings(
             `js-settings`,
             libraryDependencies += "org.scala-js" %%% "scalajs-dom" % "2.8.1"

@@ -85,3 +85,12 @@ trait WebSocketEngine:
         protocol: Option[String] = None
     )(using Frame): WebSocketConnection < (Async & Scope & Abort[ApolloException])
 end WebSocketEngine
+
+object WebSocketEngine:
+    /** The platform's production engine, resolved per-platform via
+      * [[WebSocketEnginePlatform]]: the browser/Node `WebSocket`-backed
+      * `JsWebSocketEngine` on JS/Wasm, a `kyo-http`-backed `KyoHttpWebSocketEngine`
+      * on JVM/Native.
+      */
+    def default(): WebSocketEngine = WebSocketEnginePlatform.default()
+end WebSocketEngine
