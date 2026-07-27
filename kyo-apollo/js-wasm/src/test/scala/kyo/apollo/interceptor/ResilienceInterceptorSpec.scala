@@ -97,6 +97,21 @@ class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
         end intercept
     end ScriptedApollo
 
+    /** A terminal that answers each `proceed` with ALL scripted responses as one
+      * multi-emission stream — the `@defer` / cache-and-network shape the resilience
+      * interceptors must forward without collapsing to the first emission.
+      */
+    final class MultiEmitApollo(makers: List[Uuid => ApolloResponse[Any]]) extends ApolloInterceptor:
+        var seen: List[ApolloRequest[?]] = Nil
+        def intercept[D](
+            request: ApolloRequest[D],
+            chain: ApolloInterceptorChain
+        )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
+            seen = seen :+ request
+            Stream.init(makers.map(m => m(request.requestUuid).asInstanceOf[ApolloResponse[D]]))
+        end intercept
+    end MultiEmitApollo
+
     private def data(value: Int): Uuid => ApolloResponse[Any] =
         uuid => ApolloResponse[Any](uuid, data = Present(value))
     private def networkFail: Uuid => ApolloResponse[Any] =
@@ -203,6 +218,18 @@ class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
             end for
         }
 
+        "retry: forwards every emission of a multi-emission response (no collapse)" in {
+            // A happy-path @defer / CacheAndNetwork response emits more than once; the
+            // retry decision rides only the first emission, the rest must pass through.
+            val terminal    = MultiEmitApollo(List(data(1), data(2), data(3)))
+            val interceptor = RetryOnErrorInterceptor(scheduler = AutoScheduler())
+            val chain       = DefaultApolloInterceptorChain(Chunk(interceptor, terminal), 0)
+            StreamProbe.collect(chain.proceed(ApolloRequest(ValueQuery()))).map { responses =>
+                assert(responses.map(_.data) == List(Present(1), Present(2), Present(3)))
+                assert(terminal.seen.length == 1) // happy path — no retry, one round trip
+            }
+        }
+
         // --- AutoPersistedQueryInterceptor -------------------------------------
 
         "APQ: a registered-query hit sends only the hash, no document" in {
@@ -236,6 +263,17 @@ class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
                 val fallback = terminal.seen(1)
                 assert(!fallback.sendApqExtensions, "fallback drops APQ entirely")
                 assert(fallback.sendDocument)
+            }
+        }
+
+        "APQ: forwards every emission of an accepted (multi-emission) probe response" in {
+            // An accepted probe may itself be an @defer stream; only the negotiation
+            // rides the first response — later patches must not be dropped.
+            val terminal = MultiEmitApollo(List(data(1), data(2)))
+            val chain    = DefaultApolloInterceptorChain(Chunk(AutoPersistedQueryInterceptor(), terminal), 0)
+            StreamProbe.collect(chain.proceed(ApolloRequest(ValueQuery()))).map { responses =>
+                assert(responses.map(_.data) == List(Present(1), Present(2)))
+                assert(terminal.seen.length == 1) // registered hit — single round trip
             }
         }
 
