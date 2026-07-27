@@ -141,7 +141,14 @@ final class WebSocketNetworkTransport(
                     emitData = payload => discard(channel.unsafe.offer(decodeData(request, payload))),
                     emitErrorPayload = payload => discard(channel.unsafe.offer(errorResponse(request, payload))),
                     emitException = exception => discard(channel.unsafe.offer(exceptionResponse(request, exception))),
-                    terminate = () => discard(channel.unsafe.close())
+                    // Graceful close, not a hard `close`: a plain close hands the channel's
+                    // backlog to the closer, dropping it for the consumer. On JS's single
+                    // carrier the owner fiber runs the last `offer(response)` and this
+                    // `terminate` (a server `complete` right after the last `next`) before
+                    // the consumer drains, so a hard close would drop that final response.
+                    // `closeAwaitEmpty` instead closes only once the consumer has drained
+                    // the buffer, cooperating with `streamUntilClosed`'s own drain.
+                    terminate = () => discard(channel.unsafe.closeAwaitEmpty())
                 )
                 discard(mailbox.unsafe.offer(Msg.Register(subscriber)))
                 Scope

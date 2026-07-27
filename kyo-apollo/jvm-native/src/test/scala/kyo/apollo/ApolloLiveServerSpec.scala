@@ -60,13 +60,14 @@ class ApolloLiveServerSpec extends kyo.test.Test[Any]:
                         ws.put(HttpWebSocket.Payload.Text("""{"type":"connection_ack"}""")).andThen(Loop.continue)
                     else if msg.contains("\"subscribe\"") then
                         val id = extractId(msg)
-                        // Pace the events like a real subscription source (caliban's ZStream
-                        // yields between elements); a synchronous burst is unrealistic and
-                        // stresses kyo-http's WS frame delivery, not apollo's (drain-safe) path.
+                        // Fire the three events plus complete in a synchronous burst — the
+                        // transport's subscriber channel drains gracefully (closeAwaitEmpty),
+                        // so even a complete arriving in the same tick as the last next never
+                        // drops it. No pacing needed.
                         Kyo.foreachDiscard(Seq(10, 20, 30))(v =>
                             ws.put(HttpWebSocket.Payload.Text(
                                 s"""{"id":"$id","type":"next","payload":{"data":{"value":$v}}}"""
-                            )).andThen(Async.sleep(15.millis))
+                            ))
                         ).andThen(
                             ws.put(HttpWebSocket.Payload.Text(s"""{"id":"$id","type":"complete"}"""))
                         ).andThen(Loop.continue)
