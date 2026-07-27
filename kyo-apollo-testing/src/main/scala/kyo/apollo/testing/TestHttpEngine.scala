@@ -1,11 +1,11 @@
 package kyo.apollo.testing
 
+import java.util.concurrent.atomic.AtomicReference
 import kyo.*
 import kyo.apollo.network.http.HttpEngine
 import kyo.apollo.network.http.HttpRequest
 import kyo.apollo.network.http.HttpResponse
 import scala.concurrent.Future
-import scala.concurrent.Promise
 
 /** The single, parameterized fake [[HttpEngine]] that collapses the ~11 inline
   * doubles the audit found across the suite (ADR §2b): the capturing engine
@@ -84,19 +84,23 @@ end TestHttpEngine
   * `Success` assertions), with the request-recording of [[TestHttpEngine]] added.
   */
 final class GatedHttpEngine(responseBody: String, status: Int = 200) extends HttpEngine:
-    import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+    private given AllowUnsafe = AllowUnsafe.embrace.danger
+    private given Frame       = Frame.internal
 
-    private val gate                         = Promise[Unit]()
-    private var _requests: List[HttpRequest] = Nil
+    private val gate: Fiber.Promise[Unit, Any] =
+        Sync.Unsafe.evalOrThrow(Fiber.Promise.init[Unit, Any])
+    private val requestsRef = new AtomicReference[Vector[HttpRequest]](Vector.empty)
 
     /** Every request received, oldest first (recorded when parked, before release). */
-    def requests: List[HttpRequest] = _requests
+    def requests: List[HttpRequest] = requestsRef.get().toList
 
     /** Release the gate so every parked (and future) reply resolves. Idempotent. */
     def release(): Unit =
-        val _ = gate.trySuccess(())
+        given AllowUnsafe = AllowUnsafe.embrace.danger
+        discard(gate.unsafe.completeUnitDiscard())
 
     def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
-        _requests = _requests :+ request
-        Async.fromFuture(gate.future.map(_ => HttpResponse(status, Nil, responseBody)))
+        Sync.defer(discard(requestsRef.updateAndGet(_ :+ request))).andThen {
+            gate.get.andThen(HttpResponse(status, Nil, responseBody))
+        }
 end GatedHttpEngine

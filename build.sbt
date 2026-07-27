@@ -414,6 +414,7 @@ lazy val kyoJVM: Project = project
         `kyo-ui-components`.jvm,
         `kyo-ui-components-gen`,
         `kyo-apollo`.jvm,
+        `kyo-apollo-testing`.jvm,
         `kyo-apollo-codegen`.jvm,
         `kyo-markdown`.jvm,
         `kyo-i18n`.jvm,
@@ -576,6 +577,7 @@ lazy val kyoNative = project
         `kyo-ui`.native,
         `kyo-ui-components`.native,
         `kyo-apollo`.native,
+        `kyo-apollo-testing`.native,
         `kyo-markdown`.native,
         `kyo-i18n`.native,
         `kyo-pod`.native,
@@ -648,6 +650,7 @@ lazy val kyoWasm = project
         `kyo-ui`.wasm,
         `kyo-ui-components`.wasm,
         `kyo-apollo`.wasm,
+        `kyo-apollo-testing`.wasm,
         `kyo-markdown`.wasm,
         `kyo-i18n`.wasm,
         `kyo-test-api`.wasm,
@@ -3003,15 +3006,19 @@ lazy val `kyo-apollo` =
         )
 
 // Promoted fake transports / scripted sockets / stream probes that apps and specs
-// depend on instead of re-declaring inline doubles. JS, depends on the apollo core.
+// depend on instead of re-declaring inline doubles. Cross-published everywhere the
+// apollo core is (JS/JVM/Native/Wasm); all doubles are portable native-kyo now.
 lazy val `kyo-apollo-testing` =
-    crossProject(JSPlatform)
+    crossProject(JSPlatform, JVMPlatform, NativePlatform, WasmPlatform)
         .crossType(CrossType.Pure)
         .in(file("kyo-apollo-testing"))
         .dependsOn(`kyo-apollo`, `kyo-core`, `kyo-data`, `kyo-schema`)
         .withKyoTest
         .settings(`kyo-settings`)
+        .jvmSettings(mimaCheck(false))
+        .nativeSettings(`native-settings`, `openssl-native-settings`)
         .jsSettings(`js-settings`)
+        .wasmSettings(`wasm-settings`)
 
 // Build-time generator emitting typed `apollo.api.Operation` sources from a GraphQL
 // schema + documents. Plain JVM (runs inside sbt), reuses Caliban's parser. Does not
