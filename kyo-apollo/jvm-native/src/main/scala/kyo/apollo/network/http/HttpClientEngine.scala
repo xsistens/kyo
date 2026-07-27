@@ -2,6 +2,7 @@ package kyo.apollo.network.http
 
 import java.nio.ByteBuffer
 import java.nio.CharBuffer
+import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import kyo.{HttpRequest as _, HttpResponse as _, *}
 import kyo.apollo.network.HttpHeader
@@ -148,9 +149,19 @@ end HttpClientEngine
   * the next chunk (the JVM/Native analog of the browser `TextDecoder({stream:true})`
   * the `FetchHttpEngine` relies on), so `@defer` payloads are never corrupted at a
   * boundary. Single-fiber use only — no synchronization.
+  *
+  * Malformed / unmappable input is REPLACEd with U+FFFD, matching the browser
+  * `TextDecoder`'s default (`fatal: false`). The default REPORT action would instead
+  * stop at the first bad byte and leave it (plus everything after it) in `carry`,
+  * stalling the stream and growing `carry` without bound; REPLACE consumes the bad
+  * byte and decodes on. A legitimate incomplete trailing sequence still returns
+  * UNDERFLOW and is carried, not replaced, so boundary splits are unaffected.
   */
 final private[http] class Utf8ChunkDecoder:
-    private val decoder            = StandardCharsets.UTF_8.newDecoder()
+    private val decoder =
+        StandardCharsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPLACE)
+            .onUnmappableCharacter(CodingErrorAction.REPLACE)
     private var carry: Array[Byte] = Array.emptyByteArray
 
     /** Decode `bytes` (prepended with any bytes carried from the previous chunk),
