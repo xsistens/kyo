@@ -19,11 +19,9 @@ import kyo.apollo.network.ApolloResponse
 import kyo.apollo.network.ExecutionContext
 import kyo.apollo.network.HttpHeader
 import kyo.apollo.network.HttpMethod
-import kyo.apollo.network.http.FetchHttpEngine
 import kyo.apollo.network.http.HttpEngine
 import kyo.apollo.network.http.HttpNetworkTransport
 import kyo.apollo.network.ws.GraphQLWsProtocol
-import kyo.apollo.network.ws.JsWebSocketEngine
 import kyo.apollo.network.ws.WebSocketEngine
 import kyo.apollo.network.ws.WebSocketNetworkTransport
 import kyo.apollo.network.ws.WsProtocol
@@ -435,12 +433,12 @@ object ApolloClient:
                             httpInterceptors = _httpInterceptors,
                             interceptors = _interceptors,
                             defaultHttpMethod = _httpMethod,
-                            httpEngine = _httpEngine.getOrElse(FetchHttpEngine()),
+                            httpEngine = _httpEngine.getOrElse(HttpEngine.default()),
                             webSocketServerUrl = _webSocketServerUrl.getOrElse(serverUrl),
                             wsProtocol = _wsProtocol,
                             webSocketReopenWhen = _webSocketReopenWhen,
                             webSocketConnectionPayload = _webSocketConnectionPayload,
-                            webSocketEngine = _webSocketEngine.getOrElse(JsWebSocketEngine())
+                            webSocketEngine = _webSocketEngine.getOrElse(WebSocketEngine.default())
                         )
                     )
 

@@ -1,6 +1,6 @@
 package kyo.apollo.network.http
 
-import kyo.*
+import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType

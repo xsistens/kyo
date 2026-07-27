@@ -1,6 +1,6 @@
 package kyo.apollo.network.http
 
-import kyo.*
+import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
 import kyo.apollo.api.GraphQLResponse
 import kyo.apollo.exception.ApolloHttpException
 import kyo.apollo.exception.ApolloNetworkException
@@ -35,7 +35,7 @@ import scala.util.control.NonFatal
   */
 final class HttpNetworkTransport(
     serverUrl: String,
-    engine: HttpEngine = FetchHttpEngine(),
+    engine: HttpEngine = HttpEngine.default(),
     composer: HttpRequestComposer = HttpRequestComposer()
 ):
 
