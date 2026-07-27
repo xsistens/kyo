@@ -150,7 +150,6 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
                 .serverUrl("https://example.test/graphql")
                 .webSocketServerUrl("wss://example.test/graphql")
                 .webSocketEngine(ws)
-                .webSocketScheduler(ws.scheduler)
                 .build()
             var seen: List[Int] = Nil
             for
