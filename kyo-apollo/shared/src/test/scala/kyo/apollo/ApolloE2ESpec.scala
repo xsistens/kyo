@@ -15,9 +15,10 @@ import scala.collection.immutable.VectorMap
   * the same running `apolloit.ItServer`.
   *
   * Gated on the `APOLLO_IT_URL` env var (host:port) the orchestrator exports after
-  * starting the server: absent — e.g. a plain `sbt test` — the leaf is a no-op, so
-  * the suite stays green without the backend. The env read is `kyo.System.env`, which
-  * is `process.env` on JS/Wasm (Node) and the JVM/Native environment otherwise.
+  * starting the server: absent — e.g. a plain `sbt test` — the leaf is `cancel`led
+  * (reported Cancelled, not Passed) so a run without the backend never masquerades as
+  * interop coverage. The env read is `kyo.System.env`, which is `process.env` on
+  * JS/Wasm (Node) and the JVM/Native environment otherwise.
   */
 class ApolloE2ESpec extends kyo.test.Test[Any]:
 
@@ -40,7 +41,11 @@ class ApolloE2ESpec extends kyo.test.Test[Any]:
     "apollo client drives a query and subscription against the shared caliban server" in {
         KyoSystem.env[String]("APOLLO_IT_URL").map {
             case Absent =>
-                assert(true) // not running under the E2E orchestrator — skip
+                // Not running under the E2E orchestrator (scripts/apollo-e2e.sh). Report
+                // this as Cancelled, not Passed: a plain `sbt test` must not show a green
+                // leaf that never touched a live engine — that would read as cross-platform
+                // interop coverage the run did not actually provide.
+                cancel("APOLLO_IT_URL not set — run scripts/apollo-e2e.sh to exercise the live engines")
             case Present(base) =>
                 val client = ApolloClient
                     .builder()
