@@ -1,7 +1,6 @@
 package kyo.apollo.network.ws
 
-import scala.scalajs.js.timers.clearTimeout
-import scala.scalajs.js.timers.setTimeout
+import kyo.*
 
 /** Schedules a one-shot delayed task — the single timer seam the WebSocket layer
   * depends on.
@@ -33,12 +32,19 @@ end WsScheduler
 
 object WsScheduler:
 
-    /** The production scheduler, backed by the JS event loop's `setTimeout` /
-      * `clearTimeout`. Cancelling clears the timeout so a revoked idle/ack timer
-      * never fires.
+    /** The production scheduler, backed by a `Clock`-driven kyo fiber (portable
+      * across JS, Wasm, JVM and Native — no `js.timers`). `schedule` forks a fiber
+      * that sleeps `delayMillis` then runs `task`; the returned thunk interrupts it,
+      * so a revoked idle/ack timer never fires.
       */
     val default: WsScheduler = new WsScheduler:
+        import kyo.AllowUnsafe.embrace.danger
+        private given Frame = Frame.internal
+
         def schedule(delayMillis: Long)(task: () => Unit): () => Unit =
-            val handle = setTimeout(delayMillis.toDouble)(task())
-            () => clearTimeout(handle)
+            val fiber = Sync.Unsafe.evalOrThrow(
+                Fiber.initUnscoped(Async.delay(delayMillis.millis)(Sync.defer(task())))
+            )
+            () => discard(Sync.Unsafe.evalOrThrow(fiber.interrupt))
+        end schedule
 end WsScheduler

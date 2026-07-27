@@ -54,8 +54,12 @@ final class BatchingHttpInterceptor(
     scheduler: WsScheduler = WsScheduler.default
 ) extends HttpInterceptor:
 
-    // Value-only import so it never clashes with `kyo.apollo.network.ExecutionContext`.
-    import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
+    // A same-thread ExecutionContext for the Future callbacks below — portable
+    // across JS, Wasm, JVM and Native (Scala.js's microtask queue is unavailable
+    // off-JS). The callbacks only complete promises, so running them inline is
+    // correct; cross-thread queue mutations are guarded by `synchronized` (a no-op
+    // on JS's single-threaded event loop, a real lock on JVM/Native).
+    private given scala.concurrent.ExecutionContext = scala.concurrent.ExecutionContext.parasitic
 
     // Effect pivot (Schritt 2.2): the batching window's accumulate/flush machinery
     // stays Future/Promise/timer-based (single-threaded, proven, deterministic under
@@ -101,17 +105,23 @@ final class BatchingHttpInterceptor(
             // when it is built), preserving the original per-execution batching window.
             Sync
                 .defer {
-                    val promise = Promise[HttpResponse]()
-                    pending = pending :+ Pending(request, chain, promise)
-                    if pending.length >= maxBatchSize then flush()
-                    else if timer.isEmpty then
-                        timer = Present(scheduler.schedule(batchIntervalMillis)(() => flush()))
-                    promise
+                    this.synchronized {
+                        val promise = Promise[HttpResponse]()
+                        pending = pending :+ Pending(request, chain, promise)
+                        if pending.length >= maxBatchSize then flush()
+                        else if timer.isEmpty then
+                            timer = Present(scheduler.schedule(batchIntervalMillis)(() => flush()))
+                        promise
+                    }
                 }
                 .map(promise => Async.fromFuture(promise.future))
 
-    /** Send whatever is queued as one batch and reset for the next window. */
-    private def flush(): Unit =
+    /** Send whatever is queued as one batch and reset for the next window.
+      * Reentrant with `intercept`'s critical section; the batch effects are only
+      * *launched* here (each `runToFuture` forks a fiber and returns at once), so the
+      * lock is held briefly and never spans the actual HTTP round trip.
+      */
+    private def flush(): Unit = this.synchronized {
         timer.foreach(_())
         timer = Absent
         val batch = pending
@@ -123,6 +133,7 @@ final class BatchingHttpInterceptor(
                 runToFuture(one.chain.proceed(one.request)).onComplete(one.response.complete)
             case _ => sendBatch(batch)
         end match
+    }
     end flush
 
     /** POST the merged JSON array of every queued body, then fan the array response
