@@ -150,12 +150,26 @@ final class WebSocketNetworkTransport(
                     // the buffer, cooperating with `streamUntilClosed`'s own drain.
                     terminate = () => discard(channel.unsafe.closeAwaitEmpty())
                 )
-                discard(mailbox.unsafe.offer(Msg.Register(subscriber)))
+                // Install the teardown finalizer BEFORE registering the route, then register.
+                // Registering first would leave a window: an interrupt landing between the
+                // Register offer and the ensure installation strands the route forever — the
+                // owner adds it, but no Cancel is ever offered and the channel is never closed,
+                // so the socket never idle-closes (routes never empties) and the ghost route is
+                // resubscribed on every reconnect. With ensure first, an interrupt before the
+                // Register makes the finalizer's Cancel a harmless no-op (onCancel ignores an
+                // unknown id) and after it cleans the route up — cleanup is always paired.
+                // Not unit-tested by design: reproducing the interrupt precisely in this window
+                // (which has no natural suspension point) would require a production test seam,
+                // and this ordering is correct by construction.
                 Scope
                     .ensure(Sync.defer {
                         given AllowUnsafe = AllowUnsafe.embrace.danger
                         discard(mailbox.unsafe.offer(Msg.Cancel(id)))
                         discard(channel.unsafe.close())
+                    })
+                    .andThen(Sync.defer {
+                        given AllowUnsafe = AllowUnsafe.embrace.danger
+                        discard(mailbox.unsafe.offer(Msg.Register(subscriber)))
                     })
                     .andThen(channel.streamUntilClosed())
             }
