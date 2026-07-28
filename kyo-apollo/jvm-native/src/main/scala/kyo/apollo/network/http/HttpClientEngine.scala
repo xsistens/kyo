@@ -34,22 +34,58 @@ import kyo.apollo.network.HttpMethod
 final class HttpClientEngine extends HttpEngine:
 
     def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
-        val headers = request.headers.map(h => h.name -> h.value)
-        val call =
-            request.method match
-                case HttpMethod.Get =>
-                    HttpClient.getTextResponse(request.url, headers, failOnError = false)
-                case HttpMethod.Post =>
-                    HttpClient.postTextResponse(request.url, request.body.getOrElse(""), headers, failOnError = false)
-        Abort.run[HttpException](call).map {
-            case Result.Success(resp) =>
-                val hs = List.newBuilder[HttpHeader]
-                resp.headers.foreach((n, v) => hs += HttpHeader(n, v))
-                HttpResponse(resp.status.code, hs.result(), resp.fields.body)
-            case Result.Failure(e) => Sync.defer(throw e)
-            case Result.Panic(e)   => Sync.defer(throw e)
-        }
+        request.formBody match
+            // A file upload (graphql-multipart-request-spec): the composer sets `formBody`
+            // and leaves `body` empty, so the plain text POST below would send an EMPTY
+            // request and silently drop the operation, map, and files. Send the real
+            // multipart/form-data body instead (the JS `FetchHttpEngine` does the same).
+            case Some(form) => executeMultipart(request, form)
+            case None =>
+                val headers = request.headers.map(h => h.name -> h.value)
+                val call =
+                    request.method match
+                        case HttpMethod.Get =>
+                            HttpClient.getTextResponse(request.url, headers, failOnError = false)
+                        case HttpMethod.Post =>
+                            HttpClient.postTextResponse(request.url, request.body.getOrElse(""), headers, failOnError = false)
+                Abort.run[HttpException](call).map {
+                    case Result.Success(resp) => toApollo(resp)
+                    case Result.Failure(e)    => Sync.defer(throw e)
+                    case Result.Panic(e)      => Sync.defer(throw e)
+                }
     end execute
+
+    /** Send a `multipart/form-data` body (a file upload) as a real multipart POST over
+      * kyo-http, which sets the `Content-Type` (with a generated boundary) itself. Non-2xx
+      * still completes (`sendWith` hands the response to the continuation regardless of
+      * status), matching the `failOnError = false` contract of the plain path; a genuine
+      * transport failure re-raises as a panic the transport folds to a value.
+      */
+    private def executeMultipart(request: HttpRequest, form: HttpForm)(using Frame): HttpResponse < Async =
+        val url   = HttpUrl.parse(request.url).getOrThrow
+        val route = HttpRoute.postRaw("").request(_.bodyMultipart).response(_.bodyText)
+        val req   = withHeaders(kyo.HttpRequest.postRaw(url).addField("body", formParts(form)), request)
+        Abort.run[HttpException](HttpClient.use(_.sendWith(route, req)(resp => toApollo(resp)))).map {
+            case Result.Success(resp) => resp
+            case Result.Failure(e)    => Sync.defer(throw e)
+            case Result.Panic(e)      => Sync.defer(throw e)
+        }
+    end executeMultipart
+
+    /** Lower an [[HttpForm]] to kyo-http request parts: each text field becomes a part with
+      * no filename/content-type, each file a part carrying both (the ordering — fields then
+      * files — is irrelevant to the multipart spec, and the server keys parts by name).
+      */
+    private def formParts(form: HttpForm): Seq[kyo.HttpRequest.Part] =
+        form.fields.map((name, value) =>
+            kyo.HttpRequest.Part(name, Absent, Absent, Span.fromUnsafe(value.getBytes(StandardCharsets.UTF_8)))
+        ) ++ form.files.map(f => kyo.HttpRequest.Part(f.fieldName, Present(f.fileName), Present(f.contentType), f.data))
+
+    private def toApollo(resp: kyo.HttpResponse["body" ~ String]): HttpResponse =
+        val hs = List.newBuilder[HttpHeader]
+        resp.headers.foreach((n, v) => hs += HttpHeader(n, v))
+        HttpResponse(resp.status.code, hs.result(), resp.fields.body)
+    end toApollo
 
     override def executeStreaming(request: HttpRequest)(using Frame): HttpStreamResponse < (Async & Scope) =
         for
@@ -101,9 +137,17 @@ final class HttpClientEngine extends HttpEngine:
                         val req   = withHeaders(kyo.HttpRequest.getRaw(url), request)
                         client.sendWith(route, req)(drainInto(head, chunks))
                     case HttpMethod.Post =>
-                        val route = HttpRoute.postRaw("").request(_.bodyText).response(_.bodyStream)
-                        val req   = withHeaders(kyo.HttpRequest.postRaw(url).addField("body", request.body.getOrElse("")), request)
-                        client.sendWith(route, req)(drainInto(head, chunks))
+                        request.formBody match
+                            case Some(form) =>
+                                // A deferred upload (@defer + a file variable): stream the response
+                                // off a real multipart request body, not an empty POST.
+                                val route = HttpRoute.postRaw("").request(_.bodyMultipart).response(_.bodyStream)
+                                val req   = withHeaders(kyo.HttpRequest.postRaw(url).addField("body", formParts(form)), request)
+                                client.sendWith(route, req)(drainInto(head, chunks))
+                            case None =>
+                                val route = HttpRoute.postRaw("").request(_.bodyText).response(_.bodyStream)
+                                val req   = withHeaders(kyo.HttpRequest.postRaw(url).addField("body", request.body.getOrElse("")), request)
+                                client.sendWith(route, req)(drainInto(head, chunks))
             }
         Abort.run[HttpException](send).map {
             case Result.Success(_) => ()
