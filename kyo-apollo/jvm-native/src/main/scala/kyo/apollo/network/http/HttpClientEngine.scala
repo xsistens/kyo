@@ -128,26 +128,32 @@ final class HttpClientEngine extends HttpEngine:
         head: Fiber.Promise[(Int, List[HttpHeader]), Abort[Throwable]],
         chunks: Channel[Maybe[String]]
     )(using Frame): Unit < Async =
-        val url = HttpUrl.parse(request.url).getOrThrow
+        // The URL parse is INSIDE the guarded `send` (via Abort.get, not an eager getOrThrow):
+        // a malformed URL is then a plain Abort[HttpException] failure that completes `head`
+        // below, rather than an unguarded throw that panics this producer fiber and leaves
+        // `head` forever incomplete — which would park the caller's `head.get` indefinitely.
         val send: Unit < (Async & Abort[HttpException]) =
-            HttpClient.use { client =>
-                request.method match
-                    case HttpMethod.Get =>
-                        val route = HttpRoute.getRaw("").response(_.bodyStream)
-                        val req   = withHeaders(kyo.HttpRequest.getRaw(url), request)
-                        client.sendWith(route, req)(drainInto(head, chunks))
-                    case HttpMethod.Post =>
-                        request.formBody match
-                            case Some(form) =>
-                                // A deferred upload (@defer + a file variable): stream the response
-                                // off a real multipart request body, not an empty POST.
-                                val route = HttpRoute.postRaw("").request(_.bodyMultipart).response(_.bodyStream)
-                                val req   = withHeaders(kyo.HttpRequest.postRaw(url).addField("body", formParts(form)), request)
-                                client.sendWith(route, req)(drainInto(head, chunks))
-                            case None =>
-                                val route = HttpRoute.postRaw("").request(_.bodyText).response(_.bodyStream)
-                                val req   = withHeaders(kyo.HttpRequest.postRaw(url).addField("body", request.body.getOrElse("")), request)
-                                client.sendWith(route, req)(drainInto(head, chunks))
+            Abort.get(HttpUrl.parse(request.url)).map { url =>
+                HttpClient.use { client =>
+                    request.method match
+                        case HttpMethod.Get =>
+                            val route = HttpRoute.getRaw("").response(_.bodyStream)
+                            val req   = withHeaders(kyo.HttpRequest.getRaw(url), request)
+                            client.sendWith(route, req)(drainInto(head, chunks))
+                        case HttpMethod.Post =>
+                            request.formBody match
+                                case Some(form) =>
+                                    // A deferred upload (@defer + a file variable): stream the response
+                                    // off a real multipart request body, not an empty POST.
+                                    val route = HttpRoute.postRaw("").request(_.bodyMultipart).response(_.bodyStream)
+                                    val req   = withHeaders(kyo.HttpRequest.postRaw(url).addField("body", formParts(form)), request)
+                                    client.sendWith(route, req)(drainInto(head, chunks))
+                                case None =>
+                                    val route = HttpRoute.postRaw("").request(_.bodyText).response(_.bodyStream)
+                                    val req =
+                                        withHeaders(kyo.HttpRequest.postRaw(url).addField("body", request.body.getOrElse("")), request)
+                                    client.sendWith(route, req)(drainInto(head, chunks))
+                }
             }
         Abort.run[HttpException](send).map {
             case Result.Success(_) => ()

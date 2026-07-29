@@ -48,6 +48,42 @@ class HttpClientEngineStreamingSpec extends kyo.test.Test[Any]:
         assert(tail.isEmpty)
     }
 
+    /** A trivial query, enough to drive the transport's streaming path (routing to `execute`
+      * vs `executeStreaming` is the interceptor's job; here we call executeStreaming directly).
+      */
+    final private case class Ping() extends kyo.apollo.api.Query[Int]:
+        def name: String            = "Ping"
+        def document: String        = "query Ping { ping }"
+        def dataSchema: Schema[Int] = summon[Schema[Int]]
+        def rootField: kyo.apollo.api.CompiledField =
+            kyo.apollo.api.CompiledField("data", kyo.apollo.api.CompiledNamedType("Query"))
+        def variables: kyo.apollo.json.Json = kyo.apollo.json.Json.JObj(scala.collection.immutable.VectorMap.empty)
+    end Ping
+
+    "a malformed URL in the streaming path folds to an exception value, never hanging" in {
+        // The pre-fix engine parsed the URL with an unguarded getOrThrow inside the streaming
+        // producer fiber: a malformed URL panicked that fiber and left `head` forever
+        // incomplete, so head.get (and therefore the whole ResponseStream) hung. The fix routes
+        // the parse failure through head; the transport then folds it to an ApolloNetworkException
+        // value ("failures are values"). The outer timeout turns a regressed hang into a test
+        // failure rather than a wedged suite.
+        val transport = new HttpNetworkTransport("", new HttpClientEngine)
+        Abort.run[Timeout](Async.timeout(15.seconds)(
+            StreamProbe.collect(transport.executeStreaming(kyo.apollo.network.ApolloRequest(Ping())))
+        )).map {
+            case Result.Failure(_) =>
+                fail("executeStreaming hung on a malformed URL — the parse failure was not routed through head")
+            case Result.Panic(e) =>
+                fail(s"the malformed URL escaped as a panic instead of folding to a value: $e")
+            case Result.Success(rs) =>
+                assert(rs.nonEmpty, "expected a terminal exception value, got an empty stream")
+                assert(
+                    rs.last.exception.exists(_.isInstanceOf[kyo.apollo.exception.ApolloNetworkException]),
+                    s"expected an ApolloNetworkException value for the malformed URL, got $rs"
+                )
+        }
+    }
+
     "executeStreaming surfaces a multipart/mixed body as a live Chunked stream, UTF-8-exact across chunk boundaries" in {
         val boundary = "graphql"
         val fullText =
