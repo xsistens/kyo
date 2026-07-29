@@ -33,7 +33,8 @@ object CodegenRunner:
     def generate(schema: Document, config: CodegenConfig): List[GeneratedSource] =
         ApolloClientWriter.writeSchemaTypes(schema, config) ++
             ApolloClientWriter.writeSelectors(schema, config) ++
-            ApolloClientWriter.writeClientFields(schema, config)
+            ApolloClientWriter.writeClientFields(schema, config) ++
+            ApolloClientWriter.writeSchemaIdentities(schema, config)
 
     /** Load the schema from disk, emit the sources, and write them into `outputDir`
       * (created if absent). Returns the paths written, in emission order. A source
