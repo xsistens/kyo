@@ -99,7 +99,10 @@ object IncrementalAssembler:
                     if extensions.nonEmpty then env += "extensions" -> Json.JObj(extensions)
                     try
                         val gql = GraphQLResponse.parse(Json.JObj(env.result()), request.operation)
-                        ApolloResponse.fromGraphQLResponse(request.requestUuid, gql, request.executionContext)
+                        ApolloResponse
+                            .fromGraphQLResponse(request.requestUuid, gql, request.executionContext)
+                            // Still growing while the wire has announced more payloads.
+                            .copy(complete = !awaitingMore)
                     catch
                         case NonFatal(cause) =>
                             ApolloResponse.fromException(

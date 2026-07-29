@@ -76,7 +76,7 @@ object NetworkStatus:
     private[kyo] def base(qs: QueryState[?]): NetworkStatus = qs match
         case QueryState.Idle              => NetworkStatus.Loading
         case QueryState.Loading           => NetworkStatus.Loading
-        case QueryState.Success(_, _)     => NetworkStatus.Ready
+        case QueryState.Success(_, _, _)  => NetworkStatus.Ready
         case QueryState.PartialData(_, _) => NetworkStatus.Ready
         case QueryState.Failure(_, _)     => NetworkStatus.Error
 end NetworkStatus

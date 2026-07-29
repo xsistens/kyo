@@ -150,6 +150,18 @@ class DeferSpec extends kyo.test.Test[Any]:
             }
         }
 
+        "emissions carry `complete`: false while payloads are outstanding, true on the final one" in {
+            // The C4 streaming marker: hasNext:true → complete=false, the terminal
+            // hasNext:false → complete=true. A view keys its "loading more" affordance
+            // on this instead of guessing from emission counts.
+            val t = transport(engineOf(respond(200, contentType, multipart)))
+            StreamProbe.collect(t.executeStreaming(ApolloRequest(DeferQ()))).map { rs =>
+                assert(rs.size >= 2)
+                assert(!rs.head.complete)
+                assert(rs.last.complete)
+            }
+        }
+
         "a complete incremental stream (terminal hasNext:false) emits no truncation error" in {
             // The regular two-part body ends with hasNext:false, so awaitingMore is back to
             // false at end-of-stream and no terminal error is appended (guards the new
