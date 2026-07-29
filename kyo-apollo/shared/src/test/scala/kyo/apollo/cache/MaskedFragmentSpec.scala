@@ -238,6 +238,20 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
         }
     }
 
+    "CacheIdentity.generatorOf" - {
+
+        "collects exactly the identities in scope — the SchemaIdentities expansion" in {
+            // The shape codegen emits: enumerate ALL object types; only CountryT has a
+            // given here, so PageInfoT contributes nothing and falls back to id keying.
+            val gen = CacheIdentity.generatorOf[CountryT *: PageInfoT *: EmptyTuple]
+            val key = gen.cacheKeyForObject(
+                Map("__typename" -> Json.JStr("Country"), "code" -> Json.JStr("DE")),
+                CacheKeyGeneratorContext(CompiledField("country", CompiledNamedType("Country")))
+            )
+            assert(key.contains(CacheKey("Country", "DE")))
+        }
+    }
+
     "spreadAs" - {
 
         "names the element explicitly when the derived label is not wanted" in {
