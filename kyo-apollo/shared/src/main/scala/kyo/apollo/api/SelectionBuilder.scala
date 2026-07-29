@@ -383,6 +383,48 @@ object SelectionBuilder:
             value => codec.encode(value.asInstanceOf[V])
         )
 
+    /** Build an inline-fragment branch of a union (or interface) selection:
+      * `... on <typeName> { <child> }`. The branch contributes a typed
+      * [[CompiledFragment]] to the parent selection set and decodes to
+      * `Option[A]` — `Some` when the object's `__typename` matches `typeName`
+      * (the parent object selector always requests `__typename`), `None`
+      * otherwise. Branches compose with `~` like any field, so a full union
+      * read is `PlayableItem.onTrack(…) ~ PlayableItem.onEpisode(…)` with the
+      * result `(onTrack: Option[…], onEpisode: Option[…])`, exactly one of
+      * which is `Some`. `R` is the 1-ary named tuple the caller (generated
+      * union selector) ascribes.
+      */
+    def onType[Origin, R <: AnyNamedTuple, A](
+        typeName: String,
+        child: SelectionBuilder[?, A]
+    ): SelectionBuilder[Origin, R] =
+        new Tuples[Origin, R]:
+            private[api] def arity: Int = 1
+            def selections: List[CompiledSelection] =
+                List(CompiledFragment(typeName, List(typeName), child.selections))
+            private[api] def argEntries: List[Arg] = child.argEntries
+            private[api] def decodeRaw(row: Map[String, Json]): Tuple =
+                row.get("__typename") match
+                    case Some(Json.JStr(`typeName`)) => Tuple1(Some(child.decode(Json.JObj(row))))
+                    case _                           => Tuple1(None)
+            private[api] def encodeRaw(value: Tuple): List[(String, Json)] =
+                value.productElement(0).asInstanceOf[Option[A]] match
+                    case None => Nil
+                    case Some(v) =>
+                        withTypename(child.encode(v), typeName) match
+                            case Json.JObj(fields) => fields.toList
+                            // A non-object projection cannot be spliced back into the
+                            // parent row; the branch's fields simply stay absent.
+                            case _ => Nil
+            private[api] def deferLast: Tuples[Origin, ? <: AnyNamedTuple] =
+                throw IllegalStateException(
+                    "`.deferred` cannot be applied to an inline-fragment branch"
+                )
+            private[api] def streamLast(initialCount: Int, condition: Option[String]): Tuples[Origin, R] =
+                throw IllegalStateException(
+                    "`.streamed` cannot be applied to an inline-fragment branch"
+                )
+
     /** Project a selection's result to `B`, reusing its wire selection/arguments. */
     private[api] def project[Origin, B](
         under: SelectionBuilder[Origin, ?],
