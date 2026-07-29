@@ -141,22 +141,31 @@ extension [A <: AnyNamedTuple](sb: SelectionBuilder[RootSubscription, A])
 end extension
 
 extension [Origin, A <: AnyNamedTuple](sb: SelectionBuilder[Origin, A])
-    /** Build a cache-access [[Fragment]] on `typeName` from this selection — the
-      * targeted-read/write analogue of [[toQuery]]. `typeName` is the GraphQL type
-      * the fragment applies to (e.g. `"Country"`), naming the record's type
-      * condition; it is passed explicitly because the phantom `Origin` does not
-      * carry its schema name at runtime. Like `toQuery`, the builder's structural
-      * codec is installed as the fragment's [[Fragment.dataCodec]] (its
-      * [[Fragment.dataSchema]] is unused, matching the inline-operation path), and
-      * the selection's fields become the fragment's `rootField` selections — so a
-      * `Fragment.of` reads/writes exactly what an equivalent query selection would.
+    /** Build a cache-access [[Fragment]] from this selection — the
+      * targeted-read/write analogue of [[toQuery]].
+      *
+      * The GraphQL type the fragment applies to (naming the record's type
+      * condition) comes from `given TypeName[Origin]`, which codegen already emits
+      * beside every phantom marker. It used to be a `String` parameter, which was
+      * both redundant and unchecked: a typo compiled fine and produced a fragment
+      * addressing a type the schema does not have. Now the phantom `Origin` decides
+      * it, and a type with no generated marker simply does not compile.
+      *
+      * Like `toQuery`, the builder's structural codec is installed as the
+      * fragment's [[Fragment.dataCodec]] (its [[Fragment.dataSchema]] is unused,
+      * matching the inline-operation path), and the selection's fields become the
+      * fragment's `rootField` selections — so a `Fragment.of` reads/writes exactly
+      * what an equivalent query selection would.
       */
-    def toFragment(typeName: String): Fragment[A] =
+    def toFragment(using origin: TypeName[Origin]): Fragment[A] =
+        val typeName = origin.name
         new Fragment[A]:
             override def dataCodec: JsonCodec[A] = codecOf(sb)
             def dataSchema: Schema[A]            = throw noSchema(s"fragment on $typeName")
             def rootField: CompiledField =
                 CompiledField(typeName, CompiledNamedType(typeName), selections = sb.selections)
+        end new
+    end toFragment
 end extension
 
 // -- internals ----------------------------------------------------------------

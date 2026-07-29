@@ -150,6 +150,52 @@ class HttpTransportRoundTripSpec extends kyo.test.Test[Any]:
             }
         }
 
+        "a non-2xx application/graphql-response+json body is parsed as the GraphQL response it is" in {
+            // GraphQL-over-HTTP: that media type promises a well-formed envelope whatever
+            // the status, so a 400 carrying typed `errors` must not be flattened into an
+            // opaque ApolloHttpException.
+            val engine = CapturingEngine(
+                HttpResponse(
+                    400,
+                    List(HttpHeader("Content-Type", "application/graphql-response+json; charset=utf-8")),
+                    """{"data":null,"errors":[{"message":"unknown field `nope`"}]}"""
+                )
+            )
+            transportWith(engine).execute(ApolloRequest(ValueQuery())).map { response =>
+                assert(response.errors.map(_.message) == Chunk("unknown field `nope`"))
+                assert(response.error.exists(_.isInstanceOf[ApolloGraphQLException]))
+                assert(!response.hasTransportError)
+            }
+        }
+
+        "a non-2xx graphql-response+json body that does not parse falls back to the status" in {
+            val engine = CapturingEngine(
+                HttpResponse(
+                    503,
+                    List(HttpHeader("Content-Type", "application/graphql-response+json")),
+                    "<html>gateway down</html>"
+                )
+            )
+            transportWith(engine).execute(ApolloRequest(ValueQuery())).map { response =>
+                assert(response.error.exists(_.isInstanceOf[ApolloHttpException]))
+                assert(response.hasTransportError)
+            }
+        }
+
+        "a non-2xx application/json body is NOT parsed — the status says nothing about it" in {
+            val engine = CapturingEngine(
+                HttpResponse(
+                    400,
+                    List(HttpHeader("Content-Type", "application/json")),
+                    """{"data":null,"errors":[{"message":"legacy"}]}"""
+                )
+            )
+            transportWith(engine).execute(ApolloRequest(ValueQuery())).map { response =>
+                assert(response.error.exists(_.isInstanceOf[ApolloHttpException]))
+                assert(response.errors.isEmpty)
+            }
+        }
+
         "HTTP error: a non-2xx status folds into an ApolloHttpException value" in {
             val headers = List(HttpHeader("Retry-After", "5"))
             val engine  = CapturingEngine(HttpResponse(500, headers, "internal error"))

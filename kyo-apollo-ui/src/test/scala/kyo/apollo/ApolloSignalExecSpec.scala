@@ -103,8 +103,8 @@ class ApolloSignalExecSpec extends kyo.test.Test[Any]:
                     _     <- Async.sleep(30L.millis)
                     state <- signal.current
                 yield state match
-                    case QueryState.Failure(ex) => assert(ex.isInstanceOf[ApolloException])
-                    case other                  => fail(s"expected Failure, got $other")
+                    case QueryState.Failure(ex, _) => assert(ex.isInstanceOf[ApolloException])
+                    case other                     => fail(s"expected Failure, got $other")
             }
         }
 

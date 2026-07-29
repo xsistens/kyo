@@ -78,15 +78,22 @@ object NetworkStatus:
         case QueryState.Loading           => NetworkStatus.Loading
         case QueryState.Success(_, _)     => NetworkStatus.Ready
         case QueryState.PartialData(_, _) => NetworkStatus.Ready
-        case QueryState.Failure(_)        => NetworkStatus.Error
+        case QueryState.Failure(_, _)     => NetworkStatus.Error
 end NetworkStatus
 
 /** The **projection-capable** surface of a live query — everything a data
   * projection can honestly carry: the reactive [[state]], the derived
-  * [[networkStatus]], the typed [[refetch]], `Scope`-bound [[polling]], the
-  * à-la-carte [[onCompleted]]/[[onError]] callbacks, and [[mapData]] itself.
+  * [[networkStatus]], the typed [[refetch]], `Scope`-bound [[polling]], and
+  * [[mapData]] itself.
   *
-  * [[RawQueryHandle]] (what [[useQuery]] returns) extends this with the operations a
+  * There are deliberately no `onCompleted`/`onError` callbacks (Apollo Client 4
+  * removed them from `useQuery`/`useLazyQuery` for the same reason): on a live
+  * query they fire per emission with no defined relationship to a render, and
+  * [[state]] already carries every settle as a value. Tap it directly —
+  * `state.current` / `state.next` is the primitive the callbacks were built on.
+  * A one-shot mutation is different, and [[MutationHandle]] keeps its pair.
+  *
+  * [[RawQueryHandle]] extends this with the operations a
   * projection CANNOT offer: `subscribeToMore` must write merged data back into the
   * store in the operation's RAW shape (a projection has no inverse to encode
   * through), and the imperative `startPolling`/`stopPolling` pair parks its loop
@@ -221,28 +228,6 @@ class QueryHandle[D] private[apollo] (
             case Absent => Sync.defer(())
         }
 
-    /** À-la-carte success callback — the composable alternative to the both-callbacks
-      * [[useQuery]] overload. Spawns a `Scope`-bound watcher that fires `f(data)` on
-      * the current state (if already `Success`) and on every later settle to
-      * `Success`. Use alone or chain with [[onError]] — no no-op filler needed:
-      *
-      * {{{
-      * useQuery(call).flatMap(_.onCompleted(cacheIt))                            // only success
-      * useQuery(call).flatMap(_.onCompleted(cacheIt)).flatMap(_.onError(toast))
-      * }}}
-      *
-      * Prefer tapping [[state]] directly where you can — `state.current` /
-      * `state.next` is the very primitive this is built on (see [[attachQueryCallbacks]]).
-      */
-    def onCompleted(f: D => Any < Async)(using Frame): this.type < (Async & Scope) =
-        attachQueryCallbacks(state, f, (_: ApolloException) => Sync.defer(())).andThen(this)
-
-    /** À-la-carte error callback — fires `f(exception)` whenever [[state]] settles to
-      * `Failure`. See [[onCompleted]] for the shape and the tap-`state` alternative.
-      */
-    def onError(f: ApolloException => Any < Async)(using Frame): this.type < (Async & Scope) =
-        attachQueryCallbacks(state, (_: D) => Sync.defer(()), f).andThen(this)
-
 end QueryHandle
 
 object QueryHandle:
@@ -259,10 +244,10 @@ object QueryHandle:
         yield QueryHandle(state, activity, Abort.fail(exception))
 end QueryHandle
 
-/** The result of [[useQuery]] — the react-apollo `useQuery` shape, mapped onto
+/** The result of `Apollo.query` — the react-apollo `useQuery` shape, mapped onto
   * Kyo: the full [[QueryHandle]] surface (reactive [[state]], [[networkStatus]],
   * [[refetch]], scoped [[polling]], the imperative [[QueryHandle.startPolling]]/
-  * [[QueryHandle.stopPolling]] pair, callbacks, [[mapData]]) PLUS the one operation
+  * [[QueryHandle.stopPolling]] pair, [[mapData]]) PLUS the one operation
   * a projection cannot carry: [[subscribeToMore]] (it writes merged data back into
   * the store in the operation's OWN shape, which a `mapData`-projected handle — a
   * one-way `D => B` — cannot invert). That is the sole reason this subtype exists;
@@ -357,24 +342,6 @@ private[apollo] def buildQueryHandle[D](
         _ <- Scope.ensure(handle.stopPolling)
         _ <- Scope.ensure(Sync.defer(dispose()))
     yield handle
-
-/** Fire `onCompleted` / `onError` off a query's reactive `state`, on a
-  * Scope-bound fiber. Fires on the current value first, then on every subsequent
-  * change; only `Success` / `Failure` settle states trigger a callback.
-  */
-private[apollo] def attachQueryCallbacks[D](
-    state: Signal[QueryState[D]],
-    onCompleted: D => Any < Async,
-    onError: ApolloException => Any < Async
-)(using Frame): Unit < (Async & Scope) =
-    def fire(qs: QueryState[D]): Unit < Async =
-        qs match
-            case QueryState.Success(data, _) => onCompleted(data).unit
-            case QueryState.Failure(ex)      => onError(ex).unit
-            case _                           => Sync.defer(())
-    def pump: Unit < Async = state.next.map(fire).andThen(pump)
-    Fiber.init(state.current.map(fire).andThen(pump)).unit
-end attachQueryCallbacks
 
 /** The result of [[useLazyQuery]] — react-apollo's `useLazyQuery` shape: a
   * reactive [[state]] that starts [[QueryState.Idle]] (no fetch on setup) and a

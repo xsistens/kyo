@@ -64,29 +64,28 @@ object Fragment:
 
     /** Build a [[Fragment]] from a chainable selection — the ergonomic entry point.
       *
-      * `Fragment.of[Country]("Country")(_.code.name.capital)` derives the fragment's
-      * codec and `rootField` from the generated selectors (the same machinery
-      * `toQuery` uses), so no hand-written `CompiledField` / `Schema` is needed.
-      * `typeName` is the GraphQL type the fragment applies to (the phantom `Origin`
-      * doesn't carry it at runtime).
+      * `Fragment.of[Country](_.code.name.capital)` derives the fragment's codec and
+      * `rootField` from the generated selectors (the same machinery `toQuery` uses),
+      * so no hand-written `CompiledField` / `Schema` is needed. The GraphQL type the
+      * fragment applies to comes from `given TypeName[Origin]`, which codegen emits
+      * beside the phantom marker — naming it a second time as a string was redundant
+      * and let a typo through to runtime.
       *
       * The `Origin` type argument is supplied; the result type `D` is inferred from
-      * the selection, so only `Origin` is named (`Fragment.of[Country]`). Returns a
-      * [[Builder]] whose `apply` takes the selection and delegates to
-      * [[kyo.apollo.api.toFragment]].
+      * the selection, so only `Origin` is named. Returns a [[Builder]] whose `apply`
+      * takes the selection and delegates to [[kyo.apollo.api.toFragment]].
       *
       * @tparam Origin the phantom selection origin (e.g. `Country`)
       */
-    def of[Origin](typeName: String): Builder[Origin] = new Builder[Origin](typeName)
+    def of[Origin](using TypeName[Origin]): Builder[Origin] = new Builder[Origin]
 
-    /** The partially-applied [[of]] — carries `Origin` + `typeName` so the selection
-      * infers `D`. `Fragment.of[Country]("Country")(_.code.name)` is
-      * `of[Country]("Country").apply(_.code.name)`.
+    /** The partially-applied [[of]] — carries `Origin` so the selection infers `D`.
+      * `Fragment.of[Country](_.code.name)` is `of[Country].apply(_.code.name)`.
       */
-    final class Builder[Origin](typeName: String):
+    final class Builder[Origin](using TypeName[Origin]):
         def apply[D <: AnyNamedTuple](
             build: SelectionBuilder[Origin, Empty] => SelectionBuilder[Origin, D]
         ): Fragment[D] =
-            build(SelectionBuilder.empty[Origin]).toFragment(typeName)
+            build(SelectionBuilder.empty[Origin]).toFragment
     end Builder
 end Fragment

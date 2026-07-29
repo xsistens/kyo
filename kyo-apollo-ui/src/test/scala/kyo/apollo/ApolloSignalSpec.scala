@@ -72,20 +72,20 @@ class ApolloSignalSpec extends kyo.test.Test[Any]:
         "project prefers a transport exception over partial data" in {
             val boom = ApolloNetworkException("connection dropped")
             ApolloSignal.project(resp[Int](data = Present(7), error = Present(boom))) match
-                case QueryState.Failure(ex) => assert(ex == boom)
-                case other                  => fail(s"expected Failure($boom), got $other")
+                case QueryState.Failure(ex, _) => assert(ex == boom)
+                case other                     => fail(s"expected Failure($boom), got $other")
         }
 
         "project maps an empty response (no data, no errors) to Failure" in {
             ApolloSignal.project(resp[Int]()) match
-                case QueryState.Failure(ex: DefaultApolloException) =>
+                case QueryState.Failure(ex: DefaultApolloException, _) =>
                     assert(ex.getMessage.contains("did not return any data"))
                 case other => fail(s"expected Failure(DefaultApolloException), got $other")
         }
 
         "project maps no-data-with-errors to Failure describing the errors" in {
             ApolloSignal.project(resp[Int](data = Absent, errors = Chunk(GraphQLError("nope")))) match
-                case QueryState.Failure(ex: ApolloGraphQLException) =>
+                case QueryState.Failure(ex: ApolloGraphQLException, _) =>
                     // Apollo JS parity: the bare error message, no prefix.
                     assert(ex.getMessage == "nope")
                     assert(ex.errors.map(_.message) == Chunk("nope"))
@@ -102,8 +102,8 @@ class ApolloSignalSpec extends kyo.test.Test[Any]:
         "QueryState.of is the public alias of the projection" in {
             assert(QueryState.of(resp(data = Present(42))) == QueryState.Success(42, fromCache = false))
             QueryState.of(resp[Int]()) match
-                case QueryState.Failure(_: DefaultApolloException) => assert(true)
-                case other                                         => fail(s"expected Failure(DefaultApolloException), got $other")
+                case QueryState.Failure(_: DefaultApolloException, _) => assert(true)
+                case other                                            => fail(s"expected Failure(DefaultApolloException), got $other")
         }
 
         "QueryState.map projects data in Success and PartialData, passes the rest through" in {
@@ -140,6 +140,72 @@ class ApolloSignalSpec extends kyo.test.Test[Any]:
             assert(widen(QueryState.Loading) == QueryState.Loading)
             val failure = QueryState.Failure(ApolloNetworkException("down"))
             assert(widen(failure) == failure)
+        }
+
+        "map and mapData carry a Failure's retained data through the projection" in {
+            val down = ApolloNetworkException("down")
+            assert(QueryState.Failure(down, Present(21)).map(_ * 2) == QueryState.Failure(down, Present(42)))
+            assert(
+                QueryState.Failure(down, Present(21)).mapData(_ * 2) == QueryState.Failure(down, Present(42))
+            )
+        }
+
+        "mapData drops retained data the projection rejects — it is not renderable" in {
+            val down     = ApolloNetworkException("down")
+            val rejected = DefaultApolloException("unusable")
+            val projected =
+                QueryState.Failure(down, Present(-1)).mapData(n => if n < 0 then Abort.fail(rejected) else n)
+            // The original failure is what the view reports; the rejection only decides
+            // whether the stale data survives.
+            assert(projected == QueryState.Failure(down, Absent))
+        }
+    }
+
+    "ApolloSignal.retainingData" - {
+
+        val down = ApolloNetworkException("connection dropped")
+
+        "a bare Failure inherits the data the previous state carried" in {
+            val previous = QueryState.Success(42, fromCache = false)
+            assert(
+                ApolloSignal.retainingData(previous, QueryState.Failure(down))
+                    == QueryState.Failure(down, Present(42))
+            )
+        }
+
+        "PartialData counts as data worth keeping" in {
+            val previous = QueryState.PartialData(7, Chunk(GraphQLError("boom")))
+            assert(
+                ApolloSignal.retainingData(previous, QueryState.Failure(down))
+                    == QueryState.Failure(down, Present(7))
+            )
+        }
+
+        "a run of consecutive failures keeps carrying the same data forward" in {
+            val first  = ApolloSignal.retainingData(QueryState.Success(42, fromCache = false), QueryState.Failure(down))
+            val second = ApolloSignal.retainingData(first, QueryState.Failure(down))
+            assert(second == QueryState.Failure(down, Present(42)))
+        }
+
+        "a first-fetch failure has nothing to keep" in {
+            assert(
+                ApolloSignal.retainingData(QueryState.Loading: QueryState[Int], QueryState.Failure(down))
+                    == QueryState.Failure(down, Absent)
+            )
+        }
+
+        "fresh data supersedes stale data outright" in {
+            val previous = QueryState.Failure(down, Present(1))
+            assert(
+                ApolloSignal.retainingData(previous, QueryState.Success(2, fromCache = false))
+                    == QueryState.Success(2, fromCache = false)
+            )
+        }
+
+        "Idle and Loading are deliberate resets, not failures to patch up" in {
+            val previous = QueryState.Success(42, fromCache = false)
+            assert(ApolloSignal.retainingData(previous, QueryState.Loading) == QueryState.Loading)
+            assert(ApolloSignal.retainingData(previous, QueryState.Idle) == QueryState.Idle)
         }
     }
 end ApolloSignalSpec
