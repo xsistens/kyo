@@ -508,17 +508,31 @@ object ApolloClientWriter:
           * in `empty` too but only ever appears inline, where reduction succeeds.
           */
         private def chainingBlock(originName: String, fields: List[FieldSpec]): String =
-            val accessors = fields.map(chainAccessor(originName, _)).mkString("\n")
-            s"""extension [Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder[$originName, Acc])
+            val parts     = fields.map(chainAccessor(originName, _))
+            val classes   = parts.flatMap(_._1)
+            val accessors = parts.map(_._2).mkString("\n")
+            val ext =
+                s"""extension [Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder[$originName, Acc])
          |${indent(accessors, 2)}""".stripMargin
+            if classes.isEmpty then ext
+            else classes.mkString("\n\n") + "\n\n" + ext
         end chainingBlock
 
         /** One chainable accessor: `sb.field` appends `field` to the accumulated
           * selection. Scalar leaves add `(field: T)`; object leaves take a nested
           * chainable builder `sub` and add `(field: Wrap[B])`. Both reuse the plain
           * `Origin.field` selector under `~`, keeping wire output identical.
+          *
+          * Fields with DEFAULTED args need one indirection: an extension method
+          * desugars into the same `object Origin` namespace as the plain selector
+          * `def field(args…)`, and Scala forbids two overloads that BOTH declare
+          * default arguments. Same Option-D trick as the `` `field$sel` `` selector
+          * classes — hoist the args onto the sole `apply` of a dedicated
+          * `` `field$chain` `` class reached through a parameterless accessor. The
+          * call site keeps the exact `_.field(args…)(sub)` shape. Returns the
+          * optional chain-class declaration plus the accessor.
           */
-        private def chainAccessor(originName: String, field: FieldSpec): String =
+        private def chainAccessor(originName: String, field: FieldSpec): (Option[String], String) =
             val label    = accessorLabel(field.name)
             val leafName = Type.innerType(field.ofType)
             val argParams = field.args.map { a =>
@@ -529,15 +543,42 @@ object ApolloClientWriter:
             val argNames =
                 if field.args.isEmpty then ""
                 else s"(${field.args.map(a => sanitize(a.name)).mkString(", ")})"
+            val hasDefaultedArgs = field.args.exists(a => !isNonNull(a.ofType))
             if objectNames(leafName) then
                 val chained =
                     s"scala.NamedTuple.Concat[Acc, ($label: ${wrappedTypeExpr(field.ofType, "B")})]"
-                s"""def $label[B]$argClause(sub: SelectionBuilder[$leafName, scala.NamedTuple.Empty] => SelectionBuilder[$leafName, B]): SelectionBuilder[$originName, $chained] =
-           |  sb ~ $originName.$label$argNames(sub(SelectionBuilder.empty))""".stripMargin
+                if hasDefaultedArgs then
+                    val cls =
+                        s"""final class `$label$$chain`[Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder[$originName, Acc]):
+               |  def apply[B]$argClause(sub: SelectionBuilder[$leafName, scala.NamedTuple.Empty] => SelectionBuilder[$leafName, B]): SelectionBuilder[$originName, $chained] =
+               |    sb ~ $originName.$label$argNames(sub(SelectionBuilder.empty))""".stripMargin
+                    val acc =
+                        s"""def $label: `$label$$chain`[Acc] =
+               |  new `$label$$chain`(sb)""".stripMargin
+                    (Some(cls), acc)
+                else
+                    val acc =
+                        s"""def $label[B]$argClause(sub: SelectionBuilder[$leafName, scala.NamedTuple.Empty] => SelectionBuilder[$leafName, B]): SelectionBuilder[$originName, $chained] =
+               |  sb ~ $originName.$label$argNames(sub(SelectionBuilder.empty))""".stripMargin
+                    (None, acc)
+                end if
             else
                 val chained = s"scala.NamedTuple.Concat[Acc, ($label: ${scalaTypeOf(field.ofType)})]"
-                s"""def $label$argClause: SelectionBuilder[$originName, $chained] =
-           |  sb ~ $originName.$label$argNames""".stripMargin
+                if hasDefaultedArgs then
+                    val cls =
+                        s"""final class `$label$$chain`[Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder[$originName, Acc]):
+               |  def apply$argClause: SelectionBuilder[$originName, $chained] =
+               |    sb ~ $originName.$label$argNames""".stripMargin
+                    val acc =
+                        s"""def $label: `$label$$chain`[Acc] =
+               |  new `$label$$chain`(sb)""".stripMargin
+                    (Some(cls), acc)
+                else
+                    val acc =
+                        s"""def $label$argClause: SelectionBuilder[$originName, $chained] =
+               |  sb ~ $originName.$label$argNames""".stripMargin
+                    (None, acc)
+                end if
             end if
         end chainAccessor
 
