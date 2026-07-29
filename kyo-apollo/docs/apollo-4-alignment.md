@@ -1,7 +1,11 @@
 # Apollo Client 4 alignment plan
 
-Status: **complete — P1–P6 and the demo batch landed.** Outstanding beyond this plan: optional
-`Schema[Ref]` and the conditional items in §3. Last updated 2026-07-29.
+Status: **complete — P1–P6 and the demo batch landed.** Outstanding beyond this plan: only the
+conditional items in §3. `Schema[Ref]` was considered and **declined** (2026-07-29): the colocation
+idiom is named-tuple-shaped and does not need it, a view model embedding an opaque ref is a skewed
+pattern anyway, and the path-dependent `Ref` types would force an instance-bound schema — API
+surface nobody has asked for. Revisit only if a real case-class-with-ref need appears.
+Last updated 2026-07-29.
 
 Demo batch (standalone repo, commits `e03fa42` + `08794a0`): all three demo modules migrated to the
 aligned API (the error channel, the pattern arities, the stringless `Fragment.of`, the callback
