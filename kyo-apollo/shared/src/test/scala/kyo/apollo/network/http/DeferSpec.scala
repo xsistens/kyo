@@ -112,7 +112,7 @@ class DeferSpec extends kyo.test.Test[Any]:
             val t = transport(engineOf(respond(500, contentType, "")))
             StreamProbe.collect(t.executeStreaming(ApolloRequest(DeferQ()))).map { rs =>
                 assert(rs.size == 1)
-                assert(rs(0).exception.isDefined)
+                assert(rs(0).error.isDefined)
                 assert(rs(0).data == Absent)
             }
         }
@@ -122,7 +122,7 @@ class DeferSpec extends kyo.test.Test[Any]:
             val t    = transport(engineOf(_ => Async.fromFuture(Future.failed[HttpResponse](boom))))
             StreamProbe.collect(t.executeStreaming(ApolloRequest(DeferQ()))).map { rs =>
                 assert(rs.size == 1)
-                assert(rs(0).exception.isDefined)
+                assert(rs(0).error.isDefined)
             }
         }
 
@@ -143,7 +143,7 @@ class DeferSpec extends kyo.test.Test[Any]:
                 assert(rs.size == 3) // the two delivered patches, then the truncation error
                 assert(rs(0).data == Present(Data(Some(Loc("DE", None)))))
                 assert(rs(1).data == Present(Data(Some(Loc("DE", Some("Berlin"))))))
-                assert(rs(2).exception.exists {
+                assert(rs(2).error.exists {
                     case _: ApolloNetworkException => true
                     case _                         => false
                 })
@@ -156,7 +156,7 @@ class DeferSpec extends kyo.test.Test[Any]:
             // check against firing on a well-formed stream).
             val t = transport(engineOf(respond(200, contentType, multipart)))
             StreamProbe.collect(t.executeStreaming(ApolloRequest(DeferQ()))).map { rs =>
-                assert(rs.forall(_.exception.isEmpty))
+                assert(rs.forall(_.error.isEmpty))
             }
         }
 
@@ -180,7 +180,7 @@ class DeferSpec extends kyo.test.Test[Any]:
             StreamProbe.collect(transport(streamingEngine).executeStreaming(ApolloRequest(DeferQ()))).map { rs =>
                 assert(rs.nonEmpty)
                 assert(rs.head.data == Present(Data(Some(Loc("DE", None))))) // the part before the drop still arrives
-                assert(rs.last.exception.exists {
+                assert(rs.last.error.exists {
                     case _: ApolloNetworkException => true
                     case _                         => false
                 })
@@ -200,7 +200,7 @@ class DeferSpec extends kyo.test.Test[Any]:
                 assert(deferred.size == 2) // @defer → executeStreaming splits the multipart body
                 assert(deferred(1).data == Present(Data(Some(Loc("DE", Some("Berlin"))))))
                 assert(plain.size == 1) // plain → execute → the multipart body is not single JSON
-                assert(plain(0).exception.isDefined)
+                assert(plain(0).error.isDefined)
             end for
         }
     }

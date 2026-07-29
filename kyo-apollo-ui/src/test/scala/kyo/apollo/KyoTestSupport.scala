@@ -62,7 +62,7 @@ object CountryFixture:
     // --- fake HTTP engines (the "fake transport" reused from earlier phases) ----
 
     /** Answers every request with the same `(status, body)`. A non-2xx status is
-      * folded by the transport into an `ApolloResponse.exception` value.
+      * folded by the transport into an `ApolloResponse.error` value.
       */
     final class StaticEngine(responseBody: String, status: Int = 200) extends HttpEngine:
         var calls = 0

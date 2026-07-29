@@ -9,7 +9,7 @@ import scala.concurrent.Future
 
 /** Tests the [[ApolloCall]] async contract: `execute` is the first emission of
   * the stream-first `stream`, transport failures arrive as *values* inside
-  * `ApolloResponse.exception`, and only an empty or raising stream fails the
+  * `ApolloResponse.error`, and only an empty or raising stream fails the
   * effect (surfaced here by running it through `Abort.run`).
   */
 class ApolloCallSpec extends kyo.test.Test[Any]:
@@ -55,7 +55,7 @@ class ApolloCallSpec extends kyo.test.Test[Any]:
             val offline = new ApolloNetworkException("offline")
             val failed  = ApolloResponse.fromException[Int](Uuid.random(), offline)
             callOf(Stream.init(Seq(failed))).execute.map { response =>
-                assert(response.exception == Present(offline))
+                assert(response.error == Present(offline))
                 assert(response.data == Absent)
                 assert(response.hasErrors)
             }

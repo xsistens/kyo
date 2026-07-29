@@ -44,7 +44,7 @@ import kyo.apollo.runtime.ResponseStream
   *      queries/mutations, and a
   *      [[kyo.apollo.network.ws.WebSocketNetworkTransport]] bound to
   *      `webSocketServerUrl` for subscriptions; both are the single place
-  *      network/HTTP/parse/socket failures become `ApolloResponse.exception`
+  *      network/HTTP/parse/socket failures become `ApolloResponse.error`
   *      values;
   *   1. the **Apollo tier** — the registered [[ApolloInterceptor]]s followed by
   *      a terminal [[NetworkInterceptor]] that routes each operation to the right
@@ -101,7 +101,7 @@ final class ApolloClient private (
 
     // The terminal transport, built once: the HTTP interceptor stack presented as
     // a single engine (identity when there are none), wrapped by the network
-    // transport that folds failures into `ApolloResponse.exception` values.
+    // transport that folds failures into `ApolloResponse.error` values.
     private val transport: HttpNetworkTransport =
         HttpNetworkTransport(
             serverUrl,

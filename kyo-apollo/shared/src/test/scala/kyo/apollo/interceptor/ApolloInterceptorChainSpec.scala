@@ -55,7 +55,7 @@ class ApolloInterceptorChainSpec extends kyo.test.Test[Any]:
             )
             StreamProbe.first(chain.proceed(ApolloRequest(ValueQuery()))).map { response =>
                 assert(response.data == Present(42))
-                assert(response.exception == Absent)
+                assert(response.error == Absent)
             }
         }
 

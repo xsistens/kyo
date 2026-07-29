@@ -22,7 +22,7 @@ import kyo.apollo.runtime.ResponseStream
   *     lifted into a one-emission [[Flow]].
   *
   * Because both transports already fold every network/HTTP/parse failure into
-  * `ApolloResponse.exception` (Task 3's "failures are values" contract), this
+  * `ApolloResponse.error` (Task 3's "failures are values" contract), this
   * interceptor never fails the stream for those conditions — the response, error
   * or not, simply arrives as a value. It must be placed **last** in an
   * [[ApolloInterceptorChain]]; it ignores the `chain` argument by design.

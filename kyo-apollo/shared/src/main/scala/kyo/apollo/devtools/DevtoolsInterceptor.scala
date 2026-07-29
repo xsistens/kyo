@@ -3,6 +3,7 @@ package kyo.apollo.devtools
 import kyo.*
 import kyo.apollo.api.Mutation
 import kyo.apollo.api.Query
+import kyo.apollo.exception.ApolloGraphQLException
 import kyo.apollo.interceptor.ApolloInterceptor
 import kyo.apollo.interceptor.ApolloInterceptorChain
 import kyo.apollo.network.ApolloRequest
@@ -61,9 +62,10 @@ final class DevtoolsInterceptor(store: DevtoolsOperationStore) extends ApolloInt
     end intercept
 
     private def errorOf(response: ApolloResponse[?]): Option[String] =
-        response.exception match
-            case Present(ex) => Some(Option(ex.getMessage).getOrElse(ex.toString))
-            case Absent =>
-                if response.errors.nonEmpty then Some(response.errors.map(_.message).mkString("; "))
-                else None
+        response.error match
+            // GraphQL errors keep the devtools' one-line "; " join rather than the
+            // newline-joined Apollo-JS parity message the exception itself carries.
+            case Present(gql: ApolloGraphQLException) => Some(gql.errors.map(_.message).mkString("; "))
+            case Present(ex)                          => Some(Option(ex.getMessage).getOrElse(ex.toString))
+            case Absent                               => None
 end DevtoolsInterceptor

@@ -63,7 +63,7 @@ class OperationStoreSpec extends kyo.test.Test[Any]:
                 Seq(
                     ApolloResponse[D](
                         request.requestUuid,
-                        exception = Present(DefaultApolloException(message))
+                        error = Present(DefaultApolloException(message))
                     )
                 )
             )

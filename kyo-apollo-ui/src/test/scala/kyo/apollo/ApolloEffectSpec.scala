@@ -17,16 +17,23 @@ class ApolloEffectSpec extends kyo.test.Test[Any]:
 
     given CanEqual[Any, Any] = CanEqual.derived
 
+    /** `errors` is the convenience for "the server answered with errors"; `error`
+      * sets the channel directly, which is how a transport failure is expressed.
+      * Passing both is a caller error — `error` wins, matching the real model where
+      * a response has one failure, not two.
+      */
     private def resp[D](
         data: Maybe[D] = Absent,
         errors: Chunk[GraphQLError] = Chunk.empty,
-        exception: Maybe[ApolloException] = Absent
+        error: Maybe[ApolloException] = Absent
     ): ApolloResponse[D] =
         ApolloResponse(
             requestUuid = Uuid.random(),
             data = data,
-            errors = errors,
-            exception = exception
+            error =
+                if error.isDefined then error
+                else if errors.isEmpty then Absent
+                else Present(ApolloGraphQLException(errors))
         )
 
     "ApolloEffect.projectData / asApolloException" - {
@@ -38,14 +45,14 @@ class ApolloEffectSpec extends kyo.test.Test[Any]:
         "projectData surfaces a transport exception as Left(exception)" in {
             val boom = ApolloNetworkException("connection dropped")
             assert(
-                ApolloEffect.projectData(resp[Int](data = Absent, exception = Present(boom))) == Left(boom)
+                ApolloEffect.projectData(resp[Int](data = Absent, error = Present(boom))) == Left(boom)
             )
         }
 
         "projectData prefers the exception even when partial data is present" in {
             val boom = ApolloNetworkException("half a response")
             assert(
-                ApolloEffect.projectData(resp[Int](data = Present(7), exception = Present(boom))) == Left(
+                ApolloEffect.projectData(resp[Int](data = Present(7), error = Present(boom))) == Left(
                     boom
                 )
             )

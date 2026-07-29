@@ -14,12 +14,12 @@ import kyo.apollo.network.HttpHeader
   * The three transport subtypes below — [[ApolloNetworkException]],
   * [[ApolloHttpException]], [[ApolloParseException]] — were introduced with the
   * HTTP transport (Phase 03 Task 3), which folds each failure it catches into an
-  * [[kyo.apollo.network.ApolloResponse.exception]] value. Task 4 rounds the
+  * [[kyo.apollo.network.ApolloResponse.error]] value. Task 4 rounds the
   * hierarchy out with [[ApolloWebSocketClosedException]] (Phase 06 stub) and a
   * catch-all [[DefaultApolloException]], completing the closed set of Apollo
   * failure values.
   *
-  * Contract: these are **values**, carried inside `ApolloResponse.exception`;
+  * Contract: these are **values**, carried inside `ApolloResponse.error`;
   * the public API never throws them for network/HTTP/parse conditions.
   */
 sealed abstract class ApolloException(
@@ -136,7 +136,7 @@ final class ApolloConfigException(
   * Because it is a distinct subtype, the cache interceptor can tell a genuine
   * cache miss apart from a transport error: `CacheFirst`/`NetworkFirst` fall
   * through to the network on a miss, while `CacheOnly` surfaces it as an
-  * `ApolloResponse.exception` value (consistent with the Phase 03 value
+  * `ApolloResponse.error` value (consistent with the Phase 03 value
   * contract). Lives in this file because [[ApolloException]] is `sealed`, and
   * deliberately depends on no cache types so `kyo.apollo.exception` stays leaf-level.
   *

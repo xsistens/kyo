@@ -53,7 +53,7 @@ class WebSocketNetworkTransportSpec extends kyo.test.Test[Any]:
         control.advance(0.millis, 30.millis)
 
     private def wsClosed(r: ApolloResponse[Int], code: Int): Boolean =
-        r.exception.exists {
+        r.error.exists {
             case e: ApolloWebSocketClosedException => e.code == code
             case _                                 => false
         }
@@ -174,7 +174,7 @@ class WebSocketNetworkTransportSpec extends kyo.test.Test[Any]:
                 _ <- settle(control)
             yield
                 assert(seen.size == 1)
-                assert(seen.head.exception.exists(_.isInstanceOf[ApolloNetworkException]))
+                assert(seen.head.error.exists(_.isInstanceOf[ApolloNetworkException]))
             end for
         }
 

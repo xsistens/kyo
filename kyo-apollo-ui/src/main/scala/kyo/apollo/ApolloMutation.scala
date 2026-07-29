@@ -120,20 +120,22 @@ end MutationHandle
 object MutationState:
 
     /** Project a response onto the UI-facing [[MutationState]] (the mutation analog
-      * of [[ApolloSignal.project]]): a transport `exception` → [[Failure]]; clean
+      * of [[ApolloSignal.project]]): a transport failure → [[Failure]]; clean
       * `data` → [[Success]]; `data` with GraphQL `errors` → [[PartialData]]; absent
       * `data` → [[Failure]]. Total — a `Signal` needs a value for every emission.
       */
     private[kyo] def fromResponse[D](resp: ApolloResponse[D]): MutationState[D] =
-        resp.exception match
+        resp.error match
+            case Present(gql: ApolloGraphQLException) =>
+                resp.data match
+                    case Present(d) => MutationState.PartialData(d, gql.errors)
+                    case Absent     => MutationState.Failure(gql)
             case Present(ex) => MutationState.Failure(ex)
             case Absent =>
                 resp.data match
-                    case Present(d) if resp.errors.isEmpty => MutationState.Success(d)
-                    case Present(d)                        => MutationState.PartialData(d, resp.errors)
+                    case Present(d) => MutationState.Success(d)
                     case Absent =>
                         MutationState.Failure(
-                            if resp.errors.nonEmpty then ApolloGraphQLException(resp.errors)
-                            else DefaultApolloException("The server did not return any data")
+                            DefaultApolloException("The server did not return any data")
                         )
 end MutationState

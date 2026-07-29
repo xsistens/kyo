@@ -30,7 +30,7 @@ private[normalized] object CacheResponses:
             cacheInfo = Present(CacheInfo.hit(dependentKeys))
         )
 
-    /** A cache-miss response carrying the miss as an `exception` value. Any
+    /** A cache-miss response carrying the miss on its `error` channel. Any
       * non-[[CacheMissException]] cause is wrapped as a whole-root miss so the
       * failure still travels as a value rather than escaping the stream.
       */
@@ -42,7 +42,7 @@ private[normalized] object CacheResponses:
         ApolloResponse(
             requestUuid = request.requestUuid,
             executionContext = request.executionContext,
-            exception = Present(missException),
+            error = Present(missException),
             cacheInfo = Present(CacheInfo.miss(missException))
         )
     end miss

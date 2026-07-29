@@ -16,7 +16,7 @@ import scala.concurrent.Future
 /** Tests [[HttpNetworkTransport]]'s decode/error-mapping against a fake
   * [[HttpEngine]] — no network. Covers the "failures are values" contract:
   * success lifts to typed data, while non-2xx / malformed body / connection
-  * error all land in `ApolloResponse.exception` rather than being thrown.
+  * error all land in `ApolloResponse.error` rather than being thrown.
   */
 class HttpNetworkTransportSpec extends kyo.test.Test[Any]:
 
@@ -61,7 +61,7 @@ class HttpNetworkTransportSpec extends kyo.test.Test[Any]:
             val engine = engineReturning(HttpResponse(200, Nil, """{"data":{"value":42}}"""))
             transport(engine).execute(ApolloRequest(ValueQuery())).map { response =>
                 assert(response.data == Present(42))
-                assert(response.exception == Absent)
+                assert(response.error == Absent)
                 assert(!response.hasErrors)
             }
         }
@@ -71,7 +71,7 @@ class HttpNetworkTransportSpec extends kyo.test.Test[Any]:
             val engine  = engineReturning(HttpResponse(503, headers, "service down"))
             transport(engine).execute(ApolloRequest(ValueQuery())).map { response =>
                 assert(response.data == Absent)
-                response.exception match
+                response.error match
                     case Present(e: ApolloHttpException) =>
                         assert(e.statusCode == 503)
                         assert(e.headers == headers)
@@ -85,14 +85,14 @@ class HttpNetworkTransportSpec extends kyo.test.Test[Any]:
             val engine = engineReturning(HttpResponse(200, Nil, "not json at all"))
             transport(engine).execute(ApolloRequest(ValueQuery())).map { response =>
                 assert(response.data == Absent)
-                assert(response.exception.exists(_.isInstanceOf[ApolloParseException]))
+                assert(response.error.exists(_.isInstanceOf[ApolloParseException]))
             }
         }
 
         "shape-invalid envelope (JSON array) becomes an ApolloParseException" in {
             val engine = engineReturning(HttpResponse(200, Nil, "[1,2,3]"))
             transport(engine).execute(ApolloRequest(ValueQuery())).map { response =>
-                assert(response.exception.exists(_.isInstanceOf[ApolloParseException]))
+                assert(response.error.exists(_.isInstanceOf[ApolloParseException]))
             }
         }
 
@@ -100,7 +100,7 @@ class HttpNetworkTransportSpec extends kyo.test.Test[Any]:
             val engine = engineFailing(new RuntimeException("ECONNREFUSED"))
             transport(engine).execute(ApolloRequest(ValueQuery())).map { response =>
                 assert(response.data == Absent)
-                assert(response.exception.exists(_.isInstanceOf[ApolloNetworkException]))
+                assert(response.error.exists(_.isInstanceOf[ApolloNetworkException]))
             }
         }
 

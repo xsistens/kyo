@@ -158,7 +158,7 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
                         .mutation(UpdateUserNameMutation("Bob"))
                         .fetchPolicy(FetchPolicy.NetworkOnly)
                         .execute
-                    _ = assert(mutationResponse.exception.isEmpty)
+                    _ = assert(mutationResponse.error.isEmpty)
                     second <- pull.next
                 yield assert(second.data == Present(userData("Bob")))
             }

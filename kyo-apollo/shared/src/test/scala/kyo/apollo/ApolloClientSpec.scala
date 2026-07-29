@@ -117,7 +117,7 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
             val client = clientReturning(engine)
             client.query(ValueQuery()).execute.map { response =>
                 assert(response.data == Present(42))
-                assert(response.exception == Absent)
+                assert(response.error == Absent)
                 // Default method is POST with a JSON body carrying the document.
                 assert(engine.lastRequest.map(_.method) == Some(HttpMethod.Post))
                 assert(engine.lastRequest.flatMap(_.body).exists(_.contains("query Value")))
@@ -219,7 +219,7 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
             val client = clientReturning(engine)
             client.query(ValueQuery()).execute.map { response =>
                 assert(response.data == Absent)
-                assert(response.exception.exists(_.isInstanceOf[kyo.apollo.exception.ApolloHttpException]))
+                assert(response.error.exists(_.isInstanceOf[kyo.apollo.exception.ApolloHttpException]))
                 assert(response.hasErrors)
             }
         }

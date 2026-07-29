@@ -263,27 +263,28 @@ object ApolloSignal:
 
     /** Project a response onto the UI-facing [[QueryState]].
       *
-      * A transport / parse `exception` wins as [[QueryState.Failure]]. Otherwise a
-      * present `data` with no GraphQL `errors` is a [[QueryState.Success]] (its
-      * `fromCache` read from [[kyo.apollo.network.CacheInfo]]); `data` accompanied by
-      * `errors` is [[QueryState.PartialData]]; and an absent `data` (with or
-      * without errors) is a [[QueryState.Failure]] carrying a
-      * [[DefaultApolloException]] describing the errors or the missing payload.
+      * A transport failure wins as [[QueryState.Failure]]. The server answering with
+      * GraphQL `errors` is [[QueryState.PartialData]] when data accompanies them and
+      * [[QueryState.Failure]] when it does not. A clean response with `data` is a
+      * [[QueryState.Success]] (its `fromCache` read from
+      * [[kyo.apollo.network.CacheInfo]]); a clean response without `data` is a
+      * [[QueryState.Failure]] carrying a [[DefaultApolloException]].
       * Total — a `Signal` needs a value for every emission, so there is no throw.
       */
     private[kyo] def project[D](response: ApolloResponse[D]): QueryState[D] =
-        response.exception match
+        response.error match
+            case Present(gql: ApolloGraphQLException) =>
+                response.data match
+                    case Present(d) => QueryState.PartialData(d, gql.errors)
+                    case Absent     => QueryState.Failure(gql)
             case Present(ex) => QueryState.Failure(ex)
             case Absent =>
                 response.data match
-                    case Present(d) if response.errors.isEmpty =>
-                        QueryState.Success(d, fromCache = response.cacheInfo.exists(_.fromCache))
                     case Present(d) =>
-                        QueryState.PartialData(d, response.errors)
+                        QueryState.Success(d, fromCache = response.cacheInfo.exists(_.fromCache))
                     case Absent =>
                         QueryState.Failure(
-                            if response.errors.nonEmpty then ApolloGraphQLException(response.errors)
-                            else DefaultApolloException("The server did not return any data")
+                            DefaultApolloException("The server did not return any data")
                         )
 
     /** Drive `ref` from a response source (`call.watch()` or `call.stream`), gated by

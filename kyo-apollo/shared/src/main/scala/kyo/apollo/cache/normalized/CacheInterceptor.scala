@@ -91,7 +91,7 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
         chain: ApolloInterceptorChain
     )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
         chain.proceed(request).mapPure { response =>
-            if response.exception.isEmpty then writeBack(request, response)
+            if !response.hasTransportError then writeBack(request, response)
             else
                 readFromCache(request) match
                     case Success((data, keys)) => cacheHit(request, data, keys)
@@ -151,7 +151,7 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
         discard(store.writeOptimisticUpdates(request.operation, optimistic.data.asInstanceOf[D], mutationId))
         chain.proceed(request).mapPure { response =>
             discard {
-                if response.exception.isEmpty then
+                if !response.hasTransportError then
                     response.data match
                         case Present(data) => store.rollbackAndWrite(request.operation, data, mutationId)
                         case Absent        => store.rollbackOptimisticUpdates(mutationId)
@@ -187,7 +187,7 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
         response: ApolloResponse[D]
     ): ApolloResponse[D] =
         val changed =
-            if response.exception.isEmpty then
+            if !response.hasTransportError then
                 response.data match
                     case Present(data) => store.writeOperation(request.operation, data)
                     case Absent        => Set.empty[String]

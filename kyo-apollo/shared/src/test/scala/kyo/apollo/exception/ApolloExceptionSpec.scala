@@ -8,7 +8,7 @@ import kyo.apollo.network.Uuid
 
 /** Tests the completed [[ApolloException]] hierarchy (Phase 03 Task 4): every
   * concrete subtype constructs, carries its payload/message, is an
-  * `ApolloException`, and folds into an [[ApolloResponse.exception]] value —
+  * `ApolloException`, and folds into an [[ApolloResponse.error]] value —
   * the "failures are values" contract from the Task 1 design (§3).
   */
 class ApolloExceptionSpec extends kyo.test.Test[Any]:
@@ -66,7 +66,7 @@ class ApolloExceptionSpec extends kyo.test.Test[Any]:
             assert(ex.getMessage == "Apollo operation failed")
         }
 
-        "every subtype folds into an ApolloResponse.exception value (no throw)" in {
+        "every subtype folds into an ApolloResponse.error value (no throw)" in {
             val id = Uuid.random()
             val subtypes: List[ApolloException] = List(
                 ApolloNetworkException(),
@@ -77,7 +77,7 @@ class ApolloExceptionSpec extends kyo.test.Test[Any]:
             )
             subtypes.foreach { ex =>
                 val response = ApolloResponse.fromException[Nothing](id, ex)
-                assert(response.exception == Present(ex))
+                assert(response.error == Present(ex))
                 assert(response.data == Absent)
                 // hasErrors folds in a present exception, so a failure response reports it
                 assert(response.hasErrors)

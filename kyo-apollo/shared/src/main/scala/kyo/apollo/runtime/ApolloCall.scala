@@ -23,7 +23,7 @@ import kyo.apollo.network.ApolloResponse
   * first value.
   *
   * Failures follow the "failures are values" contract: network / HTTP / parse
-  * problems arrive inside `ApolloResponse.exception` (a value), never on the
+  * problems arrive inside `ApolloResponse.error` (a value), never on the
   * `Async` error channel. The effect from [[execute]] therefore raises only for a
   * genuine wiring error (an exhausted interceptor chain) or an empty stream —
   * never for an ordinary GraphQL/transport error.
@@ -50,7 +50,7 @@ trait ApolloCall[D]:
       * so the two can never disagree: it takes the first emission.
       *
       * The effect carries a transport/GraphQL error *inside*
-      * `ApolloResponse.exception` (a value); it raises outright only if the stream
+      * `ApolloResponse.error` (a value); it raises outright only if the stream
       * completes without emitting (a `NoSuchElementException`) or the chain raises a
       * wiring error.
       */

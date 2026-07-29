@@ -53,7 +53,7 @@ end TestHttpEngine
 object TestHttpEngine:
 
     /** Answers every request with the same `(status, body)`. A non-2xx status is
-      * folded by the transport into an `ApolloResponse.exception` value.
+      * folded by the transport into an `ApolloResponse.error` value.
       */
     def returning(body: String, status: Int = 200): TestHttpEngine =
         new TestHttpEngine(_ => HttpResponse(status, Nil, body))

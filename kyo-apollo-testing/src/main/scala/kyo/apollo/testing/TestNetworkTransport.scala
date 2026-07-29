@@ -7,6 +7,7 @@ import kyo.apollo.api.Operation
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.IdCacheKeyGenerator
 import kyo.apollo.exception.ApolloException
+import kyo.apollo.exception.ApolloGraphQLException
 import kyo.apollo.exception.ApolloHttpException
 import kyo.apollo.exception.ApolloNetworkException
 import kyo.apollo.interceptor.ApolloInterceptor
@@ -146,7 +147,7 @@ object TestResponses:
 
     /** A response carrying a single GraphQL `errors` entry (not a transport fault). */
     def graphqlError(message: String): Uuid => ApolloResponse[Any] =
-        uuid => ApolloResponse[Any](uuid, errors = Chunk(GraphQLError(message)))
+        uuid => ApolloResponse[Any](uuid, error = Present(ApolloGraphQLException(Chunk(GraphQLError(message)))))
 
     /** A response carrying an arbitrary transport [[ApolloException]]. */
     def exception(cause: ApolloException): Uuid => ApolloResponse[Any] =

@@ -34,20 +34,20 @@ import kyo.apollo.network.Uuid
   * ==Failures are values, projected onto `Abort` explicitly==
   *
   * Per `core`'s contract, transport / HTTP / parse problems arrive **inside**
-  * `ApolloResponse.exception` (a value); the effect itself fails only for a
+  * `ApolloResponse.error` (a value); the effect itself fails only for a
   * genuine wiring error (an exhausted chain, or an empty stream). Mapping a
   * response's failure onto Kyo's typed `Abort[ApolloException]` channel is
   * therefore an explicit projection we choose ([[ApolloEffect.projectData]]),
   * never a caught panic:
   *
   *   - `response` runs `call.execute` under `Scope.run` and `Abort.run[Throwable]`,
-  *     folding any wiring failure/panic back into an `ApolloResponse.exception`
+  *     folding any wiring failure/panic back into an `ApolloResponse.error`
   *     value — so its effect set is just `Async`, matching the "failures are
   *     values" contract.
-  *   - `data` reuses that response and then projects: a present `exception`, any
-  *     GraphQL `errors`, or absent `data` all become an `Abort.fail`, mirroring
-  *     `ApolloResponse.dataAssertNoErrors()` onto the `Abort` channel rather than
-  *     a throw. Callers that want partial data + errors use `response`.
+  *   - `data` reuses that response and then projects: a present `error` — whether a
+  *     transport failure or the server's own GraphQL errors — or an absent `data`
+  *     becomes an `Abort.fail` rather than a throw. Callers that want partial data
+  *     alongside its errors use `response`.
   */
 extension [D](call: ApolloCall[D])
 
@@ -79,7 +79,7 @@ extension [D](call: ApolloCall[D])
       * `data`, GraphQL `errors`, and any transport `exception` as values, so the
       * caller inspects them directly. A genuine wiring failure of `call.execute`
       * (an exhausted interceptor chain, or a stream that completes with no
-      * emission) is folded back into an `ApolloResponse.exception` value, keeping
+      * emission) is folded back into an `ApolloResponse.error` value, keeping
       * this path total.
       */
     def response(using
@@ -91,7 +91,7 @@ extension [D](call: ApolloCall[D])
         // for a one-shot query) is discharged with `Scope.run`. A wiring failure (an
         // empty stream's `NoSuchElementException`, an exhausted chain) surfaces on the
         // async PANIC channel, so — per Slice 1's panic-fold rule — `Abort.run` folds
-        // BOTH failure and panic back into an `ApolloResponse.exception` value
+        // BOTH failure and panic back into an `ApolloResponse.error` value
         // (ordinary transport errors already arrive as response values).
         Abort.run[Throwable](Scope.run(call.execute)).map {
             case Result.Success(resp) => resp
@@ -126,29 +126,30 @@ object ApolloEffect:
 
     /** Project a response onto the strict one-shot outcome the `.data` effect
       * yields, under the given [[kyo.apollo.ErrorPolicy]]: `Right(data)` for a clean
-      * response, `Left(exception)` when a transport/parse `exception` is present or
-      * `data` is absent. A transport `exception` always wins. GraphQL `errors` map to
+      * response, `Left(error)` when a transport failure is present or `data` is
+      * absent. A transport failure always wins. The server's GraphQL `errors` map to
       * `Left` only under `ErrorPolicy.None` (the default); under `Ignore`/`All` they
       * are discarded and the `data` is returned if present. Total over `Either`
       * rather than a throw.
+      *
+      * The two are told apart by the shape of the single `error` channel: an
+      * [[ApolloGraphQLException]] is the server having answered with errors,
+      * anything else is a transport failure, which no policy suppresses.
       */
     private[kyo] def projectData[D](
         resp: ApolloResponse[D],
         errorPolicy: ErrorPolicy = ErrorPolicy.None
     ): Either[ApolloException, D] =
-        resp.exception match
+        def noData = DefaultApolloException("The server did not return any data")
+        resp.error match
+            case Present(gql: ApolloGraphQLException) =>
+                errorPolicy match
+                    case ErrorPolicy.None                     => Left(gql)
+                    case ErrorPolicy.Ignore | ErrorPolicy.All => resp.data.toRight(noData)
             case Present(ex) => Left(ex)
-            case Absent =>
-                val raiseGraphQLErrors = errorPolicy match
-                    case ErrorPolicy.None                     => true
-                    case ErrorPolicy.Ignore | ErrorPolicy.All => false
-                if resp.errors.nonEmpty && raiseGraphQLErrors then
-                    Left(ApolloGraphQLException(resp.errors))
-                else
-                    resp.data.toRight(
-                        DefaultApolloException("The server did not return any data")
-                    )
-                end if
+            case Absent      => resp.data.toRight(noData)
+        end match
+    end projectData
 
     /** Normalize an arbitrary wiring-failure cause (a failed/panicked `execute`)
       * into an [[kyo.apollo.exception.ApolloException]] value: an `ApolloException`
