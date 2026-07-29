@@ -133,8 +133,8 @@ deferred with a trigger:
   persisted-query hit rates hurt; the flat splice is spec-correct.
 - **GraphQL-17-alpha9 incremental format** — adopt when a server we actually talk to emits it
   (check what Caliban emits first).
-- **`Schema[Ref]` for `mapInto` targets** — optional convenience; the colocation idiom is
-  named-tuple-shaped and does not need it.
+- **`Schema[Ref]` for `mapInto` targets** — considered and declined (2026-07-29): the colocation
+  idiom is named-tuple-shaped, and a view model embedding an opaque ref is a skewed pattern.
 - **Field-granular `cache.modify`** — N/A by design (typed `updateFragment` is the replacement).
 
 ## Provenance
