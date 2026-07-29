@@ -411,9 +411,9 @@ object UI:
       *
       * Both ride the same transport that carries render ops: the server emits an op, the client applies it (server-push:
       * over the WebSocket; SPA: straight to the local DOM). A measure additionally flows back as an inbound `Measure` event
-      * the runner routes here, resolving the `requestMeasure` callback — so the honest pattern is "request a measure, update
-      * a Signal from the callback, re-render with correct geometry". Example — an overlay that flips above its anchor when it
-      * would overflow the viewport: on open, `requestMeasure` the panel; in the callback, if `rect.y + rect.height >
+      * the runner routes here, completing the `requestMeasure` reply — so the honest pattern is "await a measure, derive a
+      * Signal, re-render with correct geometry". Example — an overlay that flips above its anchor when it would overflow the
+      * viewport: on open, `requestMeasure` the panel and bind the returned `rect` — if `rect.y + rect.height >
       * rect.viewportHeight`, set a `flip` Signal the panel reads and re-renders from.
       *
       * '''Two doors over one transport (the injection contract).''' kyo-ui exposes the imperative surface through two
@@ -434,12 +434,16 @@ object UI:
       */
     final class Commands private[kyo] (
         private[kyo] val emit: internal.HtmlOp => Unit < Async,
-        private[kyo] val pending: AtomicRef[Map[Seq[String], Rect => Unit < Async]],
-        private[kyo] val pendingById: AtomicRef[Map[String, Rect => Unit < Async]],
-        // Unit 8: PERSISTENT viewport-observer sinks, keyed by id. Unlike `pendingById` (one-shot: consumed on the first
-        // MeasureById reply), an entry here is KEPT across replies so a scroll/resize stream keeps feeding the sink; it
-        // is removed only by observeViewportById's scope finalizer. An id lives in exactly one of the two maps.
-        private[kyo] val observers: AtomicRef[Map[String, Rect => Unit < Async]],
+        // Pending one-shot measure round-trips, keyed by target. `requestMeasure` suspends on the Promise; the transport's
+        // `deliverMeasure` completes it with the reply Rect — the kyo-native request→reply shape where the effect RETURNS
+        // the value (monadic bind) instead of registering a callback.
+        private[kyo] val pending: AtomicRef[Map[Seq[String], Promise[Rect, Any]]],
+        private[kyo] val pendingById: AtomicRef[Map[String, Promise[Rect, Any]]],
+        // Unit 8: PERSISTENT viewport-observer signals, keyed by id. Unlike `pendingById` (one-shot: the Promise is consumed
+        // on the first MeasureById reply), an entry here is KEPT across replies — each reply pushes the new Rect into the
+        // SignalRef so a scroll/resize stream keeps updating it; it is removed only by observeViewportById's scope
+        // finalizer. An id lives in exactly one of the two maps.
+        private[kyo] val observers: AtomicRef[Map[String, Signal.SignalRef[Maybe[Rect]]]],
         private[kyo] val idCounter: AtomicInt
     ):
         // ---- Unit 3: imperative command ----
@@ -460,19 +464,24 @@ object UI:
 
         // ---- Unit 2: measure round-trip ----
 
-        /** Request the client to measure the element at `path`; when the reply arrives, run `sink` with its [[kyo.UI.Rect]]
-          * (element rect + viewport). Fire-and-forget: returns as soon as the request op is emitted; `sink` runs later, when
-          * the inbound `Measure` event is routed here. A second request for the same path replaces the pending callback.
+        /** Measure the element at `path` and RETURN its [[kyo.UI.Rect]] (element rect + viewport). Suspends until the client
+          * replies: emits the request op, then awaits the inbound `Measure` event the transport routes here. The kyo-native
+          * request→reply shape — bind the result directly (`requestMeasure(path).map(rect => …)`), no callback. A second
+          * request for the same path before the first reply supersedes it (the earlier suspension is abandoned; last wins).
           */
-        def requestMeasure(path: Seq[String])(sink: Rect => Unit < Async)(using Frame): Unit < Async =
-            pending.getAndUpdate(_.updated(path, sink)).andThen(emit(internal.HtmlOp.RequestMeasure(path)))
+        def requestMeasure(path: Seq[String])(using Frame): Rect < Async =
+            Promise.init[Rect, Any].map { p =>
+                pending.getAndUpdate(_.updated(path, p))
+                    .andThen(emit(internal.HtmlOp.RequestMeasure(path)))
+                    .andThen(p.get)
+            }
 
-        /** Transport hook: resolve the pending [[requestMeasure]] for `path` with `rect` (run + drop its callback). */
+        /** Transport hook: resolve the pending [[requestMeasure]] for `path` with `rect` (complete + drop its Promise). */
         private[kyo] def deliverMeasure(path: Seq[String], rect: Rect)(using Frame): Unit < Async =
             pending.getAndUpdate(_.removed(path)).map { m =>
                 m.get(path) match
-                    case Some(sink) => sink(rect)
-                    case None       => ()
+                    case Some(p) => p.completeDiscard(Result.succeed(rect))
+                    case None    => ()
             }
 
         // ---- Self-addressing: id minting + id-addressed command/measure ----
@@ -497,26 +506,31 @@ object UI:
         /** `commandById(id, "scrollIntoView")` — scroll the element with id `id` into view (`{block:"nearest"}`). */
         def scrollIntoViewId(id: String)(using Frame): Unit < Async = commandById(id, "scrollIntoView")
 
-        /** Id-addressed twin of [[requestMeasure]]: measure the element with DOM id `id`. The reply (`UIEvent.MeasureById`)
-          * carries the `id`, so [[deliverMeasureById]] matches it against a SEPARATE id-keyed pending map (kept side by side
-          * with the path-keyed [[pending]] map for clarity). A second request for the same id replaces the pending callback.
+        /** Id-addressed twin of [[requestMeasure]]: measure the element with DOM id `id` and RETURN its [[kyo.UI.Rect]].
+          * Suspends until the reply (`UIEvent.MeasureById`) carrying the `id` is routed here, matched against a SEPARATE
+          * id-keyed pending map (kept side by side with the path-keyed [[pending]] map for clarity). A second request for the
+          * same id before the first reply supersedes it (last wins).
           */
-        def requestMeasureById(id: String)(sink: Rect => Unit < Async)(using Frame): Unit < Async =
-            pendingById.getAndUpdate(_.updated(id, sink)).andThen(emit(internal.HtmlOp.RequestMeasureById(id)))
+        def requestMeasureById(id: String)(using Frame): Rect < Async =
+            Promise.init[Rect, Any].map { p =>
+                pendingById.getAndUpdate(_.updated(id, p))
+                    .andThen(emit(internal.HtmlOp.RequestMeasureById(id)))
+                    .andThen(p.get)
+            }
 
-        /** Transport hook: deliver `rect` for `id`. Checks BOTH maps: a PERSISTENT [[observers]] sink (Unit 8 viewport
-          * observation) is run and KEPT (the stream continues); otherwise the one-shot [[pendingById]] callback is run
-          * and dropped. An id is only ever in one map, so the observer branch takes precedence and short-circuits.
+        /** Transport hook: deliver `rect` for `id`. Checks BOTH maps: a PERSISTENT [[observers]] SignalRef (Unit 8 viewport
+          * observation) is updated and KEPT (the stream continues); otherwise the one-shot [[pendingById]] Promise is
+          * completed and dropped. An id is only ever in one map, so the observer branch takes precedence and short-circuits.
           */
         private[kyo] def deliverMeasureById(id: String, rect: Rect)(using Frame): Unit < Async =
             observers.get.map { obs =>
                 obs.get(id) match
-                    case Some(sink) => sink(rect)
+                    case Some(ref) => ref.set(Present(rect))
                     case None =>
                         pendingById.getAndUpdate(_.removed(id)).map { m =>
                             m.get(id) match
-                                case Some(sink) => sink(rect)
-                                case None       => ()
+                                case Some(p) => p.completeDiscard(Result.succeed(rect))
+                                case None    => ()
                         }
             }
 
@@ -549,27 +563,33 @@ object UI:
         def bindAttrById(id: String, name: String, value: Signal[String])(using Frame): Unit < (Async & Scope) =
             Fiber.init(value.observe(v => emit(internal.HtmlOp.SetAttrById(id, name, v)))).unit
 
-        /** Continuously observe the viewport geometry of the element with DOM id `id`: register `sink` in the persistent
-          * [[observers]] map, emit [[internal.HtmlOp.ObserveViewportById]] (the client measures now and attaches
-          * scroll+resize listeners that each reply with a `MeasureById(id)`), and register a [[kyo.Scope]] finalizer that
-          * emits [[internal.HtmlOp.UnobserveViewportById]] AND drops the sink. Replies arrive as `MeasureById(id)` and are
-          * routed to `sink` by [[deliverMeasureById]] (kept, not removed) for as long as the scope is open.
+        /** Continuously observe the viewport geometry of the element with DOM id `id`, RETURNING a [[kyo.Signal]] that holds
+          * the latest [[kyo.UI.Rect]] (`Absent` until the first measurement lands). Registers a backing SignalRef in the
+          * persistent [[observers]] map, emits [[internal.HtmlOp.ObserveViewportById]] (the client measures now and attaches
+          * scroll+resize listeners that each reply with a `MeasureById(id)`), and registers a [[kyo.Scope]] finalizer that
+          * emits [[internal.HtmlOp.UnobserveViewportById]] AND drops the ref. Each reply is pushed into the signal by
+          * [[deliverMeasureById]] for as long as the scope is open — the kyo-native shape for a continuous stream is a
+          * `Signal` the caller maps/renders, not a callback (e.g. `observeViewportById(id).map(sig => bindStyleById(id,
+          * sig.map(toStyle)))`).
           */
-        def observeViewportById(id: String)(sink: Rect => Unit < Async)(using Frame): Unit < (Async & Scope) =
-            observers.getAndUpdate(_.updated(id, sink))
-                .andThen(emit(internal.HtmlOp.ObserveViewportById(id)))
-                .andThen(Scope.ensure(
-                    emit(internal.HtmlOp.UnobserveViewportById(id)).andThen(observers.getAndUpdate(_.removed(id)))
-                ))
+        def observeViewportById(id: String)(using Frame): Signal[Maybe[Rect]] < (Async & Scope) =
+            Signal.initRef[Maybe[Rect]](Absent).map { ref =>
+                observers.getAndUpdate(_.updated(id, ref))
+                    .andThen(emit(internal.HtmlOp.ObserveViewportById(id)))
+                    .andThen(Scope.ensure(
+                        emit(internal.HtmlOp.UnobserveViewportById(id)).andThen(observers.getAndUpdate(_.removed(id)))
+                    ))
+                    .andThen(ref)
+            }
     end Commands
 
     private[kyo] object Commands:
         /** Create a session channel over `emit` (the per-transport op sink: `ws.put` server-side, direct DOM apply in the SPA). */
         def init(emit: internal.HtmlOp => Unit < Async)(using Frame): Commands < Sync =
             for
-                pending     <- AtomicRef.init(Map.empty[Seq[String], Rect => Unit < Async])
-                pendingById <- AtomicRef.init(Map.empty[String, Rect => Unit < Async])
-                observers   <- AtomicRef.init(Map.empty[String, Rect => Unit < Async])
+                pending     <- AtomicRef.init(Map.empty[Seq[String], Promise[Rect, Any]])
+                pendingById <- AtomicRef.init(Map.empty[String, Promise[Rect, Any]])
+                observers   <- AtomicRef.init(Map.empty[String, Signal.SignalRef[Maybe[Rect]]])
                 idCounter   <- AtomicInt.init(0)
             yield new Commands(emit, pending, pendingById, observers, idCounter)
     end Commands

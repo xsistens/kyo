@@ -17,7 +17,7 @@ class MeasureScenarioItTest extends UITest:
             yield UI.div(
                 UI.div.id("box").style(Style.width(120.px) ++ Style.height(40.px))("content"),
                 UI.button("measure").id("btn").onClick(
-                    UI.commands.flatMap(_.requestMeasure(Seq("0"))(r =>
+                    UI.commands.flatMap(_.requestMeasure(Seq("0")).map(r =>
                         info.set(f"${r.width}%.0f x ${r.height}%.0f vp ${r.viewportWidth > 0 && r.viewportHeight > 0}")
                     ))
                 ),

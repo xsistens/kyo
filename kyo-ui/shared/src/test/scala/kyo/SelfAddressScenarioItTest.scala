@@ -31,7 +31,7 @@ class SelfAddressScenarioItTest extends UITest:
                     // ...and drives id-addressed commands at itself — no render path involved.
                     UI.button("focus").id("btn-focus").onClick(cmds.focusId(inputId)),
                     UI.button("measure").id("btn-measure").onClick(
-                        cmds.requestMeasureById(boxId)(r =>
+                        cmds.requestMeasureById(boxId).map(r =>
                             info.set(f"${r.width}%.0f x ${r.height}%.0f vp ${r.viewportWidth > 0 && r.viewportHeight > 0}")
                         )
                     ),
