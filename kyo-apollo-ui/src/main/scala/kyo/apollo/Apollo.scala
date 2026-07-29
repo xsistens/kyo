@@ -312,6 +312,22 @@ object Apollo:
             PaginatedQueryHandle(paged.state, conn.fetchMore)
         }
 
+    // --- Preloading ------------------------------------------------------------
+
+    /** Start `call`'s watcher NOW and hand back a [[PreloadedQuery]] immediately —
+      * react-apollo's `preloadQuery`. The fetch is in flight from this moment;
+      * nothing suspends until a consumer calls [[PreloadedQuery.read]]. Preload
+      * every query a route needs in one loader and the fetches run in parallel
+      * instead of waterfalling mount by mount. The watcher lives in the `Scope`
+      * this is bound in.
+      */
+    def preload[D](call: ApolloCall[D])(using
+        Frame,
+        Tag[Emit[Chunk[ApolloResponse[D]]]],
+        CanEqual[D, D]
+    ): PreloadedQuery[D] < (Async & Scope) =
+        watchSignal(call).map(PreloadedQuery(_))
+
     // --- Reactive Signal builders --------------------------------------------
 
     /** Watch this operation as a live `kyo-ui` [[Signal]] of [[QueryState]]: seeds
@@ -327,7 +343,9 @@ object Apollo:
     ): Signal[QueryState[D]] < (Async & Scope) =
         for
             ref <- Signal.initRef[QueryState[D]](QueryState.Loading)
-            _   <- Fiber.init(Scope.run(call.watch().foreach(resp => ref.set(ApolloSignal.project(resp)))))
+            // `push`, not a bare `project`: a mid-stream transport failure must retain
+            // the last good data (same contract as the gated overload).
+            _ <- Fiber.init(Scope.run(call.watch().foreach(resp => ApolloSignal.push(ref, resp))))
         yield ref
 
     /** [[watchSignal]] with a live `skip` — react-apollo's `skip` (urql's `pause`).
