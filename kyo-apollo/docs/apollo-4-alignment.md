@@ -1,7 +1,7 @@
 # Apollo Client 4 alignment plan
 
-Status: **P1–P5 and the demo batch landed; outstanding: optional `Schema[Ref]` and P6.**
-Last updated 2026-07-29.
+Status: **complete — P1–P6 and the demo batch landed.** Outstanding beyond this plan: optional
+`Schema[Ref]` and the conditional items in §3. Last updated 2026-07-29.
 
 Demo batch (standalone repo, commits `e03fa42` + `08794a0`): all three demo modules migrated to the
 aligned API (the error channel, the pattern arities, the stringless `Fragment.of`, the callback
@@ -318,7 +318,9 @@ demo card joins the demo batch.
 
 **P6 — Documentation.** Move the parity map here from the (now demo-only) standalone `kyo-apollo`
 repo, rewrite it against Apollo Client 4, and keep §1.2 of this document as the standing deviations
-register.
+register. *Landed 2026-07-29*: [apollo-parity.md](apollo-parity.md) — the V4-surface inventory with
+in-repo paths (every cited symbol spot-verified); the standalone repo's v3-era map carries a
+superseded banner and stays as the historical record.
 
 **Conditional, with triggers rather than dates.** C7 — put `IncrementalAssembler` behind a small
 interface now (Apollo's own pluggable-handler approach) and add the alpha9 `pending`/`completed`
