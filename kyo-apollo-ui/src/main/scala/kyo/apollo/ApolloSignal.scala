@@ -359,7 +359,7 @@ object ApolloSignal:
     /** Project `resp` and write it to `ref`, carrying forward the data the operation
       * had already delivered if the projection is a bare [[QueryState.Failure]].
       */
-    private def push[D](ref: Signal.SignalRef[QueryState[D]], resp: ApolloResponse[D])(using
+    private[apollo] def push[D](ref: Signal.SignalRef[QueryState[D]], resp: ApolloResponse[D])(using
         Frame
     ): Unit < Sync =
         ref.currentWith(previous => ref.set(retainingData(previous, project(resp))))
