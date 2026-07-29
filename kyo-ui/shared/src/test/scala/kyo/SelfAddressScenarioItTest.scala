@@ -25,7 +25,7 @@ class SelfAddressScenarioItTest extends UITest:
                     UI.div.id(boxId).style(Style.width(120.px) ++ Style.height(40.px))("content"),
                     UI.button("focus").id("btn-focus").onClick(cmds.focusId(inputId)),
                     UI.button("measure").id("btn-measure").onClick(
-                        cmds.requestMeasureById(boxId)(r =>
+                        cmds.requestMeasureById(boxId).map(r =>
                             info.set(f"${r.width}%.0f x ${r.height}%.0f vp ${r.viewportWidth > 0 && r.viewportHeight > 0}")
                         )
                     ),
