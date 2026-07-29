@@ -1,6 +1,7 @@
 # Apollo Client 4 alignment plan
 
-Status: **P1, P2 and the P3 core landed; P3 demo + P4–P6 outstanding.** Last updated 2026-07-29.
+Status: **P1–P5 landed; outstanding: the demo batch (P3 colocation demo + P5 streaming card, in the
+standalone repo after a snapshot publish), optional `Schema[Ref]`, and P6.** Last updated 2026-07-29.
 
 Source of the comparison: "Apollo Client 4" by Gerald Miller (Apollo client-team maintainer),
 GraphQL Conf 2025 — <https://www.youtube.com/watch?v=QNzziV0L9Ks>.
@@ -290,14 +291,20 @@ test); §2.7 resolutions above. Outstanding: the colocation demo (standalone rep
 publish) and the optional `Schema[Ref]` for `mapInto` targets.
 
 **P4 — Suspense naming.** `Apollo.preload` / `PreloadedQuery` (`read` suspends until first data,
-then follows the watcher; `state` does not suspend) as the `preloadQuery` + `useReadQuery` analog,
-plus `Apollo.fragmentData` (the `useSuspenseFragment` analog, depends on P3), plus a router-loader
-example showing parallel preloading instead of waterfalls.
+then follows the watcher; `state` does not suspend) as the `preloadQuery` + `useReadQuery` analog.
+*Landed 2026-07-29.* The parallel-preload (no-waterfall) property is pinned by a test counting
+in-flight requests before the first read; the router-loader page itself joins the demo batch.
+`Apollo.fragmentData` was dropped rather than built: since P3 made `Apollo.fragment(ref)` total,
+there is no pending phase left to suspend through — it already *is* the `useSuspenseFragment`
+analog, minus the suspension. En route this closed a C2 gap: the plain `watchSignal` overload
+still projected unconditionally; both overloads now share the retaining push.
 
 **P5 — Streaming marker.** C4. `Success(data, fromCache, complete: Boolean = true)` — a default
 field rather than a separate enum case, so the ~90 % of queries that never stream are unchanged.
 Requires surfacing `hasNext` from `IncrementalAssembler` onto `ApolloResponse`. Demo card with a
-growing list.
+growing list. *Landed 2026-07-29* (`ApolloResponse.complete` = `!awaitingMore`, carried through
+`project`/`map`/`mapData`, pinned in DeferSpec: first emission incomplete, terminal complete); the
+demo card joins the demo batch.
 
 **P6 — Documentation.** Move the parity map here from the (now demo-only) standalone `kyo-apollo`
 repo, rewrite it against Apollo Client 4, and keep §1.2 of this document as the standing deviations
