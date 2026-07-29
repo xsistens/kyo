@@ -1,7 +1,17 @@
 # Apollo Client 4 alignment plan
 
-Status: **P1–P5 landed; outstanding: the demo batch (P3 colocation demo + P5 streaming card, in the
-standalone repo after a snapshot publish), optional `Schema[Ref]`, and P6.** Last updated 2026-07-29.
+Status: **P1–P5 and the demo batch landed; outstanding: optional `Schema[Ref]` and P6.**
+Last updated 2026-07-29.
+
+Demo batch (standalone repo, commits `e03fa42` + `08794a0`): all three demo modules migrated to the
+aligned API (the error channel, the pattern arities, the stringless `Fragment.of`, the callback
+removal — with the CallbacksSpec query test rewritten as the tap-`state` replacement idiom — the
+effect-based WS traits via `MockWebSocketServer`, and `UploadJs.fromFile`), plus three new showcase
+pages: fragment masking (colocated `CountryCard`, opaque ref), preloading (router-loader, parallel
+fetches), and the `@stream` card keying its "loading more" line on `Success.complete`.
+`MaskedColocationSpec` pins the whole flow against the GENERATED selectors — which caught one real
+bug: inside the declaring object a stable path collapses to a bare `Ident`, so the spread label now
+derives from the declaring owner SYMBOL rather than the reference syntax.
 
 Source of the comparison: "Apollo Client 4" by Gerald Miller (Apollo client-team maintainer),
 GraphQL Conf 2025 — <https://www.youtube.com/watch?v=QNzziV0L9Ks>.
