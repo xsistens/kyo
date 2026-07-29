@@ -56,20 +56,32 @@ enum QueryState[+D] derives CanEqual:
 
     /** A failed response: a transport / parse `exception` was present, or the call
       * returned neither `data` nor a renderable partial payload.
+      *
+      * `last` carries the most recent data this operation had delivered before the
+      * failure, when there was one. A live query whose connection drops mid-stream
+      * should not blank the screen: with `last` the view renders the stale data
+      * behind an error banner, which is the whole reason a failure keeps a data
+      * slot at all. It is [[Absent]] when the operation never succeeded (the first
+      * fetch failed) — the genuine "nothing to show" case, and the default, so a
+      * `Failure(ex)` built by hand stays exactly what it says.
+      *
+      * `ApolloSignal.driveGated` fills it in; [[ApolloSignal.project]] cannot,
+      * being a pure function of one response with no memory of earlier ones.
       */
-    case Failure(exception: ApolloException) extends QueryState[Nothing]
+    case Failure[+D](exception: ApolloException, last: Maybe[D] = Absent) extends QueryState[D]
 
     /** Project the carried data with `f`, preserving the state — the functor an app
       * needs to derive a page-facing signal from an operation-shaped one (e.g. a
       * root named tuple unwrapped to its single field, or a DTO composed into a
-      * view model). `Idle`/`Loading`/`Failure` pass through unchanged.
+      * view model). `Idle`/`Loading` pass through unchanged; a `Failure`'s retained
+      * `last` is projected too, so a stale-data-plus-banner view survives `mapData`.
       */
     def map[B](f: D => B): QueryState[B] = this match
         case QueryState.Idle                   => QueryState.Idle
         case QueryState.Loading                => QueryState.Loading
         case QueryState.Success(d, fromCache)  => QueryState.Success(f(d), fromCache)
         case QueryState.PartialData(d, errors) => QueryState.PartialData(f(d), errors)
-        case failure: QueryState.Failure       => failure
+        case QueryState.Failure(ex, last)      => QueryState.Failure(ex, last.map(f))
 
     /** Like [[map]], but the projection may reject the data: an `Abort.fail(e)` in `f`
       * lands in [[QueryState.Failure]] — the escape hatch for "data arrived but is
@@ -77,7 +89,9 @@ enum QueryState[+D] derives CanEqual:
       * The data-carrying shape is preserved on the success path (`Success` keeps its
       * `fromCache`, `PartialData` keeps its `errors`); a rejected `PartialData`
       * becomes a plain `Failure` (the abort wins over the partial errors).
-      * `Idle`/`Loading`/`Failure` pass through unchanged.
+      * `Idle`/`Loading` pass through unchanged; a `Failure` keeps its retained
+      * `last`, projected through `f` — a rejection there drops it, since data `f`
+      * refuses is not data the view can render.
       *
       * `f`'s ONLY effect is `Abort[ApolloException]`, so it is discharged locally and
       * purely (`Abort.run(...).eval`) — which is what keeps this method (and its
@@ -86,9 +100,10 @@ enum QueryState[+D] derives CanEqual:
       * anything wider would make the local `.eval` unsound.
       */
     def mapData[B](f: D => B < Abort[ApolloException])(using Frame): QueryState[B] = this match
-        case QueryState.Idle             => QueryState.Idle
-        case QueryState.Loading          => QueryState.Loading
-        case failure: QueryState.Failure => failure
+        case QueryState.Idle    => QueryState.Idle
+        case QueryState.Loading => QueryState.Loading
+        case QueryState.Failure(ex, last) =>
+            QueryState.Failure(ex, last.flatMap(d => QueryState.runDataMaybe(f(d))))
         case QueryState.Success(d, fromCache) =>
             QueryState.runData(f(d))(QueryState.Success(_, fromCache))
         case QueryState.PartialData(d, errors) =>
@@ -109,6 +124,16 @@ object QueryState:
             case Result.Failure(e) => QueryState.Failure(e)
             case Result.Panic(t) =>
                 QueryState.Failure(DefaultApolloException(Option(t.getMessage).getOrElse(t.toString)))
+
+    /** Discharge a projection over a `Failure`'s retained `last`, keeping only a
+      * clean result. A rejected or panicking projection yields [[Absent]]: the state
+      * is already a failure, so there is no second error to report — only the
+      * question of whether stale data is still renderable, and it is not.
+      */
+    private def runDataMaybe[B](projected: B < Abort[ApolloException])(using Frame): Maybe[B] =
+        Abort.run(projected).eval match
+            case Result.Success(b) => Present(b)
+            case _                 => Absent
 
     /** Project an [[ApolloResponse]] onto a [[QueryState]] — the same total
       * projection [[watchSignal]] applies internally (see [[ApolloSignal.project]]),
@@ -202,7 +227,7 @@ extension [D](sig: Signal[QueryState[D]])
             _ <- Fiber.init(sig.observe {
                 case QueryState.Success(d, _)     => ref.set(d)
                 case QueryState.PartialData(d, _) => ref.set(d)
-                case QueryState.Failure(ex)       => onTailFailure(ex)
+                case QueryState.Failure(ex, _)    => onTailFailure(ex)
                 case _                            => (): Unit
             })
         yield ref
@@ -232,7 +257,7 @@ extension [D](sig: Signal[QueryState[D]])
             _ <- Fiber.init(sig.observe {
                 case QueryState.Success(d, _)     => ref.set(d)
                 case QueryState.PartialData(d, _) => ref.set(d)
-                case QueryState.Failure(ex)       =>
+                case QueryState.Failure(ex, _)    =>
                     // Escalate: fail this follow fiber so a supervising mount node flips; the log keeps
                     // the failure visible on engines without supervision.
                     Log.error("apollo live operation failed after first data", ex).andThen(Abort.fail(ex))
@@ -258,7 +283,7 @@ object ApolloSignal:
         st match
             case QueryState.Success(d, _)     => p.completeDiscard(Result.succeed(d))
             case QueryState.PartialData(d, _) => p.completeDiscard(Result.succeed(d))
-            case QueryState.Failure(ex)       => p.completeDiscard(Result.fail(ex))
+            case QueryState.Failure(ex, _)    => p.completeDiscard(Result.fail(ex))
             case _                            => (): Unit
 
     /** Project a response onto the UI-facing [[QueryState]].
@@ -299,6 +324,9 @@ object ApolloSignal:
       *     `skip` returns to `false`. `newSource` is by-name so each window rebuilds a
       *     fresh cold stream.
       *
+      * Every write goes through [[retainingData]], so a mid-stream failure keeps the
+      * last data it delivered instead of blanking the view.
+      *
       * Returns a scope-free `Unit < Async` (each mode discharges the source's `Scope`
       * internally), so callers fork it with a plain `Fiber.init` bound to the
       * enclosing watcher `Scope`.
@@ -314,7 +342,7 @@ object ApolloSignal:
                 Scope.run(newSource.foreach { resp =>
                     skip.current.map {
                         case true  => Sync.defer(())
-                        case false => ref.set(project(resp))
+                        case false => push(ref, resp)
                     }
                 })
             case SkipMode.Unsubscribe =>
@@ -323,8 +351,44 @@ object ApolloSignal:
                         case true => skip.next.andThen(window)
                         case false =>
                             Fiber
-                                .use(Scope.run(newSource.foreach(resp => ref.set(project(resp)))))(_ => skip.next)
+                                .use(Scope.run(newSource.foreach(resp => push(ref, resp))))(_ => skip.next)
                                 .andThen(window)
                     }
                 window
+
+    /** Project `resp` and write it to `ref`, carrying forward the data the operation
+      * had already delivered if the projection is a bare [[QueryState.Failure]].
+      */
+    private def push[D](ref: Signal.SignalRef[QueryState[D]], resp: ApolloResponse[D])(using
+        Frame
+    ): Unit < Sync =
+        ref.currentWith(previous => ref.set(retainingData(previous, project(resp))))
+
+    /** Merge a freshly projected state with the one it replaces: a `Failure` that
+      * carries no data of its own inherits whatever `previous` had.
+      *
+      * This is the piece a per-response projection cannot do. A live query that has
+      * been serving data and then loses its connection would otherwise emit a bare
+      * `Failure`, and a view keyed on that state blanks — replacing a working screen
+      * with an error page over a blip. Carrying the data forward lets the view show
+      * it behind a banner instead. Every other state replaces outright: fresh data
+      * supersedes stale data, and `Idle`/`Loading` are deliberate resets.
+      */
+    private[kyo] def retainingData[D](
+        previous: QueryState[D],
+        next: QueryState[D]
+    ): QueryState[D] =
+        next match
+            case QueryState.Failure(ex, Absent) => QueryState.Failure(ex, dataOf(previous))
+            case settled                        => settled
+
+    /** The renderable data a state carries, if any — including a failure's retained
+      * `last`, so the carry-forward survives a run of consecutive failures.
+      */
+    private def dataOf[D](state: QueryState[D]): Maybe[D] =
+        state match
+            case QueryState.Success(d, _)     => Present(d)
+            case QueryState.PartialData(d, _) => Present(d)
+            case QueryState.Failure(_, last)  => last
+            case _                            => Absent
 end ApolloSignal

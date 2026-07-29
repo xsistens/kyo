@@ -156,16 +156,53 @@ final class HttpNetworkTransport(
         request: ApolloRequest[D],
         httpResponse: HttpResponse
     ): ApolloResponse[D] =
-        if !httpResponse.isSuccessful then
-            failure(
-                request,
-                ApolloHttpException(
-                    statusCode = httpResponse.statusCode,
-                    headers = httpResponse.headers,
-                    message = s"HTTP request failed with status ${httpResponse.statusCode}"
+        if httpResponse.isSuccessful then decodeSingle(request, httpResponse.body)
+        else
+            // GraphQL-over-HTTP: `application/graphql-response+json` means the body IS a
+            // well-formed GraphQL response whatever the status — a 4xx carrying the
+            // server's typed `errors` is far more useful than an opaque status. Only a
+            // body that fails to parse (or a legacy `application/json` server, where a
+            // non-2xx says nothing about the body) degrades to the status exception.
+            val graphqlBody =
+                if isGraphQLResponse(httpResponse.header("Content-Type").getOrElse("")) then
+                    decodeGraphQLResponse(request, httpResponse.body)
+                else Absent
+            graphqlBody.getOrElse(
+                failure(
+                    request,
+                    ApolloHttpException(
+                        statusCode = httpResponse.statusCode,
+                        headers = httpResponse.headers,
+                        message = s"HTTP request failed with status ${httpResponse.statusCode}"
+                    )
                 )
             )
-        else decodeSingle(request, httpResponse.body)
+        end if
+    end decode
+
+    private def isGraphQLResponse(contentType: String): Boolean =
+        contentType.toLowerCase.contains("application/graphql-response+json")
+
+    /** Decode `body` as a GraphQL envelope, or [[Absent]] if it is not one. Unlike
+      * [[decodeSingle]] a parse failure is not an [[ApolloParseException]] here: on a
+      * non-2xx it just means the body was never a GraphQL response, and the caller
+      * falls back to the HTTP status.
+      */
+    private def decodeGraphQLResponse[D](
+        request: ApolloRequest[D],
+        body: String
+    ): Maybe[ApolloResponse[D]] =
+        try
+            val json     = JsonParser.parse(body)
+            val response = GraphQLResponse.parse(json, request.operation)
+            Present(
+                ApolloResponse.fromGraphQLResponse(
+                    request.requestUuid,
+                    response,
+                    request.executionContext
+                )
+            )
+        catch case NonFatal(_) => Absent
 
     /** Parse a single GraphQL response envelope, folding a parse failure to a value. */
     private def decodeSingle[D](

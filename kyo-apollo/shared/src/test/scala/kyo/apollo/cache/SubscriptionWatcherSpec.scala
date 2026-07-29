@@ -28,8 +28,15 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
 
     // --- generated-style schema selectors (mirrors apollo-codegen output) -------
 
+    // Codegen puts the type-name given in the phantom's companion so it auto-summons;
+    // these hand-written markers mirror that.
     sealed trait LobbyPlayerT
+    object LobbyPlayerT:
+        given TypeName[LobbyPlayerT] = TypeName("LobbyPlayer")
+
     sealed trait LobbyViewT
+    object LobbyViewT:
+        given TypeName[LobbyViewT] = TypeName("LobbyView")
 
     object GPlayer:
         def id: SelectionBuilder[LobbyPlayerT, (id: String)] =
@@ -205,7 +212,7 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
             // reference — its players node compiles the implicit `__typename`
             // selection, so the record must carry the field.
             val playerFragment: Fragment[(id: String, color: String)] =
-                (GPlayer.id ~ GPlayer.color).toFragment("LobbyPlayer")
+                (GPlayer.id ~ GPlayer.color).toFragment
 
             val store = cachedClient().apolloStore
             val _     = store.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1)))
