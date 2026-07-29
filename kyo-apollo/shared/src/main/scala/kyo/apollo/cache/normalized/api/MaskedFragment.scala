@@ -229,12 +229,23 @@ private[apollo] object MaskedFragment:
       */
     private def spreadLabel(using Quotes)(term: quotes.reflect.Term): Type[?] =
         import quotes.reflect.*
+        // The label comes from the fragment val's DECLARING object (`val fields`
+        // inside `object CountryCard` → `countryCard`) — read off the SYMBOL's
+        // owner, not the reference syntax: a stable path collapses to a bare
+        // `Ident(fields)` when the enclosing object's prefix is elided (sibling
+        // references inside the same object), and the syntactic qualifier is then
+        // simply gone. A fragment held in a local val has a method owner instead;
+        // its own name is the honest label there.
         def nameOf(t: Term): String = t match
-            case Select(qualifier, _) => qualifier.symbol.name
-            case Ident(name)          => name
             case Inlined(_, _, inner) => nameOf(inner)
             case Typed(inner, _)      => nameOf(inner)
-            case _                    => "fragment"
+            case t =>
+                val sym = t.symbol
+                if sym.exists && sym.owner.exists && sym.owner.flags.is(Flags.Module) then
+                    sym.owner.name
+                else if sym.exists then sym.name
+                else "fragment"
+                end if
         val base  = nameOf(term).stripSuffix("$")
         val label = if base.isEmpty then "fragment" else base.head.toLower.toString + base.tail
         ConstantType(StringConstant(label)).asType
