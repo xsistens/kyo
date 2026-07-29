@@ -88,4 +88,57 @@ object Fragment:
         ): Fragment[D] =
             build(SelectionBuilder.empty[Origin]).toFragment
     end Builder
+
+    /** Declare a colocated, masked fragment on an entity type — see
+      * [[EntityFragment]] for the full contract. Requires the type's
+      * [[CacheIdentity]] so a spread's ref always resolves to the entity record
+      * (never a positional path key), and derives the fragment's name from the
+      * declaration site via [[kyo.Frame]] — globally unique by construction,
+      * with neither typos nor collisions expressible.
+      *
+      * {{{
+      * object CountryCard:
+      *     val fields = Fragment.entity[Country](_.name.capital)
+      * }}}
+      */
+    def entity[Origin](using CacheIdentity[Origin], TypeName[Origin], kyo.Frame): EntityBuilder[Origin] =
+        new EntityBuilder[Origin]
+
+    final class EntityBuilder[Origin](using
+        identity: CacheIdentity[Origin],
+        origin: TypeName[Origin],
+        frame: kyo.Frame
+    ):
+        def apply[D <: AnyNamedTuple](
+            build: SelectionBuilder[Origin, Empty] => SelectionBuilder[Origin, D]
+        ): EntityFragment[Origin, D] =
+            val selection = build(SelectionBuilder.empty[Origin])
+            EntityFragment(
+                fragmentName = frame.className,
+                typeName = origin.name,
+                identity = identity,
+                selection = selection,
+                cacheFragment = selection.toFragment
+            )
+        end apply
+    end EntityBuilder
+
+    /** Declare a colocated, masked fragment on an object with no independent
+      * identity (a `PageInfo`, a value object) — see [[EmbeddedFragment]]. No
+      * [[CacheIdentity]] is required: the ref carries the value, and updates
+      * flow through the parent's reactivity.
+      */
+    def embedded[Origin](using TypeName[Origin], kyo.Frame): EmbeddedBuilder[Origin] =
+        new EmbeddedBuilder[Origin]
+
+    final class EmbeddedBuilder[Origin](using origin: TypeName[Origin], frame: kyo.Frame):
+        def apply[D <: AnyNamedTuple](
+            build: SelectionBuilder[Origin, Empty] => SelectionBuilder[Origin, D]
+        ): EmbeddedFragment[Origin, D] =
+            EmbeddedFragment(
+                fragmentName = frame.className,
+                typeName = origin.name,
+                selection = build(SelectionBuilder.empty[Origin])
+            )
+    end EmbeddedBuilder
 end Fragment
