@@ -1,6 +1,6 @@
 # Apollo Client 4 alignment plan
 
-Status: **P1 and P2 landed; P3–P6 outstanding.** Last updated 2026-07-29.
+Status: **P1, P2 and the P3 core landed; P3 demo + P4–P6 outstanding.** Last updated 2026-07-29.
 
 Source of the comparison: "Apollo Client 4" by Gerald Miller (Apollo client-team maintainer),
 GraphQL Conf 2025 — <https://www.youtube.com/watch?v=QNzziV0L9Ks>.
@@ -232,23 +232,35 @@ This does **not** reach `mapInto`, which decodes the raw response JSON through t
 duplicate selections per GraphQL §5.3.2). Under masking the question dissolves anyway: each spread
 contributes one element, so arity tracks the number of fragments, not the number of fields.
 
-### 2.7 Open design items for P3
+### 2.7 Open design items for P3 — resolutions (2026-07-29)
 
-- **`Schema[FragmentRef[D]]`** — decided: option (a), the ref encodes as its entity key fields, so
-  `mapInto` stays bidirectional over spread-containing selections. `.spread` forces the key fields
-  into the document, so the encoding is well defined. Detailed shape still to be worked out.
-- **`fields.Ref` as a path-dependent type** rather than `FragmentRef[fields.Data]`, so a ref cannot
-  be handed to a different fragment whose field set is a superset (which would otherwise be a
-  runtime cache miss).
-- **Cache-miss diagnostics under masking** — "fragment CountryCard needs field `capital` on
-  `Country:DE`; the record has `code`, `name`. Was the fragment spread into the query that fetched
-  it?" rather than today's generic text.
-- **Interfaces and unions** — the runtime `__typename` may differ from the declared type condition;
-  the ref must take the type name from the response, not the declaration.
-- **Double spread of one fragment into one query** — produces two tuple elements with the same
-  label, not reported. Harmless (fragments merge in GraphQL). Could be caught with a
-  `NamedTuple.Names` disjointness constraint on `~`; needs verification against the type system
-  before being promised.
+- **`Schema[FragmentRef[D]]` / ref encoding** — the agreed option (a) ("encode as the entity key
+  fields") turned out to be **wrong in a way only implementation could show**: `writeOperation`
+  re-encodes *decoded* data through the codec before normalizing, so a key-fields-only ref would
+  silently drop every masked field from the cache on each network write-back. The ref therefore
+  privately retains its full raw response slice and re-encodes it losslessly — pinned by test. What
+  remains open is only the `mapInto`-into-a-case-class convenience (a user case class holding a
+  `Ref` field needs a `given Schema[Ref]`); until that exists, spread-containing selections stay
+  named-tuple-shaped, which the colocation idiom uses anyway.
+- **`fields.Ref` as a path-dependent type** — done: `Ref` is an inner case class of the fragment
+  value, and the spread macro preserves the path (`CountryCard.fields.Ref` survives inlining), so a
+  component's signature pins exactly its own fragment.
+- **Cache-miss diagnostics under masking** — largely dissolved rather than built: because refs
+  carry their slice, `Apollo.fragment(ref)` is *total* (cache first, slice as fallback, keep-last
+  on later misses). The scenario the diagnostic was designed for — a masked read failing because
+  the fragment was never spread — cannot be expressed anymore: without a spread there is no ref.
+- **Interfaces and unions** — done: the ref keys by the response `__typename`, not the declared
+  type condition; pinned by test.
+- **Double spread of one fragment into one query** — cannot happen by accident anymore: the macro
+  derives the label from the reference written at the call site, so spreading the same
+  `CountryCard.fields` twice yields the same label twice, and the second element is simply
+  unreachable (first-wins, per the §2.6 probe) while the wire behaviour stays correct. A
+  `Names`-disjointness constraint on `~` remains possible but unpromised.
+
+**Spread label derivation, beyond the plan:** the plan left the named-tuple label mechanism open.
+Implemented as a `transparent inline` macro on an *inline extension receiver* (an inline method's
+`this` only ever shows the macro a synthetic proxy): `CountryCard.fields.spread` contributes
+`(countryCard: fields.Ref)`. `spreadAs["label"]` is the explicit escape hatch.
 
 ---
 
@@ -272,6 +284,10 @@ see §1.3.
 **P3 — Fragment masking.** C6, per §2. The only phase with a real design round up front: the
 signatures above plus the open items in §2.7. Ends with a demo that establishes colocation as the
 idiom — without it the API stays unused, exactly as the shared-selection pattern is today.
+*Core landed 2026-07-29* (`CacheIdentity` + `generatorOf`, `Fragment.entity`/`embedded`, the spread
+macro, `Apollo.fragment(ref)`, codegen `SchemaIdentities`, and the §2.5 cross-operation composition
+test); §2.7 resolutions above. Outstanding: the colocation demo (standalone repo — needs a snapshot
+publish) and the optional `Schema[Ref]` for `mapInto` targets.
 
 **P4 — Suspense naming.** `Apollo.preload` / `PreloadedQuery` (`read` suspends until first data,
 then follows the watcher; `state` does not suspend) as the `preloadQuery` + `useReadQuery` analog,
