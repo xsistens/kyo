@@ -424,6 +424,12 @@ private[kyo] object HtmlRenderer:
         // enter/leave transition class lists (read client-side by the patch-application code).
         attrs.enterTransition.foreach(c => w(sb, s""" data-kyo-enter="${esc(c)}""""))
         attrs.leaveTransition.foreach(c => w(sb, s""" data-kyo-leave="${esc(c)}""""))
+        // Portal marker (read client-side by the patch-application code): the client re-homes this element
+        // to document.body behind a data-kyo-portal-slot placeholder; SSR/SSG keep it inline.
+        attrs.portal.foreach(v => if v then w(sb, """ data-kyo-portal="1""""))
+        // Portal marker (read client-side by the patch-application code): the client re-homes this element
+        // to document.body behind a data-kyo-portal-slot placeholder; SSR/SSG keep it inline.
+        attrs.portal.foreach(v => if v then w(sb, """ data-kyo-portal="1""""))
         // A generated pseudoClass already carries the base props in its own rule (see
         // registerPseudoClass); rendering them inline too would shadow the pseudo-state override.
         if pseudoClass.isEmpty then
@@ -956,6 +962,9 @@ private[kyo] object HtmlRenderer:
            |        __kyoRangeEnterSeed(r,__en);
            |        __kyoRangeSeedFocusAuto(r,__fa);
            |        kyoSpawnGhosts(__gh);
+           |        // Portal upkeep: re-home freshly-inserted portal elements (after the subtree-scoped seeding
+           |        // above, which needs them inline) and retire body twins whose placeholder left with this patch.
+           |        __kyoRangeEls(r).forEach(__kyoPortalSweep);
            |      }
            |    }
            |    sweepFocusAuto();
@@ -966,6 +975,8 @@ private[kyo] object HtmlRenderer:
            |    if(el)el.remove();
            |    else{var rr=__kyoRegions[p];if(rr&&rr.s.isConnected){__rgh=__kyoRangeLeavePrepare(rr,{});var n=rr.s.nextSibling;while(n&&n!==rr.e){var nx=n.nextSibling;rr.s.parentNode.removeChild(n);n=nx;}}}
            |    kyoSpawnGhosts(__rgh);
+           |    // The removed subtree may have contained portal placeholders: retire their body twins.
+           |    __kyoPortalSweep(null);
            |    sweepFocusAuto();
            |  }else if(op.InjectCss){
            |    var s=document.createElement("style");
@@ -1124,8 +1135,10 @@ private[kyo] object HtmlRenderer:
            |  return null;
            |}
            |// Logical-child key: element data-kyo-path, open marker's region path, else null (positional).
+           |// A portal placeholder (data-kyo-portal-slot="<path>", no data-kyo-path of its own) keys as the re-homed
+           |// element it stands in for, so the sibling reconciliation matches the incoming portal element against it.
            |function __kyoLKey(n){
-           |  if(n.nodeType===1)return n.hasAttribute("data-kyo-path")?n.getAttribute("data-kyo-path"):null;
+           |  if(n.nodeType===1)return n.hasAttribute("data-kyo-path")?n.getAttribute("data-kyo-path"):(n.hasAttribute("data-kyo-portal-slot")?n.getAttribute("data-kyo-portal-slot"):null);
            |  if(n.nodeType===8){var p=__kyoMParse(n.data);if(p&&!p.c&&__kyoSpanClose(n,p.p))return p.p;}
            |  return null;
            |}
@@ -1151,6 +1164,16 @@ private[kyo] object HtmlRenderer:
            |// Kind mismatch replaces wholesale.
            |function __kyoPatchL(parent,m,toNode){
            |  var fs=m.nodeType===8,ts=toNode.nodeType===8;
+           |  // Portal slot: the incoming portal element's live node was re-homed to document.body behind this
+           |  // placeholder. Reconcile the BODY TWIN in place (content updates flow to it) and keep the placeholder -
+           |  // materializing the incoming node inline would duplicate its data-kyo-path. A lost twin (defensive)
+           |  // falls back to re-materializing inline; the post-patch sweep re-homes it.
+           |  if(__kyoIsPortalSlot(m)&&__kyoIsPortal(toNode)){
+           |    var __tw=__kyoPortalTwin(__kyoLKey(toNode));
+           |    if(__tw)__kyoMorphNode(__tw,toNode);
+           |    else parent.replaceChild(document.importNode(toNode,true),m);
+           |    return;
+           |  }
            |  if(!fs&&!ts){__kyoMorphNode(m,toNode);return;}
            |  if(fs&&ts){
            |    var f=__kyoMParse(m.data),t=__kyoMParse(toNode.data);
@@ -1260,7 +1283,14 @@ private[kyo] object HtmlRenderer:
            |  while(n&&n!==document.body){
            |    var ev=n.getAttribute&&n.getAttribute("data-kyo-ev");
            |    if(ev&&ev.split(",").indexOf(t)>=0)return true;
-           |    n=n.parentElement;
+           |    // Portal hop: a re-homed element's DOM parent is <body>; continue the walk at its LOGICAL parent
+           |    // (its placeholder slot's parent) so handlers declared on logical ancestors still forward — the
+           |    // server dispatch bubbles over the logical tree anyway. Twin of DomBackend.declaredInChain.
+           |    if(n.hasAttribute&&n.hasAttribute("data-kyo-portal")&&n.parentNode===document.body){
+           |      var pp=n.getAttribute("data-kyo-path");
+           |      var sl=pp!==null?document.querySelector('[data-kyo-portal-slot="'+pp+'"]'):null;
+           |      n=sl?sl.parentElement:null;
+           |    }else n=n.parentElement;
            |  }
            |  return false;
            |}
@@ -1434,6 +1464,58 @@ private[kyo] object HtmlRenderer:
            |// runs over every top-level element in it and unions the result. Scoping to the range (rather than
            |// handing the helpers the shared parent) keeps siblings OUTSIDE the region from being read as removed.
            |// Twins of rangeEnterPaths & co in DomBackend.
+           |// Twins of DomBackend.isPortalEl/isPortalSlot/portalTwin: an element that declared portal(true); the inert
+           |// placeholder left at its logical position; the (unique) re-homed body child carrying the path.
+           |function __kyoIsPortal(n){return n.nodeType===1&&n.hasAttribute("data-kyo-portal");}
+           |function __kyoIsPortalSlot(n){return n.nodeType===1&&n.hasAttribute("data-kyo-portal-slot");}
+           |function __kyoPortalTwin(p){return document.querySelector('body > [data-kyo-path="'+p+'"][data-kyo-portal]');}
+           |// Portal upkeep after a patch (twin of DomBackend.portalSweep; keep the two in lockstep).
+           |// ADOPT: every data-kyo-portal element still sitting inline under root (root included; freshly inserted
+           |// by this patch) is re-homed to document.body behind an inert data-kyo-portal-slot placeholder at its
+           |// logical position. Must run AFTER focus/enter seeding (both subtree-scoped). Reparenting drops DOM
+           |// focus, so focus (and caret) held inside the moved subtree is re-applied after the move; the enter
+           |// transition is unaffected (its from-state classes release on the NEXT frame, after the move).
+           |// ORPHANS: a body twin whose placeholder is gone (its slot was removed or replaced) leaves with its
+           |// region - spawn its leave ghost (ghosts already live at body) and remove it. Document-wide by
+           |// necessity: the twin is outside every region subtree, so the regular leave sweep cannot see it.
+           |function __kyoPortalSweep(root){
+           |  if(root&&root.querySelectorAll){
+           |    var cand=[];
+           |    if(root.hasAttribute&&root.hasAttribute("data-kyo-portal"))cand.push(root);
+           |    var els=root.querySelectorAll("[data-kyo-portal]");
+           |    for(var i=0;i<els.length;i++)cand.push(els[i]);
+           |    for(var j=0;j<cand.length;j++){
+           |      var el=cand[j];
+           |      var p=el.getAttribute("data-kyo-path");
+           |      // Only path-carrying elements can portal (the placeholder must key the slot); the parent check
+           |      // keeps the sweep idempotent (an adopted twin is a direct body child, never under a region again).
+           |      if(p!==null&&el.parentNode&&el.parentNode!==document.body){
+           |        var stale=__kyoPortalTwin(p);
+           |        if(stale&&stale!==el)document.body.removeChild(stale);
+           |        var svgNs="http://www.w3.org/2000/svg";
+           |        var slot=(el.namespaceURI===svgNs)?document.createElementNS(svgNs,"g"):document.createElement("span");
+           |        slot.setAttribute("data-kyo-portal-slot",p);
+           |        slot.setAttribute("hidden","");
+           |        var ae=document.activeElement;
+           |        var had=ae&&ae!==document.body&&(el===ae||el.contains(ae));
+           |        var ss=(had&&typeof ae.selectionStart==='number')?ae.selectionStart:null;
+           |        var se=(had&&typeof ae.selectionEnd==='number')?ae.selectionEnd:null;
+           |        el.parentNode.insertBefore(slot,el);
+           |        document.body.appendChild(el);
+           |        if(had){ae.focus();if(ss!==null)kyoSetCaret(ae,ss,se);}
+           |      }
+           |    }
+           |  }
+           |  var twins=document.querySelectorAll('body > [data-kyo-portal][data-kyo-path]');
+           |  for(var t=0;t<twins.length;t++){
+           |    var tw=twins[t];
+           |    var tp=tw.getAttribute("data-kyo-path");
+           |    if(!document.querySelector('[data-kyo-portal-slot="'+tp+'"]')){
+           |      kyoSpawnGhosts(kyoLeavePrepare(tw,{}));
+           |      document.body.removeChild(tw);
+           |    }
+           |  }
+           |}
            |function __kyoRangeEls(r){var o=[],n=r.s.nextSibling;while(n&&n!==r.e){if(n.nodeType===1)o.push(n);n=n.nextSibling;}return o;}
            |function __kyoMergeSet(a,b){for(var k in b)a[k]=true;return a;}
            |function __kyoRangeEnterPaths(r){var s={},es=__kyoRangeEls(r);for(var i=0;i<es.length;i++)__kyoMergeSet(s,faEnterPaths(es[i]));return s;}
@@ -1446,6 +1528,8 @@ private[kyo] object HtmlRenderer:
            |kyoEnterSeed(document.body,{});
            |// Initial mount: everything server-rendered is new (empty old set), like native autofocus.
            |seedFocusAuto(document.body,{});
+           |// Portal adopt for the initial paint (a portal element present at load re-homes immediately).
+           |__kyoPortalSweep(document.body);
            |// Dropdown helpers: close all dropdowns except the given id
            |function kyoCloseDropdown(exceptId){
            |  var all=document.querySelectorAll('[data-kyo-dropdown-options]');
