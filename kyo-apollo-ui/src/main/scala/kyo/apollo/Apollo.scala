@@ -3,6 +3,8 @@ package kyo.apollo
 import kyo.*
 import kyo.apollo.cache.normalized.FetchPolicy
 import kyo.apollo.cache.normalized.api.CacheKey
+import kyo.apollo.cache.normalized.api.EmbeddedFragment
+import kyo.apollo.cache.normalized.api.EntityFragment
 import kyo.apollo.cache.normalized.api.Fragment
 import kyo.apollo.cache.normalized.apolloStore
 import kyo.apollo.cache.normalized.watch
@@ -11,6 +13,7 @@ import kyo.apollo.exception.ApolloException
 import kyo.apollo.exception.CacheMissException
 import kyo.apollo.exception.DefaultApolloException
 import kyo.apollo.network.ApolloResponse
+import scala.NamedTuple.AnyNamedTuple
 
 /** The `Apollo` namespace — the constructor entry points of the `kyo-ui` binding.
   *
@@ -172,6 +175,94 @@ object Apollo:
             }
         }
     end fragment
+
+    /** Reactively read a masked fragment through its spread-produced ref — the
+      * masked `useFragment`, and the ONLY door to a ref's contents: the fields a
+      * [[EntityFragment]] selected are `private[apollo]` on the ref, so a parent
+      * can pass it here (or to the component that declared the fragment) but never
+      * read through it.
+      *
+      * Total, unlike the [[Fragment]]+[[CacheKey]] overload's `Maybe`: the ref was
+      * decoded from a response that contained the fragment's fields, so there is
+      * always something to render — the signal seeds from the entity record when
+      * the cache has it and from the ref's own captured slice when it does not
+      * (evicted, or a cache-less client). Later cache changes touching a dependent
+      * key re-read and re-emit; a re-read that misses keeps the last value rather
+      * than blanking a working view.
+      */
+    def fragment[Origin, D <: AnyNamedTuple](ref: EntityFragment[Origin, D]#Ref)(using
+        client: ApolloClient,
+        frame: Frame,
+        canEqual: CanEqual[D, D]
+    ): Signal[D] < (Async & Scope) =
+        val definition = ref.definition
+        // A cache-less client has no store to watch — the ref's captured slice IS
+        // the data, so the signal degenerates to a constant. This is what keeps the
+        // masked read total instead of inheriting `apolloStore`'s throw.
+        val maybeStore =
+            try Some(client.apolloStore)
+            catch case _: IllegalStateException => None
+        maybeStore match
+            case None        => Signal.initRef[D](ref.decoded)
+            case Some(store) => fragmentSignal(ref, definition, store)
+    end fragment
+
+    private def fragmentSignal[Origin, D <: AnyNamedTuple](
+        ref: EntityFragment[Origin, D]#Ref,
+        definition: EntityFragment[Origin, D],
+        store: kyo.apollo.cache.normalized.ApolloStore
+    )(using
+        frame: Frame,
+        canEqual: CanEqual[D, D]
+    ): Signal[D] < (Async & Scope) =
+        def read(): Maybe[(D, Set[String])] =
+            try
+                val (data, keys) = store.readFragmentWithKeys(definition.cacheFragment, ref.key)
+                Present((data, keys + ref.key.key))
+            catch case _: CacheMissException => Absent
+
+        val (initial, initialKeys) = read() match
+            case Present((data, keys)) => (data, keys)
+            case Absent                => (ref.decoded, Set(ref.key.key))
+        Signal.initRef[D](initial).map { signalRef =>
+            Channel.initUnscoped[Set[String]](Int.MaxValue).map { channel =>
+                given AllowUnsafe = AllowUnsafe.embrace.danger
+                val unsubscribe = store.addChangedKeysListener { changed =>
+                    val _ = channel.unsafe.offer(changed)
+                }
+                var watched = initialKeys
+                val consume = channel.streamUntilClosed().foreach { changed =>
+                    if changed.exists(watched) then
+                        read() match
+                            case Present((next, keys)) =>
+                                watched = keys
+                                signalRef.set(next)
+                            // Keep the last value on a miss (an eviction mid-life); the
+                            // dependent-key set keeps watching, so a re-population re-emits.
+                            case Absent => Sync.defer(())
+                    else Sync.defer(())
+                }
+                Scope
+                    .ensure(Sync.defer {
+                        unsubscribe()
+                        val _ = channel.unsafe.close()
+                    })
+                    .andThen(Fiber.init(consume))
+                    .andThen(signalRef)
+            }
+        }
+    end fragmentSignal
+
+    /** Read a masked embedded fragment's ref — the value-carrying counterpart of
+      * the entity overload. The object has no cache identity, so there is nothing
+      * to watch: the signal is constant, and updates arrive the way the value did —
+      * through the parent's reactivity re-rendering the child with a fresh ref.
+      */
+    def fragment[Origin, D <: AnyNamedTuple](ref: EmbeddedFragment[Origin, D]#Ref)(using
+        frame: Frame,
+        canEqual: CanEqual[D, D]
+    ): Signal[D] < Sync =
+        Signal.initRef[D](ref.value)
 
     // --- Pagination ----------------------------------------------------------
 

@@ -390,6 +390,34 @@ object SelectionBuilder:
     ): SelectionBuilder[Origin, B] =
         Mapped(under, codec)
 
+    /** A raw arity-1 node whose single element is computed from the PARENT row
+      * rather than one response field — the seam a masked fragment spread plugs
+      * into. `compiled` is what it contributes to the wire selection (spliced
+      * flat into the parent, merged with sibling duplicates downstream);
+      * `decodeRow` sees the whole parent object and builds the element (a
+      * fragment ref); `encodeValue` re-emits the element's response fields so a
+      * cache write of decoded data stays lossless. Arguments are harvested from
+      * `argsFrom` (the underlying child selection).
+      */
+    private[apollo] def rawLeaf[Origin, R <: AnyNamedTuple](
+        compiled: List[CompiledSelection],
+        argsFrom: SelectionBuilder[?, ?],
+        decodeRow: Map[String, Json] => Any,
+        encodeValue: Any => List[(String, Json)]
+    ): SelectionBuilder[Origin, R] =
+        new Tuples[Origin, R]:
+            private[api] def arity: Int             = 1
+            def selections: List[CompiledSelection] = compiled
+            private[api] def argEntries: List[Arg]  = argsFrom.argEntries
+            private[api] def decodeRaw(row: Map[String, Json]): Tuple =
+                Tuple1(decodeRow(row))
+            private[api] def encodeRaw(value: Tuple): List[(String, Json)] =
+                encodeValue(value.productElement(0))
+            private[api] def deferLast: Tuples[Origin, ? <: AnyNamedTuple] =
+                throw IllegalStateException("`.deferred` cannot be applied to a fragment spread")
+            private[api] def streamLast(initialCount: Int, condition: Option[String]): Tuples[Origin, R] =
+                throw IllegalStateException("`.streamed` cannot be applied to a fragment spread")
+
     /** The empty selection for `Origin`: selects nothing, and is the neutral
       * starting point a chainable selection folds fields onto — the generated
       * `Country.select` returns this, so `Country.select.code.name` is
