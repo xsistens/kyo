@@ -43,6 +43,12 @@ import kyo.apollo.json.Json
   * @param cacheInfo         how the normalized cache produced this response, when
   *                          it flowed through the cache interceptor (Phase 04);
   *                          absent for a plain networked response
+  * @param complete          false while an incremental delivery (`@defer` /
+  *                          `@stream`) still has payloads outstanding (the wire
+  *                          `hasNext: true`) — Apollo Client 4's
+  *                          `dataState: "streaming"`. Ordinary single-part
+  *                          responses are always complete, so nothing changes
+  *                          for the ~90 % of operations that never stream.
   */
 final case class ApolloResponse[D](
     requestUuid: Uuid,
@@ -50,7 +56,8 @@ final case class ApolloResponse[D](
     error: Maybe[ApolloException] = Maybe.empty,
     extensions: Map[String, Json] = Map.empty,
     executionContext: ExecutionContext = ExecutionContext.Empty,
-    cacheInfo: Maybe[CacheInfo] = Maybe.empty
+    cacheInfo: Maybe[CacheInfo] = Maybe.empty,
+    complete: Boolean = true
 ):
 
     /** True when the call did not fully succeed — i.e. [[error]] is present. */

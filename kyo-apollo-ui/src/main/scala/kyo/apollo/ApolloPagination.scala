@@ -134,7 +134,7 @@ object PaginatedQuery:
 
     /** The data of a state that carries a renderable payload, else `None`. */
     private[apollo] def dataOf[D](qs: QueryState[D]): Option[D] = qs match
-        case QueryState.Success(d, _)     => Some(d)
+        case QueryState.Success(d, _, _)  => Some(d)
         case QueryState.PartialData(d, _) => Some(d)
         case _                            => None
 end PaginatedQuery

@@ -54,6 +54,12 @@ class ApolloSignalSpec extends kyo.test.Test[Any]:
             )
         }
 
+        "project carries the streaming marker: an incomplete response is Success(complete = false)" in {
+            ApolloSignal.project(resp(data = Present(42)).copy(complete = false)) match
+                case QueryState.Success(42, _, complete) => assert(!complete)
+                case other                               => fail(s"expected an incomplete Success, got $other")
+        }
+
         "project reads fromCache = false from a networked response" in {
             assert(
                 ApolloSignal.project(resp(data = Present(42), cacheInfo = Present(CacheInfo.network)))

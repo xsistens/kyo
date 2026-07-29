@@ -46,8 +46,14 @@ enum QueryState[+D] derives CanEqual:
     /** A fully clean response: `data` present, no GraphQL `errors`, no transport
       * `exception`. `fromCache` records whether the normalized cache served it
       * (as opposed to the network), from [[kyo.apollo.network.CacheInfo.fromCache]].
+      *
+      * `complete` is false while an incremental delivery (`@defer` / `@stream`)
+      * still has payloads outstanding — Apollo Client 4's `dataState:
+      * "streaming"` — so a view can show a growing list with a "loading more"
+      * affordance instead of guessing. A default field rather than a separate
+      * enum case: the ~90 % of queries that never stream are untouched.
       */
-    case Success[+D](data: D, fromCache: Boolean) extends QueryState[D]
+    case Success[+D](data: D, fromCache: Boolean, complete: Boolean = true) extends QueryState[D]
 
     /** A response that carried `data` *and* GraphQL `errors` — a partial success
       * the UI can render while still surfacing the errors.
@@ -77,11 +83,11 @@ enum QueryState[+D] derives CanEqual:
       * `last` is projected too, so a stale-data-plus-banner view survives `mapData`.
       */
     def map[B](f: D => B): QueryState[B] = this match
-        case QueryState.Idle                   => QueryState.Idle
-        case QueryState.Loading                => QueryState.Loading
-        case QueryState.Success(d, fromCache)  => QueryState.Success(f(d), fromCache)
-        case QueryState.PartialData(d, errors) => QueryState.PartialData(f(d), errors)
-        case QueryState.Failure(ex, last)      => QueryState.Failure(ex, last.map(f))
+        case QueryState.Idle                            => QueryState.Idle
+        case QueryState.Loading                         => QueryState.Loading
+        case QueryState.Success(d, fromCache, complete) => QueryState.Success(f(d), fromCache, complete)
+        case QueryState.PartialData(d, errors)          => QueryState.PartialData(f(d), errors)
+        case QueryState.Failure(ex, last)               => QueryState.Failure(ex, last.map(f))
 
     /** Like [[map]], but the projection may reject the data: an `Abort.fail(e)` in `f`
       * lands in [[QueryState.Failure]] — the escape hatch for "data arrived but is
@@ -104,8 +110,8 @@ enum QueryState[+D] derives CanEqual:
         case QueryState.Loading => QueryState.Loading
         case QueryState.Failure(ex, last) =>
             QueryState.Failure(ex, last.flatMap(d => QueryState.runDataMaybe(f(d))))
-        case QueryState.Success(d, fromCache) =>
-            QueryState.runData(f(d))(QueryState.Success(_, fromCache))
+        case QueryState.Success(d, fromCache, complete) =>
+            QueryState.runData(f(d))(QueryState.Success(_, fromCache, complete))
         case QueryState.PartialData(d, errors) =>
             QueryState.runData(f(d))(QueryState.PartialData(_, errors))
 end QueryState
@@ -225,7 +231,7 @@ extension [D](sig: Signal[QueryState[D]])
             // contract), so a value that lands between seeding and attaching is
             // caught up immediately — no gap.
             _ <- Fiber.init(sig.observe {
-                case QueryState.Success(d, _)     => ref.set(d)
+                case QueryState.Success(d, _, _)  => ref.set(d)
                 case QueryState.PartialData(d, _) => ref.set(d)
                 case QueryState.Failure(ex, _)    => onTailFailure(ex)
                 case _                            => (): Unit
@@ -255,7 +261,7 @@ extension [D](sig: Signal[QueryState[D]])
             }
             ref <- Signal.initRef[D](seed)
             _ <- Fiber.init(sig.observe {
-                case QueryState.Success(d, _)     => ref.set(d)
+                case QueryState.Success(d, _, _)  => ref.set(d)
                 case QueryState.PartialData(d, _) => ref.set(d)
                 case QueryState.Failure(ex, _)    =>
                     // Escalate: fail this follow fiber so a supervising mount node flips; the log keeps
@@ -281,7 +287,7 @@ object ApolloSignal:
         st: QueryState[D]
     )(using Frame): Unit < Sync =
         st match
-            case QueryState.Success(d, _)     => p.completeDiscard(Result.succeed(d))
+            case QueryState.Success(d, _, _)  => p.completeDiscard(Result.succeed(d))
             case QueryState.PartialData(d, _) => p.completeDiscard(Result.succeed(d))
             case QueryState.Failure(ex, _)    => p.completeDiscard(Result.fail(ex))
             case _                            => (): Unit
@@ -306,7 +312,11 @@ object ApolloSignal:
             case Absent =>
                 response.data match
                     case Present(d) =>
-                        QueryState.Success(d, fromCache = response.cacheInfo.exists(_.fromCache))
+                        QueryState.Success(
+                            d,
+                            fromCache = response.cacheInfo.exists(_.fromCache),
+                            complete = response.complete
+                        )
                     case Absent =>
                         QueryState.Failure(
                             DefaultApolloException("The server did not return any data")
@@ -387,7 +397,7 @@ object ApolloSignal:
       */
     private def dataOf[D](state: QueryState[D]): Maybe[D] =
         state match
-            case QueryState.Success(d, _)     => Present(d)
+            case QueryState.Success(d, _, _)  => Present(d)
             case QueryState.PartialData(d, _) => Present(d)
             case QueryState.Failure(_, last)  => last
             case _                            => Absent

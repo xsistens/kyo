@@ -34,8 +34,8 @@ class ApolloSignalExecSpec extends kyo.test.Test[Any]:
                 yield
                     assert(loading == QueryState.Loading)
                     settled match
-                        case QueryState.Success(data, _) => assert(data == userData("Alice"))
-                        case other                       => fail(s"expected Success(Alice), got $other")
+                        case QueryState.Success(data, _, _) => assert(data == userData("Alice"))
+                        case other                          => fail(s"expected Success(Alice), got $other")
             }
         }
 
@@ -125,8 +125,8 @@ class ApolloSignalExecSpec extends kyo.test.Test[Any]:
                     rejectedRefetch <- Abort.run[ApolloException](rejecting.refetch)
                 yield
                     projectedState match
-                        case QueryState.Success(name, _) => assert(name == "Alice")
-                        case other                       => fail(s"expected Success(Alice), got $other")
+                        case QueryState.Success(name, _, _) => assert(name == "Alice")
+                        case other                          => fail(s"expected Success(Alice), got $other")
                     assert(refetched == "Alice")
                     assert(rejectedState == QueryState.Failure(rejected))
                     assert(rejectedRefetch == Result.Failure(rejected))
