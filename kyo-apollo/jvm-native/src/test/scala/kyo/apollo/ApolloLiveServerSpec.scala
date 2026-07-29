@@ -151,7 +151,7 @@ class ApolloLiveServerSpec extends kyo.test.Test[Any]:
                     _         <- server.closeNow // raw TCP drop, no WS close frame
                     seen      <- collected.get   // the subscription terminates with the drop value
                 yield assert(seen.exists(r =>
-                    r.exception.exists {
+                    r.error.exists {
                         case e: ApolloWebSocketClosedException => e.code == WebSocketConnection.NormalClosure + 6 // 1006
                         case _                                 => false
                     }

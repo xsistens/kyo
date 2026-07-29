@@ -19,7 +19,7 @@ import kyo.apollo.network.ExecutionContext
   *   - `NetworkOnly`    — the network only (one response), always written back;
   *                        the cache is never read.
   *   - `CacheOnly`      — the cache only (one response); a miss surfaces as an
-  *                        `ApolloResponse.exception` value, never the network.
+  *                        `ApolloResponse.error` value, never the network.
   *   - `NetworkFirst`   — the network (written back); on a network error, fall
   *                        back to a cache read, else re-emit the network error.
   *   - `CacheAndNetwork`— a cache response (when hit) **then** a network response,

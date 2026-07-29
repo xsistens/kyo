@@ -174,7 +174,7 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
                 optimistic <- pull.next
                 _ = assert(name(optimistic) == Some("BobOptimistic"))
                 response <- fib.get
-                _ = assert(response.exception.isEmpty)
+                _ = assert(response.error.isEmpty)
                 // Network truth ("Bob") replaces the optimistic value; layer is gone.
                 settled <- pull.next
                 _ = assert(name(settled) == Some("Bob"))
@@ -204,7 +204,7 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
                 optimistic <- pull.next
                 _ = assert(name(optimistic) == Some("BobOptimistic"))
                 response <- fib.get
-                _ = assert(response.exception.isDefined) // the scripted 500 surfaced as a value
+                _ = assert(response.error.isDefined) // the scripted 500 surfaced as a value
                 // The optimistic layer rolled back cleanly: watcher is back to Alice, and
                 // the pristine cache never took the optimistic value.
                 reverted <- pull.next
@@ -219,7 +219,7 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
 
     /** Routes the mutation to a scripted outcome: a 200 echoing the requested name,
       * or a 500 to simulate a transient transport failure (surfaced as an
-      * `ApolloResponse.exception` value). The seeding query always returns Alice.
+      * `ApolloResponse.error` value). The seeding query always returns Alice.
       */
     final private class ScriptedEngine(mutationFails: Boolean)
         extends kyo.apollo.network.http.HttpEngine:

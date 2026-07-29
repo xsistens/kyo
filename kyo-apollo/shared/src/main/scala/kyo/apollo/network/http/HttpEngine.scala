@@ -5,7 +5,7 @@ import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
 /** The seam between [[HttpNetworkTransport]] and the actual wire.
   *
   * The transport owns GraphQL concerns (composing the request, decoding the
-  * envelope, mapping failures to `ApolloResponse.exception`); an `HttpEngine`
+  * envelope, mapping failures to `ApolloResponse.error`); an `HttpEngine`
   * owns only the raw round-trip `HttpRequest => HttpResponse < Async`. Splitting
   * it out lets [[FetchHttpEngine]] hit the network in production while unit
   * tests inject a deterministic fake with no server.

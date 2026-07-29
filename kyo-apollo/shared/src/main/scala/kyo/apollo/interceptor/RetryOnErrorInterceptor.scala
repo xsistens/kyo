@@ -16,11 +16,11 @@ import scala.util.Random
 /** An [[ApolloInterceptor]] that transparently re-runs an operation when it comes
   * back as a **transport failure**, backing off between attempts.
   *
-  * The retry decision is made on `ApolloResponse.exception` — a network drop or a
+  * The retry decision is made on `ApolloResponse.error` — a network drop or a
   * 5xx HTTP status — never on GraphQL `errors`. A partial-data response with
   * GraphQL errors is a legitimate server answer, not a transient fault, so it is
   * passed straight through (per the Task 1 reuse doc §3.5: "Retry classifies on
-  * `ApolloResponse.exception` (transport) vs GraphQL errors in `data` — only the
+  * `ApolloResponse.error` (transport) vs GraphQL errors in `data` — only the
   * former is retried"). The classifier is injectable via `retryWhen`; the default
   * [[RetryOnErrorInterceptor.transportErrors]] retries [[ApolloNetworkException]]
   * and 5xx [[ApolloHttpException]]s.
@@ -83,8 +83,12 @@ final class RetryOnErrorInterceptor(
                 if head.isEmpty then rest
                 else
                     val first = head.head
-                    first.exception match
-                        case Present(cause) if n < maxAttempts && retryWhen(cause) =>
+                    // `hasTransportError` keeps `retryWhen` seeing only transport failures,
+                    // as its contract promises: a response carrying the server's own
+                    // GraphQL errors is an answer, not a connection worth retrying.
+                    first.error match
+                        case Present(cause)
+                            if first.hasTransportError && n < maxAttempts && retryWhen(cause) =>
                             Stream.unwrap(
                                 delay(jittered(backoff.delayMillis(n)))
                                     .andThen(attempt(request, chain, n + 1))

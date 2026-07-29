@@ -271,7 +271,7 @@ class CacheSpec extends kyo.test.Test[Any]:
             call(client).fetchPolicy(FetchPolicy.CacheOnly).execute.map { r =>
                 assert(engine.calls == 0)
                 assert(r.data == Absent)
-                assert(r.exception.exists(_.isInstanceOf[CacheMissException]))
+                assert(r.error.exists(_.isInstanceOf[CacheMissException]))
             }
         }
 

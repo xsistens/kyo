@@ -29,7 +29,7 @@ end ApolloInterceptorChain
   * interceptor is expected to be terminal (a [[NetworkInterceptor]]) and must not
   * call `chain.proceed`. Running off the end therefore signals a wiring error and
   * throws, rather than returning a value: it is a programming mistake, not a
-  * network/parse failure (those still travel as `ApolloResponse.exception`).
+  * network/parse failure (those still travel as `ApolloResponse.error`).
   *
   * @param interceptors the Apollo interceptors, applied in list order
   * @param index        the current position (start a run at `0`)

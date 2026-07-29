@@ -36,12 +36,12 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
             }
         }
 
-        "TestHttpEngine.failing surfaces as an ApolloResponse.exception value" in {
+        "TestHttpEngine.failing surfaces as an ApolloResponse.error value" in {
             val engine = TestHttpEngine.failing(new RuntimeException("down"))
             val client = TestApolloClient.cacheless(engine)
             client.query(Fixtures.ValueQuery()).execute.map { response =>
                 assert(response.data == Absent)
-                assert(response.exception.isDefined)
+                assert(response.error.isDefined)
             }
         }
 

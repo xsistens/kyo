@@ -192,7 +192,7 @@ class WatcherSpec extends kyo.test.Test[Any]:
                     second <- pull.next
                 yield
                     assert(second.data.isEmpty)
-                    assert(second.exception.exists(_.isInstanceOf[CacheMissException]))
+                    assert(second.error.exists(_.isInstanceOf[CacheMissException]))
             }
         }
 

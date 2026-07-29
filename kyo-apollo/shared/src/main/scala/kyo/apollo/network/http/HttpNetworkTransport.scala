@@ -17,7 +17,7 @@ import scala.util.control.NonFatal
   *
   * It is the single place where failures become values (Phase 03's contract):
   * every network drop, non-2xx status, or unparseable body is caught here and
-  * folded into `ApolloResponse.exception`, so the returned `Future` **never
+  * folded into `ApolloResponse.error`, so the returned `Future` **never
   * fails** for those conditions.
   *
   *   - connection error / `fetch` rejection → [[ApolloNetworkException]]

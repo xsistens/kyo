@@ -7,6 +7,7 @@ import kyo.apollo.api.GraphQLError
 import kyo.apollo.api.GraphQLResponse
 import kyo.apollo.api.OperationRequestBody
 import kyo.apollo.exception.ApolloException
+import kyo.apollo.exception.ApolloGraphQLException
 import kyo.apollo.exception.ApolloNetworkException
 import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.exception.ApolloWebSocketClosedException
@@ -51,7 +52,7 @@ import scala.util.control.NonFatal
   * `Clock`-driven they are deterministic under `Clock.withTimeControl` in tests.
   *
   * '''Failures are values''': a socket drop or terminal server close surfaces as
-  * `ApolloResponse.exception` (an [[ApolloWebSocketClosedException]]) pushed to
+  * `ApolloResponse.error` (an [[ApolloWebSocketClosedException]]) pushed to
   * every active subscriber; the stream itself does not fail. '''Reconnection''' is
   * opt-in via [[reconnectWhen]]: an established socket's abnormal drop surfaces to
   * every subscriber as the resubscription-signal value, then the transport
@@ -530,7 +531,7 @@ final class WebSocketNetworkTransport(
         ApolloResponse(
             requestUuid = request.requestUuid,
             data = Absent,
-            errors = parseErrors(payload),
+            error = Present(ApolloGraphQLException(parseErrors(payload))),
             executionContext = request.executionContext
         )
 

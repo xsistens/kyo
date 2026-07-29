@@ -18,17 +18,24 @@ class ApolloSignalSpec extends kyo.test.Test[Any]:
 
     given CanEqual[Any, Any] = CanEqual.derived
 
+    /** `errors` is the convenience for "the server answered with errors"; `error`
+      * sets the channel directly, which is how a transport failure is expressed.
+      * Passing both is a caller error — `error` wins, matching the real model where
+      * a response has one failure, not two.
+      */
     private def resp[D](
         data: Maybe[D] = Absent,
         errors: Chunk[GraphQLError] = Chunk.empty,
-        exception: Maybe[ApolloException] = Absent,
+        error: Maybe[ApolloException] = Absent,
         cacheInfo: Maybe[CacheInfo] = Absent
     ): ApolloResponse[D] =
         ApolloResponse(
             requestUuid = Uuid.random(),
             data = data,
-            errors = errors,
-            exception = exception,
+            error =
+                if error.isDefined then error
+                else if errors.isEmpty then Absent
+                else Present(ApolloGraphQLException(errors)),
             cacheInfo = cacheInfo
         )
 
@@ -64,7 +71,7 @@ class ApolloSignalSpec extends kyo.test.Test[Any]:
 
         "project prefers a transport exception over partial data" in {
             val boom = ApolloNetworkException("connection dropped")
-            ApolloSignal.project(resp[Int](data = Present(7), exception = Present(boom))) match
+            ApolloSignal.project(resp[Int](data = Present(7), error = Present(boom))) match
                 case QueryState.Failure(ex) => assert(ex == boom)
                 case other                  => fail(s"expected Failure($boom), got $other")
         }

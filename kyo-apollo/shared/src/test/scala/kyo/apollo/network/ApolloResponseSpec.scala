@@ -7,17 +7,16 @@ import kyo.apollo.api.GraphQLError
 import kyo.apollo.api.GraphQLResponse
 import kyo.apollo.exception.ApolloGraphQLException
 import kyo.apollo.exception.ApolloNetworkException
-import kyo.apollo.exception.DefaultApolloException
 import kyo.apollo.json.Json
 
-/** Tests [[ApolloResponse]] construction from a decoded [[GraphQLResponse]]
-  * (field-for-field copy under the same names, no re-parse) and the
-  * `hasErrors` predicate.
+/** Tests [[ApolloResponse]] construction from a decoded [[GraphQLResponse]] and
+  * the behaviour of its single `error` channel.
   *
-  * The `exception`-populated path (transport/parse failures folded into a value
-  * via [[ApolloResponse.fromException]]) is exercised in Task 8, once Task 4
-  * adds the instantiable [[kyo.apollo.exception.ApolloException]] subtypes — the
-  * base is `sealed`, so no concrete exception exists to construct yet.
+  * The consolidation these tests pin down: a response has exactly one place to
+  * look for failure. The server's own GraphQL `errors` arrive there as an
+  * [[ApolloGraphQLException]] — which is what makes them distinguishable from a
+  * transport failure without a second field — and remain reachable in typed form
+  * through the `errors` projection.
   */
 class ApolloResponseSpec extends kyo.test.Test[Any]:
 
@@ -27,109 +26,76 @@ class ApolloResponseSpec extends kyo.test.Test[Any]:
 
     "ApolloResponse" - {
 
-        "fromGraphQLResponse copies data/errors/extensions and attaches the uuid" in {
+        "fromGraphQLResponse copies data/extensions and attaches the uuid" in {
             val id = Uuid.random()
             val gql = GraphQLResponse(
                 data = Present(Hero("Luke")),
-                errors = Chunk(GraphQLError("partial")),
+                errors = Chunk.empty,
                 extensions = Map[String, Json]("cost" -> Json.JNum(3.0))
             )
             val response = ApolloResponse.fromGraphQLResponse(id, gql)
 
             assert(response.requestUuid == id)
             assert(response.data == Present(Hero("Luke")))
-            assert(response.errors == Chunk(GraphQLError("partial")))
             assert(response.extensions == Map[String, Json]("cost" -> Json.JNum(3.0)))
-            assert(response.exception == Absent)
+            assert(response.error == Absent)
+            assert(response.errors == Chunk.empty)
         }
 
-        "defaults: no data, no errors/extensions, empty context, no exception" in {
+        "defaults: no data, no error, no extensions, empty context" in {
             val response = ApolloResponse[Hero](Uuid.random())
             assert(response.data == Absent)
+            assert(response.error == Absent)
             assert(response.errors == Chunk.empty)
             assert(response.extensions == Map.empty[String, Json])
             assert(response.executionContext.isEmpty)
-            assert(response.exception == Absent)
             assert(!response.hasErrors)
+            assert(!response.hasTransportError)
         }
 
-        "hasErrors is true when GraphQL errors are present" in {
-            val response = ApolloResponse.fromGraphQLResponse(
-                Uuid.random(),
-                GraphQLResponse(data = Absent, errors = Chunk(GraphQLError("boom")))
-            )
-            assert(response.hasErrors)
-        }
-
-        "hasErrors and exceptionOrNull reflect a transport exception" in {
-            val boom     = new ApolloNetworkException("dropped")
-            val response = ApolloResponse.fromException[Hero](Uuid.random(), boom)
-            assert(response.hasErrors)
-            assert(response.exceptionOrNull == boom)
-        }
-
-        "exceptionOrNull is null on a clean response" in {
-            val response = ApolloResponse.fromGraphQLResponse(
-                Uuid.random(),
-                GraphQLResponse(data = Present(Hero("Luke")), errors = Chunk.empty)
-            )
-            assert(response.exceptionOrNull == null)
-        }
-
-        "dataOrThrow returns data on success" in {
-            val response = ApolloResponse.fromGraphQLResponse(
-                Uuid.random(),
-                GraphQLResponse(data = Present(Hero("Luke")), errors = Chunk.empty)
-            )
-            assert(response.dataOrThrow() == Hero("Luke"))
-        }
-
-        "dataOrThrow returns partial data even when GraphQL errors are present" in {
-            val response = ApolloResponse.fromGraphQLResponse(
-                Uuid.random(),
-                GraphQLResponse(data = Present(Hero("Luke")), errors = Chunk(GraphQLError("partial")))
-            )
-            assert(response.dataOrThrow() == Hero("Luke"))
-        }
-
-        "dataOrThrow rethrows the transport exception when present" in {
-            val boom     = new ApolloNetworkException("dropped")
-            val response = ApolloResponse.fromException[Hero](Uuid.random(), boom)
-            val thrown   = intercept[ApolloNetworkException](response.dataOrThrow())
-            assert(thrown == boom)
-        }
-
-        "dataOrThrow throws when there is neither data nor exception" in {
+        "GraphQL errors become an ApolloGraphQLException on the error channel" in {
             val response = ApolloResponse.fromGraphQLResponse(
                 Uuid.random(),
                 GraphQLResponse[Hero](data = Absent, errors = Chunk(GraphQLError("boom")))
             )
-            val _ = intercept[DefaultApolloException](response.dataOrThrow())
+            assert(response.hasErrors)
+            assert(response.error.exists(_.isInstanceOf[ApolloGraphQLException]))
+            assert(response.errors == Chunk(GraphQLError("boom")))
         }
 
-        "dataAssertNoErrors returns data on a fully clean response" in {
-            val response = ApolloResponse.fromGraphQLResponse(
-                Uuid.random(),
-                GraphQLResponse(data = Present(Hero("Luke")), errors = Chunk.empty)
-            )
-            assert(response.dataAssertNoErrors() == Hero("Luke"))
-        }
-
-        "dataAssertNoErrors throws when GraphQL errors accompany partial data" in {
+        "partial data keeps both the data and the errors" in {
             val response = ApolloResponse.fromGraphQLResponse(
                 Uuid.random(),
                 GraphQLResponse(data = Present(Hero("Luke")), errors = Chunk(GraphQLError("partial")))
             )
-            val thrown = intercept[ApolloGraphQLException](response.dataAssertNoErrors())
-            assert(thrown.getMessage == "partial")
-            assert(thrown.errors.map(_.message) == Chunk("partial"))
+            assert(response.data == Present(Hero("Luke")))
+            assert(response.errors.map(_.message) == Chunk("partial"))
+            assert(response.error.exists(_.getMessage == "partial"))
         }
 
-        "dataAssertNoErrors rethrows the transport exception before checking data" in {
+        "a transport failure carries the exception itself and projects no errors" in {
             val boom     = new ApolloNetworkException("dropped")
             val response = ApolloResponse.fromException[Hero](Uuid.random(), boom)
-            val thrown   = intercept[ApolloNetworkException](response.dataAssertNoErrors())
-            assert(thrown == boom)
+            assert(response.data == Absent)
+            assert(response.error == Present(boom))
+            assert(response.hasErrors)
+            assert(response.errors == Chunk.empty)
+        }
+
+        "hasTransportError separates a transport failure from the server's errors" in {
+            val dropped = ApolloResponse.fromException[Hero](Uuid.random(), new ApolloNetworkException("dropped"))
+            val answered = ApolloResponse.fromGraphQLResponse(
+                Uuid.random(),
+                GraphQLResponse(data = Present(Hero("Luke")), errors = Chunk(GraphQLError("partial")))
+            )
+            val clean = ApolloResponse.fromGraphQLResponse(
+                Uuid.random(),
+                GraphQLResponse(data = Present(Hero("Luke")), errors = Chunk.empty)
+            )
+
+            assert(dropped.hasTransportError)
+            assert(!answered.hasTransportError)
+            assert(!clean.hasTransportError)
         }
     }
 end ApolloResponseSpec

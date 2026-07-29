@@ -6,6 +6,7 @@ import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
 import kyo.apollo.api.GraphQLError
 import kyo.apollo.api.Query
+import kyo.apollo.exception.ApolloGraphQLException
 import kyo.apollo.exception.ApolloHttpException
 import kyo.apollo.exception.ApolloNetworkException
 import kyo.apollo.json.Json
@@ -119,9 +120,9 @@ class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
     private def httpFail(status: Int): Uuid => ApolloResponse[Any] =
         uuid => ApolloResponse.fromException(uuid, ApolloHttpException(status, Nil, "http"))
     private def graphqlError: Uuid => ApolloResponse[Any] =
-        uuid => ApolloResponse[Any](uuid, errors = Chunk(GraphQLError("bad field")))
+        uuid => ApolloResponse[Any](uuid, error = Present(ApolloGraphQLException(Chunk(GraphQLError("bad field")))))
     private def apqError(message: String): Uuid => ApolloResponse[Any] =
-        uuid => ApolloResponse[Any](uuid, errors = Chunk(GraphQLError(message)))
+        uuid => ApolloResponse[Any](uuid, error = Present(ApolloGraphQLException(Chunk(GraphQLError(message)))))
 
     private def retry(
         scheduler: AutoScheduler,
@@ -176,7 +177,7 @@ class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
             val (terminal, stream) = retry(scheduler, List(networkFail, networkFail, data(42)))
             StreamProbe.first(stream).map { response =>
                 assert(response.data == Present(42))
-                assert(response.exception == Absent)
+                assert(response.error == Absent)
                 assert(terminal.seen.length == 3)            // 1 initial + 2 retries
                 assert(scheduler.delays == List(100L, 200L)) // exponential, no jitter
             }
@@ -186,7 +187,7 @@ class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
             val scheduler          = AutoScheduler()
             val (terminal, stream) = retry(scheduler, List(networkFail), maxAttempts = 3)
             StreamProbe.first(stream).map { response =>
-                assert(response.exception.exists(_.isInstanceOf[ApolloNetworkException]))
+                assert(response.error.exists(_.isInstanceOf[ApolloNetworkException]))
                 assert(terminal.seen.length == 3)
                 assert(scheduler.delays == List(100L, 200L)) // two waits between three tries
             }
@@ -213,7 +214,7 @@ class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
             yield
                 assert(r5.data == Present(7))
                 assert(seen5xx.seen.length == 2)
-                assert(r4.exception.exists(_.isInstanceOf[ApolloHttpException]))
+                assert(r4.error.exists(_.isInstanceOf[ApolloHttpException]))
                 assert(seen4xx.seen.length == 1) // 4xx not retried
             end for
         }

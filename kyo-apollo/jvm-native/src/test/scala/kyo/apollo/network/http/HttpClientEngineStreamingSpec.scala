@@ -78,7 +78,7 @@ class HttpClientEngineStreamingSpec extends kyo.test.Test[Any]:
             case Result.Success(rs) =>
                 assert(rs.nonEmpty, "expected a terminal exception value, got an empty stream")
                 assert(
-                    rs.last.exception.exists(_.isInstanceOf[kyo.apollo.exception.ApolloNetworkException]),
+                    rs.last.error.exists(_.isInstanceOf[kyo.apollo.exception.ApolloNetworkException]),
                     s"expected an ApolloNetworkException value for the malformed URL, got $rs"
                 )
         }

@@ -4,6 +4,7 @@ import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
 import kyo.apollo.api.Query
+import kyo.apollo.exception.ApolloGraphQLException
 import kyo.apollo.exception.ApolloHttpException
 import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.json.Json
@@ -108,22 +109,24 @@ class HttpTransportRoundTripSpec extends kyo.test.Test[Any]:
             transportWith(engine).execute(ApolloRequest(ValueQuery())).map { response =>
                 assert(response.data == Present(42))
                 assert(response.errors == Chunk.empty)
-                assert(response.exception == Absent)
+                assert(response.error == Absent)
                 assert(!response.hasErrors)
             }
         }
 
-        "GraphQL errors on a 200 populate `errors` but leave `exception` None" in {
-            // A valid envelope carrying only errors is a value, not a thrown/exception:
-            // `errors` are the server's, `exception` is reserved for transport/parse.
+        "GraphQL errors on a 200 land on the error channel, not as a transport failure" in {
+            // A valid envelope carrying only errors is a value, not a throw. It shares the
+            // one error channel with transport failures but stays distinguishable from
+            // them by its type — which is what `hasTransportError` reads.
             val engine = CapturingEngine(
                 HttpResponse(200, Nil, """{"data":null,"errors":[{"message":"boom"}]}""")
             )
             transportWith(engine).execute(ApolloRequest(ValueQuery())).map { response =>
                 assert(response.data == Absent)
                 assert(response.errors.map(_.message) == Chunk("boom"))
-                assert(response.exception == Absent)
+                assert(response.error.exists(_.isInstanceOf[ApolloGraphQLException]))
                 assert(response.hasErrors)
+                assert(!response.hasTransportError)
             }
         }
 
@@ -134,7 +137,7 @@ class HttpTransportRoundTripSpec extends kyo.test.Test[Any]:
             transportWith(engine).execute(ApolloRequest(ValueQuery())).map { response =>
                 assert(response.data == Present(7))
                 assert(response.errors.map(_.message) == Chunk("partial"))
-                assert(response.exception == Absent)
+                assert(!response.hasTransportError)
             }
         }
 
@@ -152,7 +155,7 @@ class HttpTransportRoundTripSpec extends kyo.test.Test[Any]:
             val engine  = CapturingEngine(HttpResponse(500, headers, "internal error"))
             transportWith(engine).execute(ApolloRequest(ValueQuery())).map { response =>
                 assert(response.data == Absent)
-                response.exception match
+                response.error match
                     case Present(e: ApolloHttpException) =>
                         assert(e.statusCode == 500)
                         assert(e.headers == headers)
@@ -166,7 +169,7 @@ class HttpTransportRoundTripSpec extends kyo.test.Test[Any]:
             val engine = CapturingEngine(HttpResponse(200, Nil, "not json at all"))
             transportWith(engine).execute(ApolloRequest(ValueQuery())).map { response =>
                 assert(response.data == Absent)
-                assert(response.exception.exists(_.isInstanceOf[ApolloParseException]))
+                assert(response.error.exists(_.isInstanceOf[ApolloParseException]))
                 // A parse failure is a value — the effect completed successfully.
                 assert(response.hasErrors)
             }
