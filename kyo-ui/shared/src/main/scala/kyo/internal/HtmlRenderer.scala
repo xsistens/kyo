@@ -219,16 +219,15 @@ private[kyo] object HtmlRenderer:
                 renderTo(sb, child, path, svg, cssRules, mountSlot)
 
             case r: Reactive[?] =>
-                // In SVG context emit a <g> placeholder (a <span> is invalid inside <svg>); the
-                // closing tag matches the opening. Both carry the same data-kyo-reactive anchor.
-                val tag = if svg then "g" else "span"
-                w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}" data-kyo-reactive>""")
+                // Regions are delimited by comment markers, not a wrapper element: comments are valid
+                // in every parse context (table, tr, select, svg), whereas the parser foster-parents a
+                // wrapper out of table contexts and drops it inside select.
+                w(sb, RegionMarker.open(path))
                 for current <- r.signal.current(using r.frame)
-                yield renderTo(sb, current, contentPath(path, current), svg, cssRules, mountSlot).andThen(w(sb, s"</$tag>"))
+                yield renderTo(sb, current, contentPath(path, current), svg, cssRules, mountSlot).andThen(w(sb, RegionMarker.close(path)))
 
             case fe: Foreach[?, ?] @unchecked =>
-                val tag = if svg then "g" else "span"
-                w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}" data-kyo-reactive>""")
+                w(sb, RegionMarker.open(path))
                 fe.applyTyped {
                     [T] =>
                         (signal, keyFn, renderFn) =>
@@ -238,30 +237,27 @@ private[kyo] object HtmlRenderer:
                                     case Present(f) => f(item)
                                     case Absent     => i.toString
                                 renderTo(sb, renderFn(i, item), path :+ key, svg, cssRules, mountSlot)
-                            }.andThen(w(sb, s"</$tag>"))
+                            }.andThen(w(sb, RegionMarker.close(path)))
                             end for
                 }
 
             case m: Mounted =>
                 // Static/SSG projection of a mount is its placeholder; live, ReactiveUI.subscribeMounted patches
                 // the region when the node's cell publishes (synchronously, before paint, for an adopted keyed instance).
-                val tag = if svg then "g" else "span"
-                // Client-only marker (see `render`): declares a mount belongs at this slot, so a parent morph
+                // The `s` flag is client-only (see `render`): declares a mount belongs at this slot, so a parent morph
                 // preserves a live mount but reconciles away a stale one when the new content is NOT a mount. SSR keeps golden HTML.
-                val slotAttr = if mountSlot then " data-kyo-mount-slot" else ""
-                w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}" data-kyo-reactive$slotAttr>""")
+                w(sb, RegionMarker.open(path, slot = mountSlot))
                 val mph = m.placeholderUI.getOrElse(UI.empty(using m.frame))
                 renderTo(sb, mph, contentPath(path, mph), svg, cssRules, mountSlot)
-                    .andThen(w(sb, s"</$tag>"))
+                    .andThen(w(sb, RegionMarker.close(path)))
 
             case b: Boundary =>
                 // Static/SSG projection of a boundary is its fallback; live, ReactiveUI.subscribeBoundary repaints
                 // with the child on reveal (same task chain, when the eager child walk started nothing pending).
-                val tag = if svg then "g" else "span"
-                w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}" data-kyo-reactive>""")
+                w(sb, RegionMarker.open(path))
                 val bfb = b.fallbackUI.getOrElse(UI.empty(using b.frame))
                 renderTo(sb, bfb, contentPath(path, bfb), svg, cssRules, mountSlot)
-                    .andThen(w(sb, s"</$tag>"))
+                    .andThen(w(sb, RegionMarker.close(path)))
     end renderTo
 
     private def renderTextareaValue(sb: StringBuilder, ta: Textarea)(using Frame): Unit < Sync =
@@ -733,7 +729,6 @@ private[kyo] object HtmlRenderer:
           |body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 0; }
           |div, section, main, header, footer, form, article, aside, p, ul, ol, pre, code, h1, h2, h3, h4, h5, h6, label { display: flex; flex-direction: column; }
           |nav, li, span, button, a { display: flex; flex-direction: row; align-items: center; }
-          |[data-kyo-reactive] { display: contents; }
           |ul, ol { list-style: none; padding: 0; margin: 0; }
           |h1, h2, h3, h4, h5, h6, p { margin: 0; }
           |a { color: inherit; text-decoration: none; }

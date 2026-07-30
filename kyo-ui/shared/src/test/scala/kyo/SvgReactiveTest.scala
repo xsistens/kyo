@@ -7,8 +7,8 @@ import kyo.internal.HtmlRenderer
 import kyo.internal.ReactiveUI
 import scala.language.implicitConversions
 
-/** Tests SVG reactive resolution via the engine's rebuildSvgElement and resolveReactives, and the `<g>`-based
-  * reactive placeholders used for a reactive boundary in SVG context.
+/** Tests SVG reactive resolution via the engine's rebuildSvgElement and resolveReactives, and the comment-marker
+  * region delimiters (`<!--kyo:P-->…<!--/kyo:P-->`), which are uniform across SVG and HTML context.
   */
 class SvgReactiveTest extends kyo.test.Test[Any]:
 
@@ -32,66 +32,64 @@ class SvgReactiveTest extends kyo.test.Test[Any]:
         end for
     }
 
-    // An empty reactive boundary inside <svg> renders a <g> placeholder, not <span>.
-    "empty reactive in svg emits <g> placeholder" in {
+    // A reactive boundary inside <svg> renders comment markers (valid in SVG content), no wrapper element.
+    "empty reactive in svg emits comment markers" in {
         val emptySig = Signal.initConst(Chunk.empty[Int])
         val root     = Svg.svg(emptySig.foreach(i => Svg.rect.x(i.toDouble).y(0).width(1).height(1)))
         for html <- HtmlRenderer.render(root, Seq.empty)
         yield
-            assert(html.contains("<g data-kyo-path=\"0\" data-kyo-reactive>"))
-            assert(html.contains("</g>"))
-            // No <span> placeholder is emitted inside the svg.
-            assert(!html.contains("<span data-kyo-reactive"))
-            assert(!html.contains("data-kyo-reactive></span>"))
+            assert(html.contains("<!--kyo:0--><!--/kyo:0-->"))
+            // No wrapper element is emitted for the region.
+            assert(!html.contains("data-kyo-reactive"))
         end for
     }
 
-    // Once the SVG signal resolves to children, the SVG children appear under the <g> boundary.
+    // Once the SVG signal resolves to children, the SVG children appear between the markers.
     "reactive in svg renders children after signal resolves" in {
         val sig  = Signal.initConst(Chunk(1, 2))
         val root = Svg.svg(sig.foreach(i => Svg.rect.x(i.toDouble).y(0).width(1).height(1)))
         for html <- HtmlRenderer.render(root, Seq.empty)
         yield
-            assert(html.contains("<g data-kyo-path=\"0\" data-kyo-reactive>"))
+            assert(html.contains("<!--kyo:0-->"))
+            assert(html.contains("<!--/kyo:0-->"))
             assert(html.split("<rect").length - 1 == 2)
         end for
     }
 
-    // An empty reactive boundary in HTML context still renders a <span> placeholder.
-    "empty reactive in HTML emits <span> placeholder" in {
+    // An empty reactive boundary in HTML context renders the same comment markers — the format is
+    // context-uniform (the old <span>-vs-<g> distinction is gone).
+    "empty reactive in HTML emits comment markers" in {
         val emptySig = Signal.initConst(Chunk.empty[Int])
         val root     = UI.div(emptySig.foreach(i => UI.span(i.toString)))
         for html <- HtmlRenderer.render(root, Seq.empty)
         yield
-            assert(html.contains("<span data-kyo-path=\"0\" data-kyo-reactive>"))
-            assert(!html.contains("<g data-kyo-reactive"))
-            assert(!html.contains("data-kyo-reactive></g>"))
+            assert(html.contains("<!--kyo:0--><!--/kyo:0-->"))
+            assert(!html.contains("data-kyo-reactive"))
         end for
     }
 
-    // A reactive inside foreignObject (the HTML bridge) renders <span>, not <g>.
-    "reactive inside foreignObject resets to <span>" in {
+    // A reactive inside foreignObject (the HTML bridge) uses the same markers as everywhere else.
+    "reactive inside foreignObject emits comment markers" in {
         val emptySig = Signal.initConst(Chunk.empty[Int])
         val root     = Svg.svg(Svg.foreignObject(UI.div(emptySig.foreach(i => UI.span(i.toString)))))
         for html <- HtmlRenderer.render(root, Seq.empty)
         yield
-            // The reactive lives under foreignObject -> div, so HTML context applies: a <span> placeholder.
-            assert(html.contains("data-kyo-reactive></span>"))
-            assert(html.contains("<span data-kyo-path="))
-            // No <g> placeholder boundary carrying data-kyo-reactive is emitted for the bridged reactive.
-            assert(!html.contains("data-kyo-reactive></g>"))
+            // foreignObject -> div -> reactive: markers at the reactive's path, no wrapper element.
+            assert(html.contains("<!--kyo:0.0.0-->"))
+            assert(html.contains("<!--/kyo:0.0.0-->"))
+            assert(!html.contains("data-kyo-reactive"))
         end for
     }
 
-    // Nested svg/foreignObject/div/svg toggles the placeholder tag per boundary.
-    "nested svg/html/svg toggles placeholder tag" in {
+    // Nested svg/foreignObject/div/svg: markers appear at each boundary's own path.
+    "nested svg/html/svg markers carry per-boundary paths" in {
         val emptySig = Signal.initConst(Chunk.empty[Int])
         val inner    = Svg.svg(emptySig.foreach(i => Svg.rect.x(i.toDouble).y(0).width(1).height(1)))
         val root     = Svg.svg(Svg.foreignObject(UI.div(inner)))
         for html <- HtmlRenderer.render(root, Seq.empty)
         yield
-            // The innermost reactive is back in SVG context (inner svg) so it emits a <g> placeholder.
-            assert(html.contains("data-kyo-reactive>") && html.contains("</g>"))
+            // The innermost reactive sits at svg -> foreignObject(0) -> div(0.0) -> svg(0.0.0) -> region(0.0.0.0).
+            assert(html.contains("<!--kyo:0.0.0.0--><!--/kyo:0.0.0.0-->"))
             assert(html.contains("<foreignObject"))
             assert(html.contains("<div"))
         end for
@@ -157,7 +155,7 @@ class SvgReactiveTest extends kyo.test.Test[Any]:
             b <- HtmlRenderer.render(root, Seq.empty)
         yield
             assert(a == b)
-            assert(a.contains("<g data-kyo-path=\"0\" data-kyo-reactive>"))
+            assert(a.contains("<!--kyo:0-->"))
         end for
     }
 

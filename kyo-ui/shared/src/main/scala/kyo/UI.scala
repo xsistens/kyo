@@ -592,8 +592,8 @@ object UI:
         }
 
     /** The base CSS reset kyo-ui relies on for correct layout: `box-sizing: border-box`, the
-      * flex-column / flex-row element defaults, `[data-kyo-reactive] { display: contents }`, the
-      * list/heading/anchor/table normalizations, and `[hidden] { display: none }`.
+      * flex-column / flex-row element defaults, the list/heading/anchor/table normalizations, and
+      * `[hidden] { display: none }`.
       *
       * Every kyo-ui runner injects this automatically (`runMount` via the DOM stylesheet,
       * `runHandlers` and the page runner via the document `<head>`), so a normal app never names
