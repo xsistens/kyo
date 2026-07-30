@@ -142,6 +142,14 @@ private[kyo] object ReactiveUI:
 
     import UI.Ast.*
 
+    /** Repair interval for UI observers. NOT infinite: `observe`'s loop reads `current` and only then
+      * registers `nextWith`, so an emission landing in that window is lost until the next emission — with
+      * thousands of observers re-subscribing after every keyed-list re-render, a burst of signal updates
+      * during that tail measurably loses emissions (empirically up to ~15% of a 100-signal burst fired
+      * ~100ms after a 1k-row swap). The finite repair heals any such loss within this interval.
+      */
+    private val uiRepairInterval = 1.second
+
     def init(
         path: Seq[String],
         signal: Signal[UI],
@@ -879,7 +887,7 @@ private[kyo] object ReactiveUI:
         // multi-second post-paint tail on 1k-child regions).
         def observeSkippingRendered[A](sig: Signal[A], rendered: Maybe[A])(f: A => Unit < Async)(using Frame): Unit < Async =
             var first = true
-            sig.observe { v =>
+            sig.observe(uiRepairInterval) { v =>
                 val skip = first && rendered.exists(_.equals(v))
                 first = false
                 if skip then (): Unit < Async else f(v)
@@ -1009,11 +1017,11 @@ private[kyo] object ReactiveUI:
                             case el: Element
                                 if el.attrs.reactiveAttrs.nonEmpty || el.attrs.reactiveBoolAttrs.nonEmpty || el.attrs.reactiveClasses.nonEmpty =>
                                 Kyo.foreachDiscard(el.attrs.reactiveAttrs.toSeq) { case (name, sig) =>
-                                    Fiber.init(sig.observe(v => exchange.onAttrPatch(path, name, v))).unit
+                                    Fiber.init(sig.observe(uiRepairInterval)(v => exchange.onAttrPatch(path, name, v))).unit
                                 }.andThen(Kyo.foreachDiscard(el.attrs.reactiveBoolAttrs.toSeq) { case (name, sig) =>
-                                    Fiber.init(sig.observe(v => exchange.onBoolAttrPatch(path, name, v))).unit
+                                    Fiber.init(sig.observe(uiRepairInterval)(v => exchange.onBoolAttrPatch(path, name, v))).unit
                                 }).andThen(Kyo.foreachDiscard(el.attrs.reactiveClasses.toSeq) { case (name, sig) =>
-                                    Fiber.init(sig.observe(v => exchange.onClassPatch(path, name, v))).unit
+                                    Fiber.init(sig.observe(uiRepairInterval)(v => exchange.onClassPatch(path, name, v))).unit
                                 })
                             case _ => Kyo.unit
                         _ <- Kyo.foreachDiscard(newKids)(
@@ -1022,7 +1030,7 @@ private[kyo] object ReactiveUI:
                     yield ()
                 Abort.run[Throwable] {
                     var first = true
-                    signal.observe { current =>
+                    signal.observe(uiRepairInterval) { current =>
                         val isFirst = first
                         first = false
                         if isFirst && rendered.exists(_.equals(current)) then
