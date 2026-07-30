@@ -440,6 +440,15 @@ private[kyo] object DomBackend:
         (asInt(dyn.selectionStart), asInt(dyn.selectionEnd))
     end readSelection
 
+    /** Engine-driven focus (restore, focus-auto seeding, return-pop, portal re-apply) must never
+      * scroll: the browser's default focus() scrolls every scrollable ancestor to reveal the
+      * target, and a bookkeeping focus after a patch would yank container scroll positions the
+      * user never touched (visible as a scrollbar flash or content jump). Explicit app focus
+      * commands and user-driven keyboard navigation keep the native scrolling semantics.
+      */
+    private def focusNoScroll(el: dom.Element): Unit =
+        discard(el.asInstanceOf[scalajs.js.Dynamic].focus(scalajs.js.Dynamic.literal(preventScroll = true)))
+
     private def restoreFocus(capturedPath: String, selStart: Maybe[Int], selEnd: Maybe[Int]): Unit =
         // Reactive wrapper spans share their data-kyo-path with the first element they wrap,
         // so a plain path query can hit the (unfocusable) wrapper — prefer the real element.
@@ -450,7 +459,7 @@ private[kyo] object DomBackend:
                     val inner = located.querySelector("input,textarea,select,[contenteditable]")
                     if inner != null then inner else located
                 else located
-            val _ = focusTarget.asInstanceOf[scalajs.js.Dynamic].focus()
+            focusNoScroll(focusTarget)
             (selStart, selEnd) match
                 case (Present(s), Present(e)) =>
                     val dyn = focusTarget.asInstanceOf[scalajs.js.Dynamic]
@@ -509,7 +518,7 @@ private[kyo] object DomBackend:
                 else Absent
             focusReturnStack =
                 (el.getAttribute("data-kyo-path"), ret, el.hasAttribute("data-kyo-focus-restore")) :: focusReturnStack
-            val _ = el.asInstanceOf[scalajs.js.Dynamic].focus()
+            focusNoScroll(el)
         }
     end seedFocusAuto
 
@@ -530,7 +539,7 @@ private[kyo] object DomBackend:
                             ret.foreach { retPath =>
                                 val re = locateByPath(retPath)
                                 if re != null then
-                                    val _ = re.asInstanceOf[scalajs.js.Dynamic].focus()
+                                    focusNoScroll(re)
                             }
                         end if
                 case Nil => continue = false
@@ -1484,7 +1493,7 @@ private[kyo] object DomBackend:
                 discard(document.body.appendChild(el))
                 if hadFocus then
                     val dyn = ae.asInstanceOf[scalajs.js.Dynamic]
-                    val _   = dyn.focus()
+                    focusNoScroll(ae)
                     (selStart, selEnd) match
                         case (Present(s), Present(e)) if scalajs.js.typeOf(dyn.setSelectionRange) == "function" =>
                             try

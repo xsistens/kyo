@@ -912,7 +912,7 @@ private[kyo] object HtmlRenderer:
            |      // __kyoMorph returns the region root, so no re-query for the path is needed.
            |      var nel=__kyoMorph(el,op.Replace.html);
            |      if(nel){applyJsProps(nel);ba(nel);}
-           |      if(ap){var rf=lbp(ap);if(rf&&rf.hasAttribute&&rf.hasAttribute('data-kyo-reactive')){var inner=rf.querySelector('input,textarea,select,[contenteditable]');if(inner)rf=inner;}if(rf){rf.focus();if(ss!==null&&typeof rf.setSelectionRange==='function'){try{rf.setSelectionRange(ss,se);}catch(e){if(e.name!=='InvalidStateError')throw e;}}}}
+           |      if(ap){var rf=lbp(ap);if(rf&&rf.hasAttribute&&rf.hasAttribute('data-kyo-reactive')){var inner=rf.querySelector('input,textarea,select,[contenteditable]');if(inner)rf=inner;}if(rf){rf.focus({preventScroll:true});if(ss!==null&&typeof rf.setSelectionRange==='function'){try{rf.setSelectionRange(ss,se);}catch(e){if(e.name!=='InvalidStateError')throw e;}}}}
            |      // Focus seeding runs AFTER the focus/caret restore so a newly-appeared focus-auto element wins
            |      // over restore-to-trigger (opening a panel moves focus into it). The morph path above never seeds.
            |      if(nel)faSeed(nel,__fa);
@@ -1110,7 +1110,7 @@ private[kyo] object HtmlRenderer:
            |      var ae=document.activeElement;
            |      var ret=(ae&&ae!==document.body&&ae.getAttribute)?ae.getAttribute("data-kyo-path"):null;
            |      __frs.push({fa:fa,ret:ret,restore:cand[j].hasAttribute("data-kyo-focus-restore")});
-           |      if(typeof cand[j].focus==='function')cand[j].focus();
+           |      if(typeof cand[j].focus==='function')cand[j].focus({preventScroll:true});
            |      return;
            |    }
            |  }
@@ -1126,7 +1126,7 @@ private[kyo] object HtmlRenderer:
            |    var top=__frs[__frs.length-1];
            |    if(document.querySelector('[data-kyo-path="'+top.fa+'"][data-kyo-focus-auto]'))return;
            |    __frs.pop();
-           |    if(top.restore&&top.ret){var re=lbp(top.ret);if(re&&typeof re.focus==='function')re.focus();}
+           |    if(top.restore&&top.ret){var re=lbp(top.ret);if(re&&typeof re.focus==='function')re.focus({preventScroll:true});}
            |  }
            |}
            |// ---- Unit 1: enter/leave transition helpers (client-local; nothing crosses the wire) ----
@@ -1378,7 +1378,7 @@ private[kyo] object HtmlRenderer:
            |        var se=(had&&typeof ae.selectionEnd==='number')?ae.selectionEnd:null;
            |        el.parentNode.insertBefore(slot,el);
            |        document.body.appendChild(el);
-           |        if(had){ae.focus();if(ss!==null&&typeof ae.setSelectionRange==='function'){try{ae.setSelectionRange(ss,se);}catch(e){if(e.name!=='InvalidStateError')throw e;}}}
+           |        if(had){ae.focus({preventScroll:true});if(ss!==null&&typeof ae.setSelectionRange==='function'){try{ae.setSelectionRange(ss,se);}catch(e){if(e.name!=='InvalidStateError')throw e;}}}
            |      }
            |    }
            |  }
