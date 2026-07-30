@@ -22,7 +22,16 @@ private[kyo] case class ReactiveUI(
     // (empty for non-element / attribute-less nodes).
     reactiveAttrs: Map[String, Signal[String]] = Map.empty,
     reactiveBoolAttrs: Map[String, Signal[Boolean]] = Map.empty,
-    reactiveClasses: Map[String, Signal[Boolean]] = Map.empty
+    reactiveClasses: Map[String, Signal[Boolean]] = Map.empty,
+    // Render-time snapshots: the values the enclosing paint already put into the DOM, captured at
+    // normalize time (which happens-before the HTML render on every paint path). Subscribe skips an
+    // observer's FIRST emission when the current value still equals the snapshot — the DOM is already
+    // correct, so repainting it is pure waste (it is what made a 1k-row list re-render trail a ~2x
+    // repaint tail of redundant per-child region morphs and channel patches).
+    renderedValue: Maybe[UI] = Absent,
+    renderedAttrValues: Map[String, String] = Map.empty,
+    renderedBoolAttrValues: Map[String, Boolean] = Map.empty,
+    renderedClassValues: Map[String, Boolean] = Map.empty
 )
 
 /** Normalization-time companion of a [[kyo.UI.Ast.Boundary]] node. */
@@ -188,7 +197,7 @@ private[kyo] object ReactiveUI:
                             (_, freshHdl) <- walkStatic(currentUI, path, svg, mountDispatch)
                             result        <- freshHdl(targetPath, event)
                         yield result
-                }
+                }.copy(renderedValue = Present(current))
                 end for
 
             case ui: Foreach[?, ?] @unchecked =>
@@ -210,7 +219,7 @@ private[kyo] object ReactiveUI:
                             (_, freshHdl) <- walkStatic(currentUI, path, svg, mountDispatch)
                             result        <- freshHdl(targetPath, event)
                         yield result
-                }
+                }.copy(renderedValue = Present(current))
                 end for
 
             case ui: Element =>
@@ -225,7 +234,11 @@ private[kyo] object ReactiveUI:
                 // re-renders without the value-dedup ever suppressing a real edit. An element with no bound ref is const.
                 val (elementSignal, isConstNode) =
                     collectSignalRef(ui).fold((Signal.initConst(ui: UI), true))(ref => (ref.map(_ => ui: UI), false))
-                for (kids, hdl) <- walkStatic(ui, path, svg, mountDispatch)
+                for
+                    (kids, hdl) <- walkStatic(ui, path, svg, mountDispatch)
+                    attrSnap    <- Kyo.foreach(ui.attrs.reactiveAttrs.toSeq)((n, s) => s.current.map(v => n -> v))
+                    boolSnap    <- Kyo.foreach(ui.attrs.reactiveBoolAttrs.toSeq)((n, s) => s.current.map(v => n -> v))
+                    classSnap   <- Kyo.foreach(ui.attrs.reactiveClasses.toSeq)((n, s) => s.current.map(v => n -> v))
                 yield ReactiveUI(
                     path,
                     elementSignal,
@@ -236,8 +249,12 @@ private[kyo] object ReactiveUI:
                     tableContext = table,
                     reactiveAttrs = ui.attrs.reactiveAttrs,
                     reactiveBoolAttrs = ui.attrs.reactiveBoolAttrs,
-                    reactiveClasses = ui.attrs.reactiveClasses
+                    reactiveClasses = ui.attrs.reactiveClasses,
+                    renderedAttrValues = attrSnap.toMap,
+                    renderedBoolAttrValues = boolSnap.toMap,
+                    renderedClassValues = classSnap.toMap
                 )
+                end for
 
             case ui: Mounted =>
                 // The handler resolves through the MountDispatch TABLE (by path), not the node: dispatch re-normalizes
@@ -856,17 +873,35 @@ private[kyo] object ReactiveUI:
         // Start the scoped in-place-patch observers for this node's reactive channels. Runs unconditionally: a
         // no-op for attribute-less nodes, but an element carrying ONLY reactive attrs is `isConst = true` and
         // would otherwise fork no observer of its own.
+        // The first emission is skipped when it still equals the render-time snapshot: normalize
+        // happens-before the HTML render on every paint path, so the DOM already shows that value and
+        // the initial patch would only repaint freshly painted state (per-row this compounds into a
+        // multi-second post-paint tail on 1k-child regions).
+        def observeSkippingRendered[A](sig: Signal[A], rendered: Maybe[A])(f: A => Unit < Async)(using Frame): Unit < Async =
+            var first = true
+            sig.observe { v =>
+                val skip = first && rendered.exists(_.equals(v))
+                first = false
+                if skip then (): Unit < Async else f(v)
+            }
+        end observeSkippingRendered
         val startAttrObservers: Unit < (Async & Scope) =
             Kyo.foreachDiscard(rui.reactiveAttrs.toSeq) { case (name, sig) =>
-                Fiber.init(sig.observe(v => exchange.onAttrPatch(rui.path, name, v))).unit
+                Fiber.init(observeSkippingRendered(sig, Maybe.fromOption(rui.renderedAttrValues.get(name)))(v =>
+                    exchange.onAttrPatch(rui.path, name, v)
+                )).unit
             }
         val startBoolAttrObservers: Unit < (Async & Scope) =
             Kyo.foreachDiscard(rui.reactiveBoolAttrs.toSeq) { case (name, sig) =>
-                Fiber.init(sig.observe(v => exchange.onBoolAttrPatch(rui.path, name, v))).unit
+                Fiber.init(observeSkippingRendered(sig, Maybe.fromOption(rui.renderedBoolAttrValues.get(name)))(v =>
+                    exchange.onBoolAttrPatch(rui.path, name, v)
+                )).unit
             }
         val startClassObservers: Unit < (Async & Scope) =
             Kyo.foreachDiscard(rui.reactiveClasses.toSeq) { case (name, sig) =>
-                Fiber.init(sig.observe(v => exchange.onClassPatch(rui.path, name, v))).unit
+                Fiber.init(observeSkippingRendered(sig, Maybe.fromOption(rui.renderedClassValues.get(name)))(v =>
+                    exchange.onClassPatch(rui.path, name, v)
+                )).unit
             }
         startAttrObservers.andThen(startBoolAttrObservers).andThen(startClassObservers).andThen {
             rui.mountedSpec match
@@ -890,7 +925,9 @@ private[kyo] object ReactiveUI:
                                     signalChangeTime,
                                     Absent,
                                     mountDispatch,
-                                    boundary
+                                    boundary,
+                                    initialKids = rui.children,
+                                    rendered = rui.renderedValue
                                 )
         }
     end subscribeScoped
@@ -945,7 +982,13 @@ private[kyo] object ReactiveUI:
         // True when this region IS a keyless mount's content cell: its paint flags the DOM node as a mount root so a
         // parent's in-place update leaves the subtree alone (the mount repaints itself). Keyed mounts stay false;
         // their reset relies on the parent painting the placeholder over the stale content.
-        mount: Boolean = false
+        mount: Boolean = false,
+        // The already-walked children and render-time value snapshot of this region's node: when the first
+        // observed value still equals the snapshot, the paint is skipped (the enclosing render already put
+        // it in the DOM) and only the children/mount subscriptions start. Values that cannot be compared
+        // structurally (element roots carry handler lambdas) simply never match and keep today's behavior.
+        initialKids: Seq[ReactiveUI] = Seq.empty,
+        rendered: Maybe[UI] = Absent
     )(using Frame): Unit < (Async & Scope) =
         for
             regionMounts <- presetMounts match
@@ -978,7 +1021,22 @@ private[kyo] object ReactiveUI:
                         )
                     yield ()
                 Abort.run[Throwable] {
-                    signal.observe(renderValue)
+                    var first = true
+                    signal.observe { current =>
+                        val isFirst = first
+                        first = false
+                        if isFirst && rendered.exists(_.equals(current)) then
+                            // The enclosing render painted exactly this value (normalize happens-before
+                            // render on every paint path): skip the redundant repaint, but still claim
+                            // mounts and subscribe the already-walked children so their observers start.
+                            regionMounts.evictExcept(collectMountKeys(initialKids)).andThen(
+                                Kyo.foreachDiscard(initialKids)(
+                                    subscribeScoped(_, exchange, signalChangeTime, regionMounts, mountDispatch, boundary)
+                                )
+                            )
+                        else renderValue(current)
+                        end if
+                    }
                 }.map { result =>
                     result.fold(
                         _ => (),
