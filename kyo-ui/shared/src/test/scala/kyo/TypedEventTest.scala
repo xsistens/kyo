@@ -208,13 +208,13 @@ class TypedEventTest extends kyo.test.Test[Any]:
             assert(result.get.targetId == Present("my-input"))
     }
 
-    // ---- dispatch resolves the click target through a Reactive boundary ----
+    // ---- dispatch reads the click target's CURRENT disabled state ----
     //
-    // A signal-typed setter such as `.disabled(Signal)` wraps its element in a `Reactive`. The
-    // server-side dispatch must still recognise the wrapped element by its concrete type (Button) and
-    // read its current attributes (disabled), otherwise a submit button wrapped in `.disabled(valid)`
-    // (the canonical "enable submit only when valid" pattern) no longer submits the form. Regression
-    // for that bug.
+    // `.disabled(Signal)` binds an in-place reactive boolean attribute (Attrs.reactiveBoolAttrs);
+    // the server-side dispatch must consult the signal's current value, not just the static attr,
+    // otherwise a submit button gated by `.disabled(valid)` (the canonical "enable submit only when
+    // valid" pattern) submits the form while disabled. Regression for that bug — the wrapped-path
+    // shape below (path Seq("1")) also covers the historical Reactive-wrapper encoding.
 
     "Form.onSubmit fires when a Click targets a submit button wrapped in .disabled(Signal=false)" in {
         for
