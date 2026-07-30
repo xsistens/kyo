@@ -67,10 +67,17 @@ final class Normalizer(
       *         within this response already merged
       */
     def normalize(data: Map[String, Json], rootField: CompiledField): Map[String, Record] =
+        val rootType = rootField.fieldType.leafType.name
+        // Stamp the root like every nested object (servers rarely send a root
+        // `__typename`), so the record merger can resolve type-scoped field
+        // policies for root fields too.
+        val enrichedRoot =
+            if data.contains("__typename") then data
+            else data + ("__typename" -> Json.JStr(rootType))
         normalizeObject(
-            obj = data,
+            obj = enrichedRoot,
             selections = rootField.selections,
-            parentType = rootField.fieldType.leafType.name,
+            parentType = rootType,
             key = rootKey,
             path = List(rootKey)
         )
@@ -96,7 +103,7 @@ final class Normalizer(
         // explicit `writeFragment` whose node is not client-marked, so it still lands.
         for field <- collectFields(selections, typename) if !field.client do
             obj.get(field.responseName).foreach { value =>
-                val fieldKey = fieldPolicies.fieldKey(field, variables)
+                val fieldKey = fieldPolicies.fieldKey(typename, field, variables)
                 recordFields(fieldKey) = buildFieldValue(value, field, path :+ fieldKey)
             }
         end for

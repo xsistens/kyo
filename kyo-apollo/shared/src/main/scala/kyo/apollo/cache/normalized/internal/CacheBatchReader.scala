@@ -94,22 +94,25 @@ final class CacheBatchReader(
         val typename = recordTypename(record).getOrElse(parentType)
         val builder  = VectorMap.newBuilder[String, Json]
         for field <- FieldCollector.collect(selections, typename, injectTypename = false) do
-            builder += (field.responseName -> readField(record, field))
+            builder += (field.responseName -> readField(record, field, typename))
         Json.JObj(builder.result())
     end readObject
 
     /** Resolve a single selected field to JSON: a configured redirect reads a
       * different record, otherwise the field's own stored value is used. A field
       * selected but absent from its record is a [[CacheMissException]].
+      * `parentType` is the resolved type of `record` (its stored `__typename`,
+      * falling back to the schema's static type), matching the type the
+      * [[Normalizer]] keyed the field under.
       */
-    private def readField(record: Record, field: CompiledField): Json =
-        redirect(field) match
+    private def readField(record: Record, field: CompiledField, parentType: String): Json =
+        redirect(parentType, field) match
             case Present(targetKey) =>
                 val target = resolve(targetKey)
                     .getOrElse(throw CacheMissException(targetKey, field.responseName))
                 readObject(target, field.selections, field.fieldType.leafType.name)
             case Absent =>
-                val fieldKey = fieldPolicies.fieldKey(field, variables)
+                val fieldKey = fieldPolicies.fieldKey(parentType, field, variables)
                 record.get(fieldKey) match
                     case Present(value) => readValue(value, field)
                     // A local `@client` field that was never written is not a miss: yield
@@ -124,11 +127,11 @@ final class CacheBatchReader(
       * [[CacheKeyResolver]]. Scalar (leaf) fields are never redirected — a redirect
       * names another record to read a sub-selection from.
       */
-    private def redirect(field: CompiledField): Maybe[String] =
+    private def redirect(parentType: String, field: CompiledField): Maybe[String] =
         if field.selections.isEmpty then Absent
         else
             fieldPolicies
-                .readRedirect(field, variables)
+                .readRedirect(parentType, field, variables)
                 .orElse(cacheKeyResolver.cacheKeyForField(field, variables))
                 .map(_.key)
 

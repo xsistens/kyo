@@ -38,6 +38,9 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
 
     private def ref(key: String): RecordValue = RecordValue.reference(CacheKey(key))
 
+    /** A stored `__typename` value, as the Normalizer writes it. */
+    private def tn(typename: String): RecordValue = RecordValue.Scalar(jstr(typename))
+
     // --- TypePolicy through the Normalizer ------------------------------------
 
     final private case class KeyedQuery(selections: List[CompiledSelection]) extends Query[Int]:
@@ -120,7 +123,9 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
             // Edges keyed by cursor so successive pages do not collide on a positional
             // key; nodes fall through to the default id-based key.
             cacheKeyGenerator = TypePolicyCacheKeyGenerator.of(TypePolicy("PostEdge", List("cursor"))),
-            fieldPolicies = FieldPolicies.fromList(ConnectionFieldPolicy("Query", "feed"))
+            // The edges merge binds to the runtime `__typename` of the connection
+            // objects — the response data carries "PostConnection".
+            fieldPolicies = FieldPolicies.fromList(ConnectionFieldPolicy("Query", "feed", "PostConnection"))
         )
 
     private def page(cursors: List[(String, String)], endCursor: String, hasNext: Boolean): FeedData =
@@ -210,6 +215,7 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
                 sealed trait FeedConn
                 sealed trait FeedEdge
                 given TypeName[FeedRoot] = TypeName("Query")
+                given TypeName[FeedConn] = TypeName("FeedConnection")
                 given TypeName[FeedEdge] = TypeName("FeedEdge")
                 given CacheIdentity[FeedEdge] = CacheIdentity.by(_ =>
                     SelectionBuilder.scalar[FeedEdge, (cursor: String), String](
@@ -224,10 +230,13 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
                     def fieldName = "edges"
             end gen
             import gen.given
-            assert(ConnectionFieldPolicy.of(gen.feed, gen.edges) == ConnectionFieldPolicy("Query", "feed"))
+            assert(
+                ConnectionFieldPolicy.of(gen.feed, gen.edges) ==
+                    ConnectionFieldPolicy("Query", "feed", "FeedConnection")
+            )
             assert(
                 ConnectionFieldPolicy.of(gen.feed, gen.edges, filterArgs = List("category")) ==
-                    ConnectionFieldPolicy("Query", "feed", filterArgs = List("category"))
+                    ConnectionFieldPolicy("Query", "feed", "FeedConnection", filterArgs = List("category"))
             )
         }
 
@@ -235,9 +244,27 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
             val policies = FieldPolicies.empty
             assert(policies.isEmpty)
             val field = feedField(List(CompiledArgument.literal("first", jnum(1))))
-            assert(policies.fieldKey(field, Map.empty) == "feed({\"first\":1})")
-            assert(policies.readRedirect(field, Map.empty) == Absent)
-            assert(policies.fieldMerge("feed") == Absent)
+            assert(policies.fieldKey("Query", field, Map.empty) == "feed({\"first\":1})")
+            assert(policies.readRedirect("Query", field, Map.empty) == Absent)
+            assert(policies.fieldMerge("FeedConnection", "feed") == Absent)
+        }
+
+        "policies are scoped to their declared type and do not leak to same-named fields" in {
+            val policies = FieldPolicies.fromList(
+                ConnectionFieldPolicy("Playlist", "tracks", "PlaylistTrackConnection")
+            )
+            val field = CompiledField(
+                "tracks",
+                CompiledNamedType("SavedTrackConnection"),
+                arguments = List(CompiledArgument.literal("first", jnum(10)))
+            )
+            // On the declared type the pagination args are dropped from the key.
+            assert(policies.fieldKey("Playlist", field, Map.empty) == "tracks")
+            // On any other type the same field name keeps its full argument-aware key.
+            assert(policies.fieldKey("CurrentUser", field, Map.empty) == "tracks({\"first\":10})")
+            // The edges union is bound to the connection type, not to every `edges`.
+            assert(policies.fieldMerge("PlaylistTrackConnection", "edges").isDefined)
+            assert(policies.fieldMerge("SavedTrackConnection", "edges") == Absent)
         }
 
         "a FieldPolicy read resolver is surfaced by the registry" in {
@@ -245,10 +272,48 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
                 FieldPolicy("Query", "book", read = Some(_ => Present(CacheKey("Book", "42"))))
             )
             val field = CompiledField("book", CompiledNamedType("Book"))
-            assert(policies.readRedirect(field, Map.empty) == Present(CacheKey("Book", "42")))
+            assert(policies.readRedirect("Query", field, Map.empty) == Present(CacheKey("Book", "42")))
         }
 
         "RecordMerger.fieldPolicies unions a policied field and reports it changed" in {
+            val policies = FieldPolicies.of(
+                FieldPolicy("Feed", "edges", merge = Some(ConnectionFieldPolicy.unionByReference))
+            )
+            val merger = RecordMerger.fieldPolicies(policies)
+            val existing = Record(
+                "Feed:1",
+                Map("__typename" -> tn("Feed"), "edges" -> RecordValue.RList(Chunk(ref("E:1"))))
+            )
+            val incoming = Record(
+                "Feed:1",
+                Map("__typename" -> tn("Feed"), "edges" -> RecordValue.RList(Chunk(ref("E:2"))))
+            )
+            val (merged, changed) = merger.merge(Present(existing), incoming)
+            assert(merged.get("edges") == Present(RecordValue.RList(Chunk(ref("E:1"), ref("E:2")))))
+            assert(changed == Set("edges"))
+        }
+
+        "a merge policy does not leak onto a same-named field of another type" in {
+            // The Liked-Songs scenario: one connection type is policied (unions),
+            // a second one is not — its refetch must REPLACE, so removed edges
+            // actually disappear.
+            val policies = FieldPolicies.of(
+                FieldPolicy("Feed", "edges", merge = Some(ConnectionFieldPolicy.unionByReference))
+            )
+            val merger = RecordMerger.fieldPolicies(policies)
+            val existing = Record(
+                "Saved:1",
+                Map("__typename" -> tn("Saved"), "edges" -> RecordValue.RList(Chunk(ref("E:1"), ref("E:2"))))
+            )
+            val incoming = Record(
+                "Saved:1",
+                Map("__typename" -> tn("Saved"), "edges" -> RecordValue.RList(Chunk(ref("E:2"))))
+            )
+            val (merged, _) = merger.merge(Present(existing), incoming)
+            assert(merged.get("edges") == Present(RecordValue.RList(Chunk(ref("E:2")))))
+        }
+
+        "a record without a stored __typename matches no merge policy" in {
             val policies = FieldPolicies.of(
                 FieldPolicy("Feed", "edges", merge = Some(ConnectionFieldPolicy.unionByReference))
             )
@@ -256,7 +321,7 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
             val existing          = Record("Feed:1", Map("edges" -> RecordValue.RList(Chunk(ref("E:1")))))
             val incoming          = Record("Feed:1", Map("edges" -> RecordValue.RList(Chunk(ref("E:2")))))
             val (merged, changed) = merger.merge(Present(existing), incoming)
-            assert(merged.get("edges") == Present(RecordValue.RList(Chunk(ref("E:1"), ref("E:2")))))
+            assert(merged.get("edges") == Present(RecordValue.RList(Chunk(ref("E:2")))))
             assert(changed == Set("edges"))
         }
 
@@ -302,8 +367,12 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
                 page(List("c3" -> "3", "c4" -> "4"), "c4", hasNext = false)
             )
 
-            // Both pages collapsed onto the single connection field key `feed`.
-            assert(store.cache.loadRecord("QUERY_ROOT").map(_.fieldKeys) == Present(Set("feed")))
+            // Both pages collapsed onto the single connection field key `feed`
+            // (next to the root's stamped `__typename`).
+            assert(
+                store.cache.loadRecord("QUERY_ROOT").map(_.fieldKeys) ==
+                    Present(Set("__typename", "feed"))
+            )
 
             val merged = store.readOperation(FeedQuery(None))
             assert(merged.feed.edges.map(_.cursor) == List("c1", "c2", "c3", "c4"))
@@ -344,8 +413,9 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
                 page(List("c3" -> "3", "c4" -> "4"), "c4", hasNext = false)
             )
 
-            // Two distinct field keys on the root — the pages are isolated.
-            assert(store.cache.loadRecord("QUERY_ROOT").map(_.fieldKeys.size) == Present(2))
+            // Two distinct field keys on the root (plus the stamped `__typename`) —
+            // the pages are isolated.
+            assert(store.cache.loadRecord("QUERY_ROOT").map(_.fieldKeys.size) == Present(3))
             assert(store.readOperation(FeedQuery(None)).feed.edges.map(_.cursor) == List("c1", "c2"))
             assert(
                 store.readOperation(FeedQuery(Some("c2"))).feed.edges.map(_.cursor) == List("c3", "c4")

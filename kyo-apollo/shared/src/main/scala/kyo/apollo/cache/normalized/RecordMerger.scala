@@ -5,6 +5,8 @@ import kyo.Maybe
 import kyo.Present
 import kyo.apollo.cache.normalized.api.FieldPolicies
 import kyo.apollo.cache.normalized.api.Record
+import kyo.apollo.cache.normalized.api.RecordValue
+import kyo.apollo.json.Json
 
 /** The policy that merges an incoming [[Record]] onto whatever is already stored
   * under its key, reporting which field keys changed. Mirrors apollo-kotlin's
@@ -41,8 +43,13 @@ object RecordMerger:
 end RecordMerger
 
 /** Merges records field-by-field, consulting `policies` for a per-field override
-  * (keyed by the field's base name, dropping any `(args)` suffix) and otherwise
-  * taking the incoming value.
+  * (keyed by the record's type and the field's base name, dropping any `(args)`
+  * suffix) and otherwise taking the incoming value.
+  *
+  * The record's type comes from its stored `__typename`: the [[internal.Normalizer]]
+  * stamps one onto every object it normalizes (root included), so a policied
+  * record always carries it. A record without one (e.g. hand-written through a
+  * lower-level seam) simply matches no policy and merges the default way.
   */
 final private class FieldPolicyRecordMerger(policies: FieldPolicies) extends RecordMerger:
 
@@ -50,12 +57,14 @@ final private class FieldPolicyRecordMerger(policies: FieldPolicies) extends Rec
         existing match
             case Absent => (incoming, incoming.fieldKeys)
             case Present(old) =>
-                var changed = Set.empty[String]
+                val typename = recordTypename(incoming).orElse(recordTypename(old))
+                var changed  = Set.empty[String]
                 val mergedIncoming = incoming.fields.map { case (fieldKey, incomingValue) =>
                     val oldValue = old.fields.get(fieldKey)
-                    val newValue = policies.fieldMerge(baseName(fieldKey)) match
-                        case Present(mergeFn) => mergeFn(oldValue, incomingValue)
-                        case Absent           => incomingValue
+                    val newValue = typename
+                        .flatMap(t => policies.fieldMerge(t, baseName(fieldKey)))
+                        .map(mergeFn => mergeFn(oldValue, incomingValue))
+                        .getOrElse(incomingValue)
                     if !oldValue.contains(newValue) then changed += fieldKey
                     fieldKey -> newValue
                 }
@@ -67,4 +76,8 @@ final private class FieldPolicyRecordMerger(policies: FieldPolicies) extends Rec
       * field name matches whether or not the stored field carries arguments.
       */
     private def baseName(fieldKey: String): String = fieldKey.takeWhile(_ != '(')
+
+    /** The record's stored `__typename`, when present as a string scalar. */
+    private def recordTypename(record: Record): Maybe[String] =
+        record.get("__typename").collect { case RecordValue.Scalar(Json.JStr(t)) => t }
 end FieldPolicyRecordMerger
