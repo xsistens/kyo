@@ -974,6 +974,7 @@ object UI:
         buttons: Int,
         targetId: Maybe[String]
     ) derives CanEqual, Schema
+
     /** The payload delivered to an `onScrollPosition` handler: the element's resulting native scroll offset
       * (`scrollTop`/`scrollLeft`) after a scroll gesture, plus the scrolled element's `id` (`Absent` when it has
       * none). Unlike [[WheelEvent]] (a per-notch mouse-wheel delta), this reports the browser-owned scroll position
@@ -1311,6 +1312,7 @@ object UI:
               * the imperative `event.preventDefault()` a component library calls in every arrow-key handler.
               */
             def preventScrollKeys: Self = withAttrs(attrs.copy(dataAttrs = attrs.dataAttrs.updated("kyo-scroll-keys", "1")))
+
             /** Runs `f` when this element is natively scrolled (a real `overflow:auto`/`scroll` viewport), receiving the
               * [[kyo.UI.ScrollPositionEvent]] payload (`scrollTop`/`scrollLeft`). Unlike [[onScroll]] (a per-notch wheel
               * delta), this fires for all scroll input (wheel, scrollbar drag, touch, keyboard) because the browser owns

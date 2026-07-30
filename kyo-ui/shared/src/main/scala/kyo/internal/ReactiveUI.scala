@@ -529,6 +529,37 @@ private[kyo] object ReactiveUI:
             case ti: TextInput => ti.readOnly.getOrElse(false)
             case _             => false
 
+    /** The element's CURRENT disabled state: the static attribute OR a bound `disabled(Signal)`.
+      * Signal-typed boolean setters patch the attribute in place (Attrs.reactiveBoolAttrs) instead of
+      * wrapping the element in a `Reactive`, so a static read alone would dispatch through a
+      * currently-disabled element (e.g. submit a form whose button is gated by `.disabled(valid)`).
+      */
+    private def currentDisabled(elem: Element)(using Frame): Boolean < Sync =
+        if isDisabled(elem) then true
+        else
+            elem.attrs.reactiveBoolAttrs.get("disabled") match
+                case Some(sig) => sig.current
+                case None      => false
+
+    /** The element's CURRENT readOnly state — the reactive twin of [[isReadOnly]], see [[currentDisabled]]. */
+    private def currentReadOnly(elem: Element)(using Frame): Boolean < Sync =
+        if isReadOnly(elem) then true
+        else
+            elem.attrs.reactiveBoolAttrs.get("readonly") match
+                case Some(sig) => sig.current
+                case None      => false
+
+    /** Current (disabled, readOnly) of a dispatch TARGET. Bubbling elements (isTarget=false) never
+      * suppress their own handler on these grounds, so their signal reads are skipped entirely.
+      */
+    private def currentGate(elem: Element, isTarget: Boolean)(using Frame): (Boolean, Boolean) < Sync =
+        if !isTarget then (false, false)
+        else
+            for
+                d <- currentDisabled(elem)
+                r <- currentReadOnly(elem)
+            yield (d, r)
+
     /** Check if element is hidden. */
     private def isHidden(elem: Element): Boolean =
         elem.attrs.hidden.getOrElse(false)
@@ -540,7 +571,7 @@ private[kyo] object ReactiveUI:
       * these boundaries is what lets an element wrapped by a signal-typed setter (e.g. `.disabled(Signal)`, which wraps it in a `Reactive`)
       * still be recognized by its concrete type, so button-click form submit and disabled detection keep working through such wrappers.
       */
-    private def targetSatisfies(node: UI, nodePath: Seq[String], targetPath: Seq[String], predicate: Element => Boolean)(using
+    private def targetSatisfies(node: UI, nodePath: Seq[String], targetPath: Seq[String], predicate: Element => Boolean < Sync)(using
         Frame
     ): Boolean < Sync =
         node match
@@ -595,7 +626,7 @@ private[kyo] object ReactiveUI:
                 targetSatisfies(b.child, nodePath, targetPath, predicate)
 
     private def isTargetDisabled(elem: Element, myPath: Seq[String], targetPath: Seq[String])(using Frame): Boolean < Sync =
-        targetSatisfies(elem, myPath, targetPath, isDisabled)
+        targetSatisfies(elem, myPath, targetPath, currentDisabled)
 
     private def isTargetButton(elem: Element, myPath: Seq[String], targetPath: Seq[String])(using Frame): Boolean < Sync =
         targetSatisfies(elem, myPath, targetPath, _.isInstanceOf[Button])
@@ -624,187 +655,213 @@ private[kyo] object ReactiveUI:
         using Frame
     ): Boolean < Async =
         val attrs = elem.attrs
-        event match
-            case ev: UIEvent.Click =>
-                // Disabled or hidden elements ignore their own click handler, but allow bubbling
-                if isTarget && (isDisabled(elem) || isHidden(elem)) then true
-                else
-                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
-                    val self = if isTarget then
-                        invoke(attrs.onClickSelf).andThen(invokeWith(attrs.onClickSelfEvt, mouse))
-                    else Kyo.lift(())
-                    // Checkbox/radio toggle is handled by UIControlSession.click() which dispatches
-                    // ChangeChecked after Click. Don't toggle here to avoid double-toggle.
-                    val activateToggle = Kyo.lift(())
-                    // When a Click on a Button bubbles to a Form, trigger onSubmit (browser behavior)
-                    // Only Button clicks submit forms (not radio, checkbox, or input clicks)
-                    val formSubmit = if !isTarget && !disabledTarget && submitOrigin then
-                        elem match
-                            case f: Form =>
-                                invoke(f.onSubmit).andThen(invokeWith(f.onSubmitEvt, mouse))
-                            case _ => Kyo.lift(())
-                    else Kyo.lift(())
-                    // Self handlers only count as "declared" when they actually fired (isTarget).
-                    val declared = attrs.onClick.nonEmpty || attrs.onClickEvt.nonEmpty ||
-                        (isTarget && (attrs.onClickSelf.nonEmpty || attrs.onClickSelfEvt.nonEmpty))
-                    self
-                        .andThen(invokeWith(attrs.onClickEvt, mouse))
-                        .andThen(invoke(attrs.onClick))
-                        .andThen(activateToggle)
-                        .andThen(formSubmit)
-                        .andThen(keepBubbling(elem, declared))
-            case ev: UIEvent.Focus =>
-                val isFocusable = elem.isInstanceOf[Focusable] || elem.attrs.tabIndex.nonEmpty
-                if isTarget && isFocusable then
-                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
-                    invoke(attrs.onFocus).andThen(invokeWith(attrs.onFocusEvt, mouse)).andThen(true)
-                else if isTarget then Kyo.lift(false) // not focusable; reject
-                else true
-                end if
-            case ev: UIEvent.Blur =>
-                if isTarget then
-                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
-                    invoke(attrs.onBlur).andThen(invokeWith(attrs.onBlurEvt, mouse)).andThen(true)
-                else true
-            case e: UIEvent.KeyDown =>
-                if isTarget && isDisabled(elem) then true
-                else
+        def dispatchGated(selfDisabled: Boolean, selfReadOnly: Boolean): Boolean < Async =
+            event match
+                case ev: UIEvent.Click =>
+                    // Disabled or hidden elements ignore their own click handler, but allow bubbling
+                    if isTarget && (selfDisabled || isHidden(elem)) then true
+                    else
+                        val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
+                        val self = if isTarget then
+                            invoke(attrs.onClickSelf).andThen(invokeWith(attrs.onClickSelfEvt, mouse))
+                        else Kyo.lift(())
+                        // Checkbox/radio toggle is handled by UIControlSession.click() which dispatches
+                        // ChangeChecked after Click. Don't toggle here to avoid double-toggle.
+                        val activateToggle = Kyo.lift(())
+                        // When a Click on a Button bubbles to a Form, trigger onSubmit (browser behavior)
+                        // Only Button clicks submit forms (not radio, checkbox, or input clicks)
+                        val formSubmit = if !isTarget && !disabledTarget && submitOrigin then
+                            elem match
+                                case f: Form =>
+                                    invoke(f.onSubmit).andThen(invokeWith(f.onSubmitEvt, mouse))
+                                case _ => Kyo.lift(())
+                        else Kyo.lift(())
+                        // Self handlers only count as "declared" when they actually fired (isTarget).
+                        val declared = attrs.onClick.nonEmpty || attrs.onClickEvt.nonEmpty ||
+                            (isTarget && (attrs.onClickSelf.nonEmpty || attrs.onClickSelfEvt.nonEmpty))
+                        self
+                            .andThen(invokeWith(attrs.onClickEvt, mouse))
+                            .andThen(invoke(attrs.onClick))
+                            .andThen(activateToggle)
+                            .andThen(formSubmit)
+                            .andThen(keepBubbling(elem, declared))
+                case ev: UIEvent.ContextMenu =>
+                    // Mirrors Click: a disabled or hidden target ignores its own handler but allows bubbling;
+                    // every ancestor on the path that declared a context-menu handler fires (innermost first).
+                    if isTarget && (selfDisabled || isHidden(elem)) then true
+                    else
+                        val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
+                        invoke(attrs.onContextMenu)
+                            .andThen(invokeWith(attrs.onContextMenuEvt, mouse))
+                            .andThen(keepBubbling(elem, attrs.onContextMenu.nonEmpty || attrs.onContextMenuEvt.nonEmpty))
+                case ev: UIEvent.Focus =>
+                    val isFocusable = elem.isInstanceOf[Focusable] || elem.attrs.tabIndex.nonEmpty
+                    if isTarget && isFocusable then
+                        val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
+                        invoke(attrs.onFocus).andThen(invokeWith(attrs.onFocusEvt, mouse)).andThen(true)
+                    else if isTarget then Kyo.lift(false) // not focusable; reject
+                    else true
+                    end if
+                case ev: UIEvent.Blur =>
+                    if isTarget then
+                        val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
+                        invoke(attrs.onBlur).andThen(invokeWith(attrs.onBlurEvt, mouse)).andThen(true)
+                    else true
+                case e: UIEvent.KeyDown =>
+                    if isTarget && selfDisabled then true
+                    else
+                        val kbEvent = UI.KeyboardEvent(
+                            key = Keyboard.fromString(e.keyboard.key),
+                            modifiers = e.keyboard.modifiers,
+                            targetId = e.keyboard.targetId
+                        )
+                        val keyHandler = invokeWith(attrs.onKeyDown, kbEvent)
+                        // Enter/Space on button/anchor triggers onClick (browser behavior)
+                        val activateClick = if isTarget && (e.keyboard.key == "Enter" || e.keyboard.key == " ") then
+                            elem match
+                                case _: Button => invoke(attrs.onClick)
+                                case _: Anchor => invoke(attrs.onClick)
+                                case _         => Kyo.lift(())
+                        else Kyo.lift(())
+                        // Enter/Space on checkbox/radio triggers onChange (browser behavior)
+                        val activateToggle = if isTarget && (e.keyboard.key == "Enter" || e.keyboard.key == " ") then
+                            elem match
+                                case cb: Checkbox =>
+                                    toggleChecked(cb.checked).map(newVal => invokeWith(cb.onChange, newVal))
+                                case rb: Radio =>
+                                    val autoSet = rb.checked match
+                                        case Present(Bound.Ref(ref)) => ref.set(true)
+                                        case _                       => Kyo.lift(())
+                                    autoSet.andThen(invokeWith(rb.onChange, true))
+                                case _ => Kyo.lift(())
+                        else Kyo.lift(())
+                        // ArrowDown/ArrowUp/Space/Enter on Select cycles through options (browser behavior)
+                        val selectCycle =
+                            if isTarget && (e.keyboard.key == "ArrowDown" || e.keyboard.key == "ArrowUp" || e.keyboard.key == " " || e.keyboard.key == "Enter")
+                            then
+                                elem match
+                                    case sel: Select => cycleSelectOption(sel, forward = e.keyboard.key != "ArrowUp")
+                                    case _           => Kyo.lift(())
+                            else Kyo.lift(())
+                        // Enter key bubbling to Form triggers onSubmit (browser behavior)
+                        // Enter on Select should NOT submit; it interacts with the dropdown
+                        val formSubmit = if !isTarget && e.keyboard.key == "Enter" && !selectTarget then
+                            elem match
+                                case f: Form => invoke(f.onSubmit)
+                                case _       => Kyo.lift(())
+                        else Kyo.lift(())
+                        keyHandler.andThen(activateClick).andThen(activateToggle).andThen(selectCycle).andThen(formSubmit)
+                            .andThen(keepBubbling(elem, attrs.onKeyDown.nonEmpty))
+                case e: UIEvent.KeyUp =>
                     val kbEvent = UI.KeyboardEvent(
                         key = Keyboard.fromString(e.keyboard.key),
                         modifiers = e.keyboard.modifiers,
                         targetId = e.keyboard.targetId
                     )
-                    val keyHandler = invokeWith(attrs.onKeyDown, kbEvent)
-                    // Enter/Space on button/anchor triggers onClick (browser behavior)
-                    val activateClick = if isTarget && (e.keyboard.key == "Enter" || e.keyboard.key == " ") then
+                    invokeWith(attrs.onKeyUp, kbEvent).andThen(keepBubbling(elem, attrs.onKeyUp.nonEmpty))
+                case e: UIEvent.Input =>
+                    if isTarget && (selfDisabled || selfReadOnly) then true
+                    else
                         elem match
-                            case _: Button => invoke(attrs.onClick)
-                            case _: Anchor => invoke(attrs.onClick)
-                            case _         => Kyo.lift(())
-                    else Kyo.lift(())
-                    // Enter/Space on checkbox/radio triggers onChange (browser behavior)
-                    val activateToggle = if isTarget && (e.keyboard.key == "Enter" || e.keyboard.key == " ") then
-                        elem match
-                            case cb: Checkbox =>
-                                toggleChecked(cb.checked).map(newVal => invokeWith(cb.onChange, newVal))
-                            case rb: Radio =>
-                                val autoSet = rb.checked match
-                                    case Present(Bound.Ref(ref)) => ref.set(true)
+                            case ti: TextInput =>
+                                val autoSet = ti.value match
+                                    case Present(Bound.Ref(ref)) => ref.set(e.value)
                                     case _                       => Kyo.lift(())
-                                autoSet.andThen(invokeWith(rb.onChange, true))
-                            case _ => Kyo.lift(())
-                    else Kyo.lift(())
-                    // ArrowDown/ArrowUp/Space/Enter on Select cycles through options (browser behavior)
-                    val selectCycle =
-                        if isTarget && (e.keyboard.key == "ArrowDown" || e.keyboard.key == "ArrowUp" || e.keyboard.key == " " || e.keyboard.key == "Enter")
-                        then
-                            elem match
-                                case sel: Select => cycleSelectOption(sel, forward = e.keyboard.key != "ArrowUp")
-                                case _           => Kyo.lift(())
-                        else Kyo.lift(())
-                    // Enter key bubbling to Form triggers onSubmit (browser behavior)
-                    // Enter on Select should NOT submit; it interacts with the dropdown
-                    val formSubmit = if !isTarget && e.keyboard.key == "Enter" && !selectTarget then
+                                autoSet.andThen(invokeWith(ti.onInput, e.value)).andThen(true)
+                            case _ => true
+                case e: UIEvent.Change =>
+                    if isTarget && (selfDisabled || selfReadOnly) then true
+                    else
                         elem match
-                            case f: Form => invoke(f.onSubmit)
-                            case _       => Kyo.lift(())
-                    else Kyo.lift(())
-                    keyHandler.andThen(activateClick).andThen(activateToggle).andThen(selectCycle).andThen(formSubmit)
-                        .andThen(keepBubbling(elem, attrs.onKeyDown.nonEmpty))
-            case e: UIEvent.KeyUp =>
-                val kbEvent = UI.KeyboardEvent(
-                    key = Keyboard.fromString(e.keyboard.key),
-                    modifiers = e.keyboard.modifiers,
-                    targetId = e.keyboard.targetId
-                )
-                invokeWith(attrs.onKeyUp, kbEvent).andThen(keepBubbling(elem, attrs.onKeyUp.nonEmpty))
-            case e: UIEvent.Input =>
-                if isTarget && (isDisabled(elem) || isReadOnly(elem)) then true
-                else
+                            case ti: TextInput =>
+                                val autoSet = ti.value match
+                                    case Present(Bound.Ref(ref)) => ref.set(e.value)
+                                    case _                       => Kyo.lift(())
+                                autoSet.andThen(invokeWith(ti.onChange, e.value)).andThen(true)
+                            case dd: Dropdown =>
+                                val autoSet = dd.value match
+                                    case Present(Bound.Ref(ref)) => ref.set(e.value)
+                                    case _                       => Kyo.lift(())
+                                autoSet.andThen(invokeWith(dd.onChange, e.value)).andThen(true)
+                            case pi: PickerInput =>
+                                val autoSet = pi.value match
+                                    case Present(Bound.Ref(ref)) => ref.set(e.value)
+                                    case _                       => Kyo.lift(())
+                                autoSet.andThen(invokeWith(pi.onChange, e.value)).andThen(true)
+                            case fi: FileInput => invokeWith(fi.onChange, e.value).andThen(true)
+                            case _             => true
+                case e: UIEvent.FileSelect =>
+                    // Bubbles like Change (files carried in the payload; nothing read from the element here).
+                    if isTarget && selfDisabled then true
+                    else invokeWith(attrs.onFileSelect, e.files).andThen(keepBubbling(elem, attrs.onFileSelect.nonEmpty))
+                case e: UIEvent.ChangeChecked =>
+                    if isTarget && selfDisabled then true
+                    else
+                        elem match
+                            case bi: BooleanInput =>
+                                val autoSet = bi.checked match
+                                    case Present(Bound.Ref(ref)) => ref.set(e.checked)
+                                    case _                       => Kyo.lift(())
+                                autoSet.andThen(invokeWith(bi.onChange, e.checked)).andThen(true)
+                            case _ => true
+                case e: UIEvent.ChangeNumeric =>
+                    if isTarget && selfDisabled then true
+                    else
+                        elem match
+                            case ni: NumberInput =>
+                                val autoSet = ni.value match
+                                    case Present(Bound.Ref(ref)) => ref.set(formatDouble(e.value))
+                                    case _                       => Kyo.lift(())
+                                autoSet.andThen(invokeWith(ni.onChangeNumeric, e.value)).andThen(true)
+                            case ri: RangeInput =>
+                                val autoSet = ri.value match
+                                    case Present(Bound.Ref(ref)) => ref.set(e.value)
+                                    case _                       => Kyo.lift(())
+                                autoSet.andThen(invokeWith(ri.onChange, e.value)).andThen(true)
+                            case _ => true
+                case ev: UIEvent.Submit =>
                     elem match
-                        case ti: TextInput =>
-                            val autoSet = ti.value match
-                                case Present(Bound.Ref(ref)) => ref.set(e.value)
-                                case _                       => Kyo.lift(())
-                            autoSet.andThen(invokeWith(ti.onInput, e.value)).andThen(true)
+                        case f: Form =>
+                            val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
+                            invoke(f.onSubmit).andThen(invokeWith(f.onSubmitEvt, mouse)).andThen(true)
                         case _ => true
-            case e: UIEvent.Change =>
-                if isTarget && (isDisabled(elem) || isReadOnly(elem)) then true
-                else
-                    elem match
-                        case ti: TextInput =>
-                            val autoSet = ti.value match
-                                case Present(Bound.Ref(ref)) => ref.set(e.value)
-                                case _                       => Kyo.lift(())
-                            autoSet.andThen(invokeWith(ti.onChange, e.value)).andThen(true)
-                        case dd: Dropdown =>
-                            val autoSet = dd.value match
-                                case Present(Bound.Ref(ref)) => ref.set(e.value)
-                                case _                       => Kyo.lift(())
-                            autoSet.andThen(invokeWith(dd.onChange, e.value)).andThen(true)
-                        case pi: PickerInput =>
-                            val autoSet = pi.value match
-                                case Present(Bound.Ref(ref)) => ref.set(e.value)
-                                case _                       => Kyo.lift(())
-                            autoSet.andThen(invokeWith(pi.onChange, e.value)).andThen(true)
-                        case fi: FileInput => invokeWith(fi.onChange, e.value).andThen(true)
-                        case _             => true
-            case e: UIEvent.ChangeChecked =>
-                if isTarget && isDisabled(elem) then true
-                else
-                    elem match
-                        case bi: BooleanInput =>
-                            val autoSet = bi.checked match
-                                case Present(Bound.Ref(ref)) => ref.set(e.checked)
-                                case _                       => Kyo.lift(())
-                            autoSet.andThen(invokeWith(bi.onChange, e.checked)).andThen(true)
-                        case _ => true
-            case e: UIEvent.ChangeNumeric =>
-                if isTarget && isDisabled(elem) then true
-                else
-                    elem match
-                        case ni: NumberInput =>
-                            val autoSet = ni.value match
-                                case Present(Bound.Ref(ref)) => ref.set(formatDouble(e.value))
-                                case _                       => Kyo.lift(())
-                            autoSet.andThen(invokeWith(ni.onChangeNumeric, e.value)).andThen(true)
-                        case ri: RangeInput =>
-                            val autoSet = ri.value match
-                                case Present(Bound.Ref(ref)) => ref.set(e.value)
-                                case _                       => Kyo.lift(())
-                            autoSet.andThen(invokeWith(ri.onChange, e.value)).andThen(true)
-                        case _ => true
-            case ev: UIEvent.Submit =>
-                elem match
-                    case f: Form =>
-                        val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
-                        invoke(f.onSubmit).andThen(invokeWith(f.onSubmitEvt, mouse)).andThen(true)
-                    case _ => true
-            case ev: UIEvent.Hover =>
-                val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
-                invoke(attrs.onHover).andThen(invokeWith(attrs.onHoverEvt, mouse))
-                    .andThen(keepBubbling(elem, attrs.onHover.nonEmpty || attrs.onHoverEvt.nonEmpty))
-            case ev: UIEvent.Unhover =>
-                val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
-                invoke(attrs.onUnhover).andThen(invokeWith(attrs.onUnhoverEvt, mouse))
-                    .andThen(keepBubbling(elem, attrs.onUnhover.nonEmpty || attrs.onUnhoverEvt.nonEmpty))
-            case ev: UIEvent.Scroll =>
-                val wheel = UI.WheelEvent(ev.deltaX, ev.deltaY, ev.targetId, ev.modifiers)
-                invoke(attrs.onScroll).andThen(invokeWith(attrs.onScrollEvt, wheel))
-                    .andThen(keepBubbling(elem, attrs.onScroll.nonEmpty || attrs.onScrollEvt.nonEmpty))
-            // Payload (UI.PointerEvent) rides the wire directly like FileSelect, so nothing is read from the element.
-            case ev: UIEvent.PointerDown =>
-                invokeWith(attrs.onPointerDown, ev.pointer).andThen(keepBubbling(elem, attrs.onPointerDown.nonEmpty))
-            case ev: UIEvent.PointerMove =>
-                invokeWith(attrs.onPointerMove, ev.pointer).andThen(keepBubbling(elem, attrs.onPointerMove.nonEmpty))
-            case ev: UIEvent.PointerUp =>
-                invokeWith(attrs.onPointerUp, ev.pointer).andThen(keepBubbling(elem, attrs.onPointerUp.nonEmpty))
-            case ev: UIEvent.ScrollPosition =>
-                val sp = UI.ScrollPositionEvent(ev.scrollTop, ev.scrollLeft, ev.targetId)
-                invokeWith(attrs.onScrollPos, sp)
-                    .andThen(keepBubbling(elem, attrs.onScrollPos.nonEmpty))
-            case _ => true
-        end match
+                case ev: UIEvent.Hover =>
+                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
+                    invoke(attrs.onHover).andThen(invokeWith(attrs.onHoverEvt, mouse))
+                        .andThen(keepBubbling(elem, attrs.onHover.nonEmpty || attrs.onHoverEvt.nonEmpty))
+                case ev: UIEvent.Unhover =>
+                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
+                    invoke(attrs.onUnhover).andThen(invokeWith(attrs.onUnhoverEvt, mouse))
+                        .andThen(keepBubbling(elem, attrs.onUnhover.nonEmpty || attrs.onUnhoverEvt.nonEmpty))
+                case ev: UIEvent.Scroll =>
+                    val wheel = UI.WheelEvent(ev.deltaX, ev.deltaY, ev.targetId, ev.modifiers)
+                    invoke(attrs.onScroll).andThen(invokeWith(attrs.onScrollEvt, wheel))
+                        .andThen(keepBubbling(elem, attrs.onScroll.nonEmpty || attrs.onScrollEvt.nonEmpty))
+                case ev: UIEvent.ScrollPosition =>
+                    val sp = UI.ScrollPositionEvent(ev.scrollTop, ev.scrollLeft, ev.targetId)
+                    invokeWith(attrs.onScrollPos, sp)
+                        .andThen(keepBubbling(elem, attrs.onScrollPos.nonEmpty))
+                // Unit 1: pointer/drag events. The payload (UI.PointerEvent) is already the handler value (it rides the
+                // wire directly, like FileSelect), so nothing is read from the element. Bubble like Click.
+                case ev: UIEvent.PointerDown =>
+                    invokeWith(attrs.onPointerDown, ev.pointer).andThen(keepBubbling(elem, attrs.onPointerDown.nonEmpty))
+                case ev: UIEvent.PointerMove =>
+                    invokeWith(attrs.onPointerMove, ev.pointer).andThen(keepBubbling(elem, attrs.onPointerMove.nonEmpty))
+                case ev: UIEvent.PointerUp =>
+                    invokeWith(attrs.onPointerUp, ev.pointer).andThen(keepBubbling(elem, attrs.onPointerUp.nonEmpty))
+                case _ => true
+            end match
+        end dispatchGated
+        // Fast path: without a signal-bound boolean attribute the gate flags are pure reads and the
+        // dispatch stays suspension-free — the common case for every element that never used
+        // `.disabled(Signal)` / `.readOnly(Signal)`. Only a bound TARGET pays the signal reads.
+        if !isTarget || attrs.reactiveBoolAttrs.isEmpty then
+            dispatchGated(isTarget && isDisabled(elem), isTarget && isReadOnly(elem))
+        else
+            currentGate(elem, isTarget).map { case (selfDisabled, selfReadOnly) =>
+                dispatchGated(selfDisabled, selfReadOnly)
+            }
+        end if
     end dispatchToElement
 
     // ---- Subscribe ----

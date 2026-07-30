@@ -98,8 +98,8 @@ private[kyo] object DomBackend:
             _ <- Sync.defer { scanRoot = container; rebuildRegions() }
             _ <- applyJsProps(container)
             // Initial mount: everything just rendered is new (empty old set), like native autofocus.
-            _        <- Sync.defer(seedEnter(container, Set.empty))
-            _        <- Sync.defer(seedFocusAuto(container, Set.empty))
+            _ <- Sync.defer(seedEnter(container, Set.empty))
+            _ <- Sync.defer(seedFocusAuto(container, Set.empty))
             // Portal adopt for the initial paint (a portal element present at load re-homes immediately).
             _        <- Sync.defer(portalSweep(container))
             _        <- Sync.defer(beginAnimationsSync(container))
@@ -1169,6 +1169,7 @@ private[kyo] object DomBackend:
             // AS that element for the sibling reconciliation to match the incoming portal against it.
             else if el.hasAttribute("data-kyo-portal-slot") then el.getAttribute("data-kyo-portal-slot")
             else null
+            end if
         else if node.nodeType == 8 then
             RegionMarker.parse(commentData(node)) match
                 case Present(p) if !p.isClose && spanClose(node, p.path) != null => p.path
