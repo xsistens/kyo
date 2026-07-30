@@ -119,11 +119,11 @@ class SvgReactiveTest extends kyo.test.Test[Any]:
         end for
     }
 
-    // The exchange wraps reactive updates in <g> for a reactive boundary in SVG context.
-    // Calls the real HtmlRenderer.wrapReactiveRegion production function; a bug in that
-    // function (wrong tag, missing attribute) makes the assertion fail. Also covers the
-    // non-svg branch: wrapReactiveRegion with svgContext=false must produce a <span>.
-    "reactive region wrapped in <g> in svg context" in {
+    // The exchange payload is the region's bare content fragment — no wrapper element in either
+    // context. The region stays addressable through its live comment markers, so the SSR string is the
+    // whole per-context contract (the parse-context wrap on the client side derives from the live
+    // parent at patch time).
+    "region payload carries no wrapper element" in {
         val sig  = Signal.initConst(Chunk.empty[Int])
         val root = Svg.svg(sig.foreach(i => Svg.rect.x(i.toDouble).y(0).width(1).height(1)))
         for
@@ -131,17 +131,10 @@ class SvgReactiveTest extends kyo.test.Test[Any]:
             node = ReactiveUI.findNode(rui, Seq("0"))
             innerHtml <- HtmlRenderer.render(UI.fragment(), Seq("0"))
         yield
-            // svg-context branch: node is recorded as svg, wrapReactiveRegion must pick "g"
+            // The node still records its svg context (normalize bookkeeping)...
             assert(node.isDefined && node.get.svgContext)
-            val svgWrapped = HtmlRenderer.wrapReactiveRegion(node.get.path, node.get.svgContext, innerHtml)
-            assert(svgWrapped.startsWith("<g data-kyo-path="))
-            assert(svgWrapped.contains("data-kyo-reactive"))
-            assert(svgWrapped.endsWith("</g>"))
-            // non-svg branch: wrapReactiveRegion with svgContext=false must pick "span"
-            val htmlWrapped = HtmlRenderer.wrapReactiveRegion(Seq("1", "2"), svgContext = false, innerHtml)
-            assert(htmlWrapped.startsWith("<span data-kyo-path=\"1.2\""))
-            assert(htmlWrapped.contains("data-kyo-reactive"))
-            assert(htmlWrapped.endsWith("</span>"))
+            // ...but the rendered content fragment is wrapper-free.
+            assert(!innerHtml.contains("data-kyo-reactive"))
         end for
     }
 

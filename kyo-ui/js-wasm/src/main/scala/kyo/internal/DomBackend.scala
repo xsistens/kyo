@@ -326,8 +326,22 @@ private[kyo] object DomBackend:
                 Sync.defer {
                     val pathAttr = path.mkString(".")
                     val r        = lookupRegion(pathAttr)
-                    // Absent region = patch against DOM that is not painted (e.g. Boundary pre-reveal): silent no-op.
-                    if r == null then ()
+                    if r == null then
+                        // No marker pair at this path: either an ELEMENT region (a signal-bound field like
+                        // `input.value(ref)` — the region root IS the live element carrying the path; no wrapper
+                        // of any kind exists) morphed 1:1 in place, or genuinely unpainted DOM (e.g. Boundary
+                        // pre-reveal), which stays a silent no-op.
+                        val el = queryByPath(path)
+                        if el != null && el.parentNode != null then
+                            val toContainer = parseToContainer(el.parentNode.asInstanceOf[dom.Element], html)
+                            val toRoot      = if toContainer != null then firstElementChildOf(toContainer) else null
+                            if toRoot != null then
+                                morphNode(el, toRoot)
+                                val live = queryByPath(path)
+                                if live != null then
+                                    applyJsPropsSync(live)
+                                    beginAnimationsSync(live)
+                        end if
                     // Leave the live mount region untouched ONLY when the new content is itself a mount slot
                     // (`s` = the SAME mount re-rendering, which owns its subtree). Different content or an empty
                     // gate-closed repaint falls through so the morph reconciles/empties the region.
@@ -666,6 +680,18 @@ private[kyo] object DomBackend:
 
     private def commentData(n: dom.Node): String = n.asInstanceOf[dom.Comment].data
 
+    /** Register a scanned pair, repairing parser separation first: the whole-page parser keeps an open
+      * marker that precedes a table's FIRST row as a `<table>` child while the rows and the close
+      * marker land inside the implied `<tbody>` it synthesizes. Adopting the open marker into that row
+      * group makes the pair share a parent again (the invariant every range walk relies on) and puts
+      * the rows inside the range. Twin of `__kyoRegPair` in clientJs.
+      */
+    private def registerPair(path: String, start: dom.Comment, end: dom.Comment, mount: Boolean): Unit =
+        if (start.parentNode ne end.parentNode) && end.parentNode != null && (end.parentNode.parentNode eq start.parentNode) then
+            discard(end.parentNode.insertBefore(start, end.parentNode.firstChild))
+        regions(path) = new RegionRange(start, end, mount)
+    end registerPair
+
     /** Register every marker pair under `root` (whole-subtree TreeWalker) into `regions`. Paths are
       * document-unique, so pairing open->close by path needs no stack; unbalanced markers are dropped.
       */
@@ -679,7 +705,7 @@ private[kyo] object DomBackend:
                     if p.isClose then
                         opens.get(p.path) match
                             case Some((start, mount)) =>
-                                regions(p.path) = new RegionRange(start, n.asInstanceOf[dom.Comment], mount)
+                                registerPair(p.path, start, n.asInstanceOf[dom.Comment], mount)
                                 discard(opens.remove(p.path))
                             case None => ()
                     else opens(p.path) = (n.asInstanceOf[dom.Comment], p.mount)
@@ -707,7 +733,7 @@ private[kyo] object DomBackend:
                         if p.isClose then
                             opens.get(p.path) match
                                 case Some((start, mount)) =>
-                                    regions(p.path) = new RegionRange(start, n.asInstanceOf[dom.Comment], mount)
+                                    registerPair(p.path, start, n.asInstanceOf[dom.Comment], mount)
                                     discard(opens.remove(p.path))
                                 case None => ()
                         else opens(p.path) = (n.asInstanceOf[dom.Comment], p.mount)
