@@ -1,6 +1,7 @@
 package kyo.apollo.cache.normalized
 
 import kyo.*
+import kyo.apollo.api.Mutation
 import kyo.apollo.api.Subscription
 import kyo.apollo.interceptor.ApolloInterceptor
 import kyo.apollo.interceptor.ApolloInterceptorChain
@@ -40,21 +41,27 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
         // into the store — triggering watchers — exactly like a network query.
         request.operation match
             case _: Subscription[?] => network(request, chain)
-            case _                  =>
-                // A mutation carrying optimistic data is inherently network-bound: overlay
-                // the optimistic value now, then reconcile it against the network reply —
-                // ahead of (and bypassing) the fetch-policy cache-read dispatch.
+            case _: Mutation[?]     =>
+                // A mutation is inherently network-bound and must NEVER be answered
+                // from the cache: its own write-back stores its result under
+                // MUTATION_ROOT, so a repeat of the same mutation (or, with a read
+                // redirect like CacheKeyResolver.byIdArgument, any id-carrying
+                // mutation whose entity is already cached) would otherwise be a
+                // cache hit under CacheFirst and silently never reach the server.
+                // With optimistic data the store is additionally overlaid before the
+                // network call and reconciled against the reply.
                 request.executionContext.get(OptimisticData) match
                     case Present(optimistic) => optimisticMutation(request, chain, optimistic)
-                    case Absent =>
-                        request.executionContext.get(FetchPolicy).getOrElse(FetchPolicy.Default) match
-                            case FetchPolicy.CacheFirst      => cacheFirst(request, chain)
-                            case FetchPolicy.NetworkOnly     => networkOnly(request, chain)
-                            case FetchPolicy.CacheOnly       => cacheOnly(request)
-                            case FetchPolicy.NetworkFirst    => networkFirst(request, chain)
-                            case FetchPolicy.CacheAndNetwork => cacheAndNetwork(request, chain)
-                            case FetchPolicy.NoCache         => noCache(request, chain)
-                            case FetchPolicy.Standby         => standby(request)
+                    case Absent              => network(request, chain)
+            case _ =>
+                request.executionContext.get(FetchPolicy).getOrElse(FetchPolicy.Default) match
+                    case FetchPolicy.CacheFirst      => cacheFirst(request, chain)
+                    case FetchPolicy.NetworkOnly     => networkOnly(request, chain)
+                    case FetchPolicy.CacheOnly       => cacheOnly(request)
+                    case FetchPolicy.NetworkFirst    => networkFirst(request, chain)
+                    case FetchPolicy.CacheAndNetwork => cacheAndNetwork(request, chain)
+                    case FetchPolicy.NoCache         => noCache(request, chain)
+                    case FetchPolicy.Standby         => standby(request)
 
     // --- policies -------------------------------------------------------------
 
