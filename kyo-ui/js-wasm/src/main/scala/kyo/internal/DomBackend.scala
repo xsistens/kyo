@@ -341,6 +341,7 @@ private[kyo] object DomBackend:
                                 if live != null then
                                     applyJsPropsSync(live)
                                     beginAnimationsSync(live)
+                            end if
                         end if
                     // Leave the live mount region untouched ONLY when the new content is itself a mount slot
                     // (`s` = the SAME mount re-rendering, which owns its subtree). Different content or an empty
@@ -718,6 +719,7 @@ private[kyo] object DomBackend:
     private def rebuildRegions(): Unit =
         regions = js.Dictionary.empty
         if scanRoot != null then scanRegionsInto(scanRoot)
+    end rebuildRegions
 
     /** Re-register marker pairs inside `r` after a patch. A pair always shares one parent, so direct
       * comment siblings pair at this level and everything deeper is contained in element siblings.
