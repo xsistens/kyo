@@ -22,6 +22,14 @@ private[kyo] object FlagPlatform {
     // falls back to the stdlib read: `java.lang.System.getenv` always returns null under Scala.js-Node, but
     // a Wasm host may resolve it through its own environment binding, so the fallback still gives the
     // caller its best answer instead of a hardcoded null.
+    //
+    // The `js.typeOf(js.Dynamic.global.process)` probe must stay INLINE: Scala.js only compiles it to the
+    // safe `typeof process` when typeOf is applied directly to the global selection. Hoisting the selection
+    // into a `val proc` first emits a bare `process` read, which throws a ReferenceError on hosts where the
+    // global does not exist at all — exactly the browsers this guard is for.
+    private def hasProcess: Boolean =
+        js.typeOf(js.Dynamic.global.process) != "undefined"
+
     def env(name: String): String = {
         if (!hasProcess) java.lang.System.getenv(name)
         else {
