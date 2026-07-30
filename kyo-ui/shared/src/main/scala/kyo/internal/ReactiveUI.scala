@@ -360,7 +360,19 @@ private[kyo] object ReactiveUI:
                         val inner = child match
                             case kc: KeyedChild[?] => kc.child
                             case _                 => child
-                        walkStatic(inner, childPath, svg, mountDispatch, table)
+                        inner match
+                            case innerElem: Element
+                                if collectSignalRef(
+                                    innerElem
+                                ).nonEmpty || innerElem.attrs.reactiveAttrs.nonEmpty || innerElem.attrs.reactiveBoolAttrs.nonEmpty || innerElem.attrs.reactiveClasses.nonEmpty =>
+                                // Same promotion as the Element-children walk above: a fragment child (e.g. a keyed
+                                // Foreach row) whose ROOT element carries reactive channels must become a ReactiveUI
+                                // node, or subscribeScoped never forks its in-place-patch observers.
+                                for rui <- normalizeWith(innerElem, childPath, svg, mountDispatch, table)
+                                yield (Seq(rui), rui.handle)
+                            case _ =>
+                                walkStatic(inner, childPath, svg, mountDispatch, table)
+                        end match
                     }
                 yield
                     val allKids    = childWalks.flatMap(_._1)
