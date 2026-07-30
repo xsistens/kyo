@@ -346,7 +346,19 @@ private[kyo] object ReactiveUI:
                         val inner = child match
                             case kc: KeyedChild[?] => kc.child
                             case _                 => child
-                        walkStatic(inner, childPath, svg, mountDispatch)
+                        inner match
+                            case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted | _: Boundary =>
+                                // Same contract as an Element's reactive child: the renderer paints the
+                                // node's own anchor at childPath (no content descent), so normalize there
+                                // directly. Recursing through walkStatic would hit the TOP-LEVEL branch,
+                                // which registers at childPath :+ "$r" — every patch would then target a
+                                // path the painted DOM does not have (mount stuck on its placeholder,
+                                // reactive updates silently dropped).
+                                for rui <- normalizeWith(inner, childPath, svg, mountDispatch)
+                                yield (Seq(rui), rui.handle)
+                            case _ =>
+                                walkStatic(inner, childPath, svg, mountDispatch)
+                        end match
                     }
                 yield
                     val allKids    = childWalks.flatMap(_._1)
