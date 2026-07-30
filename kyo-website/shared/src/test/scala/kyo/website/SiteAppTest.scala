@@ -208,7 +208,7 @@ class SiteAppTest extends WebsiteTest:
 
     "the content slot renders the caller's body in a reactive boundary" in {
         render(versions2, home).map { html =>
-            assert(html.contains("data-kyo-reactive"), s"content slot must be a reactive boundary: $html")
+            assert(html.contains("<!--kyo:"), s"content slot must be a reactive region (comment markers): $html")
             assert(html.contains("content-marker"), s"content slot must render the caller's body: $html")
         }
     }

@@ -263,7 +263,7 @@ class DocsAppTest extends WebsiteTest:
             reactive = UI.Ast.Reactive(route.map(_ => article))
             html <- this.rendered(emptyContent(), route, Chunk.empty, reactive)
         yield
-            assert(html.contains("data-kyo-reactive"), s"data-kyo-reactive not found in HTML: $html")
+            assert(html.contains("<!--kyo:"), s"region marker not found in HTML: $html")
             assert(html.contains("<h2"), s"h2 element not found in HTML: $html")
         end for
     }
