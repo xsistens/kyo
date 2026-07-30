@@ -207,4 +207,104 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
             end for
         }
     }
+
+    // --- mutations bypass the cache read entirely -----------------------------
+
+    // A mutation whose root field carries an `id` argument and returns a Country,
+    // the shape `CacheKeyResolver.byIdArgument` redirects on.
+    final case class DeleteCountryData(deleteCountry: Country) derives Schema
+
+    final case class DeleteCountryMutation(code: String) extends Mutation[DeleteCountryData]:
+        def name = "DeleteCountry"
+        def document =
+            s"""mutation DeleteCountry { deleteCountry(id: "$code") { __typename code name } }"""
+        def dataSchema: Schema[DeleteCountryData] = summon[Schema[DeleteCountryData]]
+        def rootField: CompiledField =
+            CompiledField(
+                "data",
+                CompiledNamedType("Mutation"),
+                selections = List(
+                    CompiledField(
+                        "deleteCountry",
+                        CompiledNamedType("Country"),
+                        arguments = List(
+                            CompiledArgument("id", CompiledArgumentValue.Literal(Json.JStr(code)))
+                        ),
+                        selections = List(
+                            CompiledField("__typename", CompiledNamedType("String")),
+                            CompiledField("code", CompiledNamedType("String")),
+                            CompiledField("name", CompiledNamedType("String"))
+                        )
+                    )
+                )
+            )
+        def variables: Json = Json.JObj(VectorMap.empty)
+    end DeleteCountryMutation
+
+    /** Routes by operation: the mutation returns its Country, anything else the
+      * canned countries body. Counts every call like [[CountingEngine]].
+      */
+    final private class MutationRoutingEngine extends kyo.apollo.network.http.HttpEngine:
+        var calls = 0
+        def execute(
+            request: kyo.apollo.network.http.HttpRequest
+        )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
+            calls += 1
+            val payload =
+                if request.body.exists(_.contains("DeleteCountry")) then
+                    """{"data":{"deleteCountry":{"__typename":"Country","code":"DE","name":"Germany"}}}"""
+                else body
+            kyo.apollo.network.http.HttpResponse(200, Nil, payload)
+        end execute
+    end MutationRoutingEngine
+
+    /** [[cachedClient]] plus the `byIdArgument` read redirect, so an id-carrying
+      * field can be answered straight from the entity record.
+      */
+    private def redirectingClient(engine: MutationRoutingEngine): ApolloClient =
+        ApolloClient
+            .builder()
+            .serverUrl("https://example.com/graphql")
+            .httpEngine(engine)
+            .normalizedCache(
+                MemoryCache(),
+                IdCacheKeyGenerator(List("code")),
+                keyResolver = kyo.apollo.cache.normalized.api.CacheKeyResolver.byIdArgument()
+            )
+            .build()
+
+    "mutations" - {
+
+        "a repeated mutation always hits the network (its own write-back is never read)" in {
+            val engine = MutationRoutingEngine()
+            val client = redirectingClient(engine)
+            for
+                // First run writes its result under MUTATION_ROOT; without the
+                // mutation bypass the second, identical run would be a CacheFirst hit.
+                r1 <- client.mutation(DeleteCountryMutation("DE")).execute
+                r2 <- client.mutation(DeleteCountryMutation("DE")).execute
+            yield
+                assert(r1.cacheInfo.map(_.fromCache) == Present(false))
+                assert(r2.cacheInfo.map(_.fromCache) == Present(false))
+                assert(engine.calls == 2)
+            end for
+        }
+
+        "an id-carrying mutation is not answered by a cache redirect" in {
+            val engine = MutationRoutingEngine()
+            val client = redirectingClient(engine)
+            for
+                // Cache the Country:DE entity and create MUTATION_ROOT via a first
+                // mutation; the second mutation's root field then resolves fully
+                // from the cache through byIdArgument, so only the bypass keeps it
+                // on the network.
+                _ <- call(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                _ <- client.mutation(DeleteCountryMutation("FR")).execute
+                r <- client.mutation(DeleteCountryMutation("DE")).execute
+            yield
+                assert(r.cacheInfo.map(_.fromCache) == Present(false))
+                assert(engine.calls == 3)
+            end for
+        }
+    }
 end CacheInterceptorSpec
