@@ -41,8 +41,10 @@ final case class FieldPolicyReadContext(
   * (write-side field keys), the reader (read-side field keys and redirects), and
   * the record merger (merge).
   *
-  * @param typeName  the parent type this field belongs to (informational; the
-  *                  field name is what the walkers key on)
+  * @param typeName  the parent type this field belongs to; together with
+  *                  [[fieldName]] it forms the registry key, so the policy only
+  *                  applies to this type's field, never to a same-named field on
+  *                  another type
   * @param fieldName the field's schema name
   * @param keyArgs   the argument names that form the field key, or `None` for all
   * @param read      an optional read redirect
@@ -82,29 +84,42 @@ object ConnectionFieldPolicy:
 
     /** Policies for the connection field `fieldName` on `typeName`.
       *
-      * @param typeName   the type the connection field is declared on
-      * @param fieldName  the connection field's name (e.g. `feed`)
-      * @param filterArgs argument names that DO partition the connection (each
-      *                   value paginates on its own); pagination args are always
-      *                   dropped. Default: none — all pages share one slot.
-      * @param edgesField the connection's edge-list field name (default `edges`)
+      * The registry is keyed by `(typeName, fieldName)`, so the edges merge must
+      * be declared under the CONNECTION type (the type the `edges` field lives
+      * on), which is why `connectionTypeName` is required. It must match the
+      * `__typename` the connection objects carry at runtime (for a plain object
+      * connection type, that is the schema type name). Prefer [[of]], which
+      * derives all three names from generated selectors.
+      *
+      * @param typeName           the type the connection field is declared on
+      * @param fieldName          the connection field's name (e.g. `feed`)
+      * @param connectionTypeName the connection's own type (e.g. `FeedConnection`),
+      *                           the parent type of its `edges` field
+      * @param filterArgs         argument names that DO partition the connection
+      *                           (each value paginates on its own); pagination args
+      *                           are always dropped. Default: none — all pages
+      *                           share one slot.
+      * @param edgesField         the connection's edge-list field name (default
+      *                           `edges`)
       */
     def apply(
         typeName: String,
         fieldName: String,
+        connectionTypeName: String,
         filterArgs: List[String] = Nil,
         edgesField: String = "edges"
     ): List[FieldPolicy] =
         List(
             FieldPolicy(typeName, fieldName, keyArgs = Some(filterArgs)),
-            FieldPolicy(typeName, edgesField, merge = Some(unionByReference))
+            FieldPolicy(connectionTypeName, edgesField, merge = Some(unionByReference))
         )
 
     /** The typed form of [[apply]]: the connection field and its edges field are
       * named by generated selectors, so both provably exist and a schema drift is
-      * a compile error instead of a silently inert policy (the registry keys by
-      * field name alone, so a misspelled string never matches and pagination
-      * quietly degrades to replacing pages).
+      * a compile error instead of a silently inert policy (a misspelled string
+      * never matches in the registry and pagination quietly degrades to replacing
+      * pages). The connection's own type name (the registry key of the edges
+      * merge) comes from the codegen-emitted `TypeName[Conn]` given.
       *
       * {{{
       * ConnectionFieldPolicy.of(Playlist.tracks(), PlaylistTrackConnection.edges)
@@ -133,6 +148,7 @@ object ConnectionFieldPolicy:
         filterArgs: List[String] = Nil
     )(using
         origin: TypeName[Origin],
+        conn: TypeName[Conn],
         @implicitNotFound(
             "Connection edges union by record reference, so the edge type needs its own cache identity: " +
                 "without one, edges are keyed by response position, successive pages collide on those keys, " +
@@ -142,7 +158,7 @@ object ConnectionFieldPolicy:
         ) edgeIdentity: CacheIdentity[Edge]
     ): List[FieldPolicy] =
         discard(edgeIdentity)
-        apply(origin.name, connection.fieldName, filterArgs, edges.fieldName)
+        apply(origin.name, connection.fieldName, conn.name, filterArgs, edges.fieldName)
     end of
 
     /** Union two edge lists, appending incoming references not already present and

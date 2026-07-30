@@ -51,6 +51,13 @@ class NormalizerSpec extends kyo.test.Test[Any]:
     private def jstr(s: String): Json = Json.JStr(s)
     private def jnum(n: Double): Json = Json.JNum(n)
 
+    /** The root record's expected fields: the test's own plus the `__typename`
+      * the Normalizer stamps onto the root (so type-scoped field policies can be
+      * resolved for root fields at merge time).
+      */
+    private def rootFields(fields: (String, RecordValue)*): Map[String, RecordValue] =
+        Map("__typename" -> RecordValue.Scalar(jstr("Query"))) ++ fields
+
     private def normalize(
         selections: List[CompiledSelection],
         data: Map[String, Json],
@@ -71,7 +78,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
             assert(records.keySet == Set("QUERY_ROOT"))
             assert(
                 records("QUERY_ROOT").fields ==
-                    Map("hello" -> RecordValue.Scalar(jstr("world")))
+                    rootFields("hello" -> RecordValue.Scalar(jstr("world")))
             )
         }
 
@@ -80,7 +87,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
                 selections = List(leaf("hello")),
                 data = Map("hello" -> Json.JNull)
             )
-            assert(records("QUERY_ROOT").fields == Map("hello" -> RecordValue.Null))
+            assert(records("QUERY_ROOT").fields == rootFields("hello" -> RecordValue.Null))
         }
 
         "a scalar list stays inline as a list of scalars" in {
@@ -90,7 +97,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
             )
             assert(
                 records("QUERY_ROOT").fields ==
-                    Map(
+                    rootFields(
                         "tags" -> RecordValue.RList(
                             Chunk(RecordValue.Scalar(jstr("a")), RecordValue.Scalar(jstr("b")))
                         )
@@ -115,7 +122,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
             // Parent holds only a reference to the child.
             assert(
                 records("QUERY_ROOT").fields ==
-                    Map("book" -> RecordValue.Reference(CacheReference("Book:42")))
+                    rootFields("book" -> RecordValue.Reference(CacheReference("Book:42")))
             )
             // Child record holds the object's own scalar fields.
             assert(
@@ -136,7 +143,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
             assert(records.keySet == Set("QUERY_ROOT", "QUERY_ROOT.stats"))
             assert(
                 records("QUERY_ROOT").fields ==
-                    Map("stats" -> RecordValue.Reference(CacheReference("QUERY_ROOT.stats")))
+                    rootFields("stats" -> RecordValue.Reference(CacheReference("QUERY_ROOT.stats")))
             )
             // The static-typename stamp is stored even on a path-keyed record, so the
             // read side's implicit `__typename` selection is satisfied.
@@ -173,7 +180,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
             assert(records.keySet == Set("QUERY_ROOT", "Country:DE", "Country:FR"))
             assert(
                 records("QUERY_ROOT").fields ==
-                    Map(
+                    rootFields(
                         "countries" -> RecordValue.RList(
                             Chunk(
                                 RecordValue.Reference(CacheReference("Country:DE")),
@@ -230,7 +237,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
                         "author"     -> RecordValue.Scalar(jstr("B"))
                     )
             )
-            assert(records("QUERY_ROOT").fields.keySet == Set("primary", "secondary"))
+            assert(records("QUERY_ROOT").fields.keySet == Set("__typename", "primary", "secondary"))
         }
 
         // --- Argument-aware field keys --------------------------------------------
@@ -258,7 +265,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
 
             assert(
                 records("QUERY_ROOT").fields.keySet ==
-                    Set("user({\"id\":1})", "user({\"id\":2})")
+                    Set("__typename", "user({\"id\":1})", "user({\"id\":2})")
             )
             assert(records.keySet == Set("QUERY_ROOT", "User:1", "User:2"))
         }
@@ -335,7 +342,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
         "a selected field missing from the response is simply not stored" in {
             val selections = List(leaf("present"), leaf("absent"))
             val records    = normalize(selections, Map("present" -> jstr("here")))
-            assert(records("QUERY_ROOT").fieldKeys == Set("present"))
+            assert(records("QUERY_ROOT").fieldKeys == Set("__typename", "present"))
         }
     }
 end NormalizerSpec
