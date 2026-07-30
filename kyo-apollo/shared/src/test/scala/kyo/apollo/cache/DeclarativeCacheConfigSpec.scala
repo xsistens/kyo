@@ -51,6 +51,45 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
         def variables: Json = Json.JObj(VectorMap.empty)
     end KeyedQuery
 
+    // --- singleton TypePolicy end to end through ApolloStore ------------------
+
+    final case class Player(__typename: String, isPlaying: Boolean) derives Schema
+    final case class PlayerData(playbackState: Player) derives Schema
+    final case class PauseData(pausePlayback: Player) derives Schema
+
+    private def playerSelections: List[CompiledSelection] = List(
+        CompiledField("__typename", CompiledNamedType("String")),
+        CompiledField("isPlaying", CompiledNamedType("Boolean"))
+    )
+
+    final private case class PlayerQuery() extends Query[PlayerData]:
+        def name                           = "Player"
+        def document                       = "query Player { playbackState { __typename isPlaying } }"
+        def dataSchema: Schema[PlayerData] = summon[Schema[PlayerData]]
+        def rootField: CompiledField =
+            CompiledField(
+                "data",
+                CompiledNamedType("Query"),
+                selections =
+                    List(CompiledField("playbackState", CompiledNamedType("Player"), selections = playerSelections))
+            )
+        def variables: Json = Json.JObj(VectorMap.empty)
+    end PlayerQuery
+
+    final private case class PauseMutation() extends Mutation[PauseData]:
+        def name                          = "Pause"
+        def document                      = "mutation Pause { pausePlayback { __typename isPlaying } }"
+        def dataSchema: Schema[PauseData] = summon[Schema[PauseData]]
+        def rootField: CompiledField =
+            CompiledField(
+                "data",
+                CompiledNamedType("Mutation"),
+                selections =
+                    List(CompiledField("pausePlayback", CompiledNamedType("Player"), selections = playerSelections))
+            )
+        def variables: Json = Json.JObj(VectorMap.empty)
+    end PauseMutation
+
     // --- ConnectionFieldPolicy end to end through ApolloStore -----------------
 
     // `__typename` named verbatim so kyo-schema encodes the response key the
@@ -168,8 +207,26 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
             )
         }
 
-        "TypePolicy requires at least one key field" in {
-            val _ = intercept[IllegalArgumentException](TypePolicy("Country", Nil))
+        "an empty-keyFields TypePolicy keys every object of the type by the bare typename" in {
+            // Apollo Client's `keyFields: []` — the singleton-record declaration.
+            val gen = TypePolicyCacheKeyGenerator.of(TypePolicy("PlaybackState", Nil))
+            val obj = Map("__typename" -> jstr("PlaybackState"), "isPlaying" -> Json.JBool(true))
+            assert(gen.cacheKeyForObject(obj, ctx()) == Present(CacheKey("PlaybackState")))
+        }
+
+        "a query snapshot and a mutation response of a singleton type share one record" in {
+            // The whole point of the singleton policy: the mutation's write-back
+            // lands in the record the query watcher reads, so the watcher sees it.
+            val store = new ApolloStore(
+                MemoryCache(),
+                cacheKeyGenerator = TypePolicyCacheKeyGenerator.of(TypePolicy("Player", Nil))
+            )
+            store.writeOperation(PlayerQuery(), PlayerData(Player("Player", isPlaying = true)))
+            assert(store.cache.loadRecord("Player").isDefined)
+
+            val changed = store.writeOperation(PauseMutation(), PauseData(Player("Player", isPlaying = false)))
+            assert(changed.contains("Player"))
+            assert(!store.readOperation(PlayerQuery()).playbackState.isPlaying)
         }
 
         "keyArgs restricts a field key to the named arguments" in {
