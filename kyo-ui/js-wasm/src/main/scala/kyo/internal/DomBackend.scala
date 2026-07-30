@@ -405,7 +405,14 @@ private[kyo] object DomBackend:
                             // leave-elements the incoming HTML does not bring back (so their ghosts are cloned
                             // while they still have a layout box).
                             val oldEnter     = rangeEnterPaths(r)
-                            val ghosts       = rangePrepareLeaveGhosts(r, leaveSurvSet(html))
+                            // A mount cell's OWN republish (mount=true) never ghosts: the engine re-ran the mount effect because an
+                            // enclosing region repainted — bookkeeping, not user-visible leaving — and placeholder vs effect
+                            // content may shape their children differently, so a leave-marked element's path changes across the
+                            // swap and the survivor set cannot match it. Each open used to spawn a storm of ghosts over the
+                            // fresh panel. Content genuinely leaves through an ENCLOSING patch (the gate closing), mount=false.
+                            val ghosts =
+                                if mount then Seq.empty[(dom.Element, String)]
+                                else rangePrepareLeaveGhosts(r, leaveSurvSet(html))
                             val oldFocusAuto = rangeFocusAutoPaths(r)
                             // Morph the marker-delimited range instead of replacing, so focus/caret/scroll/
                             // transitions on reused nodes survive.

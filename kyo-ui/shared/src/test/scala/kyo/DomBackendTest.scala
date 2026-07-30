@@ -480,6 +480,70 @@ class DomBackendTest extends UITest:
         }
     }
 
+    // Leave ghosts vs mount repaints: a keyless mount's OWN republish (an enclosing region repainted,
+    // the engine re-ran the mount effect) is bookkeeping, not user-visible leaving — even when the
+    // placeholder and the effect content shape their children differently, so the leave-marked element's
+    // path changes and the survivor set cannot match it. Only a patch that removes the mount from the
+    // page (the enclosing gate closing) plays the leave ghost.
+
+    "a keyless mount republish does not ghost leave-marked content (enclosing region repaint)" in {
+        val app: UI < Async =
+            for tick <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("gtick").id("gtick").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map { t =>
+                    UI.div(
+                        UI.span(s"t:$t").id("gtxt"),
+                        UI.mounted {
+                            Signal.initRef(0).map(_ =>
+                                // effect shape: fragment(marker, panel) — panel path differs from the placeholder's
+                                UI.fragment(
+                                    UI.span("m").id("gmark"),
+                                    UI.div("panel").id("glpanel").leaveTransition("ghost-probe-leave")
+                                ): UI
+                            )
+                        }.placeholder(UI.div("panel").id("glpanel").leaveTransition("ghost-probe-leave"))
+                    ): UI
+                }
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("glpanel"), "panel")
+                _ <- Browser.evalDiscard(
+                    "window.__g=0;new MutationObserver(function(ms){ms.forEach(function(m){m.addedNodes.forEach(function(n){if(n.nodeType===1&&n.hasAttribute&&n.hasAttribute('data-kyo-ghost'))window.__g++;});});}).observe(document.body,{childList:true,subtree:true})"
+                )
+                _ <- Browser.click(Selector.id("gtick"))
+                _ <- Browser.assertText(Selector.id("gtxt"), "t:1") // enclosing region repainted -> mount republished
+                _ <- Browser.assertText(Selector.id("glpanel"), "panel")
+                g <- Browser.evalInt("window.__g")
+            yield assert(g == 0)
+        }
+    }
+
+    "closing a gate above a keyless mount still plays the leave ghost" in {
+        val app: UI < Async =
+            for open <- Signal.initRef(true)
+            yield UI.div(
+                UI.button("gclose2").id("gclose2").onClick(open.set(false)),
+                UI.when(open)(
+                    UI.mounted {
+                        Signal.initRef(0).map(_ => UI.div("panel").id("gopanel").leaveTransition("ghost-probe-leave"): UI)
+                    }.placeholder(UI.empty)
+                )
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("gopanel"), "panel")
+                _ <- Browser.evalDiscard(
+                    "window.__g=0;new MutationObserver(function(ms){ms.forEach(function(m){m.addedNodes.forEach(function(n){if(n.nodeType===1&&n.hasAttribute&&n.hasAttribute('data-kyo-ghost'))window.__g++;});});}).observe(document.body,{childList:true,subtree:true})"
+                )
+                _ <- Browser.click(Selector.id("gclose2"))
+                _ <- Browser.assertNotExists(Selector.id("gopanel"))
+                g <- Browser.evalInt("window.__g")
+            yield assert(g == 1)
+        }
+    }
+
     // Portal (data-kyo-portal): the client re-homes the element to document.body behind an inert
     // data-kyo-portal-slot placeholder at its logical position. The element stays the document's only
     // carrier of its data-kyo-path, the morph reconciles the body twin through the placeholder, and the

@@ -947,7 +947,12 @@ private[kyo] object HtmlRenderer:
            |        // Read enter/leave/focus-auto state from the LIVE range before the morph: which paths were
            |        // already on screen (so a reused node is not re-animated) and which leave-elements the incoming
            |        // HTML does not bring back (so their ghosts are cloned while they still have a layout box).
-           |        var __en=__kyoRangeEnterPaths(r),__gh=__kyoRangeLeavePrepare(r,kyoLeaveSurv(op.Replace.html)),__fa=__kyoRangeFocusAutoPaths(r);
+           |        // A mount cell's OWN republish never ghosts: the engine re-ran the mount effect because an enclosing
+           |        // region repainted (bookkeeping, not leaving), and placeholder vs effect content may key a leave-marked
+           |        // element differently, so the survivor set cannot match it and each republish spawned a ghost storm.
+           |        // Twin of DomBackend.onChange's mount guard; keep the two in lockstep.
+           |        var __en=__kyoRangeEnterPaths(r),__fa=__kyoRangeFocusAutoPaths(r);
+           |        var __gh=op.Replace.mount?[]:__kyoRangeLeavePrepare(r,kyoLeaveSurv(op.Replace.html));
            |        __kyoMorphRange(rp,r.s.nextSibling,r.e,tc.firstChild,null);
            |        // The mount's own first paint claims the region: the 'm' flag rides the live start marker
            |        // (source of truth — survives registry rebuilds); the registry entry is a cache. Any 'k' a
