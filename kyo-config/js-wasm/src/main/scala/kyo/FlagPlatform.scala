@@ -15,20 +15,28 @@ private[kyo] object FlagPlatform {
     // falls back to the stdlib read: `java.lang.System.getenv` always returns null under Scala.js-Node, but
     // a Wasm host may resolve it through its own environment binding, so the fallback still gives the
     // caller its best answer instead of a hardcoded null.
+    // The `typeof` guard must stay INLINE on the global selection: binding `js.Dynamic.global.process`
+    // to a val first emits a bare `process` read, which throws ReferenceError in browsers.
     def env(name: String): String = {
-        val proc = js.Dynamic.global.process
-        if (js.typeOf(proc) == "undefined" || js.typeOf(proc.env) == "undefined") java.lang.System.getenv(name)
+        if (js.typeOf(js.Dynamic.global.process) == "undefined") java.lang.System.getenv(name)
         else {
-            val value = proc.env.selectDynamic(name)
-            if (js.isUndefined(value) || value == null) java.lang.System.getenv(name)
-            else value.asInstanceOf[String]
+            val proc = js.Dynamic.global.process
+            if (js.typeOf(proc.env) == "undefined") java.lang.System.getenv(name)
+            else {
+                val value = proc.env.selectDynamic(name)
+                if (js.isUndefined(value) || value == null) java.lang.System.getenv(name)
+                else value.asInstanceOf[String]
+            }
         }
     }
 
     def envNames: Iterable[String] = {
-        val proc = js.Dynamic.global.process
-        if (js.typeOf(proc) == "undefined" || js.typeOf(proc.env) == "undefined") Iterable.empty
-        else js.Object.keys(proc.env.asInstanceOf[js.Object]).toSeq
+        if (js.typeOf(js.Dynamic.global.process) == "undefined") Iterable.empty
+        else {
+            val proc = js.Dynamic.global.process
+            if (js.typeOf(proc.env) == "undefined") Iterable.empty
+            else js.Object.keys(proc.env.asInstanceOf[js.Object]).toSeq
+        }
     }
 
 }
