@@ -87,6 +87,9 @@ private[kyo] object DomBackend:
         private def svgContextAt(path: Seq[String]): Boolean =
             ReactiveUI.findNode(root, path).map(_.svgContext).getOrElse(false)
 
+        private def tableContextAt(path: Seq[String]): Boolean =
+            ReactiveUI.findNode(root, path).map(_.tableContext).getOrElse(false)
+
         def onChange(path: Seq[String], ui: UI)(using Frame): Unit < Async =
             HtmlRenderer.render(ui, path).map { html =>
                 // Always wrap the rendered html in the reactive boundary element so the node carrying
@@ -95,7 +98,7 @@ private[kyo] object DomBackend:
                 // the next update could not locate the node. In SVG context the boundary is a <g> (a <span>
                 // is invalid inside <svg>); otherwise a <span> (CSS sets `display: contents` so it is layout-
                 // transparent).
-                val tag       = if svgContextAt(path) then "g" else "span"
+                val tag       = if svgContextAt(path) then "g" else if tableContextAt(path) then "tbody" else "span"
                 val pathAttr  = path.mkString(".")
                 val finalHtml = s"""<$tag data-kyo-path="$pathAttr" data-kyo-reactive>$html</$tag>"""
                 Sync.defer {

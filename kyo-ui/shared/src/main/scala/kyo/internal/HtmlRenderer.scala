@@ -28,8 +28,8 @@ private[kyo] object HtmlRenderer:
       * @return
       *   the full placeholder HTML string with data-kyo-path and data-kyo-reactive attributes
       */
-    private[kyo] def wrapReactiveRegion(path: Seq[String], svgContext: Boolean, innerHtml: String): String =
-        val tag = if svgContext then "g" else "span"
+    private[kyo] def wrapReactiveRegion(path: Seq[String], svgContext: Boolean, innerHtml: String, tableContext: Boolean = false): String =
+        val tag = if svgContext then "g" else if tableContext then "tbody" else "span"
         s"""<$tag data-kyo-path="${path.mkString(".")}" data-kyo-reactive>$innerHtml</$tag>"""
 
     /** Wrap body HTML in a full page with inline JS client. */
@@ -98,7 +98,9 @@ private[kyo] object HtmlRenderer:
 
     // ---- Core rendering ----
 
-    private def renderTo(sb: StringBuilder, ui: UI, path: Seq[String], svg: Boolean = false)(using Frame): Unit < Sync =
+    // `table` is true when `ui` is a direct child of a <table>: reactive placeholders must render as <tbody>
+    // (a <span> between <table> and <tr> is foster-parented out by the HTML parser, dropping the rows).
+    private def renderTo(sb: StringBuilder, ui: UI, path: Seq[String], svg: Boolean = false, table: Boolean = false)(using Frame): Unit < Sync =
         ui match
             case dd: Dropdown =>
                 renderDropdown(sb, dd, path)
@@ -131,13 +133,14 @@ private[kyo] object HtmlRenderer:
                             case _: Svg.ForeignObject => false
                             case _: Svg.SvgElement    => true
                             case _                    => svg
+                        val childTable = elem.isInstanceOf[Table]
                         val textChild: Unit < Sync = elem match
                             case t: Svg.Title => w(sb, esc(t.text)); Kyo.unit
                             case d: Svg.Desc  => w(sb, esc(d.text)); Kyo.unit
                             case _            => Kyo.unit
                         textChild.andThen(
                             Kyo.foreachDiscard(elem.children.toSeq.zipWithIndex) { (child, i) =>
-                                renderTo(sb, child, path :+ i.toString, childSvg)
+                                renderTo(sb, child, path :+ i.toString, childSvg, childTable)
                             }.andThen(w(sb, s"</$tag>"))
                         )
                     end if
@@ -156,22 +159,23 @@ private[kyo] object HtmlRenderer:
                     val childPath = child match
                         case kc: KeyedChild[?] => path :+ kc.key
                         case _                 => path :+ i.toString
-                    renderTo(sb, child, childPath, svg)
+                    renderTo(sb, child, childPath, svg, table)
                 }
 
             case KeyedChild(_, child) =>
-                renderTo(sb, child, path, svg)
+                renderTo(sb, child, path, svg, table)
 
             case r: Reactive[?] =>
-                // In SVG context emit a <g> placeholder (a <span> is invalid inside <svg>); the
-                // closing tag matches the opening. Both carry the same data-kyo-reactive anchor.
-                val tag = if svg then "g" else "span"
+                // In SVG context emit a <g> placeholder (a <span> is invalid inside <svg>); in table
+                // context a <tbody> (a <span> would be foster-parented out of the table); the
+                // closing tag matches the opening. All carry the same data-kyo-reactive anchor.
+                val tag = if svg then "g" else if table then "tbody" else "span"
                 w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}" data-kyo-reactive>""")
                 for current <- r.signal.current(using r.frame)
                 yield renderTo(sb, current, path, svg).andThen(w(sb, s"</$tag>"))
 
             case fe: Foreach[?, ?] @unchecked =>
-                val tag = if svg then "g" else "span"
+                val tag = if svg then "g" else if table then "tbody" else "span"
                 w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}" data-kyo-reactive>""")
                 fe.applyTyped {
                     [T] =>
@@ -192,7 +196,7 @@ private[kyo] object HtmlRenderer:
                 // publishes — for an adopted keyed instance, synchronously within the same render pass, so the
                 // placeholder never reaches a paint. In a static/SSG render (no subscription) the placeholder IS
                 // the node's server-side projection.
-                val tag = if svg then "g" else "span"
+                val tag = if svg then "g" else if table then "tbody" else "span"
                 w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}" data-kyo-reactive>""")
                 renderTo(sb, m.placeholderUI.getOrElse(UI.empty(using m.frame)), path, svg)
                     .andThen(w(sb, s"</$tag>"))
@@ -201,7 +205,7 @@ private[kyo] object HtmlRenderer:
                 // A boundary paints its fallback first; the subscription (ReactiveUI.subscribeBoundary) repaints
                 // the wrapper with the child from current signal values on reveal — immediately, within the same
                 // task chain, when the eager child walk started nothing pending. SSG projection = fallback.
-                val tag = if svg then "g" else "span"
+                val tag = if svg then "g" else if table then "tbody" else "span"
                 w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}" data-kyo-reactive>""")
                 renderTo(sb, b.fallbackUI.getOrElse(UI.empty(using b.frame)), path, svg)
                     .andThen(w(sb, s"</$tag>"))
