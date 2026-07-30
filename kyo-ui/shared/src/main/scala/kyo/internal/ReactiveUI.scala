@@ -12,6 +12,9 @@ private[kyo] case class ReactiveUI(
     children: Seq[ReactiveUI],
     handle: (Seq[String], UIEvent) => Boolean < Async,
     svgContext: Boolean = false,
+    // True when this region sits directly inside a <table>: its placeholder wrapper renders as <tbody>
+    // (see HtmlRenderer.wrapReactiveRegion), so the transports must wrap region updates with the same tag.
+    tableContext: Boolean = false,
     mountedSpec: Maybe[MountedSpec] = Absent,
     boundarySpec: Maybe[BoundarySpec] = Absent,
     mountDispatch: Maybe[MountDispatch] = Absent, // set on the ROOT normalize product only; see subscribe
@@ -135,11 +138,12 @@ private[kyo] object ReactiveUI:
         signal: Signal[UI],
         isConst: Boolean,
         children: Seq[ReactiveUI],
-        svgContext: Boolean = false
+        svgContext: Boolean = false,
+        tableContext: Boolean = false
     )(
         handle: (Seq[String], UIEvent) => Boolean < Async
     ): ReactiveUI =
-        ReactiveUI(path, signal, isConst, children, handle, svgContext)
+        ReactiveUI(path, signal, isConst, children, handle, svgContext, tableContext)
 
     /** Locate the ReactiveUI node at `path` in the resolved tree. Used by the exchanges to look up the
       * recorded svgContext flag so an empty placeholder uses the correct (<g> vs <span>) tag.
@@ -164,14 +168,20 @@ private[kyo] object ReactiveUI:
         end for
     end normalize
 
-    private def normalizeWith(ui: UI, path: Seq[String], svg: Boolean, mountDispatch: MountDispatch): ReactiveUI < Sync =
+    private def normalizeWith(
+        ui: UI,
+        path: Seq[String],
+        svg: Boolean,
+        mountDispatch: MountDispatch,
+        table: Boolean = false
+    ): ReactiveUI < Sync =
         given Frame = ui.frame
         ui match
             case ui: Reactive[?] =>
                 for
                     current   <- ui.signal.current
                     (kids, _) <- walkStatic(current, path, svg, mountDispatch)
-                yield init(path, ui.signal, isConst = false, kids, svgContext = svg) {
+                yield init(path, ui.signal, isConst = false, kids, svgContext = svg, tableContext = table) {
                     (targetPath, event) =>
                         for
                             currentUI     <- ui.signal.current
@@ -193,7 +203,7 @@ private[kyo] object ReactiveUI:
                 for
                     current   <- sig.current
                     (kids, _) <- walkStatic(current, path, svg, mountDispatch)
-                yield init(path, sig, isConst = false, kids, svgContext = svg) {
+                yield init(path, sig, isConst = false, kids, svgContext = svg, tableContext = table) {
                     (targetPath, event) =>
                         for
                             currentUI     <- sig.current
@@ -223,6 +233,7 @@ private[kyo] object ReactiveUI:
                     kids,
                     hdl,
                     svgContext = svg,
+                    tableContext = table,
                     reactiveAttrs = ui.attrs.reactiveAttrs,
                     reactiveBoolAttrs = ui.attrs.reactiveBoolAttrs,
                     reactiveClasses = ui.attrs.reactiveClasses
@@ -250,6 +261,7 @@ private[kyo] object ReactiveUI:
                     Seq.empty,
                     handle,
                     svgContext = svg,
+                    tableContext = table,
                     mountedSpec = Present(spec)
                 )
 
@@ -266,6 +278,7 @@ private[kyo] object ReactiveUI:
                     kids,
                     hdl,
                     svgContext = svg,
+                    tableContext = table,
                     boundarySpec = Present(spec)
                 )
 
@@ -299,7 +312,7 @@ private[kyo] object ReactiveUI:
     private type Handler = (Seq[String], UIEvent) => Boolean < Async
 
     /** Walk a static UI tree. Collect reactive children, build handle. */
-    private def walkStatic(ui: UI, basePath: Seq[String], svg: Boolean, mountDispatch: MountDispatch)(using
+    private def walkStatic(ui: UI, basePath: Seq[String], svg: Boolean, mountDispatch: MountDispatch, table: Boolean = false)(using
         Frame
     ): (Seq[ReactiveUI], Handler) < Sync =
         ui match
@@ -310,11 +323,12 @@ private[kyo] object ReactiveUI:
                     case _: Svg.ForeignObject => false
                     case _: Svg.SvgElement    => true
                     case _                    => svg
+                val childTable = elem.isInstanceOf[Table]
                 for childWalks <- Kyo.foreach(elem.children.toSeq.zipWithIndex) { (child, i) =>
                         val childPath = basePath :+ i.toString
                         child match
                             case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted | _: Boundary =>
-                                for rui <- normalizeWith(child, childPath, childSvg, mountDispatch)
+                                for rui <- normalizeWith(child, childPath, childSvg, mountDispatch, childTable)
                                 yield (Seq(rui), Seq.empty[(Int, Handler)])
                             case childElem: Element
                                 if collectSignalRef(
@@ -323,10 +337,10 @@ private[kyo] object ReactiveUI:
                                 // Normalize into a ReactiveUI node so subscribeScoped wires the updates. Required
                                 // even for a const element carrying ONLY reactive attrs: otherwise it is not walked
                                 // into a node and its in-place-patch observers would never start.
-                                for rui <- normalizeWith(childElem, childPath, childSvg, mountDispatch)
+                                for rui <- normalizeWith(childElem, childPath, childSvg, mountDispatch, childTable)
                                 yield (Seq(rui), Seq.empty[(Int, Handler)])
                             case _ =>
-                                for (innerKids, innerHandle) <- walkStatic(child, childPath, childSvg, mountDispatch)
+                                for (innerKids, innerHandle) <- walkStatic(child, childPath, childSvg, mountDispatch, childTable)
                                 yield (innerKids, Seq((i, innerHandle)))
                         end match
                     }
@@ -346,7 +360,7 @@ private[kyo] object ReactiveUI:
                         val inner = child match
                             case kc: KeyedChild[?] => kc.child
                             case _                 => child
-                        walkStatic(inner, childPath, svg, mountDispatch)
+                        walkStatic(inner, childPath, svg, mountDispatch, table)
                     }
                 yield
                     val allKids    = childWalks.flatMap(_._1)

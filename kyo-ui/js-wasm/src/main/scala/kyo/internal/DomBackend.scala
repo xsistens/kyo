@@ -274,6 +274,9 @@ private[kyo] object DomBackend:
         private def svgContextAt(path: Seq[String]): Boolean =
             ReactiveUI.findNode(root, path).map(_.svgContext).getOrElse(false)
 
+        private def tableContextAt(path: Seq[String]): Boolean =
+            ReactiveUI.findNode(root, path).map(_.tableContext).getOrElse(false)
+
         // In-place attr patch, ownership-marked (__kyoOwn) so a parent region's morph won't reconcile the live value back.
         override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
             Sync.defer {
@@ -311,7 +314,7 @@ private[kyo] object DomBackend:
                 // the next update could not locate the node. In SVG context the boundary is a <g> (a <span>
                 // is invalid inside <svg>); otherwise a <span> (CSS sets `display: contents` so it is layout-
                 // transparent).
-                val tag      = if svgContextAt(path) then "g" else "span"
+                val tag      = if svgContextAt(path) then "g" else if tableContextAt(path) then "tbody" else "span"
                 val pathAttr = path.mkString(".")
                 // data-kyo-mount flags a keyless mount's root so a parent morph treats it as opaque (never wipes the
                 // live subtree). Client-only marker, never in the server render, so golden HTML stays byte-identical.

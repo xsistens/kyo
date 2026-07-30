@@ -76,6 +76,9 @@ private[kyo] object UIServer:
             private def svgContextAt(path: Seq[String]): Boolean =
                 ReactiveUI.findNode(root, path).map(_.svgContext).getOrElse(false)
 
+            private def tableContextAt(path: Seq[String]): Boolean =
+                ReactiveUI.findNode(root, path).map(_.tableContext).getOrElse(false)
+
             // Pseudo-state CSS classes already carried by this connection's <style> (seeded from the
             // initial SSR page, then grown by every InjectCss this exchange sends), so a later
             // re-render reusing one of these classes never re-sends its rule. Connection-scoped: each
@@ -90,7 +93,7 @@ private[kyo] object UIServer:
                 // (twin of DomBackend.onChange).
                 HtmlRenderer.renderWithCss(ui, HtmlRenderer.contentPath(path, ui), mountSlot = true).map { (html, rules) =>
                     val newRules  = rules.filterNot(r => sentClasses.contains(r._1))
-                    val finalHtml = HtmlRenderer.wrapReactiveRegion(path, svgContextAt(path), html, mount)
+                    val finalHtml = HtmlRenderer.wrapReactiveRegion(path, svgContextAt(path), html, mount, tableContextAt(path))
                     val replaceOp = HtmlOp.Replace(path, finalHtml)
                     // runPartial drops only a Closed (the socket closed mid-render -> the op is moot); a Panic
                     // propagates to the region fiber rather than being swallowed by the discard.

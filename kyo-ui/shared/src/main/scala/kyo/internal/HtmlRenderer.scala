@@ -53,13 +53,22 @@ private[kyo] object HtmlRenderer:
       *   the region's path segments (joined with "." for the data-kyo-path attribute)
       * @param svgContext
       *   true if the reactive region lives inside SVG (uses "g" tag), false for HTML (uses "span")
+      * @param tableContext
+      *   true if the reactive region is a direct child of a `<table>` (uses "tbody" — a "span" there
+      *   would be foster-parented out of the table by the HTML parser, dropping the rows)
       * @param innerHtml
       *   the rendered inner content to wrap
       * @return
       *   the full placeholder HTML string with data-kyo-path and data-kyo-reactive attributes
       */
-    private[kyo] def wrapReactiveRegion(path: Seq[String], svgContext: Boolean, innerHtml: String, mount: Boolean = false): String =
-        val tag = if svgContext then "g" else "span"
+    private[kyo] def wrapReactiveRegion(
+        path: Seq[String],
+        svgContext: Boolean,
+        innerHtml: String,
+        mount: Boolean = false,
+        tableContext: Boolean = false
+    ): String =
+        val tag = if svgContext then "g" else if tableContext then "tbody" else "span"
         // data-kyo-mount flags a keyless mount's root so a parent __kyoMorph treats it as opaque (never wipes the
         // live subtree). Only added on a per-region Replace, never the full-page render, so golden HTML stays byte-identical.
         val mountAttr = if mount then " data-kyo-mount" else ""
@@ -139,7 +148,10 @@ private[kyo] object HtmlRenderer:
         svg: Boolean = false,
         cssRules: Maybe[CssCollector] = Absent,
         // Client-only: when true, stamp `data-kyo-mount-slot` on Mounted placeholders reached here (forwarded recursively).
-        mountSlot: Boolean = false
+        mountSlot: Boolean = false,
+        // True when `ui` is a direct child of a <table>: reactive placeholders must render as <tbody>
+        // (a <span> between <table> and <tr> is foster-parented out by the HTML parser, dropping the rows).
+        table: Boolean = false
     )(using
         Frame
     ): Unit < Sync =
@@ -187,13 +199,14 @@ private[kyo] object HtmlRenderer:
                             case _: Svg.ForeignObject => false
                             case _: Svg.SvgElement    => true
                             case _                    => svg
+                        val childTable = elem.isInstanceOf[Table]
                         val textChild: Unit < Sync = elem match
                             case t: Svg.Title => w(sb, esc(t.text)); Kyo.unit
                             case d: Svg.Desc  => w(sb, esc(d.text)); Kyo.unit
                             case _            => Kyo.unit
                         textChild.andThen(
                             Kyo.foreachDiscard(elem.children.toSeq.zipWithIndex) { (child, i) =>
-                                renderTo(sb, child, path :+ i.toString, childSvg, cssRules, mountSlot)
+                                renderTo(sb, child, path :+ i.toString, childSvg, cssRules, mountSlot, childTable)
                             }.andThen(w(sb, s"</$tag>"))
                         )
                     end if
@@ -212,22 +225,23 @@ private[kyo] object HtmlRenderer:
                     val childPath = child match
                         case kc: KeyedChild[?] => path :+ kc.key
                         case _                 => path :+ i.toString
-                    renderTo(sb, child, childPath, svg, cssRules, mountSlot)
+                    renderTo(sb, child, childPath, svg, cssRules, mountSlot, table)
                 }
 
             case KeyedChild(_, child) =>
-                renderTo(sb, child, path, svg, cssRules, mountSlot)
+                renderTo(sb, child, path, svg, cssRules, mountSlot, table)
 
             case r: Reactive[?] =>
-                // In SVG context emit a <g> placeholder (a <span> is invalid inside <svg>); the
-                // closing tag matches the opening. Both carry the same data-kyo-reactive anchor.
-                val tag = if svg then "g" else "span"
+                // In SVG context emit a <g> placeholder (a <span> is invalid inside <svg>); in table
+                // context a <tbody> (a <span> would be foster-parented out of the table); the
+                // closing tag matches the opening. All carry the same data-kyo-reactive anchor.
+                val tag = if svg then "g" else if table then "tbody" else "span"
                 w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}" data-kyo-reactive>""")
                 for current <- r.signal.current(using r.frame)
                 yield renderTo(sb, current, contentPath(path, current), svg, cssRules, mountSlot).andThen(w(sb, s"</$tag>"))
 
             case fe: Foreach[?, ?] @unchecked =>
-                val tag = if svg then "g" else "span"
+                val tag = if svg then "g" else if table then "tbody" else "span"
                 w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}" data-kyo-reactive>""")
                 fe.applyTyped {
                     [T] =>
@@ -245,7 +259,7 @@ private[kyo] object HtmlRenderer:
             case m: Mounted =>
                 // Static/SSG projection of a mount is its placeholder; live, ReactiveUI.subscribeMounted patches
                 // the region when the node's cell publishes (synchronously, before paint, for an adopted keyed instance).
-                val tag = if svg then "g" else "span"
+                val tag = if svg then "g" else if table then "tbody" else "span"
                 // Client-only marker (see `render`): declares a mount belongs at this slot, so a parent morph
                 // preserves a live mount but reconciles away a stale one when the new content is NOT a mount. SSR keeps golden HTML.
                 val slotAttr = if mountSlot then " data-kyo-mount-slot" else ""
@@ -257,7 +271,7 @@ private[kyo] object HtmlRenderer:
             case b: Boundary =>
                 // Static/SSG projection of a boundary is its fallback; live, ReactiveUI.subscribeBoundary repaints
                 // with the child on reveal (same task chain, when the eager child walk started nothing pending).
-                val tag = if svg then "g" else "span"
+                val tag = if svg then "g" else if table then "tbody" else "span"
                 w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}" data-kyo-reactive>""")
                 val bfb = b.fallbackUI.getOrElse(UI.empty(using b.frame))
                 renderTo(sb, bfb, contentPath(path, bfb), svg, cssRules, mountSlot)
