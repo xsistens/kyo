@@ -1411,14 +1411,18 @@ private[kyo] object HtmlRenderer:
            |    g.style.position="fixed";g.style.left=rect.left+"px";g.style.top=rect.top+"px";
            |    g.style.width=rect.width+"px";g.style.height=rect.height+"px";g.style.margin="0";g.style.pointerEvents="none";
            |    g.setAttribute("data-kyo-ghost","1");
-           |    ghosts.push({node:g,leave:leave});
+           |    ghosts.push({src:node,node:g,leave:leave});
            |  }
            |  return ghosts;
            |}
            |// Append prepared ghosts to <body>, add their leave classes next frame, remove on transitionend/animationend or a 1s safety.
+           |// The survivor set is a PREDICTION — a preserved subtree (opaque mount boundary, portal slot) survives the
+           |// patch despite not matching, so a ghost whose SOURCE is still in the document is dropped here (a leave
+           |// animation over the live element would be a false departure). Twin of DomBackend.spawnGhosts.
            |function kyoSpawnGhosts(ghosts){
            |  if(!ghosts)return;
            |  for(var i=0;i<ghosts.length;i++){(function(gh){
+           |    if(gh.src&&document.contains(gh.src))return;
            |    var g=gh.node;document.body.appendChild(g);
            |    var cls=(gh.leave||"").split(/\\s+/);
            |    requestAnimationFrame(function(){for(var c=0;c<cls.length;c++){if(cls[c])g.classList.add(cls[c]);}});
@@ -1522,8 +1526,10 @@ private[kyo] object HtmlRenderer:
            |    var tw=twins[t];
            |    var tp=tw.getAttribute("data-kyo-path");
            |    if(!document.querySelector('[data-kyo-portal-slot="'+tp+'"]')){
-           |      kyoSpawnGhosts(kyoLeavePrepare(tw,{}));
+           |      // Prepare while in the DOM, REMOVE, then spawn — kyoSpawnGhosts drops still-connected sources.
+           |      var __tg=kyoLeavePrepare(tw,{});
            |      document.body.removeChild(tw);
+           |      kyoSpawnGhosts(__tg);
            |    }
            |  }
            |}
