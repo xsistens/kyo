@@ -1110,8 +1110,10 @@ object UI:
               * visual GHOST (a deep clone, `position:fixed` at the captured rect, `pointer-events:none`) to `document.body`
               * with these classes added on the next frame; the ghost is removed on `transitionend`/`animationend` or a 1s
               * safety timeout. Only the OUTERMOST removed leave-element per patch spawns a ghost. The ghost is visual-only —
-              * its interactivity is dead (identifying `data-kyo-*`/`id` attributes are stripped from the clone). Emits
-              * `data-kyo-leave="..."`.
+              * its interactivity is dead (identifying `data-kyo-*`/`id` attributes are stripped from the clone). A mount
+              * cell's OWN republish never ghosts — the engine re-running a mount effect (because an enclosing region
+              * repainted) is bookkeeping, not leaving; the leave plays when an ENCLOSING patch removes the content (the
+              * gate closing). Emits `data-kyo-leave="..."`.
               */
             def leaveTransition(classes: String): Self = withAttrs(attrs.copy(leaveTransition = Present(classes)))
 

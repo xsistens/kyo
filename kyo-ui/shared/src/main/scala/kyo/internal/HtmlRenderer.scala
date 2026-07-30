@@ -902,8 +902,12 @@ private[kyo] object HtmlRenderer:
            |      var se=(ae&&typeof ae.selectionEnd==='number')?ae.selectionEnd:null;
            |      var __fa=faPaths(el);
            |      // Unit 1: capture enter old-set + prepare leave ghosts (rect+clone) BEFORE the patch mutates the DOM.
+           |      // A mount cell's own republish (the incoming wrapper carries bare data-kyo-mount) never ghosts:
+           |      // engine bookkeeping, not user-visible leaving — the placeholder/effect shapes may key a
+           |      // leave-marked element differently, so the survivor set cannot match it and each republish
+           |      // used to spawn a ghost storm. Twin of DomBackend.onChange's mount guard; keep in lockstep.
            |      var __en=faEnterPaths(el);
-           |      var __gh=kyoLeavePrepare(el,kyoLeaveSurv(op.Replace.html));
+           |      var __gh=__kyoRootIsMountCell(op.Replace.html)?[]:kyoLeavePrepare(el,kyoLeaveSurv(op.Replace.html));
            |      // Morph in place toward the pushed HTML (preserves focus/caret/scroll/transitions on reused nodes);
            |      // __kyoMorph returns the region root, so no re-query for the path is needed.
            |      var nel=__kyoMorph(el,op.Replace.html);
@@ -1181,6 +1185,9 @@ private[kyo] object HtmlRenderer:
            |  return null;
            |}
            |function __kyoIsMount(n){return n.nodeType===1&&n.hasAttribute("data-kyo-mount");}
+           |// True when the FIRST tag of a Replace html is a mount cell's wrapper (bare data-kyo-mount attr;
+           |// the whitespace-or-gt guard keeps data-kyo-mount-slot from false-matching on its prefix).
+           |function __kyoRootIsMountCell(html){var i=html.indexOf('<');if(i<0)return false;var j=html.indexOf('>',i);if(j<i)return false;return /\\sdata-kyo-mount[\\s>]/.test(html.substring(i,j+1));}
            |// Twin of DomBackend.isPortalEl/isPortalSlot/portalTwin: an element declared portal(true); the inert
            |// placeholder left at its logical position; the (unique) re-homed body child carrying the path.
            |function __kyoIsPortal(n){return n.nodeType===1&&n.hasAttribute("data-kyo-portal");}

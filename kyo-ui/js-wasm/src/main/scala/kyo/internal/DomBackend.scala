@@ -395,8 +395,16 @@ private[kyo] object DomBackend:
                         // not steal the user's focus).
                         val oldFocusAuto = focusAutoPaths(el)
                         // Unit 1: capture enter old-set + prepare leave ghosts (rect+clone) BEFORE the DOM mutates.
+                        // A mount cell's OWN republish (mount=true) never ghosts: the engine re-ran the mount
+                        // effect (an enclosing region repainted — bookkeeping, not user-visible leaving), and the
+                        // placeholder and effect content may shape their children differently, so a leave-marked
+                        // element's path changes across the swap and the survivor set cannot match it — each open
+                        // used to spawn a storm of leave ghosts over the fresh panel. Content genuinely leaves the
+                        // page through an ENCLOSING patch (the gate closing), which is a mount=false region.
                         val oldEnter = enterPaths(el)
-                        val ghosts   = prepareLeaveGhosts(el, leaveSurvSet(finalHtml))
+                        val ghosts =
+                            if mount then Seq.empty[(dom.Element, String)]
+                            else prepareLeaveGhosts(el, leaveSurvSet(finalHtml))
                         // Morph the existing subtree toward finalHtml instead of replacing it, so focus/caret/scroll/
                         // in-flight transitions on reused nodes survive the update. The surrounding capture-restore
                         // ceremony is retained: it now largely no-ops (identity is preserved) but stays correct. morph
