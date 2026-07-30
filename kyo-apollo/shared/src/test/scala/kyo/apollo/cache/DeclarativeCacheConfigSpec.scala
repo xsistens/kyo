@@ -202,6 +202,35 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
             assert(ConnectionFieldPolicy.unionByReference(None, incoming) == incoming)
         }
 
+        "ConnectionFieldPolicy.of derives the string policies from typed selectors" in {
+            // Phantom types + hand-rolled selectors standing in for codegen output:
+            // the generated `field$sel` classes implement FieldSelector the same way.
+            object gen:
+                sealed trait FeedRoot
+                sealed trait FeedConn
+                sealed trait FeedEdge
+                given TypeName[FeedRoot] = TypeName("Query")
+                given TypeName[FeedEdge] = TypeName("FeedEdge")
+                given CacheIdentity[FeedEdge] = CacheIdentity.by(_ =>
+                    SelectionBuilder.scalar[FeedEdge, (cursor: String), String](
+                        "cursor",
+                        CompiledNamedType("String").notNull,
+                        ScalarCodec.string
+                    )
+                )
+                val feed = new FieldSelector[FeedRoot, FeedConn]:
+                    def fieldName = "feed"
+                val edges = new FieldSelector[FeedConn, FeedEdge]:
+                    def fieldName = "edges"
+            end gen
+            import gen.given
+            assert(ConnectionFieldPolicy.of(gen.feed, gen.edges) == ConnectionFieldPolicy("Query", "feed"))
+            assert(
+                ConnectionFieldPolicy.of(gen.feed, gen.edges, filterArgs = List("category")) ==
+                    ConnectionFieldPolicy("Query", "feed", filterArgs = List("category"))
+            )
+        }
+
         "an empty registry is identity: full field key, no redirect, no merge" in {
             val policies = FieldPolicies.empty
             assert(policies.isEmpty)

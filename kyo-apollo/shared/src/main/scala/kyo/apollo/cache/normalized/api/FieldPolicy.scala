@@ -2,7 +2,11 @@ package kyo.apollo.cache.normalized.api
 
 import kyo.Maybe
 import kyo.apollo.api.CompiledField
+import kyo.apollo.api.FieldSelector
+import kyo.apollo.api.TypeName
 import kyo.apollo.json.Json
+import kyo.discard
+import scala.annotation.implicitNotFound
 
 /** How two stored values of the *same* field key merge when a new write lands on
   * an existing record: given the value already stored (`existing`, `None` if the
@@ -95,6 +99,51 @@ object ConnectionFieldPolicy:
             FieldPolicy(typeName, fieldName, keyArgs = Some(filterArgs)),
             FieldPolicy(typeName, edgesField, merge = Some(unionByReference))
         )
+
+    /** The typed form of [[apply]]: the connection field and its edges field are
+      * named by generated selectors, so both provably exist and a schema drift is
+      * a compile error instead of a silently inert policy (the registry keys by
+      * field name alone, so a misspelled string never matches and pagination
+      * quietly degrades to replacing pages).
+      *
+      * {{{
+      * ConnectionFieldPolicy.of(Playlist.tracks(), PlaylistTrackConnection.edges)
+      * }}}
+      *
+      * The `CacheIdentity[Edge]` context bound is a compile time witness for the
+      * other half of the pagination contract: [[unionByReference]] de-duplicates
+      * by referenced record key, so an edge type without its own identity is
+      * keyed by response position, pages collide on those keys, and every page
+      * replaces the previous one. Requiring the identity here turns that runtime
+      * degradation into a compile error. The query must still SELECT the
+      * identity's key fields (e.g. `cursor`) inside `edges` for the written
+      * records to carry them; that part stays a runtime concern.
+      *
+      * @param connection the connection field's generated selector, e.g.
+      *                   `Playlist.tracks()` (argument values are irrelevant,
+      *                   only the field is read)
+      * @param edges      the edge-list field's generated selector on the
+      *                   connection type, e.g. `PlaylistTrackConnection.edges`
+      * @param filterArgs argument names that DO partition the connection, as in
+      *                   [[apply]]
+      */
+    def of[Origin, Conn, Edge](
+        connection: FieldSelector[Origin, Conn],
+        edges: FieldSelector[Conn, Edge],
+        filterArgs: List[String] = Nil
+    )(using
+        origin: TypeName[Origin],
+        @implicitNotFound(
+            "Connection edges union by record reference, so the edge type needs its own cache identity: " +
+                "without one, edges are keyed by response position, successive pages collide on those keys, " +
+                "and every page replaces the previous one. Declare " +
+                "`given CacheIdentity[${Edge}] = CacheIdentity.by(_.cursor)` (or key by the node id) " +
+                "where your other identities live, and make sure the query selects the key field."
+        ) edgeIdentity: CacheIdentity[Edge]
+    ): List[FieldPolicy] =
+        discard(edgeIdentity)
+        apply(origin.name, connection.fieldName, filterArgs, edges.fieldName)
+    end of
 
     /** Union two edge lists, appending incoming references not already present and
       * de-duplicating by referenced record key; non-list values fall back to

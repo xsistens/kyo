@@ -521,8 +521,11 @@ object ApolloClientWriter:
                 val selClass = s"`${field.name}$$sel`"
                 // `A` is deliberately unbounded so a `map`/`mapInto`-projected child
                 // selection (whose result is not a named tuple) still nests here.
+                // Extending `FieldSelector` lets the selector value double as a typed
+                // field handle for library configuration (`ConnectionFieldPolicy.of`).
                 val selDef =
-                    s"""final class $selClass(selArgs: List[SelectionBuilder.Arg]):
+                    s"""final class $selClass(selArgs: List[SelectionBuilder.Arg]) extends FieldSelector[$originName, $leafName]:
+             |  def fieldName: String = "${field.name}"
              |  // Value form: a prebuilt selection (`Country.code ~ …`) passed directly.
              |  def apply[A](sel: SelectionBuilder[$leafName, A]): $returnType =
              |    SelectionBuilder.obj("${field.name}", $compiled, selArgs, sel, $nesting)
