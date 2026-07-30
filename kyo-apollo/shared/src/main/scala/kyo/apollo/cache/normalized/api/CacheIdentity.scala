@@ -60,6 +60,15 @@ object CacheIdentity:
         new CacheIdentity(origin.name, fields)
     end by
 
+    /** Declare `Origin` as a '''singleton''' type: one record per app, keyed by
+      * the bare typename (Apollo Client's `keyFields: []`). For one-per-viewer
+      * values like a playback state — a snapshot query, subscription events, and
+      * every mutation returning the type all normalize into the same record, so
+      * one cache watcher observes them all, optimistic overlays included.
+      */
+    def singleton[Origin](using origin: TypeName[Origin]): CacheIdentity[Origin] =
+        new CacheIdentity(origin.name, Nil)
+
     /** A [[CacheKeyGenerator]] over the given identities — the client-build
       * counterpart of the `given` declarations. Types without an identity fall
       * back to the default id-based keying.

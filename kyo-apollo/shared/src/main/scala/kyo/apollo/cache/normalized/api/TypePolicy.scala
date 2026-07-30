@@ -14,12 +14,19 @@ import kyo.apollo.json.Json
   * (in the declared order) so a composite key like `Book:<isbn>+<edition>` is
   * stable regardless of field order in the response.
   *
+  * An EMPTY `keyFields` list declares a '''singleton''' type (Apollo Client's
+  * `keyFields: []`): every object of the type normalizes into the single record
+  * keyed by the bare typename. The shape for one-per-app values like a viewer's
+  * playback state — a query snapshot, subscription events, and mutation
+  * responses of the type all converge on the same record, so any watcher sees
+  * every write (including optimistic overlays).
+  *
   * @param typename  the `__typename` this policy applies to
   * @param keyFields the object fields whose scalar values compose the id part of
-  *                  the key, tried/joined in the given order (must be non-empty)
+  *                  the key, tried/joined in the given order; empty for a
+  *                  singleton type keyed by the bare typename
   */
-final case class TypePolicy(typename: String, keyFields: List[String]):
-    require(keyFields.nonEmpty, s"TypePolicy for $typename must declare at least one key field")
+final case class TypePolicy(typename: String, keyFields: List[String])
 
 /** A [[CacheKeyGenerator]] driven by a set of [[TypePolicy]] declarations.
   *

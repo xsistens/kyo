@@ -40,9 +40,12 @@ object CacheKey:
         case _: Subscription[?] => SubscriptionRoot
 
     /** Build a key from a typename and object id, e.g. `Country:DE`. The standard
-      * shape [[CacheKeyGenerator]] emits when an object carries an id.
+      * shape [[CacheKeyGenerator]] emits when an object carries an id. An empty
+      * id yields the bare typename, the singleton-record key an empty-keyFields
+      * [[TypePolicy]] produces.
       */
-    def apply(typename: String, id: String): CacheKey = CacheKey(s"$typename:$id")
+    def apply(typename: String, id: String): CacheKey =
+        if id.isEmpty then CacheKey(typename) else CacheKey(s"$typename:$id")
 
     /** Build a position-based key from a rooted response `path`, e.g.
       * `List("QUERY_ROOT", "countries", "0")` becomes `QUERY_ROOT.countries.0`.
