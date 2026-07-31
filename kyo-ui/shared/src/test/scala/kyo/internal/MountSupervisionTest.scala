@@ -48,7 +48,7 @@ class MountSupervisionTest extends kyo.test.Test[Any]:
             for
                 gate         <- Promise.init[Unit, Any]
                 (rec, marks) <- recording("ready", "feed died")
-                effect = Fiber.init(gate.get.andThen(Abort.fail(boom)))
+                effect = UI.fork(gate.get.andThen(Abort.fail(boom)))
                     .map(_ => UI.span("ready").id("content"))
                 _ <- run(UI.div(UI.mounted(effect).keyed("k")), rec)
                 _ <- marks("ready").get
@@ -63,7 +63,7 @@ class MountSupervisionTest extends kyo.test.Test[Any]:
             for
                 gate         <- Promise.init[Unit, Any]
                 (rec, marks) <- recording("ready", "feed died")
-                effect = Fiber.init(gate.get.andThen(Abort.fail(boom)))
+                effect = UI.fork(gate.get.andThen(Abort.fail(boom)))
                     .map(_ => UI.span("ready").id("content"))
                 _ <- run(UI.div(UI.mounted(effect)), rec)
                 _ <- marks("ready").get
@@ -78,7 +78,7 @@ class MountSupervisionTest extends kyo.test.Test[Any]:
             for
                 gate         <- Promise.init[Unit, Any]
                 (rec, marks) <- recording("ready", "custom:feed died")
-                effect = Fiber.init(gate.get.andThen(Abort.fail(boom)))
+                effect = UI.fork(gate.get.andThen(Abort.fail(boom)))
                     .map(_ => UI.span("ready").id("content"))
                 node = UI.mounted(effect).keyed("k").onError(t => UI.span(s"custom:${t.getMessage}"))
                 _ <- run(UI.div(node), rec)
@@ -94,7 +94,7 @@ class MountSupervisionTest extends kyo.test.Test[Any]:
             for
                 gate         <- Promise.init[Unit, Any]
                 (rec, marks) <- recording("ready", "boundary:feed died")
-                effect = Fiber.init(gate.get.andThen(Abort.fail(boom)))
+                effect = UI.fork(gate.get.andThen(Abort.fail(boom)))
                     .map(_ => UI.span("ready").id("content"))
                 ui = UI.div(
                     UI.boundary.onError { case t: RuntimeException => UI.span(s"boundary:${t.getMessage}") }(
@@ -117,8 +117,8 @@ class MountSupervisionTest extends kyo.test.Test[Any]:
                 (rec, marks) <- recording("ready", "kyo-mount-error")
                 effect =
                     for
-                        _ <- Fiber.init(gate1.get.andThen(Abort.fail(new RuntimeException("first"))))
-                        _ <- Fiber.init(gate2.get.andThen(Abort.fail(new RuntimeException("second"))))
+                        _ <- UI.fork(gate1.get.andThen(Abort.fail(new RuntimeException("first"))))
+                        _ <- UI.fork(gate2.get.andThen(Abort.fail(new RuntimeException("second"))))
                     yield UI.span("ready").id("content")
                 _ <- run(UI.div(UI.mounted(effect).keyed("k")), rec)
                 _ <- marks("ready").get
@@ -137,7 +137,7 @@ class MountSupervisionTest extends kyo.test.Test[Any]:
             for
                 gate         <- Promise.init[Unit, Any]
                 (rec, marks) <- recording("feed died")
-                effect = Fiber.init(Abort.fail(boom)) // fails while the effect is still pending
+                effect = UI.fork(Abort.fail(boom)) // fails while the effect is still pending
                     .map(_ => gate.get)
                     .map(_ => UI.span("ready").id("content"))
                 _ <- run(UI.div(UI.mounted(effect).keyed("k")), rec)
@@ -153,7 +153,7 @@ class MountSupervisionTest extends kyo.test.Test[Any]:
         Scope.run {
             for
                 (rec, _) <- recording()
-                effect = Fiber.init(Abort.fail(new RuntimeException("from fiber")))
+                effect = UI.fork(Abort.fail(new RuntimeException("from fiber")))
                     .andThen(Abort.fail(new RuntimeException("from effect")))
                 _ <- run(UI.div(UI.mounted(effect).keyed("k")), rec)
                 _ <- Async.sleep(150L.millis)
@@ -167,7 +167,7 @@ class MountSupervisionTest extends kyo.test.Test[Any]:
                 sel          <- Signal.initRef("a")
                 (rec, marks) <- recording("inst:a", "inst:b")
                 effect = (k: String) =>
-                    Fiber.init(Async.never).map(_ => UI.span(s"inst:$k").id("content"))
+                    UI.fork(Async.never).map(_ => UI.span(s"inst:$k").id("content"))
                 ui = UI.div(sel.map(k => UI.div(UI.mounted(effect(k)).keyed(k))))
                 _ <- run(ui, rec)
                 _ <- marks("inst:a").get

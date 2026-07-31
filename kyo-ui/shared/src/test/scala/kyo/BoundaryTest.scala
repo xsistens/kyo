@@ -133,7 +133,7 @@ class BoundaryTest extends UITest:
                             UI.div(
                                 UI.span("revealed-sibling").id("sib"),
                                 UI.mounted(
-                                    Fiber.init(gate.get.andThen(Abort.fail(new DataError("tail-nope"))))
+                                    UI.fork(gate.get.andThen(Abort.fail(new DataError("tail-nope"))))
                                         .map(_ => UI.span("live").id("content"))
                                 ).keyed("feed")
                             )

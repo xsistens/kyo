@@ -2,6 +2,7 @@ package kyo
 
 import kyo.internal.HtmlRenderer
 import kyo.internal.ReactiveUI
+import kyo.internal.Reducible
 import kyo.internal.UICommands
 import kyo.internal.UIExchange
 import kyo.internal.UIServer
@@ -284,6 +285,33 @@ object UI:
             pendingPolicy = PendingPolicy.KeepLatest
         )
     end mounted
+
+    /** Forks a supervised background fiber: the `Fiber.init` to use inside a [[kyo.UI.mounted]] effect.
+      *
+      * A mount effect allocates and returns; anything long-lived it opens (a data feed, a subscription drain, a poll loop) keeps
+      * running on the node's `Scope` after the node published its UI. Forked with `Fiber.init`, such a fiber dying is invisible to
+      * the node: the effect already succeeded, so the node keeps showing content produced from a feed that no longer runs. Forked
+      * with `UI.fork`, a non-interrupt terminal failure (an `Abort` failure or a panic) flips the already-published node into its
+      * error rendering, taking the same route a failed mount takes.
+      *
+      * Supervision rides an inheritable `Local` that the engine installs around the mount effect, so it also reaches `UI.fork`
+      * calls made from inside a fiber the effect already forked that way. Engine fibers run outside it, a plain `Fiber.init` does
+      * not participate, and outside any mount effect `UI.fork` IS `Fiber.init`.
+      */
+    def fork[E, A, S, S2](
+        using isolate: Isolate[S, Sync, S2]
+    )(
+        v: => A < (Abort[E] & Async & S)
+    )(
+        using
+        reduce: Reducible[Abort[E]],
+        frame: Frame
+    ): Fiber[A, reduce.SReduced & S2] < (Sync & S & Scope) =
+        ReactiveUI.MountSupervision.local.use {
+            case Absent => Fiber.init[E, A, S, S2](v)
+            case Present(supervision) =>
+                Fiber.init[E, A, S, S2](v).map(fiber => fiber.onComplete(r => supervision.report(r)).andThen(fiber))
+        }
 
     /** Entry point for [[kyo.UI.Ast.Boundary]] (EXPERIMENTAL): `UI.boundary.fallback(spinner).onError { case e: DataError =>
       * card(e) }(subtree...)`. See the Boundary scaladoc for aggregation/reveal/error semantics.

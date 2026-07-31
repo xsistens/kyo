@@ -456,7 +456,7 @@ class MountedTest extends UITest:
                 UI.div(
                     UI.span("sibling").id("sibling"),
                     UI.mounted(
-                        Fiber.init(gate.get.andThen(Abort.fail(new RuntimeException("feed-died"))))
+                        UI.fork(gate.get.andThen(Abort.fail(new RuntimeException("feed-died"))))
                             .map(_ => UI.span("live").id("content"))
                     ).keyed("game")
                         .onError(t => UI.span(s"error:${t.getMessage}").id("content"))
@@ -486,7 +486,7 @@ class MountedTest extends UITest:
                     UI.div(
                         UI.span(s"tick:$n").id("tick-val"),
                         UI.mounted(
-                            Fiber.init(gate.get.andThen(Abort.fail(new RuntimeException("late-fail"))))
+                            UI.fork(gate.get.andThen(Abort.fail(new RuntimeException("late-fail"))))
                                 .map(_ => UI.span("live").id("content"))
                         ).keyed("stable")
                             .onError(t => UI.span(s"error:${t.getMessage}").id("content"))

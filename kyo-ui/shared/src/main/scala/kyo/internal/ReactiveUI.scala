@@ -1105,7 +1105,7 @@ private[kyo] object ReactiveUI:
         extends KyoException(s"Mounted background fiber failed: $value")
 
     /** The node-scope supervision seam of one mount instance: collects the FIRST non-interrupt failure of any
-      * supervised background fiber (see [[Fiber.Supervisor]]) and lets the node runner park on it AFTER the
+      * supervised background fiber (see [[kyo.UI.fork]]) and lets the node runner park on it AFTER the
       * effect outcome — flipping an already-published node into its error rendering retroactively.
       *
       * Publish→flip is serialized on the node's own fiber (the park runs after [[runMountEffect]]'s outcome
@@ -1117,19 +1117,23 @@ private[kyo] object ReactiveUI:
         firstFailure: Fiber.Promise.Unsafe[Throwable, Any],
         routed: AtomicRef[Boolean]
     ):
-        /** Installed around the USER effect only (engine fibers never see it): maps the fiber error to a
+        /** Fiber-completion callback registered by [[kyo.UI.fork]]: maps a non-interrupt terminal error to a
           * Throwable and completes the once-only failure promise; later failures are dropped by the promise.
+          * Runs on the completing fiber's thread, so it must stay allocation-light and must not block.
           */
-        val supervisor: Fiber.Supervisor = new Fiber.Supervisor:
-            def onFailure(error: Result.Error[Any])(using AllowUnsafe): Unit =
-                val t = error match
-                    case failure: Result.Failure[Any] =>
-                        failure.failure match
-                            case t: Throwable => t
-                            case other        => MountFiberFailure(other)(using Frame.internal)
-                    case panic: Result.Panic => panic.exception
-                discard(firstFailure.complete(Result.succeed(t)))
-            end onFailure
+        def report[E, A](result: Result[E, A])(using Frame): Unit < Sync =
+            result match
+                case Result.Panic(_: Interrupted)   => Kyo.lift(())
+                case Result.Failure(_: Interrupted) => Kyo.lift(())
+                case Result.Panic(exception)        => recordFailure(exception)
+                case Result.Failure(failure) =>
+                    failure match
+                        case t: Throwable => recordFailure(t)
+                        case other        => recordFailure(MountFiberFailure(other))
+                case _ => Kyo.lift(())
+
+        private def recordFailure(t: Throwable)(using Frame): Unit < Sync =
+            Sync.Unsafe.defer(discard(firstFailure.complete(Result.succeed(t))))
 
         /** Route a failure through `route` at most once across effect-fail and supervised-fail paths. */
         def routeOnce(t: Throwable)(route: Throwable => Unit < Async)(using Frame): Unit < Async =
@@ -1152,6 +1156,15 @@ private[kyo] object ReactiveUI:
                     new MountSupervision(Fiber.Promise.Unsafe.init[Throwable, Any](), routed)
                 }
             }
+
+        /** The mount instance a computation runs under, read by [[kyo.UI.fork]]. Inheritable, so a `UI.fork`
+          * inside an already forked fiber still reports to the node that started the chain. Installed around
+          * the USER effect only: engine fibers run outside it and are never supervised.
+          */
+        private[kyo] val local: Local[Maybe[MountSupervision]] = Local.init(Maybe.empty[MountSupervision])
+
+        private[kyo] def let[A, S](sup: MountSupervision)(v: A < S)(using Frame): A < S =
+            local.let(Present(sup))(v)
     end MountSupervision
 
     /** Run a Mounted node's effect and publish the outcome into its content cell, then settle the enclosing
@@ -1178,7 +1191,7 @@ private[kyo] object ReactiveUI:
                         case Present(ctx) =>
                             ctx.tryHandle(t).map(handled => if handled then () else cell.set(spec.errorUI(t)).unit)
                         case Absent => cell.set(spec.errorUI(t)).unit
-        Abort.run[Throwable](Fiber.Supervisor.let(supervision.supervisor)(spec.node.effect)).map {
+        Abort.run[Throwable](MountSupervision.let(supervision)(spec.node.effect)).map {
             case Result.Success(ui) => cell.set(ui).andThen(record(ui)).andThen(onSettled)
             case Result.Failure(t) =>
                 Log.error(s"Mounted effect failed (frame=${spec.node.frame.position.show})", t)
