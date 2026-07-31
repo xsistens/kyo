@@ -101,22 +101,6 @@ extension [D](call: ApolloCall[D])
                 ApolloResponse.fromException[D](Uuid.random(), ApolloEffect.asApolloException(cause))
         }
 
-    /** Drain this operation's stream on a `Scope`-bound fiber purely for its cache
-      * side effect, discarding every response.
-      *
-      * The one-liner for the "subscription that exists only to keep the normalized
-      * cache warm" pattern: a subscription's replies normalize into the store and
-      * re-emit every dependent `watchSignal`, but only while something consumes the
-      * stream — a live subscription with no collector delivers nothing. Fork this
-      * and the shared socket has its consumer; the fiber is bound to the current
-      * `Scope`, so the subscription is torn down (and the socket unsubscribed) when
-      * that scope is released. Yields immediately — it does not wait for the stream.
-      */
-    def keepCacheWarm(using
-        Frame,
-        Tag[Emit[Chunk[ApolloResponse[D]]]]
-    ): Unit < (Async & Scope) =
-        Fiber.init(Scope.run(call.stream.foreach(_ => ()))).unit
 end extension
 
 /** Helpers backing the effect-form extension methods, kept off the extension

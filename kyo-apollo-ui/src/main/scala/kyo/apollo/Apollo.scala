@@ -23,7 +23,7 @@ import scala.NamedTuple.AnyNamedTuple
   * `Signal` builders (`watchSignal`/`pollingSignal`/`subscribe`), and client
   * construction (`client`/`clientLayer`). Fluent per-call configuration
   * (`call.fetchPolicy`…), the one-shot run verbs (`call.data`/`call.response`), the
-  * raw stream views (`call.watch()`/`call.watchStream`/`call.keepCacheWarm`), and the
+  * raw stream views (`call.watch()`/`call.watchStream`), and the
   * instance methods on the returned handles/signals/store stay as methods on their
   * receiver.
   */
@@ -170,7 +170,7 @@ object Apollo:
                         unsubscribe()
                         val _ = channel.unsafe.close()
                     })
-                    .andThen(Fiber.init(consume))
+                    .andThen(UI.fork(consume))
                     .andThen(ref)
             }
         }
@@ -247,7 +247,7 @@ object Apollo:
                         unsubscribe()
                         val _ = channel.unsafe.close()
                     })
-                    .andThen(Fiber.init(consume))
+                    .andThen(UI.fork(consume))
                     .andThen(signalRef)
             }
         }
@@ -345,7 +345,7 @@ object Apollo:
             ref <- Signal.initRef[QueryState[D]](QueryState.Loading)
             // `push`, not a bare `project`: a mid-stream transport failure must retain
             // the last good data (same contract as the gated overload).
-            _ <- Fiber.init(Scope.run(call.watch().foreach(resp => ApolloSignal.push(ref, resp))))
+            _ <- UI.fork(Scope.run(call.watch().foreach(resp => ApolloSignal.push(ref, resp))))
         yield ref
 
     /** [[watchSignal]] with a live `skip` — react-apollo's `skip` (urql's `pause`).
@@ -360,7 +360,7 @@ object Apollo:
     ): Signal[QueryState[D]] < (Async & Scope) =
         for
             ref <- Signal.initRef[QueryState[D]](QueryState.Loading)
-            _   <- Fiber.init(ApolloSignal.driveGated(call.watch(), ref, skip, mode))
+            _   <- UI.fork(ApolloSignal.driveGated(call.watch(), ref, skip, mode))
         yield ref
 
     /** [[watchSignal]] that additionally **polls** the network every `interval` — the
@@ -379,7 +379,7 @@ object Apollo:
                         .run[ApolloException](call.fetchPolicy(FetchPolicy.NetworkOnly).data)
                         .andThen(pollLoop)
                 }
-            Fiber.init(pollLoop).andThen(signal)
+            UI.fork(pollLoop).andThen(signal)
         }
 
     /** [[pollingSignal]] with a live `skip`: while skipped, the watcher is gated (per
@@ -406,13 +406,20 @@ object Apollo:
                                 .andThen(pollLoop)
                     }
                 }
-            Fiber.init(pollLoop).andThen(signal)
+            UI.fork(pollLoop).andThen(signal)
         }
 
     /** Watch a **subscription** as a live [[Signal]] of [[QueryState]] — the
       * react-apollo `useSubscription` shape. Seeds [[QueryState.Loading]], then
       * re-emits the projection of each event; the socket is torn down when the
       * enclosing `Scope` is released.
+      *
+      * This is also the "subscription that exists only to keep the normalized cache
+      * warm" pattern: the drain is what gives the shared socket a consumer, and each
+      * reply normalizes into the store and re-emits every dependent `watchSignal`.
+      * Ignore the returned signal and the cache side effect is all you get; observe
+      * it and the terminal state (a [[QueryState.Failure]], or a feed that simply
+      * stopped) stays a value you can act on instead of a silent gap.
       */
     def subscribe[D](call: ApolloCall[D])(using
         Frame,
@@ -421,7 +428,7 @@ object Apollo:
     ): Signal[QueryState[D]] < (Async & Scope) =
         for
             ref <- Signal.initRef[QueryState[D]](QueryState.Loading)
-            _   <- Fiber.init(Scope.run(call.stream.foreach(resp => ref.set(ApolloSignal.project(resp)))))
+            _   <- UI.fork(Scope.run(call.stream.foreach(resp => ref.set(ApolloSignal.project(resp)))))
         yield ref
 
     /** [[subscribe]] with a live `skip` — pause/resume a subscription feed.
@@ -436,7 +443,7 @@ object Apollo:
     ): Signal[QueryState[D]] < (Async & Scope) =
         for
             ref <- Signal.initRef[QueryState[D]](QueryState.Loading)
-            _   <- Fiber.init(ApolloSignal.driveGated(call.stream, ref, skip, mode))
+            _   <- UI.fork(ApolloSignal.driveGated(call.stream, ref, skip, mode))
         yield ref
 
     // --- Client construction -------------------------------------------------

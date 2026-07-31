@@ -230,7 +230,7 @@ extension [D](sig: Signal[QueryState[D]])
             // The follow observer re-reads the CURRENT state on attach (observe's
             // contract), so a value that lands between seeding and attaching is
             // caught up immediately — no gap.
-            _ <- Fiber.init(sig.observe {
+            _ <- UI.fork(sig.observe {
                 case QueryState.Success(d, _, _)  => ref.set(d)
                 case QueryState.PartialData(d, _) => ref.set(d)
                 case QueryState.Failure(ex, _)    => onTailFailure(ex)
@@ -241,10 +241,10 @@ extension [D](sig: Signal[QueryState[D]])
     /** The '''escalating''' suspense form — [[dataSignal]] without a tail handler: a tail
       * `QueryState.Failure` is logged and then FAILS the follow-observer fiber (`Abort.fail`).
       *
-      * On an engine with node-scope supervision (the kyo `ui-mounted` fork, `1.0.0-RC5-mounted3`+),
-      * that fiber failure flips the enclosing mounted node into its error state — the same routing a
-      * failed mount takes (node `.onError` → `UI.boundary` chain → default error UI), so head AND
-      * tail failures land in one channel. On a vanilla engine it degrades to logged-and-stopped (the
+      * The follow observer is forked with `UI.fork`, so on an engine with node-scope supervision that
+      * fiber failure flips the enclosing mounted node into its error state — the same routing a failed
+      * mount takes (node `.onError`, then the default error UI), so head AND tail failures land in one
+      * channel. On a vanilla engine it degrades to logged-and-stopped (the
       * signal keeps the last delivered data) — never silently swallowed, but nothing repaints. Use
       * the `(onTailFailure)` overload to keep the node alive and surface tail failures in-app (a
       * toast) instead.
@@ -260,7 +260,7 @@ extension [D](sig: Signal[QueryState[D]])
                 }
             }
             ref <- Signal.initRef[D](seed)
-            _ <- Fiber.init(sig.observe {
+            _ <- UI.fork(sig.observe {
                 case QueryState.Success(d, _, _)  => ref.set(d)
                 case QueryState.PartialData(d, _) => ref.set(d)
                 case QueryState.Failure(ex, _)    =>
