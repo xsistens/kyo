@@ -5,7 +5,7 @@ import kyo.*
 
 /** Direct-engine tests for node-scope supervision (no browser): a background fiber a mounted node forked with
   * `UI.fork` failing AFTER publication flips the node into its error routing (node `.onError`, then the
-  * default error UI), first-failure-wins, teardown interrupts never flip, and the
+  * boundary chain, then the default error UI), first-failure-wins, teardown interrupts never flip, and the
   * fibers that do not participate (`Fiber.init`, `Fiber.initUnscoped`) leave the node alone. The engine is
   * driven via `ReactiveUI.normalize`/`subscribe` with a recording `UIExchange` (the MountedTest direct-test
   * idiom).
@@ -88,6 +88,26 @@ class MountSupervisionTest extends kyo.test.Test[Any]:
                 _ <- gate.completeUnitDiscard
                 _ <- marks("custom:feed died").get
             yield assert(rec.count("custom:feed died") == 1)
+        }
+    }
+
+    "an unhandled supervised failure walks the boundary chain post-reveal" in {
+        Scope.run {
+            for
+                gate         <- Promise.init[Unit, Any]
+                (rec, marks) <- recording("ready", "boundary:feed died")
+                effect = UI.fork(gate.get.andThen(Abort.fail(boom)))
+                    .map(_ => UI.span("ready").id("content"))
+                ui = UI.div(
+                    UI.boundary.onError { case t: RuntimeException => UI.span(s"boundary:${t.getMessage}") }(
+                        UI.mounted(effect).keyed("k")
+                    )
+                )
+                _ <- run(ui, rec)
+                _ <- marks("ready").get
+                _ <- gate.completeUnitDiscard
+                _ <- marks("boundary:feed died").get
+            yield assert(rec.count("boundary:feed died") == 1)
         }
     }
 

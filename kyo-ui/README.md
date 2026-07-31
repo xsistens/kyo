@@ -376,7 +376,7 @@ A value input that should UPDATE a live instance belongs in a `Signal` parameter
 
 ### Failure after the first paint
 
-A mount can also fail *after* it has already published its UI: a background fiber it forked (a data feed, a subscription drain, a poll loop) terminates with an error. Fork those with `UI.fork` instead of `Fiber.init` and node-scope supervision covers that window: a non-interrupt failure flips the already-published node into the same error routing as an up-front failure: its `.onError` first, then a default error node.
+A mount can also fail *after* it has already published its UI: a background fiber it forked (a data feed, a subscription drain, a poll loop) terminates with an error. Fork those with `UI.fork` instead of `Fiber.init` and node-scope supervision covers that window: a non-interrupt failure flips the already-published node into the same error routing as an up-front failure, its `.onError` first, then the enclosing `UI.boundary` chain, then a default error node.
 
 ```scala
 import UI.*
@@ -390,6 +390,8 @@ def liveTicker(quotes: Stream[String, Async]): UI < (Async & Scope) =
 ```
 
 At most one flip happens per instance (first failure wins), and the flip *replaces* the node's content; a component that would rather keep its content and surface the error elsewhere routes that failure to a value channel (a toast) instead of letting the fiber fail, and an `.onError` render can offer a retry by swapping the node's key. A clean interrupt, including the one that tears the node down on a key change, is never a failure. Supervision rides an inheritable `Local` the engine installs around the mount effect, so it reaches `UI.fork` calls made from inside a fiber the effect already forked that way. Participation is opt-in: a plain `Fiber.init` is still scoped to the node but its failure stays invisible to it, which is the escape hatch for a fiber the effect watches itself, and `Fiber.initUnscoped` stays fire-and-forget. Outside a mount effect, `UI.fork` is `Fiber.init`.
+
+`UI.boundary.fallback(spinner).onError { case e: DataError => card(e) }(subtree*)` (experimental) aggregates the pending state of the mounted descendants beneath it and supplies a shared error branch for any that carry no node-local `.onError`.
 
 ## Inputs and forms
 

@@ -256,7 +256,7 @@ object UI:
       * '''Node-scope supervision.''' The node's error state is not limited to the mount phase: a fiber the effect forks with
       * [[kyo.UI.fork]] (directly, or from inside a fiber it already forked that way) is SUPERVISED. A non-interrupt terminal
       * failure of such a fiber retroactively flips the ALREADY-PUBLISHED node into the same error routing a failed mount takes:
-      * node-local `.onError` render, else the default inline error.
+      * node-local `.onError` render, else the enclosing [[UI.boundary]] chain (typed selection), else the default inline error.
       * First failure wins (at most one flip per instance, shared with the effect-failure path); teardown interrupts are exempt;
       * the node `Scope` stays open on a flip (sibling fibers keep running, exactly like a pending-phase failure). Participation
       * is opt-in: a plain `Fiber.init` is scoped to the node like always but its failure stays invisible to the node, which is
@@ -314,6 +314,32 @@ object UI:
             case Present(supervision) =>
                 Fiber.init[E, A, S, S2](v).map(fiber => fiber.onComplete(r => supervision.report(r)).andThen(fiber))
         }
+
+    /** Entry point for [[kyo.UI.Ast.Boundary]] (EXPERIMENTAL): `UI.boundary.fallback(spinner).onError { case e: DataError =>
+      * card(e) }(subtree...)`. See the Boundary scaladoc for aggregation/reveal/error semantics.
+      */
+    def boundary: BoundaryBuilder = BoundaryBuilder(Absent, Absent)
+
+    final case class BoundaryBuilder private[kyo] (
+        fallbackUI: Maybe[UI],
+        errorPf: Maybe[PartialFunction[Throwable, UI]]
+    ):
+        /** Painted while mounted descendants that started under this boundary are pending. Default: empty. */
+        def fallback(ui: UI): BoundaryBuilder = copy(fallbackUI = Present(ui))
+
+        /** Typed error selection: renders the first matching error of a mounted descendant that has no
+          * node-local `.onError`; non-matching errors bubble to the next enclosing boundary, then to the
+          * node-local default.
+          */
+        def onError(pf: PartialFunction[Throwable, UI]): BoundaryBuilder = copy(errorPf = Present(pf))
+
+        def apply(children: Ast.HtmlChildVal*)(using Frame): Ast.Boundary =
+            val child = children.toList match
+                case single :: Nil => single.value
+                case many          => Ast.Fragment[UI](Chunk.from(many.map(_.value)))
+            Ast.Boundary(child, fallbackUI, errorPf)
+        end apply
+    end BoundaryBuilder
 
     /** Builder-style modifiers for [[kyo.UI.Ast.Mounted]], following the attrs-API idiom. */
     object MountedOps:
@@ -1187,6 +1213,24 @@ object UI:
             placeholderUI: Maybe[UI],
             errorRender: Maybe[Throwable => UI],
             pendingPolicy: UI.PendingPolicy
+        )(using val frame: Frame) extends UI with HtmlContent
+
+        /** A pending/error boundary over a subtree (EXPERIMENTAL): while any mounted descendant that started
+          * under this boundary is still pending, the boundary paints `fallbackUI` instead of `child`: the
+          * subtree is subscribed EAGERLY behind the fallback (all mount effects start immediately, in
+          * parallel; no waterfalls), and the child content is painted from current signal values once the
+          * pending count reaches zero. Reveal is once-only (Suspense semantics for first load): mounts that
+          * start after the reveal use their node-local placeholders.
+          *
+          * `errorPf` is the boundary's typed error selection: a mounted descendant's failure WITHOUT a
+          * node-local `.onError` is offered to the nearest enclosing boundary chain; the first boundary whose
+          * partial function is defined at the error renders it (replacing the boundary's whole content). An
+          * unmatched error falls back to the node-local default rendering and counts as settled.
+          */
+        case class Boundary(
+            child: UI,
+            fallbackUI: Maybe[UI],
+            errorPf: Maybe[PartialFunction[Throwable, UI]]
         )(using val frame: Frame) extends UI with HtmlContent
 
         // ====== Block containers ======
