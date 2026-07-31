@@ -150,6 +150,27 @@ object QueryState:
     def of[D](response: ApolloResponse[D]): QueryState[D] = ApolloSignal.project(response)
 end QueryState
 
+/** Where the failure of a live operation's UPDATE goes: a `QueryState.Failure` that arrives after
+  * [[dataSignal]] already seeded and the enclosing mount effect already returned, so no effect row is left
+  * to abort into. The load succeeded; something that was keeping it current did not. The choice is what
+  * the user should see, not how it is delivered.
+  */
+enum UpdateFailure derives CanEqual:
+
+    /** The content is no longer valid: fail the follow fiber. It is forked with `UI.fork`, so kyo-ui's
+      * node-scope supervision flips the enclosing mounted node into the same error rendering a failed mount
+      * takes (its `.onError`, then the enclosing `UI.boundary` chain, then the default error node). The
+      * default, and the right choice when the live feed IS the page.
+      */
+    case Escalate
+
+    /** The content is stale but still worth showing: keep it and report the failure to the app's
+      * `UI.notices` sink (a toast, a banner, a log). The node, its region and the follow observer stay
+      * alive, so a later emission repaints as usual.
+      */
+    case Notify
+end UpdateFailure
+
 /** How a reactive watcher / subscription reacts while its `skip` signal is `true`
   * — the kyo-ui form of react-apollo's `skip` (and urql's `pause`), driven by a
   * live `Signal[Boolean]` so a button can toggle it.
@@ -194,27 +215,26 @@ extension [D](call: ApolloCall[D])
 end extension
 
 extension [D](sig: Signal[QueryState[D]])
-    /** Consume a live operation '''suspense-style''': await the FIRST settled
-      * [[QueryState]] — `Success`/`PartialData` seeds the returned `Signal[D]`,
-      * `Failure` aborts into the shared Apollo error channel — then follow every
-      * later data emission. The pending phase suspends THIS effect, so a UI
-      * mount's placeholder covers loading and its error render covers the first
-      * failure: the view consumes plain data with no `QueryState` arm left.
+    /** Consume a live operation '''suspense-style''': await the FIRST settled [[QueryState]]
+      * (`Success`/`PartialData` seeds the returned `Signal[D]`, `Failure` aborts into the shared Apollo
+      * error channel), then follow every later data emission. The pending phase suspends THIS effect, so a
+      * UI mount's placeholder covers loading and its error render covers the first failure: the view
+      * consumes plain data with no `QueryState` arm left.
       *
-      * A live stream can still fail AFTER the enclosing mount completed — its
-      * effect row is gone by then, so a tail failure cannot abort. It goes to the
-      * '''mandatory''' [[onTailFailure]] handler instead (surface it — a toast, a
-      * log — never swallow it silently), while the signal keeps the last
-      * delivered data. Later `Idle`/`Loading` emissions (a gated re-subscribe,
-      * a refetch) also keep the last data — the suspense shape has no reified
-      * loading state to fall back to.
+      * A live stream can still fail AFTER the enclosing mount completed. Its effect row is gone by then, so
+      * such a failure cannot abort, and `onUpdateFailure` decides where it goes instead:
+      * [[UpdateFailure.Escalate]] fails the follow fiber (forked with `UI.fork`, so node-scope supervision
+      * flips the enclosing mounted node into the same error rendering a failed mount takes),
+      * [[UpdateFailure.Notify]] hands it to the app's `UI.notices` sink and leaves the node alone. The
+      * signal keeps the last delivered data either way.
+      * Later `Idle`/`Loading` emissions (a gated re-subscribe, a refetch) also keep the last data: the
+      * suspense shape has no reified loading state to fall back to.
       *
-      * The first-settled await rides a scoped observer torn down as soon as the
-      * seed resolves (`Scope.run`); the follow observer lives in the CALLER's
-      * `Scope` — release it to stop following (the same lifetime contract as
-      * [[watchSignal]]/[[subscribeSignal]]).
+      * The first-settled await rides a scoped observer torn down as soon as the seed resolves (`Scope.run`);
+      * the follow observer lives in the CALLER's `Scope`, so releasing it stops the following (the same
+      * lifetime contract as [[watchSignal]]/[[subscribeSignal]]).
       */
-    def dataSignal(onTailFailure: ApolloException => Unit < Async)(using
+    def dataSignal(onUpdateFailure: UpdateFailure)(using
         Frame,
         CanEqual[D, D]
     ): Signal[D] < (Async & Abort[ApolloException] & Scope) =
@@ -229,47 +249,23 @@ extension [D](sig: Signal[QueryState[D]])
             ref <- Signal.initRef[D](seed)
             // The follow observer re-reads the CURRENT state on attach (observe's
             // contract), so a value that lands between seeding and attaching is
-            // caught up immediately — no gap.
+            // caught up immediately: no gap.
             _ <- UI.fork(sig.observe {
                 case QueryState.Success(d, _, _)  => ref.set(d)
                 case QueryState.PartialData(d, _) => ref.set(d)
-                case QueryState.Failure(ex, _)    => onTailFailure(ex)
+                case QueryState.Failure(ex, _)    => ApolloSignal.routeUpdateFailure(onUpdateFailure, ex)
                 case _                            => (): Unit
             })
         yield ref
 
-    /** The '''escalating''' suspense form — [[dataSignal]] without a tail handler: a tail
-      * `QueryState.Failure` is logged and then FAILS the follow-observer fiber (`Abort.fail`).
-      *
-      * The follow observer is forked with `UI.fork`, so on an engine with node-scope supervision that
-      * fiber failure flips the enclosing mounted node into its error state — the same routing a failed
-      * mount takes (node `.onError`, then the default error UI), so head AND tail failures land in one
-      * channel. On a vanilla engine it degrades to logged-and-stopped (the
-      * signal keeps the last delivered data) — never silently swallowed, but nothing repaints. Use
-      * the `(onTailFailure)` overload to keep the node alive and surface tail failures in-app (a
-      * toast) instead.
+    /** [[dataSignal]] with the default policy, [[UpdateFailure.Escalate]]: kept as its own overload so
+      * the common point-free form stays `signal.dataSignal`.
       */
     def dataSignal(using
         Frame,
         CanEqual[D, D]
     ): Signal[D] < (Async & Abort[ApolloException] & Scope) =
-        for
-            seed <- Scope.run {
-                Promise.initWith[D, Abort[ApolloException]] { p =>
-                    Fiber.init(sig.observe(st => ApolloSignal.completeSettled(p, st))).andThen(p.get)
-                }
-            }
-            ref <- Signal.initRef[D](seed)
-            _ <- UI.fork(sig.observe {
-                case QueryState.Success(d, _, _)  => ref.set(d)
-                case QueryState.PartialData(d, _) => ref.set(d)
-                case QueryState.Failure(ex, _)    =>
-                    // Escalate: fail this follow fiber so a supervising mount node flips; the log keeps
-                    // the failure visible on engines without supervision.
-                    Log.error("apollo live operation failed after first data", ex).andThen(Abort.fail(ex))
-                case _ => (): Unit
-            })
-        yield ref
+        dataSignal(UpdateFailure.Escalate)
 end extension
 
 /** Helpers backing the reactive-form extension methods, kept off the extension
@@ -277,6 +273,19 @@ end extension
   * [[ApolloEffect]]) and the subscription bridge is shared by both shapes.
   */
 object ApolloSignal:
+
+    /** Deliver a failed update per [[UpdateFailure]]: escalate by failing the calling (supervised) follow
+      * fiber, or hand it to the app's notice sink. Logged either way, so an app with no sink installed
+      * still sees it.
+      */
+    private[apollo] def routeUpdateFailure(policy: UpdateFailure, ex: ApolloException)(using
+        Frame
+    ): Unit < (Async & Abort[ApolloException]) =
+        Log.error("apollo live operation failed after first data", ex).andThen {
+            policy match
+                case UpdateFailure.Escalate => Abort.fail(ex)
+                case UpdateFailure.Notify   => UI.notify(ex)
+        }
 
     /** Complete `p` once the state settles: data succeeds it, a failure fails it;
       * `Idle`/`Loading` leave it pending ([[dataSignal]]'s first-settled await).

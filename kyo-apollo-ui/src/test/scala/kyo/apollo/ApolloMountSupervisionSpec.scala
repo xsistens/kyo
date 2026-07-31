@@ -9,7 +9,7 @@ import kyo.internal.UIExchange
 
 /** End-to-end check of the seam between kyo-apollo's live operations and kyo-ui's node-scope
   * supervision: a component mounted with `UI.mounted` opens an apollo `dataSignal` in its effect, the
-  * source turns into a tail `QueryState.Failure` long after the node published its UI, and the node
+  * source turns into a `QueryState.Failure` long after the node published its UI, and the node
   * has to flip into its error rendering.
   *
   * The escalating `dataSignal` forks its follow observer with `UI.fork`, which is what carries the
@@ -54,12 +54,12 @@ class ApolloMountSupervisionSpec extends kyo.test.Test[Any]:
     private def run(ui: UI, rec: Recording)(using Frame): Unit < (Async & Scope) =
         ReactiveUI.normalize(ui, Seq.empty).map(root => ReactiveUI.subscribe(root, rec.exchange).unit)
 
-    "a tail failure of an apollo dataSignal flips the mounted node that opened it" in {
+    "a failed update of an apollo dataSignal flips the mounted node that opened it" in {
         Scope.run {
             for
                 src          <- Signal.initRef[QueryState[Int]](QueryState.Success(1, fromCache = false))
                 (rec, marks) <- recording("value:1", "kyo-mount-error")
-                effect = src.dataSignal.map(sig => UI.span(sig.map(n => s"value:$n")).id("content"): UI)
+                effect = src.dataSignal(UpdateFailure.Escalate).map(sig => UI.span(sig.map(n => s"value:$n")).id("content"): UI)
                 _ <- run(UI.div(UI.mounted(effect).keyed("apollo")), rec)
                 _ <- marks("value:1").get
                 _ <- src.set(QueryState.Failure(DefaultApolloException("socket died")))

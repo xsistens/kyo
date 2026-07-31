@@ -105,6 +105,14 @@ private[kyo] object ReactiveUI:
 
     import UI.Ast.*
 
+    /** The app's sink for non-fatal failures, read by [[kyo.UI.notify]] and installed by
+      * [[kyo.UI.notices]]. Inheritable, so it reaches mount effects, the fibers they fork and the
+      * event handlers of the tree below the installation point, all of which descend from the runner's
+      * caller.
+      */
+    private[kyo] val noticeSink: Local[Maybe[Throwable => Unit < Async]] =
+        Local.init(Maybe.empty[Throwable => Unit < Async])
+
     def init(
         path: Seq[String],
         signal: Signal[UI],

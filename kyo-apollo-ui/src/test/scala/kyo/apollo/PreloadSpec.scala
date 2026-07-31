@@ -46,7 +46,7 @@ class PreloadSpec extends kyo.test.Test[Any]:
                     _ = assert(engine.started == 1)
                     _ = assert(pending == QueryState.Loading)
                     _    <- Sync.defer(engine.release())
-                    sig  <- preloaded.read(_ => ())
+                    sig  <- preloaded.read(UpdateFailure.Notify)
                     data <- sig.current
                 yield assert(data == userData("Alice"))
             }
@@ -63,8 +63,8 @@ class PreloadSpec extends kyo.test.Test[Any]:
                     // Both left before EITHER was read — the loader shape, not a waterfall.
                     _ = assert(engine.started == 2)
                     _ = engine.release()
-                    s1 <- first.read(_ => ())
-                    s2 <- second.read(_ => ())
+                    s1 <- first.read(UpdateFailure.Notify)
+                    s2 <- second.read(UpdateFailure.Notify)
                     d1 <- s1.current
                     d2 <- s2.current
                 yield
@@ -80,7 +80,7 @@ class PreloadSpec extends kyo.test.Test[Any]:
                 for
                     preloaded <- Apollo.preload(summon[ApolloClient].query(CurrentUserQuery()))
                     _ = engine.release()
-                    outcome <- Abort.run[ApolloException](preloaded.read(_ => ()))
+                    outcome <- Abort.run[ApolloException](preloaded.read(UpdateFailure.Notify))
                 yield outcome match
                     case Result.Failure(ex) => assert(ex.getMessage == "boom")
                     case other              => fail(s"expected the first-settle failure, got $other")

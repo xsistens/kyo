@@ -91,7 +91,9 @@ end NetworkStatus
   * query they fire per emission with no defined relationship to a render, and
   * [[state]] already carries every settle as a value. Tap it directly —
   * `state.current` / `state.next` is the primitive the callbacks were built on.
-  * A one-shot mutation is different, and [[MutationHandle]] keeps its pair.
+  * A one-shot mutation has no such pair either: [[MutationHandle.run]] returns the
+  * effect, so success and failure compose at the call site (`run(i).map(use)`,
+  * `Abort.run(run(i))`) instead of being handed to the handle.
   *
   * [[RawQueryHandle]] extends this with the operations a
   * projection CANNOT offer: `subscribeToMore` must write merged data back into the
