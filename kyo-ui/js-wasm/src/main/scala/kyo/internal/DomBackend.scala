@@ -94,35 +94,13 @@ private[kyo] object DomBackend:
                 Sync.defer {
                     val el = document.querySelector(s"""[data-kyo-path="$pathAttr"]""")
                     if el != null && el.outerHTML != finalHtml then
-                        // Capture focus and caret of the active element inside the replaced region,
-                        // keyed on data-kyo-path identity (mirrors HtmlRenderer.clientJs:576-583 on
-                        // the JS DOM API). Plain DOM inside the already-suspended Sync.defer; no new
-                        // AllowUnsafe crossing.
-                        val ae = document.activeElement
-                        val insideRegion = ae != null && (ae ne document.body) &&
-                            (ae.getAttribute("data-kyo-path") == pathAttr || el.contains(ae))
-                        // Use the active element's own data-kyo-path when it carries one (nested
-                        // reactive region), otherwise fall back to pathAttr so the region wrapper
-                        // itself is queried (common case: value-bound input inside the region has
-                        // no data-kyo-path of its own).
-                        val activePath =
-                            if insideRegion then
-                                if ae.hasAttribute("data-kyo-path") then ae.getAttribute("data-kyo-path")
-                                else pathAttr
-                            else null
-                        val (selStart, selEnd) = if insideRegion then readSelection(ae) else (Absent, Absent)
-                        val oldEnter           = enterPaths(el)
-                        val ghosts             = prepareLeaveGhosts(el, leaveSurvSet(finalHtml))
-                        el.outerHTML = finalHtml
-                        val updated = document.querySelector(s"""[data-kyo-path="$pathAttr"]""")
-                        if updated != null then
-                            applyJsPropsSync(updated)
-                            beginAnimationsSync(updated)
-                        if activePath != null then
-                            restoreFocus(activePath, selStart, selEnd)
-                        if updated != null then
-                            seedEnter(updated, oldEnter)
-                        spawnGhosts(ghosts)
+                        // Elements carrying data-kyo-leave that this replace would drop animate out FIRST, on the
+                        // live nodes, and the replace waits for them. Moving them elsewhere to animate (a clone
+                        // re-parented to <body>) would re-resolve every percentage and inherited value on them
+                        // against the new parent. Mirrors kyoLeaving/kyoDeferReplace in HtmlRenderer.clientJs.
+                        val leaving = leavingElements(el, leaveSurvSet(finalHtml))
+                        if leaving.nonEmpty then deferReplace(pathAttr, finalHtml, leaving)
+                        else applyReplace(el, pathAttr, finalHtml)
                     end if
                 }
             }
@@ -462,23 +440,11 @@ private[kyo] object DomBackend:
         }.toSet
     end leaveSurvSet
 
-    /** Strip `data-kyo-*` and `id` from a subtree so a ghost clone is inert (no selector collisions). */
-    private def stripKyo(el: dom.Element): Unit =
-        def strip(e: dom.Element): Unit =
-            val dyn = e.asInstanceOf[scalajs.js.Dynamic]
-            if scalajs.js.typeOf(dyn.getAttributeNames) == "function" then
-                val names = dyn.getAttributeNames().asInstanceOf[scalajs.js.Array[String]]
-                names.foreach(n => if n.startsWith("data-kyo-") || n == "id" then e.removeAttribute(n))
-        end strip
-        strip(el)
-        val ds = el.querySelectorAll("*")
-        (0 until ds.length).foreach(i => strip(ds(i).asInstanceOf[dom.Element]))
-    end stripKyo
-
-    /** Prepare leave ghosts for the OUTERMOST `data-kyo-leave` elements under `root` being removed (path not in `surv`).
-      * Captures rect + clone WHILE the node is still in the DOM; returns (ghostNode, leaveClasses) descriptors.
+    /** The OUTERMOST `data-kyo-leave` elements under `root` that this patch drops (path not in `surv`) — the ones
+      * that actually depart. Outermost only: a leaving subtree animates as one, its leaving descendants ride along.
+      * Mirrors `kyoLeaving` in HtmlRenderer.clientJs.
       */
-    private def prepareLeaveGhosts(root: dom.Element, surv: Set[String]): Seq[(dom.Element, String)] =
+    private def leavingElements(root: dom.Element, surv: Set[String]): Seq[dom.Element] =
         val els = root.querySelectorAll("[data-kyo-leave]")
         val cand =
             (if root.getAttribute("data-kyo-leave") != null then Seq(root) else Seq.empty) ++
@@ -487,43 +453,113 @@ private[kyo] object DomBackend:
             val p = e.getAttribute("data-kyo-path")
             p == null || !surv.contains(p)
         }
-        val outer = removed.filterNot(e => removed.exists(o => (o ne e) && o.contains(e)))
-        outer.map { node =>
-            val rect  = node.asInstanceOf[scalajs.js.Dynamic].getBoundingClientRect()
-            val leave = node.getAttribute("data-kyo-leave")
-            val g     = node.cloneNode(true).asInstanceOf[dom.Element]
-            stripKyo(g)
-            val st = g.asInstanceOf[scalajs.js.Dynamic].style
-            st.position = "fixed"
-            st.left = rect.left.asInstanceOf[Double].toString + "px"
-            st.top = rect.top.asInstanceOf[Double].toString + "px"
-            st.width = rect.width.asInstanceOf[Double].toString + "px"
-            st.height = rect.height.asInstanceOf[Double].toString + "px"
-            st.margin = "0"
-            st.pointerEvents = "none"
-            g.setAttribute("data-kyo-ghost", "1")
-            (g, if leave == null then "" else leave)
-        }
-    end prepareLeaveGhosts
+        removed.filterNot(e => removed.exists(o => (o ne e) && o.contains(e)))
+    end leavingElements
 
-    /** Append prepared ghosts to `<body>`, add their leave classes next frame, remove on transitionend/animationend or a 1s safety. */
-    private def spawnGhosts(ghosts: Seq[(dom.Element, String)]): Unit =
-        ghosts.foreach { case (g, leave) =>
-            discard(document.body.appendChild(g))
-            val cls     = leave.split("\\s+").filter(_.nonEmpty)
-            val clsList = g.asInstanceOf[scalajs.js.Dynamic].classList
-            discard(dom.window.requestAnimationFrame((_: Double) => cls.foreach(c => clsList.add(c))))
-            var done = false
-            def cleanup(): Unit =
-                if !done then
-                    done = true
-                    if g.parentNode != null then discard(g.parentNode.removeChild(g))
-            val listener: scalajs.js.Function1[dom.Event, Unit] = (_: dom.Event) => cleanup()
-            g.addEventListener("transitionend", listener)
-            g.addEventListener("animationend", listener)
-            val to: scalajs.js.Function0[Unit] = () => cleanup()
-            discard(dom.window.setTimeout(to, 1000.0))
+    /** Longest transition/animation on `el` in milliseconds, delays included. Computed `<time>` serializes in
+      * seconds, but `ms` is accepted too. Mirrors `kyoDurationMs`; the timeout it feeds is the safety net for what
+      * `transitionend` does not cover (zero duration, an interrupted or never-started transition).
+      */
+    private def durationMs(el: dom.Element): Double =
+        val cs = dom.window.getComputedStyle(el).asInstanceOf[scalajs.js.Dynamic]
+        def ms(v: String): Double =
+            val n = v.trim.takeWhile(c => c.isDigit || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E')
+            val d = n.toDoubleOption.getOrElse(0.0)
+            if v.contains("ms") then d else d * 1000.0
+        end ms
+        def longest(dur: String, del: String): Double =
+            val ds = dur.split(",")
+            val ls = (if del == null || del.isEmpty then "0s" else del).split(",")
+            ds.indices.map(i => ms(ds(i)) + ms(ls(i % ls.length))).maxOption.getOrElse(0.0)
+        end longest
+        def str(v: scalajs.js.Dynamic): String = if scalajs.js.typeOf(v) == "string" then v.asInstanceOf[String] else ""
+        math.max(
+            longest(str(cs.transitionDuration), str(cs.transitionDelay)),
+            longest(str(cs.animationDuration), str(cs.animationDelay))
+        )
+    end durationMs
+
+    /** Add each element's leave classes, then run `done` once every one has finished animating. Mirrors `kyoRunLeave`. */
+    private def runLeave(els: Seq[dom.Element], done: () => Unit): Unit =
+        els.foreach { e =>
+            val clsList = e.asInstanceOf[scalajs.js.Dynamic].classList
+            Maybe(e.getAttribute("data-kyo-leave")).foreach(_.split("\\s+").filter(_.nonEmpty).foreach(c => clsList.add(c)))
         }
-    end spawnGhosts
+        // Measure AFTER the classes are on: the transition may be declared by the leave class itself.
+        val total = els.map(durationMs).maxOption.getOrElse(0.0)
+        if total <= 0 then done()
+        else
+            var fired   = false
+            var pending = els.size
+            def finish(): Unit =
+                if !fired then
+                    fired = true
+                    done()
+            els.foreach { e =>
+                lazy val listener: scalajs.js.Function1[dom.Event, Unit] = (ev: dom.Event) =>
+                    // Descendant transitions bubble; only this element's own end counts.
+                    if ev.target eq e then
+                        e.removeEventListener("transitionend", listener)
+                        e.removeEventListener("animationend", listener)
+                        pending -= 1
+                        if pending <= 0 then finish()
+                e.addEventListener("transitionend", listener)
+                e.addEventListener("animationend", listener)
+            }
+            val to: scalajs.js.Function0[Unit] = () => finish()
+            discard(dom.window.setTimeout(to, total + 50.0))
+        end if
+    end runLeave
+
+    /** Pending replace payload per path while its leave animation runs. Latest wins: a newer replace for the same
+      * path supersedes the stale payload rather than queueing behind it, so at most one swap ever lands.
+      * Module-level mutable state is safe — all mutation runs on the single-threaded JS runtime.
+      */
+    private var pendingReplace: Map[String, String] = Map.empty
+
+    private def deferReplace(pathAttr: String, html: String, leaving: Seq[dom.Element]): Unit =
+        val running = pendingReplace.contains(pathAttr)
+        pendingReplace = pendingReplace.updated(pathAttr, html)
+        if !running then
+            runLeave(
+                leaving,
+                () =>
+                    val pend = pendingReplace(pathAttr)
+                    pendingReplace = pendingReplace - pathAttr
+                    val cur = document.querySelector(s"""[data-kyo-path="$pathAttr"]""")
+                    if cur != null && cur.outerHTML != pend then applyReplace(cur, pathAttr, pend)
+            )
+        end if
+    end deferReplace
+
+    /** The plain swap: capture focus/caret, replace, re-apply client-side props, restore, seed enter classes.
+      * Mirrors `kyoApplyReplace` in HtmlRenderer.clientJs.
+      */
+    private def applyReplace(el: dom.Element, pathAttr: String, html: String): Unit =
+        // Capture focus and caret of the active element inside the replaced region, keyed on data-kyo-path
+        // identity. Plain DOM inside the already-suspended Sync.defer; no new AllowUnsafe crossing.
+        val ae = document.activeElement
+        val insideRegion = ae != null && (ae ne document.body) &&
+            (ae.getAttribute("data-kyo-path") == pathAttr || el.contains(ae))
+        // Use the active element's own data-kyo-path when it carries one (nested reactive region), otherwise fall
+        // back to pathAttr so the region wrapper itself is queried (common case: value-bound input inside the
+        // region has no data-kyo-path of its own).
+        val activePath =
+            if insideRegion then
+                if ae.hasAttribute("data-kyo-path") then ae.getAttribute("data-kyo-path")
+                else pathAttr
+            else null
+        val (selStart, selEnd) = if insideRegion then readSelection(ae) else (Absent, Absent)
+        val oldEnter           = enterPaths(el)
+        el.outerHTML = html
+        val updated = document.querySelector(s"""[data-kyo-path="$pathAttr"]""")
+        if updated != null then
+            applyJsPropsSync(updated)
+            beginAnimationsSync(updated)
+        if activePath != null then
+            restoreFocus(activePath, selStart, selEnd)
+        if updated != null then
+            seedEnter(updated, oldEnter)
+    end applyReplace
 
 end DomBackend

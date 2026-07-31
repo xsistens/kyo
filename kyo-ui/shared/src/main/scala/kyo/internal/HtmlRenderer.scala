@@ -773,24 +773,21 @@ private[kyo] object HtmlRenderer:
            |      }
            |    }
            |    if(el&&!__morphed&&el.outerHTML!==op.Replace.html){
-           |      var ae=document.activeElement;
-           |      var ap=ae&&ae!==document.body&&ae.getAttribute?ae.getAttribute("data-kyo-path"):null;
-           |      var ss=(ae&&typeof ae.selectionStart==='number')?ae.selectionStart:null;
-           |      var se=(ae&&typeof ae.selectionEnd==='number')?ae.selectionEnd:null;
-           |      var __en=faEnterPaths(el);
-           |      var __gh=kyoLeavePrepare(el,kyoLeaveSurv(op.Replace.html));
-           |      el.outerHTML=op.Replace.html;
-           |      var nel=document.querySelector('[data-kyo-path="'+p+'"]');if(nel){applyJsProps(nel);ba(nel);}
-           |      if(ap){var rf=document.querySelector('[data-kyo-path="'+ap+'"]');if(rf&&rf.hasAttribute&&rf.hasAttribute('data-kyo-reactive')){var inner=rf.querySelector('input,textarea,select,[contenteditable]');if(inner)rf=inner;}if(rf){rf.focus();if(ss!==null&&typeof rf.setSelectionRange==='function'){try{rf.setSelectionRange(ss,se);}catch(e){if(e.name!=='InvalidStateError')throw e;}}}}
-           |      if(nel)kyoEnterSeed(nel,__en);
-           |      kyoSpawnGhosts(__gh);
+           |      // Elements carrying data-kyo-leave that this Replace would drop animate out FIRST, on the live
+           |      // nodes, and the swap waits for them. Moving them elsewhere to animate (a clone re-parented to
+           |      // <body>) would re-resolve every percentage and inherited value on them against the new parent.
+           |      var __lv=kyoLeaving(el,kyoLeaveSurv(op.Replace.html));
+           |      if(__lv.length)kyoDeferReplace(p,op.Replace.html,__lv);
+           |      else kyoApplyReplace(el,p,op.Replace.html);
            |    }
            |  }else if(op.Remove){
            |    var p=op.Remove.path.join(".");
            |    var el=document.querySelector('[data-kyo-path="'+p+'"]');
-           |    var __rgh=el?kyoLeavePrepare(el,{}):[];
-           |    if(el)el.remove();
-           |    kyoSpawnGhosts(__rgh);
+           |    if(el){
+           |      var __rlv=kyoLeaving(el,{});
+           |      if(__rlv.length)kyoRunLeave(__rlv,function(){var c=document.querySelector('[data-kyo-path="'+p+'"]');if(c)c.remove();});
+           |      else el.remove();
+           |    }
            |  }else if(op.InjectCss){
            |    var s=document.createElement("style");
            |    s.textContent=op.InjectCss.css;
@@ -901,15 +898,9 @@ private[kyo] object HtmlRenderer:
            |  for(var i=0;i<els.length;i++){var pp=els[i].getAttribute("data-kyo-path");if(pp!==null)s[pp]=true;}
            |  return s;
            |}
-           |// Strip data-kyo-* and id from a subtree so a ghost clone is inert (no data-kyo-path/focus-auto selector collisions).
-           |function kyoStrip(el){
-           |  var all=[el];if(el.querySelectorAll){var ds=el.querySelectorAll("*");for(var i=0;i<ds.length;i++)all.push(ds[i]);}
-           |  for(var j=0;j<all.length;j++){var e2=all[j];if(!e2.getAttributeNames)continue;var ns=e2.getAttributeNames();
-           |    for(var k=0;k<ns.length;k++){if(ns[k].indexOf("data-kyo-")===0||ns[k]==="id")e2.removeAttribute(ns[k]);}}
-           |}
-           |// Prepare leave ghosts for the OUTERMOST data-kyo-leave elements under root being removed (path not in survSet).
-           |// Captures rect+clone WHILE the node is still in the DOM (getBoundingClientRect on a detached node is zero).
-           |function kyoLeavePrepare(root,survSet){
+           |// The OUTERMOST data-kyo-leave elements under root that this patch drops (path not in survSet) — the ones
+           |// that actually depart. Outermost only: a leaving subtree animates as one, its leaving descendants ride along.
+           |function kyoLeaving(root,survSet){
            |  if(!root)return [];
            |  var cand=[];
            |  if(root.getAttribute&&root.getAttribute("data-kyo-leave")!==null)cand.push(root);
@@ -921,29 +912,67 @@ private[kyo] object HtmlRenderer:
            |  for(var k=0;k<removed.length;k++){var inside=false;
            |    for(var m=0;m<removed.length;m++){if(m!==k&&removed[m].contains(removed[k])){inside=true;break;}}
            |    if(!inside)out.push(removed[k]);}
-           |  var ghosts=[];
-           |  for(var n=0;n<out.length;n++){
-           |    var node=out[n];var rect=node.getBoundingClientRect();var leave=node.getAttribute("data-kyo-leave");
-           |    var g=node.cloneNode(true);kyoStrip(g);
-           |    g.style.position="fixed";g.style.left=rect.left+"px";g.style.top=rect.top+"px";
-           |    g.style.width=rect.width+"px";g.style.height=rect.height+"px";g.style.margin="0";g.style.pointerEvents="none";
-           |    g.setAttribute("data-kyo-ghost","1");
-           |    ghosts.push({node:g,leave:leave});
-           |  }
-           |  return ghosts;
+           |  return out;
            |}
-           |// Append prepared ghosts to <body>, add their leave classes next frame, remove on transitionend/animationend or a 1s safety.
-           |function kyoSpawnGhosts(ghosts){
-           |  if(!ghosts)return;
-           |  for(var i=0;i<ghosts.length;i++){(function(gh){
-           |    var g=gh.node;document.body.appendChild(g);
-           |    var cls=(gh.leave||"").split(/\\s+/);
-           |    requestAnimationFrame(function(){for(var c=0;c<cls.length;c++){if(cls[c])g.classList.add(cls[c]);}});
-           |    var done=false;
-           |    function cleanup(){if(done)return;done=true;if(g.parentNode)g.parentNode.removeChild(g);}
-           |    g.addEventListener("transitionend",cleanup);g.addEventListener("animationend",cleanup);
-           |    setTimeout(cleanup,1000);
-           |  })(ghosts[i]);}
+           |// Longest transition/animation on el in ms, delays included. Computed <time> serializes in seconds, but
+           |// accept "ms" too. Mirrors Vue's getTransitionInfo: the timeout it feeds is the safety net for the cases
+           |// transitionend does not cover (zero duration, an interrupted or never-started transition).
+           |function kyoDurationMs(el){
+           |  var cs=getComputedStyle(el);
+           |  function ms(v){return v.indexOf("ms")>=0?(parseFloat(v)||0):(parseFloat(v)||0)*1000;}
+           |  function longest(dur,del){
+           |    var ds=(dur||"").split(","),ls=(del||"0s").split(","),mx=0;
+           |    for(var i=0;i<ds.length;i++){var t=ms(ds[i])+ms(ls[i%ls.length]);if(t>mx)mx=t;}
+           |    return mx;
+           |  }
+           |  return Math.max(longest(cs.transitionDuration,cs.transitionDelay),longest(cs.animationDuration,cs.animationDelay));
+           |}
+           |// Add each element's leave classes, then call done() once every one has finished animating.
+           |function kyoRunLeave(els,done){
+           |  var ms=0;
+           |  for(var i=0;i<els.length;i++){
+           |    var cls=(els[i].getAttribute("data-kyo-leave")||"").split(/\\s+/);
+           |    for(var c=0;c<cls.length;c++){if(cls[c])els[i].classList.add(cls[c]);}
+           |  }
+           |  // Measure AFTER the classes are on: the transition may be declared by the leave class itself.
+           |  for(var j=0;j<els.length;j++){var d=kyoDurationMs(els[j]);if(d>ms)ms=d;}
+           |  if(ms<=0){done();return;}
+           |  var fired=false,pending=els.length;
+           |  function fin(){if(fired)return;fired=true;done();}
+           |  for(var k=0;k<els.length;k++){(function(e){
+           |    function h(ev){
+           |      if(ev.target!==e)return;                       // descendant transitions bubble; only ours counts
+           |      e.removeEventListener("transitionend",h);e.removeEventListener("animationend",h);
+           |      if(--pending<=0)fin();
+           |    }
+           |    e.addEventListener("transitionend",h);e.addEventListener("animationend",h);
+           |  })(els[k]);}
+           |  setTimeout(fin,ms+50);
+           |}
+           |// Pending Replace payload per path while its leave animation runs. Latest wins: a newer Replace for the
+           |// same path supersedes the stale payload rather than queueing behind it, so at most one swap ever lands.
+           |var __pending={};
+           |function kyoDeferReplace(p,html,leaving){
+           |  var running=Object.prototype.hasOwnProperty.call(__pending,p);
+           |  __pending[p]=html;
+           |  if(running)return;
+           |  kyoRunLeave(leaving,function(){
+           |    var pend=__pending[p];delete __pending[p];
+           |    var cur=document.querySelector('[data-kyo-path="'+p+'"]');
+           |    if(cur&&cur.outerHTML!==pend)kyoApplyReplace(cur,p,pend);
+           |  });
+           |}
+           |// The plain swap: capture focus/caret, replace, re-apply client-side props, restore, seed enter classes.
+           |function kyoApplyReplace(el,p,html){
+           |  var ae=document.activeElement;
+           |  var ap=ae&&ae!==document.body&&ae.getAttribute?ae.getAttribute("data-kyo-path"):null;
+           |  var ss=(ae&&typeof ae.selectionStart==='number')?ae.selectionStart:null;
+           |  var se=(ae&&typeof ae.selectionEnd==='number')?ae.selectionEnd:null;
+           |  var en=faEnterPaths(el);
+           |  el.outerHTML=html;
+           |  var nel=document.querySelector('[data-kyo-path="'+p+'"]');if(nel){applyJsProps(nel);ba(nel);}
+           |  if(ap){var rf=document.querySelector('[data-kyo-path="'+ap+'"]');if(rf&&rf.hasAttribute&&rf.hasAttribute('data-kyo-reactive')){var inner=rf.querySelector('input,textarea,select,[contenteditable]');if(inner)rf=inner;}if(rf){rf.focus();if(ss!==null&&typeof rf.setSelectionRange==='function'){try{rf.setSelectionRange(ss,se);}catch(e){if(e.name!=='InvalidStateError')throw e;}}}}
+           |  if(nel)kyoEnterSeed(nel,en);
            |}
            |applyJsProps(document.body);ba(document.body);
            |kyoEnterSeed(document.body,{});
