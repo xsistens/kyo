@@ -476,6 +476,19 @@ object UI:
         case External(scheme: String, value: String)
     end Href
 
+    /** What a leave transition does when a re-render brings the element back before the transition has ended.
+      *
+      * `Reverse` (the default) abandons the leave and drops the leave classes again, so the CSS transition runs back from
+      * wherever it had got to and the element never disappears — the behaviour a toggled panel wants. `Finish` lets the leave
+      * play out and applies the pending render afterwards, so the element does disappear and then returns, replaying its
+      * [[UI.Element.Interactive.enterTransition]] if it declares one.
+      *
+      * When one patch removes several leaving elements that disagree, `Finish` wins: no element's transition gets cut short.
+      */
+    enum LeaveInterrupt derives CanEqual:
+        case Reverse, Finish
+    end LeaveInterrupt
+
     /** A typed image source for an `img` `src` attribute.
       *
       * `Absolute` carries a parsed [[kyo.HttpUrl]], `Path` a same-origin path, and `Data` an inline `data:` URI (MIME type plus payload).
@@ -678,14 +691,28 @@ object UI:
               */
             def enterTransition(classes: String): Self = withAttrs(attrs.copy(enterTransition = Present(classes)))
 
-            /** Declarative LEAVE transition (client-local): when a Replace/Remove removes this element, the client captures
-              * its `getBoundingClientRect` before applying the patch (nothing crosses the wire), then appends a visual GHOST
-              * (deep clone, `position:fixed` at the captured rect, `pointer-events:none`) to `document.body` with these
-              * classes added next frame; the ghost is removed on `transitionend`/`animationend` or a 1s safety timeout. Only
-              * the outermost removed leave-element per patch spawns a ghost. The ghost is visual-only: its identifying
-              * `data-kyo-*`/`id` attributes are stripped from the clone. Emits `data-kyo-leave="..."`.
+            /** Declarative LEAVE transition (client-local): when a Replace/Remove would remove this element, the client adds
+              * the space-separated `classes` to it where it already sits and defers the patch until the resulting CSS
+              * transition has ended, so the element animates out as itself — nothing is cloned and nothing is re-parented,
+              * and every relative length on it keeps resolving against the context it was authored in. Only the outermost
+              * removed leave-element per patch is animated; its leaving descendants ride along. Emits `data-kyo-leave="..."`.
+              *
+              * @see
+              *   the two-argument overload to choose what happens when the element reappears mid-transition
               */
             def leaveTransition(classes: String): Self = withAttrs(attrs.copy(leaveTransition = Present(classes)))
+
+            /** [[leaveTransition]] with an explicit [[LeaveInterrupt]] policy for a re-render that brings this element back
+              * while it is still leaving. Equivalent to `leaveTransition(classes).leaveInterrupt(interrupt)`.
+              */
+            def leaveTransition(classes: String, interrupt: LeaveInterrupt): Self =
+                withAttrs(attrs.copy(leaveTransition = Present(classes), leaveInterrupt = Present(interrupt)))
+
+            /** What a leave transition does when a re-render brings this element back before the transition has ended.
+              * Defaults to [[LeaveInterrupt.Reverse]] when unset. Only meaningful together with [[leaveTransition]]. Emits
+              * `data-kyo-leave-interrupt="..."`.
+              */
+            def leaveInterrupt(v: LeaveInterrupt): Self = withAttrs(attrs.copy(leaveInterrupt = Present(v)))
 
             // Internal JS property setter (used by Checkbox.indeterminate, etc.)
             private[kyo] def jsProp(name: String, value: String): Self =
@@ -951,6 +978,7 @@ object UI:
             stopPropagation: Maybe[Boolean] = Absent,
             enterTransition: Maybe[String] = Absent,
             leaveTransition: Maybe[String] = Absent,
+            leaveInterrupt: Maybe[LeaveInterrupt] = Absent,
             uiStyle: Style = Style.empty,
             onClick: Maybe[Any < Async] = Absent,
             onClickEvt: Maybe[MouseEvent => Any < Async] = Absent,

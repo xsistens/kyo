@@ -94,13 +94,7 @@ private[kyo] object DomBackend:
                 Sync.defer {
                     val el = document.querySelector(s"""[data-kyo-path="$pathAttr"]""")
                     if el != null && el.outerHTML != finalHtml then
-                        // Elements carrying data-kyo-leave that this replace would drop animate out FIRST, on the
-                        // live nodes, and the replace waits for them. Moving them elsewhere to animate (a clone
-                        // re-parented to <body>) would re-resolve every percentage and inherited value on them
-                        // against the new parent. Mirrors kyoLeaving/kyoDeferReplace in HtmlRenderer.clientJs.
-                        val leaving = leavingElements(el, leaveSurvSet(finalHtml))
-                        if leaving.nonEmpty then deferReplace(pathAttr, finalHtml, leaving)
-                        else applyReplace(el, pathAttr, finalHtml)
+                        replaceRegion(pathAttr, el, finalHtml)
                     end if
                 }
             }
@@ -511,26 +505,93 @@ private[kyo] object DomBackend:
         end if
     end runLeave
 
-    /** Pending replace payload per path while its leave animation runs. Latest wins: a newer replace for the same
-      * path supersedes the stale payload rather than queueing behind it, so at most one swap ever lands.
-      * Module-level mutable state is safe — all mutation runs on the single-threaded JS runtime.
-      */
-    private var pendingReplace: Map[String, String] = Map.empty
+    /** Remove the leave classes again, abandoning the transition wherever it got to. The CSS runs back on its own. */
+    private def unleave(els: Seq[dom.Element]): Unit =
+        els.foreach { e =>
+            val clsList = e.asInstanceOf[scalajs.js.Dynamic].classList
+            Maybe(e.getAttribute("data-kyo-leave")).foreach(_.split("\\s+").filter(_.nonEmpty).foreach(c => clsList.remove(c)))
+        }
 
-    private def deferReplace(pathAttr: String, html: String, leaving: Seq[dom.Element]): Unit =
-        val running = pendingReplace.contains(pathAttr)
-        pendingReplace = pendingReplace.updated(pathAttr, html)
-        if !running then
-            runLeave(
-                leaving,
-                () =>
-                    val pend = pendingReplace(pathAttr)
-                    pendingReplace = pendingReplace - pathAttr
-                    val cur = document.querySelector(s"""[data-kyo-path="$pathAttr"]""")
-                    if cur != null && cur.outerHTML != pend then applyReplace(cur, pathAttr, pend)
-            )
+    /** Do all of `els` reappear in `surv`? Then the render that produced it brings them back. */
+    private def allReturn(els: Seq[dom.Element], surv: Set[String]): Boolean =
+        els.nonEmpty && els.forall { e =>
+            val p = e.getAttribute("data-kyo-path")
+            p != null && surv.contains(p)
+        }
+
+    /** Does `node` already render exactly what `html` describes? Compared through the DOM serializer on both sides:
+      * `outerHTML` writes valueless attributes as `attr=""`, so `data-kyo-reactive` alone makes a rendered string never
+      * equal a live node's `outerHTML` verbatim. Mirrors `kyoSameHtml` in HtmlRenderer.clientJs.
+      */
+    private def sameHtml(node: dom.Element, html: String): Boolean =
+        val tpl = document.createElement("template").asInstanceOf[scalajs.js.Dynamic]
+        tpl.innerHTML = html
+        val first = tpl.content.asInstanceOf[scalajs.js.Dynamic].firstElementChild.asInstanceOf[dom.Element]
+        first != null && first.outerHTML == node.outerHTML
+    end sameHtml
+
+    /** `data-kyo-leave-interrupt` for a set of leaving elements. Absent means Reverse; if they disagree Finish wins, so
+      * no element's transition is cut short by a sibling's policy.
+      */
+    private def interruptOf(els: Seq[dom.Element]): UI.LeaveInterrupt =
+        if els.exists(_.getAttribute("data-kyo-leave-interrupt") == "finish") then UI.LeaveInterrupt.Finish
+        else UI.LeaveInterrupt.Reverse
+
+    /** A deferred replace awaiting its leave transition. `dead` marks a leave that was abandoned, so its already-armed
+      * completion callback knows its payload went with it.
+      */
+    final private class Deferred(var html: String, val els: Seq[dom.Element], var dead: Boolean)
+
+    /** Pending replace per path while its leave runs. Latest wins: a newer replace supersedes the stale payload rather
+      * than queueing behind it, so at most one swap ever lands per leave. Module-level mutable state is safe — all
+      * mutation runs inside `Sync.defer` on the single-threaded JS runtime. Mirrors `__pending` in HtmlRenderer.clientJs.
+      */
+    private var pendingReplace: Map[String, Deferred] = Map.empty
+
+    /** The single entry point for a region replace. A leave already running for this path decides first — it may be
+      * abandoned (the element came back) or merely re-aimed at the newer payload. Only when no leave is pending does this
+      * patch get to start one, and only when nothing is leaving does the swap apply straight away. Routing the re-render
+      * through here is what makes [[UI.LeaveInterrupt]] observable: nothing is leaving on the way back in, so a plain
+      * "does anything leave?" test would replace the node outright and lose both the transition and the slot.
+      * Mirrors `kyoReplace` in HtmlRenderer.clientJs.
+      */
+    private def replaceRegion(pathAttr: String, el: dom.Element, html: String): Unit =
+        if pendingReplace.contains(pathAttr) then
+            val slot = pendingReplace(pathAttr)
+            // Mid-leave re-render. If it brings every leaving element back and none of them asked to finish, abandon the
+            // leave: drop the classes so the transition reverses, and swap only if something ELSE also changed (usually
+            // nothing did, and the DOM already is the state this render describes).
+            if allReturn(slot.els, leaveSurvSet(html)) && interruptOf(slot.els) == UI.LeaveInterrupt.Reverse then
+                slot.dead = true
+                pendingReplace = pendingReplace - pathAttr
+                unleave(slot.els)
+                val back = document.querySelector(s"""[data-kyo-path="$pathAttr"]""")
+                if back != null && !sameHtml(back, html) then applyReplace(back, pathAttr, html)
+            else slot.html = html
+            end if
+        else
+            val leaving = leavingElements(el, leaveSurvSet(html))
+            if leaving.isEmpty then applyReplace(el, pathAttr, html)
+            else
+                // Elements carrying data-kyo-leave that this patch drops animate out FIRST, on the live nodes, and the
+                // swap waits for them. Moving them elsewhere to animate (a clone re-parented to <body>) would re-resolve
+                // every percentage and inherited value on them against the new parent.
+                val mine = Deferred(html, leaving, dead = false)
+                pendingReplace = pendingReplace.updated(pathAttr, mine)
+                runLeave(
+                    leaving,
+                    () =>
+                        // A dead slot means the leave was abandoned; its payload went with it.
+                        if !mine.dead then
+                            // Never clear a newer leave's slot.
+                            if pendingReplace.contains(pathAttr) && (pendingReplace(pathAttr) eq mine) then
+                                pendingReplace = pendingReplace - pathAttr
+                            val cur = document.querySelector(s"""[data-kyo-path="$pathAttr"]""")
+                            if cur != null && cur.outerHTML != mine.html then applyReplace(cur, pathAttr, mine.html)
+                )
+            end if
         end if
-    end deferReplace
+    end replaceRegion
 
     /** The plain swap: capture focus/caret, replace, re-apply client-side props, restore, seed enter classes.
       * Mirrors `kyoApplyReplace` in HtmlRenderer.clientJs.

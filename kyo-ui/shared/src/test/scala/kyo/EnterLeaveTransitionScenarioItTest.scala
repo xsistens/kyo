@@ -13,6 +13,11 @@ class EnterLeaveTransitionScenarioItTest extends UITest:
     private val styleTag: String =
         """<style>.boxbase{opacity:1;transition:opacity 0.15s linear;} .efrom{opacity:0;} .lto{opacity:0;}</style>"""
 
+    // A leave stretched to 1s, so a departing element stays observable mid-flight and a toggle-back lands well
+    // inside the transition. With the 150ms styleTag both would be races against the assertion polling.
+    private val slowStyleTag: String =
+        """<style>.slowbase{opacity:1;transition:opacity 1s linear;} .lto{opacity:0;}</style>"""
+
     "enterTransition emits data-kyo-enter" in {
         withUI(UI.div(UI.div("hi").id("box").enterTransition("efrom"))) {
             Browser.assertAttribute(Selector.id("box"), "data-kyo-enter", "efrom").unit
@@ -51,13 +56,15 @@ class EnterLeaveTransitionScenarioItTest extends UITest:
     }
 
     "toggling a leave element hidden animates the live element in place, then removes it" in {
+        // The slow (1s) transition keeps the departing element observable for the assertions below; with the 150ms
+        // styleTag the leave can be over before the first poll, making the mid-flight state a race.
         val app: UI < Async =
             for visible <- Signal.initRef(true)
             yield UI.div(
-                UI.rawHtml(styleTag),
+                UI.rawHtml(slowStyleTag),
                 UI.button("hide").id("hide").onClick(visible.set(false)),
                 UI.when(visible)(
-                    UI.div("bye").id("box").cssClass("boxbase").leaveTransition("lto")
+                    UI.div("bye").id("box").cssClass("slowbase").leaveTransition("lto")
                 )
             )
         withUI(app) {
@@ -110,6 +117,56 @@ class EnterLeaveTransitionScenarioItTest extends UITest:
                 _ <- Browser.waitFor("window.__leave!==null")
                 _ <- Browser.waitFor("Math.abs(window.__leave.w-window.__srcW)<2")
                 _ <- Browser.waitFor("Math.abs(window.__leave.h-window.__srcH)<2")
+            yield ()
+        }
+    }
+
+    private def toggleApp(box: UI.Ast.Div): UI < Async =
+        for visible <- Signal.initRef(true)
+        yield UI.div(
+            UI.rawHtml(slowStyleTag),
+            UI.button("hide").id("hide").onClick(visible.set(false)),
+            UI.button("show").id("show").onClick(visible.set(true)),
+            UI.when(visible)(box)
+        )
+
+    "re-showing during a leave reverses it by default: the element never leaves the DOM" in {
+        val app = toggleApp(UI.div("bye").id("box").cssClass("slowbase").leaveTransition("lto"))
+        withUI(app) {
+            for
+                _ <- Browser.assertExists(Selector.id("box"))
+                // Count every removal of #box from the document; under Reverse there must be none at all.
+                _ <- Browser.evalDiscard(
+                    "window.__gone=0;new MutationObserver(function(ms){ms.forEach(function(m){for(var i=0;i<m.removedNodes.length;i++){var n=m.removedNodes[i];if(n.id==='box'||(n.querySelector&&n.querySelector('#box')))window.__gone++;}});}).observe(document.body,{childList:true,subtree:true});"
+                )
+                _ <- Browser.click(Selector.id("hide"))
+                _ <- Browser.waitFor("document.getElementById('box').classList.contains('lto')")
+                _ <- Browser.click(Selector.id("show"))
+                // The leave is abandoned: the class comes off, the element stays, and the pending swap never lands.
+                _ <- Browser.waitFor("!document.getElementById('box').classList.contains('lto')")
+                _ <- Browser.waitFor("window.__gone===0")
+                _ <- Browser.assertExists(Selector.id("box"))
+            yield ()
+        }
+    }
+
+    "LeaveInterrupt.Finish plays the leave out, then brings the element back" in {
+        val app = toggleApp(
+            UI.div("bye").id("box").cssClass("slowbase").leaveTransition("lto", UI.LeaveInterrupt.Finish)
+        )
+        withUI(app) {
+            for
+                _ <- Browser.assertAttribute(Selector.id("box"), "data-kyo-leave-interrupt", "finish")
+                _ <- Browser.evalDiscard(
+                    "window.__gone=0;new MutationObserver(function(ms){ms.forEach(function(m){for(var i=0;i<m.removedNodes.length;i++){var n=m.removedNodes[i];if(n.id==='box'||(n.querySelector&&n.querySelector('#box')))window.__gone++;}});}).observe(document.body,{childList:true,subtree:true});"
+                )
+                _ <- Browser.click(Selector.id("hide"))
+                _ <- Browser.waitFor("document.getElementById('box').classList.contains('lto')")
+                _ <- Browser.click(Selector.id("show"))
+                // The leave runs to completion, so the element does go away — and the pending render brings it back.
+                _ <- Browser.waitFor("window.__gone>0")
+                _ <- Browser.assertExists(Selector.id("box"))
+                _ <- Browser.waitFor("!document.getElementById('box').classList.contains('lto')")
             yield ()
         }
     }

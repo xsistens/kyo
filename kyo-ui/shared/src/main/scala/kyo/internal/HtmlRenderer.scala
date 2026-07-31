@@ -394,6 +394,11 @@ private[kyo] object HtmlRenderer:
         // enter/leave transition class lists (read client-side by the patch-application code).
         attrs.enterTransition.foreach(c => w(sb, s""" data-kyo-enter="${esc(c)}""""))
         attrs.leaveTransition.foreach(c => w(sb, s""" data-kyo-leave="${esc(c)}""""))
+        // Absent means LeaveInterrupt.Reverse; the client applies that default so the common case stays out of the markup.
+        attrs.leaveInterrupt.foreach {
+            case UI.LeaveInterrupt.Reverse => w(sb, """ data-kyo-leave-interrupt="reverse"""")
+            case UI.LeaveInterrupt.Finish  => w(sb, """ data-kyo-leave-interrupt="finish"""")
+        }
         // A generated pseudoClass already carries the base props in its own rule (see
         // registerPseudoClass); rendering them inline too would shadow the pseudo-state override.
         if pseudoClass.isEmpty then
@@ -773,12 +778,7 @@ private[kyo] object HtmlRenderer:
            |      }
            |    }
            |    if(el&&!__morphed&&el.outerHTML!==op.Replace.html){
-           |      // Elements carrying data-kyo-leave that this Replace would drop animate out FIRST, on the live
-           |      // nodes, and the swap waits for them. Moving them elsewhere to animate (a clone re-parented to
-           |      // <body>) would re-resolve every percentage and inherited value on them against the new parent.
-           |      var __lv=kyoLeaving(el,kyoLeaveSurv(op.Replace.html));
-           |      if(__lv.length)kyoDeferReplace(p,op.Replace.html,__lv);
-           |      else kyoApplyReplace(el,p,op.Replace.html);
+           |      kyoReplace(p,el,op.Replace.html);
            |    }
            |  }else if(op.Remove){
            |    var p=op.Remove.path.join(".");
@@ -949,17 +949,66 @@ private[kyo] object HtmlRenderer:
            |  })(els[k]);}
            |  setTimeout(fin,ms+50);
            |}
-           |// Pending Replace payload per path while its leave animation runs. Latest wins: a newer Replace for the
-           |// same path supersedes the stale payload rather than queueing behind it, so at most one swap ever lands.
+           |// Remove the leave classes again, abandoning the transition wherever it got to. The CSS runs back on its own.
+           |function kyoUnleave(els){
+           |  for(var i=0;i<els.length;i++){
+           |    var cls=(els[i].getAttribute("data-kyo-leave")||"").split(/\\s+/);
+           |    for(var c=0;c<cls.length;c++){if(cls[c])els[i].classList.remove(cls[c]);}
+           |  }
+           |}
+           |// Do all of `els` reappear in `survSet`? Then the render that produced it brings them back.
+           |function kyoAllReturn(els,survSet){
+           |  for(var i=0;i<els.length;i++){var pp=els[i].getAttribute("data-kyo-path");if(pp===null||!survSet[pp])return false;}
+           |  return els.length>0;
+           |}
+           |// Does `node` already render exactly what `html` describes? Compared through the DOM serializer on both
+           |// sides: outerHTML writes valueless attributes as attr="", so `data-kyo-reactive` alone makes a rendered
+           |// string never equal a live node's outerHTML verbatim.
+           |function kyoSameHtml(node,html){
+           |  var t=document.createElement("template");t.innerHTML=html;
+           |  var f=t.content.firstElementChild;
+           |  return !!f&&f.outerHTML===node.outerHTML;
+           |}
+           |// data-kyo-leave-interrupt for a set of leaving elements. Absent means "reverse"; if they disagree "finish"
+           |// wins, so no element's transition is cut short by a sibling's policy.
+           |function kyoInterrupt(els){
+           |  for(var i=0;i<els.length;i++){if(els[i].getAttribute("data-kyo-leave-interrupt")==="finish")return "finish";}
+           |  return "reverse";
+           |}
+           |// Pending Replace per path while its leave runs: {html, els, dead}. Latest wins — a newer Replace supersedes
+           |// the stale payload rather than queueing behind it, so at most one swap ever lands per leave.
            |var __pending={};
-           |function kyoDeferReplace(p,html,leaving){
-           |  var running=Object.prototype.hasOwnProperty.call(__pending,p);
-           |  __pending[p]=html;
-           |  if(running)return;
-           |  kyoRunLeave(leaving,function(){
-           |    var pend=__pending[p];delete __pending[p];
+           |// The single entry point for a region replace. A leave already running for this path decides first — it may be
+           |// abandoned (the element came back) or merely re-aimed at the newer payload. Only when no leave is pending does
+           |// this patch get to start one, and only when nothing is leaving does the swap apply straight away. Routing the
+           |// re-render through here is what makes LeaveInterrupt observable: nothing is leaving on the way back in, so a
+           |// plain "does anything leave?" test would replace the node outright and lose both the transition and the slot.
+           |function kyoReplace(p,el,html){
+           |  var slot=__pending[p];
+           |  if(slot){
+           |    // Mid-leave re-render. If it brings every leaving element back and none of them asked to finish, abandon
+           |    // the leave: drop the classes so the transition reverses, and swap only if something ELSE also changed
+           |    // (usually nothing did, and the DOM already is the state this render describes).
+           |    if(kyoAllReturn(slot.els,kyoLeaveSurv(html))&&kyoInterrupt(slot.els)==="reverse"){
+           |      slot.dead=true;delete __pending[p];
+           |      kyoUnleave(slot.els);
+           |      var back=document.querySelector('[data-kyo-path="'+p+'"]');
+           |      if(back&&!kyoSameHtml(back,html))kyoApplyReplace(back,p,html);
+           |    }else slot.html=html;
+           |    return;
+           |  }
+           |  var lv=kyoLeaving(el,kyoLeaveSurv(html));
+           |  if(!lv.length){kyoApplyReplace(el,p,html);return;}
+           |  // Elements carrying data-kyo-leave that this patch drops animate out FIRST, on the live nodes, and the swap
+           |  // waits for them. Moving them elsewhere to animate (a clone re-parented to <body>) would re-resolve every
+           |  // percentage and inherited value on them against the new parent.
+           |  var mine={html:html,els:lv,dead:false};
+           |  __pending[p]=mine;
+           |  kyoRunLeave(lv,function(){
+           |    if(mine.dead)return;                        // the leave was abandoned; its payload went with it
+           |    if(__pending[p]===mine)delete __pending[p]; // never clear a newer leave's slot
            |    var cur=document.querySelector('[data-kyo-path="'+p+'"]');
-           |    if(cur&&cur.outerHTML!==pend)kyoApplyReplace(cur,p,pend);
+           |    if(cur&&cur.outerHTML!==mine.html)kyoApplyReplace(cur,p,mine.html);
            |  });
            |}
            |// The plain swap: capture focus/caret, replace, re-apply client-side props, restore, seed enter classes.
