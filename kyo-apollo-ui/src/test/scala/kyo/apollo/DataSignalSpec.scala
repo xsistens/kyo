@@ -5,8 +5,8 @@ import kyo.apollo.exception.ApolloException
 import kyo.apollo.exception.DefaultApolloException
 
 /** Effectful tests for the suspense-shape [[dataSignal]]: first-settled seeding
-  * (immediate and after a pending phase), first-failure abort, tail following,
-  * and the mandatory tail-failure surface (keep last data + invoke the handler).
+  * (immediate and after a pending phase), first-failure abort, update following,
+  * and the mandatory failed-update surface (keep last data + invoke the handler).
   * Driven off a plain `Signal.initRef[QueryState[Int]]` source.
   *
   * Synchronization is condition-based, not sleep-based: [[eventually]] polls a
@@ -48,7 +48,7 @@ class DataSignalSpec extends kyo.test.Test[Any]:
             Scope.run {
                 for
                     src    <- Signal.initRef[QueryState[Int]](QueryState.Success(1, fromCache = false))
-                    sig    <- src.dataSignal(_ => ())
+                    sig    <- src.dataSignal(UpdateFailure.Notify)
                     seeded <- sig.current
                 yield assert(seeded == 1)
             }
@@ -58,7 +58,7 @@ class DataSignalSpec extends kyo.test.Test[Any]:
             Scope.run {
                 for
                     src   <- Signal.initRef[QueryState[Int]](QueryState.Loading)
-                    fiber <- Fiber.init(Scope.run(src.dataSignal(_ => ()).map(_.current)))
+                    fiber <- Fiber.init(Scope.run(src.dataSignal(UpdateFailure.Notify).map(_.current)))
                     // No wait needed before the set: the first-settle observer re-reads
                     // the current state on attach, so it seeds whether it attached
                     // before or after this lands.
@@ -72,7 +72,7 @@ class DataSignalSpec extends kyo.test.Test[Any]:
             Scope.run {
                 for
                     src    <- Signal.initRef[QueryState[Int]](QueryState.PartialData(7, Chunk.empty))
-                    sig    <- src.dataSignal(_ => ())
+                    sig    <- src.dataSignal(UpdateFailure.Notify)
                     seeded <- sig.current
                 yield assert(seeded == 7)
             }
@@ -84,7 +84,7 @@ class DataSignalSpec extends kyo.test.Test[Any]:
                     src <- Signal.initRef[QueryState[Int]](
                         QueryState.Failure(DefaultApolloException("first failure"))
                     )
-                    result <- Abort.run[ApolloException](src.dataSignal(_ => ()))
+                    result <- Abort.run[ApolloException](src.dataSignal(UpdateFailure.Notify))
                 yield result match
                     case Result.Failure(ex) => assert(ex.getMessage == "first failure")
                     case other              => fail(s"expected Failure, got $other")
@@ -95,7 +95,7 @@ class DataSignalSpec extends kyo.test.Test[Any]:
             Scope.run {
                 for
                     src    <- Signal.initRef[QueryState[Int]](QueryState.Success(1, fromCache = false))
-                    sig    <- src.dataSignal(_ => ())
+                    sig    <- src.dataSignal(UpdateFailure.Notify)
                     first  <- sig.current
                     _      <- src.set(QueryState.Success(2, fromCache = false))
                     second <- eventually(sig.current)(_ == 2)
@@ -105,25 +105,29 @@ class DataSignalSpec extends kyo.test.Test[Any]:
             }
         }
 
-        "a tail Failure keeps the last data and invokes the handler" in {
+        "a failed update keeps the last data and reaches the app's notice sink" in {
             Scope.run {
                 for
-                    seen     <- AtomicRef.init[Maybe[String]](Absent)
-                    src      <- Signal.initRef[QueryState[Int]](QueryState.Success(1, fromCache = false))
-                    sig      <- src.dataSignal(ex => seen.set(Present(ex.getMessage)))
-                    _        <- src.set(QueryState.Failure(DefaultApolloException("tail failure")))
-                    surfaced <- eventually(seen.get)(_.isDefined)
-                    kept     <- sig.current
+                    seen <- AtomicRef.init[Maybe[String]](Absent)
+                    src  <- Signal.initRef[QueryState[Int]](QueryState.Success(1, fromCache = false))
+                    res <- UI.notices(ex => seen.set(Present(Option(ex.getMessage).getOrElse(ex.toString)))) {
+                        for
+                            sig      <- src.dataSignal(UpdateFailure.Notify)
+                            _        <- src.set(QueryState.Failure(DefaultApolloException("update failure")))
+                            surfaced <- eventually(seen.get)(_.isDefined)
+                            kept     <- sig.current
+                        yield (kept, surfaced)
+                    }
                 yield
-                    assert(kept == 1)
-                    assert(surfaced == Present("tail failure"))
+                    assert(res._1 == 1)
+                    assert(res._2 == Present("update failure"))
             }
         }
 
         "the follow observer stops when the caller's Scope is released" in {
             for
                 src     <- Signal.initRef[QueryState[Int]](QueryState.Success(1, fromCache = false))
-                escaped <- Scope.run(src.dataSignal(_ => ()))
+                escaped <- Scope.run(src.dataSignal(UpdateFailure.Notify))
                 // The Scope is closed; a later source emission must no longer follow.
                 _      <- src.set(QueryState.Success(99, fromCache = false))
                 frozen <- settles(escaped.current)
@@ -160,12 +164,12 @@ class DataSignalSpec extends kyo.test.Test[Any]:
             }
         }
 
-        "a tail Failure keeps the last data and stops the follow (the fiber escalates)" in {
+        "a failed update keeps the last data and stops the follow (the fiber escalates)" in {
             Scope.run {
                 for
                     src <- Signal.initRef[QueryState[Int]](QueryState.Success(1, fromCache = false))
                     sig <- src.dataSignal
-                    _   <- src.set(QueryState.Failure(DefaultApolloException("tail failure")))
+                    _   <- src.set(QueryState.Failure(DefaultApolloException("update failure")))
                     // A signal delivers the LATEST value, not every intermediate one — if 99
                     // landed immediately, the observer could legitimately never see the
                     // failure at all. Give it a settling window to observe (and die on) the

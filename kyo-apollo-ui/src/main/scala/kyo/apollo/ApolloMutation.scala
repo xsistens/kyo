@@ -81,34 +81,6 @@ final case class MutationHandle[I, D](
     reset: Unit < Sync
 ):
 
-    /** À-la-carte success callback — the composable alternative to passing
-      * `onCompleted` at construction. Returns a new handle whose `run` also fires
-      * `f(data)` after a successful run (a `Right` projection, honoring
-      * `errorPolicy`), before yielding the data. Pure `run`-wrapping — no extra
-      * `Scope` or fiber. Chains with [[onError]]; use either alone, no no-op filler:
-      *
-      * {{{
-      * useMutation(saveCall).map(_.onError(toast))                   // only error
-      * useMutation(build).map(_.onCompleted(refresh).onError(toast)) // both, chained
-      * }}}
-      *
-      * Prefer composing `run` itself where you can — `handle.run(i).map(use)` already
-      * delivers the result effect.
-      */
-    def onCompleted(f: D => Any < Async)(using Frame): MutationHandle[I, D] =
-        copy(run = input => run(input).map(data => f(data).andThen(data)))
-
-    /** À-la-carte error callback — fires `f(exception)` when `run` aborts (honoring
-      * the call's `ErrorPolicy`), then re-raises. See [[onCompleted]] for the shape.
-      */
-    def onError(f: ApolloException => Any < Async)(using Frame): MutationHandle[I, D] =
-        copy(run =
-            input =>
-                Abort.run[ApolloException](run(input)).map {
-                    case Result.Failure(ex) => f(ex).andThen(Abort.fail(ex))
-                    case other              => Abort.get(other)
-                }
-        )
 end MutationHandle
 
 // `Apollo.mutation` (the react-apollo `useMutation`, both the ready-call and the
