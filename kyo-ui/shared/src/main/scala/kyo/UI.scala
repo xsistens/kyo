@@ -1356,6 +1356,7 @@ object UI:
                 Isolate[S, Sync, S]
             ): Self =
                 withAttrs(attrs.copy(onScrollPos = Present(eraseHandlerFn(f))))
+
             /** Runs `f` when files are selected on a descendant file input, receiving the full list of
               * [[kyo.UI.FilePayload]] (name, size, MIME type, and text content of every selected file). The client reads all
               * selected files (a `FileReader` per file, aggregated once every read completes) and posts a single `FileSelect`
