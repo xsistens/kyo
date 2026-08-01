@@ -1338,7 +1338,13 @@ private[kyo] object HtmlRenderer:
            |  if(!an.length)return;
            |  requestAnimationFrame(function(){for(var i=0;i<an.length;i++){try{an[i].beginElement();}catch(e){}}});
            |}
-           |// ---- enter/leave transition helpers (client-local; nothing crosses the wire) ----
+           |""".stripMargin + clientJsTail
+
+    /** The second half of [[clientJs]], split purely to stay under the JVM class file's 64 KiB limit for a single
+      * UTF8 constant — the two halves are concatenated verbatim and the boundary carries no meaning.
+      */
+    private def clientJsTail: String =
+        s"""|// ---- enter/leave transition helpers (client-local; nothing crosses the wire) ----
            |// Set of data-kyo-enter paths under root (root included): the enter elements present BEFORE a patch.
            |function faEnterPaths(root){
            |  var s={};if(!root)return s;
