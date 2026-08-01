@@ -1028,6 +1028,13 @@ private[kyo] object ReactiveUI:
                             _       <- Scope.ensure(mountDispatch.unregister(rui.path, inst.cell))
                             current <- inst.cell.current
                             _       <- exchange.onChange(rui.path, current)
+                            // `mount = true` for a KEYED instance too: the region claims the `m` flag, so a
+                            // parent re-render leaves the live subtree alone instead of wiping it to the
+                            // placeholder and having this instance paint it back. Safe for keyed mounts only
+                            // because the marker also carries the mount key — a key change still falls through
+                            // to the morph and resets the slot (see RegionMarker's `k` flag). Without it the
+                            // adopted instance kept its scopes but lost its DOM on every parent emission:
+                            // focus, caret, scroll position and in-place bindings all died per navigation.
                             _ <- subscribeRegion(
                                 rui.path,
                                 inst.cell,
@@ -1036,7 +1043,8 @@ private[kyo] object ReactiveUI:
                                 signalChangeTime,
                                 Present(inst.childMounts),
                                 mountDispatch,
-                                boundary
+                                boundary,
+                                mount = true
                             )
                         yield ()
                     case Absent =>
