@@ -1390,6 +1390,10 @@ class EventHandlerTest extends UITest:
                         "document.getElementById('tall').style.height='2000px';void s.scrollHeight;s.scrollTop=120;"
                 )
                 _ <- Browser.assertText(Selector.id("out"), "pos:120")
+            yield ()
+        }
+    }
+
     // onContextMenu end-to-end over the server-push transport; the DomBackend SPA mirror has no harness.
     /** Dispatch a synthetic right-click; returns whether the native menu would still open
       * (dispatchEvent returns false iff a listener called preventDefault on the cancelable event).

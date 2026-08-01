@@ -973,7 +973,7 @@ private[kyo] object HtmlRenderer:
            |        kyoSpawnGhosts(__gh);
            |        // Portal upkeep: re-home freshly-inserted portal elements (after the subtree-scoped seeding
            |        // above, which needs them inline) and retire body twins whose placeholder left with this patch.
-           |        __kyoRangeEls(r).forEach(__kyoPortalSweep);
+           |        __kyoRangeEls(r).forEach(__kyoPortalAdopt);__kyoPortalRetireOrphans();
            |      }
            |    }
            |    sweepFocusAuto();
@@ -1497,7 +1497,8 @@ private[kyo] object HtmlRenderer:
            |// ORPHANS: a body twin whose placeholder is gone (its slot was removed or replaced) leaves with its
            |// region - spawn its leave ghost (ghosts already live at body) and remove it. Document-wide by
            |// necessity: the twin is outside every region subtree, so the regular leave sweep cannot see it.
-           |function __kyoPortalSweep(root){
+           |function __kyoPortalSweep(root){__kyoPortalAdopt(root);__kyoPortalRetireOrphans();}
+           |function __kyoPortalAdopt(root){
            |  if(root&&root.querySelectorAll){
            |    var cand=[];
            |    if(root.hasAttribute&&root.hasAttribute("data-kyo-portal"))cand.push(root);
@@ -1525,6 +1526,10 @@ private[kyo] object HtmlRenderer:
            |      }
            |    }
            |  }
+           |}
+           |// Orphan retirement runs independently of any subtree: a region that patched to EMPTY (a gate closing)
+           |// leaves no element to sweep from, yet its twin still has to go.
+           |function __kyoPortalRetireOrphans(){
            |  var twins=document.querySelectorAll('body > [data-kyo-portal][data-kyo-path]');
            |  for(var t=0;t<twins.length;t++){
            |    var tw=twins[t];

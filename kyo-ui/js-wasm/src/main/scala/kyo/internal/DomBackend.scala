@@ -443,7 +443,10 @@ private[kyo] object DomBackend:
                             // Portal upkeep: re-home freshly-inserted portal elements to document.body (after the
                             // subtree-scoped focus/enter seeding above, which need them inline) and retire body twins
                             // whose placeholder left.
-                            foreachRangeElement(r)(portalSweep)
+                            foreachRangeElement(r)(portalAdopt)
+                            // Orphan retirement is NOT per-element: a region that patched to empty (the gate
+                            // closing) has no range element left to sweep from, yet its body twin still has to go.
+                            portalRetireOrphans()
                             sweepFocusAuto()
                         end if
                     end if
@@ -1337,6 +1340,12 @@ private[kyo] object DomBackend:
       * region subtree, so the regular leave sweep cannot see it.
       */
     private def portalSweep(root: dom.Element): Unit =
+        portalAdopt(root)
+        portalRetireOrphans()
+    end portalSweep
+
+    /** ADOPT only — see [[portalSweep]]. */
+    private def portalAdopt(root: dom.Element): Unit =
         val els = root.querySelectorAll("[data-kyo-portal]")
         val cand =
             (if root.hasAttribute("data-kyo-portal") then Seq(root) else Seq.empty) ++
@@ -1368,6 +1377,12 @@ private[kyo] object DomBackend:
                 end if
             end if
         }
+    end portalAdopt
+
+    /** ORPHANS only — see [[portalSweep]]. Runs independently of any subtree because a region that patched to
+      * EMPTY (a gate closing) leaves no element to sweep from, yet its twin still has to go.
+      */
+    private def portalRetireOrphans(): Unit =
         val twins = document.querySelectorAll("body > [data-kyo-portal][data-kyo-path]")
         (0 until twins.length).foreach { i =>
             val twin = twins(i).asInstanceOf[dom.Element]
@@ -1380,7 +1395,7 @@ private[kyo] object DomBackend:
                 spawnGhosts(twinGhosts)
             end if
         }
-    end portalSweep
+    end portalRetireOrphans
 
     /** True when the payload's first node is an open marker carrying the `s` (mount slot) flag — the
       * region's new content root IS a mount placeholder. Bounded to the leading comment so a descendant
