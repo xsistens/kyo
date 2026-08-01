@@ -296,6 +296,71 @@ object Apollo:
             }
         }
 
+    /** Prepare a paginated query whose operation **variables** are live — the shape a
+      * search page needs, where a new term must restart pagination without the page
+      * being rebuilt.
+      *
+      * Pagination and variables are two different axes and are driven differently, the
+      * way react-apollo drives them:
+      *
+      *   - The watcher is opened on `page(v, initial)` — the FIRST page's cursors,
+      *     always. It is never re-pointed at a later cursor; `fetchMore` is a separate
+      *     `NetworkOnly` shot whose write-back merges into the same cache slot (per the
+      *     connection's [[kyo.apollo.cache.normalized.api.ConnectionFieldPolicy]]) and
+      *     re-emits [[PaginatedQuery.state]] with every page loaded so far.
+      *   - A change in `values` re-opens that watcher and resets the cursor state to
+      *     `initial` in the same step. The DATA reset needs no help: a different value
+      *     produces a different cache field key, so the new connection starts empty —
+      *     and returning to an earlier value repaints from the cache with the pages it
+      *     had already accumulated.
+      *
+      * `Absent` parks the watcher at [[QueryState.Idle]] and makes every `fetchMore` a
+      * no-op.
+      */
+    def paginatedQuery[D, C, V](values: Signal[Maybe[V]])(initial: C)(page: (V, C) => ApolloCall[D])(
+        using
+        Frame,
+        CanEqual[C, C],
+        CanEqual[V, V],
+        Tag[Emit[Chunk[ApolloResponse[D]]]],
+        CanEqual[D, D]
+    ): PaginatedQuery[D, C] < (Async & Scope) =
+        for
+            cursors <- Signal.initRef[C](initial)
+            ref     <- values.currentWith(v0 => Signal.initRef[QueryState[D]](ApolloSignal.seedFor(v0)))
+            _ <- UI.fork(
+                ApolloSignal.driveSwitching(
+                    values,
+                    (v: V) => page(v, initial).watch(),
+                    ref,
+                    _ => cursors.set(initial)
+                )
+            )
+        yield
+            val advance: ((C, D) => Option[C]) => (Unit < (Async & Abort[ApolloException])) =
+                reduce =>
+                    values.current.map {
+                        case Absent => ()
+                        case Present(v) =>
+                            cursors.current.map { c =>
+                                ref.current.map { qs =>
+                                    val next: Option[C] = PaginatedQuery.dataOf(qs) match
+                                        case Some(d) => reduce(c, d)
+                                        case None    => None
+                                    next match
+                                        case Some(c2) =>
+                                            cursors.set(c2).andThen(
+                                                page(v, c2).fetchPolicy(FetchPolicy.NetworkOnly).data.unit
+                                            )
+                                        case None => ()
+                                    end match
+                                }
+                            }
+                    }
+            new PaginatedQuery(ref, advance)
+        end for
+    end paginatedQuery
+
     /** Prepare a paginated query with a single connection — the sugar over the
       * general form. `page(None)` is the first page; `page(Some(cursor))` each next
       * one. Yields a flat [[PaginatedQueryHandle]] whose `fetchMore` advances it.
@@ -361,6 +426,34 @@ object Apollo:
         for
             ref <- Signal.initRef[QueryState[D]](QueryState.Loading)
             _   <- UI.fork(ApolloSignal.driveGated(call.watch(), ref, skip, mode))
+        yield ref
+
+    /** [[watchSignal]] over **live variables** — react-apollo's variables change on a
+      * mounted `useQuery`, where the hook instance survives and only the operation is
+      * re-pointed.
+      *
+      * One watcher at a time, re-opened whenever `values` emits a genuinely different
+      * value; `Absent` parks it (nothing subscribed, state [[QueryState.Idle]]), which
+      * is the signal-shaped `skip` for a parameter that does not exist yet. Across a
+      * `Present` → `Present` switch the previous data stays in the signal until the new
+      * response arrives, so a consumer re-renders from stale content instead of
+      * flashing a placeholder.
+      *
+      * This is what lets a component take its parameter as a `Signal` instead of a
+      * captured value — and therefore stop putting that value in its `UI.mounted` key,
+      * where every change costs a full teardown of the subtree, its scope and its DOM.
+      */
+    def watchSignal[D, V](values: Signal[Maybe[V]])(call: V => ApolloCall[D])(using
+        Frame,
+        Tag[Emit[Chunk[ApolloResponse[D]]]],
+        CanEqual[D, D],
+        CanEqual[V, V]
+    ): Signal[QueryState[D]] < (Async & Scope) =
+        for
+            ref <- values.currentWith(v0 => Signal.initRef[QueryState[D]](ApolloSignal.seedFor(v0)))
+            _ <- UI.fork(
+                ApolloSignal.driveSwitching(values, (v: V) => call(v).watch(), ref, _ => (): Unit < Sync)
+            )
         yield ref
 
     /** [[watchSignal]] that additionally **polls** the network every `interval` — the
