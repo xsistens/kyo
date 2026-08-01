@@ -7,13 +7,13 @@ name: build
 # Serial within a target: SBT_TASK_LIMIT=1 (set in env below) runs one sbt task at a time inside
 # each job, bounding peak memory to a single module's compile/link/test on the 16GB runners.
 #
-# Parallel across archs: the parent workflow (build-pr.yml / build-main.yml) calls this workflow
-# once per arch. Those calls have no `needs:` between them so the archs run as independent CI jobs.
+# Parallel across os poles: the parent workflow (ci.yml) calls this workflow once per pole.
+# Those calls have no `needs:` between them so the poles run as independent CI jobs.
 on:
   workflow_call:
     inputs:
       os:
-        description: 'Target os/arch identifier (e.g. linux-x64, linux-arm64).'
+        description: 'Target os/arch identifier (e.g. linux-x64, linux-arm64, windows-x64).'
         type: string
         required: true
       runner-image:
@@ -51,9 +51,11 @@ jobs:
 
   build:
     needs: prep
-    # JVM full runs peak at ~95-100 min (browser/UI/caliban suites serialize under a shared Chrome
-    # instance that cannot take concurrent CDP connections). 180 min gives headroom above that peak.
-    timeout-minutes: 180
+    # JVM full runs peak at ~95-100 min on Linux (browser/UI/caliban suites serialize under a
+    # shared Chrome instance that cannot take concurrent CDP connections) and run slower on the
+    # Windows pole, where runner-slot contention has pushed a full JVM run past 180 min. 240 min
+    # bounds a genuine hang while giving the slowest pole real headroom.
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -108,6 +110,17 @@ jobs:
       # kyo-browser auto-downloads `chrome-headless-shell` (~120 MB) on first launch and caches it under the
       # platform's user cache dir; the setup action restores it. The action also installs Node, the native
       # libraries, and podman conditionally on the target and os, and provisions corretto:25 + sbt.
+
+      # Guards issue #1821. The `native-settings` hook drops each module's Scala Native work directory
+      # right after its test binary links, to keep the row's ~40 modules inside the runner's disk; a
+      # drop that leaves state describing the deleted IR makes the next link hand clang object paths
+      # for files nobody wrote, and the row dies an hour in on a missing .ll.o with no diagnostic.
+      # kyo-data is the cheapest module with a Native test binary, and the row reuses the binary linked
+      # here, so the guard costs the row a couple of minutes and fails fast when it trips.
+      - name: native relink guard (${{ inputs.os }})
+        if: ${{ matrix.target == 'Native' }}
+        shell: bash
+        run: ./scripts/native-relink-selftest.sh
 
       - name: ${{ inputs.mode }} ${{ matrix.target }} (${{ inputs.os }})
         shell: bash

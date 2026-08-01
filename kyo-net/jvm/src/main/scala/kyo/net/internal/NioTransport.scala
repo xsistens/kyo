@@ -154,6 +154,9 @@ final private[kyo] class NioTransport private (
       */
     override private[net] def supportedTlsProviders: Set[String] = Set("jdk")
 
+    /** NIO binds real AF_UNIX sockets through `UnixDomainSocketAddress` (JEP 380) on every host the JVM runs on, Windows included. */
+    override private[kyo] def supportsUnixSockets: Boolean = true
+
     /** Claim flag for the process-global stdio connection, so stdio is claimed at most once (fds 0/1 must never be double-owned). Mirrors the
       * posix and Node transports' claim.
       */
@@ -1436,6 +1439,11 @@ final private[kyo] class NioTransport private (
             // first upgrade's channel) and, via the unguarded detach fallthrough, drive a second handshake over a channel the first upgrade
             // still owns.
             if !nioConn.claimUpgrade() then promise.completeDiscard(Result.fail(NetAlreadyDetachedException()))
+            // One upgrade per HANDLE, not just per connection: the handle has one engine slot, so its upgrade machinery (engine attachment,
+            // salvage, handoff) is single-shot. A connection whose handle already carries an engine covers both re-upgrade shapes: the
+            // upgraded STARTTLS connection (a fresh Connection over the same handle, with its own claim) and a connectTls/listenTls
+            // connection, whose upgradeFn is wired too and would otherwise drive a raw-mode STARTTLS over engine-routed reads.
+            else if handle.tls.isDefined then promise.completeDiscard(Result.fail(NetAlreadyDetachedException()))
             else
                 // Central failure-close for the upgrade: detachForUpgrade gives up the plaintext connection's ownership of the channel WITHOUT
                 // closing it, and on a STARTTLS handshake failure startTlsHandshake (existingHandle present) does not close it either, so the
@@ -1450,6 +1458,12 @@ final private[kyo] class NioTransport private (
                         // Failure / interrupt: close the handoff window so a torn-down handle never lingers mid-upgrade, then release the fd.
                         handle.upgrading = false
                         handle.handshakeReading = false
+                        // Abort-path sweep (the posix releaseFailedUpgrade dual): a stray pump arm that landed in the sweep-to-marker gap
+                        // installed a cell only the handshake's first producer arm would have failed, and an upgrade that aborts before that
+                        // arm never runs it. cancel's slot-first cleanupPending takes whatever cell is armed, so no read promise (or its
+                        // pendingReads entry and buffer) outlives the aborted upgrade. Idempotent on the pre-detach abort orderings, where
+                        // the close path that won the state CAS runs the same sweep.
+                        driver.cancel(handle)
                         closeQuietly(handle.channel)
                 }
                 // `promise` owns the detached channel for the whole upgrade (the onComplete failure arm above is what releases it), so route a
