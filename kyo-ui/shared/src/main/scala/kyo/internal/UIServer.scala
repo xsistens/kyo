@@ -7,11 +7,14 @@ private[kyo] object UIServer:
     private def normalizePath(basePath: String): String =
         if basePath.endsWith("/") then basePath.dropRight(1) else basePath
 
-    def handlers(basePath: String)(ui: => UI < Async)(using Frame): Seq[HttpHandler[?, ?, ?]] < Sync =
+    def handlers(basePath: String, mountError: Maybe[UI.MountErrorPolicy])(ui: => UI < Async)(using
+        Frame
+    ): Seq[HttpHandler[?, ?, ?]] < Sync =
         val base = normalizePath(basePath)
         Sync.defer(Seq(
+            // The page GET is pure SSR (no session, no mounts run), so it needs no error policy; the WS session does.
             getPage(base, basePath, Sync.defer(ui)),
-            wsRoute(base, Sync.defer(ui))
+            wsRoute(base, Sync.defer(ui), mountError)
         ))
     end handlers
 
@@ -30,11 +33,16 @@ private[kyo] object UIServer:
                 .addHeader("Content-Type", "text/html; charset=utf-8")
         }
 
-    private[kyo] def serveSession(ws: HttpWebSocket, ui: => UI < Async)(using Frame): Unit < (Async & Abort[Closed]) =
+    /** `mountError` defaults to `Absent` — the app installed nothing, so the default policy answers and the
+      * unanswered mounts of this tree are announced. `UI.runHandlers` always passes what it read from the Local.
+      */
+    private[kyo] def serveSession(ws: HttpWebSocket, ui: => UI < Async, mountError: Maybe[UI.MountErrorPolicy] = Absent)(using
+        Frame
+    ): Unit < (Async & Abort[Closed]) =
         Scope.run {
             for
                 uiTree <- ui
-                root   <- ReactiveUI.normalize(uiTree, Seq.empty)
+                root   <- ReactiveUI.normalize(uiTree, Seq.empty, mountError)
                 // Pre-seed the connection's sent-class tracking with every pseudo-state class the
                 // initial SSR page already carries (rendered once more here, discarding the HTML), so
                 // the first reactive update touching an unchanged pseudo-styled element does not
@@ -66,9 +74,9 @@ private[kyo] object UIServer:
             yield ()
         }
 
-    private def wsRoute(base: String, ui: => UI < Async)(using Frame): HttpHandler[?, ?, ?] =
+    private def wsRoute(base: String, ui: => UI < Async, mountError: Maybe[UI.MountErrorPolicy])(using Frame): HttpHandler[?, ?, ?] =
         HttpHandler.webSocket(s"$base/_kyo/ws") { (_, ws) =>
-            serveSession(ws, ui)
+            serveSession(ws, ui, mountError)
         }
 
     private def wsExchange(root: ReactiveUI, ws: HttpWebSocket, seenClasses: Set[String])(using Frame): UIExchange =

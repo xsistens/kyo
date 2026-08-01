@@ -39,7 +39,7 @@ class MountSupervisionTest extends kyo.test.Test[Any]:
         }
 
     private def run(ui: UI, rec: Recording)(using Frame): Unit < (Async & Scope) =
-        ReactiveUI.normalize(ui, Seq.empty).map(root => ReactiveUI.subscribe(root, rec.exchange).unit)
+        ReactiveUI.normalize(ui, Seq.empty, Present(UI.MountErrorPolicy.message)).map(root => ReactiveUI.subscribe(root, rec.exchange).unit)
 
     private def boom = new RuntimeException("feed died")
 

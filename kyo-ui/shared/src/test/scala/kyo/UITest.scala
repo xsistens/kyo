@@ -66,8 +66,11 @@ abstract class UITest extends kyo.test.Test[Any]:
         Retry[BrowserConnectionLostException | BrowserSetupFailedException](retrySchedule) {
             cancelOnUnsupportedPlatform {
                 for
-                    uiTree   <- ui
-                    handlers <- UI.runHandlers("/")(uiTree)
+                    uiTree <- ui
+                    // Browser suites that assert on the terminal mount-error rendering (the duplicate-key card,
+                    // the failure's own message) expect the pre-policy output: `message` reproduces it exactly.
+                    // Without this the default `marker` answers, which names the mount's frame instead.
+                    handlers <- UI.mountErrors(UI.MountErrorPolicy.message)(UI.runHandlers("/")(uiTree))
                     server   <- HttpServer.init(0, "localhost")(handlers*)
                     result <- Browser.runShared() {
                         Browser.goto(s"http://localhost:${server.port}/").andThen(f)

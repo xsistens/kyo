@@ -94,7 +94,14 @@ end BoundaryCtx
   * observe's closed-and-awaited ordering makes unregister-then-reregister safe across region rebuilds), and read by
   * the dispatch-time handler of whatever fresh Mounted node value occupies the same path.
   */
-final private[kyo] class MountDispatch(cells: AtomicRef[Map[Seq[String], Signal[UI]]]):
+final private[kyo] class MountDispatch(
+    cells: AtomicRef[Map[Seq[String], Signal[UI]]],
+    /** The session's terminal mount-error rendering (installed at the runner entry, see [[ReactiveUI.normalize]]): consulted by
+      * [[MountedSpec.errorUI]] when neither a node-local `.onError` nor the boundary chain claimed the failure. Carried here because
+      * this table is the one session-level object every normalization closure already closes over.
+      */
+    val mountError: UI.MountErrorPolicy
+):
     def register(path: Seq[String], cell: Signal[UI])(using Frame): Unit < Sync =
         cells.getAndUpdate(_.updated(path, cell)).unit
 
@@ -111,19 +118,28 @@ final private[kyo] class MountDispatch(cells: AtomicRef[Map[Seq[String], Signal[
 end MountDispatch
 
 private[kyo] object MountDispatch:
-    def init(using Frame): MountDispatch < Sync =
-        AtomicRef.init(Map.empty[Seq[String], Signal[UI]]).map(new MountDispatch(_))
+    def init(mountError: UI.MountErrorPolicy)(using Frame): MountDispatch < Sync =
+        AtomicRef.init(Map.empty[Seq[String], Signal[UI]]).map(new MountDispatch(_, mountError))
 
-/** Normalization-time companion of a [[kyo.UI.Ast.Mounted]] node: the node plus its rendering defaults. */
-final private[kyo] case class MountedSpec(node: UI.Ast.Mounted):
+/** Normalization-time companion of a [[kyo.UI.Ast.Mounted]] node: the node, where it sits, and how it renders a failure.
+  *
+  * `path` and `policy` are captured at normalization time because that is the only place both are in hand; the failure paths below
+  * (which run much later, on the node's own fiber) then need no extra plumbing to build a [[kyo.UI.MountError]].
+  */
+final private[kyo] case class MountedSpec(node: UI.Ast.Mounted, path: Seq[String], policy: UI.MountErrorPolicy):
     def placeholderUI(using Frame): UI = node.placeholderUI.getOrElse(UI.empty)
 
-    def errorUI(t: Throwable)(using Frame): UI =
+    /** A node-local `.onError` wins; otherwise the session's terminal policy answers. The engine itself renders nothing. */
+    def errorUI(err: UI.MountError): UI =
         node.errorRender match
-            case Present(f) => f(t)
-            case Absent =>
-                given Frame = node.frame
-                UI.span(UI.Ast.Text(Option(t.getMessage).getOrElse(t.toString))).cssClass("kyo-mount-error")
+            case Present(f) => f(err.error)
+            case Absent     => policy.render(err)
+
+    /** `message` defaults to the failure's own text; the duplicate-key slot passes its undecorated one-liner instead, because a
+      * `KyoException` answers `getMessage` with the frame-decorated development block.
+      */
+    def mountError(t: Throwable, source: UI.MountErrorSource, message: Maybe[String] = Absent): UI.MountError =
+        UI.MountError(t, source, message.getOrElse(Option(t.getMessage).getOrElse(t.toString)), node.frame, path, node.key)
 end MountedSpec
 
 private[kyo] object ReactiveUI:
@@ -137,6 +153,16 @@ private[kyo] object ReactiveUI:
       */
     private[kyo] val noticeSink: Local[Maybe[Throwable => Unit < Async]] =
         Local.init(Maybe.empty[Throwable => Unit < Async])
+
+    /** The app's terminal mount-error rendering, read by the runners and installed by [[kyo.UI.mountErrors]].
+      *
+      * Read at the runner ENTRY, on the caller's fiber, then carried into the session as a plain value — never read
+      * at failure time. Deliberate: under the server-push transport the session fibers do not inherit the
+      * `runHandlers` caller's context (the same gap [[kyo.UI.notices]] documents), so a read on the failing fiber
+      * would silently see `Absent` there.
+      */
+    private[kyo] val mountErrorPolicy: Local[Maybe[UI.MountErrorPolicy]] =
+        Local.init(Maybe.empty[UI.MountErrorPolicy])
 
     def init(
         path: Seq[String],
@@ -162,15 +188,57 @@ private[kyo] object ReactiveUI:
     /** Root entry point: creates the session's MountDispatch table and stamps it on the returned root node
       * (subscribe picks it up from there). All recursion goes through normalizeWith so every handler closure
       * shares the one table.
+      *
+      * `mountError` is the app's installed [[kyo.UI.MountErrorPolicy]]; the runners read it from
+      * [[mountErrorPolicy]] on their own fiber and pass it here. `Absent` means the app said nothing: the default
+      * marker answers, and every mount in the initial tree that has no answer of its own is announced once, by
+      * source position — the state that is otherwise invisible until something fails in front of a user.
       */
-    def normalize(ui: UI, path: Seq[String], svg: Boolean = false): ReactiveUI < Sync =
+    def normalize(
+        ui: UI,
+        path: Seq[String],
+        mountError: Maybe[UI.MountErrorPolicy] = Absent,
+        svg: Boolean = false
+    ): ReactiveUI < Sync =
         given Frame = ui.frame
         for
-            mountDispatch <- MountDispatch.init
+            mountDispatch <- MountDispatch.init(mountError.getOrElse(UI.MountErrorPolicy.marker))
             root          <- normalizeWith(ui, path, svg, mountDispatch)
+            _             <- if mountError.isEmpty then announceUnanswered(root) else Kyo.lift(())
         yield root.copy(mountDispatch = Present(mountDispatch))
         end for
     end normalize
+
+    /** Mounts in the INITIAL tree with no answer of their own: no node-local `.onError` and no enclosing
+      * [[kyo.UI.boundary]] doing typed error selection. Whether such a boundary's partial function would actually
+      * MATCH the eventual failure cannot be known here, so this reports the unambiguous case only. Mounts that
+      * appear later (nested inside a mount's published content) are not in this tree yet.
+      */
+    private def unansweredMounts(root: ReactiveUI): Seq[Frame] =
+        def loop(n: ReactiveUI, underErrorBoundary: Boolean, acc: Seq[Frame]): Seq[Frame] =
+            val under = underErrorBoundary || n.boundarySpec.map(_.node.errorPf.nonEmpty).getOrElse(false)
+            val acc1 =
+                n.mountedSpec match
+                    case Present(spec) if spec.node.errorRender.isEmpty && !under => acc :+ spec.node.frame
+                    case _                                                        => acc
+            n.children.foldLeft(acc1)((a, c) => loop(c, under, a))
+        end loop
+        loop(root, false, Seq.empty)
+    end unansweredMounts
+
+    private def announceUnanswered(root: ReactiveUI)(using Frame): Unit < Sync =
+        val frames = unansweredMounts(root)
+        if frames.isEmpty then Kyo.lift(())
+        else
+            val shown = frames.take(10).map(_.position.show).mkString(", ")
+            val more  = if frames.size > 10 then s" (+${frames.size - 10} more)" else ""
+            Log.warn(
+                s"kyo-ui: ${frames.size} mounted node(s) have no answer for failure — no .onError and no enclosing " +
+                    s"UI.boundary error selection — and no UI.mountErrors policy is installed, so a failure renders " +
+                    s"the default marker: $shown$more"
+            )
+        end if
+    end announceUnanswered
 
     private def normalizeWith(ui: UI, path: Seq[String], svg: Boolean, mountDispatch: MountDispatch): ReactiveUI < Sync =
         given Frame = ui.frame
@@ -240,7 +308,7 @@ private[kyo] object ReactiveUI:
                 // The handler resolves through the MountDispatch TABLE (by path), not the node: dispatch re-normalizes
                 // a fresh node value per event, so no live wiring can ride the node. The stored signal is a placeholder
                 // constant the subscribe path never observes (subscribeScoped branches on mountedSpec first).
-                val spec = MountedSpec(ui)
+                val spec = MountedSpec(ui, path, mountDispatch.mountError)
                 val handle: Handler = (targetPath, event) =>
                     mountDispatch.lookup(path).map {
                         case Present(cell) =>
@@ -819,10 +887,11 @@ private[kyo] object ReactiveUI:
             signalChangeTime <- AtomicRef.init(Instant.Epoch)
             rootMounts       <- MountRegistry.init
             _                <- Scope.ensure(rootMounts.evictAll)
-            // Absent only for hand-built ReactiveUIs in tests; a normalize-produced root always carries the table.
+            // Absent only for hand-built ReactiveUIs in tests; a normalize-produced root always carries the table. Such a root cannot
+            // reach the policy below: a Mounted node only exists as a MountedSpec, which carries its own policy from normalize.
             mountDispatch <- rui.mountDispatch match
                 case Present(d) => Kyo.lift(d)
-                case Absent     => MountDispatch.init
+                case Absent     => MountDispatch.init(UI.MountErrorPolicy.marker)
             _ <- subscribeScoped(rui, exchange, signalChangeTime, rootMounts, mountDispatch, Absent)
         yield Subscription(rui.handle, signalChangeTime)
 
@@ -1048,16 +1117,20 @@ private[kyo] object ReactiveUI:
                             )
                         yield ()
                     case Absent =>
-                        // Duplicate key this render pass (claim already warned): paint a loud inline error instead of
-                        // silently sharing the first slot's instance. No cell/dispatch/boundary entry — a dead slot
-                        // (boundary counting happens only at instance creation) until the caller gives distinct keys.
+                        // Duplicate key this render pass (claim already warned): the slot renders through the session's
+                        // MountErrorPolicy instead of silently sharing the first slot's instance, so the engine emits no
+                        // hardcoded artifact of its own. It goes STRAIGHT to the policy: the node never mounts, and a
+                        // node-local `.onError` answers for a failed mount, which this is not. No cell/dispatch/boundary
+                        // entry — a dead slot (boundary counting happens only at instance creation) until the caller
+                        // gives distinct keys.
                         given Frame = spec.node.frame
-                        exchange
-                            .onChange(
-                                rui.path,
-                                UI.span(UI.Ast.Text(s"kyo-ui: duplicate mounted key '$key'")).cssClass("kyo-mount-error")
+                        val err =
+                            spec.mountError(
+                                DuplicateMountKey(key),
+                                UI.MountErrorSource.DuplicateKey,
+                                Present(DuplicateMountKey.text(key))
                             )
-                            .unit
+                        exchange.onChange(rui.path, spec.policy.render(err)).unit
                 }
             case Absent =>
                 for
@@ -1190,6 +1263,9 @@ private[kyo] object ReactiveUI:
       * the failure is offered to the boundary chain (typed selection); otherwise the node's default error
       * rendering applies. The enclosing region stays alive either way (a flip keeps the node Scope open, like
       * a pending-phase failure always has); failures are additionally logged out-of-band.
+      *
+      * The terminal station logs a SECOND time, distinctly: reaching it means nobody claimed the failure, which is the state a
+      * reader of the page cannot tell from a deliberate rendering. That log names the node (frame, path, key) and why it fired.
       */
     private def runMountEffect(
         spec: MountedSpec,
@@ -1199,25 +1275,36 @@ private[kyo] object ReactiveUI:
         onSettled: Unit < Async,
         supervision: MountSupervision
     )(using Frame): Nothing < (Async & Scope) =
-        def failed(t: Throwable): Unit < Async =
+        def terminal(err: UI.MountError): Unit < Async =
+            Log.error(
+                s"kyo-ui: unhandled mount failure, no .onError and no matching boundary — the session's MountErrorPolicy decides " +
+                    s"what this node shows (frame=${err.frame.position.show} path=${err.path.mkString("/")} " +
+                    s"key=${err.key.map(_.toString).getOrElse("none")} source=${err.source})",
+                err.error
+            ).andThen(cell.set(spec.errorUI(err)).unit)
+
+        def failed(source: UI.MountErrorSource)(t: Throwable): Unit < Async =
+            val err = spec.mountError(t, source)
             spec.node.errorRender match
-                case Present(_) => cell.set(spec.errorUI(t)).unit
+                case Present(_) => cell.set(spec.errorUI(err)).unit
                 case Absent =>
                     boundary match
-                        case Present(ctx) =>
-                            ctx.tryHandle(t).map(handled => if handled then () else cell.set(spec.errorUI(t)).unit)
-                        case Absent => cell.set(spec.errorUI(t)).unit
+                        case Present(ctx) => ctx.tryHandle(t).map(handled => if handled then () else terminal(err))
+                        case Absent       => terminal(err)
+            end match
+        end failed
+
         Abort.run[Throwable](MountSupervision.let(supervision)(spec.node.effect)).map {
             case Result.Success(ui) => cell.set(ui).andThen(record(ui)).andThen(onSettled)
             case Result.Failure(t) =>
                 Log.error(s"Mounted effect failed (frame=${spec.node.frame.position.show})", t)
-                    .andThen(supervision.routeOnce(t)(failed)).andThen(onSettled)
+                    .andThen(supervision.routeOnce(t)(failed(UI.MountErrorSource.Effect))).andThen(onSettled)
             case Result.Panic(t) =>
                 if t.isInstanceOf[Interrupted] then ()
                 else
                     Log.error(s"Mounted effect panicked (frame=${spec.node.frame.position.show})", t)
-                        .andThen(supervision.routeOnce(t)(failed)).andThen(onSettled)
-        }.map(_ => supervision.park(spec, failed))
+                        .andThen(supervision.routeOnce(t)(failed(UI.MountErrorSource.Panic))).andThen(onSettled)
+        }.map(_ => supervision.park(spec, failed(UI.MountErrorSource.Fork)))
     end runMountEffect
 
     /** A live keyed mount: the content cell, the unscoped runner fiber that owns the node Scope, and the child

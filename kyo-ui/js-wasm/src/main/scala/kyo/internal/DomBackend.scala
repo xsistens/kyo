@@ -38,15 +38,15 @@ private[kyo] object DomBackend:
     end markOwned
 
     /** Mount a UI into the page body. */
-    def mount(ui: UI)(using Frame): Unit < (Async & Scope) =
-        mountInto(ui, document.body)
+    def mount(ui: UI, mountError: Maybe[UI.MountErrorPolicy])(using Frame): Unit < (Async & Scope) =
+        mountInto(ui, document.body, mountError)
 
     /** Mount a UI into a specific DOM element selected by CSS selector. */
-    def mount(ui: UI, selector: String)(using Frame): Unit < (Async & Scope) =
+    def mount(ui: UI, selector: String, mountError: Maybe[UI.MountErrorPolicy])(using Frame): Unit < (Async & Scope) =
         Sync.defer {
             val target = document.querySelector(selector)
             if target == null then Abort.panic(UIException(s"Element not found: $selector"))
-            else mountInto(ui, target.asInstanceOf[dom.Element])
+            else mountInto(ui, target.asInstanceOf[dom.Element], mountError)
         }
     end mount
 
@@ -63,13 +63,13 @@ private[kyo] object DomBackend:
     private[kyo] def injectStylesheet(sheet: Stylesheet)(using Frame): Unit < Sync =
         DomStyleSheet.injectBase().andThen(Sync.defer(DomStyleSheet.injectStylesheet(sheet.render)))
 
-    private def mountInto(ui: UI, container: dom.Element)(using Frame): Unit < (Async & Scope) =
+    private def mountInto(ui: UI, container: dom.Element, mountError: Maybe[UI.MountErrorPolicy])(using Frame): Unit < (Async & Scope) =
         // Late-bound to break the emit<->Commands construction cycle (emit resolves measure callbacks via Commands,
         // Commands needs emit). Set before any op is emitted.
         var sessionCommands: UI.Commands = null
         for
             _    <- DomStyleSheet.injectBase()
-            root <- ReactiveUI.normalize(ui, Seq.empty)
+            root <- ReactiveUI.normalize(ui, Seq.empty, mountError)
             // `mountSlot = true` on the BOOT render: this HTML goes straight into the live DOM and is never
             // a golden/SSR artifact, so the mount slots may carry their `s`/`k` flags from the very first
             // byte. Without them a keyed mount's region starts keyless, and the first parent re-render has
@@ -988,6 +988,7 @@ private[kyo] object DomBackend:
                         if f.mount && t.slot then
                             m.asInstanceOf[dom.Comment].data =
                                 RegionMarker.openData(f.path, mount = true, key = t.key)
+                    end if
                 case _ => ()
         else
             insertLogicalClone(parent, toNode, m)

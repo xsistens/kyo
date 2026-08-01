@@ -18,7 +18,9 @@ class NoticeTest extends kyo.test.Test[Any]:
             def onChange(path: Seq[String], changed: UI, mount: Boolean)(using Frame): Unit < Async = Kyo.unit
 
     private def subscribe(ui: UI)(using Frame): Unit < (Async & Scope) =
-        ReactiveUI.normalize(ui, Seq.empty).map(root => ReactiveUI.subscribe(root, silentExchange).unit)
+        ReactiveUI.normalize(ui, Seq.empty, Present(UI.MountErrorPolicy.message)).map(root =>
+            ReactiveUI.subscribe(root, silentExchange).unit
+        )
 
     private def boom = new RuntimeException("degraded")
 
@@ -77,7 +79,7 @@ class NoticeTest extends kyo.test.Test[Any]:
             _ <- UI.notices(_ => Kyo.unit) {
                 Scope.run {
                     val effect = UI.notify(boom).andThen(UI.span("content").id("c"): UI)
-                    ReactiveUI.normalize(UI.div(UI.mounted(effect).keyed("k")), Seq.empty)
+                    ReactiveUI.normalize(UI.div(UI.mounted(effect).keyed("k")), Seq.empty, Present(UI.MountErrorPolicy.message))
                         .map(root => ReactiveUI.subscribe(root, exchange).unit)
                         .andThen(seen.get)
                 }

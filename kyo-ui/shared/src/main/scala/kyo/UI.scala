@@ -29,6 +29,9 @@ import scala.language.implicitConversions
   *   - `runHandlers`: exposes it as a server-push pair (SSR page GET and a WebSocket diff channel).
   *   - `runRender`: emits a `Stream[String, Async]` of full-page HTML for SSR, tests, or custom transports.
   *
+  * Each runner reads the app's [[kyo.UI.MountErrorPolicy]] (installed with [[kyo.UI.mountErrors]]) as it starts: the single answer for
+  * a mount failure that nothing below it claimed.
+  *
   * @see
   *   [[kyo.UI.div]], [[kyo.UI.button]], [[kyo.UI.input]] and the other factory constructors for building elements
   * @see
@@ -256,7 +259,8 @@ object UI:
       * the scoped `Fiber.init` (directly or transitively — a data feed forked by a library the effect calls) is SUPERVISED. A
       * non-interrupt terminal failure of such a fiber retroactively flips the ALREADY-PUBLISHED node into the same error routing
       * a failed mount takes: node-local `.onError` render, else the enclosing [[UI.boundary]] chain (typed selection), else the
-      * default inline error. First failure wins (at most one flip per instance, shared with the effect-failure path); teardown
+      * session's [[kyo.UI.MountErrorPolicy]] — the app's own terminal answer, which also logs the node that had none. First
+      * failure wins (at most one flip per instance, shared with the effect-failure path); teardown
       * interrupts are exempt; the node `Scope` stays open on a flip (sibling fibers keep running, exactly like a pending-phase
       * failure). The flip REPLACES the node's content — an app that wants "keep the content, surface the error elsewhere" routes
       * that failure to a value/side channel (e.g. a toast) instead of failing the fiber; an `.onError` render may offer retry by
@@ -348,6 +352,95 @@ object UI:
             case Absent        => Log.warn("kyo-ui: notice with no UI.notices sink installed", t)
         }
 
+    /** Installs the app's terminal answer for mount failures: what a mounted node renders when neither its own
+      * `.onError` nor an enclosing [[kyo.UI.boundary]] claimed the failure. Wrap the runner once, next to
+      * [[kyo.UI.notices]] — that one annotates without replacing, this one is the end of the replacing chain:
+      *
+      * {{{
+      * UI.mountErrors(UI.MountErrorPolicy.marker)(
+      *     UI.runMount(shell, "#app")
+      * )
+      * }}}
+      *
+      * The policy is read once, here at the runner, and carried into the session as a value; it is not consulted
+      * again on the failing fiber. With none installed the default answers — see [[kyo.UI.MountErrorPolicy]] for
+      * what that default is and what it announces.
+      */
+    def mountErrors[A, S](policy: MountErrorPolicy)(v: A < S)(using Frame): A < S =
+        ReactiveUI.mountErrorPolicy.let(Present(policy))(v)
+
+    /** Why a mounted node is showing its error rendering.
+      *
+      * `Effect` and `Panic` are the mount effect's own outcome. `Fork` is the one no effect type can describe: the effect already
+      * SUCCEEDED and the node published its content, and a fiber it forked with [[kyo.UI.fork]] died afterwards, flipping the live
+      * node. `DuplicateKey` is a caller bug — two mounted nodes claimed the same key in one render pass, so the second slot never
+      * mounts.
+      */
+    enum MountErrorSource derives CanEqual:
+        case Effect, Panic, Fork, DuplicateKey
+
+    /** A mount failure that reached the terminal station, with what it takes to find the node that produced it: the failure, why it
+      * fired, the source position of the `UI.mounted` call, the node's render path, and its key if it is keyed.
+      *
+      * `message` is the plain, rendering-ready description — the failure's own message for an ordinary failure, the engine's
+      * one-liner for [[kyo.UI.MountErrorSource.DuplicateKey]]. Prefer it over `error.getMessage` when rendering: a `KyoException`
+      * answers `getMessage` with its frame-decorated DEVELOPMENT block, which is right for a log and wrong for a page.
+      */
+    final case class MountError(
+        error: Throwable,
+        source: MountErrorSource,
+        message: String,
+        frame: Frame,
+        path: Seq[String],
+        key: Maybe[Any]
+    )
+
+    /** The app's one central decision: what a mount failure renders when nothing below it claimed the failure — no node-local
+      * `.onError`, no matching [[kyo.UI.boundary]] in the chain.
+      *
+      * Every mounted node can fail, including the ones whose effect declares no `Abort`: a fiber forked with [[kyo.UI.fork]] can flip
+      * a node long after it published ([[kyo.UI.MountErrorSource.Fork]]). There is therefore no such thing as a mount that needs no
+      * answer here. Install one with [[kyo.UI.mountErrors]].
+      *
+      * '''With none installed''' the default is [[marker]] — never the failure's own text, which would sit in the layout position of
+      * whatever the mount was going to render and read as content. The runner additionally announces, once, every mount in the tree
+      * that has no answer of its own (no `.onError`, no enclosing boundary error selection), by source position: a tree of unanswered
+      * mounts is otherwise invisible until one of them fails in front of a user. A tree with no mounted nodes says nothing and costs
+      * nothing — which is why this rides an ambient default rather than an obligation on every renderer.
+      *
+      * Contrast with [[kyo.UI.notices]], the other half of failure routing: this chain REPLACES the node's content, `UI.notices`
+      * annotates without replacing. A failure is logged out-of-band either way, and the terminal station logs a second time, naming
+      * the node that had no answer.
+      */
+    final case class MountErrorPolicy(render: MountError => UI)
+
+    object MountErrorPolicy:
+
+        /** Unmistakably framework-emitted, in the spirit of kyo-i18n's `‹key›` miss marker: names the mount's source position and
+          * nothing else, so it can never be mistaken for app content. The failure itself is in the log.
+          */
+        val marker: MountErrorPolicy = MountErrorPolicy { e =>
+            given Frame = e.frame
+            UI.span(UI.Ast.Text(s"‹mount failed: ${e.frame.position.show}›")).cssClass("kyo-mount-error")
+        }
+
+        /** The failure's own message inline: compact, but it puts library wording (and possibly internals) in the layout position of
+          * whatever the mount was going to render.
+          */
+        val message: MountErrorPolicy = MountErrorPolicy { e =>
+            given Frame = e.frame
+            UI.span(UI.Ast.Text(e.message)).cssClass("kyo-mount-error")
+        }
+
+        /** Renders nothing; the failure lives only in the log. For apps that surface failures entirely out of band (e.g. through
+          * [[kyo.UI.notices]]) and want the slot to collapse.
+          */
+        val silent: MountErrorPolicy = MountErrorPolicy { e =>
+            given Frame = e.frame
+            UI.empty
+        }
+    end MountErrorPolicy
+
     /** Entry point for [[kyo.UI.Ast.Boundary]] (EXPERIMENTAL): `UI.boundary.fallback(spinner).onError { case e: DataError =>
       * card(e) }(subtree...)`. See the Boundary scaladoc for aggregation/reveal/error semantics.
       */
@@ -396,8 +489,10 @@ object UI:
                 given Frame = m.frame
                 m.copy(placeholderUI = Present(ui))
 
-            /** Renders a failed mount (`Abort` failure or panic of the effect). Defaults to a minimal inline error node; the
-              * failure is additionally logged. The enclosing region stays alive; a subsequent key change re-mounts cleanly.
+            /** Renders a failed mount (`Abort` failure or panic of the effect, or a supervised [[kyo.UI.fork]] fiber that died
+              * after publish). Optional: without it the failure is offered to the enclosing [[kyo.UI.boundary]] chain and then to
+              * the session's [[kyo.UI.MountErrorPolicy]]. Logged out-of-band in every case. The enclosing region stays alive; a
+              * subsequent key change re-mounts cleanly.
               */
             def onError(f: Throwable => UI): Mounted =
                 given Frame = m.frame
@@ -417,9 +512,12 @@ object UI:
       * The page GET is pure SSR: it evaluates the UI, renders the initial HTML, and returns. It creates no session, forks no fibers, and
       * sets no cookie. Each WebSocket connection owns its own subscription tree for the duration of the connection; per-connection state
       * resets when the client disconnects.
+      *
+      * The app's [[kyo.UI.MountErrorPolicy]] is read HERE, on the caller's fiber, and travels the session as a value — a read on a
+      * session fiber would miss it, since those do not inherit the caller's context.
       */
     def runHandlers(basePath: String)(ui: => UI < Async)(using Frame): Seq[HttpHandler[?, ?, ?]] < Sync =
-        UIServer.handlers(basePath)(ui)
+        ReactiveUI.mountErrorPolicy.use(policy => UIServer.handlers(basePath, policy)(ui))
 
     /** Scrolls the element with `id` into the client viewport, from inside an event handler.
       *
@@ -612,6 +710,9 @@ object UI:
 
     /** Read-only stream of the full rendered HTML. Emits whenever any signal changes. First emission is the initial render. Useful for
       * testing, SSR, export, or custom transports.
+      *
+      * Mounted nodes run here like under any other runner, so the app's [[kyo.UI.MountErrorPolicy]] applies; it is read when the
+      * stream body starts.
       */
     def runRender(ui: UI)(using Frame): Stream[String, Async] =
         Stream[String, Async] {
@@ -634,8 +735,9 @@ object UI:
                     // the consume loop ends, the Scope closes, and the subscription tree cascade-tears-down.
                     Scope.run {
                         for
-                            root <- ReactiveUI.normalize(ui, Seq.empty)
-                            _    <- ReactiveUI.subscribe(root, exchange)
+                            policy <- ReactiveUI.mountErrorPolicy.get
+                            root   <- ReactiveUI.normalize(ui, Seq.empty, policy)
+                            _      <- ReactiveUI.subscribe(root, exchange)
                         yield Loop.foreach {
                             // runPartial captures only the Closed failure (the channel closed when the consumer stopped
                             // draining / on teardown -> end the stream); a Panic propagates rather than being silently

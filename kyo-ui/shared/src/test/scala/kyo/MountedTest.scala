@@ -61,7 +61,7 @@ class MountedTest extends UITest:
                                 if html.contains("hello-env") then seen.completeDiscard(Result.succeed(html))
                                 else ()
                             }
-                    root <- kyo.internal.ReactiveUI.normalize(ui, Seq.empty)
+                    root <- kyo.internal.ReactiveUI.normalize(ui, Seq.empty, Present(UI.MountErrorPolicy.message))
                     _    <- kyo.internal.ReactiveUI.subscribe(root, exchange)
                     html <- seen.get
                 yield assert(html.contains("hello-env"))
@@ -391,7 +391,7 @@ class MountedTest extends UITest:
                 )
                 exchange = new kyo.internal.UIExchange:
                     def onChange(path: Seq[String], changed: UI, mount: Boolean)(using Frame): Unit < Async = ()
-                root     <- kyo.internal.ReactiveUI.normalize(ui, Seq.empty)
+                root     <- kyo.internal.ReactiveUI.normalize(ui, Seq.empty, Present(UI.MountErrorPolicy.message))
                 dispatch <- kyo.internal.ReactiveUI.subscribe(root, exchange)
                 // Target = the LABEL region's path: div(0)=cards-div... button-bar=child 1, button=child 0, label=child 0.
                 labelPath = Seq("1", "0", "0")
