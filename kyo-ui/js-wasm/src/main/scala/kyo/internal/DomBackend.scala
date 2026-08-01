@@ -480,7 +480,7 @@ private[kyo] object DomBackend:
                         }
                         found
         if focusTarget != null then
-            val _ = focusTarget.asInstanceOf[scalajs.js.Dynamic].focus()
+            val _ = focusTarget.asInstanceOf[scalajs.js.Dynamic].focus(scalajs.js.Dynamic.literal(preventScroll = true))
             (selStart, selEnd) match
                 case (Present(s), Present(e)) => setSelection(focusTarget, s, e)
                 case _                        => ()
@@ -524,7 +524,7 @@ private[kyo] object DomBackend:
                 focusReturnStack.append(
                     FocusSeed(el.getAttribute("data-kyo-path"), ret, el.hasAttribute("data-kyo-focus-restore"))
                 )
-            discard(el.asInstanceOf[scalajs.js.Dynamic].focus())
+            discard(el.asInstanceOf[scalajs.js.Dynamic].focus(scalajs.js.Dynamic.literal(preventScroll = true)))
         }
     end seedFocusAuto
 
@@ -552,7 +552,7 @@ private[kyo] object DomBackend:
         val el = document.querySelector(s"""[data-kyo-path="$path"]""")
         if el == null then false
         else
-            discard(el.asInstanceOf[scalajs.js.Dynamic].focus())
+            discard(el.asInstanceOf[scalajs.js.Dynamic].focus(scalajs.js.Dynamic.literal(preventScroll = true)))
             true
         end if
     end focusIfPresent
@@ -1323,7 +1323,7 @@ private[kyo] object DomBackend:
                 discard(document.body.appendChild(el))
                 if hadFocus then
                     val dyn = ae.asInstanceOf[scalajs.js.Dynamic]
-                    val _   = dyn.focus()
+                    val _   = dyn.focus(scalajs.js.Dynamic.literal(preventScroll = true))
                     (selStart, selEnd) match
                         case (Present(s), Present(e)) => setSelection(ae, s, e)
                         case _                        => ()

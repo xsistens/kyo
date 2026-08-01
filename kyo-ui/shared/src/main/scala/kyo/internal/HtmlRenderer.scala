@@ -1130,7 +1130,7 @@ private[kyo] object HtmlRenderer:
            |function __kyoRestoreFocus(ap,ss,se){
            |  var rf=document.querySelector('[data-kyo-path="'+ap+'"]');
            |  if(!rf){var r=__kyoRegions[ap];if(r&&r.s.isConnected){var fs='input,textarea,select,[contenteditable]',n=r.s.nextSibling;while(!rf&&n&&n!==r.e){if(n.nodeType===1){rf=(n.matches&&n.matches(fs))?n:n.querySelector(fs);}n=n.nextSibling;}}}
-           |  if(rf){rf.focus();if(ss!==null&&typeof rf.setSelectionRange==='function'){try{rf.setSelectionRange(ss,se);}catch(e){if(e.name!=='InvalidStateError')throw e;}}}
+           |  if(rf){rf.focus({preventScroll:true});if(ss!==null&&typeof rf.setSelectionRange==='function'){try{rf.setSelectionRange(ss,se);}catch(e){if(e.name!=='InvalidStateError')throw e;}}}
            |}
            |function __kyoFirstEl(p){var c=p.firstChild;while(c&&c.nodeType!==1)c=c.nextSibling;return c;}
            |// For an open marker, its matching close among following siblings (paths unique among siblings).
@@ -1457,7 +1457,7 @@ private[kyo] object HtmlRenderer:
            |      var ae=document.activeElement;
            |      var ret=(ae&&ae!==document.body&&ae.getAttribute)?ae.getAttribute("data-kyo-path"):null;
            |      __focusReturnStack.push({fa:fa,ret:ret,restore:cand[j].hasAttribute("data-kyo-focus-restore")});
-           |      if(typeof cand[j].focus==='function')cand[j].focus();
+           |      if(typeof cand[j].focus==='function')cand[j].focus({preventScroll:true});
            |      return;
            |    }
            |  }
@@ -1472,7 +1472,7 @@ private[kyo] object HtmlRenderer:
            |    __focusReturnStack.pop();
            |    // At most one restore per unwind: a deeper entry belongs to a seed that closed while a newer one stayed
            |    // open, so its return target is stale and must not override the one just restored.
-           |    if(!restored&&top.restore&&top.ret){var re=document.querySelector('[data-kyo-path="'+top.ret+'"]');if(re&&typeof re.focus==='function'){re.focus();restored=true;}}
+           |    if(!restored&&top.restore&&top.ret){var re=document.querySelector('[data-kyo-path="'+top.ret+'"]');if(re&&typeof re.focus==='function'){re.focus({preventScroll:true});restored=true;}}
            |  }
            |}
            |// Range-scoped mirrors of the element-rooted helpers above: a region is a SIBLING RANGE, so each pass
@@ -1517,7 +1517,7 @@ private[kyo] object HtmlRenderer:
            |        var se=(had&&typeof ae.selectionEnd==='number')?ae.selectionEnd:null;
            |        el.parentNode.insertBefore(slot,el);
            |        document.body.appendChild(el);
-           |        if(had){ae.focus();if(ss!==null)kyoSetCaret(ae,ss,se);}
+           |        if(had){ae.focus({preventScroll:true});if(ss!==null)kyoSetCaret(ae,ss,se);}
            |      }
            |    }
            |  }
