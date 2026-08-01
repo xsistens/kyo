@@ -375,6 +375,57 @@ object ApolloSignal:
                     }
                 window
 
+    /** Drive `ref` from a source whose VARIABLES change over time — the reactive
+      * counterpart of [[driveGated]]'s fixed source, and react-apollo's
+      * `ObservableQuery.reobserve` on a variables change.
+      *
+      * `values` is consumed through [[kyo.Signal.observe]], which deduplicates by value
+      * and gives each distinct one its own `Scope`: the watcher for a value is forked
+      * into that scope and torn down when — and only when — the value actually changes.
+      * The old watcher's scope closes strictly before the new one opens, so the two are
+      * never subscribed at once. `Absent` opens no watcher at all and parks `ref` at
+      * [[QueryState.Idle]]: the signal-shaped `skip`, and the state a page holds before
+      * its route parameter exists.
+      *
+      * A switch between two `Present` values deliberately does NOT reset `ref` to
+      * [[QueryState.Loading]] — the previous data stays on screen until the new response
+      * lands. That is the whole reason to re-point a live watcher instead of remounting
+      * its consumer, and it is what react achieves with `useDeferredValue`. Only a
+      * switch out of `Idle` (nothing has ever been fetched here) promotes to `Loading`.
+      *
+      * `onSwitch` runs after the previous value's scope closed and before the new
+      * watcher opens — the seam for per-variables state a caller keeps alongside the
+      * watcher, such as the cursor accumulator of a paginated query. Sequencing it here
+      * rather than in a second observer of `values` is what stops a concurrent
+      * `fetchMore` from sending the previous value's cursor to the new query.
+      */
+    private[kyo] def driveSwitching[D, V](
+        values: Signal[Maybe[V]],
+        source: V => Stream[ApolloResponse[D], Async & Scope],
+        ref: Signal.SignalRef[QueryState[D]],
+        onSwitch: Maybe[V] => Unit < Sync
+    )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]], CanEqual[V, V]): Unit < Async =
+        values.observe { value =>
+            onSwitch(value).andThen {
+                value match
+                    case Present(v) =>
+                        ref.currentWith {
+                            case QueryState.Idle => ref.set(QueryState.Loading)
+                            case _               => (): Unit < Sync
+                        }.andThen(Fiber.init(Scope.run(source(v).foreach(resp => push(ref, resp)))).unit)
+                    case Absent =>
+                        ref.set(QueryState.Idle)
+            }
+        }
+
+    /** The [[QueryState]] a freshly seeded watcher ref starts at, given the first value
+      * of its variables signal: a parked (`Absent`) watcher has requested nothing yet,
+      * a live one has a fetch in flight. Read synchronously at construction so no
+      * consumer can observe `Idle` on a signal that is about to load.
+      */
+    private[kyo] def seedFor[D, V](value: Maybe[V]): QueryState[D] =
+        if value.isEmpty then QueryState.Idle else QueryState.Loading
+
     /** Project `resp` and write it to `ref`, carrying forward the data the operation
       * had already delivered if the projection is a bare [[QueryState.Failure]].
       */
