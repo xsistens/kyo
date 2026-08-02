@@ -222,7 +222,7 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
       *   A new signal containing transformed values
       */
     @nowarn("msg=anonymous")
-    inline def map[B](inline f: A => B)(using CanEqual[B, B], Frame): Signal[B] =
+    inline def map[B](inline f: A => B)(using canEqualB: CanEqual[B, B], frame: Frame): Signal[B] =
         Signal._initRawF(
             [C, S] => g => self.currentWith(a => g(f(a))),
             [C, S] => g => self.nextWith(a => g(f(a))),
@@ -230,7 +230,14 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
             // plain `observe` compared source values, so a source change delivered to every derived observer
             // even when its own image held still, and re-created each one's per-value Scope for nothing. The
             // baseline is now used directly: it is already in image space, so no translation is needed.
-            [S] => (baseline, ri, g) => self.observeProjected[B, S](f, baseline, ri)(g)
+            [S] => (baseline, ri, g) => self.observeProjected[B, S](f, baseline, ri)(g),
+            // Projections compose down the chain rather than stopping at this map: a projected observation
+            // of `x.map(f)` becomes one of `x` through `proj ∘ f`. That is what keeps a chain rooted in a
+            // SignalRef on that ref's exact protocol — without it the first map answers from the trait's
+            // repairing loop, and a two-step chain silently reacquires the repair timer.
+            [C, S] =>
+                (proj, baseline, ri, g, canEqualC) =>
+                    self.observeProjected[C, S](a => proj(f(a)), baseline, ri)(g)(using canEqualC, frame)
         )
 
     /** This signal's CHANGES, carrying `b` in place of its own values.
@@ -616,7 +623,14 @@ object Signal:
     private inline def _initRawF[A](
         inline _currentWith: [B, S] => (A => B < S) => B < (S & Sync),
         inline _nextWith: [B, S] => (A => B < S) => B < (S & Async),
-        inline _observe: [S] => (Maybe[A], Duration, A => Unit < (S & Async & Scope)) => Unit < (S & Async)
+        inline _observe: [S] => (Maybe[A], Duration, A => Unit < (S & Async & Scope)) => Unit < (S & Async),
+        inline _observeProjected: [C, S] => (
+            A => C,
+            Maybe[C],
+            Duration,
+            C => Unit < (S & Async & Scope),
+            CanEqual[C, C]
+        ) => Unit < (S & Async)
     )(
         using
         frame: Frame,
@@ -631,6 +645,10 @@ object Signal:
                 frame: Frame
             ): Unit < (S & Async) =
                 _observe(baseline, repairInterval, f)
+            override def observeProjected[C, S](proj: A => C, baseline: Maybe[C], repairInterval: Duration)(
+                g: C => Unit < (S & Async & Scope)
+            )(using canEqualC: CanEqual[C, C], frame: Frame): Unit < (S & Async) =
+                _observeProjected(proj, baseline, repairInterval, g, canEqualC)
         end new
     end _initRawF
 
