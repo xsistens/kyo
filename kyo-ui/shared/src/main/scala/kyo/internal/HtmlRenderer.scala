@@ -211,7 +211,10 @@ private[kyo] object HtmlRenderer:
                 // the region when the node's cell publishes (synchronously, before paint, for an adopted keyed instance).
                 // The `s` flag is client-only (see `render`): declares a mount belongs at this slot, so a parent morph
                 // preserves a live mount but reconciles away a stale one when the new content is NOT a mount. SSR keeps golden HTML.
-                w(sb, RegionMarker.open(path, slot = mountSlot))
+                // The `k` flag rides along with `s`: it names the mount that belongs at this slot, so a
+                // parent morph can tell "the SAME keyed mount is still here" (leave its live subtree alone)
+                // from "a different key claims this slot now" (reconcile it away). Client-only like `s`.
+                w(sb, RegionMarker.open(path, slot = mountSlot, key = if mountSlot then m.key.map(_.toString) else Absent))
                 val mph = m.placeholderUI.getOrElse(UI.empty(using m.frame))
                 renderTo(sb, mph, contentPath(path, mph), svg, cssRules, mountSlot)
                     .andThen(w(sb, RegionMarker.close(path)))
@@ -884,7 +887,9 @@ private[kyo] object HtmlRenderer:
            |        __kyoMorphRange(rp,r.s.nextSibling,r.e,tc.firstChild,null);
            |        // The mount's own first paint claims the region: the 'm' flag rides the live start marker
            |        // (source of truth, survives registry rebuilds); the registry entry is a cache.
-           |        if(op.Replace.mount&&!r.m){r.m=true;r.s.data="kyo:"+__kyoMEsc(p)+" m";}
+           |        // Any 'k' a parent slot render already put there is carried over: dropping it would
+           |        // make the next parent paint fall through instead of skipping.
+           |        if(op.Replace.mount&&!r.m){var pk=__kyoMParse(r.s.data);r.m=true;r.s.data=__kyoMOpen(p,true,pk?pk.k:null);}
            |        // A morph imports subtrees (new nested-region markers ride along), so refresh this range.
            |        __kyoRescanRange(r);
            |        var rn=r.s.nextSibling;while(rn&&rn!==r.e){if(rn.nodeType===1){applyJsProps(rn);ba(rn);}rn=rn.nextSibling;}
@@ -935,10 +940,15 @@ private[kyo] object HtmlRenderer:
            |  if(s.indexOf("/kyo:")===0){close=true;s=s.substring(5);}
            |  else if(s.indexOf("kyo:")===0){s=s.substring(4);}
            |  else return null;
-           |  var m=false,sl=false;
-           |  if(!close){var sp=s.indexOf(" ");if(sp>=0){var fl=s.substring(sp+1).split(" ");m=fl.indexOf("m")>=0;sl=fl.indexOf("s")>=0;s=s.substring(0,sp);}}
-           |  return {p:__kyoMUnesc(s),c:close,m:m,s:sl};
+           |  var m=false,sl=false,k=null;
+           |  if(!close){var sp=s.indexOf(" ");if(sp>=0){var fl=s.substring(sp+1).split(" ");m=fl.indexOf("m")>=0;sl=fl.indexOf("s")>=0;
+           |    for(var fi=0;fi<fl.length;fi++){if(fl[fi].indexOf("k=")===0){k=__kyoMUnesc(fl[fi].substring(2));break;}}
+           |    s=s.substring(0,sp);}}
+           |  return {p:__kyoMUnesc(s),c:close,m:m,s:sl,k:k};
            |}
+           |// Rebuild an open marker's data (twin of RegionMarker.openData): used when a live mount region
+           |// claims 'm' or adopts an incoming mount key.
+           |function __kyoMOpen(p,m,k){return "kyo:"+__kyoMEsc(p)+(m?" m":"")+(k===null||k===undefined?"":" k="+__kyoMEsc(k));}
            |// True when the payload's first node is an open marker with the 's' flag (the region's new content
            |// root IS a mount placeholder). Bounded to the leading comment.
            |function __kyoPayloadSlot(html){
@@ -1032,8 +1042,11 @@ private[kyo] object HtmlRenderer:
            |function __kyoRemoveL(parent,node){__kyoEachSpan(node,function(n){parent.removeChild(n);});}
            |function __kyoInsertL(parent,toNode,ref){__kyoEachSpan(toNode,function(n){parent.insertBefore(document.importNode(n,true),ref);});}
            |// Patch matched logical children. Span vs span recurses on the content ranges, unless the live span
-           |// carries 'm' and the incoming one 's' (the SAME mount re-rendering, which owns its subtree): opaque,
-           |// and the 'm' start marker is never touched. Kind mismatch replaces wholesale.
+           |// carries 'm', the incoming one 's', AND both name the same mount 'k' (the SAME mount still sitting
+           |// here, which owns its subtree): opaque, and the 'm' start marker is never touched. A differing 'k'
+           |// falls through to the morph (so a key change resets the slot) and the live marker adopts the
+           |// incoming key, which also closes the boot case where full-page HTML carries no 'k' at all.
+           |// Kind mismatch replaces wholesale.
            |function __kyoPatchL(parent,m,toNode){
            |  var fs=m.nodeType===8,ts=toNode.nodeType===8;
            |  if(!fs&&!ts){__kyoMorphNode(m,toNode);return;}
@@ -1042,8 +1055,9 @@ private[kyo] object HtmlRenderer:
            |    if(!f||!t)return;
            |    var fc=__kyoSpanClose(m,f.p),tc=__kyoSpanClose(toNode,t.p);
            |    if(!fc||!tc)return;
-           |    if(f.m&&t.s)return;
+           |    if(f.m&&t.s&&f.k===t.k)return;
            |    __kyoMorphRange(parent,m.nextSibling,fc,toNode.nextSibling,tc);
+           |    if(f.m&&t.s)m.data=__kyoMOpen(f.p,true,t.k);
            |    return;
            |  }
            |  __kyoInsertL(parent,toNode,m);__kyoRemoveL(parent,m);

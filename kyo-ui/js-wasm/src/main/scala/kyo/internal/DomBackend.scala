@@ -55,7 +55,11 @@ private[kyo] object DomBackend:
         for
             _    <- DomStyleSheet.injectBase()
             root <- ReactiveUI.normalize(ui, Seq.empty)
-            html <- HtmlRenderer.render(ui, Seq.empty)
+            // `mountSlot = true` on the BOOT render: this HTML goes straight into the live DOM and is never
+            // a golden/SSR artifact, so the mount slots may carry their `s`/`k` flags from the very first
+            // byte. Without them a keyed mount's region starts keyless, and the first parent re-render has
+            // to fall through the opacity guard (rebuilding the live subtree once) just to adopt the key.
+            html <- HtmlRenderer.render(ui, Seq.empty, mountSlot = true)
             _    <- Sync.defer(container.innerHTML = html)
             // Comment markers produce no node handles from an innerHTML assignment; one full scan
             // builds the path->range registry the patch path resolves against.
@@ -170,8 +174,11 @@ private[kyo] object DomBackend:
                                 // The mount's own first paint claims the region: the `m` flag rides the live
                                 // start marker (source of truth, survives registry rebuilds); the registry
                                 // entry is a cache. Client-only mutation, never in server-rendered HTML.
+                                // Any `k` a parent slot render already put there is carried over: dropping
+                                // it would make the next parent paint fall through instead of skipping.
+                                val carried = RegionMarker.parse(r.start.data).flatMap(_.key)
                                 r.mount = true
-                                r.start.data = RegionMarker.openData(pathAttr, mount = true)
+                                r.start.data = RegionMarker.openData(pathAttr, mount = true, key = carried)
                             end if
                             // A morph imports subtrees, which carries new nested-region markers with it:
                             // refresh the registry for exactly this range.
@@ -1058,10 +1065,17 @@ private[kyo] object DomBackend:
         eachSpanNode(toNode)(n => discard(parent.insertBefore(document.importNode(n, true), ref)))
 
     /** Patch matched logical children (same key). Element vs element morphs in place; span vs span
-      * recurses on the two content ranges, unless the live span carries the `m` (mount root) flag and
-      * the incoming one the `s` (mount slot) flag: that is the SAME mount re-rendering, which owns and
-      * repaints its own subtree, so the span is opaque and its start marker is never touched (the `m`
-      * flag must survive). A kind mismatch at one key replaces wholesale.
+      * recurses on the two content ranges, unless the live span carries the `m` (mount root) flag, the
+      * incoming one the `s` (mount slot) flag, AND both name the same mount `k`: that is the SAME mount
+      * still sitting here, which owns and repaints its own subtree, so the span is opaque and its start
+      * marker is never touched (the `m` flag must survive). A kind mismatch at one key replaces wholesale.
+      *
+      * The `k` comparison is what makes opacity safe for a KEYED mount. Without it, a key change would keep
+      * the evicted instance's content on screen forever; with it, the differing key falls through to the
+      * morph (which reconciles the stale content against the new placeholder) and the live marker ADOPTS
+      * the incoming key on the way out, so the next paint of an unchanged key is opaque. That adoption also
+      * closes the boot case: a full-page render emits no `k` (client-only flag, golden HTML unchanged), so
+      * the first re-render after boot morphs once and every one after it skips.
       */
     private def patchLogical(parent: dom.Element, m: dom.Node, toNode: dom.Node): Unit =
         val fromIsSpan = m.nodeType == 8
@@ -1073,8 +1087,13 @@ private[kyo] object DomBackend:
                     val fClose = spanClose(m, f.path)
                     val tClose = spanClose(toNode, t.path)
                     if fClose == null || tClose == null then ()
-                    else if f.mount && t.slot then ()
-                    else morphRange(parent, m.nextSibling, fClose, toNode.nextSibling, tClose)
+                    else if f.mount && t.slot && f.key == t.key then ()
+                    else
+                        morphRange(parent, m.nextSibling, fClose, toNode.nextSibling, tClose)
+                        if f.mount && t.slot then
+                            m.asInstanceOf[dom.Comment].data =
+                                RegionMarker.openData(f.path, mount = true, key = t.key)
+                    end if
                 case _ => ()
         else
             insertLogicalClone(parent, toNode, m)
