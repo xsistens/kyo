@@ -13,35 +13,58 @@ import kyo.*
   * BYTE-FORMAT CONTRACT: shared with the inline LiveView client in `HtmlRenderer.clientJs`; both
   * implementations MUST stay in lockstep:
   * {{{
-  *   open  comment data = "kyo:" + escape(path) [+ " m"] [+ " s"]
+  *   open  comment data = "kyo:" + escape(path) [+ " m"] [+ " s"] [+ " k=" + escape(mountKey)]
   *   close comment data = "/kyo:" + escape(path)
   *   escape: "%" -> "%25", "-" -> "%2D", " " -> "%20"   (decode in reverse; "%25" last)
   * }}}
   * Foreach keys are arbitrary user strings and land in the path, so escaping is load-bearing: with no raw
   * '-' left, no comment-terminating "-->" / "--!>" can occur inside a marker; with no raw ' ', the first
-  * space unambiguously separates the path from the flags.
+  * space unambiguously separates the path from the flags AND the flags from each other, which is why the
+  * `k=` payload is escaped with the same function.
   *
   * Flags (client-paint only, never emitted by SSR/full-page renders, so golden HTML stays byte-identical):
-  *   - `m` (mount root): a keyless mount's live region; a parent morph treats the whole marker span as
-  *     opaque and never wipes the live subtree.
+  *   - `m` (mount root): a mount's live region; a parent morph treats the whole marker span as opaque and
+  *     never wipes the live subtree.
   *   - `s` (mount slot): a `Mounted` placeholder painted by an exchange `onChange`, so a morph can tell
   *     "this slot IS a mount" from content that merely collided on the positional path key.
+  *   - `k=<key>` (mount key): the identity of the mount that owns or claims this slot. `m` alone cannot
+  *     decide opacity for a KEYED mount, because a key change must still reset the slot: the morph skips
+  *     the span only when the live `k` equals the incoming one, and adopts the incoming `k` onto the live
+  *     marker whenever it does not. Keyless mounts carry no `k` on either side, so `Absent == Absent`
+  *     keeps their existing behaviour exactly.
   */
 private[kyo] object RegionMarker:
 
-    /** A parsed marker comment's data. `path` is the unescaped dot-joined path (registry key). */
-    final case class Parsed(path: String, isClose: Boolean, mount: Boolean, slot: Boolean) derives CanEqual
+    /** A parsed marker comment's data. `path` is the unescaped dot-joined path (registry key); `key` is the
+      * unescaped mount key, present only on mount slots/roots that carry one.
+      */
+    final case class Parsed(
+        path: String,
+        isClose: Boolean,
+        mount: Boolean,
+        slot: Boolean,
+        key: Maybe[String] = Absent
+    ) derives CanEqual
 
-    def open(path: Seq[String], mount: Boolean = false, slot: Boolean = false): String =
-        s"<!--${openData(path.mkString("."), mount, slot)}-->"
+    def open(path: Seq[String], mount: Boolean = false, slot: Boolean = false, key: Maybe[String] = Absent): String =
+        s"<!--${openData(path.mkString("."), mount, slot, key)}-->"
 
     def close(path: Seq[String]): String =
         s"<!--${closeData(path.mkString("."))}-->"
 
     /** Comment data (the text between `<!--` and `-->`) of an open marker for a dot-joined path. */
-    def openData(joinedPath: String, mount: Boolean = false, slot: Boolean = false): String =
-        val flags = (if mount then " m" else "") + (if slot then " s" else "")
+    def openData(
+        joinedPath: String,
+        mount: Boolean = false,
+        slot: Boolean = false,
+        key: Maybe[String] = Absent
+    ): String =
+        val flags =
+            (if mount then " m" else "") +
+                (if slot then " s" else "") +
+                key.fold("")(k => s" k=${escape(k)}")
         s"kyo:${escape(joinedPath)}$flags"
+    end openData
 
     /** Comment data of a close marker for a dot-joined path. */
     def closeData(joinedPath: String): String =
@@ -60,7 +83,8 @@ private[kyo] object RegionMarker:
                     unescape(rest.substring(0, sp)),
                     isClose = false,
                     mount = flags.contains("m"),
-                    slot = flags.contains("s")
+                    slot = flags.contains("s"),
+                    key = Maybe.fromOption(flags.find(_.startsWith("k=")).map(f => unescape(f.substring(2))))
                 ))
             end if
         else Absent
