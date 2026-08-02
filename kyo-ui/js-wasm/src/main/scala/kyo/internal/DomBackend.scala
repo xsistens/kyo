@@ -143,6 +143,10 @@ private[kyo] object DomBackend:
                     // (`s` = the SAME mount re-rendering, which owns its subtree). Different content or an empty
                     // gate-closed repaint falls through so the morph reconciles/empties the region.
                     else if !mount && r.mount && payloadRootIsMountSlot(html) then ()
+                    // Text into text: assigning the node IS the whole patch. The slow path below would put
+                    // this through a <template> parse and a morph per region, which is what makes a hundred
+                    // changed labels cost a hundred HTML parses.
+                    else if !mount && !r.mount && patchLoneText(r, html) then ()
                     else
                         val parent = r.start.parentNode.asInstanceOf[dom.Element]
                         // Capture focus and caret of the active element inside the replaced region (mirrors the
@@ -199,6 +203,27 @@ private[kyo] object DomBackend:
                 }
             }
     end LocalExchange
+
+    /** Assign a text-only payload to a region that currently holds exactly one text node, and report
+      * whether that applied. Both shapes have to match: a region holding elements needs the morph, and a
+      * payload carrying markup needs the parser. `&` disqualifies a payload alongside `<` — the renderer
+      * escapes text, and decoding entities here would duplicate the parser's job for the sake of a few
+      * percent of payloads. Everything the slow path does around the morph is a no-op on this shape:
+      * a range without elements has no js props, no animations, no enter/leave sets, and cannot hold focus.
+      *
+      * Twin of `__kyoLoneText` in clientJs; keep in lockstep.
+      */
+    private def patchLoneText(r: RegionRange, html: String): Boolean =
+        if html.indexOf('<') >= 0 || html.indexOf('&') >= 0 then false
+        else
+            val first = r.start.nextSibling
+            if first == null || (first eq r.end) || first.nodeType != 3 || (first.nextSibling ne r.end) then false
+            else
+                val t = first.asInstanceOf[dom.Text]
+                if t.data != html then t.data = html
+                true
+            end if
+    end patchLoneText
 
     private def readSelection(el: dom.Element): (Maybe[Int], Maybe[Int]) =
         val dyn = el.asInstanceOf[scalajs.js.Dynamic]
@@ -1221,24 +1246,111 @@ private[kyo] object DomBackend:
         toStart: dom.Node,
         toEnd: dom.Node
     ): Unit =
+        val fromNodes = js.Array[dom.Node]()
+        val fromKeys  = js.Array[String]()
+        val toNodes   = js.Array[dom.Node]()
+        val toKeys    = js.Array[String]()
+        collectLogical(fromStart, fromEnd, fromNodes, fromKeys)
+        collectLogical(toStart, toEnd, toNodes, toKeys)
+
         var fromKeyed: js.Dictionary[dom.Node] = null
         var toKeyed: js.Dictionary[Boolean]    = null
-        var scan                               = fromStart
-        while scan != null && (scan ne fromEnd) do
-            val k = logicalKey(scan)
-            if k != null then
+        var i                                  = 0
+        while i < fromKeys.length do
+            if fromKeys(i) != null then
                 if fromKeyed == null then fromKeyed = js.Dictionary.empty[dom.Node]
-                fromKeyed(k) = scan
-            scan = logicalNext(scan)
+                fromKeyed(fromKeys(i)) = fromNodes(i)
+            i += 1
         end while
-        scan = toStart
-        while scan != null && (scan ne toEnd) do
-            val k = logicalKey(scan)
-            if k != null then
+        i = 0
+        while i < toKeys.length do
+            if toKeys(i) != null then
                 if toKeyed == null then toKeyed = js.Dictionary.empty[Boolean]
-                toKeyed(k) = true
+                toKeyed(toKeys(i)) = true
+            i += 1
+        end while
+
+        // Two-ended keyed pass, ahead of the single-cursor walk below. That walk can only insert IN FRONT
+        // OF its cursor, so a key found behind the cursor drags every sibling in between along with it: a
+        // two-row swap in a thousand rows costs 997 moves. Matching both ends first relocates only the
+        // children that actually changed place — 2 for that swap, 0 for a removal in the middle.
+        //
+        // Invariant: the children still to place are exactly fromNodes[fh..ft], a contiguous DOM run that
+        // ends immediately before `tailBoundary`. Only run boundaries are ever moved, and only out to a
+        // boundary, so the run stays contiguous and the snapshot stays valid.
+        var fh           = 0
+        var ft           = fromNodes.length - 1
+        var th           = 0
+        var tt           = toNodes.length - 1
+        var tailBoundary = fromEnd
+        var scanning     = true
+        while scanning && fh <= ft && th <= tt do
+            // Unkeyed at either end: positional reconciliation is the cursor walk's job, so hand over.
+            if fromKeys(fh) == null || fromKeys(ft) == null || toKeys(th) == null || toKeys(tt) == null then
+                scanning = false
+            else if fromKeys(fh) == toKeys(th) then
+                patchLogical(fromParent, fromNodes(fh), toNodes(th))
+                fh += 1
+                th += 1
+            else if fromKeys(ft) == toKeys(tt) then
+                patchLogical(fromParent, fromNodes(ft), toNodes(tt))
+                tailBoundary = fromNodes(ft)
+                ft -= 1
+                tt -= 1
+            else if fromKeys(fh) == toKeys(tt) then
+                // The run's head belongs at its tail. A single remaining child already sits there.
+                if fh != ft then moveLogicalBefore(fromParent, fromNodes(fh), tailBoundary)
+                patchLogical(fromParent, fromNodes(fh), toNodes(tt))
+                tailBoundary = fromNodes(fh)
+                fh += 1
+                tt -= 1
+            else if fromKeys(ft) == toKeys(th) then
+                if ft != fh then moveLogicalBefore(fromParent, fromNodes(ft), fromNodes(fh))
+                patchLogical(fromParent, fromNodes(ft), toNodes(th))
+                ft -= 1
+                th += 1
+            else scanning = false
+            end if
+        end while
+
+        // Hand the unresolved middle to the cursor walk. The dictionaries stay whole: keys are unique among
+        // siblings, so a key consumed at an end cannot be asked for again from the middle.
+        val gFromStart = if fh <= ft then fromNodes(fh) else tailBoundary
+        val gToEnd     = if tt + 1 < toNodes.length then toNodes(tt + 1) else toEnd
+        val gToStart   = if th <= tt then toNodes(th) else gToEnd
+        morphRangeCursor(fromParent, gFromStart, tailBoundary, gToStart, gToEnd, fromKeyed, toKeyed)
+    end morphRange
+
+    /** Snapshot the logical children of [start, end) into `nodes` and their keys into `keys` (null where
+      * unkeyed). One pass: the two-ended walk reads keys four times per step, and `logicalKey` is not free
+      * for a span, where it has to find the matching close marker.
+      */
+    private def collectLogical(
+        start: dom.Node,
+        end: dom.Node,
+        nodes: js.Array[dom.Node],
+        keys: js.Array[String]
+    ): Unit =
+        var scan = start
+        while scan != null && (scan ne end) do
+            discard(nodes.push(scan))
+            discard(keys.push(logicalKey(scan)))
             scan = logicalNext(scan)
         end while
+    end collectLogical
+
+    /** Single-cursor reconciliation of whatever the two-ended pass left over: keyed children are pulled to
+      * the cursor by key, unkeyed ones morph positionally against the first compatible live child.
+      */
+    private def morphRangeCursor(
+        fromParent: dom.Element,
+        fromStart: dom.Node,
+        fromEnd: dom.Node,
+        toStart: dom.Node,
+        toEnd: dom.Node,
+        fromKeyed: js.Dictionary[dom.Node],
+        toKeyed: js.Dictionary[Boolean]
+    ): Unit =
         var curFrom = fromStart
         var curTo   = toStart
         while curTo != null && (curTo ne toEnd) do
@@ -1283,7 +1395,7 @@ private[kyo] object DomBackend:
             removeLogical(fromParent, curFrom)
             curFrom = fNext
         end while
-    end morphRange
+    end morphRangeCursor
 
     /** Two nodes may be patched into each other positionally: same node kind, and for elements the same tag. */
     private def compatible(a: dom.Node, b: dom.Node): Boolean =
