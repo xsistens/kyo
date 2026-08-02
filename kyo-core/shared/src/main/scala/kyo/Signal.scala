@@ -165,6 +165,45 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
       * that differs from it. Same per-value [[Scope]] semantics and the same delivery tiers. This variant uses
       * [[Signal.defaultRepairInterval]].
       */
+    /** Observation of a projected view of this signal, deduplicated on the PROJECTION rather than on this signal's own values.
+      *
+      * This is what a derived signal's observation needs. `map` delegates to its source's loop, and that loop compares SOURCE values, so
+      * every observer of a derived signal wakes AND delivers on every source change even when its own image is unchanged: a thousand rows
+      * deriving `selected.map(_ == row.id)` from one selection signal each run a full per-value `Scope` teardown and setup for a value that
+      * did not move. Comparing images instead confines that to the rows whose image actually changed.
+      *
+      * The per-value `Scope` follows the IMAGE: it opens when the image changes and stays open while the image holds, so a source change
+      * that leaves the image alone no longer releases what `g` set up for it.
+      *
+      * Structurally the repairing loop of [[observe]], with `proj(cur)` where that one has `cur`; [[SignalRef]] overrides it the same way,
+      * so a projected observation of a ref keeps the exact protocol. A projection over an already-derived signal (a `map` of a `map`) falls
+      * back to this repairing loop, exactly as an ordinary observation of one does.
+      *
+      * @param proj
+      *   The view to observe; called on each source value and compared for equality against the last delivered image
+      * @param baseline
+      *   The image already processed by the caller: `g` is not run while the current image still equals it
+      * @param repairInterval
+      *   How often a parked observation re-reads `current` to reconcile a missed wakeup on the repair path
+      * @param g
+      *   The per-image setup, run inside a fresh `Scope`
+      */
+    def observeProjected[B, S](proj: A => B, baseline: Maybe[B], repairInterval: Duration)(
+        g: B => Unit < (S & Async & Scope)
+    )(using CanEqual[B, B], Frame): Unit < (S & Async) =
+        def await: Unit < Async =
+            Async.race(Seq(nextWith(_ => ()), Async.sleep(repairInterval))).unit
+        def holdUntilChanged(b: B): Unit < (S & Async) =
+            await.andThen(currentWith(c => if proj(c) == b then holdUntilChanged(b) else (): Unit < (S & Async)))
+        def loop(last: Maybe[B]): Unit < (S & Async) =
+            currentWith { cur =>
+                val b = proj(cur)
+                if last.exists(_ == b) then await.andThen(loop(last))
+                else Scope.run(g(b).andThen(holdUntilChanged(b))).andThen(loop(Present(b)))
+            }
+        loop(baseline)
+    end observeProjected
+
     final def observeChanges[S](f: A => Unit < (S & Async & Scope))(using Frame): Unit < (S & Async) =
         observeChanges(Signal.defaultRepairInterval)(f)
 
@@ -187,20 +226,47 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
         Signal._initRawF(
             [C, S] => g => self.currentWith(a => g(f(a))),
             [C, S] => g => self.nextWith(a => g(f(a))),
-            [S] =>
-                (baseline, ri, g) =>
-                    baseline match
-                        case Present(b0) =>
-                            // Translate the B-space baseline into an A-space seed by sampling the source: skip
-                            // while the source still holds a value whose image equals the baseline. A source
-                            // change whose image happens to equal the baseline re-emits it, consistent with a
-                            // mapped observe already re-emitting equal images for distinct source values.
-                            self.currentWith { a0 =>
-                                if f(a0) == b0 then self.observe[S](Present(a0), ri)(a => g(f(a)))
-                                else self.observe[S](Absent, ri)(a => g(f(a)))
-                            }
-                        case _ => self.observe[S](Absent, ri)(a => g(f(a)))
+            // Observed through the source's projected loop, which compares IMAGES. Delegating to the source's
+            // plain `observe` compared source values, so a source change delivered to every derived observer
+            // even when its own image held still, and re-created each one's per-value Scope for nothing. The
+            // baseline is now used directly: it is already in image space, so no translation is needed.
+            [S] => (baseline, ri, g) => self.observeProjected[B, S](f, baseline, ri)(g)
         )
+
+    /** This signal's CHANGES, carrying `b` in place of its own values.
+      *
+      * Deliberately NOT `map(_ => b)`. Observation deduplicates on the IMAGE, so a constant image collapses to a
+      * single delivery however often the source moves — correct for a projection, since the observer's view
+      * genuinely did not change, and wrong for a caller whose emitted value is a stable HANDLE and whose content
+      * is rebuilt from the source at delivery time. Such a caller needs the source's own change detection, which
+      * is what this keeps: every arm below observes the source on ITS values and hands over the constant.
+      *
+      * The baseline is in `b`'s space and `b` is the only value there, so it can only mean "the caller has
+      * already processed one delivery": that is honoured by seeding the SOURCE observation with the source's
+      * current value, after which every source change delivers again.
+      *
+      * The raw callback path deliberately declines (`Absent`, the trait default): its subscriber deduplicates on
+      * the image too, which is the same trap one layer down.
+      */
+    private[kyo] def changesTo[B](b: B)(using canEqualB: CanEqual[B, B], frame: Frame): Signal[B] =
+        def observeSource[S](skipFirst: Boolean, ri: Duration, deliver: Unit < (S & Async & Scope))(
+            using Frame
+        ): Unit < (S & Async) =
+            if skipFirst then self.currentWith(a0 => self.observe[S](Present(a0), ri)(_ => deliver))
+            else self.observe[S](Absent, ri)(_ => deliver)
+        Signal._initRawF(
+            [C, S] => g => self.currentWith(_ => g(b)),
+            [C, S] => g => self.nextWith(_ => g(b)),
+            [S] => (baseline, ri, g) => observeSource[S](baseline.exists(_ == b), ri, g(b)),
+            [C, S] =>
+                (proj, baseline, ri, g, canEqualC) =>
+                    given CanEqual[C, C] = canEqualC
+                    val image            = proj(b)
+                    observeSource[S](baseline.exists(_ == image), ri, g(image))
+            ,
+            [C] => (_, _, _, _, _) => Absent
+        )
+    end changesTo
 
     /** Dynamically switches to an inner signal based on the current value.
       *
@@ -608,27 +674,55 @@ object Signal:
         // exception-free. If the kyo-browser native suite segfaults after touching this file, suspect
         // exception construction on deep stacks (si_addr=(nil), libunwind frames in the core), not this
         // code.
+        /** Await a change since version `v0`. Shared by the exact [[observe]] and [[observeProjected]] loops: both need
+          * "nothing happened since I read this version", and duplicating the masked-promise handling below would let the
+          * two drift apart.
+          */
+        private def nextSince(v0: Long)(using Frame): Unit < Async =
+            Sync.Unsafe.defer {
+                if _unsafe.version() != v0 then ()
+                else
+                    // Race wrapper: the next-promise is masked, and a fiber parked directly on a masked
+                    // promise is not resumed by its own interrupt; racing behind a fresh result promise
+                    // restores interruptibility.
+                    Async.race(Seq(
+                        Sync.Unsafe.defer {
+                            val waiter = _unsafe.next().safe
+                            if _unsafe.version() != v0 then (): Unit < Async
+                            else waiter.use(_ => ())
+                        }
+                    ))
+            }
+
+        /** The exact protocol of [[observe]], comparing images instead of values. See [[Signal.observeProjected]] for why a
+          * derived signal must deduplicate on its own image: without this, one selection change delivers to every row.
+          */
+        override def observeProjected[B, S](proj: A => B, baseline: Maybe[B], repairInterval: Duration)(
+            g: B => Unit < (S & Async & Scope)
+        )(using CanEqual[B, B], Frame): Unit < (S & Async) =
+            // Unused here for the same reason as in `observe`: delivery is exact.
+            discard(repairInterval)
+            def hold(v0: Long, b: B): Unit < Async =
+                nextSince(v0).andThen(Sync.Unsafe.defer {
+                    val v1 = _unsafe.version()
+                    if proj(_unsafe.get()) == b then hold(v1, b) else (): Unit < Async
+                })
+            def loop(last: Maybe[B]): Unit < (S & Async) =
+                Sync.Unsafe.defer {
+                    val v0 = _unsafe.version()
+                    val b  = proj(_unsafe.get())
+                    if last.exists(_ == b) then nextSince(v0).andThen(loop(last))
+                    else Scope.run(g(b).andThen(hold(v0, b))).andThen(loop(Present(b)))
+                }
+            loop(baseline)
+        end observeProjected
+
         override def observe[S](baseline: Maybe[A], repairInterval: Duration)(f: A => Unit < (S & Async & Scope))(using
             Frame
         ): Unit < (S & Async) =
             // The repair interval is unused here: delivery is exact. The parameter exists for signals that can
             // miss wakeups (combinator-derived ones run the trait's repairing loop).
             discard(repairInterval)
-            def nextSince(v0: Long): Unit < Async =
-                Sync.Unsafe.defer {
-                    if _unsafe.version() != v0 then ()
-                    else
-                        // Race wrapper: the next-promise is masked, and a fiber parked directly on a masked
-                        // promise is not resumed by its own interrupt; racing behind a fresh result promise
-                        // restores interruptibility.
-                        Async.race(Seq(
-                            Sync.Unsafe.defer {
-                                val waiter = _unsafe.next().safe
-                                if _unsafe.version() != v0 then (): Unit < Async
-                                else waiter.use(_ => ())
-                            }
-                        ))
-                }
             def hold(v0: Long, cur: A): Unit < Async =
                 nextSince(v0).andThen(Sync.Unsafe.defer {
                     val v1 = _unsafe.version()
