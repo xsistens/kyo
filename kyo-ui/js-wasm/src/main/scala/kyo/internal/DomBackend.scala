@@ -1434,8 +1434,38 @@ private[kyo] object DomBackend:
     private def moveLogicalBefore(parent: dom.Element, node: dom.Node, ref: dom.Node): Unit =
         eachSpanNode(node)(n => discard(parent.insertBefore(n, ref)))
 
+    /** Drop the index entries of every region inside `node`, which is about to leave the document.
+      * `regions` maps path -> RegionRange and holds the marker comments STRONGLY, so an entry that
+      * outlives its markers pins them — and the graph anchored to that path — until some later lookup
+      * happens to miss and rebuild the whole index. Nothing ever asks for the path of a row that is
+      * gone (keys are fresh per row), so that rebuild never comes: the entries accumulate for the
+      * lifetime of the page. Removal is the one moment the owner is known, so it is where the entry
+      * goes. Twin of `__kyoForget` in clientJs; keep in lockstep.
+      */
+    private def forgetRegionsIn(node: dom.Node): Unit =
+        def forgetMarker(n: dom.Node): Unit =
+            RegionMarker.parse(commentData(n)) match
+                // Only open markers key an entry; the close marker of the same pair shares the path.
+                case Present(p) if !p.isClose => discard(regions.remove(p.path))
+                case _                        => ()
+        if node.nodeType == 8 then forgetMarker(node)
+        else if node.nodeType == 1 then
+            // Nested regions sit inside element children, so the subtree has to be scanned — bounded
+            // by what is being removed, not by page size.
+            val walker = document.createTreeWalker(node, dom.NodeFilter.SHOW_COMMENT, null, false)
+            var n      = walker.nextNode()
+            while n != null do
+                forgetMarker(n)
+                n = walker.nextNode()
+            end while
+        end if
+    end forgetRegionsIn
+
     private def removeLogical(parent: dom.Element, node: dom.Node): Unit =
-        eachSpanNode(node)(n => discard(parent.removeChild(n)))
+        eachSpanNode(node) { n =>
+            forgetRegionsIn(n)
+            discard(parent.removeChild(n))
+        }
 
     private def insertLogicalClone(parent: dom.Element, toNode: dom.Node, ref: dom.Node): Unit =
         eachSpanNode(toNode)(n => discard(parent.insertBefore(document.importNode(n, true), ref)))

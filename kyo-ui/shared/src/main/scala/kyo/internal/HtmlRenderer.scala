@@ -1145,7 +1145,17 @@ private[kyo] object HtmlRenderer:
            |  while(!stop&&n){var nx=n.nextSibling;stop=(n===last);f(n);n=nx;}
            |}
            |function __kyoMoveL(parent,node,ref){__kyoEachSpan(node,function(n){parent.insertBefore(n,ref);});}
-           |function __kyoRemoveL(parent,node){__kyoEachSpan(node,function(n){parent.removeChild(n);});}
+           |// __kyoRegions holds marker comments strongly, so an entry outliving its markers pins them and
+           |// whatever the path anchors; nothing ever looks up a removed row's path again, so the stale
+           |// entry never triggers the rebuild that would clear it. Removal is where the owner is known.
+           |// Twin of DomBackend.forgetRegionsIn; keep in lockstep.
+           |function __kyoForget(node){
+           |  if(node.nodeType===8){var p=__kyoMParse(node.data);if(p&&!p.c)delete __kyoRegions[p.p];return;}
+           |  if(node.nodeType!==1)return;
+           |  var w=document.createTreeWalker(node,NodeFilter.SHOW_COMMENT,null,false),n=w.nextNode();
+           |  while(n){var q=__kyoMParse(n.data);if(q&&!q.c)delete __kyoRegions[q.p];n=w.nextNode();}
+           |}
+           |function __kyoRemoveL(parent,node){__kyoEachSpan(node,function(n){__kyoForget(n);parent.removeChild(n);});}
            |function __kyoInsertL(parent,toNode,ref){__kyoEachSpan(toNode,function(n){parent.insertBefore(document.importNode(n,true),ref);});}
            |// Patch matched logical children. Span vs span recurses on the content ranges, unless the live span
            |// carries 'm', the incoming one 's', AND both name the same mount 'k' (the SAME mount still sitting
