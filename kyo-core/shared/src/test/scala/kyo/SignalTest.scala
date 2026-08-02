@@ -566,17 +566,20 @@ class SignalTest extends kyo.test.Test[Any]:
                 refB <- Signal.initRef(0)
                 cl = refA.combineLatest(refB)
                 f <- Fiber.initUnscoped(cl.streamChanges.take(4).run)
-                // streamChanges re-subscribes by racing refA.next and refB.next, so fire each change only after its waiter
-                // re-arms (a set in the re-arm gap is dropped, hanging the take). The first re-subscription is clean, so both refs arm to exactly 1.
-                _ <- assertEventually(Kyo.zip(refA.waiters, refB.waiters).map { case (a, b) => a == 1 && b == 1 })
-                _ <- refA.set(1)
-                // awaitAny cancels its losing branch without unregistering, leaving a ghost waiter; the next re-subscription
-                // arms that signal to 2 (ghost + live), so >= 2 proves the live re-arm landed, not a match on the stale ghost.
-                _  <- assertEventually(refB.waiters.map(_ >= 2))
+                // streamChanges re-subscribes by racing refA.next and refB.next, so every set must land after the
+                // re-subscription: a set in the gap completes a promise nobody listens on any more and hangs the take.
+                // Syncing on the signal about to change is not enough now that a race loser releases its registration
+                // when it dies, because "loser not released yet" and "re-armed" both read as one waiter. The signal that
+                // just fired is the discriminator: it drops to zero and only the next subscription puts it back, so
+                // requiring one waiter on BOTH refs is what pins the re-arm.
+                armed = assertEventually(Kyo.zip(refA.waiters, refB.waiters).map { case (a, b) => a == 1 && b == 1 })
+                _  <- armed
+                _  <- refA.set(1)
+                _  <- armed
                 _  <- refB.set(1)
-                _  <- assertEventually(refA.waiters.map(_ >= 2))
+                _  <- armed
                 _  <- refA.set(2)
-                _  <- assertEventually(refB.waiters.map(_ >= 2))
+                _  <- armed
                 _  <- refB.set(2)
                 vs <- f.get
             yield assert(vs == Chunk((1, 0), (1, 1), (2, 1), (2, 2)))
@@ -594,13 +597,13 @@ class SignalTest extends kyo.test.Test[Any]:
                 _  <- refA.set(1)
                 v1 <- f1.get
                 v2 <- f2.get
-                // After refA fired: refA has a fresh promise (0 waiters), refB has
-                // 2 ghost waiters (one from each race loser that cancelled without
-                // removing the onComplete from refB's promise).
-                // A third waiter adds 1 more to each; wait for refB >= 3 to confirm
-                // the new awaitAny is subscribed to refB before firing it.
+                // After refA fired, refA has a fresh promise (0 waiters). refB used to carry two
+                // ghost waiters at this point — one per race loser, which cancelled without being
+                // able to remove its onComplete from refB's promise — and this sync point was
+                // calibrated on them. Race losers now release their registration, so only the
+                // live waiter of the third subscription remains to wait for.
                 f3 <- Fiber.initUnscoped(cl.next)
-                _  <- assertEventually(refB.waiters.map(_ >= 3))
+                _  <- assertEventually(refB.waiters.map(_ >= 1))
                 _  <- refB.set(1)
                 v3 <- f3.get
             yield assert(v1 == (1, 0) && v2 == (1, 0) && v3 == (1, 1))
@@ -645,11 +648,12 @@ class SignalTest extends kyo.test.Test[Any]:
                 _  <- r0.set(1)
                 _  <- f1.get
                 _  <- f2.get
-                // After r0 fired: r0 has a fresh promise (0 waiters), r1 has
-                // 2 ghost waiters (one from each race loser). A third waiter
-                // adds 1 more to r1; wait for r1 >= 3 to confirm subscription.
+                // After r0 fired, r0 has a fresh promise (0 waiters). r1 used to carry two ghost
+                // waiters from the race losers and this threshold counted them; losers now
+                // release their registration, so only the third subscription's live waiter is
+                // left on r1.
                 f3 <- Fiber.initUnscoped(Signal.awaitAny(Seq(r0, r1)))
-                _  <- assertEventually(r1.waiters.map(_ >= 3))
+                _  <- assertEventually(r1.waiters.map(_ >= 1))
                 _  <- r1.set(1)
                 _  <- f3.get
             yield ()
@@ -808,6 +812,38 @@ class SignalTest extends kyo.test.Test[Any]:
             end for
         }
 
+        "one combinator wakes on each source in turn, leaving no ghost waiters" in {
+            // The counterpart to the fresh-combinator case above: ONE combinator across three emits. That is only
+            // a clean sync point because a race loser releases its registration when it dies. Before that fix the
+            // first emit left a ghost waiter on r1 and the second left two on r2, so each threshold had to count
+            // ghost+new (>= 2, then >= 3). They are >= 1 here, which is what pins the release.
+            for
+                r0 <- Signal.initRef(0)
+                r1 <- Signal.initRef(0)
+                r2 <- Signal.initRef(0)
+                z = Signal.combineLatestAll(Seq(r0, r1, r2))
+                // First emit: r0 fires; r0 starts with 0 waiters so reliable sync point
+                f0 <- Fiber.initUnscoped(z.next)
+                _  <- assertEventually(r0.waiters.map(_ == 1))
+                _  <- r0.set(1)
+                v0 <- f0.get
+                // Second emit: r1 fires. The first emit used to leave a ghost waiter on r1, so
+                // this threshold was ghost+new=2; race losers now release their registration and
+                // only the new subscription's waiter is on r1.
+                f1 <- Fiber.initUnscoped(z.next)
+                _  <- assertEventually(r1.waiters.map(_ >= 1))
+                _  <- r1.set(1)
+                v1 <- f1.get
+                // Third emit: r2 fires, so sync on r2 (concurrent subscription means r1 being armed
+                // does not imply r2 is). r2 was never set; it used to still carry the 2 ghost
+                // waiters of the prior races, which is what >= 3 counted.
+                f2 <- Fiber.initUnscoped(z.next)
+                _  <- assertEventually(r2.waiters.map(_ >= 1))
+                _  <- r2.set(1)
+                v2 <- f2.get
+            yield assert(v0 == Chunk(1, 0, 0) && v1 == Chunk(1, 1, 0) && v2 == Chunk(1, 1, 1))
+        }
+
         "rapid bursts coalesce" in {
             // Changes only: the subscription-time Chunk(0) is NOT emitted, and the burst may collapse into a
             // single coalesced emission, so only the first change emission is awaited.
@@ -862,17 +898,20 @@ class SignalTest extends kyo.test.Test[Any]:
                 refB <- Signal.initRef(0)
                 cl = refA.combineLatest(refB)
                 f <- Fiber.initUnscoped(cl.streamChanges.take(4).run)
-                // streamChanges re-subscribes by racing refA.next and refB.next, so fire each change only after its waiter
-                // re-arms (a set in the re-arm gap is dropped, hanging the take). The first re-subscription is clean, so both refs arm to exactly 1.
-                _ <- assertEventually(Kyo.zip(refA.waiters, refB.waiters).map { case (a, b) => a == 1 && b == 1 })
-                _ <- refA.set(1)
-                // awaitAny cancels its losing branch without unregistering, leaving a ghost waiter; the next re-subscription
-                // arms that signal to 2 (ghost + live), so >= 2 proves the live re-arm landed, not a match on the stale ghost.
-                _  <- assertEventually(refB.waiters.map(_ >= 2))
+                // streamChanges re-subscribes by racing refA.next and refB.next, so every set must land after the
+                // re-subscription: a set in the gap completes a promise nobody listens on any more and hangs the take.
+                // Syncing on the signal about to change is not enough now that a race loser releases its registration
+                // when it dies, because "loser not released yet" and "re-armed" both read as one waiter. The signal that
+                // just fired is the discriminator: it drops to zero and only the next subscription puts it back, so
+                // requiring one waiter on BOTH refs is what pins the re-arm.
+                armed = assertEventually(Kyo.zip(refA.waiters, refB.waiters).map { case (a, b) => a == 1 && b == 1 })
+                _  <- armed
+                _  <- refA.set(1)
+                _  <- armed
                 _  <- refB.set(1)
-                _  <- assertEventually(refA.waiters.map(_ >= 2))
+                _  <- armed
                 _  <- refA.set(2)
-                _  <- assertEventually(refB.waiters.map(_ >= 2))
+                _  <- armed
                 _  <- refB.set(2)
                 vs <- f.get
             yield assert(vs == Chunk((1, 0), (1, 1), (2, 1), (2, 2)))

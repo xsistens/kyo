@@ -14,9 +14,9 @@ import kyo.Result.Error
   * foundation the planned cancellation tests build on: each one names which property here it
   * relies on, so a regression shows up as a precise failure instead of a mysterious one.
   *
-  * Group B states the invariant that does NOT hold today. Both are marked `pendingUntilFixed`:
-  * the body runs, the current failure is reported as pending, and the marker itself fails once
-  * the behaviour is fixed — so it cannot be forgotten.
+  * Group B covers the direction that had no coverage: the waiter's owner dies first. Both cases
+  * fail against a build without `onCompleteCancellable`, which is what makes them a gate rather
+  * than decoration.
   *
   * Deliberately no threads and no timing: every case below is deterministic. Concurrency in kyo
   * is expressed with Latch/Gate/Promise, and the one genuinely racy interleaving (cancelling
@@ -147,11 +147,9 @@ class WaiterLifecycleTest extends kyo.test.Test[Any]:
         }
     }
 
-    "B — the invariant that does not hold yet" - {
+    "B — releasing a waiter whose owner died first" - {
 
-        "B1 an interrupted subscriber leaves no waiter on a masked promise".pendingUntilFixed(
-            "IOPromise has no way to unregister an onComplete waiter, and mask() blocks the interrupt cascade that would otherwise flush it"
-        ) in {
+        "B1 an interrupted subscriber leaves no waiter on a masked promise" in {
             import AllowUnsafe.embrace.danger
             val masked = Promise.Unsafe.initMasked[Int, Any]().safe
             for
@@ -166,9 +164,7 @@ class WaiterLifecycleTest extends kyo.test.Test[Any]:
             end for
         }
 
-        "B2 observers that come and go without a value change leave no waiters on a signal".pendingUntilFixed(
-            "SignalRef's next-promise is masked and is only completed by a value change, so subscriber churn accumulates waiters without bound"
-        ) in {
+        "B2 observers that come and go without a value change leave no waiters on a signal" in {
             for
                 ref    <- Signal.initRef(0)
                 fibers <- Kyo.foreach(Chunk.from(1 to N))(_ => Fiber.initUnscoped(ref.observe(_ => Kyo.unit)))
