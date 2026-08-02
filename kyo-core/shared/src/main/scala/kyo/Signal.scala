@@ -471,11 +471,29 @@ object Signal:
         @implicitNotFound(missingCanEqual)
         canEqual: CanEqual[A, A]
     ): Signal[A] =
-        initRaw(
-            currentWith = [B, S] => f => f(value),
+        _initRawF(
+            [B, S] => f => f(value),
             // Completing this immediately would let a constant win every `awaitAny` arm, firing
             // `combineLatest(ref, const).next` with no change to report and spinning an enclosing `observe`.
-            nextWith = [B, S] => _ => Async.never
+            [B, S] => _ => Async.never,
+            // A constant cannot change, so there is nothing for a reconciliation timer to reconcile. Left to
+            // the trait's repairing loop it would arm a `nextWith`/`sleep` race per interval forever, and
+            // since `nextWith` never completes the sleep would win every time, re-read the same value and
+            // re-arm: one perpetual timer per observer, for a signal that can never move. Deliver once and
+            // hold the scope instead; interrupting the observation still closes it.
+            [S] =>
+                (baseline, repairInterval, f) =>
+                    discard(repairInterval)
+                    if baseline.exists(_ == value) then Async.never[Unit]
+                    else Scope.run(f(value).andThen(Async.never[Unit]))
+            ,
+            [C, S] =>
+                (proj, baseline, repairInterval, g, canEqualC) =>
+                    given CanEqual[C, C] = canEqualC
+                    discard(repairInterval)
+                    val image = proj(value)
+                    if baseline.exists(_ == image) then Async.never[Unit]
+                    else Scope.run(g(image).andThen(Async.never[Unit]))
         )
 
     /** Creates a new immutable signal with a constant value and applies a transformation function.
