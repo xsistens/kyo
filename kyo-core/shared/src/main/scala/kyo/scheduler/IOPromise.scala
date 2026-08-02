@@ -160,6 +160,23 @@ private[kyo] class IOPromise[E, A](init: State[E, A]) extends Safepoint.Intercep
         becomeLoop(other.compress())
     end become
 
+    /** Like [[onComplete]], but the registration can be released again.
+      *
+      * `onComplete` has no counterpart to `removeInterrupt`: a callback stays in the chain until
+      * the promise completes. That is invisible for a promise whose completion is what the caller
+      * is waiting for, but a masked promise deliberately survives its subscribers
+      * ([[mask]] sets `preInterrupt() = false`), so a subscriber that dies first leaves its
+      * callback — and everything the callback captures — reachable for the promise's lifetime.
+      *
+      * Cancelling does not unlink the node; it empties it, which is what actually matters, since
+      * the callback of a parked fiber captures that fiber's continuation.
+      */
+    def onCompleteCancellable(f: Result[E, A] => Any): Waiter[E, A] =
+        val waiter = new Waiter[E, A](f)
+        onComplete(waiter)
+        waiter
+    end onCompleteCancellable
+
     def onComplete(f: Result[E, A] => Any): Unit =
         @tailrec def onCompleteLoop(promise: IOPromise[E, A]): Unit =
             promise.state match
@@ -315,7 +332,13 @@ private[kyo] object IOPromise:
 
         final def onComplete(f: Result[E, A] => Any): Pending[E, A] =
             new Pending[E, A]:
-                def waiters: Int = self.waiters + 1
+                // A cancelled registration is still a node in the chain but can no longer run, so
+                // it is not a waiter. Keeps the count meaning "callbacks that may still fire",
+                // which is what every caller already assumes; plain callbacks are unaffected.
+                def waiters: Int =
+                    self.waiters + (f match
+                        case w: Waiter[?, ?] if w.get().isEmpty => 0
+                        case _                                  => 1)
                 def interrupt(error: Error[E]) =
                     eval(discard(f(error)))
                     self
@@ -399,6 +422,30 @@ private[kyo] object IOPromise:
         end flush
 
     end Pending
+
+    /** A releasable `onComplete` registration, handed out by [[IOPromise.onCompleteCancellable]].
+      *
+      * The callback lives in an atomic cell that both the flush and [[cancel]] take with
+      * `getAndSet(null)`, so exactly one of them wins. That makes the interleaving total rather
+      * than racy: the callback runs at most once, a cancellation that loses to a running flush is
+      * a no-op instead of a lost or half-run callback, and no ordering assumption is needed
+      * between the cancelling and the completing side.
+      *
+      * The waiter IS the callback (rather than holding one) so registering costs one object, not
+      * two.
+      */
+    final class Waiter[E, A] private[IOPromise] (f: Result[E, A] => Any)
+        extends java.util.concurrent.atomic.AtomicReference[Maybe[Result[E, A] => Any]](Present(f))
+        with (Result[E, A] => Any):
+
+        def apply(v: Result[E, A]): Any =
+            getAndSet(Absent) match
+                case Present(taken) => discard(taken(v))
+                case Absent         => ()
+
+        /** Release the callback. Returns true when this call took it, i.e. it will never run. */
+        def cancel(): Boolean = getAndSet(Absent).isDefined
+    end Waiter
 
     object Pending:
         def apply[E, A](): Pending[E, A] = Empty.asInstanceOf[Pending[E, A]]
