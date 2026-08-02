@@ -683,16 +683,18 @@ object Signal:
             Sync.Unsafe.defer {
                 if _unsafe.version() != v0 then ()
                 else
-                    // Race wrapper: the next-promise is masked, and a fiber parked directly on a masked
-                    // promise is not resumed by its own interrupt; racing behind a fresh result promise
-                    // restores interruptibility.
-                    Async.race(Seq(
-                        Sync.Unsafe.defer {
-                            val waiter = _unsafe.next().safe
-                            if _unsafe.version() != v0 then (): Unit < Async
-                            else waiter.use(_ => ())
-                        }
-                    ))
+                    // Parks DIRECTLY on the masked next-promise. This used to go through a one-element
+                    // `Async.race`, because a fiber parked on a masked promise was not released by its own
+                    // interrupt (masking blocks the interrupt cascade that is otherwise the only thing that
+                    // flushes the waiter chain), and parking behind a fresh unmasked result promise restored
+                    // interruptibility. IOTask now cancels its own registration in `onComplete` and schedules
+                    // itself, so the interrupt releases the fiber with no wrapper — see WaiterLifecycleTest
+                    // B1. The wrapper was not free: per re-arm it cost a Race promise, an IOTask, a copied
+                    // trace array and two waiter registrations, on the hot path of every observer.
+                    val waiter = _unsafe.next().safe
+                    if _unsafe.version() != v0 then (): Unit < Async
+                    else waiter.use(_ => ())
+                end if
             }
 
         /** The exact protocol of [[observe]], comparing images instead of values. See [[Signal.observeProjected]] for why a
