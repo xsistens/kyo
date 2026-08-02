@@ -21,12 +21,28 @@ sealed private[kyo] class IOTask[Ctx, E, A] private (
     final override def enter(frame: Frame, value: Any) =
         !shouldPreempt()
 
+    // The registration this task left on the promise it is parked on; Absent when it is not
+    // parked. Volatile because the interrupting side reads it from another thread; a stale read
+    // would only mean a missed release, but that is the whole point of the field.
+    @volatile private var parked: Maybe[IOPromise.Waiter[?, ?]] = Absent
+
     final override def onComplete() =
         doPreempt()
         // The promise just completed (value or interrupt): drop accumulated runtime so a
         // still-queued task runs promptly to observe completion and run finalizers. Benign on
         // value-completion; a priority boost on interrupt.
         resetRuntime()
+        // If this task is parked, its resume callback is sitting in ANOTHER promise's waiter
+        // chain, capturing this task's continuation. That chain is flushed only when that promise
+        // completes — which for a masked promise (Signal's next-promise, for one) may be never.
+        // Release the callback and schedule the task instead: `run` sees a completed promise and
+        // goes straight to the finalizers, which is what the resume would have led to anyway.
+        parked match
+            case Present(registration) =>
+                parked = Absent
+                if registration.cancel() then Scheduler.get.schedule(this)
+            case Absent => ()
+        end match
     end onComplete
 
     final override def addFinalizer(f: Maybe[Error[Any]] => Unit) =
@@ -96,11 +112,12 @@ sealed private[kyo] class IOTask[Ctx, E, A] private (
                                             cont(r.asInstanceOf[Result[Nothing, C]])
                                         case Absent =>
                                             curr = nullResult
-                                            input.onComplete { r =>
+                                            parked = Present(input.onCompleteCancellable { r =>
+                                                parked = Absent
                                                 this.removeInterrupt(input)
                                                 curr = Sync.defer(cont(r.asInstanceOf[Result[Nothing, C]]))
                                                 Scheduler.get.schedule(this)
-                                            }
+                                            })
                                             nullResult
                                     end match
                             }
@@ -126,7 +143,13 @@ sealed private[kyo] class IOTask[Ctx, E, A] private (
 
     final def run(startMillis: Long, clock: InternalClock, deadline: Long): Task.Result =
         val safepoint = Safepoint.get
-        val next      = eval(startMillis, clock, deadline)(using safepoint)
+        // `curr` is null while parked. A parked task used to reach `run` only through its resume
+        // callback, which restored `curr` first; onComplete's release path schedules it without
+        // one, so there is nothing to evaluate — fall through to the completion handling below,
+        // which is where finalizers run.
+        val next =
+            if isNull(curr) then nullResult
+            else eval(startMillis, clock, deadline)(using safepoint)
         if !isPending() then
             if !isNull(curr) && curr.evalNow.isEmpty then
                 ensureInterrupt()(using safepoint)
