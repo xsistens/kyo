@@ -839,7 +839,16 @@ private[kyo] object HtmlRenderer:
           |// Mirrors kyo.internal.InputMasking.maskNormalize.
           |function kyoMaskNormalize(mask,val){var ts=kyoMaskParse(mask);return kyoMaskFormat(ts,kyoMaskRaw(ts,val));}""".stripMargin
 
+    /** The client runtime, emitted into the page by `render`. Split in two at a function boundary purely
+      * for the JVM: a string constant in a class file is limited to 64 KB of UTF-8, and the whole runtime
+      * no longer fits. The halves are joined at runtime, so each is its own constant. Nothing else about
+      * the split is meaningful — put new code wherever it belongs, and cut again if a half outgrows the
+      * limit ("UTF8 string too large" at compile time is the signal).
+      */
     private def clientJs(basePath: String): String =
+        clientJsMorph(basePath) + clientJsRuntime
+
+    private def clientJsMorph(basePath: String): String =
         s"""(function(){
            |var base="$basePath";
            |var __q=[];
@@ -869,6 +878,9 @@ private[kyo] object HtmlRenderer:
            |    }
            |    // A live mount region ('m') is left untouched ONLY when the new content is itself a mount slot
            |    // ('s' = the SAME mount re-rendering, which owns its subtree).
+           |    // Text into text: assigning the node IS the whole patch, no parse and no morph. Twin of
+           |    // DomBackend.patchLoneText; keep in lockstep.
+           |    else if(!op.Replace.mount&&!r.m&&__kyoLoneText(r,op.Replace.html)){}
            |    else if(!(!op.Replace.mount&&r.m&&__kyoPayloadSlot(op.Replace.html))){
            |      var rp=r.s.parentNode;
            |      // Capture focus/caret of the active element inside the patched range.
@@ -1066,6 +1078,18 @@ private[kyo] object HtmlRenderer:
            |// DomBackend.parseToContainer): the wrap keeps the fragment parser from foster-parenting or dropping
            |// context-sensitive content. Comments survive all these parse modes. Returns the node whose childNodes
            |// are the new content, or null.
+           |// Assign a text-only payload to a region holding exactly one text node; report whether it applied.
+           |// Both shapes must match: a region holding elements needs the morph, a payload with markup needs
+           |// the parser. '&' disqualifies alongside '<' — text is escaped upstream, and decoding entities here
+           |// would duplicate the parser. Everything the slow path does around the morph is a no-op on this
+           |// shape: a range without elements has no js props, no animations, no enter/leave sets, no focus.
+           |function __kyoLoneText(r,html){
+           |  if(html.indexOf('<')>=0||html.indexOf('&')>=0)return false;
+           |  var f=r.s.nextSibling;
+           |  if(!f||f===r.e||f.nodeType!==3||f.nextSibling!==r.e)return false;
+           |  if(f.data!==html)f.data=html;
+           |  return true;
+           |}
            |function __kyoParseCtx(parent,html){
            |  var t=document.createElement("template"),tag=parent.tagName,pre="",suf="",d=0;
            |  if(parent.namespaceURI==="http://www.w3.org/2000/svg"&&tag.toLowerCase()!=="foreignobject"){pre="<svg>";suf="</svg>";d=1;}
@@ -1093,11 +1117,41 @@ private[kyo] object HtmlRenderer:
            |// Null bounds = to the end of the parent; a region's close marker is the from-side sentinel, so
            |// out-of-range siblings (incl. the region's own markers) are never visited and insertBefore(node,
            |// sentinel) appends at the range end. Twin of DomBackend.morphRange; keep in lockstep.
+           |function __kyoCollectL(start,end,nodes,keys){
+           |  var scan=start;
+           |  while(scan&&scan!==end){nodes.push(scan);keys.push(__kyoLKey(scan));scan=__kyoLNext(scan);}
+           |}
            |function __kyoMorphRange(fromParent,fromStart,fromEnd,toStart,toEnd){
-           |  var fromKeyed=null,toKeyed=null,scan=fromStart;
-           |  while(scan&&scan!==fromEnd){var k=__kyoLKey(scan);if(k!==null){if(!fromKeyed)fromKeyed=Object.create(null);fromKeyed[k]=scan;}scan=__kyoLNext(scan);}
-           |  scan=toStart;
-           |  while(scan&&scan!==toEnd){var k2=__kyoLKey(scan);if(k2!==null){if(!toKeyed)toKeyed=Object.create(null);toKeyed[k2]=true;}scan=__kyoLNext(scan);}
+           |  var fromNodes=[],fromKeys=[],toNodes=[],toKeys=[],i=0;
+           |  __kyoCollectL(fromStart,fromEnd,fromNodes,fromKeys);
+           |  __kyoCollectL(toStart,toEnd,toNodes,toKeys);
+           |  var fromKeyed=null,toKeyed=null;
+           |  for(i=0;i<fromKeys.length;i++){if(fromKeys[i]!==null){if(!fromKeyed)fromKeyed=Object.create(null);fromKeyed[fromKeys[i]]=fromNodes[i];}}
+           |  for(i=0;i<toKeys.length;i++){if(toKeys[i]!==null){if(!toKeyed)toKeyed=Object.create(null);toKeyed[toKeys[i]]=true;}}
+           |  // Two-ended keyed pass, ahead of the cursor walk below. That walk can only insert IN FRONT OF its
+           |  // cursor, so a key found behind the cursor drags every sibling in between along with it: a two-row
+           |  // swap in a thousand rows costs 997 moves. Matching both ends first relocates only the children
+           |  // that actually changed place. Invariant: the children still to place are exactly
+           |  // fromNodes[fh..ft], a contiguous DOM run ending immediately before tailBoundary.
+           |  var fh=0,ft=fromNodes.length-1,th=0,tt=toNodes.length-1,tailBoundary=fromEnd,scanning=true;
+           |  while(scanning&&fh<=ft&&th<=tt){
+           |    if(fromKeys[fh]===null||fromKeys[ft]===null||toKeys[th]===null||toKeys[tt]===null)scanning=false;
+           |    else if(fromKeys[fh]===toKeys[th]){__kyoPatchL(fromParent,fromNodes[fh],toNodes[th]);fh++;th++;}
+           |    else if(fromKeys[ft]===toKeys[tt]){__kyoPatchL(fromParent,fromNodes[ft],toNodes[tt]);tailBoundary=fromNodes[ft];ft--;tt--;}
+           |    else if(fromKeys[fh]===toKeys[tt]){
+           |      if(fh!==ft)__kyoMoveL(fromParent,fromNodes[fh],tailBoundary);
+           |      __kyoPatchL(fromParent,fromNodes[fh],toNodes[tt]);tailBoundary=fromNodes[fh];fh++;tt--;
+           |    }
+           |    else if(fromKeys[ft]===toKeys[th]){
+           |      if(ft!==fh)__kyoMoveL(fromParent,fromNodes[ft],fromNodes[fh]);
+           |      __kyoPatchL(fromParent,fromNodes[ft],toNodes[th]);ft--;th++;
+           |    }
+           |    else scanning=false;
+           |  }
+           |  var gToEnd=(tt+1<toNodes.length)?toNodes[tt+1]:toEnd;
+           |  __kyoMorphRangeCursor(fromParent,(fh<=ft)?fromNodes[fh]:tailBoundary,tailBoundary,(th<=tt)?toNodes[th]:gToEnd,gToEnd,fromKeyed,toKeyed);
+           |}
+           |function __kyoMorphRangeCursor(fromParent,fromStart,fromEnd,toStart,toEnd,fromKeyed,toKeyed){
            |  var curFrom=fromStart,curTo=toStart;
            |  while(curTo&&curTo!==toEnd){
            |    var toNext=__kyoLNext(curTo),tKey=__kyoLKey(curTo);
@@ -1135,7 +1189,10 @@ private[kyo] object HtmlRenderer:
            |  else if(fromNode.tagName!==toNode.tagName)fromNode.parentNode.replaceChild(document.importNode(toNode,true),fromNode);
            |  else __kyoMorphEl(fromNode,toNode);
            |}
-           |function fp(el){
+           |""".stripMargin
+
+    private def clientJsRuntime: String =
+        s"""function fp(el){
            |  while(el&&el!==document.body){
            |    if(el.hasAttribute("data-kyo-path"))return el;
            |    el=el.parentElement;
