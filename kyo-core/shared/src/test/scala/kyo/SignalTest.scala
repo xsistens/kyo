@@ -995,6 +995,26 @@ class SignalTest extends kyo.test.Test[Any]:
                 .map(lost => assert(lost == 0, s"map lost $lost / 5000 without repair"))
         }
 
+        "a constant delivers once and holds its scope across would-be repair intervals" in {
+            // A constant cannot change, so its observation arms no reconciliation timer. Nothing in the
+            // delivered values can witness that directly (a repair tick never re-runs `f` either), so this
+            // pins what a botched override would break instead: exactly one delivery, and a per-value Scope
+            // that survives several would-be intervals and closes only on interrupt.
+            for
+                seen     <- AtomicRef.init(Chunk.empty[Int])
+                released <- AtomicRef.init(false)
+                fiber <- Fiber.initUnscoped(Signal.initConst(7).observe(20.millis) { v =>
+                    Scope.ensure(released.set(true)).andThen(recordValue(seen, v))
+                })
+                _         <- pollUntil(seen.get.map(_.nonEmpty))
+                _         <- Async.sleep(200.millis)
+                values    <- seen.get
+                duringRun <- released.get
+                _         <- fiber.interrupt
+                afterStop <- pollUntil(released.get)
+            yield assert(values == Chunk(7) && !duringRun && afterStop)
+        }
+
         "an idle parked observer of a MAP CHAIN holds exactly one waiter (the chain reaches the leaf)" in {
             // Same witness as the leaf case above, one link further out. A mapped signal answers a projected
             // observation by composing the projection onto its own and asking its source, so a chain of any
