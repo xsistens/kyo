@@ -164,6 +164,36 @@ class WaiterLifecycleTest extends kyo.test.Test[Any]:
             end for
         }
 
+        "B3 a cancel that runs inside the flush still wins over it" in {
+            import AllowUnsafe.embrace.danger
+            val p   = new IOPromise[Nothing, Int]()
+            var ran = false
+            // Registered first, so the flush reaches it LAST (A1).
+            val victim = p.onCompleteCancellable(_ => ran = true)
+            // Registered second, so it runs FIRST and cancels the victim while the flush is in
+            // progress (A2) — the one genuinely racy interleaving, made deterministic.
+            var cancelWon = false
+            p.onComplete(_ => cancelWon = victim.cancel())
+            p.completeDiscard(Result.succeed(1))
+            assert(cancelWon)
+            // Only holds if the flush TAKES the callback atomically instead of merely reading it;
+            // a non-atomic take would run the victim after it was cancelled.
+            assert(!ran)
+        }
+
+        "B4 once the flush has taken the callback, cancelling is a no-op" in {
+            import AllowUnsafe.embrace.danger
+            val p     = new IOPromise[Nothing, Int]()
+            var calls = 0
+            val w     = p.onCompleteCancellable(_ => calls += 1)
+            p.completeDiscard(Result.succeed(1))
+            assert(calls == 1)
+            // The other side of the same atomicity: the flush took it, so cancel must report that
+            // it did not, and must not resurrect or re-run anything.
+            assert(!w.cancel())
+            assert(calls == 1)
+        }
+
         "B2 observers that come and go without a value change leave no waiters on a signal" in {
             for
                 ref    <- Signal.initRef(0)
