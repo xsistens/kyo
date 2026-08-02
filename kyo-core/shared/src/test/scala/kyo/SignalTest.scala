@@ -591,13 +591,13 @@ class SignalTest extends kyo.test.Test[Any]:
                 _  <- refA.set(1)
                 v1 <- f1.get
                 v2 <- f2.get
-                // After refA fired: refA has a fresh promise (0 waiters), refB has
-                // 2 ghost waiters (one from each race loser that cancelled without
-                // removing the onComplete from refB's promise).
-                // A third waiter adds 1 more to each; wait for refB >= 3 to confirm
-                // the new awaitAny is subscribed to refB before firing it.
+                // After refA fired, refA has a fresh promise (0 waiters). refB used to carry two
+                // ghost waiters at this point — one per race loser, which cancelled without being
+                // able to remove its onComplete from refB's promise — and this sync point was
+                // calibrated on them. Race losers now release their registration, so only the
+                // live waiter of the third subscription remains to wait for.
                 f3 <- Fiber.initUnscoped(cl.next)
-                _  <- assertEventually(refB.waiters.map(_ >= 3))
+                _  <- assertEventually(refB.waiters.map(_ >= 1))
                 _  <- refB.set(1)
                 v3 <- f3.get
             yield assert(v1 == (1, 0) && v2 == (1, 0) && v3 == (1, 1))
@@ -642,11 +642,12 @@ class SignalTest extends kyo.test.Test[Any]:
                 _  <- r0.set(1)
                 _  <- f1.get
                 _  <- f2.get
-                // After r0 fired: r0 has a fresh promise (0 waiters), r1 has
-                // 2 ghost waiters (one from each race loser). A third waiter
-                // adds 1 more to r1; wait for r1 >= 3 to confirm subscription.
+                // After r0 fired, r0 has a fresh promise (0 waiters). r1 used to carry two ghost
+                // waiters from the race losers and this threshold counted them; losers now
+                // release their registration, so only the third subscription's live waiter is
+                // left on r1.
                 f3 <- Fiber.initUnscoped(Signal.awaitAny(Seq(r0, r1)))
-                _  <- assertEventually(r1.waiters.map(_ >= 3))
+                _  <- assertEventually(r1.waiters.map(_ >= 1))
                 _  <- r1.set(1)
                 _  <- f3.get
             yield ()
@@ -791,18 +792,18 @@ class SignalTest extends kyo.test.Test[Any]:
                 _  <- assertEventually(r0.waiters.map(_ == 1))
                 _  <- r0.set(1)
                 v0 <- f0.get
-                // Second emit: r1 fires; after first emit, r1 has 1 ghost waiter.
-                // After second awaitAny subscribes, r1 has ghost+new=2.
-                // Use r1.waiters >= 2 as sync point to confirm subscription.
+                // Second emit: r1 fires. The first emit used to leave a ghost waiter on r1, so
+                // this threshold was ghost+new=2; race losers now release their registration and
+                // only the new subscription's waiter is on r1.
                 f1 <- Fiber.initUnscoped(z.next)
-                _  <- assertEventually(r1.waiters.map(_ >= 2))
+                _  <- assertEventually(r1.waiters.map(_ >= 1))
                 _  <- r1.set(1)
                 v1 <- f1.get
                 // Third emit: r2 fires, so sync on r2 (concurrent subscription means r1 being armed
-                // does not imply r2 is). r2 was never set, so it still carries its 2 ghost waiters from
-                // the prior races; r2.waiters >= 3 confirms the third subscription landed on r2.
+                // does not imply r2 is). r2 was never set; it used to still carry the 2 ghost
+                // waiters of the prior races, which is what >= 3 counted.
                 f2 <- Fiber.initUnscoped(z.next)
-                _  <- assertEventually(r2.waiters.map(_ >= 3))
+                _  <- assertEventually(r2.waiters.map(_ >= 1))
                 _  <- r2.set(1)
                 v2 <- f2.get
             yield assert(v0 == Chunk(1, 0, 0) && v1 == Chunk(1, 1, 0) && v2 == Chunk(1, 1, 1))
