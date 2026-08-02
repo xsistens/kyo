@@ -861,7 +861,7 @@ private[kyo] object ReactiveUI:
     def subscribe(rui: ReactiveUI, exchange: UIExchange)(using Frame): Subscription < (Async & Scope) =
         for
             signalChangeTime <- AtomicRef.init(Instant.Epoch)
-            rootMounts       <- MountRegistry.init
+            rootMounts       <- MountRegistryRef.init
             _                <- Scope.ensure(rootMounts.evictAll)
             // Absent only for hand-built ReactiveUIs in tests; a normalize-produced root always carries the table.
             mountDispatch <- rui.mountDispatch match
@@ -885,7 +885,7 @@ private[kyo] object ReactiveUI:
         rui: ReactiveUI,
         exchange: UIExchange,
         signalChangeTime: AtomicRef[Instant],
-        mounts: MountRegistry,
+        mounts: MountRegistryRef,
         mountDispatch: MountDispatch
     )(using
         Frame
@@ -996,7 +996,7 @@ private[kyo] object ReactiveUI:
         svg: Boolean,
         exchange: UIExchange,
         signalChangeTime: AtomicRef[Instant],
-        presetMounts: Maybe[MountRegistry],
+        presetMounts: Maybe[MountRegistryRef],
         mountDispatch: MountDispatch,
         // True when this region IS a keyless mount's content cell: its paint flags the DOM node as a mount root so a
         // parent's in-place update leaves the subtree alone (the mount repaints itself). Keyed mounts stay false;
@@ -1012,14 +1012,14 @@ private[kyo] object ReactiveUI:
         for
             regionMounts <- presetMounts match
                 case Present(r) => Kyo.lift(r)
-                case Absent     => MountRegistry.init.map(r => Scope.ensure(r.evictAll).andThen(r))
+                case Absent     => MountRegistryRef.init.map(r => Scope.ensure(r.evictAll).andThen(r))
             _ <- Fiber.init {
                 def renderValue(current: UI): Unit < (Async & Scope) =
                     for
                         now          <- Clock.now
                         _            <- signalChangeTime.set(now)
                         (newKids, _) <- walkStatic(current, path, svg, mountDispatch)
-                        _            <- regionMounts.evictExcept(collectMountKeys(newKids))
+                        _            <- regionMounts.evictExcept(collectMountKeys(newKids), Set.empty[Any])
                         _            <- exchange.onChange(path, current, mount)
                         // walkStatic only forks observers for reactive-attr CHILD elements; the region's painted
                         // ROOT element carries its own reactive channels at `path` and is absent from newKids, so
@@ -1048,7 +1048,7 @@ private[kyo] object ReactiveUI:
                             // The enclosing render already painted exactly this value: skip the redundant
                             // repaint and re-walk, but still claim mounts and subscribe the already-walked
                             // children, exactly as renderValue would have.
-                            regionMounts.evictExcept(collectMountKeys(initialKids)).andThen(
+                            regionMounts.evictExcept(collectMountKeys(initialKids), Set.empty[Any]).andThen(
                                 Kyo.foreachDiscard(initialKids)(
                                     subscribeScoped(_, exchange, signalChangeTime, regionMounts, mountDispatch)
                                 )
@@ -1137,7 +1137,7 @@ private[kyo] object ReactiveUI:
                 (itemSignal, keyFnMaybe, renderFn) =>
                     val keyFn = keyFnMaybe.get // reusable guarantees a key function
                     for
-                        regionMounts <- MountRegistry.init.map(r => Scope.ensure(r.evictAll).andThen(r))
+                        regionMounts <- MountRegistryRef.init.map(r => Scope.ensure(r.evictAll).andThen(r))
                         rows = spec.rows
                         _ <- Scope.ensure(rows.evictAll)
                         _ <- Fiber.init {
@@ -1158,7 +1158,7 @@ private[kyo] object ReactiveUI:
                             // walked initial kids as rows (grouped by their row path segment) and just subscribe them.
                             def seed(items: Chunk[T]): Unit < (Async & Scope) =
                                 for
-                                    _ <- regionMounts.evictExcept(collectMountKeys(initialKids))
+                                    _ <- regionMounts.evictExcept(collectMountKeys(initialKids), Set.empty[Any])
                                     grouped = initialKids.groupBy(k => k.path.lift(path.length).getOrElse(""))
                                     built <- Kyo.foreach(Chunk.from(items.toSeq.zipWithIndex)) { (item, i) =>
                                         val key  = keyFn(item)
@@ -1198,9 +1198,15 @@ private[kyo] object ReactiveUI:
                                                     (key, item, rowUI, kids, Present(hdl), Absent: Maybe[RowInstance])
                                                 )
                                     }
-                                    retainedKids = built.toSeq.collect { case (_, _, _, kids, _, Present(_)) => kids }.flatten
-                                    allKids      = built.toSeq.flatMap((_, _, _, kids, _, _) => kids)
-                                    _ <- regionMounts.evictExcept(collectMountKeys(allKids), preClaimed = collectMountKeys(retainedKids))
+                                    // Both key sets are built INSIDE the call, not bound as vals: evictExcept is
+                                    // inline, so a region with no mounted node (the common case, and every row of
+                                    // a plain keyed list) skips two full passes over every row plus their flattens
+                                    // and Set builds, instead of computing them to hand a registry that would
+                                    // discard them.
+                                    _ <- regionMounts.evictExcept(
+                                        collectMountKeys(built.toSeq.flatMap((_, _, _, kids, _, _) => kids)),
+                                        collectMountKeys(built.toSeq.collect { case (_, _, _, kids, _, Present(_)) => kids }.flatten)
+                                    )
                                     fragment =
                                         Fragment[UI](Chunk.from(built.toSeq.map((key, _, rowUI, _, _, _) => KeyedChild[UI](key, rowUI))))
                                     _ <- exchange.onChange(path, fragment)
@@ -1240,7 +1246,10 @@ private[kyo] object ReactiveUI:
       * pass, computed up front so evictExcept can run before paint.
       */
     private def collectMountKeys(kids: Seq[ReactiveUI]): Set[Any] =
-        kids.flatMap(_.mountedSpec.flatMap(_.node.key).toChunk).toSet
+        // Folded rather than flatMap-then-toSet so the common answer (no mounts at all) allocates nothing:
+        // `Set.empty` is a singleton. map/getOrElse rather than a Present/Absent match because the key type is
+        // `Any`, for which Maybe has no exhaustive match — a key could itself be an Absent.
+        kids.foldLeft(Set.empty[Any])((acc, kid) => kid.mountedSpec.flatMap(_.node.key).map(acc + _).getOrElse(acc))
 
     /** Subscribe one Mounted node.
       *
@@ -1261,73 +1270,78 @@ private[kyo] object ReactiveUI:
         spec: MountedSpec,
         exchange: UIExchange,
         signalChangeTime: AtomicRef[Instant],
-        mounts: MountRegistry,
+        mountsRef: MountRegistryRef,
         mountDispatch: MountDispatch
     )(using Frame): Unit < (Async & Scope) =
-        spec.node.key match
-            case Present(key) =>
-                mounts.claim(key, rui.path, spec).map {
-                    case Present(inst) =>
-                        for
-                            _       <- mountDispatch.register(rui.path, inst.cell)
-                            _       <- Scope.ensure(mountDispatch.unregister(rui.path, inst.cell))
-                            current <- inst.cell.current
-                            _       <- exchange.onChange(rui.path, current)
-                            // `mount = true` for a KEYED instance too: the region claims the `m` flag, so a
-                            // parent re-render leaves the live subtree alone instead of wiping it to the
-                            // placeholder and having this instance paint it back. Safe for keyed mounts only
-                            // because the marker also carries the mount key: a key change still falls through
-                            // to the morph and resets the slot (see RegionMarker's `k` flag). Without it the
-                            // adopted instance kept its scopes but lost its DOM on every parent emission, and
-                            // with it focus, caret, scroll position and in-place bindings.
-                            _ <- subscribeRegion(
-                                rui.path,
-                                inst.cell,
-                                rui.svgContext,
-                                exchange,
-                                signalChangeTime,
-                                Present(inst.childMounts),
-                                mountDispatch,
-                                mount = true
-                            )
-                        yield ()
-                    case Absent =>
-                        // Duplicate key this render pass (claim already warned): paint a loud inline error instead of
-                        // silently sharing the first slot's instance. No cell or dispatch entry: a dead slot until the
-                        // caller gives distinct keys.
-                        given Frame = spec.node.frame
-                        exchange
-                            .onChange(
-                                rui.path,
-                                UI.span(UI.Ast.Text(s"kyo-ui: duplicate mounted key '$key'")).cssClass("kyo-mount-error")
-                            )
-                            .unit
-                }
-            case Absent =>
-                for
-                    _           <- mounts.noteKeylessRemount(rui.path)
-                    seed        <- mounts.keepLatestSeed(rui.path, spec)
-                    cell        <- Signal.initRef[UI](seed)
-                    _           <- mountDispatch.register(rui.path, cell)
-                    _           <- Scope.ensure(mountDispatch.unregister(rui.path, cell))
-                    supervision <- MountSupervision.init
-                    _ <- Fiber.init(runMountEffect(
-                        spec,
-                        cell,
-                        ui => mounts.recordContent(rui.path, ui),
-                        supervision
-                    ))
-                    _ <- subscribeRegion(
-                        rui.path,
-                        cell,
-                        rui.svgContext,
-                        exchange,
-                        signalChangeTime,
-                        Absent,
-                        mountDispatch,
-                        mount = true
-                    )
-                yield ()
+        // Reaching this method is what creates the region's registry: every branch below needs registry state,
+        // and no other caller does — which is exactly the invariant MountRegistryRef's no-ops rely on.
+        mountsRef.force.map { mounts =>
+            spec.node.key match
+                case Present(key) =>
+                    mounts.claim(key, rui.path, spec).map {
+                        case Present(inst) =>
+                            for
+                                _       <- mountDispatch.register(rui.path, inst.cell)
+                                _       <- Scope.ensure(mountDispatch.unregister(rui.path, inst.cell))
+                                current <- inst.cell.current
+                                _       <- exchange.onChange(rui.path, current)
+                                // `mount = true` for a KEYED instance too: the region claims the `m` flag, so a
+                                // parent re-render leaves the live subtree alone instead of wiping it to the
+                                // placeholder and having this instance paint it back. Safe for keyed mounts only
+                                // because the marker also carries the mount key: a key change still falls through
+                                // to the morph and resets the slot (see RegionMarker's `k` flag). Without it the
+                                // adopted instance kept its scopes but lost its DOM on every parent emission, and
+                                // with it focus, caret, scroll position and in-place bindings.
+                                _ <- subscribeRegion(
+                                    rui.path,
+                                    inst.cell,
+                                    rui.svgContext,
+                                    exchange,
+                                    signalChangeTime,
+                                    Present(inst.childMounts),
+                                    mountDispatch,
+                                    mount = true
+                                )
+                            yield ()
+                        case Absent =>
+                            // Duplicate key this render pass (claim already warned): paint a loud inline error instead
+                            // of silently sharing the first slot's instance. No cell or dispatch entry: a dead slot
+                            // until the caller gives distinct keys.
+                            given Frame = spec.node.frame
+                            exchange
+                                .onChange(
+                                    rui.path,
+                                    UI.span(UI.Ast.Text(s"kyo-ui: duplicate mounted key '$key'")).cssClass("kyo-mount-error")
+                                )
+                                .unit
+                    }
+                case Absent =>
+                    for
+                        _           <- mounts.noteKeylessRemount(rui.path)
+                        seed        <- mounts.keepLatestSeed(rui.path, spec)
+                        cell        <- Signal.initRef[UI](seed)
+                        _           <- mountDispatch.register(rui.path, cell)
+                        _           <- Scope.ensure(mountDispatch.unregister(rui.path, cell))
+                        supervision <- MountSupervision.init
+                        _ <- Fiber.init(runMountEffect(
+                            spec,
+                            cell,
+                            ui => mounts.recordContent(rui.path, ui),
+                            supervision
+                        ))
+                        _ <- subscribeRegion(
+                            rui.path,
+                            cell,
+                            rui.svgContext,
+                            exchange,
+                            signalChangeTime,
+                            Absent,
+                            mountDispatch,
+                            mount = true
+                        )
+                    yield ()
+        }
+    end subscribeMounted
 
     /** A supervised background fiber of a mounted node failed with a non-Throwable `Abort` value; the node's
       * error rendering needs a Throwable, so the value is carried in this wrapper.
@@ -1433,7 +1447,7 @@ private[kyo] object ReactiveUI:
         val key: Any,
         val cell: SignalRef[UI],
         val fiber: Fiber[Nothing, Any],
-        val childMounts: MountRegistry
+        val childMounts: MountRegistryRef
     )
 
     /** Per-region ownership of keyed mount instances (plus keep-latest seeds and the keyless thrash counter).
@@ -1488,7 +1502,7 @@ private[kyo] object ReactiveUI:
                                 for
                                     seed        <- keepLatestSeed(path, spec)
                                     cell        <- Signal.initRef[UI](seed)
-                                    childMounts <- MountRegistry.init
+                                    childMounts <- MountRegistryRef.init
                                     supervision <- MountSupervision.init
                                     fiber <- Fiber.initUnscoped {
                                         Scope.run {
@@ -1600,6 +1614,55 @@ private[kyo] object ReactiveUI:
                 lastKeyByPath   <- AtomicRef.init(Dict.empty[Seq[String], (Any, Int)])
             yield new MountRegistry(instances, lastContent, keylessRemounts, claimedThisWalk, lastKeyByPath)
     end MountRegistry
+
+    /** A [[MountRegistry]] created on first use instead of per region.
+      *
+      * Every reactive region owns a registry, but only a region that actually contains a `UI.mounted` node ever
+      * puts anything in one. A thousand-row list without mounts therefore paid for a thousand registries — five
+      * AtomicRefs and five empty Dicts each — whose entire job was to answer "nothing to evict", plus the full
+      * key-collection pass that produced the argument for that answer.
+      *
+      * Deferring creation to the first [[force]] keeps the eviction protocol correct by construction rather than
+      * by a flag that could go stale: `force` is reachable only from [[subscribeMounted]], so an unforced ref
+      * provably holds no instances and no claims, and every operation other than a claim is a genuine no-op —
+      * including the `claimedThisWalk` reset, whose only observable effect is on claims that cannot exist yet.
+      * A mount appearing in a LATER emission simply forces the ref then; nothing needs to be known up front.
+      *
+      * `evictExcept` is `inline` so an unforced ref does not even evaluate its key sets.
+      */
+    final private[kyo] class MountRegistryRef(val slot: AtomicRef[Maybe[MountRegistry]]):
+
+        /** The registry, creating it if this is the region's first mounted node. A CAS loser drops its instance:
+          * the rows of one Foreach region subscribe on separate fibers and can arrive together.
+          */
+        def force(using Frame): MountRegistry < Sync =
+            slot.get.map {
+                case Present(r) => Kyo.lift(r)
+                case Absent =>
+                    MountRegistry.init.map { fresh =>
+                        slot.getAndUpdate {
+                            case Absent   => Present(fresh)
+                            case existing => existing
+                        }.map(_.getOrElse(fresh))
+                    }
+            }
+
+        inline def evictExcept(inline keep: Set[Any], inline preClaimed: Set[Any])(using Frame): Unit < Async =
+            slot.get.map {
+                case Present(r) => r.evictExcept(keep, preClaimed)
+                case Absent     => Kyo.unit
+            }
+
+        def evictAll(using Frame): Unit < Async =
+            slot.get.map {
+                case Present(r) => r.evictAll
+                case Absent     => Kyo.unit
+            }
+    end MountRegistryRef
+
+    private[kyo] object MountRegistryRef:
+        def init(using Frame): MountRegistryRef < Sync =
+            AtomicRef.init(Maybe.empty[MountRegistry]).map(new MountRegistryRef(_))
 
     // ---- Shared UI tree utilities (used by both backends) ----
 
