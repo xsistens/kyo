@@ -261,4 +261,70 @@ class DomBackendTest extends UITest:
         }
     }
 
+    "an adopted keyed mount keeps its live DOM across a parent re-render" in {
+        // The `m`+`k` marker contract. A keyed mount survives its enclosing region's re-render as an
+        // INSTANCE (the effect does not re-run), but until the region claimed `m`, the parent's paint
+        // projected the mount to its placeholder and morphed the live subtree away, so every node below
+        // it was recreated. Focus, caret, scroll and in-place bindings all died with it. Pinned here by
+        // node identity: the expando survives only if the parent left the span alone.
+        val app: UI < Async =
+            for tick <- Signal.initRef[Int](0)
+            yield UI.div(
+                UI.button("tick").id("ktick").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map(t =>
+                    UI.div(
+                        UI.span(s"t:$t").id("ktxt"),
+                        UI.mounted(Kyo.lift[UI, Async](UI.div("live").id("kinner")))
+                            .keyed("stable")
+                            .placeholder(UI.span("..."))
+                    )
+                )
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("kinner"), "live")
+                // First re-render: a server-rendered page carries no `k` (client-only flag, golden HTML
+                // stays byte-identical), so this pass falls through the guard and ADOPTS the key. The
+                // SPA transport boots with the flags already stamped and is opaque from the start.
+                _      <- Browser.click(Selector.id("ktick"))
+                _      <- Browser.assertText(Selector.id("ktxt"), "t:1")
+                _      <- Browser.evalDiscard("document.getElementById('kinner').__kyoMark = 7;")
+                before <- Browser.evalJson[Int]("document.getElementById('kinner').__kyoMark || 0")
+                // Steady state: the live marker names the same mount the incoming slot does, so the parent
+                // leaves the span alone entirely.
+                _     <- Browser.click(Selector.id("ktick"))
+                _     <- Browser.assertText(Selector.id("ktxt"), "t:2")
+                _     <- Browser.assertText(Selector.id("kinner"), "live")
+                after <- Browser.evalJson[Int]("document.getElementById('kinner').__kyoMark || 0")
+            yield
+                assert(before == 7)
+                assert(after == 7)
+        }
+    }
+
+    "a keyed mount whose key changes still resets its slot" in {
+        // The other half of the `k` contract: opacity must NOT outlive the key. A changed key evicts the
+        // instance, so the span has to fall through to the morph, otherwise the evicted instance's
+        // content would stay painted forever. Node identity must NOT survive here.
+        val app: UI < Async =
+            for which <- Signal.initRef("a")
+            yield UI.div(
+                UI.button("swap").id("kswap").onClick(which.set("b")),
+                which.map(w =>
+                    UI.mounted(Kyo.lift[UI, Async](UI.div(s"body-$w").id("kbody")))
+                        .keyed(w)
+                        .placeholder(UI.span("..."))
+                )
+            )
+        withUI(app) {
+            for
+                _      <- Browser.assertText(Selector.id("kbody"), "body-a")
+                _      <- Browser.evalDiscard("document.getElementById('kbody').__kyoMark = 9;")
+                _      <- Browser.click(Selector.id("kswap"))
+                _      <- Browser.assertText(Selector.id("kbody"), "body-b")
+                marked <- Browser.evalJson[Int]("document.getElementById('kbody').__kyoMark || 0")
+            yield assert(marked == 0)
+        }
+    }
+
 end DomBackendTest
