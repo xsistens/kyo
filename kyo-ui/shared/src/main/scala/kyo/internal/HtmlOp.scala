@@ -12,8 +12,19 @@ private[kyo] object HtmlOp:
     // span as opaque.
     case class Replace(path: Seq[String], html: String, mount: Boolean = false) extends HtmlOp derives Schema
     case class Remove(path: Seq[String])                                        extends HtmlOp derives Schema
-    case class InjectCss(css: String)                                           extends HtmlOp derives Schema
-    case class ScrollIntoView(id: String)                                       extends HtmlOp derives Schema
+    // Structural patch of a keyed list region: `keys` is the full row order, `changed` the subset being
+    // repainted, and `html` the concatenated render of exactly those rows (in `changed` order). Everything
+    // not in `changed` is a row the client already has and must NOT repaint — its live DOM is correct,
+    // including in-place channel patches no rendered payload ever carried.
+    //
+    // This is what a list emission costs the size of the CHANGE rather than the size of the LIST: a Replace
+    // has to carry a thousand rendered rows to say "one row left", and over a socket that is the whole
+    // payload rather than a local string. The order still travels in full — it is what the client reconciles
+    // against, and a thousand keys are a rounding error next to a thousand rendered rows.
+    case class PatchList(path: Seq[String], keys: Seq[String], changed: Seq[String], html: String)
+        extends HtmlOp derives Schema
+    case class InjectCss(css: String)     extends HtmlOp derives Schema
+    case class ScrollIntoView(id: String) extends HtmlOp derives Schema
     // Contracts for these imperative ops live on UI.Commands (requestMeasure / command / *ById).
     case class RequestMeasure(path: Seq[String])        extends HtmlOp derives Schema
     case class Command(path: Seq[String], verb: String) extends HtmlOp derives Schema
