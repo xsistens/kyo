@@ -13,9 +13,7 @@ import scala.language.implicitConversions
   * back to sending the entire rendered list for a one-row change. That difference is only visible in the
   * frame, which is what this reads.
   *
-  * The frames are captured by wrapping `JSON.parse` from the test side — the client resolves it globally at
-  * call time, and it is the first thing the message handler touches. Nothing in the page is built for
-  * observation, so there is no seam here for production to carry.
+  * The frames are captured by `UITest.captureFrames`.
   *
   * `HttpWebSocket.connect` would be the direct route (see [[UIServerWsTest]]), but its three behavior leaves
   * hang indefinitely on this build, so the frames are read through the transport that does work end to end.
@@ -26,23 +24,6 @@ class ListPatchWireTest extends UITest:
     private val rowCount = 200
 
     private val keys: Seq[String] = (0 until rowCount).map(i => s"k$i")
-
-    /** Record every inbound frame. Installed AFTER load, so the initial paint is not in `__ops` and every
-      * entry describes a change the test caused.
-      */
-    private val captureFrames: String =
-        """(function(){
-          |  var orig=JSON.parse;window.__ops=[];
-          |  JSON.parse=function(s){if(typeof s==='string'&&s.charAt(0)==='{')window.__ops.push(s);return orig.apply(JSON,arguments);};
-          |  return "ok";
-          |})()""".stripMargin
-
-    private def lastOp(using Frame, kyo.test.AssertScope): HtmlOp < (Browser & Abort[BrowserReadException] & Sync) =
-        Browser.evalJson[String]("window.__ops[window.__ops.length-1]").map { raw =>
-            Json.decode[HtmlOp](raw) match
-                case Result.Success(op) => Kyo.lift(op)
-                case other              => Sync.defer(fail(s"could not decode the last frame: $other\nraw: $raw"))
-        }
 
     private def app(mutations: (String, Seq[String])*): UI < Async =
         for rows <- Signal.initRef(Chunk.from(keys))
