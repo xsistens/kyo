@@ -1266,13 +1266,25 @@ private[kyo] object ReactiveUI:
                                     )
                                     // A structural command addresses rows BY KEY, so it can say nothing useful
                                     // about an emission whose keys are not unique — two rows would name one
-                                    // slot. That emission already rebuilds every row and warns; it also keeps
-                                    // the whole-fragment paint, where duplicates degrade positionally instead
-                                    // of aliasing. `retained.isEmpty` is exactly "this row was re-rendered
-                                    // above": retained iff key survived AND item compared equal, which is the
-                                    // same condition under which the row's DOM was left alone.
+                                    // slot — nor about one whose rows paint something no key names (a
+                                    // fragment's roots land under sub-paths, text and raw HTML carry no path
+                                    // at all). Both keep the whole-fragment paint, where duplicates degrade
+                                    // positionally instead of aliasing and an unkeyed row is just more
+                                    // document to diff.
+                                    //
+                                    // The shape gate lives HERE, not in a backend, because a transport that
+                                    // sends the command over a wire cannot fall back once it has sent it: the
+                                    // rows it left out are not on the client to recover from. `DomBackend`
+                                    // re-checks against the live DOM anyway, which is free in-process and
+                                    // catches what only the DOM can answer.
+                                    //
+                                    // `retained.isEmpty` is exactly "this row was re-rendered above":
+                                    // retained iff key survived AND item compared equal, which is the same
+                                    // condition under which the row's DOM was left alone.
+                                    addressable = !duplicates &&
+                                        built.toSeq.forall((_, _, rowUI, _, _, _) => HtmlRenderer.paintsAsKeyedRoot(rowUI))
                                     _ <-
-                                        if duplicates then
+                                        if !addressable then
                                             exchange.onChange(
                                                 path,
                                                 Fragment[UI](Chunk.from(built.toSeq.map((key, _, rowUI, _, _, _) =>
