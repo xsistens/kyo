@@ -762,6 +762,26 @@ private[kyo] object HtmlRenderer:
             case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted => path :+ reactiveContentSegment
             case _                                              => path
 
+    /** True when rendering `ui` at path `p` paints exactly ONE logical child that `p` names: an element
+      * carrying `data-kyo-path="p"`, or a marker span opened at `p`.
+      *
+      * A structural list command addresses rows BY KEY, so it can only describe a row whose DOM a key names.
+      * A row rendering a `Fragment` paints its children at `p.0`, `p.1`, … — no node carries `p` itself; a row
+      * rendering text or raw HTML paints roots with no path at all. Either way a key-addressed reconcile has
+      * nothing to match the row against and would drop it, so callers gate on this and fall back to the
+      * whole-fragment paint, which addresses nothing and needs no such structure.
+      *
+      * Written as a total match over the same cases as [[renderTo]], deliberately without a `case _`: a new UI
+      * node stops compiling here as well as there, so its answer gets decided rather than defaulted — which is
+      * the only thing keeping this from drifting away from what the renderer actually emits.
+      */
+    private[kyo] def paintsAsKeyedRoot(ui: UI): Boolean =
+        ui match
+            case _: Dropdown | _: Element                            => true
+            case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted      => true
+            case KeyedChild(_, child)                                => paintsAsKeyedRoot(child)
+            case _: Fragment[?] | _: UI.Ast.Text | _: UI.Ast.RawHtml => false
+
     private def fmtD(v: Double): String = NumberFormat.double(v)
 
     private inline def w(sb: StringBuilder, s: String): Unit =
@@ -954,6 +974,8 @@ private[kyo] object HtmlRenderer:
            |      }
            |    }
            |    sweepFocusAuto();
+           |  }else if(op.PatchList){
+           |    __kyoApplyList(op.PatchList.path.join("."),op.PatchList.keys,op.PatchList.changed,op.PatchList.html);
            |  }else if(op.Remove){
            |    var p=op.Remove.path.join(".");
            |    var el=document.querySelector(__kyoPathSel(p));
@@ -1082,13 +1104,30 @@ private[kyo] object HtmlRenderer:
            |  }
            |}
            |function __kyoRebuild(){__kyoRegions=Object.create(null);__kyoScanInto(document.body);}
+           |// Register one node into the region index: a close marker pairs with a matching open held in `opens`,
+           |// an element carries its nested markers as descendants. Shared so range and subset scans cannot drift.
+           |function __kyoRescanNode(n,opens){
+           |  if(n.nodeType===8){var p=__kyoMParse(n.data);if(p){if(p.c){var o=opens[p.p];if(o){__kyoRegPair(p.p,o.n,n,o.m);delete opens[p.p];}}else opens[p.p]={n:n,m:p.m};}}
+           |  else if(n.nodeType===1)__kyoScanInto(n);
+           |}
            |function __kyoRescanRange(r){
            |  var opens=Object.create(null),n=r.s.nextSibling;
-           |  while(n&&n!==r.e){
-           |    if(n.nodeType===8){var p=__kyoMParse(n.data);if(p){if(p.c){var o=opens[p.p];if(o){__kyoRegPair(p.p,o.n,n,o.m);delete opens[p.p];}}else opens[p.p]={n:n,m:p.m};}}
-           |    else if(n.nodeType===1)__kyoScanInto(n);
-           |    n=n.nextSibling;
-           |  }
+           |  while(n&&n!==r.e){__kyoRescanNode(n,opens);n=n.nextSibling;}
+           |}
+           |// __kyoRescanRange over an explicit subset of logical children: a structural list patch imports
+           |// markers only into the rows it touched, so rescanning the whole range would walk a thousand rows to
+           |// find the nested regions of one. Twin of DomBackend.rescanNodes.
+           |function __kyoRescanNodes(nodes){
+           |  var opens=Object.create(null);
+           |  for(var i=0;i<nodes.length;i++)__kyoEachSpan(nodes[i],function(n){__kyoRescanNode(n,opens);});
+           |}
+           |// Elements of an explicit set of logical children. Each entry may be a plain element or a span's open
+           |// marker, so the visit goes through __kyoEachSpan: a span's elements are its following SIBLINGS, not
+           |// its descendants. Twin of DomBackend.foreachLogicalElement.
+           |function __kyoLEls(nodes){
+           |  var o=[];
+           |  for(var i=0;i<nodes.length;i++)__kyoEachSpan(nodes[i],function(n){if(n.nodeType===1)o.push(n);});
+           |  return o;
            |}
            |// Connectivity-validated lookup: stale/missing -> ONE full rescan -> retry -> null (silent no-op).
            |function __kyoRegion(p){
@@ -1152,28 +1191,43 @@ private[kyo] object HtmlRenderer:
            |  while(!stop&&n){var nx=n.nextSibling;stop=(n===last);f(n);n=nx;}
            |}
            |function __kyoMoveL(parent,node,ref){__kyoEachSpan(node,function(n){parent.insertBefore(n,ref);});}
-           |function __kyoRemoveL(parent,node){__kyoEachSpan(node,function(n){parent.removeChild(n);});}
-           |function __kyoInsertL(parent,toNode,ref){__kyoEachSpan(toNode,function(n){parent.insertBefore(document.importNode(n,true),ref);});}
+           |// __kyoRegions holds marker comments strongly, so an entry outliving its markers pins them and
+           |// whatever the path anchors; nothing ever looks up a removed row's path again, so the stale
+           |// entry never triggers the rebuild that would clear it. Removal is where the owner is known.
+           |// Twin of DomBackend.forgetRegionsIn; keep in lockstep.
+           |function __kyoForget(node){
+           |  if(node.nodeType===8){var p=__kyoMParse(node.data);if(p&&!p.c)delete __kyoRegions[p.p];return;}
+           |  if(node.nodeType!==1)return;
+           |  var w=document.createTreeWalker(node,NodeFilter.SHOW_COMMENT,null,false),n=w.nextNode();
+           |  while(n){var q=__kyoMParse(n.data);if(q&&!q.c)delete __kyoRegions[q.p];n=w.nextNode();}
+           |}
+           |function __kyoRemoveL(parent,node){__kyoEachSpan(node,function(n){__kyoForget(n);parent.removeChild(n);});}
+           |// Reports the FIRST node inserted: the handle a caller needs to run per-node work on exactly what it
+           |// just added (twin of DomBackend.insertLogicalClone).
+           |function __kyoInsertL(parent,toNode,ref){var first=null;__kyoEachSpan(toNode,function(n){var ins=parent.insertBefore(document.importNode(n,true),ref);if(!first)first=ins;});return first;}
            |// Patch matched logical children. Span vs span recurses on the content ranges, unless the live span
            |// carries 'm', the incoming one 's', AND both name the same mount 'k' (the SAME mount still sitting
            |// here, which owns its subtree): opaque, and the 'm' start marker is never touched. A differing 'k'
            |// falls through to the morph (so a key change resets the slot) and the live marker adopts the
            |// incoming key, which also closes the boot case where full-page HTML carries no 'k' at all.
            |// Kind mismatch replaces wholesale.
+           |// Reports the node occupying the slot AFTERWARDS: `m` where it was patched in place, the replacement
+           |// where a kind mismatch swapped it out — a caller running per-node work on what it patched would
+           |// otherwise hold a detached node in exactly that case.
            |function __kyoPatchL(parent,m,toNode){
            |  var fs=m.nodeType===8,ts=toNode.nodeType===8;
-           |  if(!fs&&!ts){__kyoMorphNode(m,toNode);return;}
+           |  if(!fs&&!ts){__kyoMorphNode(m,toNode);return m;}
            |  if(fs&&ts){
            |    var f=__kyoMParse(m.data),t=__kyoMParse(toNode.data);
-           |    if(!f||!t)return;
+           |    if(!f||!t)return m;
            |    var fc=__kyoSpanClose(m,f.p),tc=__kyoSpanClose(toNode,t.p);
-           |    if(!fc||!tc)return;
-           |    if(f.m&&t.s&&f.k===t.k)return;
+           |    if(!fc||!tc)return m;
+           |    if(f.m&&t.s&&f.k===t.k)return m;
            |    __kyoMorphRange(parent,m.nextSibling,fc,toNode.nextSibling,tc);
            |    if(f.m&&t.s)m.data=__kyoMOpen(f.p,true,t.k);
-           |    return;
+           |    return m;
            |  }
-           |  __kyoInsertL(parent,toNode,m);__kyoRemoveL(parent,m);
+           |  var rep=__kyoInsertL(parent,toNode,m);__kyoRemoveL(parent,m);return rep;
            |}
            |// Parse a bare content fragment in the parse context the live parent dictates (twin of
            |// DomBackend.parseToContainer): the wrap keeps the fragment parser from foster-parenting or dropping
@@ -1489,6 +1543,131 @@ private[kyo] object HtmlRenderer:
            |    // open, so its return target is stale and must not override the one just restored.
            |    if(!restored&&top.restore&&top.ret){var re=document.querySelector('[data-kyo-path="'+top.ret+'"]');if(re&&typeof re.focus==='function'){re.focus();restored=true;}}
            |  }
+           |}
+           |// ---- enter/leave and focus seeding over a marker-delimited region ----
+           |// A region is a sibling RANGE, not one element, so each helper above runs over the range's top-level
+           |// elements and the results are combined. Twin of the range* helpers in DomBackend.
+           |// Each helper comes in an "over an element list" form and a range wrapper: a structural list patch
+           |// runs them over the rows it disturbs, which is the whole reason it costs the size of the change.
+           |function __kyoRangeEls(r){var o=[];var n=r.s.nextSibling;while(n&&n!==r.e){if(n.nodeType===1)o.push(n);n=n.nextSibling;}return o;}
+           |function __kyoEnterOver(es){var s={};for(var i=0;i<es.length;i++){var t=faEnterPaths(es[i]);for(var k in t)s[k]=true;}return s;}
+           |function __kyoFocusAutoOver(es){var s={};for(var i=0;i<es.length;i++){var t=focusAutoPaths(es[i]);for(var k in t)s[k]=true;}return s;}
+           |function __kyoRangeEnter(r){return __kyoEnterOver(__kyoRangeEls(r));}
+           |function __kyoRangeFocusAuto(r){return __kyoFocusAutoOver(__kyoRangeEls(r));}
+           |// Leave-survivors read off the ALREADY PARSED payload container rather than a second template parse:
+           |// a <tr> or <option> payload only survives parsing inside its required ancestor chain, which
+           |// __kyoParseCtx supplies and a bare template does not (its rows would be dropped, and every leaving
+           |// row would then wrongly count as removed).
+           |function __kyoLeaveSurvIn(c){var s={};if(!c||!c.querySelectorAll)return s;var els=c.querySelectorAll("[data-kyo-leave]");for(var i=0;i<els.length;i++){var p=els[i].getAttribute("data-kyo-path");if(p!==null)s[p]=true;}return s;}
+           |function __kyoGhostsOver(es,surv){var g=[];for(var i=0;i<es.length;i++){g=g.concat(kyoLeavePrepare(es[i],surv));}return g;}
+           |function __kyoEnterSeedOver(es,oldSet){for(var i=0;i<es.length;i++)kyoEnterSeed(es[i],oldSet);}
+           |// At most ONE seed per patch, as for a single root: the stack depth is the signal that an earlier
+           |// element already seeded, so later ones are skipped.
+           |function __kyoSeedFocusAutoOver(es,oldSet){var n=__focusReturnStack.length;for(var i=0;i<es.length;i++){if(__focusReturnStack.length===n)seedFocusAuto(es[i],oldSet);}}
+           |function __kyoRangeGhosts(r,surv){return __kyoGhostsOver(__kyoRangeEls(r),surv);}
+           |function __kyoRangeEnterSeed(r,oldSet){__kyoEnterSeedOver(__kyoRangeEls(r),oldSet);}
+           |function __kyoRangeSeedFocusAuto(r,oldSet){__kyoSeedFocusAutoOver(__kyoRangeEls(r),oldSet);}
+           |// ---- structural keyed-list patch (twin of DomBackend.applyListPatchIn; keep in lockstep) ----
+           |// `keys` is the whole row order; `changed` names the rows carried by `html`. Every other key names a
+           |// row already on screen, to be MOVED but never repainted — its DOM is correct, including in-place
+           |// channel patches that were never part of any rendered payload.
+           |//
+           |// The placement below is __kyoMorphRange with the `to` side replaced by that row order: matching a
+           |// retained row costs one string compare and an index bump, where a whole-fragment Replace pays a
+           |// parse and a morph for it. Rows leaving are removed at the end, which is where their region-index
+           |// entries go too (__kyoRemoveL -> __kyoForget).
+           |function __kyoApplyList(p,keys,changed,html){
+           |  var r=__kyoRegion(p);
+           |  // A keyed list always paints a marker pair, so a missing region means "never painted here":
+           |  // nothing to patch, and nothing a full repaint would have found either.
+           |  if(!r)return;
+           |  var parent=r.s.parentNode;
+           |  var tc=html?__kyoParseCtx(parent,html):null;
+           |  if(html&&!tc)return;
+           |  var i,n;
+           |  var parsedKeyed=Object.create(null);
+           |  n=tc?tc.firstChild:null;
+           |  while(n){var pk=__kyoLKey(n);if(pk!==null)parsedKeyed[pk]=n;n=__kyoLNext(n);}
+           |  var fromNodes=[],fromKeys=[];
+           |  __kyoCollectL(r.s.nextSibling,r.e,fromNodes,fromKeys);
+           |  var fromKeyed=Object.create(null);
+           |  for(i=0;i<fromKeys.length;i++)if(fromKeys[i]!==null)fromKeyed[fromKeys[i]]=fromNodes[i];
+           |  var chg=Object.create(null);
+           |  for(i=0;i<changed.length;i++)chg[changed[i]]=true;
+           |  // Target order as full logical keys. A null target node is the retained case: "this row is already
+           |  // right where the payload would have put it", which every pass below reads as "leave it alone".
+           |  var toKeys=[],toNodes=[];
+           |  for(i=0;i<keys.length;i++){
+           |    var fk=p?p+"."+keys[i]:keys[i];
+           |    toKeys.push(fk);
+           |    toNodes.push(chg[keys[i]]?(parsedKeyed[fk]||null):null);
+           |  }
+           |  // Rows this patch disturbs: the ones repainted, plus the ones leaving. A retained row is identical
+           |  // before and after, so it can contribute nothing to the enter/leave/focus-auto sets and cannot lose
+           |  // the caret — which is what lets the pre- and post-passes skip it. A Replace runs all of them over
+           |  // the whole range: six walks of the full list for a change of one row.
+           |  var tset=Object.create(null);
+           |  for(i=0;i<toKeys.length;i++)tset[toKeys[i]]=true;
+           |  var dist=[];
+           |  for(i=0;i<fromKeys.length;i++){var fkk=fromKeys[i];if(fkk===null||!tset[fkk])dist.push(fromNodes[i]);}
+           |  for(i=0;i<toKeys.length;i++){if(toNodes[i]){var lv=fromKeyed[toKeys[i]];if(lv)dist.push(lv);}}
+           |  var des=__kyoLEls(dist);
+           |  // Focus spans the WHOLE region, not just the disturbed rows. A retained row keeps its DOM, but
+           |  // MOVING it is a remove-and-insert, and that blurs whatever it holds — so a pure reorder, which
+           |  // disturbs no row at all, is precisely the case that drops the caret if this is scoped to `dist`.
+           |  var ae=document.activeElement;
+           |  var inR=ae&&ae!==document.body&&__kyoRangeHas(r,ae);
+           |  var ap=inR?((ae.hasAttribute&&ae.hasAttribute("data-kyo-path"))?ae.getAttribute("data-kyo-path"):p):null;
+           |  var ss=(inR&&typeof ae.selectionStart==='number')?ae.selectionStart:null;
+           |  var se=(inR&&typeof ae.selectionEnd==='number')?ae.selectionEnd:null;
+           |  // Captured BEFORE the patch: a ghost clone can only measure the live node, and both sets answer
+           |  // "which of these was already here", which only the pre-patch DOM can say.
+           |  var __en=__kyoEnterOver(des),__fa=__kyoFocusAutoOver(des),__gh=__kyoGhostsOver(des,__kyoLeaveSurvIn(tc));
+           |  var touched=[];
+           |  function place(from,ti){var to=toNodes[ti];if(to)touched.push(__kyoPatchL(parent,from,to));}
+           |  // Two-ended keyed pass, exactly as __kyoMorphRange: a forward cursor alone can only insert IN FRONT
+           |  // of itself, so a removal in the middle drags every following row along with it.
+           |  var fh=0,ft=fromNodes.length-1,th=0,tt=toKeys.length-1,tb=r.e,scanning=true;
+           |  while(scanning&&fh<=ft&&th<=tt){
+           |    if(fromKeys[fh]===null||fromKeys[ft]===null)scanning=false;
+           |    else if(fromKeys[fh]===toKeys[th]){place(fromNodes[fh],th);fh++;th++;}
+           |    else if(fromKeys[ft]===toKeys[tt]){place(fromNodes[ft],tt);tb=fromNodes[ft];ft--;tt--;}
+           |    else if(fromKeys[fh]===toKeys[tt]){
+           |      if(fh!==ft)__kyoMoveL(parent,fromNodes[fh],tb);
+           |      place(fromNodes[fh],tt);tb=fromNodes[fh];fh++;tt--;
+           |    }
+           |    else if(fromKeys[ft]===toKeys[th]){
+           |      if(ft!==fh)__kyoMoveL(parent,fromNodes[ft],fromNodes[fh]);
+           |      place(fromNodes[ft],th);ft--;th++;
+           |    }
+           |    else scanning=false;
+           |  }
+           |  // The unresolved middle. Keys are unique within an emission, so one consumed at an end is never
+           |  // asked for again.
+           |  var cur=(fh<=ft)?fromNodes[fh]:tb;
+           |  for(var ti=th;ti<=tt;ti++){
+           |    var m=fromKeyed[toKeys[ti]];
+           |    if(m){
+           |      if(m!==cur)__kyoMoveL(parent,m,cur);else cur=__kyoLNext(cur);
+           |      place(m,ti);
+           |    }else if(toNodes[ti]){var ins=__kyoInsertL(parent,toNodes[ti],cur);if(ins)touched.push(ins);}
+           |    // else: a key the order names that is neither on screen nor in the payload. A row is left out of
+           |    // the payload only because the client already has it, so this is a row the DOM lost earlier. The
+           |    // patch cannot repaint what was never sent; skipping keeps a hole that was already there rather
+           |    // than shifting every row around it. DomBackend answers this one by falling back to a full
+           |    // repaint, which is free in-process and heals the hole — over a wire it is not on offer.
+           |  }
+           |  // Whatever is still between the cursor and the tail was claimed by no target key: it left the list.
+           |  while(cur&&cur!==tb){var nx=__kyoLNext(cur);__kyoRemoveL(parent,cur);cur=nx;}
+           |  __kyoRescanNodes(touched);
+           |  var tes=__kyoLEls(touched);
+           |  for(i=0;i<tes.length;i++){applyJsProps(tes[i]);ba(tes[i]);}
+           |  if(ap)__kyoRestoreFocus(ap,ss,se);
+           |  __kyoEnterSeedOver(tes,__en);
+           |  // Seed AFTER focus/caret restore so a newly appeared focus-auto element wins restore-to-trigger.
+           |  __kyoSeedFocusAutoOver(tes,__fa);
+           |  kyoSpawnGhosts(__gh);
+           |  sweepFocusAuto();
            |}
            |__kyoRebuild();applyJsProps(document.body);ba(document.body);
            |kyoEnterSeed(document.body,{});
