@@ -252,6 +252,24 @@ class TypedEventTest extends kyo.test.Test[Any]:
         end for
     }
 
+    "a channel beats a static disabled at dispatch too" in {
+        // Same precedence the renderer applies, at the other place that reads it. Both orders, because the
+        // client's patch makes them indistinguishable at runtime.
+        for
+            firedA <- AtomicRef.init(false)
+            firedB <- AtomicRef.init(false)
+            off    <- Signal.initRef(false)
+            uiA = UI.div(UI.button("A").id("a").disabled(true).disabled(off).onClick(firedA.set(true)))
+            uiB = UI.div(UI.button("B").id("b").disabled(off).disabled(true).onClick(firedB.set(true)))
+            dispatchA <- makeDispatch(uiA)
+            dispatchB <- makeDispatch(uiB)
+            _         <- dispatchA(Seq("0"), UIEvent.Click(Seq("0"), MouseEventData(UI.Modifiers.none, Present("a"))))
+            _         <- dispatchB(Seq("0"), UIEvent.Click(Seq("0"), MouseEventData(UI.Modifiers.none, Present("b"))))
+            a         <- firedA.get
+            b         <- firedB.get
+        yield assert(a && b, s"static disabled won over the channel (a=$a b=$b)")
+    }
+
     "a Signal-readOnly input ignores onInput" in {
         // `.readOnly(Signal)` is the twin channel of `.disabled(Signal)`: same setter shape, same blind spot.
         // Here the guard also gates the bound-ref write, so a read-only field would edit its own model.
