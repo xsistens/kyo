@@ -18,4 +18,16 @@ private[kyo] trait UIExchange:
     def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async      = Kyo.unit
     def onBoolAttrPatch(path: Seq[String], name: String, value: Boolean)(using Frame): Unit < Async = Kyo.unit
     def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async       = Kyo.unit
+
+    /** PROTOTYPE — synchronous twin of [[onClassPatch]], for the callback-based binding path.
+      *
+      * A class channel's whole job is one `classList.toggle`, so it does not need a fiber to deliver it.
+      * This is the sink for [[kyo.Signal.unsafeObserveProjected]]: it runs on the writer's stack, inside the
+      * `set` that changed the signal, and therefore must not suspend — which is why it returns `Unit` rather
+      * than `Unit < Async`.
+      *
+      * `Absent` for exchanges with no synchronous sink (the server transport has to go over a wire), which
+      * keeps those on the fiber path unchanged.
+      */
+    def classPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit] = Absent
 end UIExchange
