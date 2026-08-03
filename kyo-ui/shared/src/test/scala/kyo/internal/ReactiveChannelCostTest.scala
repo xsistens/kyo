@@ -16,7 +16,21 @@ import kyo.*
   *
   * Both are asserted by counting, never by timing: a wall-clock threshold on a shared machine is a coin flip
   * (this campaign already had a benchmark run invalidated by a game running in the background), whereas a
-  * registration count is the same on any machine.
+  * registration count is the same on any machine. What the counts are worth was measured separately, on the
+  * JVM, by driving the same fan-out through an exchange WITH a sink and one without — the latter being the
+  * fiber path every channel used before the binding existed:
+  *
+  * {{{
+  * n      callback                          fiber (the previous path)
+  * 100    1 registration, 100/100 in set    100 registrations, 0/100 in set    149us vs   1019us
+  * 1000   1 registration, 1000/1000 in set  1000 registrations, 0/1000 in set  280us vs   4292us
+  * 5000   1 registration, 5000/5000 in set  5000 registrations, 0/5000 in set  916us vs  18533us
+  * }}}
+  *
+  * Read those times as upper bounds (200us polling granularity), and as an UNDERSTATEMENT of the browser: on
+  * the JVM the fiber path has a real multi-threaded scheduler, while Scala.js gives it one macrotask per fiber
+  * on one thread, which is where 04_select measured 160.4ms before and 6.5ms after. The write itself does get
+  * dearer — at n=1000 `set` returns after 272us instead of 173us — because the fan-out now happens inside it.
   *
   * The regression these guard against has NO functional symptom. If a change makes `bindChannel` decline — a
   * signal that stops being recognised as ref-rooted, an exchange that stops offering a sink — everything still
