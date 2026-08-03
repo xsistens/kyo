@@ -29,15 +29,43 @@ class UIReactiveTypingTest extends kyo.test.Test[Any]:
         assert(r.isInstanceOf[Reactive[?]])
     }
 
-    // Element.hidden(Signal) returns Reactive[Self]
-    "Element.hidden(Signal) returns Reactive[Self]" in {
-        val sig                      = Signal.initConst(false)
-        val r: Reactive[SpanElement] = UI.span("x").hidden(sig)
-        assert(r.isInstanceOf[Reactive[?]])
+    // ---- which shape a Signal-typed setter has ----
+    //
+    // The rule (stated on Element.withReactiveAttr): a setter is a CHANNEL — patching in place, returning
+    // `Self`, chainable — exactly when its value maps to one plain HTML attribute whose written value is the
+    // live state; otherwise it wraps the element in a `Reactive` and re-renders it. The split used to be
+    // historical, and these pin it so it stays a rule. A channel setter that silently became a wrapper again
+    // would cost a subtree repaint per emission without changing a single rendered byte.
+
+    "a channel setter returns Self and stays chainable" in {
+        val flag            = Signal.initConst(false)
+        val text            = Signal.initConst("t")
+        val el: SpanElement = UI.span("x").hidden(flag).title(text).cssClass("c", flag).id("after")
+        val link: Anchor    = UI.a("l").href(Signal.initConst(UI.Href.Path("/p"))).id("also-after")
+        assert(el.attrs.reactiveBoolAttrs.contains("hidden"))
+        assert(el.attrs.identifier == Present("after"))
+        assert(link.attrs.reactiveAttrs.contains("href") && link.attrs.identifier == Present("also-after"))
     }
 
-    // Element.style(Signal) returns Reactive[Self]
-    "Element.style(Signal) returns Reactive[Self]" in {
+    "a channel beats a static value in either setter order" in {
+        // The precedence rule (also stated on withReactiveAttr): where a channel exists it IS the value. Both
+        // orders have to agree, because the client makes them agree at runtime whatever the HTML said — its
+        // patch sets and removes the attribute on every emission. Rendering `disabled` here from the static
+        // value would paint a control the first patch then contradicts.
+        val off = Signal.initConst(false)
+        for
+            a <- renderHtml(UI.button("x").disabled(true).disabled(off))
+            b <- renderHtml(UI.button("x").disabled(off).disabled(true))
+            c <- renderHtml(UI.div("x").hidden(true).hidden(off))
+        yield
+            assert(!a.contains("disabled"), s"static won over the channel: $a")
+            assert(!b.contains("disabled"), s"static won over the channel: $b")
+            assert(!c.contains("hidden"), s"static won over the channel: $c")
+        end for
+    }
+
+    "a setter that no single attribute can carry stays a Reactive wrapper" in {
+        // style: a pseudo-state Style becomes a generated class plus an injected rule, not an inline value.
         val sig                      = Signal.initConst(Style.empty)
         val r: Reactive[SpanElement] = UI.span("x").style(sig)
         assert(r.isInstanceOf[Reactive[?]])
@@ -86,11 +114,13 @@ class UIReactiveTypingTest extends kyo.test.Test[Any]:
         assert(r2.isInstanceOf[Reactive[?]])
     }
 
-    // SVG element inherits Signal setter returning Reactive[Self]
-    "SVG element inherits Signal setter as Reactive[Self]" in {
-        val boolSig                 = Signal.initConst(false)
-        val r: Reactive[Svg.Circle] = Svg.circle.cx(1).cy(1).r(1).hidden(boolSig)
-        assert(r.isInstanceOf[Reactive[?]])
+    // SVG elements inherit the Signal setters from Element, so they follow the same split.
+    "SVG element inherits both setter shapes" in {
+        val boolSig                       = Signal.initConst(false)
+        val channel: Svg.Circle           = Svg.circle.cx(1).cy(1).r(1).hidden(boolSig)
+        val wrapper: Reactive[Svg.Circle] = Svg.circle.cx(1).cy(1).r(1).style(Signal.initConst(Style.empty))
+        assert(channel.attrs.reactiveBoolAttrs.contains("hidden"))
+        assert(wrapper.isInstanceOf[Reactive[?]])
     }
 
 end UIReactiveTypingTest
