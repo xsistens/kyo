@@ -320,29 +320,25 @@ private[kyo] object DomBackend:
     /** Exchange that renders UI to HTML and applies directly to the DOM. */
     private class LocalExchange(root: ReactiveUI) extends UIExchange:
 
-        // In-place attr patch, ownership-marked (__kyoOwn) so a parent region's morph won't reconcile the live value back.
-        override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
-            Sync.defer {
-                val el = queryByPath(path)
-                if el != null then
-                    markOwned(el, name)
-                    el.setAttribute(name, value)
-            }
+        // Each channel patches in place and marks the attribute owned (__kyoOwn), so a parent region's morph
+        // will not reconcile the live value back. The `*Now` forms are the patches themselves, written without
+        // the Sync wrapper for a caller that already holds the thread (see UIExchange's synchronous sinks); the
+        // effectful twins do nothing but defer to them, so the two can never drift apart.
+        private def attrPatchNow(path: Seq[String], name: String, value: String): Unit =
+            val el = queryByPath(path)
+            if el != null then
+                markOwned(el, name)
+                el.setAttribute(name, value)
+        end attrPatchNow
 
-        override def onBoolAttrPatch(path: Seq[String], name: String, value: Boolean)(using Frame): Unit < Async =
-            Sync.defer {
-                val el = queryByPath(path)
-                if el != null then
-                    markOwned(el, name)
-                    if value then el.setAttribute(name, "") else el.removeAttribute(name)
-            }
+        private def boolAttrPatchNow(path: Seq[String], name: String, value: Boolean): Unit =
+            val el = queryByPath(path)
+            if el != null then
+                markOwned(el, name)
+                if value then el.setAttribute(name, "") else el.removeAttribute(name)
+        end boolAttrPatchNow
 
-        // Class twin: toggle in place (so CSS transitions fire) rather than re-render; own "class" against the morph.
-        override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
-            Sync.defer(classPatchNow(path, name, on))
-
-        // The same patch without the Sync wrapper, for a caller that already holds the thread (see
-        // UIExchange.classPatcherNow). onClassPatch delegates to it so the two cannot drift apart.
+        // Toggle in place (so CSS transitions fire) rather than re-render; owns "class" against the morph.
         private def classPatchNow(path: Seq[String], name: String, on: Boolean): Unit =
             val el = queryByPath(path)
             if el != null then
@@ -350,8 +346,18 @@ private[kyo] object DomBackend:
                 discard(el.classList.toggle(name, on))
         end classPatchNow
 
-        override val classPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit] =
-            Present(classPatchNow)
+        override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
+            Sync.defer(attrPatchNow(path, name, value))
+
+        override def onBoolAttrPatch(path: Seq[String], name: String, value: Boolean)(using Frame): Unit < Async =
+            Sync.defer(boolAttrPatchNow(path, name, value))
+
+        override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
+            Sync.defer(classPatchNow(path, name, on))
+
+        override val attrPatcherNow: Maybe[(Seq[String], String, String) => Unit]      = Present(attrPatchNow)
+        override val boolAttrPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit] = Present(boolAttrPatchNow)
+        override val classPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit]    = Present(classPatchNow)
 
         def onChange(path: Seq[String], ui: UI, mount: Boolean)(using Frame): Unit < Async =
             // Render content at its nested-reactive sub-path (contentPath) so a reactive-valued region paints a
