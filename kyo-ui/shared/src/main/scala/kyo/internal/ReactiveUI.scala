@@ -464,17 +464,14 @@ private[kyo] object ReactiveUI:
       * enabled — silently, because a browser suppresses the click on a rendered `disabled` button, so it shows
       * only where dispatch decides for itself: the server transport, and any forged event.
       *
-      * Either source alone means set, which is what the renderer paints: it emits the static attribute and
-      * then appends the channel's when true. Using BOTH setters on one element remains ill-defined (the
-      * client's channel patch removes the attribute on false, including a statically-set one) and is left
-      * alone here rather than papered over.
+      * WHERE A CHANNEL EXISTS, THE CHANNEL IS THE VALUE — the static field is not consulted at all. Same rule
+      * the renderer follows (`renderElementAttrs`), and the only one consistent with the client, whose channel
+      * patch sets and REMOVES the attribute on every emission whatever the initial HTML said.
       */
-    private def boolAttrNow(elem: Element, name: String, static: Boolean)(using Frame): Boolean < Sync =
-        if static then true
-        else
-            elem.attrs.reactiveBoolAttrs.get(name) match
-                case Some(sig) => sig.current
-                case None      => false
+    private def boolAttrNow(elem: Element, name: String, static: => Boolean)(using Frame): Boolean < Sync =
+        elem.attrs.reactiveBoolAttrs.get(name) match
+            case Some(sig) => sig.current
+            case None      => static
 
     /** Check if element is disabled. */
     private def isDisabled(elem: Element)(using Frame): Boolean < Sync =
@@ -506,9 +503,11 @@ private[kyo] object ReactiveUI:
         if !isTarget then body
         else inert.map(i => if i then true else body)
 
-    /** Check if element is hidden. */
-    private def isHidden(elem: Element): Boolean =
-        elem.attrs.hidden.getOrElse(false)
+    /** Check if element is hidden. Reads the channel too: `.hidden(Signal)` installs a boolean-attribute
+      * channel exactly like `.disabled(Signal)`, so the static field is empty whenever the signal form was used.
+      */
+    private def isHidden(elem: Element)(using Frame): Boolean < Sync =
+        boolAttrNow(elem, "hidden", elem.attrs.hidden.getOrElse(false))
 
     /** Resolve the (possibly reactive) node at `targetPath` and test `predicate` against the concrete element there.
       *
@@ -604,7 +603,7 @@ private[kyo] object ReactiveUI:
         event match
             case ev: UIEvent.Click =>
                 // Disabled or hidden elements ignore their own click handler, but allow bubbling
-                unlessInert(isTarget, isDisabled(elem).map(_ || isHidden(elem))) {
+                unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isHidden(elem))) {
                     val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
                     val self = if isTarget then
                         invoke(attrs.onClickSelf).andThen(invokeWith(attrs.onClickSelfEvt, mouse))
@@ -1512,29 +1511,6 @@ private[kyo] object ReactiveUI:
             case _                  => Absent
         end match
     end findPathById
-
-    /** Find all focusable element IDs in document order from a resolved UI tree. Skips disabled and hidden elements.
-      */
-    def findAllFocusableIds(ui: UI): Seq[String] =
-        val builder = Seq.newBuilder[String]
-        def walk(node: UI): Unit = node match
-            case elem: Element =>
-                val disabled = elem match
-                    case hd: HasDisabled => hd.disabled.getOrElse(false)
-                    case _               => false
-                val hidden = elem.attrs.hidden.getOrElse(false)
-                if !disabled && !hidden then
-                    val focusable = elem.isInstanceOf[Focusable] || elem.attrs.tabIndex.nonEmpty
-                    if focusable then
-                        elem.attrs.identifier.foreach(id => builder += id)
-                end if
-                elem.children.foreach(walk)
-            case Fragment(children)   => children.foreach(walk)
-            case KeyedChild(_, child) => walk(child)
-            case _                    => ()
-        walk(ui)
-        builder.result()
-    end findAllFocusableIds
 
     /** Find element by ID in a resolved UI tree. */
     def findElementById(ui: UI, id: String): Maybe[Element] =
