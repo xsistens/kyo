@@ -98,39 +98,63 @@ private[kyo] object UIServer:
             // already belongs to.
             private val sentClasses = scala.collection.mutable.Set.from(seenClasses)
 
+            // runPartial drops only a Closed (the socket closed mid-render -> the op is moot); a Panic
+            // propagates to the region fiber rather than being swallowed by the discard.
+            private def send(op: HtmlOp)(using Frame): Unit < Async =
+                Abort.runPartial[Closed](ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](op)))).unit
+
+            /** Send `op`, preceded by the pseudo-state rules this connection has not seen yet.
+              *
+              * The rules go FIRST so the element never paints unstyled between the two frames, and each is
+              * recorded so a later paint reusing the class does not re-send it.
+              */
+            private def sendStyled(rules: Chunk[(String, String)], op: HtmlOp)(using Frame): Unit < Async =
+                val newRules = rules.filterNot(r => sentClasses.contains(r._1))
+                if newRules.isEmpty then send(op)
+                else
+                    newRules.foreach(r => sentClasses += r._1)
+                    send(HtmlOp.InjectCss(newRules.map(_._2).mkString)).andThen(send(op))
+                end if
+            end sendStyled
+
             def onChange(path: Seq[String], ui: UI, mount: Boolean)(using Frame): Unit < Async =
                 // Content at its nested-reactive sub-path (matches SSR/walkStatic). The payload is the region's
                 // bare content fragment: the client patches between the region's live comment markers, which are
                 // never re-sent. `mountSlot = true` stamps the `s` flag on Mounted placeholders so the client
                 // morph tells the same mount from colliding content (twin of DomBackend.onChange).
                 HtmlRenderer.renderWithCss(ui, HtmlRenderer.contentPath(path, ui), mountSlot = true).map { (html, rules) =>
-                    val newRules  = rules.filterNot(r => sentClasses.contains(r._1))
-                    val replaceOp = HtmlOp.Replace(path, html, mount)
-                    // runPartial drops only a Closed (the socket closed mid-render -> the op is moot); a Panic
-                    // propagates to the region fiber rather than being swallowed by the discard.
-                    val sendReplace =
-                        Abort.runPartial[Closed](ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](replaceOp)))).unit
-                    if newRules.isEmpty then sendReplace
-                    else
-                        newRules.foreach(r => sentClasses += r._1)
-                        val injectOp = HtmlOp.InjectCss(newRules.map(_._2).mkString)
-                        // Send the new pseudo-state rule(s) before the replace that introduces the class
-                        // referencing them, so the element never paints unstyled between the two frames.
-                        Abort.runPartial[Closed](ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](injectOp)))).unit
-                            .andThen(sendReplace)
-                    end if
+                    sendStyled(rules, HtmlOp.Replace(path, html, mount))
                 }
-            end onChange
+
+            /** Render ONLY the rows flagged changed, and send the row order alongside them.
+              *
+              * Same trade as `DomBackend`'s override, except the saving is bandwidth rather than parse time:
+              * dropping one row of a thousand puts a few hundred bytes on the wire where the whole-fragment
+              * Replace put the entire rendered list. Retained rows are named by key and never rendered, so
+              * their live DOM — including in-place channel patches that were never part of any payload —
+              * survives untouched.
+              *
+              * No fallback here, and none is possible: once the untouched rows have been left out of the
+              * frame, the client has nothing to rebuild them from. `ReactiveUI` therefore only emits a list
+              * patch for an emission whose rows are addressable at all (see its `addressable` gate); this
+              * override is reached solely for those.
+              */
+            override def onListPatch(path: Seq[String], rows: Seq[ListRow])(using Frame): Unit < Async =
+                val changed = rows.filter(_.changed)
+                Kyo.foreach(Chunk.from(changed))(row =>
+                    HtmlRenderer.renderWithCss(row.ui, path :+ row.key, mountSlot = true)
+                ).map { rendered =>
+                    val op = HtmlOp.PatchList(path, rows.map(_.key), changed.map(_.key), rendered.map(_._1).mkString)
+                    sendStyled(rendered.flatMap(_._2), op)
+                }
+            end onListPatch
 
             override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
-                val op = HtmlOp.SetAttrByPath(path, name, value)
-                Abort.runPartial[Closed](ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](op)))).unit
+                send(HtmlOp.SetAttrByPath(path, name, value))
             override def onBoolAttrPatch(path: Seq[String], name: String, value: Boolean)(using Frame): Unit < Async =
-                val op = HtmlOp.SetBoolAttrByPath(path, name, value)
-                Abort.runPartial[Closed](ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](op)))).unit
+                send(HtmlOp.SetBoolAttrByPath(path, name, value))
             override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
-                val op = HtmlOp.SetClassByPath(path, name, on)
-                Abort.runPartial[Closed](ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](op)))).unit
+                send(HtmlOp.SetClassByPath(path, name, on))
 
     private def dispatchEvent(
         handle: (Seq[String], UIEvent) => Boolean < Async,

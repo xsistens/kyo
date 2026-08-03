@@ -54,6 +54,12 @@ private[kyo] trait UIExchange:
       *
       * The default reassembles the fragment and goes through [[onChange]], which is byte-for-byte the old
       * behavior: a transport that cannot address rows individually loses nothing by not overriding.
+      *
+      * CONTRACT for implementers: every row here paints exactly ONE logical child named by `path :+ key` — an
+      * element carrying that `data-kyo-path`, or a marker span opened at it — and the keys are unique within
+      * the emission. `ReactiveUI` checks both before calling (`HtmlRenderer.paintsAsKeyedRoot`) and sends the
+      * whole-fragment paint instead when either fails, because a transport that puts the command on a wire
+      * cannot discover it afterwards: the rows it left out are not on the far side to fall back to.
       */
     def onListPatch(path: Seq[String], rows: Seq[ListRow])(using Frame): Unit < Async =
         onChange(path, Fragment[UI](Chunk.from(rows.map(r => KeyedChild[UI](r.key, r.ui)))))
