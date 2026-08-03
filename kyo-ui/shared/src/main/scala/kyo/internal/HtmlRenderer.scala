@@ -405,7 +405,8 @@ private[kyo] object HtmlRenderer:
             case Present(cls) => attrs.cssClasses :+ cls
             case Absent       => attrs.cssClasses
         if classes.nonEmpty then w(sb, s""" class="${esc(classes.mkString(" "))}"""")
-        attrs.hidden.foreach(v => if v then w(sb, " hidden"))
+        // Skipped when a `.hidden(Signal)` channel owns the attribute; see renderElementAttrs on precedence.
+        if !attrs.reactiveBoolAttrs.contains("hidden") then attrs.hidden.foreach(v => if v then w(sb, " hidden"))
         attrs.tabIndex.foreach(n => w(sb, s""" tabindex="$n""""))
         attrs.focusTrap.foreach(v => if v then w(sb, """ data-kyo-focus-trap="1""""))
         attrs.focusGroup.foreach(id => w(sb, s""" data-kyo-focus-group="${esc(id)}""""))
@@ -472,6 +473,15 @@ private[kyo] object HtmlRenderer:
             }.map(_.filter(_.nonEmpty))
 
     private def renderElementAttrs(sb: StringBuilder, elem: Element)(using Frame): Unit < Sync =
+        // WHERE A CHANNEL EXISTS, THE CHANNEL IS THE VALUE. Shadows the file-level `boolAttr` for the whole
+        // method, so a static value is dropped for any name a `Signal`-typed setter also bound. This is not a
+        // preference — it is what the client already does at runtime: the channel patches its attribute on
+        // every emission and REMOVES it on false, whatever the initial HTML said. Writing both here would
+        // paint an attribute the first patch then contradicts, and would leave `.disabled(true).disabled(sig)`
+        // meaning something different from `.disabled(sig).disabled(true)`.
+        def boolAttr(sb: StringBuilder, name: String, value: Maybe[Boolean]): Unit =
+            if !elem.attrs.reactiveBoolAttrs.contains(name) then HtmlRenderer.boolAttr(sb, name, value)
+        def owned(name: String): Boolean = elem.attrs.reactiveAttrs.contains(name)
         elem match
             case ci: ConstrainedInput => renderInputConstraints(sb, ci)
             case _                    => ()
@@ -605,14 +615,7 @@ private[kyo] object HtmlRenderer:
                 opt.value.foreach(v => w(sb, s""" value="${esc(v)}""""))
                 boolAttr(sb, "selected", opt.selected)
             case a: Anchor =>
-                a.href.foreach { href =>
-                    val value = href match
-                        case Href.Absolute(url)       => url.full
-                        case Href.Path(p)             => p
-                        case Href.Fragment(id)        => s"#$id"
-                        case Href.External(scheme, v) => s"$scheme:$v"
-                    w(sb, s""" href="${esc(value)}"""")
-                }
+                if !owned("href") then a.href.foreach(href => w(sb, s""" href="${esc(Href.attrValue(href))}""""))
                 a.target.foreach { t =>
                     val tv = t match
                         case Target.Self   => "_self"
@@ -622,16 +625,10 @@ private[kyo] object HtmlRenderer:
                     w(sb, s""" target="$tv"""")
                 }
             case img: Img =>
-                img.src.foreach { src =>
-                    val value = src match
-                        case ImgSrc.Absolute(url)       => url.full
-                        case ImgSrc.Path(p)             => p
-                        case ImgSrc.Data(mime, payload) => s"data:$mime;base64,$payload"
-                    w(sb, s""" src="${esc(value)}"""")
-                }
+                if !owned("src") then img.src.foreach(src => w(sb, s""" src="${esc(ImgSrc.attrValue(src))}""""))
                 img.alt.foreach(a => w(sb, s""" alt="${esc(a)}""""))
             case f: Iframe =>
-                f.src.foreach(s => w(sb, s""" src="${esc(s)}""""))
+                if !owned("src") then f.src.foreach(s => w(sb, s""" src="${esc(s)}""""))
                 f.frameTitle.foreach(t => w(sb, s""" title="${esc(t)}""""))
             case td: Td =>
                 td.colspan.foreach(n => w(sb, s""" colspan="$n""""))
