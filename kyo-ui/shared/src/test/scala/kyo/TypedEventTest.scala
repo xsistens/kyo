@@ -208,13 +208,15 @@ class TypedEventTest extends kyo.test.Test[Any]:
             assert(result.get.targetId == Present("my-input"))
     }
 
-    // ---- dispatch resolves the click target through a Reactive boundary ----
+    // ---- dispatch reads the CURRENT state behind a signal-typed setter ----
     //
-    // A signal-typed setter such as `.disabled(Signal)` wraps its element in a `Reactive`. The
-    // server-side dispatch must still recognise the wrapped element by its concrete type (Button) and
-    // read its current attributes (disabled), otherwise a submit button wrapped in `.disabled(valid)`
-    // (the canonical "enable submit only when valid" pattern) no longer submits the form. Regression
-    // for that bug.
+    // `.disabled(Signal)` and `.readOnly(Signal)` do not wrap their element: they register a
+    // boolean-attribute channel that patches the live attribute in place, leaving the static field empty.
+    // Server-side dispatch is the authority on whether an event reaches its handler, so it has to read the
+    // channel — otherwise every signal-disabled element counts as enabled, and the canonical "enable submit
+    // only when valid" pattern submits an invalid form. (A real browser suppresses the click on a rendered
+    // disabled button, which is why this hides until dispatch decides on its own: the server transport, and
+    // any forged event.)
 
     "Form.onSubmit fires when a Click targets a submit button wrapped in .disabled(Signal=false)" in {
         for
@@ -225,10 +227,48 @@ class TypedEventTest extends kyo.test.Test[Any]:
                 UI.button("Go").id("go").disabled(disabled)
             )
             dispatch <- makeDispatch(form)
-            // The button (index 1) is wrapped in a Reactive, so its path is the wrapper's path Seq("1").
+            // The button is the form's second child, so it answers to Seq("1").
             _      <- dispatch(Seq("1"), UIEvent.Click(Seq("1"), MouseEventData(UI.Modifiers.none, Present("go"))))
             result <- fired.get
         yield assert(result)
+    }
+
+    "a Signal-disabled element ignores its own click handler" in {
+        // Wider than the form-submit pair below and from the same cause: EVERY inert-target guard reads the
+        // static `disabled` field, which a Signal-typed setter never fills.
+        for
+            fired    <- AtomicRef.init(false)
+            disabled <- Signal.initRef(true)
+            ui = UI.div(UI.button("Go").id("go").disabled(disabled).onClick(fired.set(true)))
+            dispatch <- makeDispatch(ui)
+            _        <- dispatch(Seq("0"), UIEvent.Click(Seq("0"), MouseEventData(UI.Modifiers.none, Present("go"))))
+            blocked  <- fired.get
+            _        <- disabled.set(false)
+            _        <- dispatch(Seq("0"), UIEvent.Click(Seq("0"), MouseEventData(UI.Modifiers.none, Present("go"))))
+            allowed  <- fired.get
+        yield
+            assert(!blocked, "a disabled button ran its own onClick")
+            assert(allowed, "re-enabling did not restore the handler")
+        end for
+    }
+
+    "a Signal-readOnly input ignores onInput" in {
+        // `.readOnly(Signal)` is the twin channel of `.disabled(Signal)`: same setter shape, same blind spot.
+        // Here the guard also gates the bound-ref write, so a read-only field would edit its own model.
+        for
+            fired    <- AtomicRef.init(false)
+            readOnly <- Signal.initRef(true)
+            ui = UI.div(UI.input.id("x").readOnly(readOnly).onInput(_ => fired.set(true)))
+            dispatch <- makeDispatch(ui)
+            _        <- dispatch(Seq("0"), UIEvent.Input(Seq("0"), "typed"))
+            blocked  <- fired.get
+            _        <- readOnly.set(false)
+            _        <- dispatch(Seq("0"), UIEvent.Input(Seq("0"), "typed"))
+            allowed  <- fired.get
+        yield
+            assert(!blocked, "a read-only input ran its onInput")
+            assert(allowed, "clearing read-only did not restore the handler")
+        end for
     }
 
     "Form.onSubmit does NOT fire when the wrapped submit button is disabled via Signal=true" in {
