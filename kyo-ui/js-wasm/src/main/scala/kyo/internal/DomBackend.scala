@@ -567,9 +567,12 @@ private[kyo] object DomBackend:
             i += 1
         end while
 
+        // Focus spans the WHOLE region, not just the disturbed rows. A retained row keeps its DOM, but MOVING
+        // it is a remove-and-insert, and that blurs whatever it holds — so a pure reorder, which disturbs no
+        // row at all, is precisely the case that drops the caret if this is scoped to `disturbed`.
         val ae = document.activeElement
         val activePath =
-            if ae == null || (ae eq document.body) || !containedIn(disturbed, ae) then null
+            if ae == null || (ae eq document.body) || !rangeContains(r, ae) then null
             else if ae.hasAttribute("data-kyo-path") then ae.getAttribute("data-kyo-path")
             else pathAttr
         val (selStart, selEnd) = if activePath != null then readSelection(ae) else (Absent, Absent)
@@ -667,19 +670,6 @@ private[kyo] object DomBackend:
         foreachLogicalElement(nodes)(el => acc = acc ++ f(el))
         acc
     end pathsOver
-
-    /** True when `node` is one of `nodes` or a descendant of one (spans included). */
-    private def containedIn(nodes: js.Array[dom.Node], node: dom.Node): Boolean =
-        var i     = 0
-        var found = false
-        while !found && i < nodes.length do
-            eachSpanNode(nodes(i)) { n =>
-                if (n eq node) || (n.nodeType == 1 && n.asInstanceOf[dom.Element].contains(node)) then found = true
-            }
-            i += 1
-        end while
-        found
-    end containedIn
 
     /** Assign a text-only payload to a region that currently holds exactly one text node, and report
       * whether that applied. Both shapes have to match: a region holding elements needs the morph, and a
