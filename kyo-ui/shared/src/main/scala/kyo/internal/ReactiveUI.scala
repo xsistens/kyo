@@ -1194,9 +1194,26 @@ private[kyo] object ReactiveUI:
                                         collectMountKeys(built.toSeq.flatMap((_, _, _, kids, _, _) => kids)),
                                         collectMountKeys(built.toSeq.collect { case (_, _, _, kids, _, Present(_)) => kids }.flatten)
                                     )
-                                    fragment =
-                                        Fragment[UI](Chunk.from(built.toSeq.map((key, _, rowUI, _, _, _) => KeyedChild[UI](key, rowUI))))
-                                    _ <- exchange.onChange(path, fragment)
+                                    // A structural command addresses rows BY KEY, so it can say nothing useful
+                                    // about an emission whose keys are not unique — two rows would name one
+                                    // slot. That emission already rebuilds every row and warns; it also keeps
+                                    // the whole-fragment paint, where duplicates degrade positionally instead
+                                    // of aliasing. `retained.isEmpty` is exactly "this row was re-rendered
+                                    // above": retained iff key survived AND item compared equal, which is the
+                                    // same condition under which the row's DOM was left alone.
+                                    _ <-
+                                        if duplicates then
+                                            exchange.onChange(
+                                                path,
+                                                Fragment[UI](Chunk.from(built.toSeq.map((key, _, rowUI, _, _, _) =>
+                                                    KeyedChild[UI](key, rowUI)
+                                                )))
+                                            )
+                                        else
+                                            exchange.onListPatch(
+                                                path,
+                                                built.toSeq.map((key, _, rowUI, _, _, retained) => ListRow(key, rowUI, retained.isEmpty))
+                                            )
                                     finalRows <- Kyo.foreach(built) { (key, item, rowUI, kids, hdl, retained) =>
                                         retained match
                                             case Present(inst) => Kyo.lift(inst)
