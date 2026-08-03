@@ -270,6 +270,41 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                     self.unsafeObserveProjected[C](a => proj(f(a)), baseline, cb)(using canEqualC, allow, frame)
         )
 
+    /** This signal's CHANGES, carrying `b` in place of its own values.
+      *
+      * Deliberately NOT `map(_ => b)`. Observation deduplicates on the IMAGE, so a constant image collapses to a
+      * single delivery however often the source moves — correct for a projection, since the observer's view
+      * genuinely did not change, and wrong for a caller whose emitted value is a stable HANDLE and whose content
+      * is rebuilt from the source at delivery time. Such a caller needs the source's own change detection, which
+      * is what this keeps: every arm below observes the source on ITS values and hands over the constant.
+      *
+      * The baseline is in `b`'s space and `b` is the only value there, so it can only mean "the caller has
+      * already processed one delivery": that is honoured by seeding the SOURCE observation with the source's
+      * current value, after which every source change delivers again.
+      *
+      * The raw callback path deliberately declines (`Absent`, the trait default): its subscriber deduplicates on
+      * the image too, which is the same trap one layer down.
+      */
+    private[kyo] def changesTo[B](b: B)(using canEqualB: CanEqual[B, B], frame: Frame): Signal[B] =
+        def observeSource[S](skipFirst: Boolean, ri: Duration, deliver: Unit < (S & Async & Scope))(
+            using Frame
+        ): Unit < (S & Async) =
+            if skipFirst then self.currentWith(a0 => self.observe[S](Present(a0), ri)(_ => deliver))
+            else self.observe[S](Absent, ri)(_ => deliver)
+        Signal._initRawF(
+            [C, S] => g => self.currentWith(_ => g(b)),
+            [C, S] => g => self.nextWith(_ => g(b)),
+            [S] => (baseline, ri, g) => observeSource[S](baseline.exists(_ == b), ri, g(b)),
+            [C, S] =>
+                (proj, baseline, ri, g, canEqualC) =>
+                    given CanEqual[C, C] = canEqualC
+                    val image            = proj(b)
+                    observeSource[S](baseline.exists(_ == image), ri, g(image))
+            ,
+            [C] => (_, _, _, _, _) => Absent
+        )
+    end changesTo
+
     /** Dynamically switches to an inner signal based on the current value.
       *
       * When the outer signal changes, switches to the new inner signal produced by `f`. When the current inner signal changes, propagates
