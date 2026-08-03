@@ -6,16 +6,18 @@ import scala.language.implicitConversions
 
 /** Chrome-backed regressions for a keyed list under the structural list command, over the SERVER transport.
   *
-  * `withUI` serves the app through `UI.runHandlers`, so what runs here is `UIExchange`'s DEFAULT
-  * `onListPatch` — the one that reassembles the whole fragment and hands it to `onChange`. That is the point:
-  * introducing a structural command must leave every transport that does not implement it painting exactly
-  * what it painted before, and this is the suite that says so. `DomBackend`'s own override is Scala.js-only
-  * and has no DOM harness in this build; it is covered by the browser bundle's smoke run.
+  * `withUI` serves the app through `UI.runHandlers`, so what these drive is the real socket and the real
+  * client script: `UIServer.onListPatch` sends `HtmlOp.PatchList`, and the page reconciles it in
+  * `__kyoApplyList`. That client half is a hand-written JavaScript twin of `DomBackend.applyListPatchIn` living
+  * inside a string constant, so no compiler checks a word of it and this suite is what does. (No-oping
+  * `__kyoApplyList` fails eight of the nine leaves below; the ninth is the fallback case.) `DomBackend`'s own
+  * override is Scala.js-only and has no DOM harness in this build — the browser bundle's smoke run covers it.
   *
   * Every assert is about placement — which rows, in what order, how many. A test that only checked presence
   * would pass on a list that reconciled into the wrong sequence, which is the failure this path can produce.
   *
-  * [[ListPatchProtocolTest]] covers the command the region emits; this covers painting it unchanged.
+  * [[ListPatchProtocolTest]] covers the command the region emits and [[ListPatchWireTest]] what reaches the
+  * socket; this covers what the client makes of it.
   */
 class ListPatchDomTest extends UITest:
 
@@ -136,6 +138,55 @@ class ListPatchDomTest extends UITest:
                 _ <- Browser.assertCount(Selector.css("span.l"), 2)
                 _ <- Browser.assertCount(Selector.css("span.r"), 2)
                 _ <- Browser.assertPageTextOrder(Seq("a", "a!", "c", "c!"))
+            yield succeed
+        }
+    }
+
+    "a moved row keeps focus AND the caret inside it" in {
+        // The assumption this catches out: "a retained row cannot lose the caret, so every pass may skip it".
+        // True for a row left in place, FALSE for one moved — insertBefore on a live node is a remove and an
+        // insert, and that blurs whatever it holds. A pure reorder disturbs no row at all, which makes it
+        // exactly the case a focus capture scoped to the disturbed rows gets wrong.
+        val ui: UI < Async =
+            for rows <- Signal.initRef(Chunk("a", "b", "c"))
+            yield UI.div(
+                UI.ul(rows.foreachKeyed(identity)(item => UI.li(UI.input.id(s"i-$item")))),
+                UI.button("go").id("go").onClick(rows.set(Chunk("c", "b", "a")))
+            )
+        withUI(ui) {
+            for
+                _ <- Browser.fill(Selector.id("i-b"), "hello")
+                _ <- Browser.evalDiscard("document.getElementById('i-b').focus();document.getElementById('i-b').setSelectionRange(2,2)")
+                // The reorder is triggered through `.click()` rather than a real mouse click, which would
+                // move focus to the button first and leave nothing in the region to preserve.
+                _     <- Browser.evalDiscard("document.getElementById('go').click()")
+                _     <- Browser.assertFocused(Selector.id("i-b"))
+                caret <- Browser.evalInt("document.getElementById('i-b').selectionStart")
+            yield assert(caret == 2, s"caret landed at $caret")
+        }
+    }
+
+    "rows that are regions rather than elements move as whole spans" in {
+        // A row whose root is a reactive region owns no element of its own: it paints a marker span, is keyed
+        // by its region path, and has to be moved marker-and-content together. Bumping the inner signal
+        // AFTERWARDS is the second half of the test — a span that lost its registry entry on the way past
+        // would sit there silently ignoring its own updates.
+        val ui: UI < Async =
+            for
+                rows <- Signal.initRef(Chunk("a", "b", "c"))
+                n    <- Signal.initRef(1)
+            yield UI.div(
+                UI.div(rows.foreachKeyed(identity)(item => (n.map(v => UI.span(s"$item$v").cssClass("row"): UI): UI))),
+                UI.button("go").id("go").onClick(rows.set(Chunk("c", "a"))),
+                UI.button("bump").id("bump").onClick(n.set(2))
+            )
+        withUI(ui) {
+            for
+                _ <- Browser.click(Selector.id("go"))
+                _ <- Browser.assertCount(Selector.css("span.row"), 2)
+                _ <- Browser.assertPageTextOrder(Seq("c1", "a1"))
+                _ <- Browser.click(Selector.id("bump"))
+                _ <- Browser.assertPageTextOrder(Seq("c2", "a2"))
             yield succeed
         }
     }

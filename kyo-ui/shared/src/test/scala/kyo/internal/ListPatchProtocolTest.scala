@@ -125,6 +125,41 @@ class ListPatchProtocolTest extends kyo.test.Test[Any]:
         }
     }
 
+    "a row no key can name falls back to the whole-list fragment" in {
+        Scope.run {
+            for
+                rows <- Signal.initRef(Chunk("a", "b"))
+                rec = new Recording
+                // Each row paints two roots, under `path.a.0` and `path.a.1`; nothing carries `path.a`, so no
+                // key names the row. A transport that sends the command over a wire cannot discover this and
+                // re-send, so the emission has to be refused HERE rather than by the backend.
+                ui = UI.ul(rows.foreachKeyed(identity)(item => UI.fragment(UI.li(item), UI.li(item + "!"))))
+                root <- ReactiveUI.normalize(ui, Seq.empty)
+                _    <- ReactiveUI.subscribe(root, rec.exchange)
+                _    <- Async.sleep(100.millis)
+                _    <- rows.set(Chunk("a"))
+                _    <- assertEventually(Sync.defer(rec.fragments.get >= 1))
+            yield assert(rec.count == 0)
+        }
+    }
+
+    "a text row falls back too" in {
+        Scope.run {
+            for
+                rows <- Signal.initRef(Chunk("a", "b"))
+                rec = new Recording
+                // A text root carries no path at all — the other way a row can be unaddressable, and the one
+                // a root-COUNTING check would wave through.
+                ui = UI.ul(rows.foreachKeyed(identity)(item => UI.Ast.Text(item)))
+                root <- ReactiveUI.normalize(ui, Seq.empty)
+                _    <- ReactiveUI.subscribe(root, rec.exchange)
+                _    <- Async.sleep(100.millis)
+                _    <- rows.set(Chunk("a"))
+                _    <- assertEventually(Sync.defer(rec.fragments.get >= 1))
+            yield assert(rec.count == 0)
+        }
+    }
+
     "an exchange that does not implement the command still receives every row" in {
         Scope.run {
             for
