@@ -359,6 +359,17 @@ private[kyo] object DomBackend:
         override val boolAttrPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit] = Present(boolAttrPatchNow)
         override val classPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit]    = Present(classPatchNow)
 
+        // Render ONLY the changed rows, and as ONE payload rather than one parse per row: a full replacement
+        // must not lose the single bulk parse it has today just because a one-row removal wants to skip it.
+        override def onListPatch(path: Seq[String], rows: Seq[ListRow])(using Frame): Unit < Async =
+            Kyo.foreach(Chunk.from(rows.filter(_.changed)))(row =>
+                HtmlRenderer.render(row.ui, path :+ row.key, mountSlot = true)
+            ).map(htmls => Sync.defer(applyListPatch(path, rows, htmls.mkString))).map { applied =>
+                // Rows that cannot be addressed one-to-one leave the DOM untouched (see applyListPatchIn) and
+                // fall through to the inherited whole-list repaint, which needs no per-row structure at all.
+                if applied then Kyo.unit else super.onListPatch(path, rows)
+            }
+
         def onChange(path: Seq[String], ui: UI, mount: Boolean)(using Frame): Unit < Async =
             // Render content at its nested-reactive sub-path (contentPath) so a reactive-valued region paints a
             // DISTINCT inner marker span matching SSR/walkStatic. mountSlot=true stamps the `s` flag on Mounted
@@ -457,6 +468,226 @@ private[kyo] object DomBackend:
                 }
             }
     end LocalExchange
+
+    /** Apply a keyed structural list patch to the live region at `path`.
+      *
+      * `changedHtml` is the concatenated render of exactly the rows flagged changed; a retained row contributes
+      * nothing to it and is never re-rendered, re-parsed or re-diffed. That is the whole point: `onChange` is
+      * payload-shaped, so it must render, parse and morph the entire list to express "one row left", and pays
+      * the size of the LIST for the size of the CHANGE.
+      */
+    private def applyListPatch(path: Seq[String], rows: Seq[ListRow], changedHtml: String): Boolean =
+        val pathAttr = path.mkString(".")
+        val r        = lookupRegion(pathAttr)
+        // A keyed list region always renders a marker pair, so a null lookup means "never painted": nothing to
+        // patch here, and nothing a full repaint would find either.
+        if r == null then true
+        else
+            val parent      = r.start.parentNode.asInstanceOf[dom.Element]
+            val toContainer = if changedHtml.isEmpty then null else parseToContainer(parent, changedHtml)
+            // Unparseable payload: hand back to the full repaint rather than reconcile against nothing.
+            if changedHtml.nonEmpty && toContainer == null then false
+            else applyListPatchIn(r, parent, pathAttr, rows, toContainer)
+            end if
+        end if
+    end applyListPatch
+
+    /** The reconciliation half of [[applyListPatch]], against an already-parsed payload; `false` if the rows
+      * turn out not to be individually addressable, in which case NOTHING has been mutated yet.
+      *
+      * This is `morphRange`'s two-ended keyed pass with the `to` side replaced by the row order: matching a
+      * retained row costs one string comparison and an index bump, where the full-fragment path pays a parse
+      * and a morph for it. Rows leaving the list are removed at the end, which is where their region-index
+      * entries are dropped too (`removeLogical` -> `forgetRegionsIn`).
+      */
+    private def applyListPatchIn(
+        r: RegionRange,
+        parent: dom.Element,
+        pathAttr: String,
+        rows: Seq[ListRow],
+        toContainer: dom.Node
+    ): Boolean =
+        val parsedKeyed      = js.Dictionary.empty[dom.Node]
+        var parsedCount      = 0
+        var parsed: dom.Node = if toContainer == null then null else toContainer.firstChild
+        while parsed != null do
+            val k = logicalKey(parsed)
+            if k != null then parsedKeyed(k) = parsed
+            parsedCount += 1
+            parsed = logicalNext(parsed)
+        end while
+
+        val fromNodes = js.Array[dom.Node]()
+        val fromKeys  = js.Array[String]()
+        collectLogical(r.start.nextSibling, r.end, fromNodes, fromKeys)
+        val fromKeyed = js.Dictionary.empty[dom.Node]
+        var i         = 0
+        while i < fromKeys.length do
+            if fromKeys(i) != null then fromKeyed(fromKeys(i)) = fromNodes(i)
+            i += 1
+        end while
+
+        // A row is addressable only if it paints as exactly ONE path-bearing logical child. A row rendering a
+        // fragment of several roots paints children under sub-paths and a row rendering nothing paints none,
+        // so in neither case does any key name that row's DOM — and a key-based reconcile would drop it. The
+        // counts catch both without a second walk; the per-row lookups then catch a live list that disagrees
+        // with the region about which rows are on screen. Every one of these hands back to the full repaint,
+        // which needs no such structure because it diffs whole documents.
+        val toKeys       = js.Array[String]()
+        val toNodes      = js.Array[dom.Node]()
+        val changedCount = rows.count(_.changed)
+        var addressable  = parsedCount == changedCount && parsedKeyed.size == changedCount
+        i = 0
+        while addressable && i < rows.length do
+            val row  = rows(i)
+            val key  = if pathAttr.isEmpty then row.key else pathAttr + "." + row.key
+            val node = if row.changed then parsedKeyed.get(key).orNull else null
+            addressable = if row.changed then node != null else fromKeyed.contains(key)
+            discard(toKeys.push(key))
+            discard(toNodes.push(node))
+            i += 1
+        end while
+        if !addressable then return false
+
+        // Live rows this patch disturbs, in two groups: the ones leaving and the ones being repainted. A
+        // retained row is bit-identical before and after, so it can contribute nothing to the
+        // enter/leave/focus-auto sets and cannot lose the caret, which is what lets every pre- and post-pass
+        // below skip it. Those passes run over the whole range in onChange, six walks of the full list for a
+        // change of one row.
+        val targetKeys = js.Dictionary.empty[Boolean]
+        i = 0
+        while i < toKeys.length do
+            targetKeys(toKeys(i)) = true
+            i += 1
+        end while
+        // Split rather than one `disturbed` list, because the two groups answer different questions. A LEAVING
+        // row is only ever asked for leave ghosts. It cannot contribute to the enter/focus-auto sets: those are
+        // "already seeded before this patch", read back against `touched`, and `touched` holds exactly the
+        // repainted rows' new nodes and the inserted ones, every one of them under a key in `targetKeys`, which
+        // is the one thing a leaving row's key is not. Scanning it would build set entries nothing can match, at
+        // one whole-subtree selector query per row per set.
+        val leaving = js.Array[dom.Node]()
+        i = 0
+        while i < fromKeys.length do
+            val k = fromKeys(i)
+            if k == null || !targetKeys.contains(k) then discard(leaving.push(fromNodes(i)))
+            i += 1
+        end while
+        val repainted = js.Array[dom.Node]()
+        i = 0
+        while i < toKeys.length do
+            if toNodes(i) != null then
+                val live = fromKeyed.get(toKeys(i)).orNull
+                if live != null then discard(repainted.push(live))
+            i += 1
+        end while
+
+        // Focus spans the WHOLE region, not just the disturbed rows. A retained row keeps its DOM, but MOVING
+        // it is a remove-and-insert, and that blurs whatever it holds — so a pure reorder, which disturbs no
+        // row at all, is precisely the case that drops the caret if this is scoped to `disturbed`.
+        val ae = document.activeElement
+        val activePath =
+            if ae == null || (ae eq document.body) || !rangeContains(r, ae) then null
+            else if ae.hasAttribute("data-kyo-path") then ae.getAttribute("data-kyo-path")
+            else pathAttr
+        val (selStart, selEnd) = if activePath != null then readSelection(ae) else (Absent, Absent)
+        val oldEnter           = pathsOver(repainted)(enterPaths)
+        val oldFocusAuto       = pathsOver(repainted)(focusAutoPaths)
+        val surv               = if toContainer == null then Set.empty[String] else leaveSurvSetIn(toContainer)
+        var ghosts             = Seq.empty[(dom.Element, dom.Element, String)]
+        // Ghosts DO need both groups: a repainted row's old content can carry a leave element the new payload
+        // drops, which is a departure the same as a whole row leaving.
+        foreachLogicalElement(leaving)(el => ghosts = ghosts ++ prepareLeaveGhosts(el, surv))
+        foreachLogicalElement(repainted)(el => ghosts = ghosts ++ prepareLeaveGhosts(el, surv))
+
+        val touched = js.Array[dom.Node]()
+        def place(from: dom.Node, ti: Int): Unit =
+            val to = toNodes(ti)
+            if to != null then discard(touched.push(patchLogical(parent, from, to)))
+        end place
+
+        // Two-ended keyed pass, exactly as morphRange: a forward cursor alone can only insert IN FRONT of
+        // itself, so a removal in the middle drags every following row along with it.
+        var fh                     = 0
+        var ft                     = fromNodes.length - 1
+        var th                     = 0
+        var tt                     = toKeys.length - 1
+        var tailBoundary: dom.Node = r.end
+        var scanning               = true
+        while scanning && fh <= ft && th <= tt do
+            if fromKeys(fh) == null || fromKeys(ft) == null then scanning = false
+            else if fromKeys(fh) == toKeys(th) then
+                place(fromNodes(fh), th)
+                fh += 1
+                th += 1
+            else if fromKeys(ft) == toKeys(tt) then
+                place(fromNodes(ft), tt)
+                tailBoundary = fromNodes(ft)
+                ft -= 1
+                tt -= 1
+            else if fromKeys(fh) == toKeys(tt) then
+                if fh != ft then moveLogicalBefore(parent, fromNodes(fh), tailBoundary)
+                place(fromNodes(fh), tt)
+                tailBoundary = fromNodes(fh)
+                fh += 1
+                tt -= 1
+            else if fromKeys(ft) == toKeys(th) then
+                if ft != fh then moveLogicalBefore(parent, fromNodes(ft), fromNodes(fh))
+                place(fromNodes(ft), th)
+                ft -= 1
+                th += 1
+            else scanning = false
+            end if
+        end while
+
+        // The unresolved middle. Every row here is keyed, so each target either has a live node to pull into
+        // place or is new; keys are unique within an emission, so one consumed at an end is never asked for again.
+        var cursor: dom.Node = if fh <= ft then fromNodes(fh) else tailBoundary
+        var ti               = th
+        while ti <= tt do
+            val m = fromKeyed.get(toKeys(ti)).orNull
+            if m != null then
+                if m ne cursor then moveLogicalBefore(parent, m, cursor)
+                else cursor = logicalNext(cursor)
+                place(m, ti)
+            else
+                // Neither live nor retained — the addressability pass ruled both out — so it is a new row.
+                val inserted = insertLogicalClone(parent, toNodes(ti), cursor)
+                if inserted != null then discard(touched.push(inserted))
+            end if
+            ti += 1
+        end while
+
+        // Whatever is still between the cursor and the tail was not claimed by any target key: it left the list.
+        var leftover = cursor
+        while leftover != null && (leftover ne tailBoundary) do
+            val next = logicalNext(leftover)
+            removeLogical(parent, leftover)
+            leftover = next
+        end while
+
+        rescanNodes(touched)
+        foreachLogicalElement(touched) { el =>
+            applyJsPropsSync(el)
+            beginAnimationsSync(el)
+        }
+        if activePath != null then restoreFocus(activePath, selStart, selEnd)
+        foreachLogicalElement(touched)(el => seedEnter(el, oldEnter))
+        // At most ONE focus-auto seed per patch, as rangeSeedFocusAuto does: stack depth is the signal that an
+        // earlier touched row already seeded.
+        val before = focusReturnStack.size
+        foreachLogicalElement(touched)(el => if focusReturnStack.size == before then seedFocusAuto(el, oldFocusAuto))
+        spawnGhosts(ghosts)
+        sweepFocusAuto()
+        true
+    end applyListPatchIn
+
+    /** Union of `f` over the elements of an explicit set of logical children. */
+    private def pathsOver(nodes: js.Array[dom.Node])(f: dom.Element => Set[String]): Set[String] =
+        var acc = Set.empty[String]
+        foreachLogicalElement(nodes)(el => acc = acc ++ f(el))
+        acc
+    end pathsOver
 
     /** Assign a text-only payload to a region that currently holds exactly one text node, and report
       * whether that applied. Both shapes have to match: a region holding elements needs the morph, and a
@@ -1306,22 +1537,40 @@ private[kyo] object DomBackend:
         val opens = js.Dictionary.empty[(dom.Comment, Boolean)]
         var n     = r.start.nextSibling
         while n != null && (n ne r.end) do
-            if n.nodeType == 8 then
-                RegionMarker.parse(commentData(n)) match
-                    case Present(p) =>
-                        if p.isClose then
-                            opens.get(p.path) match
-                                case Some((start, mount)) =>
-                                    registerPair(p.path, start, n.asInstanceOf[dom.Comment], mount)
-                                    discard(opens.remove(p.path))
-                                case None => ()
-                        else opens(p.path) = (n.asInstanceOf[dom.Comment], p.mount)
-                    case Absent => ()
-            else if n.nodeType == 1 then scanRegionsInto(n)
-            end if
+            rescanNode(n, opens)
             n = n.nextSibling
         end while
     end rescanRange
+
+    /** [[rescanRange]] over an explicit subset of logical children: a structural list patch imports markers
+      * only into the rows it actually touched, so re-registering the whole range would walk a thousand rows
+      * to find the nested regions of one.
+      */
+    private def rescanNodes(nodes: js.Array[dom.Node]): Unit =
+        val opens = js.Dictionary.empty[(dom.Comment, Boolean)]
+        var i     = 0
+        while i < nodes.length do
+            eachSpanNode(nodes(i))(rescanNode(_, opens))
+            i += 1
+    end rescanNodes
+
+    /** Register `n` into the region index: a marker pairs with a matching open held in `opens`, an element
+      * carries its nested markers as descendants. Shared so range and subset scans cannot drift apart.
+      */
+    private def rescanNode(n: dom.Node, opens: js.Dictionary[(dom.Comment, Boolean)]): Unit =
+        if n.nodeType == 8 then
+            RegionMarker.parse(commentData(n)) match
+                case Present(p) =>
+                    if p.isClose then
+                        opens.get(p.path) match
+                            case Some((start, mount)) =>
+                                registerPair(p.path, start, n.asInstanceOf[dom.Comment], mount)
+                                discard(opens.remove(p.path))
+                            case None => ()
+                    else opens(p.path) = (n.asInstanceOf[dom.Comment], p.mount)
+                case Absent => ()
+        else if n.nodeType == 1 then scanRegionsInto(n)
+    end rescanNode
 
     /** Locate a live region by joined path. Connectivity-validated; a stale or missing entry triggers
       * ONE full rescan, then retries; still missing -> null. Callers no-op on null, preserving the old
@@ -1348,6 +1597,19 @@ private[kyo] object DomBackend:
             n = n.nextSibling
         found
     end rangeContains
+
+    /** [[foreachRangeElement]] over an explicit subset of logical children instead of a whole range.
+      *
+      * Each entry may be a plain element or the open marker of a span, so the visit goes through
+      * `eachSpanNode`: a span's elements are its following SIBLINGS, not its descendants, and iterating only
+      * the handed-in nodes would miss every one of them.
+      */
+    private def foreachLogicalElement(nodes: js.Array[dom.Node])(f: dom.Element => Unit): Unit =
+        var i = 0
+        while i < nodes.length do
+            eachSpanNode(nodes(i))(n => if n.nodeType == 1 then f(n.asInstanceOf[dom.Element]))
+            i += 1
+    end foreachLogicalElement
 
     private def foreachRangeElement(r: RegionRange)(f: dom.Element => Unit): Unit =
         var n = r.start.nextSibling
@@ -1454,8 +1716,17 @@ private[kyo] object DomBackend:
     private def removeLogical(parent: dom.Element, node: dom.Node): Unit =
         eachSpanNode(node)(n => discard(parent.removeChild(n)))
 
-    private def insertLogicalClone(parent: dom.Element, toNode: dom.Node, ref: dom.Node): Unit =
-        eachSpanNode(toNode)(n => discard(parent.insertBefore(document.importNode(n, true), ref)))
+    /** Import `toNode` (a whole span, if it is one) before `ref`, and report the first node inserted — the
+      * handle a caller needs to run per-node post-patch work on exactly what it just added.
+      */
+    private def insertLogicalClone(parent: dom.Element, toNode: dom.Node, ref: dom.Node): dom.Node =
+        var first: dom.Node = null
+        eachSpanNode(toNode) { n =>
+            val inserted = parent.insertBefore(document.importNode(n, true), ref)
+            if first == null then first = inserted
+        }
+        first
+    end insertLogicalClone
 
     /** Patch matched logical children (same key). Element vs element morphs in place; span vs span
       * recurses on the two content ranges, unless the live span carries the `m` (mount root) flag, the
@@ -1470,10 +1741,16 @@ private[kyo] object DomBackend:
       * closes the boot case: a full-page render emits no `k` (client-only flag, golden HTML unchanged), so
       * the first re-render after boot morphs once and every one after it skips.
       */
-    private def patchLogical(parent: dom.Element, m: dom.Node, toNode: dom.Node): Unit =
+    /** Returns the node that occupies the slot AFTERWARDS: `m` itself where it was patched in place, and the
+      * replacement where a kind mismatch swapped it out. A caller that runs per-node work on what it patched
+      * would otherwise operate on a detached node in exactly that case.
+      */
+    private def patchLogical(parent: dom.Element, m: dom.Node, toNode: dom.Node): dom.Node =
         val fromIsSpan = m.nodeType == 8
         val toIsSpan   = toNode.nodeType == 8
-        if !fromIsSpan && !toIsSpan then morphNode(m, toNode)
+        if !fromIsSpan && !toIsSpan then
+            morphNode(m, toNode)
+            m
         else if fromIsSpan && toIsSpan then
             (RegionMarker.parse(commentData(m)), RegionMarker.parse(commentData(toNode))) match
                 case (Present(f), Present(t)) =>
@@ -1487,10 +1764,12 @@ private[kyo] object DomBackend:
                             m.asInstanceOf[dom.Comment].data =
                                 RegionMarker.openData(f.path, mount = true, key = t.key)
                     end if
-                case _ => ()
+                    m
+                case _ => m
         else
-            insertLogicalClone(parent, toNode, m)
+            val replacement = insertLogicalClone(parent, toNode, m)
             removeLogical(parent, m)
+            replacement
         end if
     end patchLogical
 
@@ -1662,24 +1941,24 @@ private[kyo] object DomBackend:
             if fromKeys(fh) == null || fromKeys(ft) == null || toKeys(th) == null || toKeys(tt) == null then
                 scanning = false
             else if fromKeys(fh) == toKeys(th) then
-                patchLogical(fromParent, fromNodes(fh), toNodes(th))
+                discard(patchLogical(fromParent, fromNodes(fh), toNodes(th)))
                 fh += 1
                 th += 1
             else if fromKeys(ft) == toKeys(tt) then
-                patchLogical(fromParent, fromNodes(ft), toNodes(tt))
+                discard(patchLogical(fromParent, fromNodes(ft), toNodes(tt)))
                 tailBoundary = fromNodes(ft)
                 ft -= 1
                 tt -= 1
             else if fromKeys(fh) == toKeys(tt) then
                 // The run's head belongs at its tail. A single remaining child already sits there.
                 if fh != ft then moveLogicalBefore(fromParent, fromNodes(fh), tailBoundary)
-                patchLogical(fromParent, fromNodes(fh), toNodes(tt))
+                discard(patchLogical(fromParent, fromNodes(fh), toNodes(tt)))
                 tailBoundary = fromNodes(fh)
                 fh += 1
                 tt -= 1
             else if fromKeys(ft) == toKeys(th) then
                 if ft != fh then moveLogicalBefore(fromParent, fromNodes(ft), fromNodes(fh))
-                patchLogical(fromParent, fromNodes(ft), toNodes(th))
+                discard(patchLogical(fromParent, fromNodes(ft), toNodes(th)))
                 ft -= 1
                 th += 1
             else scanning = false
@@ -1734,9 +2013,9 @@ private[kyo] object DomBackend:
                 if m != null then
                     if m ne curFrom then moveLogicalBefore(fromParent, m, curFrom)
                     else curFrom = logicalNext(curFrom)
-                    patchLogical(fromParent, m, curTo)
+                    discard(patchLogical(fromParent, m, curTo))
                 else
-                    insertLogicalClone(fromParent, curTo, curFrom)
+                    discard(insertLogicalClone(fromParent, curTo, curFrom))
                 end if
             else
                 var handled = false
@@ -1759,7 +2038,7 @@ private[kyo] object DomBackend:
                         curFrom = fNext
                     end if
                 end while
-                if !handled then insertLogicalClone(fromParent, curTo, curFrom)
+                if !handled then discard(insertLogicalClone(fromParent, curTo, curFrom))
             end if
             curTo = toNext
         end while
