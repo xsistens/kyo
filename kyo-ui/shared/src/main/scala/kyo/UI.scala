@@ -61,7 +61,7 @@ object UI:
     implicit def stringToUI(v: String)(using Frame): Text = Text(v)
 
     /** Auto-lifts a `Signal[String]` into a reactive text node that re-renders whenever the signal emits. */
-    implicit def signalStringToUI(v: Signal[String])(using Frame): Reactive[Text] = Reactive[Text](v.map(s => Text(s)))
+    implicit def signalStringToUI(v: Signal[String])(using Frame): Reactive[Text] = Reactive[Text](v.map(s => Text(s)), Present(v))
 
     /** Auto-lifts a `Signal[A]` of UI values into a reactive node that swaps in the latest emitted subtree on every emission. */
     implicit def signalUIToUI[A <: UI](v: Signal[A])(using Frame, CanEqual[A, A]): Reactive[A] = Reactive[A](v.map(x => x: UI))
@@ -1380,7 +1380,7 @@ object UI:
               * text node so string signals can be passed directly to HTML container `apply` overloads.
               */
             implicit def liftSignalString(sig: Signal[String])(using Frame): HtmlChildVal =
-                new HtmlChildVal(Reactive[Text](sig.map(s => Text(s))))
+                new HtmlChildVal(Reactive[Text](sig.map(s => Text(s)), Present(sig)))
         end HtmlChildVal
 
         /** Layout marker for block-flow elements (`div`, `p`, headings, ...). */
@@ -1612,8 +1612,14 @@ object UI:
 
         /** A subtree driven by a `Signal[UI]`: re-renders the bound region whenever the signal emits a new value. The type parameter `C`
           * is a phantom bound that records the content type at the construction site; it erases to `UI` at runtime.
+          *
+          * `text` is the ORIGINAL string signal when this region was lifted from a `Signal[String]`, before it was mapped into
+          * `Signal[UI]`. Keeping it is what makes the region's content statically known to be one text node: `signal` alone says only
+          * "some UI", so the engine would have to re-derive that fact per emission — which is exactly the expensive path this exists to
+          * skip. `ReactiveUI` binds such a region straight to the backend's text write; everything else about the node is unchanged, so
+          * a backend that offers no such write simply re-renders the region as before.
           */
-        case class Reactive[C <: UI](signal: Signal[UI])(using val frame: Frame) extends UI
+        case class Reactive[C <: UI](signal: Signal[UI], text: Maybe[Signal[String]] = Absent)(using val frame: Frame) extends UI
 
         /** A keyed list driven by a `Signal[Chunk[A]]`: renders one child per element, reconciling by `key` when present. The type
           * parameter `C` is a phantom bound that records the content type at the construction site; it erases to `UI` at runtime.

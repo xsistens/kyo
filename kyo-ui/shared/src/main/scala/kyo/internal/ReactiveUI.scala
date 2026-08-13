@@ -32,7 +32,12 @@ private[kyo] case class ReactiveUI(
     renderedClassValues: Map[String, Boolean] = Map.empty,
     // Present on Foreach regions: carries the AST node (signal, key, render) and the normalize-time items
     // snapshot so subscribe can run the per-row reuse path instead of the whole-region re-render loop.
-    foreachSpec: Maybe[ForeachSpec] = Absent
+    foreachSpec: Maybe[ForeachSpec] = Absent,
+    // Present on a region lifted from a Signal[String] (UI.Ast.Reactive.text): the content is one text node
+    // whatever the signal emits, so subscribe can bind the backend's text write instead of forking the
+    // render-walk-paint loop. Carried through normalize rather than re-derived, because "this renders to a lone
+    // text node" is knowable at the lift site and only guessable afterwards.
+    textSignal: Maybe[Signal[String]] = Absent
 )
 
 /** Normalization-time companion of a [[kyo.UI.Ast.Foreach]] node: keeps the typed machinery (item signal, key
@@ -145,7 +150,7 @@ private[kyo] object ReactiveUI:
                             (_, freshHdl) <- walkStatic(currentUI, path, svg, mountDispatch)
                             result        <- freshHdl(targetPath, event)
                         yield result
-                }.copy(renderedValue = Present(current))
+                }.copy(renderedValue = Present(current), textSignal = ui.text)
                 end for
 
             case ui: Foreach[?, ?] @unchecked =>
@@ -926,19 +931,59 @@ private[kyo] object ReactiveUI:
                                     rui.children
                                 )
                             case _ =>
-                                subscribeRegion(
-                                    rui.path,
-                                    rui.signal,
-                                    rui.svgContext,
-                                    exchange,
-                                    signalChangeTime,
-                                    Absent,
-                                    mountDispatch,
-                                    initialKids = rui.children,
-                                    rendered = rui.renderedValue
-                                )
+                                bindTextRegion(rui, exchange).map { bound =>
+                                    if bound then Kyo.unit
+                                    else
+                                        subscribeRegion(
+                                            rui.path,
+                                            rui.signal,
+                                            rui.svgContext,
+                                            exchange,
+                                            signalChangeTime,
+                                            Absent,
+                                            mountDispatch,
+                                            initialKids = rui.children,
+                                            rendered = rui.renderedValue
+                                        )
+                                }
         }
     end subscribeScoped
+
+    /** Bind a lone-text region straight to the backend's text write, skipping the region fiber; `false` means the
+      * caller must subscribe it as a normal region.
+      *
+      * A region lifted from a `Signal[String]` paints one text node and nothing else. The region path still runs
+      * the full apparatus for it — a fiber, a per-value Scope with its finalizer queue, a re-walk and an HTML
+      * render — to arrive at a single `Text.data` write. Measured on `03_update10th`, that write is under 2% of
+      * the cost; the rest is the machinery around it. Binding is the same trade the attribute channels already
+      * make (see bindChannel), and for the same reason: the handler is one DOM write that cannot suspend.
+      *
+      * Three conditions, all necessary:
+      *
+      *   - the region carries its string signal, so its content is statically one text node;
+      *   - the backend offers a synchronous text write (the server transport does not, and stays on the region
+      *     path — its repaint IS the equivalent patch);
+      *   - the walk found no reactive children under it. A `Text` value cannot produce any, so this is a
+      *     guard against a future lift that fills `text` on a region whose content is not only text.
+      *
+      * The baseline is the render-time string, so an unchanged first emission is dropped before the write, and a
+      * change that landed between render and subscribe still fires (`Signal.Unsafe.subscribe` delivers the
+      * current value on registration). Release is registered on the current Scope — the same scope that would
+      * have owned the fiber — because the next-promise is masked and nothing interrupts it.
+      */
+    private def bindTextRegion(rui: ReactiveUI, exchange: UIExchange)(using Frame): Boolean < (Sync & Scope) =
+        (rui.textSignal, exchange.textPatcherNow) match
+            case (Present(sig), Present(patch)) if rui.children.isEmpty =>
+                val rendered = rui.renderedValue match
+                    case Present(t: Text) => Present(t.value)
+                    case _                => Absent
+                Sync.Unsafe.defer {
+                    sig.unsafeObserveProjected[String](identity, rendered, v => patch(rui.path, v)) match
+                        case Absent           => Kyo.lift(false)
+                        case Present(release) => Scope.ensure(Sync.defer(release())).andThen(true)
+                }
+            case _ => false
+    end bindTextRegion
 
     /** Fork the scoped in-place-patch observers for one node's reactive attr/bool-attr/class channels at
       * `path`. Shared by subscribeScoped (walked nodes) and by a region's renderValue (the painted ROOT
