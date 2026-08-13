@@ -200,15 +200,16 @@ private[kyo] object ReactiveUI:
             case ui: Element =>
                 // An element with a SignalRef-bound attribute (`.value(ref)` xor `.checked(ref)`; an element binds at most
                 // one, see collectSignalRef) must re-render when that signal changes. The change is carried by the ref
-                // (read afresh at render time), not by the rendered value's identity: the value is always the same `ui`
-                // object, kept with its `Bound.Ref` attributes so the rendered HTML carries the auto-binding event markers
-                // `data-kyo-ev="input"/"change"` the client needs and the dispatch handler resolves the ref. The region's
-                // signal is that ref mapped to the constant `ui`; mapping the leaf `SignalRef` delegates
-                // subscribeScoped's `observe` to the ref's own leaf loop (no second repair loop over the region), and
-                // each ref edit is a distinct ref VALUE that re-renders without the value-dedup ever suppressing a
-                // real edit. An element with no bound ref is const.
+                // (read afresh at render time), not by the emitted value's identity: the emitted value is always the same
+                // `ui` object, kept with its `Bound.Ref` attributes so the rendered HTML carries the auto-binding event
+                // markers `data-kyo-ev="input"/"change"` the client needs and the dispatch handler resolves the ref.
+                //
+                // `changesTo`, NOT `map(_ => ui)`: an observation deduplicates on the emitted value, and this one never
+                // changes, so a map would deliver the first paint and then go silent — the field would stop tracking its
+                // own ref forever. `changesTo` observes the ref on the REF's values and hands over the constant, which is
+                // exactly what a region rebuilt from the ref at render time needs. An element with no bound ref is const.
                 val (elementSignal, isConstNode) =
-                    collectSignalRef(ui).fold((Signal.initConst(ui: UI), true))(ref => (ref.map(_ => ui: UI), false))
+                    collectSignalRef(ui).fold((Signal.initConst(ui: UI), true))(ref => (ref.changesTo(ui: UI), false))
                 for
                     (kids, hdl) <- walkStatic(ui, path, svg, mountDispatch)
                     attrSnap    <- Kyo.foreach(ui.attrs.reactiveAttrs.toSeq)((n, s) => s.current.map(v => n -> v))
