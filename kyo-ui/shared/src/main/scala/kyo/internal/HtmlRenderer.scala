@@ -894,7 +894,12 @@ private[kyo] object HtmlRenderer:
            |        // Snapshot transitions/focus-auto off the OLD range: a morph removes departing nodes just
            |        // like the outerHTML replace it took over from, so ghosts still get cloned up front.
            |        var __en=__kyoRangePaths(r,faEnterPaths);
-           |        var __gh=__kyoRangeGhosts(r,kyoLeaveSurv(op.Replace.html));
+           |        // A mount cell's own republish never ghosts: the engine re-runs the mount effect whenever an
+           |        // enclosing region repaints, which is bookkeeping, not user-visible leaving, and the placeholder
+           |        // and effect content may key a leave-marked element differently, so the survivor set cannot match
+           |        // it. Content that genuinely leaves does so through an ENCLOSING patch, a mount=false region, which
+           |        // still ghosts. Twin of DomBackend.onChange's mount guard; keep in lockstep.
+           |        var __gh=op.Replace.mount?[]:__kyoRangeGhosts(r,__kyoLeaveSurvIn(tc));
            |        var __fa=__kyoRangePaths(r,focusAutoPaths);
            |        __kyoMorphRange(rp,r.s.nextSibling,r.e,tc.firstChild,null);
            |        // The mount's own first paint claims the region: the 'm' flag rides the live start marker
@@ -1280,12 +1285,16 @@ private[kyo] object HtmlRenderer:
            |    (function(e2,cs){requestAnimationFrame(function(){for(var m=0;m<cs.length;m++){if(cs[m])e2.classList.remove(cs[m]);}});})(el,cls);
            |  }
            |}
-           |// Set of paths of data-kyo-LEAVE elements in an HTML fragment (which leave-elements SURVIVE a Replace).
+           |// Set of paths of data-kyo-LEAVE elements in a payload (which leave-elements SURVIVE a Replace).
            |// Keyed on leave-carrying elements, NOT all data-kyo-path: a reactive wrapper span shares its path with
            |// the (leaving) element it wraps, so an all-path set would wrongly report the element as surviving.
-           |function kyoLeaveSurv(html){
-           |  var s={};var t=document.createElement("template");t.innerHTML=html;
-           |  var els=t.content.querySelectorAll("[data-kyo-leave]");
+           |// Reads off the ALREADY PARSED container, not a second template: a <tr> or <option> payload only
+           |// survives parsing inside its required ancestor chain, which __kyoParseCtx supplies and a bare
+           |// template does not. Parsed bare, those rows vanish, the set comes back empty, and every leaving row
+           |// is then wrongly treated as removed. Twin of DomBackend.leaveSurvSetIn; keep in lockstep.
+           |function __kyoLeaveSurvIn(c){
+           |  var s={};if(!c||!c.querySelectorAll)return s;
+           |  var els=c.querySelectorAll("[data-kyo-leave]");
            |  for(var i=0;i<els.length;i++){var pp=els[i].getAttribute("data-kyo-path");if(pp!==null)s[pp]=true;}
            |  return s;
            |}
@@ -1316,14 +1325,18 @@ private[kyo] object HtmlRenderer:
            |    g.style.position="fixed";g.style.left=rect.left+"px";g.style.top=rect.top+"px";
            |    g.style.width=rect.width+"px";g.style.height=rect.height+"px";g.style.margin="0";g.style.pointerEvents="none";
            |    g.setAttribute("data-kyo-ghost","1");
-           |    ghosts.push({node:g,leave:leave});
+           |    ghosts.push({src:node,node:g,leave:leave});
            |  }
            |  return ghosts;
            |}
            |// Append prepared ghosts to <body>, add their leave classes next frame, remove on transitionend/animationend or a 1s safety.
+           |// The survivor set is a PREDICTION: a preserved subtree (the opaque mount boundary) survives the patch despite not
+           |// matching, so a ghost whose SOURCE is still in the document is dropped here, since a leave animation over the live
+           |// element would be a false departure. Twin of DomBackend.spawnGhosts; keep in lockstep.
            |function kyoSpawnGhosts(ghosts){
            |  if(!ghosts)return;
            |  for(var i=0;i<ghosts.length;i++){(function(gh){
+           |    if(gh.src&&document.contains(gh.src))return;
            |    var g=gh.node;document.body.appendChild(g);
            |    var cls=(gh.leave||"").split(/\\s+/);
            |    requestAnimationFrame(function(){for(var c=0;c<cls.length;c++){if(cls[c])g.classList.add(cls[c]);}});

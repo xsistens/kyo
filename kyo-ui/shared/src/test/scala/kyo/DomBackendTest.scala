@@ -6,6 +6,16 @@ import kyo.Browser.*
 // end-to-end via the JVM browser test infrastructure (SSE/event POST cycle).
 class DomBackendTest extends UITest:
 
+    /** Counts every `data-kyo-ghost` node the client appends from now on. Ghosts remove themselves on
+      * transitionend or a 1s timeout, so polling the DOM for their presence would race the cleanup; a
+      * MutationObserver records the spawn itself.
+      */
+    private val ghostCounterJs =
+        "window.__kyoGhostCount=0;" +
+            "new MutationObserver(function(ms){ms.forEach(function(m){m.addedNodes.forEach(function(n){" +
+            "if(n.nodeType===1&&n.hasAttribute&&n.hasAttribute('data-kyo-ghost'))window.__kyoGhostCount++;" +
+            "});});}).observe(document.body,{childList:true,subtree:true})"
+
     "Replace op updates only the target reactive zone" in {
         val app: UI < Async =
             for
@@ -324,6 +334,68 @@ class DomBackendTest extends UITest:
                 _      <- Browser.assertText(Selector.id("kbody"), "body-b")
                 marked <- Browser.evalJson[Int]("document.getElementById('kbody').__kyoMark || 0")
             yield assert(marked == 0)
+        }
+    }
+
+    // Leave ghosts vs mount repaints. Two mechanisms conspire to keep a repaint from faking a departure:
+    // the mount region's OWN republish never prepares ghosts at all (bookkeeping, not leaving), and the
+    // ENCLOSING region's repaint prepares them but drops any whose source the morph preserved. Both are
+    // needed here: an enclosing repaint republishes the mount AND predicts a ghost for the mount's
+    // leave-marked content, which the opaque mount boundary then keeps alive.
+
+    "a keyless mount republish does not ghost leave-marked content (enclosing region repaint)" in {
+        val app: UI < Async =
+            for tick <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("gtick").id("gtick").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map { t =>
+                    UI.div(
+                        UI.span(s"t:$t").id("gtxt"),
+                        UI.mounted {
+                            Signal.initRef(0).map(_ =>
+                                // Effect shape is fragment(marker, panel), so the panel's path differs from
+                                // the placeholder's and the survivor set cannot match it.
+                                UI.fragment(
+                                    UI.span("m").id("gmark"),
+                                    UI.div("panel").id("glpanel").leaveTransition("ghost-probe-leave")
+                                ): UI
+                            )
+                        }.placeholder(UI.div("panel").id("glpanel").leaveTransition("ghost-probe-leave"))
+                    ): UI
+                }
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("glpanel"), "panel")
+                _ <- Browser.evalDiscard(ghostCounterJs)
+                _ <- Browser.click(Selector.id("gtick"))
+                // The enclosing region repainted, which republished the mount.
+                _ <- Browser.assertText(Selector.id("gtxt"), "t:1")
+                _ <- Browser.assertText(Selector.id("glpanel"), "panel")
+                g <- Browser.evalJson[Int]("window.__kyoGhostCount")
+            yield assert(g == 0)
+        }
+    }
+
+    "closing a gate above a keyless mount still plays the leave ghost" in {
+        val app: UI < Async =
+            for open <- Signal.initRef(true)
+            yield UI.div(
+                UI.button("gclose2").id("gclose2").onClick(open.set(false)),
+                UI.when(open)(
+                    UI.mounted {
+                        Signal.initRef(0).map(_ => UI.div("panel").id("gopanel").leaveTransition("ghost-probe-leave"): UI)
+                    }.placeholder(UI.empty)
+                )
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("gopanel"), "panel")
+                _ <- Browser.evalDiscard(ghostCounterJs)
+                _ <- Browser.click(Selector.id("gclose2"))
+                _ <- Browser.assertNotExists(Selector.id("gopanel"))
+                g <- Browser.evalJson[Int]("window.__kyoGhostCount")
+            yield assert(g == 1)
         }
     }
 
