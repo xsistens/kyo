@@ -1041,6 +1041,44 @@ class SignalTest extends kyo.test.Test[Any]:
                 .map(lost => assert(lost == 0, s"map lost $lost / 5000 without repair"))
         }
 
+        "a constant delivers once and holds its scope across would-be repair intervals" in {
+            // A constant cannot change, so its observation arms no reconciliation timer. Nothing in the
+            // delivered values can witness that directly (a repair tick never re-runs `f` either), so this
+            // pins what a botched override would break instead: exactly one delivery, and a per-value Scope
+            // that survives several would-be intervals and closes only on interrupt.
+            for
+                seen     <- AtomicRef.init(Chunk.empty[Int])
+                released <- AtomicRef.init(false)
+                fiber <- Fiber.initUnscoped(Signal.initConst(7).observe(20.millis) { v =>
+                    Scope.ensure(released.set(true)).andThen(recordValue(seen, v))
+                })
+                _         <- pollUntil(seen.get.map(_.nonEmpty))
+                _         <- Async.sleep(200.millis)
+                values    <- seen.get
+                duringRun <- released.get
+                _         <- fiber.interrupt
+                afterStop <- pollUntil(released.get)
+            yield assert(values == Chunk(7) && !duringRun && afterStop)
+        }
+
+        "an idle parked observer of a MAP CHAIN holds exactly one waiter (the chain reaches the leaf)" in {
+            // Same witness as the leaf case above, one link further out. A mapped signal answers a projected
+            // observation by composing the projection onto its own and asking its source, so a chain of any
+            // length resolves to the leaf's exact protocol and arms no timer. Were any link to answer from the
+            // trait's repairing default instead, its 50ms race would tick four times inside the 200ms below and
+            // leave a ghost waiter on the ref's masked promise per tick.
+            for
+                ref  <- Signal.initRef(0)
+                seen <- AtomicRef.init(Chunk.empty[Int])
+                sig = ref.map(v => v).map(v => v).map(v => v)
+                fiber <- Fiber.initUnscoped(sig.observe(50.millis)(recordValue(seen, _)))
+                _     <- pollUntil(seen.get.map(_.nonEmpty))
+                _     <- Async.sleep(200.millis)
+                w     <- ref.waiters
+                _     <- fiber.interrupt
+            yield assert(w == 1, s"map chain left $w waiters on the leaf; expected the exact protocol's single one")
+        }
+
         "delivers a write landing while f runs, without repair (SignalRef leaf)" in {
             // The historical loss window: f(0) is still running when the write lands, so the promise captured
             // by the swap completes with nobody parked on it. The exact protocol validates the version when it
