@@ -850,8 +850,12 @@ object UI:
               * its `getBoundingClientRect` before applying the patch (nothing crosses the wire), then appends a visual GHOST
               * (deep clone, `position:fixed` at the captured rect, `pointer-events:none`) to `document.body` with these
               * classes added next frame; the ghost is removed on `transitionend`/`animationend` or a 1s safety timeout. Only
-              * the outermost removed leave-element per patch spawns a ghost. The ghost is visual-only: its identifying
-              * `data-kyo-*`/`id` attributes are stripped from the clone. Emits `data-kyo-leave="..."`.
+              * the outermost removed leave-element per patch spawns a ghost, and only when the element actually left the
+              * document: a subtree the patch preserved keeps its live node and never plays a leave. A mount cell's OWN
+              * republish never ghosts either, since the engine re-running a mount effect because an enclosing region
+              * repainted is bookkeeping, not leaving; the leave plays when an ENCLOSING patch removes the content (the
+              * gate closing). The ghost is visual-only: its identifying `data-kyo-*`/`id` attributes are stripped from
+              * the clone. Emits `data-kyo-leave="..."`.
               */
             def leaveTransition(classes: String): Self = withAttrs(attrs.copy(leaveTransition = Present(classes)))
 
