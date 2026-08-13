@@ -19,7 +19,14 @@ class BoundValueRegionTest extends kyo.test.Test[Any]:
     final private class Recording:
         val changes = new AtomicInteger(0)
         val exchange = new UIExchange:
-            def onChange(path: Seq[String], ui: UI, mount: Boolean)(using Frame): Unit < Async =
+            def onChange(
+                region: ReactiveRegion,
+                path: Seq[String],
+                contentContext: ReactiveRegion.RegionIdentity,
+                parentContext: ReactiveRegion.ParentContext,
+                previous: Maybe[UI],
+                changed: UI
+            )(using Frame): Unit < Async =
                 Sync.defer(discard(changes.incrementAndGet()))
     end Recording
 

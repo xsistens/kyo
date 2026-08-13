@@ -65,6 +65,7 @@ private[kyo] object DomBackend:
         val d = el.asInstanceOf[js.Dynamic]
         if js.isUndefined(d.__kyoOwn) then Set.empty
         else d.__kyoOwn.asInstanceOf[js.Dictionary[Boolean]].keySet.toSet
+    end ownedAttrs
 
     private def markOwned(el: dom.Element, name: String): Unit =
         val d = el.asInstanceOf[js.Dynamic]
@@ -114,13 +115,13 @@ private[kyo] object DomBackend:
         // Commands, Commands needs emit). Set before any op is emitted.
         var sessionCommands: UI.Commands = null
         for
-            _       <- DomStyleSheet.injectBase()
-            root    <- ReactiveUI.normalize(ui, Seq.empty)
-            html    <- HtmlRenderer.render(ui, Seq.empty)
-            _       <- Sync.defer(container.innerHTML = html)
-            regions <- DomReactiveRegions.init(container)
-            _       <- applyJsProps(container)
-            _       <- Sync.defer(seedEnter(container, Set.empty))
+            _        <- DomStyleSheet.injectBase()
+            root     <- ReactiveUI.normalize(ui, Seq.empty)
+            html     <- HtmlRenderer.render(ui, Seq.empty)
+            _        <- Sync.defer(container.innerHTML = html)
+            regions  <- DomReactiveRegions.init(container)
+            _        <- applyJsProps(container)
+            _        <- Sync.defer(seedEnter(container, Set.empty))
             _        <- Sync.defer(seedFocusAuto(container, Set.empty))
             _        <- Sync.defer(beginAnimationsSync(container))
             commands <- UI.Commands.init(op => applyOpLocal(op, regions, () => sessionCommands))
@@ -222,6 +223,13 @@ private[kyo] object DomBackend:
     final private case class RangeFocus(path: Maybe[String], rootIndex: Int, childIndexes: Seq[Int])
 
     // ---- local op application for the SPA transport (Command / RequestMeasure) ----
+
+    /** `[data-kyo-path="..."]` for a dot-joined render path, with the two characters a quoted CSS attribute
+      * selector cannot carry raw escaped. Twin of `__kyoPathSel` in `HtmlRenderer.clientJs`.
+      */
+    private def pathSelector(joinedPath: String): String =
+        val escaped = joinedPath.replace("\\", "\\\\").replace("\"", "\\\"")
+        s"[data-kyo-path=\"$escaped\"]"
 
     private def queryByPath(path: Seq[String]): dom.Element =
         document.querySelector(pathSelector(path.mkString(".")))
@@ -418,7 +426,8 @@ private[kyo] object DomBackend:
                                 end match
                         }
                     }
-
+            }
+        end onChange
 
         // In-place attr patch, ownership-marked (__kyoOwn) so a parent region's morph won't reconcile the live value back.
         override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
@@ -439,111 +448,19 @@ private[kyo] object DomBackend:
 
         // Class twin: toggle in place (so CSS transitions fire) rather than re-render; own "class" against the morph.
         override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
-            Sync.defer {
-                val el = queryByPath(path)
-                if el != null then
-                    markOwned(el, "class")
-                    discard(el.classList.toggle(name, on))
-            }
+            Sync.defer(classPatchNow(path, name, on))
 
-        def onChange(path: Seq[String], ui: UI, mount: Boolean)(using Frame): Unit < Async =
-            // Render content at its nested-reactive sub-path (contentPath) so a reactive-valued region paints a
-            // DISTINCT inner marker span matching SSR/walkStatic. mountSlot=true stamps the `s` flag on Mounted
-            // placeholders for the mount guards below. The payload is a bare fragment: the region's own live
-            // markers stay in the DOM and are never re-sent, so the path stays addressable across replacements
-            // regardless of what the content is (Fragment, Text, RawHtml: none carry a path-bearing root).
-            HtmlRenderer.render(ui, HtmlRenderer.contentPath(path, ui), mountSlot = true).map { html =>
-                Sync.defer {
-                    val pathAttr = path.mkString(".")
-                    val r        = lookupRegion(pathAttr)
-                    if r == null then
-                        // No marker pair at this path: either an ELEMENT region (a signal-bound field like
-                        // `input.value(ref)`: the region root IS the live element carrying the path; no wrapper
-                        // of any kind exists) morphed 1:1 in place, or genuinely unpainted DOM, which stays a
-                        // silent no-op.
-                        val el = queryByPath(path)
-                        if el != null && el.parentNode != null then
-                            val toContainer = parseToContainer(el.parentNode.asInstanceOf[dom.Element], html)
-                            val toRoot      = if toContainer != null then firstElementChildOf(toContainer) else null
-                            if toRoot != null then
-                                morphNode(el, toRoot)
-                                val live = queryByPath(path)
-                                if live != null then
-                                    applyJsPropsSync(live)
-                                    beginAnimationsSync(live)
-                            end if
-                        end if
-                    // Leave the live mount region untouched ONLY when the new content is itself a mount slot
-                    // (`s` = the SAME mount re-rendering, which owns its subtree). Different content or an empty
-                    // gate-closed repaint falls through so the morph reconciles/empties the region.
-                    else if !mount && r.mount && payloadRootIsMountSlot(html) then ()
-                    // Text into text: assigning the node IS the whole patch. The slow path below would put
-                    // this through a <template> parse and a morph per region, which is what makes a hundred
-                    // changed labels cost a hundred HTML parses.
-                    else if !mount && !r.mount && patchLoneText(r, html) then ()
-                    else
-                        val parent = r.start.parentNode.asInstanceOf[dom.Element]
-                        // Capture focus and caret of the active element inside the replaced region (mirrors the
-                        // clientJs Replace handler on the JS DOM API). Plain DOM inside the already-suspended
-                        // Sync.defer; no new AllowUnsafe crossing.
-                        val ae           = document.activeElement
-                        val insideRegion = ae != null && (ae ne document.body) && rangeContains(r, ae)
-                        // Use the active element's own data-kyo-path when it carries one (nested element),
-                        // otherwise fall back to the region path so restoreFocus searches the range (common
-                        // case: value-bound input inside the region has no data-kyo-path of its own).
-                        val activePath =
-                            if insideRegion then
-                                if ae.hasAttribute("data-kyo-path") then ae.getAttribute("data-kyo-path")
-                                else pathAttr
-                            else null
-                        val (selStart, selEnd) = if insideRegion then readSelection(ae) else (Absent, Absent)
-                        val toContainer        = parseToContainer(parent, html)
-                        if toContainer != null then
-                            // Transition and focus-auto bookkeeping is snapshotted off the OLD range before the
-                            // morph: a morph removes departing nodes just like the outerHTML replace it took over
-                            // from, so leaving elements still have to be cloned into ghosts up front.
-                            val oldEnter = rangePaths(r)(enterPaths)
-                            // A mount cell's own republish never ghosts: the engine re-runs the mount effect
-                            // whenever an enclosing region repaints, which is bookkeeping, not user-visible
-                            // leaving. Placeholder and effect content may shape their children differently, so a
-                            // leave-marked element's path changes across the swap, the survivor set cannot match
-                            // it, and every republish would spawn a ghost. Content that genuinely leaves the page
-                            // does so through an ENCLOSING patch, which is a `mount = false` region and still
-                            // ghosts. Twin of the clientJs `op.Replace.mount` guard; keep in lockstep.
-                            val ghosts       = if mount then Seq.empty else rangeLeaveGhosts(r, leaveSurvSetIn(toContainer))
-                            val oldFocusAuto = rangePaths(r)(focusAutoPaths)
-                            // Morph the marker-delimited range instead of replacing, so focus/caret/scroll/
-                            // transitions on reused nodes survive.
-                            morphRange(parent, r.start.nextSibling, r.end, toContainer.firstChild, null)
-                            if mount && !r.mount then
-                                // The mount's own first paint claims the region: the `m` flag rides the live
-                                // start marker (source of truth, survives registry rebuilds); the registry
-                                // entry is a cache. Client-only mutation, never in server-rendered HTML.
-                                // Any `k` a parent slot render already put there is carried over: dropping
-                                // it would make the next parent paint fall through instead of skipping.
-                                val carried = RegionMarker.parse(r.start.data).flatMap(_.key)
-                                r.mount = true
-                                r.start.data = RegionMarker.openData(pathAttr, mount = true, key = carried)
-                            end if
-                            // A morph imports subtrees, which carries new nested-region markers with it:
-                            // refresh the registry for exactly this range.
-                            rescanRange(r)
-                            foreachRangeElement(r) { el =>
-                                applyJsPropsSync(el)
-                                beginAnimationsSync(el)
-                            }
-                            if activePath != null then
-                                restoreFocus(activePath, selStart, selEnd)
-                            foreachRangeElement(r)(seedEnter(_, oldEnter))
-                            // Seed AFTER restoreFocus so a newly-appeared focus-auto element wins over restore-to-trigger.
-                            seedRangeFocusAuto(r, oldFocusAuto)
-                            spawnGhosts(ghosts)
-                            sweepFocusAuto()
-                        end if
-                    end if
-                }
-            }
-        end onChange
+        // The same patch without the Sync wrapper, for a caller that already holds the thread (see
+        // UIExchange.classPatcherNow). onClassPatch delegates to it so the two cannot drift apart.
+        private def classPatchNow(path: Seq[String], name: String, on: Boolean): Unit =
+            val el = queryByPath(path)
+            if el != null then
+                markOwned(el, "class")
+                discard(el.classList.toggle(name, on))
+        end classPatchNow
+
+        override val classPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit] =
+            Present(classPatchNow)
 
         private def tryMorphRange(
             oldElements: Seq[dom.Element],

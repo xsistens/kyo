@@ -1,7 +1,7 @@
 package kyo
 
-import kyo.internal.ReactiveRegion
 import kyo.internal.MouseEventData
+import kyo.internal.ReactiveRegion
 import kyo.internal.UIEvent
 
 /** Effect-typed event handlers: `onClick[S](...)(using Isolate[S, Sync, S])`. Context effects ride the
