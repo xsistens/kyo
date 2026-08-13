@@ -339,12 +339,19 @@ private[kyo] object DomBackend:
 
         // Class twin: toggle in place (so CSS transitions fire) rather than re-render; own "class" against the morph.
         override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
-            Sync.defer {
-                val el = queryByPath(path)
-                if el != null then
-                    markOwned(el, "class")
-                    discard(el.classList.toggle(name, on))
-            }
+            Sync.defer(classPatchNow(path, name, on))
+
+        // The same patch without the Sync wrapper, for a caller that already holds the thread (see
+        // UIExchange.classPatcherNow). onClassPatch delegates to it so the two cannot drift apart.
+        private def classPatchNow(path: Seq[String], name: String, on: Boolean): Unit =
+            val el = queryByPath(path)
+            if el != null then
+                markOwned(el, "class")
+                discard(el.classList.toggle(name, on))
+        end classPatchNow
+
+        override val classPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit] =
+            Present(classPatchNow)
 
         def onChange(path: Seq[String], ui: UI, mount: Boolean)(using Frame): Unit < Async =
             // Render content at its nested-reactive sub-path (contentPath) so a reactive-valued region paints a
