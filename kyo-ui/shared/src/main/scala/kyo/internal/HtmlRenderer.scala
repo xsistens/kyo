@@ -894,7 +894,7 @@ private[kyo] object HtmlRenderer:
            |        // Snapshot transitions/focus-auto off the OLD range: a morph removes departing nodes just
            |        // like the outerHTML replace it took over from, so ghosts still get cloned up front.
            |        var __en=__kyoRangePaths(r,faEnterPaths);
-           |        var __gh=__kyoRangeGhosts(r,kyoLeaveSurv(op.Replace.html));
+           |        var __gh=__kyoRangeGhosts(r,__kyoLeaveSurvIn(tc));
            |        var __fa=__kyoRangePaths(r,focusAutoPaths);
            |        __kyoMorphRange(rp,r.s.nextSibling,r.e,tc.firstChild,null);
            |        // The mount's own first paint claims the region: the 'm' flag rides the live start marker
@@ -1280,12 +1280,16 @@ private[kyo] object HtmlRenderer:
            |    (function(e2,cs){requestAnimationFrame(function(){for(var m=0;m<cs.length;m++){if(cs[m])e2.classList.remove(cs[m]);}});})(el,cls);
            |  }
            |}
-           |// Set of paths of data-kyo-LEAVE elements in an HTML fragment (which leave-elements SURVIVE a Replace).
+           |// Set of paths of data-kyo-LEAVE elements in a payload (which leave-elements SURVIVE a Replace).
            |// Keyed on leave-carrying elements, NOT all data-kyo-path: a reactive wrapper span shares its path with
            |// the (leaving) element it wraps, so an all-path set would wrongly report the element as surviving.
-           |function kyoLeaveSurv(html){
-           |  var s={};var t=document.createElement("template");t.innerHTML=html;
-           |  var els=t.content.querySelectorAll("[data-kyo-leave]");
+           |// Reads off the ALREADY PARSED container, not a second template: a <tr> or <option> payload only
+           |// survives parsing inside its required ancestor chain, which __kyoParseCtx supplies and a bare
+           |// template does not. Parsed bare, those rows vanish, the set comes back empty, and every leaving row
+           |// is then wrongly treated as removed. Twin of DomBackend.leaveSurvSetIn; keep in lockstep.
+           |function __kyoLeaveSurvIn(c){
+           |  var s={};if(!c||!c.querySelectorAll)return s;
+           |  var els=c.querySelectorAll("[data-kyo-leave]");
            |  for(var i=0;i<els.length;i++){var pp=els[i].getAttribute("data-kyo-path");if(pp!==null)s[pp]=true;}
            |  return s;
            |}
