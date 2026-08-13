@@ -660,6 +660,7 @@ private[kyo] object HtmlRenderer:
         if attrs.onClick.nonEmpty || attrs.onClickEvt.nonEmpty ||
             attrs.onClickSelf.nonEmpty || attrs.onClickSelfEvt.nonEmpty
         then events += "click"
+        if attrs.onContextMenu.nonEmpty || attrs.onContextMenuEvt.nonEmpty then events += "contextmenu"
         if attrs.onFocus.nonEmpty || attrs.onFocusEvt.nonEmpty then events += "focus"
         if attrs.onBlur.nonEmpty || attrs.onBlurEvt.nonEmpty then events += "blur"
         if attrs.onKeyDown.nonEmpty then events += "keydown"
@@ -1134,6 +1135,8 @@ private[kyo] object HtmlRenderer:
            |    }
            |    var mid=e.target&&e.target.id?e.target.id:null;if(el.tagName&&el.tagName.toLowerCase()==='a')e.preventDefault();post({Click:{path:p,mouse:mkMouse({ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},mid)}});window._kyoClickSubmit=true;setTimeout(function(){window._kyoClickSubmit=false},0);
            |  }
+           |  // Right-click: preventDefault suppresses the native menu only when a handler was declared.
+           |  else if(t==="contextmenu"&&he(el,"contextmenu")){e.preventDefault();var cmid=e.target&&e.target.id?e.target.id:null;post({ContextMenu:{path:p,mouse:mkMouse({ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},cmid)}});}
            |  else if(t==="input"&&he(el,"input"))post({Input:{path:p,value:e.target.value}});
            |  else if(t==="change"&&he(el,"change")){
            |    var tgt=e.target,typ=tgt.type;
@@ -1345,7 +1348,7 @@ private[kyo] object HtmlRenderer:
            |  else return;
            |  if(nv!==v)kyoSetVal(t,nv);
            |}
-           |["click","input","change","submit","keydown","keyup","focus","blur","mouseover","mouseout"].forEach(function(t){
+           |["click","contextmenu","input","change","submit","keydown","keyup","focus","blur","mouseover","mouseout"].forEach(function(t){
            |  document.body.addEventListener(t,handle,true);
            |});
            |document.body.addEventListener("wheel",handle,{capture:true,passive:false});
