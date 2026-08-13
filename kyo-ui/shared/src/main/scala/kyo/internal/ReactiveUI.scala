@@ -26,7 +26,15 @@ private[kyo] case class ReactiveUI(
   * observe's closed-and-awaited ordering makes unregister-then-reregister safe across region rebuilds), and read by
   * the dispatch-time handler of whatever fresh Mounted node value occupies the same path.
   */
-final private[kyo] class MountDispatch(cells: AtomicRef[Dict[Seq[String], Signal[UI]]]):
+final private[kyo] class MountDispatch(
+    cells: AtomicRef[Dict[Seq[String], Signal[UI]]],
+    /** The session's handler-error policy (installed at the transport entry, see [[ReactiveUI.normalize]]):
+      * invoked by `safeDispatch` for every handler failure/panic, AFTER the out-of-band log and WITHOUT
+      * stopping the bubble chain. Carried here because this table is the one session-level object every
+      * dispatch closure the normalization tree builds already closes over.
+      */
+    val onHandlerError: Maybe[Throwable => Unit < Async]
+):
     def register(path: Seq[String], cell: Signal[UI])(using Frame): Unit < Sync =
         cells.getAndUpdate(_.update(path, cell)).unit
 
@@ -39,8 +47,8 @@ final private[kyo] class MountDispatch(cells: AtomicRef[Dict[Seq[String], Signal
 end MountDispatch
 
 private[kyo] object MountDispatch:
-    def init(using Frame): MountDispatch < Sync =
-        AtomicRef.init(Dict.empty[Seq[String], Signal[UI]]).map(new MountDispatch(_))
+    def init(onHandlerError: Maybe[Throwable => Unit < Async] = Absent)(using Frame): MountDispatch < Sync =
+        AtomicRef.init(Dict.empty[Seq[String], Signal[UI]]).map(new MountDispatch(_, onHandlerError))
 
 /** Normalization-time companion of a [[kyo.UI.Ast.Mounted]] node: the node, the render path it was normalized at, and its
   * rendering defaults.
@@ -88,10 +96,15 @@ private[kyo] object ReactiveUI:
       * (subscribe picks it up from there). All recursion goes through normalizeWith so every handler closure
       * shares the one table.
       */
-    def normalize(ui: UI, path: Seq[String], svg: Boolean = false): ReactiveUI < Sync =
+    def normalize(
+        ui: UI,
+        path: Seq[String],
+        svg: Boolean = false,
+        onHandlerError: Maybe[Throwable => Unit < Async] = Absent
+    ): ReactiveUI < Sync =
         given Frame = ui.frame
         for
-            mountDispatch <- MountDispatch.init
+            mountDispatch <- MountDispatch.init(onHandlerError)
             root          <- normalizeWith(ui, path, svg, mountDispatch)
         yield root.copy(mountDispatch = Present(mountDispatch))
         end for
@@ -237,7 +250,7 @@ private[kyo] object ReactiveUI:
                     val reactiveChildren = childWalks.flatMap(_._1)
                     val staticHandlers   = childWalks.flatMap(_._2)
                     val handle: Handler = (targetPath, event) =>
-                        dispatch(elem, basePath, targetPath, event, reactiveChildren, staticHandlers)
+                        dispatch(elem, basePath, targetPath, event, reactiveChildren, staticHandlers, mountDispatch.onHandlerError)
                     (reactiveChildren, handle)
                 end for
 
@@ -278,14 +291,17 @@ private[kyo] object ReactiveUI:
                 val noHandle: Handler = (_, _) => true
                 (Seq.empty[ReactiveUI], noHandle)
 
-    /** Dispatch an event through an element. */
+    /** Dispatch an event through an element. `onHandlerError` is the session's handler-error policy
+      * (threaded from the normalize root's [[MountDispatch]]), handed to [[safeDispatch]].
+      */
     private def dispatch(
         elem: Element,
         myPath: Seq[String],
         targetPath: Seq[String],
         event: UIEvent,
         reactiveChildren: Seq[ReactiveUI],
-        staticHandlers: Seq[(Int, Handler)]
+        staticHandlers: Seq[(Int, Handler)],
+        onHandlerError: Maybe[Throwable => Unit < Async]
     )(using Frame): Boolean < Async =
         if targetPath == myPath then
             dispatchToElement(elem, event, isTarget = true)
@@ -327,10 +343,12 @@ private[kyo] object ReactiveUI:
                 )
                 result <- staticChild match
                     case Present(childHandle) =>
-                        safeDispatch(childHandle, targetPath, event).map(keep => if keep then bubble else false)
+                        safeDispatch(childHandle, targetPath, event, onHandlerError).map(keep => if keep then bubble else false)
                     case Absent =>
                         reactiveChild.fold(bubble)(child =>
-                            safeDispatch(child.handle, targetPath, event).map(keep => if keep then bubble else false)
+                            safeDispatch(child.handle, targetPath, event, onHandlerError).map(keep =>
+                                if keep then bubble else false
+                            )
                         )
             yield result
             end for
@@ -345,18 +363,31 @@ private[kyo] object ReactiveUI:
     private def invokeWith[A](handler: Maybe[A => Any < Async], value: A)(using Frame): Unit < Async =
         if handler.isEmpty then () else handler.get(value).unit
 
-    /** Dispatch an event safely, logging and recovering from handler errors without stopping the bubble chain. */
-    private def safeDispatch(handle: (Seq[String], UIEvent) => Boolean < Async, path: Seq[String], event: UIEvent)(using
-        Frame
-    ): Boolean < Async =
+    /** Dispatch an event safely: handler errors are logged out-of-band, offered to the session's
+      * handler-error policy (`onHandlerError` — the app's central "what happens with action errors"
+      * decision, e.g. a toast), and never stop the bubble chain. A handler that wants a different
+      * fate for a failure consumes it itself (`Abort.recover`) before it reaches this seam; a
+      * handler that only wants to observe uses `Abort.tap` and lets it bubble here.
+      */
+    private def safeDispatch(
+        handle: (Seq[String], UIEvent) => Boolean < Async,
+        path: Seq[String],
+        event: UIEvent,
+        onHandlerError: Maybe[Throwable => Unit < Async]
+    )(using Frame): Boolean < Async =
+        def surface(err: Throwable): Unit < Async =
+            onHandlerError match
+                case Present(f) => f(err)
+                case Absent     => ()
         Abort.recover[Throwable](
             onFail = err =>
                 Log.error(s"Handler error during ${event.getClass.getSimpleName} at ${path.mkString(".")}: ${err.getMessage}")
-                    .andThen(true), // continue bubbling
+                    .andThen(surface(err)).andThen(true), // continue bubbling
             onPanic = thr =>
                 Log.error(s"Handler panic during ${event.getClass.getSimpleName} at ${path.mkString(".")}: ${thr.getMessage}")
-                    .andThen(true) // continue bubbling
+                    .andThen(surface(thr)).andThen(true) // continue bubbling
         )(handle(path, event))
+    end safeDispatch
 
     /** Read current checked value from Maybe[Bound[Boolean]]. */
     private def readChecked(checked: Maybe[Bound[Boolean]])(using Frame): Boolean < Sync =
@@ -694,7 +725,7 @@ private[kyo] object ReactiveUI:
             // Absent only for hand-built ReactiveUIs in tests; a normalize-produced root always carries the table.
             mountDispatch <- rui.mountDispatch match
                 case Present(d) => Kyo.lift(d)
-                case Absent     => MountDispatch.init
+                case Absent     => MountDispatch.init()
             _ <- subscribeScoped(rui, exchange, signalChangeTime, rootMounts, mountDispatch)
         yield Subscription(rui.handle, signalChangeTime)
 
