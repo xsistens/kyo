@@ -32,7 +32,18 @@ private[kyo] case class ReactiveUI(
     renderedClassValues: Map[String, Boolean] = Map.empty,
     // Present on Foreach regions: carries the AST node (signal, key, render) and the normalize-time items
     // snapshot so subscribe can run the per-row reuse path instead of the whole-region re-render loop.
-    foreachSpec: Maybe[ForeachSpec] = Absent
+    foreachSpec: Maybe[ForeachSpec] = Absent,
+    // Present on a region lifted from a Signal[String] (UI.Ast.Reactive.text): the content is one text node
+    // whatever the signal emits, so subscribe can bind the backend's text write instead of forking the
+    // render-walk-paint loop. Carried through normalize rather than re-derived, because "this renders to a lone
+    // text node" is knowable at the lift site and only guessable afterwards.
+    textSignal: Maybe[Signal[String]] = Absent,
+    // Present on a region built by `Signal.render` (UI.Ast.Reactive.source): the signal BEFORE the projection
+    // to UI, with the projection. Subscribe observes this instead of the projected signal, so an emission whose
+    // value is unchanged is dropped by `observe` itself rather than re-rendering a subtree that can only be
+    // compared as UI — and a UI built from handler closures never compares equal. Foreach carries the same pair
+    // for its rows; this is that treatment for the single-value region.
+    sourceSpec: Maybe[UI.Ast.Reactive.Source[?]] = Absent
 )
 
 /** Normalization-time companion of a [[kyo.UI.Ast.Foreach]] node: keeps the typed machinery (item signal, key
@@ -145,7 +156,7 @@ private[kyo] object ReactiveUI:
                             (_, freshHdl) <- walkStatic(currentUI, path, svg, mountDispatch)
                             result        <- freshHdl(targetPath, event)
                         yield result
-                }.copy(renderedValue = Present(current))
+                }.copy(renderedValue = Present(current), textSignal = ui.text, sourceSpec = ui.source)
                 end for
 
             case ui: Foreach[?, ?] @unchecked =>
@@ -926,19 +937,60 @@ private[kyo] object ReactiveUI:
                                     rui.children
                                 )
                             case _ =>
-                                subscribeRegion(
-                                    rui.path,
-                                    rui.signal,
-                                    rui.svgContext,
-                                    exchange,
-                                    signalChangeTime,
-                                    Absent,
-                                    mountDispatch,
-                                    initialKids = rui.children,
-                                    rendered = rui.renderedValue
-                                )
+                                bindTextRegion(rui, exchange).map { bound =>
+                                    if bound then Kyo.unit
+                                    else
+                                        subscribeRegion(
+                                            rui.path,
+                                            rui.signal,
+                                            rui.svgContext,
+                                            exchange,
+                                            signalChangeTime,
+                                            Absent,
+                                            mountDispatch,
+                                            initialKids = rui.children,
+                                            rendered = rui.renderedValue,
+                                            source = rui.sourceSpec
+                                        )
+                                }
         }
     end subscribeScoped
+
+    /** Bind a lone-text region straight to the backend's text write, skipping the region fiber; `false` means the
+      * caller must subscribe it as a normal region.
+      *
+      * A region lifted from a `Signal[String]` paints one text node and nothing else. The region path still runs
+      * the full apparatus for it — a fiber, a per-value Scope with its finalizer queue, a re-walk and an HTML
+      * render — to arrive at a single `Text.data` write. Measured on `03_update10th`, that write is under 2% of
+      * the cost; the rest is the machinery around it. Binding is the same trade the attribute channels already
+      * make (see bindChannel), and for the same reason: the handler is one DOM write that cannot suspend.
+      *
+      * Three conditions, all necessary:
+      *
+      *   - the region carries its string signal, so its content is statically one text node;
+      *   - the backend offers a synchronous text write (the server transport does not, and stays on the region
+      *     path — its repaint IS the equivalent patch);
+      *   - the walk found no reactive children under it. A `Text` value cannot produce any, so this is a
+      *     guard against a future lift that fills `text` on a region whose content is not only text.
+      *
+      * The baseline is the render-time string, so an unchanged first emission is dropped before the write, and a
+      * change that landed between render and subscribe still fires (`Signal.Unsafe.subscribe` delivers the
+      * current value on registration). Release is registered on the current Scope — the same scope that would
+      * have owned the fiber — because the next-promise is masked and nothing interrupts it.
+      */
+    private def bindTextRegion(rui: ReactiveUI, exchange: UIExchange)(using Frame): Boolean < (Sync & Scope) =
+        (rui.textSignal, exchange.textPatcherNow) match
+            case (Present(sig), Present(patch)) if rui.children.isEmpty =>
+                val rendered = rui.renderedValue match
+                    case Present(t: Text) => Present(t.value)
+                    case _                => Absent
+                Sync.Unsafe.defer {
+                    sig.unsafeObserveProjected[String](identity, rendered, v => patch(rui.path, v)) match
+                        case Absent           => Kyo.lift(false)
+                        case Present(release) => Scope.ensure(Sync.defer(release())).andThen(true)
+                }
+            case _ => false
+    end bindTextRegion
 
     /** Fork the scoped in-place-patch observers for one node's reactive attr/bool-attr/class channels at
       * `path`. Shared by subscribeScoped (walked nodes) and by a region's renderValue (the painted ROOT
@@ -1058,7 +1110,11 @@ private[kyo] object ReactiveUI:
         // it in the DOM) and only the mount claims and child subscriptions run. Element roots carry handler
         // lambdas and never compare equal, keeping their behavior unchanged.
         initialKids: Seq[ReactiveUI] = Seq.empty,
-        rendered: Maybe[UI] = Absent
+        rendered: Maybe[UI] = Absent,
+        // The node's pre-projection signal and projection (UI.Ast.Reactive.source), when it has one: the loop
+        // observes THAT instead of `signal`, so the comparison happens on the value rather than on a rendered
+        // tree that is never equal to the last one.
+        source: Maybe[UI.Ast.Reactive.Source[?]] = Absent
     )(using Frame): Unit < (Async & Scope) =
         for
             regionMounts <- presetMounts match
@@ -1090,9 +1146,20 @@ private[kyo] object ReactiveUI:
                             subscribeScoped(_, exchange, signalChangeTime, regionMounts, mountDispatch)
                         )
                     yield ()
+                // What the region's fiber listens to. With a source present that is VALUE space: `observe`
+                // drops an emission whose value equals the last delivered one, so a record that ticks once a
+                // second stops reaching the regions drawing the slices of it that did not move. Without a
+                // source (a lifted `Signal[UI]`, where no value exists before the UI) it stays the projected
+                // signal and the only available comparison is the UI itself, exactly as before.
+                def observed(paint: UI => Unit < (Async & Scope)): Unit < Async =
+                    source match
+                        case Present(src) =>
+                            src.applyTyped([T] => (values: Signal[T], project: T => UI) => values.observe(v => paint(project(v))))
+                        case Absent => signal.observe(paint)
+
                 Abort.run[Throwable] {
                     var first = true
-                    signal.observe { current =>
+                    observed { current =>
                         val isFirst = first
                         first = false
                         if isFirst && rendered.exists(_.equals(current)) then
