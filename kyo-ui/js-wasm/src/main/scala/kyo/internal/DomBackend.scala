@@ -169,7 +169,7 @@ private[kyo] object DomBackend:
                             // morph: a morph removes departing nodes just like the outerHTML replace it took over
                             // from, so leaving elements still have to be cloned into ghosts up front.
                             val oldEnter     = rangePaths(r)(enterPaths)
-                            val ghosts       = rangeLeaveGhosts(r, leaveSurvSet(html))
+                            val ghosts       = rangeLeaveGhosts(r, leaveSurvSetIn(toContainer))
                             val oldFocusAuto = rangePaths(r)(focusAutoPaths)
                             // Morph the marker-delimited range instead of replacing, so focus/caret/scroll/
                             // transitions on reused nodes survive.
@@ -642,19 +642,21 @@ private[kyo] object DomBackend:
         }
     end seedEnter
 
-    /** The set of paths of `data-kyo-leave` elements in an HTML fragment (which leave-elements survive a region
-      * replace). Keyed on leave-carrying elements, NOT all `data-kyo-path`: a reactive wrapper span shares its path
-      * with the (leaving) element it wraps, so an all-path set would wrongly report the element as surviving.
+    /** The set of paths of `data-kyo-leave` elements in a payload (which leave-elements survive a region replace).
+      * Keyed on leave-carrying elements, NOT all `data-kyo-path`: a reactive wrapper span shares its path with the
+      * (leaving) element it wraps, so an all-path set would wrongly report the element as surviving.
+      *
+      * Reads off the ALREADY PARSED container rather than a second `template.innerHTML`: a `<tr>` or `<option>`
+      * payload only survives parsing inside its required ancestor chain, which `parseToContainer` supplies and a
+      * bare template does not. Parsed bare, those rows are dropped, the survivor set comes back empty, and every
+      * leaving row is then wrongly treated as removed — it gets a ghost and its live node is torn out.
       */
-    private def leaveSurvSet(html: String): Set[String] =
-        val tpl = document.createElement("template").asInstanceOf[scalajs.js.Dynamic]
-        tpl.innerHTML = html
-        val content = tpl.content.asInstanceOf[dom.DocumentFragment]
-        val els     = content.querySelectorAll("[data-kyo-leave]")
+    private def leaveSurvSetIn(container: dom.Node): Set[String] =
+        val els = container.asInstanceOf[dom.Element].querySelectorAll("[data-kyo-leave]")
         (0 until els.length).flatMap { i =>
             Maybe(els(i).asInstanceOf[dom.Element].getAttribute("data-kyo-path")).toList
         }.toSet
-    end leaveSurvSet
+    end leaveSurvSetIn
 
     /** Strip `data-kyo-*` and `id` from a subtree so a ghost clone is inert (no selector collisions). */
     private def stripKyo(el: dom.Element): Unit =
