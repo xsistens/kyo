@@ -355,9 +355,19 @@ private[kyo] object DomBackend:
         override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
             Sync.defer(classPatchNow(path, name, on))
 
+        // A bound text region: the value goes into the text node as-is. Unlike patchLoneText, which receives
+        // RENDERED html and must therefore refuse payloads carrying `<` or `&`, this receives the string itself
+        // — and a text node holds literal characters, so every string is writable here with no escaping and no
+        // parser. An unpainted path is a silent no-op, exactly as for the attribute patches above.
+        private def textPatchNow(path: Seq[String], value: String): Unit =
+            val r = lookupRegion(path.mkString("."))
+            if r != null then setRegionText(r, value)
+        end textPatchNow
+
         override val attrPatcherNow: Maybe[(Seq[String], String, String) => Unit]      = Present(attrPatchNow)
         override val boolAttrPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit] = Present(boolAttrPatchNow)
         override val classPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit]    = Present(classPatchNow)
+        override val textPatcherNow: Maybe[(Seq[String], String) => Unit]              = Present(textPatchNow)
 
         // Render ONLY the changed rows, and as ONE payload rather than one parse per row: a full replacement
         // must not lose the single bulk parse it has today just because a one-row removal wants to skip it.
@@ -702,6 +712,35 @@ private[kyo] object DomBackend:
                 true
             end if
     end patchLoneText
+
+    /** Make the region hold exactly `value` as its single text node.
+      *
+      * The steady state is one text node and the write is one assignment. The rebuild branch covers the two ways
+      * that shape can be absent: the empty string renders no node at all (so a region that started empty has
+      * nothing to assign to), and a parent's morph may have left the range in any state. It restores the
+      * invariant rather than declining, because declining is not an option here — the region fiber this replaces
+      * no longer exists, so a skipped write is a lost change, not a slower one.
+      *
+      * Sibling of `patchLoneText`, which handles the same shape for the rendered-HTML path.
+      */
+    private def setRegionText(r: RegionRange, value: String): Unit =
+        val first = r.start.nextSibling
+        if first != null && (first ne r.end) && first.nodeType == 3 && (first.nextSibling eq r.end) then
+            val t = first.asInstanceOf[dom.Text]
+            if t.data != value then t.data = value
+        else
+            val parent = r.start.parentNode
+            if parent != null then
+                var n = r.start.nextSibling
+                while n != null && (n ne r.end) do
+                    val next = n.nextSibling
+                    discard(parent.removeChild(n))
+                    n = next
+                end while
+                discard(parent.insertBefore(document.createTextNode(value), r.end))
+            end if
+        end if
+    end setRegionText
 
     private def readSelection(el: dom.Element): (Maybe[Int], Maybe[Int]) =
         val dyn = el.asInstanceOf[scalajs.js.Dynamic]

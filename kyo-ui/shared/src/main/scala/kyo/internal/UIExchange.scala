@@ -43,6 +43,17 @@ private[kyo] trait UIExchange:
     def boolAttrPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit] = Absent
     def classPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit]    = Absent
 
+    /** Synchronous sink for a region whose content is exactly one text node — a `Signal[String]` lifted into a
+      * child position. Same contract as the three above: it runs on the writer's stack and must not suspend.
+      *
+      * This one has no effectful twin, and deliberately so. The three channel patches describe writes with no
+      * equivalent in [[onChange]]: there is no way to say "set this attribute" through a region repaint. A text
+      * region's patch does have one — repainting the region with the new `Text` is what the region path already
+      * does, correctly, for every transport. `Absent` here is therefore the complete fallback, not a gap to fill
+      * later, and a wire command for it would buy nothing over the repaint it would replace.
+      */
+    def textPatcherNow: Maybe[(Seq[String], String) => Unit] = Absent
+
     /** Structural patch of a KEYED list region: the whole row order, with the rows that actually need
       * repainting flagged.
       *
