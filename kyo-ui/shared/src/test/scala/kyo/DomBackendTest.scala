@@ -619,4 +619,91 @@ class DomBackendTest extends UITest:
         }
     }
 
+    // ---- Bound text regions (DomBackend.setRegionText) ----
+    //
+    // A Signal[String] child is bound straight to its text node instead of being repainted through the
+    // renderer. These leaves are the DOM half of that: ReactiveTextBindingTest proves the binding is chosen
+    // and released, only a real document can show what actually lands in the node.
+
+    "a Signal[String] child patches its text node in place" in {
+        val app: UI < Async =
+            for label <- Signal.initRef("first")
+            yield UI.div(
+                UI.button("set").id("tset").onClick(label.set("second")),
+                UI.span(label: Signal[String]).id("tlbl")
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("tlbl"), "first")
+                _ <- Browser.click(Selector.id("tset"))
+                _ <- Browser.assertText(Selector.id("tlbl"), "second")
+            yield ()
+        }
+    }
+
+    "a bound text region that starts empty gains a text node on first change" in {
+        // The empty string renders NO node at all, so the steady-state "assign to the text node" has nothing
+        // to assign to: this is the one shape that exercises setRegionText's rebuild branch.
+        val app: UI < Async =
+            for label <- Signal.initRef("")
+            yield UI.div(
+                UI.button("fill").id("tfill").onClick(label.set("appeared")),
+                UI.button("clear").id("tclear").onClick(label.set("")),
+                UI.span(label: Signal[String]).id("tempty")
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("tempty"), "")
+                _ <- Browser.click(Selector.id("tfill"))
+                _ <- Browser.assertText(Selector.id("tempty"), "appeared")
+                // And back: emptying must not leave the old text behind.
+                _ <- Browser.click(Selector.id("tclear"))
+                _ <- Browser.assertText(Selector.id("tempty"), "")
+            yield ()
+        }
+    }
+
+    "markup characters in a bound text value land literally" in {
+        // The binding writes the string into a text node; the region path renders HTML and escapes. If the
+        // binding took the rendered form, the entities would show up as visible text.
+        val app: UI < Async =
+            for label <- Signal.initRef("plain")
+            yield UI.div(
+                UI.button("markup").id("tmark").onClick(label.set("a & b < c")),
+                UI.span(label: Signal[String]).id("tesc")
+            )
+        withUI(app) {
+            for
+                _ <- Browser.click(Selector.id("tmark"))
+                _ <- Browser.assertText(Selector.id("tesc"), "a & b < c")
+            yield ()
+        }
+    }
+
+    "a bound text region keeps patching after its parent region re-renders" in {
+        // The parent's repaint replaces the text node and closes the per-value scope that owned the binding.
+        // Both halves have to work: the re-subscribe must bind again, and the new binding must find the NEW
+        // markers — it addresses by path, so a stale node reference would fail exactly here.
+        val app: UI < Async =
+            for
+                shown <- Signal.initRef(true)
+                label <- Signal.initRef("one")
+            yield UI.div(
+                UI.button("toggle").id("ttog").onClick(shown.getAndUpdate(!_).unit),
+                UI.button("bump").id("tbump").onClick(label.set("two")),
+                shown.map(v => if v then UI.span(label: Signal[String]).id("touter") else UI.span("hidden").id("touter"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("touter"), "one")
+                _ <- Browser.click(Selector.id("ttog"))
+                _ <- Browser.assertText(Selector.id("touter"), "hidden")
+                _ <- Browser.click(Selector.id("ttog"))
+                _ <- Browser.assertText(Selector.id("touter"), "one")
+                _ <- Browser.click(Selector.id("tbump"))
+                _ <- Browser.assertText(Selector.id("touter"), "two")
+            yield ()
+        }
+    }
+
 end DomBackendTest
