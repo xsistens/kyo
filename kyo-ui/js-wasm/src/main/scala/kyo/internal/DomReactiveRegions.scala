@@ -126,6 +126,37 @@ final private[kyo] class DomReactiveRegions private (
         found
     end firstElementAt
 
+    /** Write `value` as the whole content of the range that owns `path`; `false` when no range owns it.
+      *
+      * A text node holds literal characters, so the string is written as-is: no escaping, no parser, and no
+      * repaint of the surrounding region. The common shape (the range holds exactly one text node) assigns
+      * that node's data, which keeps its identity and every DOM-local thing hanging off it; any other shape
+      * is replaced by a single fresh text node.
+      */
+    private[kyo] def setTextAt(path: Seq[String], value: String): Boolean =
+        var written = false
+        ranges.foreachEntry { (id, endpoints) =>
+            if !written && ReactiveRegion.pathOf(id).contains(path) then
+                written = true
+                val first = DomReactiveRegions.next(endpoints.start)
+                first match
+                    case Present(node: dom.Text) if DomReactiveRegions.next(node).exists(_ eq endpoints.end) =>
+                        if node.data != value then node.data = value
+                    case _ =>
+                        DomReactiveRegions.parent(endpoints.start).foreach { parent =>
+                            var current = DomReactiveRegions.next(endpoints.start)
+                            while current.nonEmpty && (current.get ne endpoints.end) do
+                                val next = DomReactiveRegions.next(current.get)
+                                discard(parent.removeChild(current.get))
+                                current = next
+                            end while
+                            discard(parent.insertBefore(document.createTextNode(value), endpoints.end))
+                        }
+                end match
+        }
+        written
+    end setTextAt
+
     private[kyo] def size(using Frame): Int < Sync =
         Sync.defer(ranges.size)
 

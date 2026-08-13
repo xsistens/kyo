@@ -464,9 +464,17 @@ private[kyo] object DomBackend:
         override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
             Sync.defer(classPatchNow(path, name, on))
 
+        // A bound text region: the value goes into the text node as-is. Unlike patchLoneText, which receives
+        // RENDERED html and must therefore refuse payloads carrying `<` or `&`, this receives the string itself
+        // — and a text node holds literal characters, so every string is writable here with no escaping and no
+        // parser. An unpainted path is a silent no-op, exactly as for the attribute patches above.
+        private def textPatchNow(path: Seq[String], value: String): Unit =
+            discard(regions.setTextAt(path, value))
+
         override val attrPatcherNow: Maybe[(Seq[String], String, String) => Unit]      = Present(attrPatchNow)
         override val boolAttrPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit] = Present(boolAttrPatchNow)
         override val classPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit]    = Present(classPatchNow)
+        override val textPatcherNow: Maybe[(Seq[String], String) => Unit]              = Present(textPatchNow)
 
         private def tryMorphRange(
             oldElements: Seq[dom.Element],
