@@ -6,6 +6,16 @@ import kyo.Browser.*
 // end-to-end via the JVM browser test infrastructure (SSE/event POST cycle).
 class DomBackendTest extends UITest:
 
+    /** Counts every `data-kyo-ghost` node the client appends from now on. Ghosts remove themselves on
+      * transitionend or a 1s timeout, so polling the DOM for their presence would race the cleanup; a
+      * MutationObserver records the spawn itself.
+      */
+    private val ghostCounterJs =
+        "window.__kyoGhostCount=0;" +
+            "new MutationObserver(function(ms){ms.forEach(function(m){m.addedNodes.forEach(function(n){" +
+            "if(n.nodeType===1&&n.hasAttribute&&n.hasAttribute('data-kyo-ghost'))window.__kyoGhostCount++;" +
+            "});});}).observe(document.body,{childList:true,subtree:true})"
+
     "Replace op updates only the target reactive zone" in {
         val app: UI < Async =
             for

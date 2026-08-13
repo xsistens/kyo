@@ -858,12 +858,15 @@ private[kyo] object DomBackend:
     end stripKyo
 
     /** Prepare leave ghosts for the OUTERMOST `data-kyo-leave` elements under `root` being removed (path not in `surv`).
-      * Captures rect + clone WHILE the node is still in the DOM; returns (ghostNode, leaveClasses) descriptors.
+      * Captures rect + clone WHILE the node is still in the DOM; returns (sourceNode, ghostNode, leaveClasses)
+      * descriptors. The survivor set is a PREDICTION: a preserved subtree survives the patch despite not matching, which
+      * is exactly what the opaque mount boundary does when it keeps a live mount's content under differently-shaped
+      * incoming html. [[spawnGhosts]] therefore re-checks the SOURCE at spawn time and drops nodes still in the document.
       */
-    private def prepareLeaveGhosts(root: dom.Element, surv: Set[String]): Seq[(dom.Element, String)] =
+    private def prepareLeaveGhosts(root: dom.Element, surv: Set[String]): Seq[(dom.Element, dom.Element, String)] =
         prepareLeaveGhosts(Seq(root), surv)
 
-    private def prepareLeaveGhosts(roots: Seq[dom.Element], surv: Set[String]): Seq[(dom.Element, String)] =
+    private def prepareLeaveGhosts(roots: Seq[dom.Element], surv: Set[String]): Seq[(dom.Element, dom.Element, String)] =
         val cand = roots.flatMap { root =>
             val els = root.querySelectorAll("[data-kyo-leave]")
             (if root.getAttribute("data-kyo-leave") != null then Seq(root) else Seq.empty) ++
@@ -888,29 +891,37 @@ private[kyo] object DomBackend:
             st.margin = "0"
             st.pointerEvents = "none"
             g.setAttribute("data-kyo-ghost", "1")
-            (g, if leave == null then "" else leave)
+            (node, g, if leave == null then "" else leave)
         }
     end prepareLeaveGhosts
 
-    /** Append prepared ghosts to `<body>`, add their leave classes next frame, remove on transitionend/animationend or a 1s safety. */
-    private def spawnGhosts(ghosts: Seq[(dom.Element, String)]): Unit =
-        ghosts.foreach { case (g, leave) =>
-            discard(document.body.appendChild(g))
-            val cls     = leave.split("\\s+").filter(_.nonEmpty)
-            val clsList = g.asInstanceOf[scalajs.js.Dynamic].classList
-            discard(dom.window.requestAnimationFrame((_: Double) => cls.foreach(c => clsList.add(c))))
-            var done = false
-            def cleanup(): Unit =
-                if !done then
-                    done = true
-                    if g.parentNode != null then discard(g.parentNode.removeChild(g))
-            val listener: scalajs.js.Function1[dom.Event, Unit] = (_: dom.Event) => cleanup()
-            g.addEventListener("transitionend", listener)
-            g.addEventListener("animationend", listener)
-            val to: scalajs.js.Function0[Unit] = () => cleanup()
-            discard(dom.window.setTimeout(to, 1000.0))
+    /** Append prepared ghosts to `<body>`, add their leave classes next frame, remove on transitionend/animationend or a
+      * 1s safety. A ghost whose SOURCE node is still in the document is dropped: the patch preserved it, so playing a
+      * leave animation over the live element would be a false departure. Removal-based rather than predictive, so every
+      * preservation mechanism the morph grows is covered without a matching change here.
+      */
+    private def spawnGhosts(ghosts: Seq[(dom.Element, dom.Element, String)]): Unit =
+        ghosts.foreach { case (src, g, leave) =>
+            if !document.contains(src) then spawnGhost(g, leave)
         }
     end spawnGhosts
+
+    private def spawnGhost(g: dom.Element, leave: String): Unit =
+        discard(document.body.appendChild(g))
+        val cls     = leave.split("\\s+").filter(_.nonEmpty)
+        val clsList = g.asInstanceOf[scalajs.js.Dynamic].classList
+        discard(dom.window.requestAnimationFrame((_: Double) => cls.foreach(c => clsList.add(c))))
+        var done = false
+        def cleanup(): Unit =
+            if !done then
+                done = true
+                if g.parentNode != null then discard(g.parentNode.removeChild(g))
+        val listener: scalajs.js.Function1[dom.Event, Unit] = (_: dom.Event) => cleanup()
+        g.addEventListener("transitionend", listener)
+        g.addEventListener("animationend", listener)
+        val to: scalajs.js.Function0[Unit] = () => cleanup()
+        discard(dom.window.setTimeout(to, 1000.0))
+    end spawnGhost
 
     // ---- input filter/mask (SPA transport) ----
     // The character-level decisions live in the shared InputMasking so they are testable without a DOM;

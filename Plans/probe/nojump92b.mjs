@@ -1,0 +1,18 @@
+import { attach } from "./cdp.mjs";
+const c = await attach();
+await c.go((process.argv[2]||"http://localhost:8080") + "/c/menubar");
+await c.ev(`window.scrollTo(0, 300); 1`); await c.sleep(300);
+const b = await c.ev(`Math.round(window.scrollY)`);
+await c.ev(`document.querySelector('.p-menubar-root-list').focus()`); await c.sleep(300);
+const b2 = await c.ev(`Math.round(window.scrollY)`);
+await c.key("ArrowRight"); await c.key("ArrowDown"); await c.key("ArrowDown");
+const a = await c.ev(`Math.round(window.scrollY)`);
+console.log("menubar scrollY:", b, "after focus", b2, "after keys", a);
+await c.go((process.argv[2]||"http://localhost:8080") + "/c/select");
+await c.ev(`window.scrollTo(0, 500); 1`); await c.sleep(300);
+const s1 = await c.ev(`Math.round(window.scrollY)`);
+await c.ev(`(() => { const t = document.querySelectorAll('.p-select')[0]; t.focus && t.focus(); return 1; })()`);
+await c.key("ArrowDown"); await c.sleep(400);
+const s2 = await c.ev(`Math.round(window.scrollY)`);
+console.log("select page scrollY:", s1, "->", s2, "panel open:", await c.ev(`!!document.querySelector('.p-select-overlay')`));
+c.close();

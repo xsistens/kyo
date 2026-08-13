@@ -1,0 +1,10 @@
+import { attach } from "./cdp.mjs";
+const c = await attach();
+await c.go((process.argv[2]||"http://localhost:8080") + "/c/chip");
+const has = `[...document.querySelectorAll('.p-chip')].some(ch => ch.textContent.includes('Xuxue'))`;
+console.log("chip present:", await c.ev(has));
+await c.ev(`(() => { const ch = [...document.querySelectorAll('.p-chip')].find(ch => ch.textContent.includes('Xuxue'));
+  const b = ch.querySelector('.p-chip-remove-icon'); b.scrollIntoView({block:'center'}); b.focus(); return b.tagName + ':' + b.tabIndex; })()`).then(r=>console.log("remove button:", r));
+await c.key("Backspace"); await c.sleep(500);
+console.log("after Backspace:", await c.ev(has));
+c.close();

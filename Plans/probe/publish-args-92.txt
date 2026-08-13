@@ -1,0 +1,39 @@
+set ThisBuild / version := "1.0.0-RC5-mounted92-SNAPSHOT"
+set LocalProject("kyo-netJVM") / kyoNetClassifierArtifacts := Map.empty[Artifact, File]
+set LocalProject("kyo-netJVM") / kyoNetNativeClassifierGuard := {}
+kyo-browserJVM/publishLocal
+kyo-browserJS/publishLocal
+kyo-configJVM/publishLocal
+kyo-configJS/publishLocal
+kyo-coreJVM/publishLocal
+kyo-coreJS/publishLocal
+kyo-dataJVM/publishLocal
+kyo-dataJS/publishLocal
+kyo-ffiJVM/publishLocal
+kyo-ffiJS/publishLocal
+kyo-httpJVM/publishLocal
+kyo-httpJS/publishLocal
+kyo-jsonrpcJVM/publishLocal
+kyo-jsonrpc-httpJVM/publishLocal
+kyo-jsonrpc-httpJS/publishLocal
+kyo-jsonrpcJS/publishLocal
+kyo-kernelJVM/publishLocal
+kyo-kernelJS/publishLocal
+kyo-netJVM/publishLocal
+kyo-netJS/publishLocal
+kyo-preludeJVM/publishLocal
+kyo-preludeJS/publishLocal
+kyo-schedulerJVM/publishLocal
+kyo-schedulerJS/publishLocal
+kyo-schemaJVM/publishLocal
+kyo-schema-jsonJVM/publishLocal
+kyo-schema-jsonJS/publishLocal
+kyo-schemaJS/publishLocal
+kyo-stats-registryJVM/publishLocal
+kyo-stats-registryJS/publishLocal
+kyo-systemJVM/publishLocal
+kyo-systemJS/publishLocal
+kyo-uiJVM/publishLocal
+kyo-ui-componentsJVM/publishLocal
+kyo-ui-componentsJS/publishLocal
+kyo-uiJS/publishLocal
