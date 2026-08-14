@@ -15,11 +15,15 @@ private[kyo] object HtmlRenderer:
     /** Render a UI tree to HTML with data-kyo-path attributes. */
     def render(ui: UI, path: Seq[String])(using Frame): String < Sync =
         val sb = new StringBuilder
+        // Every descendant extends the path with `:+`, and `Seq.empty` is a List, whose `:+` copies the
+        // whole prefix per node. Normalizing once at the entry makes those appends Vector appends; paths
+        // are only ever built, compared and joined, and Seq equality holds across both.
+        val root = path.toVector
         renderTo(
             sb,
             ui,
-            path,
-            ReactiveRegion.RegionIdentity.root(path),
+            root,
+            ReactiveRegion.RegionIdentity.root(root),
             ReactiveRegion.Namespace.Html,
             parentContext = ReactiveRegion.ParentContext.Other,
             boundaryMode = ReactiveRegion.BoundaryMode.Emit
@@ -64,13 +68,14 @@ private[kyo] object HtmlRenderer:
       * rule, in first-encountered order.
       */
     private[kyo] def renderWithCss(ui: UI, path: Seq[String])(using Frame): (String, Chunk[(String, String)]) < Sync =
-        val sb  = new StringBuilder
-        val css = new CssCollector
+        val sb   = new StringBuilder
+        val css  = new CssCollector
+        val root = path.toVector
         renderTo(
             sb,
             ui,
-            path,
-            ReactiveRegion.RegionIdentity.root(path),
+            root,
+            ReactiveRegion.RegionIdentity.root(root),
             ReactiveRegion.Namespace.Html,
             cssRules = Present(css),
             parentContext = ReactiveRegion.ParentContext.Other,
@@ -290,7 +295,10 @@ private[kyo] object HtmlRenderer:
                                 case d: Svg.Desc  => w(sb, esc(d.text)); Kyo.unit
                                 case _            => Kyo.unit
                             textChild.andThen(
-                                Kyo.foreachDiscard(elem.children.toSeq.zipWithIndex) { (child, i) =>
+                                // foreachIndexedDiscard takes the Chunk and the index directly: `toSeq.zipWithIndex`
+                                // built one tuple per child and a Seq, which foreachDiscard then copied back into a
+                                // Chunk, three allocations per node on a render that runs once per node.
+                                Kyo.foreachIndexedDiscard(elem.children) { (i, child) =>
                                     renderTo(
                                         sb,
                                         child,
@@ -316,7 +324,7 @@ private[kyo] object HtmlRenderer:
             case Fragment(children) =>
                 // Use key for KeyedChild, index for everything else. This matches the path scheme
                 // walkStatic uses, so server-side event routing aligns with rendered data-kyo-path.
-                Kyo.foreachDiscard(children.toSeq.zipWithIndex) { (child, i) =>
+                Kyo.foreachIndexedDiscard(children) { (i, child) =>
                     val childPath = child match
                         case kc: KeyedChild[?] => path :+ kc.key
                         case _                 => path :+ i.toString
@@ -644,16 +652,24 @@ private[kyo] object HtmlRenderer:
         if pseudoClass.isEmpty then
             val css = CssStyleRenderer.render(attrs.uiStyle)
             if css.nonEmpty then w(sb, s""" style="${esc(css)}"""")
-        attrs.ariaAttrs.toSeq.sortBy(_._1).foreach { case (name, value) =>
-            w(sb, s""" aria-$name="${esc(value)}"""")
-        }
+        // The emptiness gates match reactiveTrueClasses below: sorting for deterministic output costs a
+        // Seq copy and a sort per element, and on a plain element every one of these maps is empty.
+        if attrs.ariaAttrs.nonEmpty then
+            attrs.ariaAttrs.toSeq.sortBy(_._1).foreach { case (name, value) =>
+                w(sb, s""" aria-$name="${esc(value)}"""")
+            }
+        end if
         attrs.role.foreach(r => w(sb, s""" role="${esc(r)}""""))
-        attrs.dataAttrs.toSeq.sortBy(_._1).foreach { case (name, value) =>
-            w(sb, s""" data-$name="${esc(value)}"""")
-        }
-        attrs.jsProps.toSeq.sortBy(_._1).foreach { case (name, value) =>
-            w(sb, s""" data-kyo-prop-$name="${esc(value)}"""")
-        }
+        if attrs.dataAttrs.nonEmpty then
+            attrs.dataAttrs.toSeq.sortBy(_._1).foreach { case (name, value) =>
+                w(sb, s""" data-$name="${esc(value)}"""")
+            }
+        end if
+        if attrs.jsProps.nonEmpty then
+            attrs.jsProps.toSeq.sortBy(_._1).foreach { case (name, value) =>
+                w(sb, s""" data-kyo-prop-$name="${esc(value)}"""")
+            }
+        end if
     end renderCommonAttrs
 
     private def encodedDragSource(source: Drag.Source)(using Frame): String =
@@ -682,17 +698,21 @@ private[kyo] object HtmlRenderer:
       * then patches it in place (HtmlOp.SetAttrByPath). Sorted for deterministic output.
       */
     private def renderReactiveAttrs(sb: StringBuilder, attrs: Attrs)(using Frame): Unit < Sync =
-        Kyo.foreachDiscard(attrs.reactiveAttrs.toSeq.sortBy(_._1)) { case (name, sig) =>
-            sig.current.map(v => w(sb, s""" $name="${esc(v)}""""))
-        }
+        if attrs.reactiveAttrs.isEmpty then Kyo.unit
+        else
+            Kyo.foreachDiscard(attrs.reactiveAttrs.toSeq.sortBy(_._1)) { case (name, sig) =>
+                sig.current.map(v => w(sb, s""" $name="${esc(v)}""""))
+            }
 
     /** Emits each reactive boolean attribute as a bare present attribute while its signal is true (mirrors
       * `boolAttr`); the client toggles it in place (HtmlOp.SetBoolAttrByPath). Sorted for deterministic output.
       */
     private def renderReactiveBoolAttrs(sb: StringBuilder, attrs: Attrs)(using Frame): Unit < Sync =
-        Kyo.foreachDiscard(attrs.reactiveBoolAttrs.toSeq.sortBy(_._1)) { case (name, sig) =>
-            sig.current.map(v => if v then w(sb, s" $name"))
-        }
+        if attrs.reactiveBoolAttrs.isEmpty then Kyo.unit
+        else
+            Kyo.foreachDiscard(attrs.reactiveBoolAttrs.toSeq.sortBy(_._1)) { case (name, sig) =>
+                sig.current.map(v => if v then w(sb, s" $name"))
+            }
 
     /** The reactive classes whose signal is currently true, for folding into the SSR class list; the client
       * toggles them in place afterwards (HtmlOp.SetClassByPath). Empty (and cheap) when none are bound.
