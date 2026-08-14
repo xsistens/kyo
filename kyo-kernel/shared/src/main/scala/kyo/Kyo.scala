@@ -257,6 +257,21 @@ object Kyo:
         Kyo.foreachDiscard(Chunk.from(source))(f)
     end foreachDiscard
 
+    /** Applies an effect-producing function to each element of a collection along with its index, discarding the results.
+      *
+      * @param source
+      *   The input collection
+      * @param f
+      *   The effect-producing function to apply to each element and its index
+      * @return
+      *   A new effect that produces Unit
+      */
+    def foreachIndexedDiscard[CC[+X] <: Iterable[X] & IterableOps[X, CC, CC[X]], A, B, S](source: CC[A])(
+        f: Safepoint ?=> (Int, A) => Any < S
+    )(using Frame, Safepoint): Unit < S =
+        Kyo.foreachIndexedDiscard(Chunk.from(source))(f)
+    end foreachIndexedDiscard
+
     /** Filters elements of a collection based on an effect-producing predicate.
       *
       * @param source
@@ -572,6 +587,27 @@ object Kyo:
                         case Nil          => Loop.done
         end match
     end foreachDiscard
+
+    /** Applies an effect-producing function to each element of a `List` along with its index, discarding the results.
+      *
+      * @param source
+      *   The input `List`
+      * @param f
+      *   The effect-producing function to apply to each element and its index
+      * @return
+      *   A new effect that produces Unit
+      */
+    def foreachIndexedDiscard[A, B, S](source: List[A])(f: Safepoint ?=> (Int, A) => Any < S)(using Frame, Safepoint): Unit < S =
+        source match
+            case Nil         => ()
+            case head :: Nil => f(0, head).unit
+            case list =>
+                Loop.indexed(list): (idx, curList) =>
+                    curList match
+                        case head :: tail => f(idx, head).andThen(Loop.continue(tail))
+                        case Nil          => Loop.done
+        end match
+    end foreachIndexedDiscard
 
     /** Filters elements of an `List` based on an effect-producing predicate.
       *
@@ -1035,6 +1071,19 @@ object Kyo:
         foreachDiscard(Chunk.from(source))(f)
     end foreachDiscard
 
+    /** Applies an effect-producing function to each element of a `Seq` along with its index, discarding the results.
+      *
+      * @param source
+      *   The input `Seq`
+      * @param f
+      *   The effect-producing function to apply to each element and its index
+      * @return
+      *   A new effect that produces Unit
+      */
+    inline def foreachIndexedDiscard[A, B, S](source: Seq[A])(f: Safepoint ?=> (Int, A) => Any < S)(using Frame, Safepoint): Unit < S =
+        foreachIndexedDiscard(Chunk.from(source))(f)
+    end foreachIndexedDiscard
+
     /** Filters elements of a `Seq` based on an effect-producing predicate.
       *
       * @param source
@@ -1366,6 +1415,28 @@ object Kyo:
                     else f(chunk(index)).andThen(Loop.continue)
         end match
     end foreachDiscard
+
+    /** Applies an effect-producing function to each element of a `Chunk` along with its index, discarding the results.
+      *
+      * @param source
+      *   The input `Chunk`
+      * @param f
+      *   The effect-producing function to apply to each element and its index
+      * @return
+      *   A new effect that produces Unit
+      */
+    def foreachIndexedDiscard[A, B, S](source: Chunk[A])(f: Safepoint ?=> (Int, A) => Any < S)(using Frame, Safepoint): Unit < S =
+        val chunk = source.toIndexed
+        val len   = chunk.length
+        len match
+            case 0 => ()
+            case 1 => f(0, chunk.head).unit
+            case _ =>
+                Loop.indexed: index =>
+                    if index == len then Loop.done
+                    else f(index, chunk(index)).andThen(Loop.continue)
+        end match
+    end foreachIndexedDiscard
 
     /** Filters elements of a `Chunk` based on an effect-producing predicate.
       *
