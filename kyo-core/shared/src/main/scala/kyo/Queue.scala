@@ -544,8 +544,8 @@ object Queue:
 
         private enum State derives CanEqual:
             case Open
-            case HalfOpen(p: Promise.Unsafe[Boolean, Any], r: Result.Error[Closed])
-            case FullyClosed(r: Result.Error[Closed])
+            case HalfOpen(p: Promise.Unsafe[Boolean, Any], closeFrame: Frame)
+            case FullyClosed(closeFrame: Frame)
         end State
 
         sealed abstract private class Closeable[A](initFrame: Frame) extends Unsafe[A]:
@@ -553,18 +553,46 @@ object Queue:
             final private val state        = AtomicRef.Unsafe.init[State](State.Open)
             final private val activeOffers = AtomicInt.Unsafe.init(0)
 
+            @volatile final private var failureCache: Result.Error[Closed] = null
+
+            /** The failure an operation on this closed queue reports, built where it is first observed.
+              *
+              * The closed state carries the frame of the call that closed the queue rather than a ready-made
+              * exception, so closing allocates nothing and a queue that is closed and never read again -- every
+              * `Scope` finalizer queue is exactly that -- never builds one. The first read builds it and caches it,
+              * so a queue read repeatedly after close still builds exactly one, as it did before.
+              *
+              * Reported frames are unchanged: `initFrame` and the closing call site are both still what they were.
+              *
+              * Deferring it matters off the JVM. `Closed` is a `Throwable`, Scala.js compiles `java.lang.Throwable`
+              * to a subclass of `Error`, and constructing one captures a V8 stack. `NoStackTrace` suppresses Scala's
+              * `fillInStackTrace`, not the `super()` call underneath it.
+              *
+              * Two threads racing the first read may each build one; they are equal, whichever lands in the field is
+              * what every later read sees, and `@volatile` makes that publication safe. On JS it costs nothing --
+              * there is one thread.
+              */
+            private def closedFailure(closeFrame: Frame): Result.Error[Closed] =
+                val cached = failureCache
+                if cached ne null then cached
+                else
+                    val built = Result.Failure(Closed("Queue", initFrame)(using closeFrame))
+                    failureCache = built
+                    built
+                end if
+            end closedFailure
+
             final def close()(using frame: Frame, allow: AllowUnsafe) =
-                val fail = Result.Failure(Closed("Queue", initFrame))
                 // A hard close on a HalfOpen queue aborts the await-empty: complete its promise false (the queue did not drain before this
                 // close) so a parked closeAwaitEmpty caller does not hang.
                 @tailrec
                 def escalate(): Boolean =
                     state.get() match
                         case State.Open =>
-                            if state.compareAndSet(State.Open, State.FullyClosed(fail)) then true
+                            if state.compareAndSet(State.Open, State.FullyClosed(frame)) then true
                             else escalate()
                         case s @ State.HalfOpen(p, _) =>
-                            if state.compareAndSet(s, State.FullyClosed(fail)) then
+                            if state.compareAndSet(s, State.FullyClosed(frame)) then
                                 p.completeDiscard(Result.succeed(false))
                                 true
                             else escalate()
@@ -586,9 +614,8 @@ object Queue:
             end close
 
             final def closeAwaitEmpty()(using frame: Frame, allow: AllowUnsafe): Fiber.Unsafe[Boolean, Any] =
-                val fail = Result.Failure(Closed("Queue", initFrame))
-                val p    = Promise.Unsafe.init[Boolean, Any]()
-                if state.compareAndSet(State.Open, State.HalfOpen(p, fail)) then
+                val p = Promise.Unsafe.init[Boolean, Any]()
+                if state.compareAndSet(State.Open, State.HalfOpen(p, frame)) then
                     handleHalfOpen()
                     p
                 else
@@ -614,8 +641,8 @@ object Queue:
 
             private def opClosed: Maybe[Result.Error[Closed]] =
                 state.get() match
-                    case State.FullyClosed(r) => Present(r)
-                    case _                    => Absent
+                    case State.FullyClosed(cf) => Present(closedFailure(cf))
+                    case _                     => Absent
 
             protected inline def op[A](inline f: => A): Result[Closed, A] =
                 opClosed.getOrElse(Result(f))
@@ -629,9 +656,9 @@ object Queue:
 
             private def offerClosed: Maybe[Result.Error[Closed]] =
                 state.get() match
-                    case State.Open           => Absent
-                    case State.HalfOpen(_, r) => Present(r)
-                    case State.FullyClosed(r) => Present(r)
+                    case State.Open            => Absent
+                    case State.HalfOpen(_, cf) => Present(closedFailure(cf))
+                    case State.FullyClosed(cf) => Present(closedFailure(cf))
 
             protected inline def offerOp(inline f: => Boolean, inline raceRepair: => Boolean): Result[Closed, Boolean] =
                 // Increment BEFORE reading state. Pairs with close()'s wait-for-zero: any offer
@@ -655,7 +682,7 @@ object Queue:
 
             private def handleHalfOpen(): Unit =
                 state.get() match
-                    case s: State.HalfOpen if _isEmpty() && state.compareAndSet(s, State.FullyClosed(s.r)) =>
+                    case s: State.HalfOpen if _isEmpty() && state.compareAndSet(s, State.FullyClosed(s.closeFrame)) =>
                         s.p.completeDiscard(Result.succeed(true))
                     case _ =>
 
