@@ -84,4 +84,28 @@ abstract class UITest extends kyo.test.Test[Any]:
     def assertContains(text: String)(using Frame) =
         Browser.assertTextSatisfies(Browser.Selector.css("body"), s"contains '$text'")(_.contains(text))
 
+    /** Record every inbound server frame, for tests that assert on the COMMAND rather than on the paint.
+      *
+      * Several server behaviours are invisible in the DOM by design — a structural list patch and a whole-list
+      * replace place the same rows, an in-place attribute patch and a re-render leave the same attribute — so
+      * the frame is the only place they differ. The hook wraps `JSON.parse`, which the client resolves globally
+      * at call time and touches first in its message handler; nothing in the page is built for observation.
+      * Install with `Browser.evalDiscard(captureFrames)` AFTER load, so the initial paint is not in `__ops` and
+      * every entry describes a change the test caused.
+      */
+    val captureFrames: String =
+        """(function(){
+          |  var orig=JSON.parse;window.__ops=[];
+          |  JSON.parse=function(s){if(typeof s==='string'&&s.charAt(0)==='{')window.__ops.push(s);return orig.apply(JSON,arguments);};
+          |  return "ok";
+          |})()""".stripMargin
+
+    /** The last frame recorded by [[captureFrames]], decoded with the real wire codec. */
+    def lastOp(using Frame, kyo.test.AssertScope): kyo.internal.HtmlOp < (Browser & Abort[BrowserReadException] & Sync) =
+        Browser.evalJson[String]("window.__ops[window.__ops.length-1]").map { raw =>
+            Json.decode[kyo.internal.HtmlOp](raw) match
+                case Result.Success(op) => Kyo.lift(op)
+                case other              => Sync.defer(fail(s"could not decode the last frame: $other\nraw: $raw"))
+        }
+
 end UITest
