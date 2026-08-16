@@ -451,6 +451,11 @@ object UI:
         // the value (monadic bind) instead of registering a callback.
         private[kyo] val pending: AtomicRef[Map[Seq[String], Promise[Rect, Any]]],
         private[kyo] val pendingById: AtomicRef[Map[String, Promise[Rect, Any]]],
+        // PERSISTENT viewport-observer signals, keyed by id. Unlike `pendingById` (one-shot: the Promise is consumed on
+        // the first MeasureById reply), an entry here is KEPT across replies: each reply pushes the new Rect into the
+        // SignalRef so a scroll/resize stream keeps updating it. Removed only by observeViewportById's scope finalizer.
+        // An id lives in exactly one of the two maps.
+        private[kyo] val observers: AtomicRef[Map[String, Signal.SignalRef[Maybe[Rect]]]],
         private[kyo] val idCounter: AtomicInt
     ):
         // ---- imperative command ----
@@ -526,12 +531,58 @@ object UI:
                     .andThen(p.get)
             }
 
-        /** Transport hook: resolve the pending [[requestMeasureById]] for `id` with `rect` (complete + drop its Promise). */
+        /** Transport hook: deliver `rect` for `id`. Checks BOTH maps: a PERSISTENT [[observers]] SignalRef (viewport
+          * observation) is updated and KEPT (the stream continues); otherwise the one-shot [[pendingById]] Promise is
+          * completed and dropped. An id is only ever in one map, so the observer branch takes precedence and short-circuits.
+          */
         private[kyo] def deliverMeasureById(id: String, rect: Rect)(using Frame): Unit < Async =
-            pendingById.getAndUpdate(_.removed(id)).map { m =>
-                m.get(id) match
-                    case Some(p) => p.completeDiscard(Result.succeed(rect))
-                    case None    => ()
+            observers.get.map { obs =>
+                obs.get(id) match
+                    case Some(ref) => ref.set(Present(rect))
+                    case None =>
+                        pendingById.getAndUpdate(_.removed(id)).map { m =>
+                            m.get(id) match
+                                case Some(p) => p.completeDiscard(Result.succeed(rect))
+                                case None    => ()
+                        }
+            }
+
+        // ---- in-place reactive attribute patching + viewport observation ----
+
+        /** Bind a class on the element with DOM id `id` to `on`: fork a mount-lifetime fiber that observes the signal and
+          * emits [[internal.HtmlOp.SetClassById]]`(id, className, value)` on every emission (including the current value
+          * at subscribe). The client toggles the class WITHOUT replacing the element, so CSS transitions on that class
+          * fire, the whole point of this channel over a `Reactive` re-render. The fiber (and thus the subscription) is
+          * bound to the current [[kyo.Scope]] and cancelled on scope close. Idempotent with any baked-in initial class.
+          */
+        def bindClassById(id: String, className: String, on: Signal[Boolean])(using Frame): Unit < (Async & Scope) =
+            Fiber.init(on.observe(v => emit(internal.HtmlOp.SetClassById(id, className, v)))).unit
+
+        /** Bind the inline style of the element with DOM id `id` to `style`: fork a mount-lifetime fiber that observes the
+          * signal and emits [[internal.HtmlOp.SetStyleById]] with the serialized declaration string on every emission
+          * (including the current value at subscribe). The client MERGES the declarations over the element's existing
+          * inline props (no full `style=""` clobber), so transitions fire. Cancelled on scope close.
+          */
+        def bindStyleById(id: String, style: Signal[Style])(using Frame): Unit < (Async & Scope) =
+            Fiber.init(style.observe(v => emit(internal.HtmlOp.SetStyleById(id, internal.CssStyleRenderer.render(v))))).unit
+
+        /** Continuously observe the viewport geometry of the element with DOM id `id`, RETURNING a [[kyo.Signal]] that holds
+          * the latest [[kyo.UI.Rect]] (`Absent` until the first measurement lands). Registers a backing SignalRef in the
+          * persistent [[observers]] map, emits [[internal.HtmlOp.ObserveViewportById]] (the client measures now and attaches
+          * scroll+resize listeners that each reply with a `MeasureById(id)`), and registers a [[kyo.Scope]] finalizer that
+          * emits [[internal.HtmlOp.UnobserveViewportById]] AND drops the ref. Each reply is pushed into the signal by
+          * [[deliverMeasureById]] for as long as the scope is open: the kyo-native shape for a continuous stream is a
+          * `Signal` the caller maps or renders, not a callback (e.g. `observeViewportById(id).map(sig => bindStyleById(id,
+          * sig.map(toStyle)))`).
+          */
+        def observeViewportById(id: String)(using Frame): Signal[Maybe[Rect]] < (Async & Scope) =
+            Signal.initRef[Maybe[Rect]](Absent).map { ref =>
+                observers.getAndUpdate(_.updated(id, ref))
+                    .andThen(emit(internal.HtmlOp.ObserveViewportById(id)))
+                    .andThen(Scope.ensure(
+                        emit(internal.HtmlOp.UnobserveViewportById(id)).andThen(observers.getAndUpdate(_.removed(id)))
+                    ))
+                    .andThen(ref)
             }
     end Commands
 
@@ -541,8 +592,9 @@ object UI:
             for
                 pending     <- AtomicRef.init(Map.empty[Seq[String], Promise[Rect, Any]])
                 pendingById <- AtomicRef.init(Map.empty[String, Promise[Rect, Any]])
+                observers   <- AtomicRef.init(Map.empty[String, Signal.SignalRef[Maybe[Rect]]])
                 idCounter   <- AtomicInt.init(0)
-            yield new Commands(emit, pending, pendingById, idCounter)
+            yield new Commands(emit, pending, pendingById, observers, idCounter)
     end Commands
 
     /** The session's [[kyo.UI.Commands]] channel (imperative commands + measure requests). Available inside any event handler
