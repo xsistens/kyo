@@ -1,0 +1,211 @@
+package kyo.uic
+
+import kyo.*
+import kyo.UI.*
+
+/** One node of an [[OrganizationChart]] — a recursive hand-authored carrier: a
+  * `label`, a stable `id` (the collapse/selection key and the event payload),
+  * its `children`, an optional `template` slot that wins over the plain label,
+  * and an optional extra `className` on the node box (Prime's `styleClass`).
+  */
+final case class OrgChartNode(
+    label: String,
+    id: String,
+    children: List[OrgChartNode] = Nil,
+    template: Maybe[UI] = Absent,
+    className: Maybe[String] = Absent
+)
+
+/** OrganizationChart — native kyo-ui, PrimeOne design (mirrors
+  * PrimeVue/PrimeReact's OrganizationChart anatomy: per node one nested
+  * `table.p-organizationchart-table` whose first row holds the
+  * `div.p-organizationchart-node[.p-organizationchart-node-selectable]
+  * [.p-organizationchart-node-selected]` box (label/template + the round
+  * `a.p-organizationchart-node-toggle-button` with the chevron — down while
+  * expanded, up while collapsed, Prime's glyphs), a connector row with the
+  * vertical `div.p-organizationchart-connector-down` line, a
+  * `tr.p-organizationchart-connectors` row of paired
+  * `td.p-organizationchart-connector-left/-right[.p-organizationchart-connector-top]`
+  * line cells, and a `tr.p-organizationchart-node-children` row with one
+  * `td[colspan=2]` per child subtree), so the extracted `@primeuix`
+  * organizationchart CSS applies verbatim.
+  *
+  * Exactly like Prime, a collapsed subtree KEEPS its layout rows and hides them
+  * via `visibility` (Prime's inline `childStyle`, expressed as the
+  * `.p-uic-oc-hidden` remainder class). `collapsed` binds two-way to a
+  * `SignalRef[Set[String]]` of COLLAPSED ids (Prime's `collapsedKeys` — empty =
+  * fully expanded, no id enumeration needed); `collapsible(true)` renders the
+  * toggle buttons. Selection (`Single`/`Multiple` + `selected` ref) follows the
+  * Tree contract. DOM deviation (documented): kyo-ui has no `<tbody>` factory,
+  * so rows are direct `<tr>` children and the tbody-scoped cell rule is
+  * re-expressed in the `.p-uic-*` remainder.
+  */
+final case class OrganizationChart private (
+    rootNode: Maybe[OrgChartNode] = Absent,
+    collapsedRef: Maybe[SignalRef[Set[String]]] = Absent,
+    selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
+    collapsibleFlag: Boolean = false,
+    selectionModeV: SelectionMode = SelectionMode.None,
+    onNodeToggleF: Maybe[String => Any < Async] = Absent,
+    onNodeClickF: Maybe[String => Any < Async] = Absent
+) extends Node:
+    type Self = OrganizationChart
+
+    /** The root node of the chart. */
+    def node(n: OrgChartNode): OrganizationChart = copy(rootNode = Present(n))
+
+    /** Binds the COLLAPSED subtrees two-way (Prime's `collapsedKeys`): empty set =
+      * fully expanded; toggles flip membership.
+      */
+    def collapsed(ref: SignalRef[Set[String]]): OrganizationChart = copy(collapsedRef = Present(ref))
+
+    /** Binds selection two-way to `ref` (a set of node ids). */
+    def selected(ref: SignalRef[Set[String]]): OrganizationChart = copy(selectedRef = Present(ref))
+
+    /** Renders the round toggle buttons on nodes with children (default false,
+      * like Prime).
+      */
+    def collapsible(v: Boolean): OrganizationChart = copy(collapsibleFlag = v)
+
+    /** Selection semantics: `Single`/`Multiple` on node click; `None` (default)
+      * leaves nodes inert.
+      */
+    def selectionMode(v: SelectionMode): OrganizationChart = copy(selectionModeV = v)
+
+    /** Fired with the node id after a toggle press (after the collapse write). */
+    def onNodeToggle(f: String => Any < Async): OrganizationChart = copy(onNodeToggleF = Present(f))
+
+    /** Fired with the node id after a node-box click (after the selection write). */
+    def onNodeClick(f: String => Any < Async): OrganizationChart = copy(onNodeClickF = Present(f))
+
+    private def selectable: Boolean =
+        selectionModeV != SelectionMode.None || onNodeClickF.isDefined
+
+    private[uic] def render(using Frame): UI =
+        (collapsedRef, selectedRef) match
+            case (Present(c), Present(s)) => c.render(col => s.render(sel => body(col, sel)))
+            case (Present(c), Absent)     => c.render(col => body(col, Set.empty))
+            case (Absent, Present(s))     => s.render(sel => body(Set.empty, sel))
+            case _                        => body(Set.empty, Set.empty)
+
+    private def body(collapsed: Set[String], sel: Set[String])(using Frame): UI =
+        val inner: List[UI] = rootNode.toList.map(n => renderNode(n, collapsed, sel))
+        div.cssClass("p-organizationchart").cssClass("p-component")(inner.map(toChild)*)
+
+    /** One node's nested table: node row, connector rows (visibility-hidden while
+      * collapsed, exactly Prime), and the children row of recursive subtrees.
+      */
+    private def renderNode(node: OrgChartNode, collapsed: Set[String], sel: Set[String])(using Frame): UI =
+        val hasChildren = node.children.nonEmpty
+        val isExpanded  = !collapsed.contains(node.id)
+        val isSelected  = sel.contains(node.id)
+        val colspan     = if hasChildren then node.children.length * 2 else 1
+
+        // The node box: label/template + the round toggle anchor (chevron-down
+        // while expanded, chevron-up while collapsed — Prime's glyphs).
+        var box = div.cssClass("p-organizationchart-node")
+        if selectable then box = box.cssClass("p-organizationchart-node-selectable").onClick(clickNode(node.id))
+        if isSelected then box = box.cssClass("p-organizationchart-node-selected")
+        node.className.foreach(c => box = box.cssClass(c))
+        val labelSlot: UI = node.template match
+            case Present(u) => u
+            case Absent     => stringToUI(node.label)
+        val toggle: List[UI] =
+            if collapsibleFlag && hasChildren then
+                List(
+                    a
+                        .cssClass("p-organizationchart-node-toggle-button")
+                        .tabIndex(0)
+                        .aria("expanded", isExpanded.toString)
+                        .onClick(toggleNode(node.id))
+                        .stopPropagation(true)(
+                            toChild(
+                                GlyphSvg(
+                                    if isExpanded then Icons.chevronDown else Icons.chevronUp,
+                                    "p-organizationchart-node-toggle-button-icon"
+                                )
+                            )
+                        )
+                )
+            else Nil
+        val nodeRow: UI = tr(td.colspan(colspan)(box((toChild(labelSlot) :: toggle.map(toChild))*)))
+
+        // The subtree rows render whenever there ARE children; a collapsed subtree
+        // keeps its layout and hides via visibility (Prime's childStyle).
+        val subtreeRows: List[UI] =
+            if !hasChildren then Nil
+            else
+                val downRow: UI =
+                    var r = tr.cssClass("p-organizationchart-connectors")
+                    if !isExpanded then r = r.cssClass("p-uic-oc-hidden")
+                    r(td.colspan(colspan)(div.cssClass("p-organizationchart-connector-down")))
+                end downRow
+
+                val linesRow: UI =
+                    var r = tr.cssClass("p-organizationchart-connectors")
+                    if !isExpanded then r = r.cssClass("p-uic-oc-hidden")
+                    if node.children.length == 1 then
+                        r(td.colspan(colspan)(div.cssClass("p-organizationchart-connector-down")))
+                    else
+                        val cells: List[UI] = node.children.zipWithIndex.flatMap { (_, i) =>
+                            var left = td.cssClass("p-organizationchart-connector-left")
+                            if i != 0 then left = left.cssClass("p-organizationchart-connector-top")
+                            var right = td.cssClass("p-organizationchart-connector-right")
+                            if i != node.children.length - 1 then right = right.cssClass("p-organizationchart-connector-top")
+                            List(left(" "), right(" "))
+                        }
+                        r(cells.map(toChild)*)
+                    end if
+                end linesRow
+
+                val childrenRow: UI =
+                    var r = tr.cssClass("p-organizationchart-node-children")
+                    if !isExpanded then r = r.cssClass("p-uic-oc-hidden")
+                    r(node.children.map(c => toChild(td.colspan(2)(toChild(renderNode(c, collapsed, sel)))))*)
+                end childrenRow
+
+                List(downRow, linesRow, childrenRow)
+
+        table.cssClass("p-organizationchart-table")((nodeRow :: subtreeRows).map(toChild)*)
+    end renderNode
+
+    /** A toggle press flips the node in the bound `collapsed` set, then fires
+      * `onNodeToggle`.
+      */
+    private def toggleNode(id: String)(using Frame): Any < Async =
+        val write: Any < Async = collapsedRef match
+            case Present(ref) => ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
+            case Absent       => ()
+        val fire: Any < Async = onNodeToggleF match
+            case Present(f) => f(id)
+            case Absent     => ()
+        for
+            _ <- write
+            r <- fire
+        yield r
+        end for
+    end toggleNode
+
+    /** A node-box click updates the bound selection per the mode, then fires
+      * `onNodeClick`.
+      */
+    private def clickNode(id: String)(using Frame): Any < Async =
+        val write: Any < Async = (selectedRef, selectionModeV) match
+            case (Present(ref), SelectionMode.Single | SelectionMode.Radio) =>
+                ref.getAndUpdate(cur => if cur == Set(id) then Set.empty else Set(id))
+            case (Present(ref), SelectionMode.Multiple | SelectionMode.Checkbox) =>
+                ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
+            case _ => ()
+        val fire: Any < Async = onNodeClickF match
+            case Present(f) => f(id)
+            case Absent     => ()
+        for
+            _ <- write
+            r <- fire
+        yield r
+        end for
+    end clickNode
+end OrganizationChart
+
+object OrganizationChart:
+    def apply(): OrganizationChart = new OrganizationChart()
