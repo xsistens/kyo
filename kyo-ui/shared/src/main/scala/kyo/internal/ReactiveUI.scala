@@ -249,7 +249,19 @@ private[kyo] object ReactiveUI:
                         val inner = child match
                             case kc: KeyedChild[?] => kc.child
                             case _                 => child
-                        walkStatic(inner, childPath, svg, mountDispatch)
+                        inner match
+                            case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted =>
+                                // Same contract as an Element's reactive child: the renderer paints the
+                                // node's own anchor at childPath (no content descent), so normalize there
+                                // directly. Recursing through walkStatic would hit the TOP-LEVEL branch,
+                                // which registers at childPath :+ "$r", so every patch would then target a
+                                // path the painted DOM does not have (mount stuck on its placeholder,
+                                // reactive updates silently dropped).
+                                for rui <- normalizeWith(inner, childPath, svg, mountDispatch)
+                                yield (Seq(rui), rui.handle)
+                            case _ =>
+                                walkStatic(inner, childPath, svg, mountDispatch)
+                        end match
                     }
                 yield
                     val allKids    = childWalks.flatMap(_._1)
@@ -267,11 +279,11 @@ private[kyo] object ReactiveUI:
                     (allKids, handle)
 
             case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted =>
-                // When walkStatic is called with a Reactive, Foreach, or Mounted as the top-level node
-                // (not as a child of an Element), normalize it at basePath so subscribeNode
-                // sets up a subscription for it. This handles the case where an outer reactive's
-                // signal value is itself a Reactive or Foreach (e.g. outer.map { _ => inner.map(UI.span(_)) }).
-                for rui <- normalizeWith(ui, basePath, svg, mountDispatch)
+                // walkStatic on a top-level Reactive/Foreach/Mounted (not a child of an Element): normalize it so
+                // subscribeNode subscribes it (handles an outer reactive whose value is itself reactive, e.g.
+                // outer.map { _ => inner.map(UI.span(_)) }). The inner region owns a DISTINCT sub-path
+                // (HtmlRenderer.contentPath) so it's addressable independently; MUST match the SSR/patch descents.
+                for rui <- normalizeWith(ui, HtmlRenderer.contentPath(basePath, ui), svg, mountDispatch)
                 yield (Seq(rui), rui.handle)
 
             case _ =>
@@ -755,7 +767,11 @@ private[kyo] object ReactiveUI:
         exchange: UIExchange,
         signalChangeTime: AtomicRef[Instant],
         presetMounts: Maybe[MountRegistry],
-        mountDispatch: MountDispatch
+        mountDispatch: MountDispatch,
+        // True when this region IS a keyless mount's content cell: its paint flags the DOM node as a mount root so a
+        // parent's in-place update leaves the subtree alone (the mount repaints itself). Keyed mounts stay false;
+        // their reset relies on the parent painting the placeholder over the stale content.
+        mount: Boolean = false
     )(using Frame): Unit < (Async & Scope) =
         for
             regionMounts <- presetMounts match
@@ -768,7 +784,7 @@ private[kyo] object ReactiveUI:
                         _            <- signalChangeTime.set(now)
                         (newKids, _) <- walkStatic(current, path, svg, mountDispatch)
                         _            <- regionMounts.evictExcept(collectMountKeys(newKids))
-                        _            <- exchange.onChange(path, current)
+                        _            <- exchange.onChange(path, current, mount)
                         _ <- Kyo.foreachDiscard(newKids)(
                             subscribeScoped(_, exchange, signalChangeTime, regionMounts, mountDispatch)
                         )
@@ -824,6 +840,13 @@ private[kyo] object ReactiveUI:
                             _       <- Scope.ensure(mountDispatch.unregister(rui.path, inst.cell))
                             current <- inst.cell.current
                             _       <- exchange.onChange(rui.path, current)
+                            // `mount = true` for a KEYED instance too: the region claims the `m` flag, so a
+                            // parent re-render leaves the live subtree alone instead of wiping it to the
+                            // placeholder and having this instance paint it back. Safe for keyed mounts only
+                            // because the marker also carries the mount key: a key change still falls through
+                            // to the morph and resets the slot (see RegionMarker's `k` flag). Without it the
+                            // adopted instance kept its scopes but lost its DOM on every parent emission, and
+                            // with it focus, caret, scroll position and in-place bindings.
                             _ <- subscribeRegion(
                                 rui.path,
                                 inst.cell,
@@ -831,7 +854,8 @@ private[kyo] object ReactiveUI:
                                 exchange,
                                 signalChangeTime,
                                 Present(inst.childMounts),
-                                mountDispatch
+                                mountDispatch,
+                                mount = true
                             )
                         yield ()
                     case Absent =>
@@ -860,7 +884,16 @@ private[kyo] object ReactiveUI:
                         ui => mounts.recordContent(rui.path, ui),
                         supervision
                     ))
-                    _ <- subscribeRegion(rui.path, cell, rui.svgContext, exchange, signalChangeTime, Absent, mountDispatch)
+                    _ <- subscribeRegion(
+                        rui.path,
+                        cell,
+                        rui.svgContext,
+                        exchange,
+                        signalChangeTime,
+                        Absent,
+                        mountDispatch,
+                        mount = true
+                    )
                 yield ()
 
     /** A supervised background fiber of a mounted node failed with a non-Throwable `Abort` value; the node's
