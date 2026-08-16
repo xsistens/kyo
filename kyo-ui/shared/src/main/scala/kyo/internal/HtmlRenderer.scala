@@ -1133,8 +1133,11 @@ private[kyo] object HtmlRenderer:
           |function kyoRangeMorph(active,oldRoots,newRoots,incoming){
           |  if(!active||oldRoots.length!==1||newRoots.length!==1||active!==oldRoots[0]||incoming.size!==0)return false;
           |  if((active.tagName!=="INPUT"&&active.tagName!=="TEXTAREA")||active.tagName!==newRoots[0].tagName)return false;
-          |  var fresh=newRoots[0];for(var i=0;i<fresh.attributes.length;i++){var a=fresh.attributes[i];if(active.getAttribute(a.name)!==a.value)active.setAttribute(a.name,a.value);}
-          |  for(var i=active.attributes.length-1;i>=0;i--){var name=active.attributes[i].name;if(!fresh.hasAttribute(name))active.removeAttribute(name);}
+          |  // An attribute the imperative id-addressed channel owns is never reconciled: server HTML never carries
+          |  // the client-set value, so reconciling would clobber it. Twin of ownedAttrs in DomBackend.
+          |  var own=active.__kyoOwn||{};
+          |  var fresh=newRoots[0];for(var i=0;i<fresh.attributes.length;i++){var a=fresh.attributes[i];if(!own[a.name]&&active.getAttribute(a.name)!==a.value)active.setAttribute(a.name,a.value);}
+          |  for(var i=active.attributes.length-1;i>=0;i--){var name=active.attributes[i].name;if(!own[name]&&!fresh.hasAttribute(name))active.removeAttribute(name);}
           |  var value=active.tagName==="TEXTAREA"?fresh.textContent:(fresh.getAttribute("value")||"");if(value!==active.value)active.value=value;
           |  applyJsProps(active);return true;
           |}
@@ -1187,6 +1190,10 @@ private[kyo] object HtmlRenderer:
            |function kyoSetCaret(t,s,e){if(typeof t.setSelectionRange!=="function")return;
            |  try{t.setSelectionRange(s,e);}catch(er){if(er.name!=="InvalidStateError")throw er;}}
            |$reactiveRangesJs
+           |// Mark an attr name as owned by the imperative id-addressed channel: names live in a __kyoOwn expando dict
+           |// ON the element (reclaimed with the node), which kyoRangeMorph reads to shield each owned attr from
+           |// reconciliation. Mirrors markOwned in DomBackend.
+           |function __kyoMark(el,n){(el.__kyoOwn||(el.__kyoOwn={}))[n]=true;}
            |var ws=new WebSocket((location.protocol===\"https:\"?\"wss:\":\"ws:\")+"//"+location.host+base+"/_kyo/ws");
            |ws.onopen=function(){__q.forEach(function(m){ws.send(m);});__q=[];};
            |${DragClientJs.script(basePath)}
@@ -1256,6 +1263,29 @@ private[kyo] object HtmlRenderer:
            |    if(rmiel){
            |      var rmir=rmiel.getBoundingClientRect();
            |      post({MeasureById:{path:[],id:op.RequestMeasureById.id,rectX:rmir.left,rectY:rmir.top,rectW:rmir.width,rectH:rmir.height,viewportW:window.innerWidth,viewportH:window.innerHeight}});
+           |    }
+           |  }else if(op.SetClassById){
+           |    var scel=document.getElementById(op.SetClassById.id);if(scel){__kyoMark(scel,"class");scel.classList.toggle(op.SetClassById.className,op.SetClassById.on);}
+           |  }else if(op.SetStyleById){
+           |    var ssel=document.getElementById(op.SetStyleById.id);
+           |    if(ssel){__kyoMark(ssel,"style");var ssd=op.SetStyleById.css.split(";");for(var ssi=0;ssi<ssd.length;ssi++){var ssc=ssd[ssi].trim();if(!ssc)continue;var sso=ssc.indexOf(":");if(sso>0)ssel.style.setProperty(ssc.substring(0,sso).trim(),ssc.substring(sso+1).trim());}}
+           |  }else if(op.ObserveViewportById){
+           |    var vid=op.ObserveViewportById.id;
+           |    window.__kyoVpObs=window.__kyoVpObs||{};
+           |    if(!window.__kyoVpObs[vid]){
+           |      var vh=function(){var ve=document.getElementById(vid);if(ve){var vr=ve.getBoundingClientRect();post({MeasureById:{path:[],id:vid,rectX:vr.left,rectY:vr.top,rectW:vr.width,rectH:vr.height,viewportW:window.innerWidth,viewportH:window.innerHeight}});}};
+           |      window.__kyoVpObs[vid]=vh;
+           |      window.addEventListener("scroll",vh,true);
+           |      window.addEventListener("resize",vh);
+           |      vh();
+           |    }
+           |  }else if(op.UnobserveViewportById){
+           |    var uid=op.UnobserveViewportById.id;
+           |    if(window.__kyoVpObs&&window.__kyoVpObs[uid]){
+           |      var uh=window.__kyoVpObs[uid];
+           |      window.removeEventListener("scroll",uh,true);
+           |      window.removeEventListener("resize",uh);
+           |      delete window.__kyoVpObs[uid];
            |    }
            |  }
            |};

@@ -42,6 +42,41 @@ private[kyo] object DomBackend:
       */
     private var focusReturnStack: Chunk[FocusSeed] = Chunk.empty
 
+    /** The page-scoped drain channel, captured once per mount so the viewport scroll/resize listeners (raw JS
+      * callbacks, outside any Kyo context) can bridge their `deliverMeasureById` effect back in via [[fireFromJs]].
+      * Set in `mountInto` before any op can be emitted. Module-level mutable state is safe on the single-threaded runtime.
+      */
+    private var sessionEvents: Maybe[Channel[Unit < Async]] = Absent
+
+    /** Live viewport observers for the SPA transport, keyed by element id. Each entry is the single handler
+      * registered for BOTH `window` scroll (capture phase) and resize; Unobserve removes it from both and drops the
+      * entry. Backed by a native `js.Map` (mirrors `UIMouseEventOps`), giving `contains`/`apply`/`update`/`remove`.
+      */
+    private val viewportObservers: js.WrappedMap[String, js.Function1[dom.Event, Unit]] =
+        new js.WrappedMap(js.Map.empty[String, js.Function1[dom.Event, Unit]])
+
+    /** Mark attribute `name` on `el` as owned by the imperative id-addressed channel (SetClassById/SetStyleById),
+      * applied out of the render pass so CSS transitions on the toggled class/style fire. The owned names live in a
+      * `__kyoOwn` expando dict ON the element, so the flag is reclaimed with the node (no session-lived set that only
+      * ever grows) and `morphAttrs` shields each owned attribute BY NAME. Mirrors `__kyoMark` in HtmlRenderer.clientJs.
+      */
+    /** The attribute names on `el` the imperative id-addressed channel owns (see [[markOwned]]). */
+    private def ownedAttrs(el: dom.Element): Set[String] =
+        val d = el.asInstanceOf[js.Dynamic]
+        if js.isUndefined(d.__kyoOwn) then Set.empty
+        else d.__kyoOwn.asInstanceOf[js.Dictionary[Boolean]].keySet.toSet
+
+    private def markOwned(el: dom.Element, name: String): Unit =
+        val d = el.asInstanceOf[js.Dynamic]
+        val own =
+            if js.isUndefined(d.__kyoOwn) then
+                val fresh = js.Dictionary.empty[Boolean]
+                d.__kyoOwn = fresh.asInstanceOf[js.Any]
+                fresh
+            else d.__kyoOwn.asInstanceOf[js.Dictionary[Boolean]]
+        own.update(name, true)
+    end markOwned
+
     /** Mount a UI into the page body. */
     def mount(ui: UI)(using Frame): Unit < (Async & Scope) =
         mountInto(ui, document.body, NoMountDiagnostics)
@@ -102,6 +137,7 @@ private[kyo] object DomBackend:
                     _ <- Scope.ensure(exchange.close)
                     // Single-consumer drain owned by the ambient page Scope. The single consumer preserves event ordering.
                     events <- Channel.init[Unit < Async](256)
+                    _ = sessionEvents = Present(events)
                     // runPartial captures only the Closed failure (the channel closed on page teardown -> stop draining); a
                     // Panic propagates rather than being silently swallowed as a clean drain end.
                     // The drain carries the session's scroll sink: a handler calling UI.scrollIntoView scrolls the
@@ -248,9 +284,76 @@ private[kyo] object DomBackend:
                     case Present(rect) => commands().deliverMeasureById(id, rect)
                     case Absent        => Kyo.unit
                 }
+            case HtmlOp.SetClassById(id, className, on) =>
+                Sync.defer {
+                    val el = document.getElementById(id)
+                    if el != null then
+                        markOwned(el, "class")
+                        discard(el.classList.toggle(className, on))
+                }
+            case HtmlOp.SetStyleById(id, css) =>
+                Sync.defer {
+                    val el = document.getElementById(id)
+                    if el != null then
+                        markOwned(el, "style")
+                        mergeStyleDomById(id, css)
+                }
+            case HtmlOp.ObserveViewportById(id) =>
+                Sync.defer(registerViewportObserver(id, commands)).andThen(
+                    Sync.defer(measureDomById(id)).map {
+                        case Present(rect) => commands().deliverMeasureById(id, rect)
+                        case Absent        => Kyo.unit
+                    }
+                )
+            case HtmlOp.UnobserveViewportById(id) =>
+                Sync.defer(unregisterViewportObserver(id))
             // Replace/Remove/InjectCss reach the DOM through LocalExchange, never this imperative channel.
             case _ => Kyo.unit
     end applyOpLocal
+
+    /** Merges a serialized `Style` declaration string ("prop:val;prop:val") onto getElementById(id) with setProperty
+      * per declaration, so it merges over other inline props rather than clobbering them (unlike a full `style=""`
+      * replace). Blank declarations and those without a `:` are skipped.
+      */
+    private def mergeStyleDomById(id: String, css: String): Unit =
+        val el = document.getElementById(id)
+        if el != null then
+            val style = el.asInstanceOf[dom.HTMLElement].style
+            css.split(';').foreach { decl =>
+                val trimmed = decl.trim
+                if trimmed.nonEmpty then
+                    val colon = trimmed.indexOf(':')
+                    if colon > 0 then
+                        style.setProperty(trimmed.substring(0, colon).trim, trimmed.substring(colon + 1).trim)
+                end if
+            }
+        end if
+    end mergeStyleDomById
+
+    /** Attaches a single handler to `window` scroll (capture) + resize that re-measures getElementById(id) and
+      * bridges the deliver back into the drain via [[fireFromJs]]. Guards against double-registration for the same id.
+      */
+    private def registerViewportObserver(id: String, commands: () => UI.Commands)(using Frame): Unit =
+        if !viewportObservers.contains(id) then
+            val handler: js.Function1[dom.Event, Unit] = (_: dom.Event) =>
+                measureDomById(id) match
+                    case Present(rect) => sessionEvents.foreach(ev => fireFromJs(ev, commands().deliverMeasureById(id, rect)))
+                    case Absent        => ()
+            viewportObservers(id) = handler
+            dom.window.addEventListener("scroll", handler, true)
+            dom.window.addEventListener("resize", handler)
+        end if
+    end registerViewportObserver
+
+    /** Removes the scroll/resize handler registered for `id` (from both listeners) and drops the map entry. */
+    private def unregisterViewportObserver(id: String): Unit =
+        if viewportObservers.contains(id) then
+            val handler = viewportObservers(id)
+            dom.window.removeEventListener("scroll", handler, true)
+            dom.window.removeEventListener("resize", handler)
+            discard(viewportObservers.remove(id))
+        end if
+    end unregisterViewportObserver
 
     /** Exchange that renders UI to HTML and applies directly to the DOM. */
     private class LocalExchange(regions: DomReactiveRegions) extends UIExchange:
@@ -308,17 +411,21 @@ private[kyo] object DomBackend:
                 val fresh = newElements.head
                 if (active.tagName != "INPUT" && active.tagName != "TEXTAREA") || active.tagName != fresh.tagName then false
                 else
-                    var i = 0
+                    // An attribute the imperative id-addressed channel owns (its name is in the element's
+                    // __kyoOwn expando) is never reconciled: server HTML never carries the client-set value,
+                    // so reconciling would clobber it. Twin of the clientJs __kyoMorphAttrs shield.
+                    val owned = ownedAttrs(active)
+                    var i     = 0
                     while i < fresh.attributes.length do
                         val attribute = fresh.attributes(i)
-                        if active.getAttribute(attribute.name) != attribute.value then
+                        if !owned.contains(attribute.name) && active.getAttribute(attribute.name) != attribute.value then
                             active.setAttribute(attribute.name, attribute.value)
                         i += 1
                     end while
                     i = active.attributes.length - 1
                     while i >= 0 do
                         val name = active.attributes(i).name
-                        if !fresh.hasAttribute(name) then active.removeAttribute(name)
+                        if !owned.contains(name) && !fresh.hasAttribute(name) then active.removeAttribute(name)
                         i -= 1
                     end while
                     val value =
