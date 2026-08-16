@@ -92,7 +92,7 @@ private[kyo] object DomBackend:
             // byte. Without them a keyed mount's region starts keyless, and the first parent re-render has
             // to fall through the opacity guard (rebuilding the live subtree once) just to adopt the key.
             html <- HtmlRenderer.render(ui, Seq.empty, mountSlot = true)
-            _    <- Sync.defer(container.innerHTML = html)
+            _    <- Sync.defer { noteMarkers(html); container.innerHTML = html }
             // Comment markers produce no node handles from an innerHTML assignment; one full scan
             // builds the path->range registry the patch path resolves against.
             _        <- Sync.defer { scanRoot = container; rebuildRegions() }
@@ -791,6 +791,7 @@ private[kyo] object DomBackend:
       * one that was already on screen: an echo re-render of an open overlay must not steal focus back from the user.
       */
     private def focusAutoPaths(root: dom.Element): Set[String] =
+        if !sawFocusAuto then return Set.empty
         val els = root.querySelectorAll("[data-kyo-focus-auto]")
         val descendants = (0 until els.length).flatMap { i =>
             Maybe(els(i).asInstanceOf[dom.Element].getAttribute("data-kyo-path")).toList
@@ -806,6 +807,7 @@ private[kyo] object DomBackend:
       * `autofocus`. Mirrors `seedFocusAuto` in HtmlRenderer.clientJs.
       */
     private def seedFocusAuto(newRoot: dom.Element, oldSet: Set[String]): Unit =
+        if !sawFocusAuto then return
         val els = newRoot.querySelectorAll("[data-kyo-focus-auto]")
         val candidates =
             (if newRoot.hasAttribute("data-kyo-focus-auto") then Seq(newRoot) else Seq.empty) ++
@@ -892,6 +894,7 @@ private[kyo] object DomBackend:
         Sync.defer(applyJsPropsSync(root))
 
     private def applyJsPropsSync(root: dom.Element): Unit =
+        if !sawJsProp then return
         val propPrefix = "data-kyo-prop-"
         // CSS has no attribute-name-prefix selector, so `[data-kyo-prop-*]` is not a valid selector and
         // throws SyntaxError. Collect the root plus every descendant and keep those carrying any
@@ -926,6 +929,7 @@ private[kyo] object DomBackend:
       * that was already replaced again by then throws and is ignored.
       */
     private def beginAnimationsSync(root: dom.Element): Unit =
+        if !sawSvgAnim then return
         val anims = root.querySelectorAll("animate,animateTransform,animateMotion")
         if anims.length > 0 then
             discard(dom.window.requestAnimationFrame { (_: Double) =>
@@ -1131,10 +1135,40 @@ private[kyo] object DomBackend:
         if p == null || p.isEmpty then Seq.empty
         else p.split("\\.").toSeq
 
+    // ---- feature-marker gates ----
+
+    /** Has any HTML that ever entered this document carried the marker at all?
+      *
+      * Sticky by design, and a false flag is a proof rather than a guess: every element in the document arrives
+      * either through the boot `innerHTML` or through [[parseToContainer]], both of which record here first, and
+      * no code path adds these attributes to a live element afterwards (`data-kyo-ghost` is the only imperative
+      * one, and nothing scans for it). So while a flag is false, every scan it guards would walk a subtree to
+      * return nothing.
+      *
+      * That is the common case, not an edge case: an app using no enter/leave transition, no focus-auto, no JS
+      * property and no SMIL animation still paid four whole-subtree selector queries per inserted row and three
+      * per removed one, including `querySelectorAll("*")`, which visits every descendant of every new row.
+      */
+    private var sawEnter     = false
+    private var sawLeave     = false
+    private var sawFocusAuto = false
+    private var sawJsProp    = false
+    private var sawSvgAnim   = false
+
+    private def noteMarkers(html: String): Unit =
+        if !sawEnter && html.contains("data-kyo-enter") then sawEnter = true
+        if !sawLeave && html.contains("data-kyo-leave") then sawLeave = true
+        if !sawFocusAuto && html.contains("data-kyo-focus-auto") then sawFocusAuto = true
+        if !sawJsProp && html.contains("data-kyo-prop-") then sawJsProp = true
+        // Covers <animate, <animateTransform and <animateMotion in one search.
+        if !sawSvgAnim && html.contains("<animate") then sawSvgAnim = true
+    end noteMarkers
+
     // ---- enter/leave transition mirror (SPA transport) ----
 
     /** The set of `data-kyo-path` values of every `data-kyo-enter` element inside `root`, `root` itself included. */
     private def enterPaths(root: dom.Element): Set[String] =
+        if !sawEnter then return Set.empty
         val els = root.querySelectorAll("[data-kyo-enter]")
         val ds = (0 until els.length).flatMap { i =>
             Maybe(els(i).asInstanceOf[dom.Element].getAttribute("data-kyo-path")).toList
@@ -1148,6 +1182,7 @@ private[kyo] object DomBackend:
       * classes, force a reflow, then remove them next frame so the CSS transition runs from the enter-from state.
       */
     private def seedEnter(newRoot: dom.Element, oldSet: Set[String]): Unit =
+        if !sawEnter then return
         val els = newRoot.querySelectorAll("[data-kyo-enter]")
         val cand =
             (if newRoot.hasAttribute("data-kyo-enter") then Seq(newRoot) else Seq.empty) ++
@@ -1176,6 +1211,7 @@ private[kyo] object DomBackend:
       * leaving row is then wrongly treated as removed: it gets a ghost and its live node is torn out.
       */
     private def leaveSurvSetIn(container: dom.Node): Set[String] =
+        if !sawLeave then return Set.empty
         val els = container.asInstanceOf[dom.Element].querySelectorAll("[data-kyo-leave]")
         (0 until els.length).flatMap { i =>
             Maybe(els(i).asInstanceOf[dom.Element].getAttribute("data-kyo-path")).toList
@@ -1202,6 +1238,7 @@ private[kyo] object DomBackend:
       * incoming html. [[spawnGhosts]] therefore re-checks the SOURCE at spawn time and drops nodes still in the document.
       */
     private def prepareLeaveGhosts(root: dom.Element, surv: Set[String]): Seq[(dom.Element, dom.Element, String)] =
+        if !sawLeave then return Seq.empty
         val els = root.querySelectorAll("[data-kyo-leave]")
         val cand =
             (if root.getAttribute("data-kyo-leave") != null then Seq(root) else Seq.empty) ++
@@ -1840,6 +1877,7 @@ private[kyo] object DomBackend:
       * clientJs; keep in lockstep.
       */
     private def parseToContainer(parent: dom.Element, html: String): dom.Node =
+        noteMarkers(html)
         val tpl = document.createElement("template").asInstanceOf[dom.HTMLTemplateElement]
         val tag = parent.tagName
         val (prefix, suffix, depth) =
