@@ -543,7 +543,7 @@ private[kyo] object DomBackend:
                 beginAnimationsSync(element)
             }
             state.active.flatMap(resolveFocus(newElements, _)).foreach { target =>
-                discard(target.asInstanceOf[scalajs.js.Dynamic].focus())
+                focusNoScroll(target)
                 (state.selectionStart, state.selectionEnd) match
                     case (Present(start), Present(end)) => setSelection(target, start, end)
                     case _                              => ()
@@ -590,10 +590,19 @@ private[kyo] object DomBackend:
         (asInt(dyn.selectionStart), asInt(dyn.selectionEnd))
     end readSelection
 
+    /** Engine-driven focus (restore after a patch, focus-auto seeding, focus-return pop) must never scroll. The
+      * browser's default `focus()` scrolls every scrollable ancestor to reveal the target, so a bookkeeping focus after
+      * a patch would yank container scroll positions the user never touched, visible as a scrollbar flash or a content
+      * jump. Explicit app focus commands ([[applyVerbDom]]) and user-driven keyboard navigation keep the native
+      * scrolling semantics: there the scroll is the point.
+      */
+    private def focusNoScroll(el: dom.Element): Unit =
+        discard(el.asInstanceOf[scalajs.js.Dynamic].focus(scalajs.js.Dynamic.literal(preventScroll = true)))
+
     private def restoreSvgFocus(capturedPath: String, selStart: Maybe[Int], selEnd: Maybe[Int]): Unit =
-        val located = document.querySelector(s"""[data-kyo-path="$capturedPath"]""")
+        val located = document.querySelector(pathSelector(capturedPath))
         if located != null then
-            val _ = located.asInstanceOf[scalajs.js.Dynamic].focus()
+            focusNoScroll(located)
             (selStart, selEnd) match
                 case (Present(s), Present(e)) => setSelection(located, s, e)
                 case _                        => ()
@@ -647,7 +656,7 @@ private[kyo] object DomBackend:
                 focusReturnStack.append(
                     FocusSeed(el.getAttribute("data-kyo-path"), ret, el.hasAttribute("data-kyo-focus-restore"))
                 )
-            discard(el.asInstanceOf[scalajs.js.Dynamic].focus())
+            focusNoScroll(el)
         }
     end seedFocusAuto
 
@@ -722,7 +731,7 @@ private[kyo] object DomBackend:
         val el = document.querySelector(s"""[data-kyo-path="$path"]""")
         if el == null then false
         else
-            discard(el.asInstanceOf[scalajs.js.Dynamic].focus())
+            focusNoScroll(el)
             true
         end if
     end focusIfPresent
