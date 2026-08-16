@@ -115,14 +115,16 @@ private[kyo] object DomBackend:
         // Commands, Commands needs emit). Set before any op is emitted.
         var sessionCommands: UI.Commands = null
         for
-            _        <- DomStyleSheet.injectBase()
-            root     <- ReactiveUI.normalize(ui, Seq.empty)
-            html     <- HtmlRenderer.render(ui, Seq.empty)
-            _        <- Sync.defer { noteMarkers(html); container.innerHTML = html }
-            regions  <- DomReactiveRegions.init(container)
-            _        <- applyJsProps(container)
-            _        <- Sync.defer(seedEnter(container, Set.empty))
-            _        <- Sync.defer(seedFocusAuto(container, Set.empty))
+            _       <- DomStyleSheet.injectBase()
+            root    <- ReactiveUI.normalize(ui, Seq.empty)
+            html    <- HtmlRenderer.render(ui, Seq.empty)
+            _       <- Sync.defer { noteMarkers(html); container.innerHTML = html }
+            regions <- DomReactiveRegions.init(container)
+            _       <- applyJsProps(container)
+            _       <- Sync.defer(seedEnter(container, Set.empty))
+            _       <- Sync.defer(seedFocusAuto(container, Set.empty))
+            // Portal adopt for the initial paint: a portal element present at load re-homes immediately.
+            _        <- Sync.defer(portalSweep(container))
             _        <- Sync.defer(beginAnimationsSync(container))
             commands <- UI.Commands.init(op => applyOpLocal(op, regions, () => sessionCommands))
             _ = sessionCommands = commands
@@ -551,6 +553,9 @@ private[kyo] object DomBackend:
             seedEnter(newElements, state.oldEnter)
             // Seed after focus restoration so a newly appeared focus-auto element wins over the trigger.
             seedFocusAuto(newElements, state.oldFocusAuto)
+            // Portal upkeep: re-home portal elements this patch inserted, and retire the placeholder of one it
+            // removed. Runs over the patched roots, so an untouched part of the page is not swept.
+            newElements.foreach(portalSweep)
             spawnGhosts(state.ghosts)
             sweepFocusAuto()
         end finishRangePatch
@@ -829,18 +834,35 @@ private[kyo] object DomBackend:
       * ReactiveUI.dispatchToElement bubbles an event to every ancestor that declared a handler for its type, so the
       * SPA forwarding gate must forward when ANY ancestor declared it, not just the target (checking only the
       * target's own data-kyo-ev would drop e.g. a keydown meant for an ancestor panel before bubble dispatch runs).
+      *
+      * The walk climbs the LOGICAL tree, which the portal makes distinct from the DOM one: see [[logicalAncestor]].
+      * Twin of `he` in HtmlRenderer.clientJs; keep the two in lockstep.
       */
+    /** The next element up the LOGICAL tree. That is the DOM parent everywhere except at a portal: a re-homed
+      * element sits directly under `document.body`, so the climb hops back to its placeholder slot first and
+      * continues from there. Twin of `__kyoLogicalParent` in HtmlRenderer.clientJs.
+      */
+    private def logicalAncestor(n: dom.Element): dom.Element =
+        val hopped =
+            if n.hasAttribute("data-kyo-portal") && (n.parentNode eq document.body) then
+                val p = n.getAttribute("data-kyo-path")
+                if p == null then null else document.querySelector(s"""[data-kyo-portal-slot="$p"]""")
+            else n
+        if hopped == null then null
+        else
+            hopped.parentNode match
+                case p: dom.Element => p
+                case _              => null
+        end if
+    end logicalAncestor
+
     private[kyo] def declaredInChain(start: dom.Element, t: String): Boolean =
         var n: dom.Element = start
         var found          = false
         while !found && n != null && (n ne document.body) do
             val ev = n.getAttribute("data-kyo-ev")
             if ev != null && ev.split(",").contains(t) then found = true
-            else
-                n = n.parentNode match
-                    case p: dom.Element => p
-                    case _              => null
-            end if
+            else n = logicalAncestor(n)
         end while
         found
     end declaredInChain
@@ -1394,6 +1416,84 @@ private[kyo] object DomBackend:
     end scrollKeyPrevented
     private val SvgNs = "http://www.w3.org/2000/svg"
 
+    /** A live portal placeholder (`data-kyo-portal-slot="<path>"`) left at the logical position of an element the
+      * client re-homed to document.body. Carries NO `data-kyo-path` of its own, so the body twin stays the document's
+      * only carrier of the path and every path-addressed lookup keeps hitting the real element; [[logicalKey]] keys the
+      * slot by the slot attribute so the sibling reconciliation still matches the incoming portal element against it.
+      * Twin of `__kyoIsPortalSlot` in clientJs.
+      */
+    private def isPortalSlot(node: dom.Node): Boolean =
+        node.nodeType == 1 && node.asInstanceOf[dom.Element].hasAttribute("data-kyo-portal-slot")
+
+    /** An element that declared `portal(true)` (`data-kyo-portal`): rendered inline by the server, re-homed to
+      * document.body by [[portalSweep]]. Twin of `__kyoIsPortal` in clientJs.
+      */
+    private def isPortalEl(node: dom.Node): Boolean =
+        node.nodeType == 1 && node.asInstanceOf[dom.Element].hasAttribute("data-kyo-portal")
+
+    /** The body twin of a portal slot: the (unique) re-homed element carrying `path`, a direct body child. */
+    private def portalTwin(path: String): dom.Element =
+        document.querySelector(s"""body > [data-kyo-path="$path"][data-kyo-portal]""")
+
+    /** Portal upkeep after a patch (twin of `__kyoPortalSweep` in HtmlRenderer.clientJs; keep them in lockstep).
+      *
+      * ADOPT: every `data-kyo-portal` element still sitting inline under `root` (root included, so a freshly inserted
+      * one is caught) is re-homed to document.body behind an inert placeholder stamped `data-kyo-portal-slot="<path>"`
+      * at its logical position. Must run AFTER focus and enter seeding, both of which are subtree-scoped and need the
+      * element inline. Reparenting drops DOM focus, so focus and caret held inside the moved subtree are captured and
+      * re-applied after the move; the enter transition is unaffected, since its from-state classes release on the NEXT
+      * frame.
+      *
+      * ORPHANS: a body twin whose placeholder is gone (its logical slot was removed or replaced by this patch) left
+      * with its region, so its leave ghost is prepared, the twin removed, and the ghost spawned, in that order, since
+      * [[spawnGhosts]] drops ghosts whose source is still connected. Document-wide by necessity: the twin sits outside
+      * every region subtree, so the regular leave sweep cannot see it.
+      */
+    private def portalSweep(root: dom.Element): Unit =
+        if root != null then
+            val els = root.querySelectorAll("[data-kyo-portal]")
+            val cand =
+                (if root.hasAttribute("data-kyo-portal") then Seq(root) else Seq.empty) ++
+                    (0 until els.length).map(els(_).asInstanceOf[dom.Element])
+            cand.foreach { el =>
+                val path = el.getAttribute("data-kyo-path")
+                // Only path-carrying elements can portal (the placeholder must key the slot); the parent check keeps
+                // the sweep idempotent, since an adopted twin is a direct body child and never under a region again.
+                if path != null && el.parentNode != null && (el.parentNode ne document.body) then
+                    // A stale twin from a lost placeholder would collide on the path: drop it first (defensive).
+                    val stale = portalTwin(path)
+                    if stale != null && (stale ne el) then discard(document.body.removeChild(stale))
+                    val slot =
+                        if el.namespaceURI == SvgNs then document.createElementNS(SvgNs, "g")
+                        else document.createElement("span")
+                    slot.setAttribute("data-kyo-portal-slot", path)
+                    slot.setAttribute("hidden", "")
+                    val ae                 = document.activeElement
+                    val hadFocus           = ae != null && (ae ne document.body) && ((el eq ae) || el.contains(ae))
+                    val (selStart, selEnd) = if hadFocus then readSelection(ae) else (Absent, Absent)
+                    discard(el.parentNode.insertBefore(slot, el))
+                    discard(document.body.appendChild(el))
+                    if hadFocus then
+                        focusNoScroll(ae)
+                        (selStart, selEnd) match
+                            case (Present(s), Present(e)) => setSelection(ae, s, e)
+                            case _                        => ()
+                    end if
+                end if
+            }
+        end if
+        val twins = document.querySelectorAll("body > [data-kyo-portal][data-kyo-path]")
+        (0 until twins.length).foreach { i =>
+            val twin = twins(i).asInstanceOf[dom.Element]
+            val p    = twin.getAttribute("data-kyo-path")
+            if document.querySelector(s"""[data-kyo-portal-slot="$p"]""") == null then
+                val ghosts = prepareLeaveGhosts(twin, Set.empty)
+                discard(document.body.removeChild(twin))
+                spawnGhosts(ghosts)
+            end if
+        }
+    end portalSweep
+
     // ---- pointer/drag delegation (SPA transport) ----
 
     // Drag-session state. Module-level mutable is safe on the single-threaded JS runtime (mutated only inside JS
@@ -1403,22 +1503,6 @@ private[kyo] object DomBackend:
     private var ptrPath: Seq[String]           = Seq.empty
     private var ptrRaf: Int                    = 0
     private var ptrPendingEv: dom.PointerEvent = null
-
-    /** True if `start` or any ancestor up to (not including) body declares event token `t` in its data-kyo-ev. */
-    private def declaredInChainAt(start: dom.Element, t: String): Boolean =
-        var n: dom.Element = start
-        var found          = false
-        while !found && n != null && (n ne document.body) do
-            val ev = n.getAttribute("data-kyo-ev")
-            if ev != null && ev.split(",").contains(t) then found = true
-            else
-                n = n.parentNode match
-                    case p: dom.Element => p
-                    case _              => null
-            end if
-        end while
-        found
-    end declaredInChainAt
 
     private def pointerPayload(el: dom.Element, ev: dom.PointerEvent): UI.PointerEvent =
         val r   = el.getBoundingClientRect()
@@ -1442,7 +1526,7 @@ private[kyo] object DomBackend:
         val down: scalajs.js.Function1[dom.Event, Unit] = (e0: dom.Event) =>
             val e = e0.asInstanceOf[dom.PointerEvent]
             findPathElement(e.target.asInstanceOf[dom.Element]).foreach { el =>
-                if declaredInChainAt(el, "pointerdown") then
+                if declaredInChain(el, "pointerdown") then
                     try
                         val d = el.asInstanceOf[scalajs.js.Dynamic]
                         if scalajs.js.typeOf(d.setPointerCapture) == "function" then discard(d.setPointerCapture(e.pointerId))
