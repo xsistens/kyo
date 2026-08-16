@@ -1161,6 +1161,22 @@ object UI:
                 case b: Boolean                    => if b then cssClass(name) else withAttrs(attrs)
                 case s: Signal[Boolean] @unchecked => withReactiveClass(name, s)
 
+            /** Declarative PORTAL (client-local): after a patch inserts this element, the client physically moves it to
+              * `document.body`, leaving an inert placeholder (`data-kyo-portal-slot="<path>"`, hidden) at the logical
+              * position. The element keeps its `data-kyo-path`, so it stays the document's ONLY carrier of that path:
+              * server-side dispatch (which bubbles over the logical tree), every path- and id-addressed op (`bind*`,
+              * `requestMeasure*`, `Command`) and focus restore keep working unchanged. On the next re-render of an
+              * enclosing region the morph matches the incoming element against the placeholder and reconciles the BODY
+              * twin in place, so content updates flow and no inline duplicate is materialized. When the element
+              * disappears from the server render, the placeholder is removed by the normal keyed reconciliation and the
+              * client removes the body twin with it, playing its [[leaveTransition]] ghost if it declared one.
+              *
+              * Use for floating panels (overlays, menus, toasts) that must escape ancestor `overflow` clipping and
+              * `transform`/`filter` containing blocks. Stacking (z-index) stays the consumer's CSS. Client-only:
+              * SSR/SSG render the element inline at its logical position. Emits `data-kyo-portal="1"`.
+              */
+            def portal(v: Boolean): Self = withAttrs(attrs.copy(portal = Present(v)))
+
             // Internal JS property setter (used by Checkbox.indeterminate, etc.)
             private[kyo] def jsProp(name: String, value: String): Self =
                 withAttrs(attrs.copy(jsProps = attrs.jsProps.updated(name, value)))
@@ -1585,6 +1601,8 @@ object UI:
             stopPropagation: Maybe[Boolean] = Absent,
             enterTransition: Maybe[String] = Absent,
             leaveTransition: Maybe[String] = Absent,
+            // Client-local portal: the client re-homes the element to document.body behind a placeholder slot.
+            portal: Maybe[Boolean] = Absent,
             uiStyle: Style = Style.empty,
             onClick: Maybe[Any < Async] = Absent,
             onClickEvt: Maybe[MouseEvent => Any < Async] = Absent,
