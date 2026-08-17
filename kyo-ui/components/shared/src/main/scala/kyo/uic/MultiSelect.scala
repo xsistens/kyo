@@ -595,9 +595,27 @@ final case class MultiSelect[A] private (
                         // Toggles the highlighted option; the panel STAYS OPEN (Prime).
                         toggleOption(shown(hiEff))
                     case _ => ()
-            }((header :+ listUI)*)
+            }((header ++ keyCollisionCard ++ List(listUI))*)
             .render
     end overlayPanel
+
+    /** The loud card shown at the top of the panel when the option keys collide (see
+      * [[KeyDiagnostics]]). A `Set[String]` value makes the failure worse here than
+      * in [[Select]]: colliding keys also merge two options into one selection.
+      */
+    private def keyCollisionCard(using Frame): List[UI] =
+        val dups = KeyDiagnostics.duplicates(items.map(key))
+        if dups.isEmpty then Nil
+        else
+            List(KeyDiagnostics.card(
+                "MultiSelect",
+                if keyF.isEmpty then
+                    "option labels are not unique and optionKey is unset, so options share one selection entry; set optionKey"
+                else "optionKey is not unique across the options, so options share one selection entry",
+                dups
+            ))
+        end if
+    end keyCollisionCard
 end MultiSelect
 
 object MultiSelect:

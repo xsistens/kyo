@@ -198,6 +198,25 @@ final case class TreeSelect private (
         loop(nodeList)
     end flatNodes
 
+    /** The loud card shown at the top of the panel when two nodes share an id (see
+      * [[KeyDiagnostics]]). The ids are the selection keys, so a collision merges two
+      * nodes into one selection entry — and [[options]] defaults the key to the label,
+      * exactly the way [[Select.optionKey]] does, so the same duplicate-label data set
+      * produces it.
+      */
+    private def keyCollisionCard(using Frame): List[UI] =
+        val dups = KeyDiagnostics.duplicates(flatNodes.map(_._1))
+        if dups.isEmpty then Nil
+        else
+            List(KeyDiagnostics.card(
+                "TreeSelect",
+                "node ids are not unique, so those nodes share one selection entry; give options an explicit key " +
+                    "projection, or distinct TreeNode ids",
+                dups
+            ))
+        end if
+    end keyCollisionCard
+
     private[uic] def render(using Frame): UI =
         // Open + (unless bound) expansion state live in signals allocated by this
         // effectful mount; static projections render the closed anatomy inert.
@@ -326,7 +345,7 @@ final case class TreeSelect private (
             Overlay(open)
                 .panelClass("p-treeselect-overlay")
                 .panelClass("p-component")(
-                    div.cssClass("p-treeselect-tree-container")(toChild(treeUI))
+                    (keyCollisionCard :+ (div.cssClass("p-treeselect-tree-container")(toChild(treeUI)): UI))*
                 )
                 .render
         }

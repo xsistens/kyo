@@ -286,6 +286,42 @@ class FormValidationSpec extends UicTest:
         assert(tooBig.isDefined, "a file over the cap fails, judged on the bound payload's size")
     }
 
+    "Activation.Change validates a field-array row's field, and stops once the row is removed" in {
+        // A row is added from an event handler, with no ambient Scope, so its Change
+        // observer runs on an unscoped fiber the array owns. Both halves matter: the
+        // trigger has to fire at all (it used to compile and do nothing), and it has to
+        // stop when the row goes away rather than validating a detached field forever.
+        val (beforeEdit, afterEdit, afterRemoval) = run {
+            for
+                captured <- AtomicRef.init(Chunk.empty[FormField[String]])
+                form     <- mkForm
+                arr <- form.fieldArray(0) { (row, _) =>
+                    for
+                        fld <- row.field("ok", Validator.required(), Activation.Change)
+                        _   <- captured.updateAndGet(_ :+ fld)
+                    yield (fragment(): UI)
+                }
+                _    <- arr.add
+                flds <- captured.get
+                fld = flds.head
+                e0 <- fld.error.current
+                _  <- fld.valueRef.set("")
+                // The observer runs on its own fiber; give it a tick to land.
+                _  <- Async.sleep(50.millis)
+                e1 <- fld.error.current
+                _  <- arr.removeAt(0)
+                // A live observer would revalidate this back to VALID and clear the error;
+                // a cancelled one leaves the error exactly where the last edit put it.
+                _  <- fld.valueRef.set("valid again")
+                _  <- Async.sleep(50.millis)
+                e2 <- fld.error.current
+            yield (e0.isDefined, e1.isDefined, e2.isDefined)
+        }
+        assert(!beforeEdit, "a row field at its valid initial value starts without an error")
+        assert(afterEdit, "Activation.Change on a row field validates on every value change")
+        assert(afterRemoval, "removing the row cancelled its observer: a later edit is not revalidated")
+    }
+
     "move / moveDown reorder rows — row.index reflects the new positions" in {
         val (i0, i1, i0b, i1b) = run {
             for
@@ -514,8 +550,8 @@ class FormValidationSpec extends UicTest:
                 form <- mkForm
                 _    <- form.field(Validator.required(), Activation.Submit)
                 _    <- form.raise(FieldError("invalid-credentials"))
-                sig  <- form.submitDisabled
-                d    <- sig.current
+                gate <- form.submitDisabled
+                d    <- gate.signal.current
             yield d
         }
         assert(!disabled, "a raised form-level error must leave the submit button enabled")

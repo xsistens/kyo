@@ -526,6 +526,29 @@ class GoldenRenderTest extends UicTest:
         assert(!bare.contains("p-uic-overlay-backdrop"), "dismissOnOutsideClick(false): no backdrop")
         assert(!bare.contains("data-kyo-focus-auto"), "seedFocus(false): no seed attribute")
         assert(!bare.contains("data-kyo-ev=\"keydown\""), "dismissOnEscape(false) + no host keys: no keydown")
+
+        // With a trigger the overlay owns the anchor box, so the glue class the
+        // geometry depends on cannot be left off by the caller.
+        val triggered = run {
+            for
+                ref <- Signal.initRef(true)
+                out <- UI.runRender(uic.Overlay(ref).trigger(button("Open"))(span("panel-content"))).take(1).run
+            yield out.mkString
+        }
+        val triggeredClosed = run {
+            for
+                ref <- Signal.initRef(false)
+                out <- UI.runRender(uic.Overlay(ref).trigger(button("Open"))(span("panel-content"))).take(1).run
+            yield out.mkString
+        }
+        assert(triggered.contains("p-uic-overlay-anchor"), "trigger: the overlay stamps its own anchor container")
+        assert(triggered.contains("Open"), "trigger: the trigger renders inside that container")
+        assert(triggered.contains("p-uic-overlay-panel"), "trigger: the panel renders next to the trigger")
+        assert(triggeredClosed.contains("p-uic-overlay-anchor"), "trigger: the anchor container survives a closed panel")
+        assert(!triggeredClosed.contains("p-uic-overlay-panel"), "trigger: closed still renders no panel")
+        // Without a trigger the primitive stays as it was: backdrop + panel only, for
+        // the components that own their own root and stamp the class there.
+        assert(!open.contains("p-uic-overlay-anchor"), "no trigger: the overlay adds no container of its own")
     }
 
     "Tooltip renders Prime anatomy inside the hover wrapper — zero state, zero round-trips" in {
@@ -1586,6 +1609,93 @@ class GoldenRenderTest extends UicTest:
         assert(bound.contains("""data-kyo-ev"""), "the picker registers its select handler for the write-back")
         assert(empty.contains("No file chosen"), "an empty bound value shows the empty state")
         assert(!empty.contains("p-fileupload-filename"), "an empty bound value is not a filename")
+    }
+
+    "a colliding option key is reported loudly instead of silently picking the wrong option" in {
+        // Two options, one label, no optionKey: the derived keys collide, so a pick
+        // would apply to whichever matched first. That is the exact failure that only
+        // shows up with the data that triggers it.
+        val dupSelect = run {
+            for
+                vref <- Signal.initRef("")
+                oref <- Signal.initRef(true)
+                href <- Signal.initRef(-1)
+                qref <- Signal.initRef("")
+                sel = uic.Select[(String, String)]().options(Seq("a" -> "Ada", "b" -> "Ada"))(_._2)
+                out <- UI.runRender(sel.value(vref).open(oref).wired(oref, href, qref)).take(1).run
+            yield out.mkString
+        }
+        val keyedSelect = run {
+            for
+                vref <- Signal.initRef("")
+                oref <- Signal.initRef(true)
+                href <- Signal.initRef(-1)
+                qref <- Signal.initRef("")
+                sel = uic.Select[(String, String)]().options(Seq("a" -> "Ada", "b" -> "Ada"))(_._2).optionKey(_._1)
+                out <- UI.runRender(sel.value(vref).open(oref).wired(oref, href, qref)).take(1).run
+            yield out.mkString
+        }
+        assert(dupSelect.contains("p-uic-key-error"), "Select: duplicate derived keys render the diagnostic card")
+        assert(dupSelect.contains("optionKey"), "Select: the card names the setter to reach for")
+        assert(dupSelect.contains("Ada"), "Select: the card names the offending key")
+        assert(dupSelect.contains("""role="alert""""), "the card announces itself to assistive tech")
+        assert(!keyedSelect.contains("p-uic-key-error"), "Select: a distinct optionKey clears the diagnostic")
+
+        val dupMulti = run {
+            for
+                vref <- Signal.initRef(Set.empty[String])
+                oref <- Signal.initRef(true)
+                href <- Signal.initRef(-1)
+                qref <- Signal.initRef("")
+                ms = uic.MultiSelect[(String, String)]().options(Seq("a" -> "Ada", "b" -> "Ada"))(_._2)
+                out <- UI.runRender(ms.value(vref).open(oref).wired(oref, href, qref)).take(1).run
+            yield out.mkString
+        }
+        assert(dupMulti.contains("p-uic-key-error"), "MultiSelect: duplicate derived keys render the card")
+
+        val dupButtons = renderHtml(uic.SelectButton[String]().options(Seq("S", "S", "L")))
+        val okButtons  = renderHtml(uic.SelectButton[String]().options(Seq("S", "M", "L")))
+        assert(dupButtons.contains("p-uic-key-error"), "SelectButton: duplicate derived keys render the card")
+        assert(!okButtons.contains("p-uic-key-error"), "SelectButton: distinct options render no card")
+
+        // The tree-shaped picker defaults its key to the label the same way, so it reports
+        // the same collision — from the node ids, which is where it lands there.
+        final case class Dept(name: String, subs: List[Dept])
+        def treeHtml(depts: Seq[Dept]): String = run {
+            for
+                vref <- Signal.initRef(Set.empty[String])
+                oref <- Signal.initRef(true)
+                eref <- Signal.initRef(Set.empty[String])
+                ts = uic.TreeSelect().options(depts)(_.name)(_.subs).value(vref)
+                out <- UI.runRender(ts.open(oref).wired(oref, eref)).take(1).run
+            yield out.mkString
+        }
+        val dupTree = treeHtml(Seq(Dept("Ops", List(Dept("Ops", Nil)))))
+        val okTree  = treeHtml(Seq(Dept("Ops", List(Dept("Field", Nil)))))
+        assert(dupTree.contains("p-uic-key-error"), "TreeSelect: duplicate node ids render the card")
+        assert(!okTree.contains("p-uic-key-error"), "TreeSelect: distinct node ids render no card")
+    }
+
+    "a DataTable that binds identity without a rowKey says so instead of keying by position" in {
+        final case class Row(id: String, name: String)
+        val rows = Seq(Row("r1", "Ada"), Row("r2", "Bob"))
+        def table(f: uic.DataTable[Row] => uic.DataTable[Row]): String = run {
+            for
+                sel <- Signal.initRef(Set.empty[String])
+                base = uic.DataTable[Row]().rows(rows).columns(uic.Column[Row]("Name")(_.name))
+                out <- UI.runRender(f(base).selected(sel).selectionMode(uic.SelectionMode.Single)).take(1).run
+            yield out.mkString
+        }
+        val unkeyed = table(identity)
+        val keyed   = table(_.rowKey(_.id))
+        // No identity bound at all: position is a fine key for a read-only table, so
+        // nothing is reported.
+        val readOnly = renderHtml(uic.DataTable[Row]().rows(rows).columns(uic.Column[Row]("Name")(_.name)))
+        assert(unkeyed.contains("p-uic-key-error"), "selection bound without rowKey renders the diagnostic card")
+        assert(unkeyed.contains("rowKey"), "the card names the setter to reach for")
+        assert(unkeyed.contains("p-datatable-table-container"), "the table still renders alongside the card")
+        assert(!keyed.contains("p-uic-key-error"), "a rowKey clears the diagnostic")
+        assert(!readOnly.contains("p-uic-key-error"), "a table that consumes no identity is not nagged")
     }
 
     "InputGroup renders addons + fields in order; IconField pins InputIcons around the input" in {

@@ -21,6 +21,11 @@ end FloatLabelVariant
   * the field plus a `<label>`), so the extracted `@primeuix` floatlabel CSS
   * applies verbatim.
   *
+  * A single-host WRAPPER, like [[IconField]]: it takes the field itself and keeps
+  * its concrete type, which is what lets it stamp `.p-filled` on that field.
+  * Contrast [[InputGroup]], a container of finished children, and [[Label]],
+  * which stands beside a field and links to it by id.
+  *
   * The float mechanics are pure CSS: `:has(input:focus)` floats the label on
   * focus with no JS, and the filled state is Prime's `.p-filled` class on the
   * field — stamped here at render time from the wrapped field's value binding

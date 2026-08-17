@@ -133,10 +133,13 @@ final class Form private[form] (
       * fully in validation, `errorSummary`, `isDirty`, focus-first-invalid, `reset`, and
       * `markPristine`.
       *
-      * Note: a row `build` runs with `Async` only (no `Scope`) — fields, `addRule`, `bind`,
-      * and `errorSummary` all work; `dependsOn` (the only `Scope` user) is not available
-      * inside a row, so live cross-field re-validation within a row falls back to `addRule`
-      * evaluated at each field's own trigger / at submit.
+      * Note: a row `build` runs with `Async` only (no `Scope`). Everything that does not need
+      * one works — fields, `addRule`, `bind`, `errorSummary` — and `Activation.Change` works
+      * too: the array wires each row's observer on an unscoped fiber and cancels it when the
+      * row is removed or the form unmounts. `dependsOn` is the exception, and the type says
+      * so: it returns `Unit < (Async & Scope)`, so it cannot be called from a row at all.
+      * Cross-field re-validation within a row falls back to `addRule` evaluated at each
+      * field's own trigger / at submit.
       */
     def fieldArray(initial: Int = 0)(build: (Form, FieldArray.Row) => UI < Async)(using Frame): FieldArray[Unit] < Async =
         fieldArrayOf(initial)((row, ctl) => build(row, ctl).map(ui => (ui, ())))
@@ -275,18 +278,28 @@ final class Form private[form] (
     def hasVisibleErrors(using Frame): Signal[Boolean] < Sync =
         allErrors.map(_.map(_.nonEmpty))
 
-    /** The usual submit-button gate: disabled while submitting OR while any FIELD error
-      * is shown to the user — yet enabled for a pristine form (so the first click runs
-      * submit-reveal, after which the shown errors keep it disabled). Bind a submit
-      * button's `disabled(...)` to this. Read after the fields/children are declared.
+    /** The usual submit-button gate: blocked while submitting OR while any FIELD error is
+      * shown to the user — yet open for a pristine form (so the first click runs
+      * submit-reveal, after which the shown errors keep it blocked). Read after the
+      * fields/children are declared.
+      *
+      * It returns a [[kyo.uic.SubmitGate]] rather than a bare `Signal[Boolean]` so that
+      * `uic.Button("Save").ariaDisabled(form.submitDisabled)` is the only binding that fits.
+      * A native `disabled` here is an accessibility trap: the button leaves the tab order,
+      * and the reactive re-enable lands a tick after the value change, so a Tab keypress
+      * jumps past it. `aria-disabled` keeps the button focusable and the race disappears —
+      * and routing its click through [[submit]] is what moves focus to the first invalid
+      * field. Reach for `.signal` when you want the raw boolean for something else.
       *
       * Form-level errors (`raise`) deliberately do NOT gate: they can only be resolved by
-      * re-submitting, so disabling submit on them would deadlock the button that produced
+      * re-submitting, so blocking submit on them would deadlock the button that produced
       * them; they surface in [[errorSummary]] instead. Field server errors ([[FormField.setError]])
-      * do gate, but they are value-scoped, so the first edit hides them and re-enables submit.
+      * do gate, but they are value-scoped, so the first edit hides them and re-opens submit.
       */
-    def submitDisabled(using Frame): Signal[Boolean] < Sync =
-        fieldErrors.map(errs => submittingRef.combineLatest(errs.map(_.nonEmpty)).map(t => t._1 || t._2))
+    def submitDisabled(using Frame): uic.SubmitGate < Sync =
+        fieldErrors.map(errs =>
+            new uic.SubmitGate(submittingRef.combineLatest(errs.map(_.nonEmpty)).map(t => t._1 || t._2))
+        )
 
     /** All DISPLAYABLE errors in this subtree, each paired with the id of the field it
       * belongs to (`Absent` for a form-level [[raise]] error). This is the building block a
@@ -429,8 +442,13 @@ final class Form private[form] (
 
     /** Launch the value observers for every `Activation.Change` field in this static subtree
       * (own fields + nested children). Called once by `Form.mountedWith` after `build`, in
-      * the mount scope, so the observers live for the form's lifetime. Field-array rows are
-      * NOT covered — they are added later, outside a `Scope` (see [[FormField.wireChange]]).
+      * the mount scope, so the observers live for the form's lifetime.
+      *
+      * Field-array ROWS are not reached from here — they are added later, from an event
+      * handler with no ambient `Scope`. They wire the same trigger through
+      * [[wireRowChangeActivations]] and the array owns the resulting fibers; the
+      * `Scope.ensure` below is what tears those down when the form unmounts, so a row
+      * observer never outlives the form that declared it.
       */
     private[form] def wireChangeActivations(using Frame): Unit < (Async & Scope) =
         for
@@ -438,7 +456,43 @@ final class Form private[form] (
             _      <- Kyo.foreach(fields)(_.wireChange)
             kids   <- childrenRef.get
             _      <- Kyo.foreach(kids)(_.wireChangeActivations)
+            _      <- Scope.ensure(cancelRowChangeActivations)
         yield ()
+
+    /** Row-scope counterpart of [[wireChangeActivations]]: wires this scope's
+      * `Activation.Change` fields (and those of its children and nested arrays' rows)
+      * WITHOUT an ambient `Scope`, retaining the observer fibers so [[cancelRowChangeActivations]]
+      * can tear exactly this subtree down. Called by `FieldArray.add` for each new row.
+      */
+    private[form] def wireRowChangeActivations(using Frame): Unit < Async =
+        for
+            fields <- fieldsRef.get
+            wired  <- Kyo.foreach(fields)(_.wireChangeUnscoped)
+            _      <- Sync.defer { rowChangeFibers = rowChangeFibers ++ wired.collect { case Present(f) => f } }
+            kids   <- childrenRef.get
+            _      <- Kyo.foreach(kids)(_.wireRowChangeActivations)
+            arrays <- arraysRef.get
+            _      <- Kyo.foreach(arrays)(_.wireRowActivations)
+        yield ()
+
+    /** Cancel every observer fiber [[wireRowChangeActivations]] started in this subtree —
+      * on row removal, on form reset of the array, and on unmount.
+      */
+    private[form] def cancelRowChangeActivations(using Frame): Unit < Async =
+        for
+            fibers <- Sync.defer { val fs = rowChangeFibers; rowChangeFibers = Chunk.empty; fs }
+            _      <- Kyo.foreach(fibers)(_.interrupt)
+            kids   <- childrenRef.get
+            _      <- Kyo.foreach(kids)(_.cancelRowChangeActivations)
+            arrays <- arraysRef.get
+            _      <- Kyo.foreach(arrays)(_.cancelRowActivations)
+        yield ()
+
+    /** Observer fibers of this scope's row-wired `Activation.Change` fields. A plain `var`
+      * for the same reason as `checks` / `invariants`: a row's wiring and teardown each run
+      * single-threaded, once.
+      */
+    private var rowChangeFibers: Chunk[Fiber[Unit, Any]] = Chunk.empty
 
     private[form] def clearErrorsSubtree(using Frame): Unit < Sync =
         for

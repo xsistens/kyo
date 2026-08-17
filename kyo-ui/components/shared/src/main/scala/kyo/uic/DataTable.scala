@@ -86,9 +86,13 @@ end Column
   *     `tr.p-datatable-row-expansion`.
   *
   * `rowKey` supplies the stable id behind selection/expansion and the
-  * `onRowClick` payload — set it whenever those are used (the fallback is the
-  * row's position in the ORIGINAL rows list, which survives sorting/filtering
-  * but not data changes).
+  * `onRowClick` payload. It is REQUIRED in practice whenever any of those is
+  * bound: without it rows fall back to their position in the ORIGINAL rows list,
+  * which survives sorting and filtering (both computed here) but not a data
+  * change — reorder the rows and every selection, expansion and click payload
+  * re-associates with a different record, silently. A table that binds identity
+  * without a key therefore renders a loud `.p-uic-key-error` card above itself
+  * rather than shipping that failure to production data.
   */
 final case class DataTable[A] private (
     rowsV: List[A] = Nil,
@@ -307,9 +311,32 @@ final case class DataTable[A] private (
             case Size.Normal => ()
         end match
         root(
-            ((div.cssClass("p-datatable-table-container")(toChild(tableEl)): UI) :: paginatorUI).map(toChild)*
+            (rowKeyCard ++ ((div.cssClass("p-datatable-table-container")(toChild(tableEl)): UI) :: paginatorUI)).map(toChild)*
         )
     end body
+
+    /** The loud card rendered above the table when per-row IDENTITY is in use but
+      * [[rowKey]] is unset (see [[KeyDiagnostics]]).
+      *
+      * The fallback key is the row's position, and position is not an identity: it
+      * is stable under sorting and filtering (both are computed over the original
+      * list here) but not under a data change. Reorder the underlying rows and every
+      * selection, expansion and click payload silently re-associates with a
+      * different record. The component cannot tell a static list from a live one, so
+      * the moment identity is actually consumed the key stops being optional.
+      */
+    private def rowKeyCard(using Frame): List[UI] =
+        val usesIdentity = selectedRef.isDefined || expandedRef.isDefined || onRowClickF.isDefined
+        if rowKeyF.isDefined || !usesIdentity then Nil
+        else
+            List(KeyDiagnostics.card(
+                "DataTable",
+                "selection, expansion or onRowClick is bound but rowKey is unset, so rows are keyed by position " +
+                    "and a data change re-associates that state with the wrong record; set rowKey",
+                Nil
+            ))
+        end if
+    end rowKeyCard
 
     /** One sortable/plain header cell with Prime's header-content anatomy. */
     private def headerCell(c: Column[A], sort: List[(String, Boolean)])(using Frame): UI =

@@ -201,11 +201,27 @@ final case class SelectButton[A] private (
             tb.render
         }
         FieldInvalid.withMessage(
-            el(buttons.map(toChild)*),
+            el((keyCollisionCard ++ buttons).map(toChild)*),
             invalidV.constTrue,
             invalidMsgV
         )
     end body
+
+    /** The loud card rendered ahead of the fused buttons when the option keys
+      * collide (see [[KeyDiagnostics]]): two options sharing a key toggle together.
+      */
+    private def keyCollisionCard(using Frame): List[UI] =
+        val dups = KeyDiagnostics.duplicates(items.map(key))
+        if dups.isEmpty then Nil
+        else
+            List(KeyDiagnostics.card(
+                "SelectButton",
+                if keyF.isEmpty then "option labels are not unique and optionKey is unset, so those options select together; set optionKey"
+                else "optionKey is not unique across the options, so those options select together",
+                dups
+            ))
+        end if
+    end keyCollisionCard
 
     /** Clicking an option updates the bound selection (single replaces, multiple
       * toggles; `allowEmpty` gates clearing the last pick), then fires `onChange`.

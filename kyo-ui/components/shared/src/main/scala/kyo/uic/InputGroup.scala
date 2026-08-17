@@ -9,6 +9,16 @@ import kyo.UI.*
   * inputgroup CSS applies verbatim: first/last children get the outer border
   * radius, inner edges fuse, and addons carry the muted surface.
   *
+  * This is a CONTAINER, not a wrapper. [[FloatLabel]], [[IftaLabel]] and
+  * [[IconField]] each take ONE field and keep its concrete type, because they
+  * stamp classes onto it (`.p-filled`, the icon paddings). InputGroup stamps
+  * nothing: Prime's CSS keys on child POSITION (`:first-child`, `:last-child`)
+  * and on `.p-component`, so the group needs no handle on any child and accepts
+  * finished `UI` values in visual order — components, addons and raw kyo elements
+  * alike. Build each child fully before placing it here; there is no group-level
+  * setter that reaches back into one. [[Label]] is the third mechanism again:
+  * standalone, linked to a field by `forId` rather than containing it.
+  *
   * Compose with the existing components — the CSS keys on `.p-component`
   * children (Input, Button, Select all qualify):
   * {{{

@@ -25,6 +25,36 @@ package object uic:
       */
     private[uic] def toChild(u: UI): HtmlChildVal = new HtmlChildVal(u)
 
+    /** Row and option IDENTITY is the one piece of configuration a component cannot
+      * infer and cannot fail loudly about on its own: a wrong key does not crash, it
+      * quietly applies a selection to the wrong record, and only with the data that
+      * triggers it. These helpers turn both failure modes into something visible.
+      *
+      * kyo-ui's engine sets the precedent: `foreachKeyed` warns on duplicate keys and
+      * a duplicate mounted key paints an inline error card. A component `render` here
+      * is pure (`UI`, no `Sync`), so a log is not reachable — the card is.
+      */
+    private[uic] object KeyDiagnostics:
+        import kyo.UI.*
+
+        /** The keys that appear more than once, in first-seen order. Empty means the
+          * projection is a real identity for this data.
+          */
+        def duplicates(keys: Seq[String]): Seq[String] =
+            keys.groupBy(identity).collect { case (k, occurrences) if occurrences.sizeIs > 1 => k }
+                .toSeq.sortBy(keys.indexOf)
+
+        /** The loud inline card. `component` names the component, `advice` the setter
+          * to reach for; the offending keys are listed so the data problem is findable.
+          */
+        def card(component: String, advice: String, keys: Seq[String])(using Frame): UI =
+            val listed = if keys.isEmpty then "" else keys.take(5).mkString(" (", ", ", if keys.sizeIs > 5 then ", ...)" else ")")
+            div
+                .cssClass("p-uic-key-error")
+                .role("alert")(s"$component: $advice$listed")
+        end card
+    end KeyDiagnostics
+
     /** Package-internal parsers from CSS value strings into kyo's typed `Style`
       * vocabulary — the Prime APIs mirrored by Skeleton/ScrollPanel/MeterGroup
       * take plain CSS strings (`width="10rem"`, `color="var(--p-cyan-500)"`), and

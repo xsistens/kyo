@@ -55,8 +55,9 @@ final class FieldArray[R] private[form] (
 
     /** Attach a cross-row validation, evaluated over ALL current rows at submit — the array
       * analogue of [[Form.satisfy]] (same `satisfy(code)(predicate)` shape), with typed access to
-      * every row. Rows are only ever submit-validated (they live outside a `Scope`), so the
-      * predicate is the submit-pull form `Chunk[R] => Boolean < Async`; `true` = valid. If it
+      * every row. A CROSS-ROW check has no signal to push from (the row set itself changes),
+      * so the predicate is the submit-pull form `Chunk[R] => Boolean < Async`; `true` = valid.
+      * Per-FIELD activation inside a row is unaffected: `Activation.Change` works there. If it
       * returns `false`, `code` is raised on the parent scope (shows in its `errorSummary`) and
       * submit is blocked. Removal-correct: it reads the live rows, so deleted rows never count.
       * For per-row attribution, `pred` may also call `field.setError` on the offending rows'
@@ -74,7 +75,8 @@ final class FieldArray[R] private[form] (
         satisfy(code, Reveal.OnSubmit)(pred)
 
     /** Append a new row: allocate its sub-scope, run `build` (which declares the row's
-      * fields and returns its UI + model), capture the row's aggregation signals, publish it.
+      * fields and returns its UI + model), start the row's `Activation.Change` observers,
+      * capture the row's aggregation signals, publish it.
       */
     def add(using Frame): Unit < Async =
         for
@@ -82,6 +84,7 @@ final class FieldArray[R] private[form] (
             child <- parent.newChildScope
             row = new Row(key, this)
             built    <- build(child, row) // (UI, R)
+            _        <- child.wireRowChangeActivations
             dirtySig <- child.isDirty
             entries  <- child.errorEntries
             fErrsSig <- child.fieldErrorsAgg(visible = true)
@@ -90,15 +93,44 @@ final class FieldArray[R] private[form] (
         yield ()
 
     /** Remove the row at index `i` (no-op if out of range). */
-    def removeAt(i: Int)(using Frame): Unit < Sync =
-        rowsRef.updateAndGet(rows => if i >= 0 && i < rows.length then rows.patch(i, Nil, 1) else rows).unit
+    def removeAt(i: Int)(using Frame): Unit < Async =
+        dropWhere(rows => if i >= 0 && i < rows.length then i else -1)
 
     /** Move the row at `from` to index `to` (clamped; no-op if either is out of range). */
     def move(from: Int, to: Int)(using Frame): Unit < Sync =
         rowsRef.updateAndGet(rows => reorder(rows, from, to)).unit
 
-    private[form] def removeKey(key: String)(using Frame): Unit < Sync =
-        rowsRef.updateAndGet(_.filterNot(_.key == key)).unit
+    private[form] def removeKey(key: String)(using Frame): Unit < Async =
+        dropWhere(_.indexWhere(_.key == key))
+
+    /** Drop the row `locate` points at (a negative index is a no-op), cancelling its
+      * `Activation.Change` observers first: those fibers are unscoped (a row is added from
+      * an event handler, outside any `Scope`), so this array owns their lifetime and a
+      * removed row must not keep validating.
+      */
+    private def dropWhere(locate: Chunk[RowEntry[R]] => Int)(using Frame): Unit < Async =
+        for
+            rows <- rowsRef.get
+            i = locate(rows)
+            _ <-
+                if i < 0 || i >= rows.length then Kyo.unit
+                else
+                    rows(i).form.cancelRowChangeActivations
+                        .andThen(rowsRef.updateAndGet(_.patch(i, Nil, 1)).unit)
+        yield ()
+
+    /** Start the `Activation.Change` observers of every CURRENT row — the recursion step for
+      * an array nested inside another array's row (its rows exist before the outer row is
+      * wired).
+      */
+    private[form] def wireRowActivations(using Frame): Unit < Async =
+        rowsRef.get.map(rows => Kyo.foreach(rows)(_.form.wireRowChangeActivations).unit)
+
+    /** Cancel the `Activation.Change` observers of every current row — on unmount, and as
+      * the recursion step when an enclosing row is removed.
+      */
+    private[form] def cancelRowActivations(using Frame): Unit < Async =
+        rowsRef.get.map(rows => Kyo.foreach(rows)(_.form.cancelRowChangeActivations).unit)
 
     /** Swap the keyed row with its neighbour `delta` positions away (±1 = up/down). */
     private[form] def moveKey(key: String, delta: Int)(using Frame): Unit < Sync =
@@ -209,7 +241,7 @@ object FieldArray:
       */
     final class Row private[form] (val key: String, array: FieldArray[?]):
         /** Remove this row from the array. */
-        def remove(using Frame): Unit < Sync = array.removeKey(key)
+        def remove(using Frame): Unit < Async = array.removeKey(key)
 
         /** Swap this row with the one above it (no-op for the first row). */
         def moveUp(using Frame): Unit < Sync = array.moveKey(key, -1)

@@ -25,12 +25,21 @@ final case class ToastMessage(
   * once in the tree, and `add` messages from anywhere that resolved the
   * service.
   *
-  * Resolution point: kyo-ui event handlers erase their effect and run on the
-  * event-drain fiber — in the browser transport a root `Env.runAll` reaches
-  * them as fiber context, but server-push dispatch runs on kyo-http session
-  * fibers WITHOUT that context. Portable code therefore resolves the service
-  * at BUILD time (`Env.get[ToastService].map(svc => ...)` while constructing
-  * the UI — the demo's pattern) and closes over the instance in handlers.
+  * Resolve the service at BUILD time, through [[ToastService.use]], and close
+  * over the instance in handlers. The service itself needs nothing from `Env`
+  * once constructed — it owns its queue and its id counter — so an instance in
+  * hand works under every transport.
+  *
+  * The resolution POINT is what matters. kyo-ui event handlers erase their
+  * effect and run on the event-drain fiber: in the browser transport a root
+  * `Env.runAll` reaches them as fiber context, but server-push dispatch runs on
+  * kyo-http session fibers WITHOUT it. An `Env.get[ToastService]` deferred INTO
+  * a handler therefore works locally and fails under server push — the worst
+  * shape a bug can take. `uic.Button.onClick` already refuses such a handler at
+  * compile time, because its parameter is `Any < Async` and an `Env` effect
+  * cannot ride along; a raw kyo element's `onClick[S]` accepts it through its
+  * `Isolate`, which is a kyo-ui capability this module does not get to revoke.
+  * `use` is the way not to need it.
   *
   * `add` assigns a monotonically increasing id (a counter inside the service —
   * the render stays pure: no clock, no randomness) and, when `life` is set,
@@ -60,6 +69,13 @@ trait ToastService:
 
     /** Removes every queued message. */
     def clear(using Frame): Unit < Sync
+
+    /** This instance's stacked region — the instance-method spelling of
+      * [[ToastService.render]], so a block that got the service from
+      * [[ToastService.use]] never has to reach back into `Env` to place it.
+      */
+    def renderRegion(position: OverlayPosition = OverlayPosition.BottomRight)(using Frame): UI =
+        ToastService.wired(this, position)
 end ToastService
 
 object ToastService:
@@ -71,6 +87,25 @@ object ToastService:
       * counter internally. Provide once at the application root.
       */
     def layer(using Frame): Layer[ToastService, Sync] = Layer(init)
+
+    /** Resolves the service ONCE, here, and hands the instance to `build`.
+      *
+      * This is the resolution point the class doc argues for, as an API rather than a
+      * convention: everything `build` returns — event handlers included — closes over the
+      * INSTANCE, so nothing downstream has to resolve anything at dispatch time, and the
+      * transport-dependent failure has no way in.
+      *
+      * {{{
+      * ToastService.use { toasts =>
+      *   div(
+      *     uic.Button("Save").onClick(toasts.add(Severity.Success, "Saved", "")),
+      *     toasts.renderRegion()
+      *   ): UI
+      * }
+      * }}}
+      */
+    def use[A, S](build: ToastService => A < S)(using Frame): A < (S & Env[ToastService]) =
+        Env.get[ToastService].map(build)
 
     /** A fresh service instance (the layer's construction — exposed for runners
       * that wire services manually).

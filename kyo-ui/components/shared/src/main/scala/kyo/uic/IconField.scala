@@ -10,6 +10,11 @@ import kyo.UI.*
   * (`.p-inputicon:first-child`) pins to the start and pads the field's start
   * edge; an icon AFTER it pins to the end.
   *
+  * A single-host WRAPPER: it takes the field itself and keeps its concrete type,
+  * which is what lets it stamp the padding classes onto that field. Contrast
+  * [[InputGroup]], a container of finished children, and [[Label]], which stands
+  * beside a field and links to it by id.
+  *
   * Hosts: [[Input]] (Prime's canonical pairing), [[TextArea]], and [[Select]].
   * Prime's sheet only pads `.p-inputtext` — the TextArea and Select paddings
   * are `.p-uic-*` remainder rules with the same padding calc (a kyo extension

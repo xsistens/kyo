@@ -26,8 +26,9 @@ object Activation:
       * validates on the union of the values it is declared with.
       *
       *   - [[Change]] — every value change (an observer on the bound value; the error surfaces
-      *     inline as the user types, RHF `onChange` mode). Wired in the mount scope, so it is
-      *     unavailable on field-array rows — use [[Blur]] / [[Submit]] there.
+      *     inline as the user types, RHF `onChange` mode). Works the same on field-array rows:
+      *     a row has no ambient `Scope`, so its observer is unscoped and the array owns it,
+      *     cancelling it when the row is removed or the form unmounts.
       *   - [[Blur]]   — focus loss (wired to the field's `onBlur`), even without an edit.
       *   - [[Submit]] — form submit (driven by `Form.submit`).
       */

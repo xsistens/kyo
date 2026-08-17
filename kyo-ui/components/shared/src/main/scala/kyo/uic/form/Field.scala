@@ -193,17 +193,38 @@ final class FormField[A] private[form] (
       * reveal) so [[isValid]] is correct from the start without flagging an untouched field;
       * every subsequent (real) change runs [[onEvent]], which marks the field touched so the
       * error surfaces inline as the user types (RHF `onChange` mode). A no-op unless the
-      * field declared `Activation.Change`. Launched in the mount scope by `Form.mountedWith`, so
-      * the observer is torn down with the form; array-row fields (built without a `Scope`) do
-      * not get it — use `Activation.Blur` / `Submit` there.
+      * field declared `Activation.Change`. Launched in the mount scope by `Form.mountedWith`,
+      * so the observer is torn down with the form. Field-array rows are added long after that
+      * mount body ran and have no ambient `Scope`, so they take [[wireChangeUnscoped]]
+      * instead — the trigger behaves identically there.
       */
     private[form] def wireChange(using Frame): Unit < (Async & Scope) =
         if !wantsChange then Kyo.unit
         else
             for
                 seen <- AtomicInt.init(0)
-                _    <- Fiber.init(value.observe(v => seen.getAndIncrement.map(n => if n == 0 then revalidate else onEvent(v)))).unit
+                _    <- Fiber.init(changeObserver(seen)).unit
             yield ()
+
+    /** [[wireChange]] for a caller with no ambient `Scope`: the observer runs on an UNSCOPED
+      * fiber, handed back so the caller owns its lifetime. `FieldArray` is that caller — it
+      * cancels a row's fibers when the row is removed and when the form's mount scope closes,
+      * which is what makes `Activation.Change` behave on rows exactly as it does on the
+      * static tree. `Absent` for a field that did not declare the trigger.
+      */
+    private[form] def wireChangeUnscoped(using Frame): Maybe[Fiber[Unit, Any]] < Async =
+        if !wantsChange then (Absent: Maybe[Fiber[Unit, Any]])
+        else
+            for
+                seen  <- AtomicInt.init(0)
+                fiber <- Fiber.initUnscoped(changeObserver(seen))
+            yield Present(fiber)
+
+    /** The observer both wirings run: first emission validates SILENTLY (correct `isValid`
+      * without flagging an untouched field), every later one goes through [[onEvent]].
+      */
+    private def changeObserver(seen: AtomicInt)(using Frame): Unit < Async =
+        value.observe(v => seen.getAndIncrement.map(n => if n == 0 then revalidate else onEvent(v)))
 
     /** Whether submit may focus this field when it is the first invalid one — toggled
       * by [[focusable]], read by `Form.submit`.

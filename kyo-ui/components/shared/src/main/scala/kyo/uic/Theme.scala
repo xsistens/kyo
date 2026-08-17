@@ -78,6 +78,10 @@ object Theme:
         """@keyframes p-icon-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
       |.p-icon-spin { animation: p-icon-spin 2s linear infinite; }
       |.p-uic-invalid-message { color: var(--p-form-field-invalid-placeholder-color, #ef4444); font-size: 0.875rem; margin-top: 0.25rem; }
+      |/* Identity misconfiguration (a colliding option key, a table using selection with no rowKey):
+      |   the failure it causes is silent and data-dependent, so the card is deliberately loud. */
+      |.p-uic-key-error { color: var(--p-form-field-invalid-placeholder-color, #ef4444); border: 1px solid currentColor;
+      |  border-radius: var(--p-border-radius-sm, 4px); padding: 0.375rem 0.5rem; font-size: 0.875rem; }
       |.p-uic-label { display: inline-flex; align-items: baseline; }
       |.p-uic-label-required::after { content: "*"; color: var(--p-form-field-invalid-border-color, #ef4444); margin-inline-start: 0.125rem; }
       |.p-uic-label-colon::after { content: ":"; }

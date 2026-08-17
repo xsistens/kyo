@@ -117,8 +117,16 @@ final case class Button private (
       */
     def ariaDisabled(v: Boolean): Button = copy(ariaDisabledV = Present(BoolValue.Const(v)))
 
-    /** Reactive [[ariaDisabled]] tracking `sig` (e.g. `form.submitDisabled`). */
+    /** Reactive [[ariaDisabled]] tracking `sig`. */
     def ariaDisabled(sig: Signal[Boolean]): Button = copy(ariaDisabledV = Present(BoolValue.Dyn(sig)))
+
+    /** Binds a form's submit gate. [[SubmitGate]] is a distinct type from `Signal[Boolean]`
+      * precisely so it fits HERE and not on [[disabled]]: a natively disabled submit button
+      * leaves the tab order and the re-enable lands a tick late, which is the focus trap
+      * [[ariaDisabled]] exists to avoid. `uic.Button("Save").ariaDisabled(gate)` is therefore
+      * the whole binding, with no accessibility decision left to make.
+      */
+    def ariaDisabled(gate: SubmitGate): Button = ariaDisabled(gate.signal)
 
     /** Busy state: shows a spinning glyph and blocks clicks (like disabled). */
     def loading(v: Boolean): Button = copy(loadingV = Present(BoolValue.Const(v)))

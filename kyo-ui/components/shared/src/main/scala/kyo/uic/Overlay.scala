@@ -33,11 +33,19 @@ end OverlayAnchor
   *      `position: absolute` against the nearest positioned ancestor, holding
   *      the given children.
   *
-  * The ANCHOR ELEMENT — the component the panel should attach to — must be
-  * `position: relative`: stamp the glue class `p-uic-overlay-anchor` on it (or
-  * declare the position yourself). The panel opens in the declared
-  * [[OverlayAnchor]] direction; `matchWidth` (default on — Prime's field-panel
-  * behavior) gives it `min-width: 100%` of the anchor.
+  * The ANCHOR ELEMENT — the box the panel attaches to — must be
+  * `position: relative`. Hand the overlay your trigger via `trigger(ui)` and it
+  * renders both inside an anchor container it owns
+  * (`div.p-uic-overlay-anchor`), so the glue class cannot be forgotten; the
+  * failure it prevents is silent and visual (an unstamped anchor positions the
+  * panel against some far-away ancestor). Without a trigger the overlay renders
+  * only backdrop + panel into whatever container the caller provides, which then
+  * has to carry `p-uic-overlay-anchor` itself — the form the components in this
+  * module use, because they already own their own root and stamp it there.
+  *
+  * The panel opens in the declared [[OverlayAnchor]] direction; `matchWidth`
+  * (default on — Prime's field-panel behavior) gives it `min-width: 100%` of the
+  * anchor.
   *
   * Focus story (`seedFocus`, default on): the panel carries kyo's declarative
   * focus attributes — `data-kyo-focus-auto` seeds focus onto the freshly
@@ -107,9 +115,18 @@ final case class Overlay private (
     scrollV: Overlay.Scroll = Overlay.Scroll.Close,
     panelClassesV: List[String] = Nil,
     keyHandlerV: Maybe[KeyboardEvent => Any < Async] = Absent,
+    triggerV: Maybe[UI] = Absent,
     kids: List[UI] = Nil
 ) extends Node:
     type Self = Overlay
+
+    /** The element the panel anchors to. Rendering it here rather than beside the
+      * overlay is what makes the anchor correct by construction: the overlay wraps
+      * `ui` and its own panel in a `div.p-uic-overlay-anchor`, so the caller never
+      * has to know that class exists. The trigger's own handlers are untouched —
+      * this primitive does not toggle the ref for you.
+      */
+    def trigger(ui: UI): Overlay = copy(triggerV = Present(ui))
 
     /** Which anchor corner the panel opens from (default [[OverlayAnchor.BottomStart]]). */
     def anchor(v: OverlayAnchor): Overlay = copy(anchorV = v)
@@ -189,7 +206,11 @@ final case class Overlay private (
     def apply(cs: UI*): Overlay = copy(kids = kids ++ cs)
 
     private[uic] def render(using Frame): UI =
-        when(openRef)(openContent)
+        val gated: UI = when(openRef)(openContent)
+        triggerV match
+            case Present(t) => div.cssClass("p-uic-overlay-anchor")(toChild(t), toChild(gated))
+            case Absent     => gated
+    end render
 
     /** The open panel content for the standard (self-gated) `render` path: the
       * continuous flip/shift reposition when `autoFlip`, else the declared-anchor

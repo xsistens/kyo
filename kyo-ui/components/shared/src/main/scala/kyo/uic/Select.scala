@@ -103,8 +103,14 @@ final case class Select[A] private (
     def options(is: Seq[String])(using ev: String =:= A): Select[A] =
         copy(items = items ++ is.map(ev).toList, labelF = a => ev.flip(a))
 
-    /** Stable per-option key — the value written into the bound ref (defaults to
-      * the label projection).
+    /** Stable per-option key — the value written into the bound ref.
+      *
+      * Defaults to the label projection, which is correct only while the labels are
+      * unique. When they are not, two options share one key and a pick applies to
+      * the wrong one — a failure that appears only with the data that triggers it,
+      * so it survives development and shows up in production. The panel therefore
+      * renders a loud `.p-uic-key-error` card whenever the derived keys collide,
+      * naming the offending keys.
       */
     def optionKey(f: A => String): Select[A] = copy(keyF = Present(f))
 
@@ -559,9 +565,28 @@ final case class Select[A] private (
                     case Keyboard.Enter if hiEff >= 0 && hiEff < shown.size && !isOptionDisabled(shown(hiEff)) =>
                         pick(shown(hiEff))(s)
                     case _ => ()
-            }((header :+ listUI)*)
+            }((header ++ keyCollisionCard ++ List(listUI))*)
             .render
     end overlayPanel
+
+    /** The loud card shown at the top of the panel when the option keys collide, so
+      * a duplicate-label data set cannot silently select the wrong row (see
+      * [[KeyDiagnostics]]). Empty in the healthy case, which is every existing
+      * render.
+      */
+    private def keyCollisionCard(using Frame): List[UI] =
+        val dups = KeyDiagnostics.duplicates(items.map(key))
+        if dups.isEmpty then Nil
+        else
+            List(KeyDiagnostics.card(
+                "Select",
+                if keyF.isEmpty then
+                    "option labels are not unique and optionKey is unset, so picks apply to the wrong option; set optionKey"
+                else "optionKey is not unique across the options, so picks apply to the wrong option",
+                dups
+            ))
+        end if
+    end keyCollisionCard
 end Select
 
 object Select:

@@ -8,6 +8,14 @@ import kyo.UI.*
   * `<label class="p-uic-label">` (kyo class — Prime ships no label CSS of its
   * own): `required` adds the asterisk marker class, `showColon` the trailing
   * colon, and `forId` forwards to the native `for` binding.
+  *
+  * This is a STANDALONE element, not a wrapper: it takes no field and renders
+  * beside one, linked only by the `for`/`id` pair. Three different mechanisms sit
+  * near each other in this module and it is worth keeping them apart:
+  *   - standalone, linked by id — `Label` (here);
+  *   - single-host wrappers that take the field and keep its concrete type so
+  *     they can stamp classes on it — [[FloatLabel]], [[IftaLabel]], [[IconField]];
+  *   - a container of already-built children in visual order — [[InputGroup]].
   */
 final case class Label private (
     text: TextValue,

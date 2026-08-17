@@ -22,6 +22,39 @@ class DiscoverabilityTest extends UicTest:
         typeCheck(preamble + """def x = uic.Input().placeholder("b")""")
     }
 
+    "components lift at placement; a for-comprehension needs the explicit toUI projection" in {
+        // Placement positions carry an expected type, so the conversions fire on their own.
+        typeCheck(preamble + """def x(using Frame): UI = div(uic.Button("A"))""")
+        typeCheck(preamble + """def x(using Frame): UI = fragment(uic.Button("A"))""")
+        // Inline in the argument, the expected type still reaches the comprehension's
+        // element type, so the conversion fires there too.
+        typeCheck(
+            preamble + """def x(using Frame): UI = fragment((for i <- List(1, 2) yield uic.Button(i.toString))*)"""
+        )
+        // Bound to a val first, it does not: nothing constrains the element type at the
+        // definition, the comprehension infers List[Button], and the placement one line
+        // later fails — pointing at the collection rather than at the missing
+        // conversion. This is the position that costs readers an unexplained ascription.
+        typeCheckFailure(
+            preamble + "def x(using Frame): UI =\n  val rows = for i <- List(1, 2) yield uic.Button(i.toString)\n  fragment(rows*)"
+        )
+        // toUI closes it without an ascription, and the ascription still works.
+        typeCheck(
+            preamble + "def x(using Frame): UI =\n  val rows = for i <- List(1, 2) yield uic.Button(i.toString).toUI\n  fragment(rows*)"
+        )
+        typeCheck(
+            preamble + "def x(using Frame): UI =\n  val rows = for i <- List(1, 2) yield (uic.Button(i.toString): UI)\n  fragment(rows*)"
+        )
+        typeCheck(
+            preamble + "def x(using Frame): uic.InputGroup =\n" +
+                "  val fields = for i <- List(1, 2) yield uic.Input().placeholder(i.toString).toUI\n" +
+                "  uic.InputGroup()(fields*)"
+        )
+        // It is a plain projection, available on every component.
+        typeCheck(preamble + """def x(using Frame): UI = uic.Input().placeholder("a").toUI""")
+        typeCheck(preamble + """def x(using Frame): List[UI] = List("a", "b").map(s => uic.Tag(s).toUI)""")
+    }
+
     "text slots accept a reactive Signal[String] as well as a constant String" in {
         // Button/Label/Tag labels + Input placeholder each take a Signal[String] overload
         // (for locale-driven I18n.t leaves) alongside the constant-String form.
@@ -131,6 +164,50 @@ class DiscoverabilityTest extends UicTest:
         // A component that holds no user value is still not bindable.
         typeCheckFailure(preamble + bindable + """def x(f: FormField[String])(using Frame) = uic.Button("Save").bind(f)""")
         typeCheckFailure(preamble + bindable + """def x(f: FormField[String])(using Frame) = uic.Tag("Done").bind(f)""")
+    }
+
+    "ToastService is resolved at build time, and the component button will not defer it" in {
+        // `use` hands the instance to the block; everything it builds closes over that
+        // instance, so no handler resolves anything at dispatch time.
+        typeCheck(
+            preamble + """def x(using Frame): UI < Env[uic.ToastService] = uic.ToastService.use(t => div(uic.Button("Save").onClick(t.add(uic.Severity.Success, "Saved", "")), t.renderRegion()): UI)"""
+        )
+        // uic.Button's handler is `Any < Async`, so an Env effect cannot ride along: the
+        // deferred resolution that works in the browser and fails under server push does
+        // not compile here at all.
+        typeCheckFailure(
+            preamble + """def x(using Frame): uic.Button = uic.Button("Go").onClick(Env.get[uic.ToastService].map(_.add(uic.Severity.Info, "a", "b")))"""
+        )
+        // A RAW kyo element's onClick[S] does accept it, through its Isolate. That is a
+        // kyo-ui capability, not something this module can revoke — recorded here so the
+        // remaining hole is a known shape rather than a surprise, and so a future kyo-ui
+        // change to it shows up as a failing expectation.
+        typeCheck(
+            preamble + """def x(using Frame): UI = button.onClick(Env.get[uic.ToastService].map(_.add(uic.Severity.Info, "a", "b")))("Go")"""
+        )
+    }
+
+    "a form's submit gate only fits the accessible setter" in {
+        // The gate is a distinct type, so the tab-order trap (a natively disabled submit
+        // button whose re-enable lands a tick late) is not reachable by accident.
+        typeCheck(
+            preamble + "import kyo.uic.form.*\n" +
+                """def x(g: uic.SubmitGate)(using Frame): uic.Button = uic.Button("Save").ariaDisabled(g)"""
+        )
+        typeCheckFailure(
+            preamble + "import kyo.uic.form.*\n" +
+                """def x(g: uic.SubmitGate)(using Frame): uic.Button = uic.Button("Save").disabled(g)"""
+        )
+        // The raw boolean is still reachable, deliberately, for reads that are not
+        // "disable this control".
+        typeCheck(
+            preamble + "import kyo.uic.form.*\n" +
+                """def x(g: uic.SubmitGate)(using Frame): Signal[Boolean] = g.signal"""
+        )
+        typeCheck(
+            preamble + "import kyo.uic.form.*\n" +
+                """def x(g: uic.SubmitGate)(using Frame): uic.Button = uic.Button("Save").disabled(g.signal)"""
+        )
     }
 
     "Button carries an id and a reactive disabled (Signal[Boolean]) alongside the constant" in {
@@ -613,6 +690,14 @@ def x(sort: SignalRef[List[(String, Boolean)]], q: SignalRef[String], pg: Signal
         typeCheckFailure(preamble + """def x = uic.InputGroup().iconStart(uic.Icons.search)""")
         typeCheckFailure(preamble + """def x = uic.IconField(uic.Input()).addon(span("x"))""")
         typeCheckFailure(preamble + """def x = uic.FloatLabel(uic.Input(), "L").iconStart(uic.Icons.search)""")
+        // Three mechanisms, kept apart by their types: a single-host wrapper takes the
+        // field, a container takes finished children, a standalone label takes neither.
+        typeCheck(preamble + """def x: uic.IconField = uic.IconField(uic.Input())""")
+        typeCheckFailure(preamble + """def x(using Frame) = uic.IconField(span("not a field"))""")
+        typeCheck(preamble + """def x(using Frame): uic.InputGroup = uic.InputGroup()(uic.Input(), uic.InputGroup.addon(span("kg")))""")
+        typeCheckFailure(preamble + """def x = uic.InputGroup(uic.Input())""")
+        typeCheck(preamble + """def x: uic.Label = uic.Label("Weight").forId("w")""")
+        typeCheckFailure(preamble + """def x = uic.Label(uic.Input(), "Weight")""")
         typeCheckFailure(preamble + """def x = uic.Timeline[String]().rows(Seq("a"))""")
         typeCheckFailure(preamble + """def x = uic.DataView[String]().columns()""")
         typeCheckFailure(preamble + """def x = uic.Stepper().tab("T", "t")""")

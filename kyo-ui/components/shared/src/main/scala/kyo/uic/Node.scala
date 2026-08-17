@@ -38,6 +38,27 @@ trait Node:
       * calls this — the placement conversions in [[Node]]'s companion do.
       */
     private[uic] def render(using Frame): UI
+
+    /** This component as a plain `kyo.UI` value.
+      *
+      * Normal PLACEMENT needs nothing: a container's child list, a `UI`-typed
+      * setter, `fragment(...)`, `when(...)` and a signal-render body all supply an
+      * expected type, and the conversions in [[Node]]'s companion fire against it.
+      *
+      * A comprehension bound to a `val` FIRST does not. Written inline as an
+      * argument the expected type still reaches the comprehension's element type,
+      * but
+      * {{{
+      * val rows = for a <- xs yield uic.Button(a)   // List[Button], not List[UI]
+      * fragment(rows*)                              // does not compile
+      * }}}
+      * has nothing constraining the element type at the definition, so the list
+      * fixes to `List[Button]` and the placement one line later fails — with an
+      * error that points at the collection rather than at the missing conversion.
+      * No additional `Conversion` can rescue that: there is no expected type to
+      * trigger one. Project explicitly instead, `yield uic.Button(a).toUI`.
+      */
+    final def toUI(using Frame): UI = render
 end Node
 
 object Node:

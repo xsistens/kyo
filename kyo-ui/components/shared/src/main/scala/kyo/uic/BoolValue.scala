@@ -38,6 +38,26 @@ private[uic] object BoolValue:
             case other             => rebuild(other)
 end BoolValue
 
+/** A reactive "blocked" state that must NOT reach a native `disabled` attribute — the submit
+  * gate ([[kyo.uic.form.Form.submitDisabled]]) is the one this exists for.
+  *
+  * A natively `disabled` submit button leaves the tab order, and the reactive re-enable lands
+  * a tick after the value change, so a Tab keypress jumps PAST the button to the next control.
+  * [[Button.ariaDisabled]] is the fix, and this type is how the fix stops being an informed
+  * choice: a `SubmitGate` is a distinct type from `Signal[Boolean]`, so it only fits the
+  * accessible setter. Take [[SubmitGate.signal]] when you genuinely want the raw boolean (a
+  * hint, a spinner) — that is a deliberate step, not the default one.
+  *
+  * A plain wrapper class rather than an opaque type or a value class: both of those erase to
+  * `Signal[Boolean]`, which would collide with the existing `ariaDisabled(Signal[Boolean])`
+  * overload at the JVM signature level. One allocation per form is not a cost worth trading
+  * the distinction for.
+  */
+final class SubmitGate private[uic] (
+    /** The underlying boolean stream, for reads that are not "disable this control". */
+    val signal: Signal[Boolean]
+)
+
 /** Call-site projections/folds over an optional boolean slot. Named so the intent reads at the
   * use site instead of spelling out the `Const`/`Dyn`/`Absent` match each time.
   */
