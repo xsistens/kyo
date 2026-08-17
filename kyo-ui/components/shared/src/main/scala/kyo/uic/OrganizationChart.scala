@@ -65,7 +65,7 @@ final case class OrganizationChart private (
       * [[TreeTable.expanded]]: the set holds the ids whose children are shown, an
       * empty set shows the root alone, and toggles flip membership. Binding a ref
       * also renders the toggle buttons on nodes with children; a chart with no ref
-      * is static.
+      * is static and fully open, since there would be no toggle to open it with.
       */
     def expanded(ref: SignalRef[Set[String]]): OrganizationChart = copy(expandedRef = Present(ref))
 
@@ -88,21 +88,21 @@ final case class OrganizationChart private (
 
     private[uic] def render(using Frame): UI =
         (expandedRef, selectedRef) match
-            case (Present(e), Present(s)) => e.render(exp => s.render(sel => body(exp, sel)))
-            case (Present(e), Absent)     => e.render(exp => body(exp, Set.empty))
-            case (Absent, Present(s))     => s.render(sel => body(Set.empty, sel))
-            case _                        => body(Set.empty, Set.empty)
+            case (Present(e), Present(s)) => e.render(exp => s.render(sel => body(exp.contains, sel)))
+            case (Present(e), Absent)     => e.render(exp => body(exp.contains, Set.empty))
+            case (Absent, Present(s))     => s.render(sel => body(OrganizationChart.allExpanded, sel))
+            case _                        => body(OrganizationChart.allExpanded, Set.empty)
 
-    private def body(expanded: Set[String], sel: Set[String])(using Frame): UI =
-        val inner: List[UI] = rootNode.toList.map(n => renderNode(n, expanded, sel))
+    private def body(isExpanded: String => Boolean, sel: Set[String])(using Frame): UI =
+        val inner: List[UI] = rootNode.toList.map(n => renderNode(n, isExpanded, sel))
         div.cssClass("p-organizationchart").cssClass("p-component")(inner.map(toChild)*)
 
     /** One node's nested table: node row, connector rows (visibility-hidden while
       * collapsed, exactly Prime), and the children row of recursive subtrees.
       */
-    private def renderNode(node: OrgChartNode, expanded: Set[String], sel: Set[String])(using Frame): UI =
+    private def renderNode(node: OrgChartNode, expandedAt: String => Boolean, sel: Set[String])(using Frame): UI =
         val hasChildren = node.children.nonEmpty
-        val isExpanded  = expanded.contains(node.id)
+        val isExpanded  = expandedAt(node.id)
         val isSelected  = sel.contains(node.id)
         val colspan     = if hasChildren then node.children.length * 2 else 1
 
@@ -166,7 +166,7 @@ final case class OrganizationChart private (
                 val childrenRow: UI =
                     var r = tr.cssClass("p-organizationchart-node-children")
                     if !isExpanded then r = r.cssClass("p-uic-oc-hidden")
-                    r(node.children.map(c => toChild(td.colspan(2)(toChild(renderNode(c, expanded, sel)))))*)
+                    r(node.children.map(c => toChild(td.colspan(2)(toChild(renderNode(c, expandedAt, sel)))))*)
                 end childrenRow
 
                 List(downRow, linesRow, childrenRow)
@@ -214,3 +214,10 @@ end OrganizationChart
 
 object OrganizationChart:
     def apply(): OrganizationChart = new OrganizationChart()
+
+    /** The expansion predicate of a chart with no `expanded` ref. Such a chart renders no
+      * toggles, so an empty expanded set would leave every subtree hidden with nothing to
+      * open it: a static chart shows its whole hierarchy.
+      */
+    private val allExpanded: String => Boolean = _ => true
+end OrganizationChart

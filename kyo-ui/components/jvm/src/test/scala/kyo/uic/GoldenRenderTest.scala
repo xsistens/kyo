@@ -3803,6 +3803,12 @@ class GoldenRenderTest extends UicTest:
         assert(collapsed.contains("""data-uic-icon="chevron-up""""), "collapsed toggle chevron-up")
         assert(static.contains("p-organizationchart"), "an unbound chart still renders")
         assert(!static.contains("p-organizationchart-node-toggle-button"), "no ref, no toggles")
+        // A static chart has no toggle to open a subtree with, so it shows the whole
+        // hierarchy. Keying expansion by the EXPANDED ids makes the unbound default the
+        // dangerous direction: an empty set would keep every descendant in the DOM but
+        // visibility-hidden, leaving the root alone on screen with no way to open it.
+        assert(static.contains("CFO") && static.contains("Dev"), "unbound: descendants in the DOM")
+        assert(!static.contains("p-uic-oc-hidden"), "unbound: nothing hidden, the hierarchy is visible")
     }
 
     "Terminal renders welcome, history rows, and the bare prompt input wired to the handler" in {
