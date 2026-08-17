@@ -306,9 +306,9 @@ final case class TreeSelect private (
         if invalidV.constTrue then el = el.cssClass("p-invalid").aria("invalid", "true")
         if disabledFlag then el = el.cssClass("p-disabled")
         sizeV match
-            case Size.Small               => el = el.cssClass("p-treeselect-sm")
-            case Size.Large | Size.XLarge => el = el.cssClass("p-treeselect-lg")
-            case Size.Normal              => ()
+            case Size.Small  => el = el.cssClass("p-treeselect-sm")
+            case Size.Large  => el = el.cssClass("p-treeselect-lg")
+            case Size.Normal => ()
         end match
         if variantV == FieldVariant.Filled then el = el.cssClass("p-variant-filled")
         if fluidFlag then el = el.cssClass("p-treeselect-fluid")

@@ -173,9 +173,9 @@ final case class TreeTable[A] private (
         if rowInteractive then root = root.cssClass("p-treetable-hoverable")
         if gridlinesFlag then root = root.cssClass("p-treetable-gridlines")
         sizeV match
-            case Size.Small               => root = root.cssClass("p-treetable-sm")
-            case Size.Large | Size.XLarge => root = root.cssClass("p-treetable-lg")
-            case Size.Normal              => ()
+            case Size.Small  => root = root.cssClass("p-treetable-sm")
+            case Size.Large  => root = root.cssClass("p-treetable-lg")
+            case Size.Normal => ()
         end match
         root(div.cssClass("p-treetable-table-container")(toChild(tableEl)))
     end body

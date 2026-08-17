@@ -35,9 +35,10 @@ final case class ToastMessage(
   * `add` assigns a monotonically increasing id (a counter inside the service —
   * the render stays pure: no clock, no randomness) and, when `life` is set,
   * forks the timed removal from an unscoped fiber (`Async.sleep` then
-  * `remove`) — the established Toast auto-dismiss idiom, now owned by the
-  * service instead of app code. Each queued message also carries its remaining
-  * `life` as `data-uic-life` (ms) for the client runtime.
+  * `remove`). This is the service half of [[Node]]'s fiber-ownership rule: a
+  * message's life spans re-renders of the region, so no render's `Scope` can own
+  * it and the service owns the cancellation instead. Each queued message also
+  * carries its remaining `life` as `data-uic-life` (ms) for the client runtime.
   */
 trait ToastService:
     /** Read-only view of the queued messages, oldest first — the render region

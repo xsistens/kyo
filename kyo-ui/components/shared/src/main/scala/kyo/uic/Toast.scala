@@ -13,10 +13,12 @@ import kyo.UI.*
   * applies verbatim.
   *
   * Visibility is gated by a `SignalRef[Boolean]` exactly like [[Dialog]] (a
-  * `when(ref)` reactive boundary). The render is pure — no timers run at render
-  * time; the auto-dismiss `duration` is emitted as `data-uic-duration` (ms) for
-  * the client runtime, and app code drives timed dismissal from a forked fiber
-  * (`ref.set(true)` then `Fiber.initUnscoped(Async.sleep(..).andThen(ref.set(false)))`).
+  * `when(ref)` reactive boundary). One `Toast` owns no fiber at all (see [[Node]]
+  * on fiber ownership): the auto-dismiss `duration` is emitted as
+  * `data-uic-duration` (ms) for the client runtime, and the dismissal timer, which
+  * has to outlive the render, is the caller's — `ref.set(true)` then
+  * `Fiber.initUnscoped(Async.sleep(..).andThen(ref.set(false)))`. [[ToastService]]
+  * exists so that timer has an owner.
   *
   * One toast renders ONE message; for the multi-message stacking store (Prime's
   * ToastService with `add(...)` queueing) use [[ToastService]] — a kyo

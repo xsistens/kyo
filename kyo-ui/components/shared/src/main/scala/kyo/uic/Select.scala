@@ -402,9 +402,9 @@ final case class Select[A] private (
         if readonlyFlag then el = el.cssClass("p-uic-select-readonly").aria("readonly", "true")
         if requiredFlag then el = el.aria("required", "true")
         sizeV match
-            case Size.Small               => el = el.cssClass("p-select-sm")
-            case Size.Large | Size.XLarge => el = el.cssClass("p-select-lg")
-            case Size.Normal              => ()
+            case Size.Small  => el = el.cssClass("p-select-sm")
+            case Size.Large  => el = el.cssClass("p-select-lg")
+            case Size.Normal => ()
         end match
         if variantV == FieldVariant.Filled then el = el.cssClass("p-variant-filled")
         if fluidFlag then el = el.cssClass("p-select-fluid")

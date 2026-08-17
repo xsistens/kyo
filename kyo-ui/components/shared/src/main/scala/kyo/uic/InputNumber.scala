@@ -210,9 +210,9 @@ final case class InputNumber private (
             .cssClass("p-component")
         idV.foreach(v => in = in.id(v))
         sizeV match
-            case Size.Small               => in = in.cssClass("p-inputtext-sm")
-            case Size.Large | Size.XLarge => in = in.cssClass("p-inputtext-lg")
-            case Size.Normal              => ()
+            case Size.Small  => in = in.cssClass("p-inputtext-sm")
+            case Size.Large  => in = in.cssClass("p-inputtext-lg")
+            case Size.Normal => ()
         end match
         if variantV == FieldVariant.Filled then in = in.cssClass("p-variant-filled")
         if invalidV.constTrue then in = in.cssClass("p-invalid").aria("invalid", "true")

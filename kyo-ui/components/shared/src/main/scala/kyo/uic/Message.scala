@@ -113,9 +113,9 @@ final case class Message private (
             case Absent                           => ()
         end match
         sizeV match
-            case Size.Small               => el = el.cssClass("p-message-sm")
-            case Size.Large | Size.XLarge => el = el.cssClass("p-message-lg")
-            case Size.Normal              => ()
+            case Size.Small  => el = el.cssClass("p-message-sm")
+            case Size.Large  => el = el.cssClass("p-message-lg")
+            case Size.Normal => ()
         end match
 
         val iconChild: List[UI] =

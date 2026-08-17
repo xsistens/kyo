@@ -167,9 +167,9 @@ final case class RadioButton private (
         var root = div.cssClass("p-radiobutton").cssClass("p-component")
         if isChecked then root = root.cssClass("p-radiobutton-checked")
         sizeV match
-            case Size.Small               => root = root.cssClass("p-radiobutton-sm")
-            case Size.Large | Size.XLarge => root = root.cssClass("p-radiobutton-lg")
-            case Size.Normal              => ()
+            case Size.Small  => root = root.cssClass("p-radiobutton-sm")
+            case Size.Large  => root = root.cssClass("p-radiobutton-lg")
+            case Size.Normal => ()
         end match
         if variantV == FieldVariant.Filled then root = root.cssClass("p-variant-filled")
         if invalidV.constTrue then root = root.cssClass("p-invalid")

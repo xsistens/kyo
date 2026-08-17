@@ -39,10 +39,12 @@ import kyo.UI.*
   *
   * Autoplay ([[autoplay]], default off): a built-in scope-bound fiber spawned
   * inside the interactive `UI.mounted` — `Fiber.init(Loop.forever { Async.sleep;
-  * advance })`. Its Scope is the carousel's lifetime, so mounted4 supervision
-  * cancels it on unmount (no leak). Autoplay always wraps to page 0 at the end
-  * (Prime's autoplay-implies-circular behavior) even when [[circular]] is off, so
-  * it keeps cycling.
+  * advance })`. This is the component half of [[Node]]'s fiber-ownership rule:
+  * the fiber is spawned inside the mount, so its Scope is the carousel's lifetime
+  * and mounted4 supervision cancels it on unmount (no leak); nothing is scheduled
+  * by `render` itself. Autoplay always wraps to page 0 at the end (Prime's
+  * autoplay-implies-circular behavior) even when [[circular]] is off, so it keeps
+  * cycling.
   *
   * `circular(true)` wraps prev/next past the ends (the wrap-around CLONE strip is
   * part of Prime's translate machinery and stays DEFERRED — circular only wraps

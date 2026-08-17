@@ -14,6 +14,22 @@ import scala.language.implicitConversions
   *
   * The chained setters each return the concrete `Self`, so IDE autocomplete after
   * `.` shows exactly the options valid for that component and nothing else.
+  *
+  * ==Who may own a fiber==
+  *
+  * This is the module's single rule on timers; components and services state their
+  * position against it rather than restating it.
+  *
+  *   - `render` is pure. Projecting a component into a `UI` schedules nothing, so a
+  *     server render, an SSG pass and a golden test never start a clock.
+  *   - A component MAY own a fiber spawned with `Fiber.init` INSIDE its own
+  *     `UI.mounted`. The mount's `Scope` is that component's lifetime, so mounted
+  *     supervision cancels the fiber on unmount and it cannot leak. `Carousel`'s
+  *     autoplay is the one component that does this today.
+  *   - A timer that must outlive any single render does NOT belong to a component.
+  *     It belongs to a service, which forks it with `Fiber.initUnscoped` and owns
+  *     the cancellation itself — `ToastService`'s per-message auto-dismiss is the
+  *     reference case.
   */
 trait Node:
     type Self <: Node

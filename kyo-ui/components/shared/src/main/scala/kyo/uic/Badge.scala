@@ -18,7 +18,7 @@ import kyo.UI.*
 final case class Badge private (
     valueV: Maybe[TextValue] = Absent,
     severityV: Maybe[SeverityValue] = Absent,
-    sizeV: Size = Size.Normal
+    sizeV: ExtendedSize = Size.Normal
 ) extends Node:
     type Self = Badge
 
@@ -31,7 +31,7 @@ final case class Badge private (
     def severity(sig: Signal[Severity]): Badge = copy(severityV = Present(SeverityValue.Dyn(sig)))
 
     /** Size: `.p-badge-sm` / default / `.p-badge-lg` / `.p-badge-xl`. */
-    def size(v: Size): Badge = copy(sizeV = v)
+    def size(v: ExtendedSize): Badge = copy(sizeV = v)
 
     /** The `.p-badge-<token>` suffix for a severity; `Primary`/`Help` render the unsuffixed base skin. */
     private def badgeToken(s: Severity): Maybe[String] = s match

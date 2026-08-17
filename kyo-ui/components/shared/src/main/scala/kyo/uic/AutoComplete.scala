@@ -343,9 +343,9 @@ final case class AutoComplete[A] private (
         fieldExtraClassesV.foreach(c => f = f.cssClass(c))
         idV.foreach(v => f = f.id(v))
         sizeV match
-            case Size.Small               => f = f.cssClass("p-inputtext-sm")
-            case Size.Large | Size.XLarge => f = f.cssClass("p-inputtext-lg")
-            case Size.Normal              => ()
+            case Size.Small  => f = f.cssClass("p-inputtext-sm")
+            case Size.Large  => f = f.cssClass("p-inputtext-lg")
+            case Size.Normal => ()
         end match
         if variantV == FieldVariant.Filled then f = f.cssClass("p-variant-filled")
         if redFlag then f = f.cssClass("p-invalid").aria("invalid", "true")

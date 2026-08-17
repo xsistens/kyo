@@ -194,9 +194,9 @@ final case class CheckBox private (
         var root = div.cssClass("p-checkbox").cssClass("p-component")
         if isChecked && !isMixed then root = root.cssClass("p-checkbox-checked")
         sizeV match
-            case Size.Small               => root = root.cssClass("p-checkbox-sm")
-            case Size.Large | Size.XLarge => root = root.cssClass("p-checkbox-lg")
-            case Size.Normal              => ()
+            case Size.Small  => root = root.cssClass("p-checkbox-sm")
+            case Size.Large  => root = root.cssClass("p-checkbox-lg")
+            case Size.Normal => ()
         end match
         if variantV == FieldVariant.Filled then root = root.cssClass("p-variant-filled")
         if invalidV.constTrue then root = root.cssClass("p-invalid")

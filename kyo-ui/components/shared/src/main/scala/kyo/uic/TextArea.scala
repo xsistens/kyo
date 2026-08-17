@@ -145,9 +145,9 @@ final case class TextArea private (
         extraClassesV.foreach(c => b = b.cssClass(c))
         idV.foreach(v => b = b.id(v))
         sizeV match
-            case Size.Small               => b = b.cssClass("p-textarea-sm")
-            case Size.Large | Size.XLarge => b = b.cssClass("p-textarea-lg")
-            case Size.Normal              => ()
+            case Size.Small  => b = b.cssClass("p-textarea-sm")
+            case Size.Large  => b = b.cssClass("p-textarea-lg")
+            case Size.Normal => ()
         end match
         if variantV == FieldVariant.Filled then b = b.cssClass("p-variant-filled")
         if invalidV.constTrue then b = b.cssClass("p-invalid").aria("invalid", "true")

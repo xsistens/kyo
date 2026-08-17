@@ -35,9 +35,9 @@ final case class ProgressSpinner private (
     private[uic] def render(using Frame): UI =
         var el = div.cssClass("p-progressspinner").role("progressbar")
         sizeV match
-            case Size.Small               => el = el.cssClass("p-uic-progressspinner-sm")
-            case Size.Large | Size.XLarge => el = el.cssClass("p-uic-progressspinner-lg")
-            case Size.Normal              => ()
+            case Size.Small  => el = el.cssClass("p-uic-progressspinner-sm")
+            case Size.Large  => el = el.cssClass("p-uic-progressspinner-lg")
+            case Size.Normal => ()
         end match
         accessibleNameV match
             case Present(TextValue.Const(n)) => el = el.aria("label", n)

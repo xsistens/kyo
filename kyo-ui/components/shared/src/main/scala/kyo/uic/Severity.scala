@@ -32,11 +32,30 @@ enum ButtonVariant derives CanEqual:
 enum FieldVariant derives CanEqual:
     case Outlined, Filled
 
-/** Component size (`.p-*-sm` / default / `.p-*-lg`; XLarge only where the
-  * design system defines it, e.g. Avatar).
+/** The widest size scale in the design system: the standard [[Size]] plus
+  * [[Size.XLarge]]. Only the components whose PrimeOne stylesheet ships an
+  * `-xl` rule accept it, which today is Avatar (`.p-avatar-xl`) and Badge
+  * (`.p-badge-xl`).
   */
-enum Size derives CanEqual:
-    case Small, Normal, Large, XLarge
+sealed trait ExtendedSize derives CanEqual
+
+/** Component size (`.p-*-sm` / default / `.p-*-lg`).
+  *
+  * `Size.XLarge` is deliberately NOT a `Size`: it is an [[ExtendedSize]], so it
+  * type-checks only against the two components that render it. Handing it to a
+  * component that has no `-xl` rule used to compile and render as Large; now it
+  * does not compile.
+  */
+sealed trait Size extends ExtendedSize derives CanEqual
+
+object Size:
+    case object Small  extends Size
+    case object Normal extends Size
+    case object Large  extends Size
+
+    /** Avatar and Badge only — the sole `-xl` rules in the PrimeOne sheet. */
+    case object XLarge extends ExtendedSize
+end Size
 
 /** Selection semantics shared by list-like components (Checkbox/Radio are
   * DataTable-only affordances).

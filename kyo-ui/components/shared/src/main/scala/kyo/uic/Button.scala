@@ -225,9 +225,9 @@ final case class Button private (
             case ButtonVariant.Link     => bs += "p-button-link"
         end match
         sizeV match
-            case Size.Small               => bs += "p-button-sm"
-            case Size.Large | Size.XLarge => bs += "p-button-lg"
-            case Size.Normal              => ()
+            case Size.Small  => bs += "p-button-sm"
+            case Size.Large  => bs += "p-button-lg"
+            case Size.Normal => ()
         end match
         if roundedFlag then bs += "p-button-rounded"
         if raisedFlag then bs += "p-button-raised"

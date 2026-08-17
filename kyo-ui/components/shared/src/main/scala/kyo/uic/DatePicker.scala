@@ -372,9 +372,9 @@ final case class DatePicker private (
         var i = input.cssClass("p-datepicker-input").cssClass("p-inputtext").cssClass("p-component")
         i = idV.map(v => i.id(v)).getOrElse(i)
         sizeV match
-            case Size.Small               => i = i.cssClass("p-inputtext-sm")
-            case Size.Large | Size.XLarge => i = i.cssClass("p-inputtext-lg")
-            case Size.Normal              => ()
+            case Size.Small  => i = i.cssClass("p-inputtext-sm")
+            case Size.Large  => i = i.cssClass("p-inputtext-lg")
+            case Size.Normal => ()
         end match
         if variantV == FieldVariant.Filled then i = i.cssClass("p-variant-filled")
         if invalidV.constTrue then i = i.aria("invalid", "true")

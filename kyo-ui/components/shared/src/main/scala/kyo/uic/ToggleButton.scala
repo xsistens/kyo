@@ -119,9 +119,9 @@ final case class ToggleButton private (
         if isChecked then el = el.cssClass("p-togglebutton-checked")
         if invalidFlag then el = el.cssClass("p-invalid").aria("invalid", "true")
         sizeV match
-            case Size.Small               => el = el.cssClass("p-togglebutton-sm").cssClass("p-inputfield-sm")
-            case Size.Large | Size.XLarge => el = el.cssClass("p-togglebutton-lg").cssClass("p-inputfield-lg")
-            case Size.Normal              => ()
+            case Size.Small  => el = el.cssClass("p-togglebutton-sm").cssClass("p-inputfield-sm")
+            case Size.Large  => el = el.cssClass("p-togglebutton-lg").cssClass("p-inputfield-lg")
+            case Size.Normal => ()
         end match
         if fluidFlag then el = el.cssClass("p-togglebutton-fluid")
         el = el.jsProp("type", "button").aria("pressed", isChecked.toString)

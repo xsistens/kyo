@@ -302,9 +302,9 @@ final case class DataTable[A] private (
         if stripedFlag then root = root.cssClass("p-datatable-striped")
         if gridlinesFlag then root = root.cssClass("p-datatable-gridlines")
         sizeV match
-            case Size.Small               => root = root.cssClass("p-datatable-sm")
-            case Size.Large | Size.XLarge => root = root.cssClass("p-datatable-lg")
-            case Size.Normal              => ()
+            case Size.Small  => root = root.cssClass("p-datatable-sm")
+            case Size.Large  => root = root.cssClass("p-datatable-lg")
+            case Size.Normal => ()
         end match
         root(
             ((div.cssClass("p-datatable-table-container")(toChild(tableEl)): UI) :: paginatorUI).map(toChild)*

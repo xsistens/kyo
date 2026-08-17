@@ -268,6 +268,24 @@ class DiscoverabilityTest extends UicTest:
         typeCheckFailure(preamble + """def x = uic.Avatar().colorScheme("Accent1")""")
     }
 
+    "Size.XLarge reaches only the components the PrimeOne sheet gives an -xl rule" in {
+        // Avatar (.p-avatar-xl) and Badge (.p-badge-xl) are the whole set; their setters
+        // widen to ExtendedSize.
+        typeCheck(preamble + """def x: uic.Avatar = uic.Avatar().initials("AL").size(uic.Size.XLarge)""")
+        typeCheck(preamble + """def x: uic.Badge = uic.Badge("3").size(uic.Size.XLarge)""")
+        // Everything else takes the standard three-case Size, so an extra-large request
+        // that would silently render as Large does not compile.
+        typeCheckFailure(preamble + """def x = uic.Button("Save").size(uic.Size.XLarge)""")
+        typeCheckFailure(preamble + """def x = uic.Input().size(uic.Size.XLarge)""")
+        typeCheckFailure(preamble + """def x = uic.Message().size(uic.Size.XLarge)""")
+        typeCheckFailure(preamble + """def x = uic.CheckBox("a").size(uic.Size.XLarge)""")
+        typeCheckFailure(preamble + """def x = uic.DataTable[String]().size(uic.Size.XLarge)""")
+        typeCheckFailure(preamble + """def x = uic.ProgressSpinner().size(uic.Size.XLarge)""")
+        // The three standard cases keep reaching both scales.
+        typeCheck(preamble + """def x: uic.Avatar = uic.Avatar().size(uic.Size.Small)""")
+        typeCheck(preamble + """def x: uic.Button = uic.Button("Save").size(uic.Size.Large)""")
+    }
+
     "Toolbar absorbs Bar: start/center/end sections, no spacer/design; Bar is retired" in {
         typeCheck(preamble + """def x(using Frame): uic.Toolbar = uic.Toolbar().start(span("a")).center(span("b")).end(span("c"))""")
         typeCheckFailure(preamble + """def x = uic.Bar()""")

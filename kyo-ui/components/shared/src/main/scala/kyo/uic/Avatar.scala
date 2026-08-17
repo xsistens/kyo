@@ -23,7 +23,7 @@ final case class Avatar private (
     iconV: Maybe[IconGlyph] = Absent,
     imageV: Maybe[String] = Absent,
     shapeV: AvatarShape = AvatarShape.Square,
-    sizeV: Size = Size.Normal,
+    sizeV: ExtendedSize = Size.Normal,
     disabledFlag: Boolean = false,
     interactiveFlag: Boolean = false,
     accessibleNameV: Maybe[String] = Absent,
@@ -49,7 +49,7 @@ final case class Avatar private (
     /** Size: `Normal` (default) / `Large` (`.p-avatar-lg`) / `XLarge`
       * (`.p-avatar-xl`); `Small` falls back to `Normal` (Prime has no small avatar).
       */
-    def size(v: Size): Avatar = copy(sizeV = v)
+    def size(v: ExtendedSize): Avatar = copy(sizeV = v)
 
     /** Greys the avatar out (`.p-disabled` + `aria-disabled`) and suppresses interaction. */
     def disabled(v: Boolean): Avatar = copy(disabledFlag = v)
