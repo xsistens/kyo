@@ -2,6 +2,7 @@ package kyo.uic
 
 import kyo.*
 import kyo.UI.*
+import scala.annotation.targetName
 
 /** SelectButton — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * SelectButton anatomy: `div.p-selectbutton.p-component[.p-invalid]
@@ -12,9 +13,14 @@ import kyo.UI.*
   * Options are TYPED like Select: `options(items)(label)` projects any `A` to
   * its visible text; `optionKey` (defaults to the label projection) supplies
   * the stable key written into the bound ref(s). Single-select binds
-  * `value(SignalRef[String])`; `multiple(true)` switches to a Set semantics
-  * bound via `values(SignalRef[Set[String]])`. `allowEmpty(false)` blocks
-  * clearing the last selection (Prime semantics).
+  * `value(SignalRef[String])`; `multiple(true)` switches to Set semantics bound
+  * via `value(SignalRef[Set[String]])`. `allowEmpty(false)` blocks clearing the
+  * last selection (Prime semantics).
+  *
+  * Both arities are form controls — [[TextFormControl]] single,
+  * [[MultiSelectFormControl]] multiple — so `uic.SelectButton[A]().bind(field)`
+  * wires value, validity, message and the blur trigger, and the field's value type
+  * picks the arity.
   */
 final case class SelectButton[A] private (
     items: List[A],
@@ -28,12 +34,22 @@ final case class SelectButton[A] private (
     allowEmptyFlag: Boolean = true,
     sizeV: Size = Size.Normal,
     disabledFlag: Maybe[BoolValue] = Absent,
-    invalidFlag: Boolean = false,
+    invalidV: Maybe[BoolValue] = Absent,
+    invalidMsgV: Maybe[String] = Absent,
+    invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
-    onChangeF: Maybe[String => Any < Async] = Absent
-) extends Node:
+    onChangeF: Maybe[String => Any < Async] = Absent,
+    onBlurF: Maybe[String => Any < Async] = Absent,
+    onBlurSetF: Maybe[Set[String] => Any < Async] = Absent,
+    idV: Maybe[String] = Absent
+) extends Node, TextFormControl, MultiSelectFormControl:
     type Self = SelectButton[A]
+
+    /** Native `id` on the group — pair with `Label.forId`; the form layer stamps the bound
+      * field's id here so focus-first-invalid can target its first button.
+      */
+    def id(v: String): SelectButton[A] = copy(idV = Present(v))
 
     /** Appends typed options with their text projection. */
     def options(is: Seq[A])(label: A => String): SelectButton[A] =
@@ -60,11 +76,15 @@ final case class SelectButton[A] private (
     /** Binds the SINGLE selection two-way to `ref` (empty string = no selection). */
     def value(ref: SignalRef[String]): SelectButton[A] = copy(valueRef = Present(ref))
 
-    /** Switches to multi-select semantics (pair with [[values]]). */
+    /** Switches to multi-select semantics (pair with the `Set` [[value]] binding). */
     def multiple(v: Boolean): SelectButton[A] = copy(multipleFlag = v)
 
-    /** Binds the MULTI selection two-way to `ref` (a set of option keys). */
-    def values(ref: SignalRef[Set[String]]): SelectButton[A] = copy(valuesRef = Present(ref))
+    /** Binds the MULTI selection two-way to `ref` (a set of option keys). Spelled `value`
+      * like the single-select binding — the [[MultiSelectFormControl]] member — because
+      * they are one concept at two arities, and the type already says which is which.
+      */
+    @targetName("valueKeys")
+    def value(ref: SignalRef[Set[String]]): SelectButton[A] = copy(valuesRef = Present(ref))
 
     /** Whether clicking the selected option may clear the selection entirely
       * (Prime default true).
@@ -78,7 +98,20 @@ final case class SelectButton[A] private (
     def disabled(v: Boolean | Signal[Boolean]): SelectButton[A] = copy(disabledFlag = Present(ReactiveValue(v)))
 
     /** Marks the group invalid (`.p-invalid` outline). */
-    def invalid(v: Boolean): SelectButton[A] = copy(invalidFlag = v)
+    def invalid(v: Boolean): SelectButton[A] = copy(invalidV = Present(BoolValue.Const(v)))
+
+    /** Reactive validity: the bound signal toggles the invalid state on emission. */
+    def invalid(sig: Signal[Boolean]): SelectButton[A] = copy(invalidV = Present(BoolValue.Dyn(sig)))
+
+    /** Message rendered below the group while it is invalid (kyo extension —
+      * `div.p-uic-invalid-message`).
+      */
+    def invalidMessage(v: String): SelectButton[A] = copy(invalidMsgV = Present(v))
+
+    /** Reactive invalid message — `Present` shows the row and (by default) marks the group
+      * invalid; `Absent` clears both.
+      */
+    def invalidMessage(sig: Signal[Maybe[String]]): SelectButton[A] = copy(invalidMsgDynV = Present(sig))
 
     /** Accessible name → `aria-label` (a literal group label, e.g. "Language"). */
     def accessibleName(v: String): SelectButton[A] = copy(accNameV = Present(TextValue.Const(v)))
@@ -94,10 +127,28 @@ final case class SelectButton[A] private (
     /** Fired with the clicked option's key after the selection write. */
     def onChange(f: String => Any < Async): SelectButton[A] = copy(onChangeF = Present(f))
 
+    /** Fires on focus loss with the SINGLE selection (empty string = none) — the
+      * validation layer's Blur trigger for a `String`-valued field.
+      */
+    def onBlur(f: String => Any < Async): SelectButton[A] = copy(onBlurF = Present(f))
+
+    /** Fires on focus loss with the MULTI selection — the Blur trigger for a
+      * `Set[String]`-valued field. `@targetName` because both erase to `onBlur(Function1)`.
+      */
+    @targetName("onBlurKeys")
+    def onBlur(f: Set[String] => Any < Async): SelectButton[A] = copy(onBlurSetF = Present(f))
+
     /** The stable option key: [[optionKey]] if set, else the label projection. */
     private def key(a: A): String = keyF.getOrElse(labelF)(a)
 
     private[uic] def render(using Frame): UI =
+        (invalidV.dynSig, invalidMsgDynV) match
+            case (Absent, Absent) => renderDisabledResolved
+            case _ => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
+                    copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderDisabledResolved
+                )
+
+    private def renderDisabledResolved(using Frame): UI =
         BoolValue.reactive(disabledFlag): d =>
             copy(disabledFlag = d).renderResolved
 
@@ -109,7 +160,26 @@ final case class SelectButton[A] private (
 
     private def body(selected: Set[String])(using Frame): UI =
         var el = div.cssClass("p-selectbutton").cssClass("p-component").role("group")
-        if invalidFlag then el = el.cssClass("p-invalid")
+        idV.foreach(v => el = el.id(v))
+        if invalidV.constTrue then el = el.cssClass("p-invalid").aria("invalid", "true")
+        // Blur fires even without a pick — the validation layer's Blur trigger. Reads the
+        // bound ref LIVE, so it reports the selection at blur time. The element carries ONE
+        // blur handler, so the arity in force decides which of the two is wired; a control
+        // that declared both would otherwise silently keep whichever was applied last.
+        val blurHandler: Maybe[Any < Async] =
+            if multipleFlag then
+                onBlurSetF.map(f =>
+                    valuesRef match
+                        case Present(r) => r.use(f)
+                        case Absent     => f(Set.empty)
+                )
+            else
+                onBlurF.map(f =>
+                    valueRef match
+                        case Present(r) => r.use(f)
+                        case Absent     => f("")
+                )
+        blurHandler.foreach(h => el = el.onBlur(h))
         accNameV match
             case Present(TextValue.Const(v)) => el = el.aria("label", v)
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
@@ -130,7 +200,11 @@ final case class SelectButton[A] private (
             else tb = tb.onChange(_ => activate(k))
             tb.render
         }
-        el(buttons.map(toChild)*)
+        FieldInvalid.withMessage(
+            el(buttons.map(toChild)*),
+            invalidV.constTrue,
+            invalidMsgV
+        )
     end body
 
     /** Clicking an option updates the bound selection (single replaces, multiple

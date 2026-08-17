@@ -439,7 +439,7 @@ class GoldenRenderTest extends UicTest:
 
         val open      = openHtml(base, "b")
         val highlight = openHtml(base, "b", hi = 0)
-        val featured  = openHtml(base.filter(true).checkmark(true).showClear(true), "b")
+        val featured  = openHtml(base.filterable(true).checkmark(true).showClear(true), "b")
         val disabled  = openHtml(base.optionDisabled(_._1 == "a"), "b")
 
         assert(open.contains("p-select-open"), "open: root modifier class")
@@ -459,17 +459,36 @@ class GoldenRenderTest extends UicTest:
         assert(open.contains("""aria-selected="true""""), "open: aria-selected on the picked row")
         assert(open.contains("Apple"), "open: all options render in the panel")
         assert(open.contains("p-select-option-label"), "open: option label span")
-        assert(!open.contains("p-select-header"), "open: no filter header without filter(true)")
+        assert(!open.contains("p-select-header"), "open: no filter header without filterable(true)")
         assert(!open.contains("p-focus"), "open: no highlight before keyboard navigation")
         assert(highlight.contains("p-focus"), "highlight ref stamps Prime's .p-focus row")
-        assert(featured.contains("p-select-header"), "filter(true): Prime's header slot")
-        assert(featured.contains("p-select-filter"), "filter(true): the filter input")
+        assert(featured.contains("p-select-header"), "filterable(true): Prime's header slot")
+        assert(featured.contains("p-select-filter"), "filterable(true): the filter input")
         assert(featured.contains("""role="searchbox""""), "filter input announces itself")
         assert(featured.contains("p-select-option-check-icon"), "checkmark(true): check glyph on the selected row")
         assert(featured.contains("p-select-option-blank-icon"), "checkmark(true): blank slot on unselected rows")
         assert(featured.contains("p-select-clear-icon"), "showClear(true): clear affordance while a value is set")
         assert(disabled.contains("p-disabled"), "optionDisabled rows carry .p-disabled")
         assert(disabled.contains("""aria-disabled="true""""), "optionDisabled rows carry aria-disabled")
+
+        // filterQuery binds the header to an app-owned ref: the panel filters against
+        // its live value, and the header renders without a separate filterable(true).
+        // Nothing is selected here, so the trigger label contributes no option text and
+        // the assertions below see only the panel rows.
+        def appQueryHtml(query: String): String = run {
+            for
+                vref <- Signal.initRef("")
+                oref <- Signal.initRef(true)
+                href <- Signal.initRef(-1)
+                qref <- Signal.initRef(query)
+                out  <- UI.runRender(base.filterQuery(qref).value(vref).open(oref).wired(oref, href, qref)).take(1).run
+            yield out.mkString
+        }
+        val appQuery = appQueryHtml("ap")
+        assert(appQuery.contains("p-select-header"), "filterQuery: the header renders without filterable(true)")
+        assert(appQuery.contains("""value="ap""""), "filterQuery: the input carries the app-owned query")
+        assert(appQuery.contains("Apple"), "filterQuery: the matching option stays")
+        assert(!appQuery.contains("Banana"), "filterQuery: the panel filters against the app-owned query")
     }
 
     "Overlay renders backdrop + anchored panel while open; closed renders nothing" in {
@@ -763,7 +782,7 @@ class GoldenRenderTest extends UicTest:
 
     "Message renders Prime anatomy: severity token, text span, default icon; closable adds the button" in {
         val html     = renderHtml(uic.Message().severity(uic.Severity.Danger)("Failed"))
-        val closable = renderHtml(uic.Message().severity(uic.Severity.Success).closable(true).onClose(())("OK"))
+        val closable = renderHtml(uic.Message().severity(uic.Severity.Success).closable(true).onDismissed(())("OK"))
         val simple   = renderHtml(uic.Message().variant(uic.MessageVariant.Simple).size(uic.Size.Small).hideIcon(true)("Hint"))
         assert(html.contains("p-message"), "base class hook")
         assert(html.contains("p-component"), "p-component class")
@@ -779,7 +798,7 @@ class GoldenRenderTest extends UicTest:
         assert(closable.contains("p-message-success"), "success token")
         assert(closable.contains("p-message-close-button"), "closable renders Prime's close button")
         assert(closable.contains("p-message-close-icon"), "close icon class")
-        assert(closable.contains("click"), "onClose registers the click")
+        assert(closable.contains("click"), "onDismissed registers the click")
         assert(simple.contains("p-message-simple"), "simple variant class")
         assert(simple.contains("p-message-sm"), "small size class")
         assert(!simple.contains("p-message-icon"), "hideIcon suppresses the icon")
@@ -930,7 +949,7 @@ class GoldenRenderTest extends UicTest:
                     .selectionMode(uic.SelectionMode.Multiple)
                     .item("Apple", "a")
                     .item("Banana", "b", icon = Present(uic.Icons.check))
-                    .selected(ref)
+                    .value(ref)
                 out <- UI.runRender(ui).take(1).run
             yield out.mkString
         }
@@ -956,12 +975,12 @@ class GoldenRenderTest extends UicTest:
         assert(empty.contains("Nothing here"), "empty message text")
     }
 
-    "Listbox filter renders Prime's header input bound to the query ref and filters options" in {
+    "Listbox filterQuery renders Prime's header input bound to the query ref and filters options" in {
         val html = run {
             for
                 query <- Signal.initRef("ap")
                 ui = uic.Listbox()
-                    .filter(query)
+                    .filterQuery(query)
                     .item("Apple", "a")
                     .item("Banana", "b")
                 out <- UI.runRender(ui).take(1).run
@@ -973,6 +992,25 @@ class GoldenRenderTest extends UicTest:
         assert(html.contains("""value="ap""""), "input value from the query ref")
         assert(html.contains("Apple"), "matching option shown")
         assert(!html.contains("Banana"), "non-matching option filtered out")
+    }
+
+    "Listbox filterable(true) renders the same header over a query it allocates itself" in {
+        val self  = renderHtml(uic.Listbox().filterable(true).item("Apple", "a").item("Banana", "b"))
+        val plain = renderHtml(uic.Listbox().item("Apple", "a").item("Banana", "b"))
+        // The static projection is the header, inert: the query ref only exists once the
+        // mount publishes, exactly like Select's open/highlight state.
+        assert(self.contains("p-listbox-header"), "filterable: header renders without an app-owned ref")
+        assert(self.contains("p-listbox-filter"), "filterable: Prime's filter input class")
+        assert(self.contains("Apple") && self.contains("Banana"), "filterable: nothing filtered before a query")
+        assert(!plain.contains("p-listbox-header"), "no filtering asked for: no header at all")
+
+        val wired = run {
+            for
+                q   <- Signal.initRef("ap")
+                out <- UI.runRender(uic.Listbox().filterQuery(q).filterable(true).item("Apple", "a").item("Banana", "b")).take(1).run
+            yield out.mkString
+        }
+        assert(!wired.contains("Banana"), "an app-owned query still filters when filterable is also set")
     }
 
     "DataTable computes sort + filter + pagination + selection server-side into Prime anatomy" in {
@@ -1463,7 +1501,7 @@ class GoldenRenderTest extends UicTest:
             for
                 ref <- Signal.initRef(Set("S", "L"))
                 out <- UI.runRender(
-                    uic.SelectButton[String]().options(Seq("S", "M", "L")).multiple(true).values(ref)
+                    uic.SelectButton[String]().options(Seq("S", "M", "L")).multiple(true).value(ref)
                 ).take(1).run
             yield out.mkString
         }
@@ -1483,6 +1521,71 @@ class GoldenRenderTest extends UicTest:
             "multiple: both bound options checked"
         )
         assert(invalid.contains("p-invalid"), "invalid class on the group")
+    }
+
+    "the seven newly-bindable controls render the invalid state and the message row" in {
+        // Prime's `.p-invalid` skin plus the kyo message row — the same two marks every
+        // other control already carried, now on the ones that had neither.
+        def marks(html: String, what: String): Unit =
+            assert(html.contains("p-invalid"), s"$what: invalid class")
+            assert(html.contains("""aria-invalid="true""""), s"$what: aria-invalid")
+            assert(html.contains("p-uic-invalid-message"), s"$what: message row")
+            assert(html.contains("Required"), s"$what: the message text")
+        end marks
+
+        marks(renderHtml(uic.ToggleButton().invalid(true).invalidMessage("Required")), "ToggleButton")
+        marks(renderHtml(uic.Slider().invalid(true).invalidMessage("Required")), "Slider")
+        marks(renderHtml(uic.Knob().invalid(true).invalidMessage("Required")), "Knob")
+        marks(renderHtml(uic.Rating().invalid(true).invalidMessage("Required")), "Rating")
+        marks(renderHtml(uic.ColorPicker().inline(true).invalid(true).invalidMessage("Required")), "ColorPicker")
+        marks(renderHtml(uic.FileUpload().invalid(true).invalidMessage("Required")), "FileUpload")
+        marks(
+            renderHtml(uic.SelectButton[String]().options(Seq("A", "B")).invalid(true).invalidMessage("Required")),
+            "SelectButton"
+        )
+        marks(renderHtml(uic.Listbox().item("A", "a").invalid(true).invalidMessage("Required")), "Listbox")
+        // Valid controls stay clean — the marks are not unconditional decoration.
+        val clean = renderHtml(uic.Slider())
+        assert(!clean.contains("p-invalid"), "a valid Slider carries no invalid class")
+        assert(!clean.contains("p-uic-invalid-message"), "a valid Slider renders no message row")
+
+        // id() reaches the focusable element, which is what focus-first-invalid needs.
+        assert(renderHtml(uic.Slider().id("vol")).contains("""id="vol""""), "Slider id lands on the range input")
+        assert(renderHtml(uic.Knob().id("gain")).contains("""id="gain""""), "Knob id lands on the dial")
+        assert(renderHtml(uic.ToggleButton().id("live")).contains("""id="live""""), "ToggleButton id lands on the button")
+        assert(renderHtml(uic.FileUpload().id("cv")).contains("""id="cv""""), "FileUpload id lands on the native input")
+    }
+
+    "integer() constrains Slider and Knob to whole numbers" in {
+        val fractional = renderHtml(uic.Slider().min(0).max(10).step(0.5).value(3.7))
+        val whole      = renderHtml(uic.Slider().min(0).max(10).step(0.5).integer(true).value(3.7))
+        assert(fractional.contains("3.7"), "without the constraint the fractional value renders as given")
+        assert(!whole.contains("3.7"), "integer(true) rounds the rendered value")
+        assert(whole.contains("4"), "3.7 rounds to 4")
+        // The native step follows, so the browser cannot produce a fraction either.
+        assert(fractional.contains("0.5"), "the declared step is used as-is")
+        assert(!whole.contains("0.5"), "integer(true) lifts a fractional step to a whole one")
+    }
+
+    "FileUpload binds the picked files as its value, and the label follows that ref" in {
+        val payload = UI.FilePayload("cv.pdf", 1024L, "application/pdf", "…")
+        val bound = run {
+            for
+                ref <- Signal.initRef(Seq(payload))
+                out <- UI.runRender(uic.FileUpload().value(ref)).take(1).run
+            yield out.mkString
+        }
+        val empty = run {
+            for
+                ref <- Signal.initRef(Seq.empty[UI.FilePayload])
+                out <- UI.runRender(uic.FileUpload().value(ref)).take(1).run
+            yield out.mkString
+        }
+        assert(bound.contains("cv.pdf"), "the bound files drive the chosen-file label")
+        assert(bound.contains("p-fileupload-filename"), "a picked file gets Prime's filename class")
+        assert(bound.contains("""data-kyo-ev"""), "the picker registers its select handler for the write-back")
+        assert(empty.contains("No file chosen"), "an empty bound value shows the empty state")
+        assert(!empty.contains("p-fileupload-filename"), "an empty bound value is not a filename")
     }
 
     "InputGroup renders addons + fields in order; IconField pins InputIcons around the input" in {
@@ -1530,6 +1633,19 @@ class GoldenRenderTest extends UicTest:
         assert(onVar.contains("p-floatlabel-on"), "on variant class")
         assert(ifta.contains("p-iftalabel"), "iftalabel root class")
         assert(ifta.contains("p-filled"), "iftalabel stamps p-filled too")
+
+        // The other three FloatLabel hosts render through IftaLabel as well: Prime's
+        // iftalabel sheet carries the textarea and .p-inputwrapper selectors for them.
+        val iftaTextArea = renderHtml(uic.IftaLabel(uic.TextArea().value("note"), "Notes"))
+        val iftaSelect   = renderHtml(uic.IftaLabel(uic.Select[String]().options(Seq("kg", "lb")), "Unit"))
+        val iftaAuto     = renderHtml(uic.IftaLabel(uic.AutoComplete[String]().options(Seq("Berlin")), "City"))
+        assert(iftaTextArea.contains("p-iftalabel"), "TextArea host wraps in the iftalabel root")
+        assert(iftaTextArea.contains("<textarea"), "TextArea host renders its own field")
+        assert(iftaTextArea.contains("Notes"), "TextArea host renders the label text")
+        assert(iftaSelect.contains("p-iftalabel"), "Select host wraps in the iftalabel root")
+        assert(iftaSelect.contains("p-inputwrapper"), "Select host keeps Prime's wrapper hook")
+        assert(iftaAuto.contains("p-iftalabel"), "AutoComplete host wraps in the iftalabel root")
+        assert(iftaAuto.contains("p-autocomplete"), "AutoComplete host renders its own field")
     }
 
     "Timeline renders opposite/separator/marker/connector/content per event; last event no connector" in {
@@ -2725,7 +2841,7 @@ class GoldenRenderTest extends UicTest:
         val open      = openHtml(base, Set("Apple"))
         val highlight = openHtml(base, Set("Apple"), hi = 1)
         val allPicked = openHtml(base, Set("Apple", "Banana"))
-        val featured  = openHtml(base.filter(true).showClear(true), Set("Apple"))
+        val featured  = openHtml(base.filterable(true).showClear(true), Set("Apple"))
         val noToggle  = openHtml(base.showToggleAll(false), Set("Apple"))
         val disabled  = openHtml(base.optionDisabled(_ == "Banana"), Set.empty)
         val hilite    = openHtml(base.highlightOnSelect(true), Set("Apple"))
@@ -3328,7 +3444,7 @@ class GoldenRenderTest extends UicTest:
                 srcSel <- Signal.initRef(Set("London"))
                 tgtSel <- Signal.initRef(Set.empty[String])
                 out <- UI.runRender(
-                    uic.PickList[String]().source(src)(identity).target(tgt).sourceSelected(srcSel).targetSelected(tgtSel)
+                    uic.PickList[String]().sourceItems(src)(identity).targetItems(tgt).sourceSelected(srcSel).targetSelected(tgtSel)
                 ).take(1).run
             yield out.mkString
         }
@@ -3337,7 +3453,7 @@ class GoldenRenderTest extends UicTest:
                 src <- Signal.initRef(Seq("A"))
                 tgt <- Signal.initRef(Seq.empty[String])
                 out <- UI.runRender(
-                    uic.PickList[String]().source(src)(identity).target(tgt).showSourceControls(false).showTargetControls(false)
+                    uic.PickList[String]().sourceItems(src)(identity).targetItems(tgt).showSourceControls(false).showTargetControls(false)
                 ).take(1).run
             yield out.mkString
         }
@@ -3533,26 +3649,29 @@ class GoldenRenderTest extends UicTest:
                 uic.OrgChartNode("CTO", "cto", children = List(uic.OrgChartNode("Dev", "dev")))
             )
         )
+        // Expansion is keyed like Tree/TreeTable: the set holds the EXPANDED ids.
         val expanded = run {
             for
-                col <- Signal.initRef(Set.empty[String])
+                exp <- Signal.initRef(Set("ceo", "cto"))
                 sel <- Signal.initRef(Set("cto"))
                 out <- UI.runRender(
                     uic.OrganizationChart()
                         .node(chart)
-                        .collapsible(true)
                         .selectionMode(uic.SelectionMode.Single)
-                        .collapsed(col)
+                        .expanded(exp)
                         .selected(sel)
                 ).take(1).run
             yield out.mkString
         }
         val collapsed = run {
             for
-                col <- Signal.initRef(Set("ceo"))
-                out <- UI.runRender(uic.OrganizationChart().node(chart).collapsible(true).collapsed(col)).take(1).run
+                exp <- Signal.initRef(Set.empty[String])
+                out <- UI.runRender(uic.OrganizationChart().node(chart).expanded(exp)).take(1).run
             yield out.mkString
         }
+        // No bound ref means no toggles at all — Prime's collapsible=false, without a
+        // separate flag to discover.
+        val static = renderHtml(uic.OrganizationChart().node(chart))
         assert(expanded.contains("p-organizationchart"), "root class")
         assert(expanded.contains("p-organizationchart-table"), "table-based layout")
         assert(expanded.contains("p-organizationchart-node"), "node box class")
@@ -3572,6 +3691,8 @@ class GoldenRenderTest extends UicTest:
         assert(collapsed.contains("p-uic-oc-hidden"), "collapsed subtree hides via visibility class")
         assert(collapsed.contains("CFO"), "collapsed children stay in the DOM (Prime's visibility model)")
         assert(collapsed.contains("""data-uic-icon="chevron-up""""), "collapsed toggle chevron-up")
+        assert(static.contains("p-organizationchart"), "an unbound chart still renders")
+        assert(!static.contains("p-organizationchart-node-toggle-button"), "no ref, no toggles")
     }
 
     "Terminal renders welcome, history rows, and the bare prompt input wired to the handler" in {

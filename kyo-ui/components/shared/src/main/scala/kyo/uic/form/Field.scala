@@ -2,6 +2,7 @@ package kyo.uic.form
 
 import kyo.*
 import kyo.uic.BooleanFormControl
+import kyo.uic.FileFormControl
 import kyo.uic.MultiSelectFormControl
 import kyo.uic.NumberFormControl
 import kyo.uic.TextFormControl
@@ -350,6 +351,22 @@ extension [C <: NumberFormControl { type Self <: C }](control: C)
         wireNumber(control.integer(field.codec.integer), field.underlying)
     def bindControlOnly(field: NumberField[?])(using Frame): C =
         wireNumberControlOnly(control.integer(field.codec.integer), field.underlying)
+end extension
+
+extension [C <: FileFormControl { type Self <: C }](control: C)
+    def bind(field: FormField[Seq[UI.FilePayload]])(using Frame): C =
+        var b: C = control.value(field.valueRef).id(field.domId)
+        b = b.invalidMessage(field.message)
+        if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
+        b
+    end bind
+
+    def bindControlOnly(field: FormField[Seq[UI.FilePayload]])(using Frame): C =
+        var b: C = control.value(field.valueRef).id(field.domId)
+        b = b.invalid(field.visibleError.map(_.isDefined))
+        if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
+        b
+    end bindControlOnly
 end extension
 
 extension [C <: MultiSelectFormControl { type Self <: C }](control: C)

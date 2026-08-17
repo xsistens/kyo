@@ -14,7 +14,9 @@ import kyo.UI.*
   * "Yes"/"No"; when BOTH are cleared the label span renders a non-breaking
   * space so the content box keeps its height (Prime renders `\u00A0`).
   * `checked(SignalRef)` binds two-way exactly like CheckBox: clicks write the
-  * toggled value back into the ref before firing the user `onChange`.
+  * toggled value back into the ref before firing the user `onChange`. It is a
+  * [[BooleanFormControl]] for the same reason, so `uic.ToggleButton().bind(field)`
+  * wires value, validity, message and the blur trigger in one call.
   */
 final case class ToggleButton private (
     checkedBinding: Maybe[ToggleButton.Checked] = Absent,
@@ -26,13 +28,22 @@ final case class ToggleButton private (
     fluidFlag: Boolean = false,
     disabledFlag: Boolean = false,
     readonlyFlag: Boolean = false,
-    invalidFlag: Boolean = false,
+    invalidV: Maybe[BoolValue] = Absent,
+    invalidMsgV: Maybe[String] = Absent,
+    invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
     onChangeF: Maybe[Boolean => Any < Async] = Absent,
+    onBlurF: Maybe[Boolean => Any < Async] = Absent,
+    idV: Maybe[String] = Absent,
     contentV: Maybe[UI] = Absent
-) extends Node:
+) extends Node, BooleanFormControl:
     type Self = ToggleButton
+
+    /** Native `id` on the button — pair with `Label.forId`; the form layer stamps the
+      * bound field's id here so focus-first-invalid can target it.
+      */
+    def id(v: String): ToggleButton = copy(idV = Present(v))
 
     /** Package-internal content slot: SelectButton's `itemTemplate` replaces the
       * icon+label pair inside `.p-togglebutton-content` with arbitrary UI (the
@@ -81,7 +92,22 @@ final case class ToggleButton private (
     def readonly(v: Boolean): ToggleButton = copy(readonlyFlag = v)
 
     /** Marks the button invalid (`.p-invalid` + `aria-invalid`). */
-    def invalid(v: Boolean): ToggleButton = copy(invalidFlag = v)
+    def invalid(v: Boolean): ToggleButton = copy(invalidV = Present(BoolValue.Const(v)))
+
+    /** Reactive validity: the bound signal toggles `.p-invalid` + `aria-invalid` in
+      * place. Explicit override of the message-derived red default.
+      */
+    def invalid(sig: Signal[Boolean]): ToggleButton = copy(invalidV = Present(BoolValue.Dyn(sig)))
+
+    /** Message rendered below the button while it is invalid (kyo extension —
+      * `div.p-uic-invalid-message`).
+      */
+    def invalidMessage(v: String): ToggleButton = copy(invalidMsgV = Present(v))
+
+    /** Reactive invalid message — `Present` shows the row and (by default) turns the
+      * button red; `Absent` clears both. Re-renders in place on emission.
+      */
+    def invalidMessage(sig: Signal[Maybe[String]]): ToggleButton = copy(invalidMsgDynV = Present(sig))
 
     /** Accessible name → `aria-label`. */
     def accessibleName(v: String): ToggleButton = copy(accNameV = Present(TextValue.Const(v)))
@@ -97,7 +123,19 @@ final case class ToggleButton private (
     /** Fired with the NEW checked value after a toggle (and after the ref write-back). */
     def onChange(f: Boolean => Any < Async): ToggleButton = copy(onChangeF = Present(f))
 
+    /** Fires on focus loss with the button's current checked state — unlike onChange it
+      * fires even when the value was not toggled. The validation layer's Blur trigger.
+      */
+    def onBlur(f: Boolean => Any < Async): ToggleButton = copy(onBlurF = Present(f))
+
     private[uic] def render(using Frame): UI =
+        (invalidV.dynSig, invalidMsgDynV) match
+            case (Absent, Absent) => renderStatic
+            case _ => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
+                    copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderStatic
+                )
+
+    private def renderStatic(using Frame): UI =
         checkedBinding match
             case Present(ToggleButton.Checked.Ref(ref)) => ref.render(b => body(b, Present(handlerFor(ref))))
             case Present(ToggleButton.Checked.Const(v)) => body(v, onChangeF)
@@ -116,8 +154,9 @@ final case class ToggleButton private (
 
     private def body(isChecked: Boolean, onChg: Maybe[Boolean => Any < Async])(using Frame): UI =
         var el = button.cssClass("p-togglebutton").cssClass("p-component")
+        idV.foreach(v => el = el.id(v))
         if isChecked then el = el.cssClass("p-togglebutton-checked")
-        if invalidFlag then el = el.cssClass("p-invalid").aria("invalid", "true")
+        if invalidV.constTrue then el = el.cssClass("p-invalid").aria("invalid", "true")
         sizeV match
             case Size.Small  => el = el.cssClass("p-togglebutton-sm").cssClass("p-inputfield-sm")
             case Size.Large  => el = el.cssClass("p-togglebutton-lg").cssClass("p-inputfield-lg")
@@ -134,6 +173,14 @@ final case class ToggleButton private (
         if disabledFlag then el = el.disabled(true)
         // readonly keeps the normal look and focusability, but never toggles.
         else if !readonlyFlag then onChg.foreach(f => el = el.onClick(f(!isChecked)))
+        // Blur fires even without a toggle — the validation layer's Blur trigger. Reads the
+        // ref LIVE (the CheckBox shape), so it reports the state at blur time.
+        onBlurF.foreach { f =>
+            el = el.onBlur(checkedBinding match
+                case Present(ToggleButton.Checked.Ref(r))   => r.use(f)
+                case Present(ToggleButton.Checked.Const(v)) => f(v)
+                case Absent                                 => f(false))
+        }
 
         val contentChildren: List[UI] = contentV match
             case Present(ui) => List(ui)
@@ -147,7 +194,11 @@ final case class ToggleButton private (
                     case _                           => span.cssClass("p-togglebutton-label")("\u00A0"): UI
                 iconSlot :+ labelUI
 
-        el(span.cssClass("p-togglebutton-content")(contentChildren.map(toChild)*))
+        FieldInvalid.withMessage(
+            el(span.cssClass("p-togglebutton-content")(contentChildren.map(toChild)*)),
+            invalidV.constTrue,
+            invalidMsgV
+        )
     end body
 end ToggleButton
 

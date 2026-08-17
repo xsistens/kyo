@@ -17,6 +17,10 @@ import kyo.UI.*
   * server-side from the bound value ((value − min) / (max − min)), so a ref
   * write from anywhere moves the slider.
   *
+  * A [[NumberFormControl]], so `uic.Slider().bind(field)` wires value, validity,
+  * message, the blur trigger and (for a whole-valued field) the [[integer]]
+  * constraint in one call.
+  *
   * Honest limits under server rendering: the native `change` event fires when
   * a drag COMMITS (pointer release) — the visual fill follows a drag on
   * release, not continuously (keyboard steps commit per keypress and track
@@ -29,12 +33,23 @@ final case class Slider private (
     minV: Double = 0.0,
     maxV: Double = 100.0,
     stepV: Double = 1.0,
+    integerFlag: Boolean = false,
     orientationV: Orientation = Orientation.Horizontal,
     disabledFlag: Maybe[BoolValue] = Absent,
+    invalidV: Maybe[BoolValue] = Absent,
+    invalidMsgV: Maybe[String] = Absent,
+    invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
-    onChangeF: Maybe[Double => Any < Async] = Absent
-) extends Node:
+    onChangeF: Maybe[Double => Any < Async] = Absent,
+    onBlurF: Maybe[Double => Any < Async] = Absent,
+    idV: Maybe[String] = Absent
+) extends Node, NumberFormControl:
     type Self = Slider
+
+    /** Native `id` on the range input — pair with `Label.forId`; the form layer stamps
+      * the bound field's id here so focus-first-invalid can target it.
+      */
+    def id(v: String): Slider = copy(idV = Present(v))
 
     /** Sets a constant value (renders the fill/handle statically). */
     def value(v: Double): Slider = copy(valueBinding = Present(ReactiveValue.Const(v)))
@@ -59,6 +74,13 @@ final case class Slider private (
     /** Drag/keyboard increment (Prime default 1). */
     def step(v: Double): Slider = copy(stepV = if v <= 0 then 1.0 else v)
 
+    /** Constrains committed values to whole numbers: the value written back is rounded,
+      * and the native input steps in whole units. The form layer flips this on for a
+      * whole-valued (`Int`/`Long`) [[kyo.uic.form.NumberField]], so a slider bound to one
+      * cannot hand it a fraction.
+      */
+    def integer(v: Boolean): Slider = copy(integerFlag = v)
+
     /** Track orientation — `.p-slider-horizontal` (default) or `.p-slider-vertical`. */
     def orientation(v: Orientation): Slider = copy(orientationV = v)
 
@@ -75,12 +97,43 @@ final case class Slider private (
       */
     def accessibleName(sig: Signal[String]): Slider = copy(accNameV = Present(TextValue.Dyn(sig)))
 
+    /** Marks the slider invalid (`.p-invalid` + `aria-invalid`). */
+    def invalid(v: Boolean): Slider = copy(invalidV = Present(BoolValue.Const(v)))
+
+    /** Reactive validity: the bound signal toggles the invalid state on emission. */
+    def invalid(sig: Signal[Boolean]): Slider = copy(invalidV = Present(BoolValue.Dyn(sig)))
+
+    /** Message rendered below the track while the slider is invalid (kyo extension —
+      * `div.p-uic-invalid-message`).
+      */
+    def invalidMessage(v: String): Slider = copy(invalidMsgV = Present(v))
+
+    /** Reactive invalid message — `Present` shows the row and (by default) marks the
+      * slider invalid; `Absent` clears both.
+      */
+    def invalidMessage(sig: Signal[Maybe[String]]): Slider = copy(invalidMsgDynV = Present(sig))
+
     /** Fired with the NEW (clamped) value after the ref write-back. */
     def onChange(f: Double => Any < Async): Slider = copy(onChangeF = Present(f))
 
-    private def clamp(v: Double): Double = math.max(minV, math.min(maxV, v))
+    /** Fires on focus loss with the slider's current value — unlike onChange it fires even
+      * when the handle was not moved. The validation layer's Blur trigger.
+      */
+    def onBlur(f: Double => Any < Async): Slider = copy(onBlurF = Present(f))
+
+    /** Clamps into range, and rounds to a whole number under [[integer]]. */
+    private def clamp(v: Double): Double =
+        val bounded = math.max(minV, math.min(maxV, v))
+        if integerFlag then math.rint(bounded) else bounded
 
     private[uic] def render(using Frame): UI =
+        (invalidV.dynSig, invalidMsgDynV) match
+            case (Absent, Absent) => renderDisabledResolved
+            case _ => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
+                    copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderDisabledResolved
+                )
+
+    private def renderDisabledResolved(using Frame): UI =
         BoolValue.reactive(disabledFlag): d =>
             copy(disabledFlag = d).renderResolved
 
@@ -111,8 +164,9 @@ final case class Slider private (
             .cssClass("p-uic-slider-native")
             .min(minV)
             .max(maxV)
-            .step(stepV)
+            .step(if integerFlag then math.max(1.0, math.rint(stepV)) else stepV)
             .value(value)
+        idV.foreach(v => in = in.id(v))
         accNameV match
             case Present(TextValue.Const(v)) => in = in.aria("label", v)
             case Present(TextValue.Dyn(s))   => in = in.aria("label", s)
@@ -135,13 +189,25 @@ final case class Slider private (
                 end for
             }
         end if
+        // Blur fires even without a drag — the validation layer's Blur trigger. Reads the
+        // ref LIVE where there is one, so it reports the value at blur time.
+        onBlurF.foreach { f =>
+            in = in.onBlur(ref match
+                case Present(r) => r.use(v => f(clamp(v)))
+                case Absent     => f(value))
+        }
 
         var el = div
             .cssClass("p-slider")
             .cssClass("p-component")
             .cssClass(if horizontal then "p-slider-horizontal" else "p-slider-vertical")
         if disabledFlag.constTrue then el = el.cssClass("p-disabled")
-        el(toChild(range), toChild(handle), toChild(in: UI))
+        if invalidV.constTrue then el = el.cssClass("p-invalid").aria("invalid", "true")
+        FieldInvalid.withMessage(
+            el(toChild(range), toChild(handle), toChild(in: UI)),
+            invalidV.constTrue,
+            invalidMsgV
+        )
     end body
 end Slider
 

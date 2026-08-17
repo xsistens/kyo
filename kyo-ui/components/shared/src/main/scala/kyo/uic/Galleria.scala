@@ -42,9 +42,15 @@ final case class GalleriaItem(
   * the thumbnail strip (`numVisible`) and slides it via a JS translate — here
   * ALL thumbnails render in the strip and the thumbnail navigators step the
   * active index by one. `circular(true)` wraps the navigators; otherwise they
-  * disable at the ends. Defaults follow Prime: thumbnails on, indicators off,
-  * item navigators off. The fullscreen mode is deferred (portal + JS
+  * disable at the ends. The fullscreen mode is deferred (portal + JS
   * lifecycle).
+  *
+  * Galleria and [[Carousel]] share the item-navigator and indicator features under
+  * the same names (`showItemNavigators`, `showIndicators`) and disagree only on
+  * their DEFAULTS: thumbnails on, indicators off, item navigators off here;
+  * navigators and indicators both on in Carousel. That is Prime's own split
+  * between the two components, inherited deliberately so the out-of-the-box look
+  * matches the design system rather than a local convention.
   */
 final case class Galleria private (
     itemList: List[GalleriaItem] = Nil,
@@ -78,10 +84,16 @@ final case class Galleria private (
     /** Renders the thumbnail strip (default true, like Prime). */
     def showThumbnails(v: Boolean): Galleria = copy(showThumbnailsFlag = v)
 
-    /** Renders the indicator dots below the preview (default false, like Prime). */
+    /** Renders the indicator dots below the preview. Default false, which is
+      * PrimeVue/PrimeReact's own Galleria default; [[Carousel.showIndicators]] is
+      * the same feature defaulted to true because Prime's Carousel does that.
+      */
     def showIndicators(v: Boolean): Galleria = copy(showIndicatorsFlag = v)
 
-    /** Renders the prev/next navigators on the preview (default false, like Prime). */
+    /** Renders the prev/next navigators on the preview. Default false, Prime's own
+      * Galleria default; [[Carousel.showItemNavigators]] is the same feature under
+      * the same name, defaulted to true after Prime's Carousel.
+      */
     def showItemNavigators(v: Boolean): Galleria = copy(showItemNavigatorsFlag = v)
 
     /** Renders the thumbnail-strip navigators (default true, like Prime). */

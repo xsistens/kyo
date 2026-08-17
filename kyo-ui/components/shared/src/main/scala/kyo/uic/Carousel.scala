@@ -67,7 +67,7 @@ final case class Carousel[A] private (
     circularFlag: Boolean = false,
     verticalFlag: Boolean = false,
     verticalHeightV: Maybe[String] = Absent,
-    showNavigatorsFlag: Boolean = true,
+    showItemNavigatorsFlag: Boolean = true,
     showIndicatorsFlag: Boolean = true,
     autoplayMsV: Int = 0,
     onPageChangeF: Maybe[Int => Any < Async] = Absent
@@ -100,10 +100,17 @@ final case class Carousel[A] private (
       */
     def verticalViewHeight(v: String): Carousel[A] = copy(verticalHeightV = Present(v))
 
-    /** Renders the prev/next buttons (default true). */
-    def showNavigators(v: Boolean): Carousel[A] = copy(showNavigatorsFlag = v)
+    /** Renders the prev/next buttons flanking the viewport. Default true, which is
+      * PrimeVue/PrimeReact's own Carousel default — [[Galleria]] spells the same
+      * feature `showItemNavigators` and defaults it to false because Prime's
+      * Galleria does, not because the two components disagree about the concept.
+      */
+    def showItemNavigators(v: Boolean): Carousel[A] = copy(showItemNavigatorsFlag = v)
 
-    /** Renders the indicator dots (default true). */
+    /** Renders the indicator dots. Default true, Prime's own Carousel default;
+      * [[Galleria.showIndicators]] is the same feature defaulted to false, again
+      * following Prime.
+      */
     def showIndicators(v: Boolean): Carousel[A] = copy(showIndicatorsFlag = v)
 
     /** Advances the page automatically every `intervalMs` (0 or negative = off).
@@ -209,14 +216,14 @@ final case class Carousel[A] private (
         val nextGlyph = if verticalFlag then Icons.chevronDown else Icons.chevronRight
 
         val prev: List[UI] =
-            if showNavigatorsFlag then
+            if showItemNavigatorsFlag then
                 List(r.render { p =>
                     val page = Carousel.clampPage(p, pages)
                     navButton("p-carousel-prev-button", prevGlyph, "Previous Page", !circularFlag && page == 0, page - 1, pages)
                 })
             else Nil
         val next: List[UI] =
-            if showNavigatorsFlag then
+            if showItemNavigatorsFlag then
                 List(r.render { p =>
                     val page = Carousel.clampPage(p, pages)
                     navButton(
@@ -295,11 +302,11 @@ final case class Carousel[A] private (
         val prevGlyph = if verticalFlag then Icons.chevronUp else Icons.chevronLeft
         val nextGlyph = if verticalFlag then Icons.chevronDown else Icons.chevronRight
         val prev: List[UI] =
-            if showNavigatorsFlag then
+            if showItemNavigatorsFlag then
                 List(navButton("p-carousel-prev-button", prevGlyph, "Previous Page", !circularFlag && atStart, page - 1, pages))
             else Nil
         val next: List[UI] =
-            if showNavigatorsFlag then
+            if showItemNavigatorsFlag then
                 List(navButton("p-carousel-next-button", nextGlyph, "Next Page", !circularFlag && atEnd, page + 1, pages))
             else Nil
 

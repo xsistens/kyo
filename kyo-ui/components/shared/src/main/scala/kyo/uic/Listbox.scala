@@ -2,6 +2,7 @@ package kyo.uic
 
 import kyo.*
 import kyo.UI.*
+import scala.annotation.targetName
 
 /** One option of a [[Listbox]] — a hand-authored carrier (not a `kyo.UI`): a
   * `text` label, a stable `id` used as the selection key and the `onItemClick`
@@ -44,24 +45,40 @@ end ListItem
   * reactively so each row's `aria-selected` tracks the set, and clicking a row
   * (when a [[SelectionMode]] other than `None` is set) writes the updated set
   * back before firing `onItemClick`. `checkmark(true)` renders Prime's per-row
-  * check-icon column; `filter(ref)` renders Prime's header filter input bound
-  * two-way to the query ref, with the options filtered by it at render time.
+  * check-icon column.
+  *
+  * Filtering has the two shapes shared by every picker in this module:
+  * `filterable(true)` renders Prime's header filter over a query the listbox
+  * allocates itself (the same word and the same meaning as
+  * [[Select.filterable]] / [[MultiSelect.filterable]]), and `filterQuery(ref)`
+  * renders it over a query the app owns. Either way the options are filtered by
+  * a case-insensitive contains at render time.
   */
 final case class Listbox private (
     items: List[ListItem] = Nil,
     selectionModeV: SelectionMode = SelectionMode.None,
     selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
-    filterRef: Maybe[SignalRef[String]] = Absent,
+    filterQueryRef: Maybe[SignalRef[String]] = Absent,
+    filterableFlag: Boolean = false,
     onItemClickF: Maybe[String => Any < Async] = Absent,
     templateF: Maybe[ListItem => UI] = Absent,
     checkmarkFlag: Boolean = false,
     disabledFlag: Boolean = false,
-    invalidFlag: Boolean = false,
+    invalidV: Maybe[BoolValue] = Absent,
+    invalidMsgV: Maybe[String] = Absent,
+    invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     emptyMessageV: Maybe[TextValue] = Absent,
     accessibleNameV: Maybe[TextValue] = Absent,
-    accessibleNameRefV: Maybe[String] = Absent
-) extends Node:
+    accessibleNameRefV: Maybe[String] = Absent,
+    onBlurF: Maybe[Set[String] => Any < Async] = Absent,
+    idV: Maybe[String] = Absent
+) extends Node, MultiSelectFormControl:
     type Self = Listbox
+
+    /** Native `id` on the option list — pair with `Label.forId`; the form layer stamps
+      * the bound field's id here so focus-first-invalid can target it.
+      */
+    def id(v: String): Listbox = copy(idV = Present(v))
 
     /** Appends the given options. */
     def items(is: ListItem*): Listbox = copy(items = items ++ is.toList)
@@ -82,14 +99,26 @@ final case class Listbox private (
       */
     def selectionMode(v: SelectionMode): Listbox = copy(selectionModeV = v)
 
-    /** Binds selection two-way to `ref`: clicks update the set, ref changes re-render `aria-selected`. */
-    def selected(ref: SignalRef[Set[String]]): Listbox = copy(selectedRef = Present(ref))
+    /** Binds selection two-way to `ref`: clicks update the set, ref changes re-render
+      * `aria-selected`. Spelled `value` like every other picker's bound selection — a
+      * Listbox is the always-visible member of that family, not a different concept.
+      */
+    @targetName("valueKeys")
+    def value(ref: SignalRef[Set[String]]): Listbox = copy(selectedRef = Present(ref))
 
     /** Renders Prime's header filter input (`div.p-listbox-header` >
-      * `input.p-listbox-filter.p-inputtext`) bound two-way to `ref`; the options
-      * are filtered by a case-insensitive contains on the current query.
+      * `input.p-listbox-filter.p-inputtext`) over a query the listbox allocates
+      * itself — the same word, and the same on/off meaning, as
+      * [[Select.filterable]] and [[MultiSelect.filterable]]. Use [[filterQuery]]
+      * when the app needs to read or write the query.
       */
-    def filter(ref: SignalRef[String]): Listbox = copy(filterRef = Present(ref))
+    def filterable(v: Boolean): Listbox = copy(filterableFlag = v)
+
+    /** Renders the same header filter, bound two-way to `ref`: typing writes the
+      * query, external writes re-filter the options (a case-insensitive contains
+      * on the label).
+      */
+    def filterQuery(ref: SignalRef[String]): Listbox = copy(filterQueryRef = Present(ref))
 
     def onItemClick(f: String => Any < Async): Listbox = copy(onItemClickF = Present(f))
 
@@ -108,8 +137,27 @@ final case class Listbox private (
       */
     def disabled(v: Boolean): Listbox = copy(disabledFlag = v)
 
-    /** Marks the listbox invalid (`.p-invalid`). */
-    def invalid(v: Boolean): Listbox = copy(invalidFlag = v)
+    /** Marks the listbox invalid (`.p-invalid` + `aria-invalid`). */
+    def invalid(v: Boolean): Listbox = copy(invalidV = Present(BoolValue.Const(v)))
+
+    /** Reactive validity: the bound signal toggles the invalid state on emission. */
+    def invalid(sig: Signal[Boolean]): Listbox = copy(invalidV = Present(BoolValue.Dyn(sig)))
+
+    /** Message rendered below the list while it is invalid (kyo extension —
+      * `div.p-uic-invalid-message`).
+      */
+    def invalidMessage(v: String): Listbox = copy(invalidMsgV = Present(v))
+
+    /** Reactive invalid message — `Present` shows the row and (by default) marks the list
+      * invalid; `Absent` clears both.
+      */
+    def invalidMessage(sig: Signal[Maybe[String]]): Listbox = copy(invalidMsgDynV = Present(sig))
+
+    /** Fires on focus loss with the current selection — the validation layer's Blur
+      * trigger.
+      */
+    @targetName("onBlurKeys")
+    def onBlur(f: Set[String] => Any < Async): Listbox = copy(onBlurF = Present(f))
 
     /** Text shown as the `li.p-listbox-empty-message` row when no options render. */
     def emptyMessage(v: String): Listbox = copy(emptyMessageV = Present(TextValue.Const(v)))
@@ -139,16 +187,37 @@ final case class Listbox private (
       * handlers still write through the BOUND refs.
       */
     private[uic] def resolved(sel: Set[String], query: String)(using Frame): UI =
-        body(sel, query)
+        body(sel, query, Absent)
 
     private[uic] def render(using Frame): UI =
-        (selectedRef, filterRef) match
-            case (Present(s), Present(f)) => s.render(sel => f.render(q => body(sel, q)))
-            case (Present(s), Absent)     => s.render(sel => body(sel, ""))
-            case (Absent, Present(f))     => f.render(q => body(Set.empty, q))
-            case _                        => body(Set.empty, "")
+        // The validity boundary sits OUTSIDE the query subscriptions but resolves before
+        // the `filterable` mount, so an emission never re-mounts and drops the query.
+        (invalidV.dynSig, invalidMsgDynV) match
+            case (Absent, Absent) => renderQuery
+            case _ => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
+                    copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderQuery
+                )
 
-    private def body(sel: Set[String], query: String)(using Frame): UI =
+    private def renderQuery(using Frame): UI =
+        filterQueryRef match
+            case Present(_)               => subscribed(filterQueryRef)
+            case Absent if filterableFlag =>
+                // No app-owned query, but the header is asked for: the query lives in a
+                // signal this mount allocates (Select's pattern). The static projection
+                // renders the same header, inert, until the transport attaches.
+                UI.mounted(Signal.initRef("").map(q => subscribed(Present(q))))
+                    .placeholder(subscribed(Absent))
+            case Absent => subscribed(Absent)
+
+    /** The selection/query subscriptions around one [[body]] render. */
+    private def subscribed(qRef: Maybe[SignalRef[String]])(using Frame): UI =
+        (selectedRef, qRef) match
+            case (Present(s), Present(f)) => s.render(sel => f.render(q => body(sel, q, qRef)))
+            case (Present(s), Absent)     => s.render(sel => body(sel, "", Absent))
+            case (Absent, Present(f))     => f.render(q => body(Set.empty, q, qRef))
+            case _                        => body(Set.empty, "", Absent)
+
+    private def body(sel: Set[String], query: String, qRef: Maybe[SignalRef[String]])(using Frame): UI =
         val shown =
             if query.isEmpty then items
             else
@@ -178,25 +247,36 @@ final case class Listbox private (
         accessibleNameRefV.foreach(v => list = list.aria("labelledby", v))
         val listUI: UI = list((rows ++ emptyRow).map(toChild)*)
 
-        val headerSlot: List[UI] = filterRef.toList.map { ref =>
-            div.cssClass("p-listbox-header")(
-                toChild(
-                    input
-                        .cssClass("p-listbox-filter")
-                        .cssClass("p-inputtext")
-                        .cssClass("p-component")
-                        .role("searchbox")
-                        .aria("label", "Filter")
-                        .value(ref)
-                )
-            )
-        }
+        val headerSlot: List[UI] =
+            if !filterableFlag && filterQueryRef.isEmpty then Nil
+            else
+                var field = input
+                    .cssClass("p-listbox-filter")
+                    .cssClass("p-inputtext")
+                    .cssClass("p-component")
+                    .role("searchbox")
+                    .aria("label", "Filter")
+                // Absent only in the static projection of a `filterable` listbox, before
+                // the mount allocates the query: the header still renders, it just does
+                // not filter yet.
+                qRef.foreach(r => field = field.value(r))
+                List(div.cssClass("p-listbox-header")(toChild(field)))
 
         var root = div.cssClass("p-listbox").cssClass("p-component")
+        idV.foreach(v => root = root.id(v))
         if disabledFlag then root = root.cssClass("p-disabled")
-        if invalidFlag then root = root.cssClass("p-invalid")
-        root(
-            (headerSlot :+ (div.cssClass("p-listbox-list-container")(toChild(listUI)): UI)).map(toChild)*
+        if invalidV.constTrue then root = root.cssClass("p-invalid").aria("invalid", "true")
+        // Blur fires even without a pick — the validation layer's Blur trigger. Reads the
+        // bound ref LIVE, so it reports the selection at blur time.
+        onBlurF.foreach { f =>
+            root = root.onBlur(selectedRef match
+                case Present(r) => r.use(f)
+                case Absent     => f(sel))
+        }
+        FieldInvalid.withMessage(
+            root((headerSlot :+ (div.cssClass("p-listbox-list-container")(toChild(listUI)): UI)).map(toChild)*),
+            invalidV.constTrue,
+            invalidMsgV
         )
     end body
 

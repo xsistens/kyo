@@ -13,9 +13,12 @@ import kyo.UI.*
   * glyphs) > the target list container > target reorder controls), so the
   * extracted `@primeuix` picklist + listbox CSS applies verbatim.
   *
-  * The two COLUMN CONTENTS are the model: `source` and `target` each bind a
-  * `SignalRef[Seq[A]]` two-way — transfers append the moved items to the other
-  * column (Prime's semantics) and reorders write the shuffled Seq back. The two
+  * The two COLUMN CONTENTS are the model: `sourceItems` and `targetItems` each
+  * bind a `SignalRef[Seq[A]]` two-way — transfers append the moved items to the
+  * other column (Prime's semantics) and reorders write the shuffled Seq back.
+  * The `*Items` names are deliberate: [[OrderList]] is the one-column member of
+  * this pair and binds a single [[OrderList.items]], so a PickList reads as two
+  * of the same thing rather than as a different model. The two
   * selection refs (keyed by `itemKey`, falling back to the label) drive which
   * rows transfer/move; a transfer clears the emptied column's selection, exactly
   * like Prime. Transfer buttons disable while their source selection is empty
@@ -37,14 +40,17 @@ final case class PickList[A] private (
 ) extends Node:
     type Self = PickList[A]
 
-    /** Binds the source column two-way; `label` is the row text of BOTH columns
-      * (and the default item key).
+    /** Binds the source column two-way, in the same curried `(ref)(label)` shape as
+      * [[OrderList.items]]; `label` is the row text of BOTH columns (and the
+      * default item key), which is why only this half carries it.
       */
-    def source(ref: SignalRef[Seq[A]])(label: A => String): PickList[A] =
+    def sourceItems(ref: SignalRef[Seq[A]])(label: A => String): PickList[A] =
         copy(sourceRef = Present(ref), labelF = Present(label))
 
-    /** Binds the target column two-way. */
-    def target(ref: SignalRef[Seq[A]]): PickList[A] = copy(targetRef = Present(ref))
+    /** Binds the target column two-way; the label projection comes from
+      * [[sourceItems]] and covers both columns.
+      */
+    def targetItems(ref: SignalRef[Seq[A]]): PickList[A] = copy(targetRef = Present(ref))
 
     /** Stable item identity — the selection key (defaults to the label). */
     def itemKey(f: A => String): PickList[A] = copy(keyF = Present(f))
@@ -114,7 +120,7 @@ final case class PickList[A] private (
                 .items(xs.map(a => ListItem(TextValue.Const(labelF.map(_(a)).getOrElse(a.toString)), keyOf(a)))*)
                 .selectionMode(SelectionMode.Multiple)
                 .disabled(disabledFlag)
-            selRef.foreach(r => lb = lb.selected(r))
+            selRef.foreach(r => lb = lb.value(r))
             templateF.foreach { f =>
                 val byKey = xs.map(a => keyOf(a) -> a).toMap
                 lb = lb.itemTemplate(li =>

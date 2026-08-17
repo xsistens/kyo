@@ -87,7 +87,9 @@ final case class OrderList[A] private (
     type Self = OrderList[A]
 
     /** Binds the ordered items two-way: the move buttons write the reordered Seq
-      * back; `label` is the row text (and the default selection key).
+      * back; `label` is the row text (and the default selection key). One column,
+      * so one binding — [[PickList]] is the two-column member of the pair and
+      * spells the same thing `sourceItems` / `targetItems`.
       */
     def items(ref: SignalRef[Seq[A]])(label: A => String): OrderList[A] =
         copy(itemsRef = Present(ref), labelF = Present(label))
@@ -149,7 +151,7 @@ final case class OrderList[A] private (
             .items(xs.map(a => ListItem(TextValue.Const(labelF.map(_(a)).getOrElse(a.toString)), keyOf(a)))*)
             .selectionMode(SelectionMode.Multiple)
             .disabled(disabledFlag)
-        selectedRef.foreach(r => lb = lb.selected(r))
+        selectedRef.foreach(r => lb = lb.value(r))
         accessibleNameV match
             case Present(TextValue.Const(v)) => lb = lb.accessibleName(v)
             case Present(TextValue.Dyn(s))   => lb = lb.accessibleName(s)

@@ -115,8 +115,13 @@ final case class AutoComplete[A] private (
       */
     def value(ref: SignalRef[String]): AutoComplete[A] = copy(valueBinding = Present(Input.Value.Ref(ref)))
 
-    /** How typed text filters the option list (default: `StartsWithPerTerm`). */
-    def filter(v: FilterMode): AutoComplete[A] = copy(filterV = v)
+    /** How typed text is MATCHED against the option list (default:
+      * `StartsWithPerTerm`). This is the matching strategy, not an on/off switch
+      * and not a query binding: an AutoComplete filters by construction, so
+      * `filterable` and `filterQuery` (the other two pickers' words) have nothing
+      * to mean here. Pass `FilterMode.None` when the caller pre-filters.
+      */
+    def filterMode(v: FilterMode): AutoComplete[A] = copy(filterV = v)
 
     /** Minimum number of typed characters before typing opens the suggestion
       * panel (Prime's `minLength`; default 1). The dropdown trigger ignores it.

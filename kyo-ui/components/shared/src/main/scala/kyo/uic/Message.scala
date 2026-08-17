@@ -17,7 +17,13 @@ enum MessageVariant derives CanEqual:
   * design-derived default leading icon from the Prime icon set — override it via
   * `icon(...)` or suppress it entirely with `hideIcon`. The close button only
   * renders with `closable(true)` (Prime semantics — messages are not closable by
-  * default); `onClose` runs when it is pressed, visibility stays app-owned.
+  * default).
+  *
+  * A Message does NOT own its visibility: it has no ref to write, so pressing the
+  * close button notifies and nothing disappears until the app removes the message
+  * from its own state. That is why the callback is [[onDismissed]] and not
+  * `onClose` — `onClose` is reserved across this module for the surfaces that own
+  * a visibility ref and close themselves ([[Dialog]], [[Drawer]], [[Toast]]).
   */
 final case class Message private (
     severityV: SeverityValue = SeverityValue.Const(Severity.Info),
@@ -26,7 +32,7 @@ final case class Message private (
     iconV: Maybe[IconGlyph] = Absent,
     hideIconFlag: Boolean = false,
     closableFlag: Boolean = false,
-    onCloseEff: Maybe[Any < Async] = Absent,
+    onDismissedEff: Maybe[Any < Async] = Absent,
     kids: List[UI] = Nil
 ) extends Node:
     type Self = Message
@@ -59,11 +65,13 @@ final case class Message private (
     /** Renders the close button (`.p-message-close-button`, hidden by default). */
     def closable(v: Boolean): Message = copy(closableFlag = v)
 
-    /** Runs `action` when the close button is pressed (implies nothing about
-      * visibility — hide the message from your own state if you want it gone).
+    /** Runs `action` when the close button is pressed. Past tense on purpose: the
+      * message has been dismissed by the user, and nothing has been hidden — remove
+      * it from your own state if you want it gone. Contrast [[Dialog.onClose]],
+      * which fires after the component has already written its own visibility ref.
       */
-    def onClose(action: => Any < Async)(using Frame): Message =
-        copy(onCloseEff = Present(Sync.defer(action)))
+    def onDismissed(action: => Any < Async)(using Frame): Message =
+        copy(onDismissedEff = Present(Sync.defer(action)))
 
     /** Adds default-slot children (the message text). */
     def apply(cs: UI*): Message = copy(kids = kids ++ cs)
@@ -137,7 +145,7 @@ final case class Message private (
                     .cssClass("p-message-close-button")
                     .jsProp("type", "button")
                     .aria("label", "Close")
-                onCloseEff.foreach(e => btn = btn.onClick(e))
+                onDismissedEff.foreach(e => btn = btn.onClick(e))
                 List(btn(toChild(GlyphSvg(Icons.times, "p-message-close-icon"))))
 
         el(

@@ -143,25 +143,30 @@ object FloatLabel:
 end FloatLabel
 
 /** IftaLabel — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
-  * IftaLabel: `div.p-iftalabel` wrapping the input plus a permanently visible
+  * IftaLabel: `div.p-iftalabel` wrapping the field plus a permanently visible
   * small `<label>` inside the field's top padding — "infield top-aligned
   * label"), so the extracted `@primeuix` iftalabel CSS applies verbatim. No
   * variants and no float: the label always rests in the field.
+  *
+  * Same four hosts as [[FloatLabel]] — Input, TextArea, Select, AutoComplete —
+  * because the two components are one idea with different label placement, and
+  * Prime's own iftalabel sheet already carries the `textarea:focus` and
+  * `.p-inputwrapper-focus` selectors the other three hosts need.
   */
 final case class IftaLabel private (
-    inputV: Input,
+    hostV: FloatLabel.Host,
     labelText: String,
     forIdV: Maybe[String] = Absent
 ) extends Node:
     type Self = IftaLabel
 
-    /** The label's native `for` binding (give the wrapped input the matching id). */
+    /** The label's native `for` binding (give the wrapped field the matching id). */
     def forId(id: String): IftaLabel = copy(forIdV = Present(id))
 
     private[uic] def render(using Frame): UI =
         FloatLabel.renderWrapper(
             base = div.cssClass("p-iftalabel"),
-            host = FloatLabel.Host.In(inputV),
+            host = hostV,
             labelText = labelText,
             forIdV = forIdV
         )
@@ -169,4 +174,17 @@ end IftaLabel
 
 object IftaLabel:
     /** Wraps `input` with the infield top-aligned `label`. */
-    def apply(input: Input, label: String): IftaLabel = new IftaLabel(input, label)
+    def apply(input: Input, label: String): IftaLabel = new IftaLabel(FloatLabel.Host.In(input), label)
+
+    /** Wraps `textArea` with the infield top-aligned `label`. */
+    def apply(textArea: TextArea, label: String): IftaLabel = new IftaLabel(FloatLabel.Host.Ta(textArea), label)
+
+    /** Wraps `select` with the infield top-aligned `label` (an empty placeholder
+      * option keeps the closed field blank until a pick, as in [[FloatLabel]]).
+      */
+    def apply(select: Select[?], label: String): IftaLabel = new IftaLabel(FloatLabel.Host.Sel(select), label)
+
+    /** Wraps `autoComplete` with the infield top-aligned `label`. */
+    def apply(autoComplete: AutoComplete[?], label: String): IftaLabel =
+        new IftaLabel(FloatLabel.Host.Ac(autoComplete), label)
+end IftaLabel

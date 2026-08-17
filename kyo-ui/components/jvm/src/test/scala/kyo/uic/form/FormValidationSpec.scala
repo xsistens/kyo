@@ -243,6 +243,49 @@ class FormValidationSpec extends UicTest:
         assert(!d3, "removing the dirty row makes the form clean again")
     }
 
+    "the controls that could not join a form now bind end to end" in {
+        import kyo.uic
+        // Slider over a numeric field: bind wires the value ref, the field's id and the
+        // gated message, so a failing rule reaches the rendered control.
+        val (beforeSubmit, afterSubmit) = run {
+            for
+                form  <- mkForm
+                field <- form.field(3.0, Validator.satisfy[Double]("min-volume")(_ >= 5.0), Activation.Submit)
+                bound = uic.Slider().min(0).max(10).bind(field)
+                pre <- UI.runRender(bound).take(1).run
+                // Marks the field touched AND validates — the same path a real Blur takes,
+                // so the error is both recorded and revealed.
+                _    <- field.onEvent(3.0)
+                post <- UI.runRender(bound).take(1).run
+            yield (pre.mkString, post.mkString)
+        }
+        assert(beforeSubmit.contains("""value="3""""), "bind wires the field's value onto the slider")
+        assert(beforeSubmit.contains("""id="id1""""), "bind stamps the field's minted id (focus-first-invalid target)")
+        assert(!beforeSubmit.contains("p-uic-invalid-message"), "no message before the rule has run")
+        assert(afterSubmit.contains("p-uic-invalid-message"), "the failing rule's message reaches the slider")
+        assert(afterSubmit.contains("min-volume"), "and it is the rule's own message")
+
+        // FileUpload over the picked payloads: a size rule reads the metadata it was
+        // handed, which is the whole point of binding the payloads rather than names.
+        val (small, tooBig) = run {
+            for
+                form <- mkForm
+                field <- form.field(
+                    Seq.empty[UI.FilePayload],
+                    Validator.satisfy[Seq[UI.FilePayload]]("file-too-large")(_.forall(_.size <= 2048)),
+                    Activation.Submit
+                )
+                _   <- field.valueRef.set(Seq(UI.FilePayload("cv.pdf", 1024L, "application/pdf", "…")))
+                ok  <- field.validateForSubmit
+                _   <- field.valueRef.set(Seq(UI.FilePayload("huge.pdf", 99999L, "application/pdf", "…")))
+                bad <- field.validateForSubmit
+                _   <- UI.runRender(uic.FileUpload().bind(field)).take(1).run
+            yield (ok, bad)
+        }
+        assert(small.isEmpty, "a file within the cap passes")
+        assert(tooBig.isDefined, "a file over the cap fails, judged on the bound payload's size")
+    }
+
     "move / moveDown reorder rows — row.index reflects the new positions" in {
         val (i0, i1, i0b, i1b) = run {
             for

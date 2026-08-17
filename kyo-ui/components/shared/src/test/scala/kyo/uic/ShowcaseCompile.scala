@@ -122,7 +122,7 @@ object ShowcaseCompile:
                 .severity(uic.Severity.Warn)
                 .icon(uic.Icons.exclamationTriangle)
                 .closable(true)
-                .onClose(dismiss)("Your session expires soon."),
+                .onDismissed(dismiss)("Your session expires soon."),
 
             // reactive progress bound two-way to a signal, mixed with a raw kyo element
             div.cssClass("field")(
@@ -158,12 +158,12 @@ object ShowcaseCompile:
             uic.Listbox()
                 .selectionMode(uic.SelectionMode.Multiple)
                 .checkmark(true)
-                .filter(listQuery)
+                .filterQuery(listQuery)
                 .emptyMessage("No matches")
                 .item("Inbox", "inbox", icon = Present(uic.Icons.inbox))
                 .item("Drafts", "drafts")
                 .items(uic.ListItem(uic.TextValue.Const("Sent"), id = "sent", additionalText = Present("12")))
-                .selected(listSel)
+                .value(listSel)
                 .onItemClick(onPick),
 
             // typed data table: text + template columns, single-select bound two-way
@@ -306,7 +306,7 @@ object ShowcaseCompile:
                 .optionKey(_._1)
                 .value(unit)
                 .allowEmpty(false),
-            uic.SelectButton[String]().options(Seq("Cheese", "Ham", "Olives")).multiple(true).values(toppings),
+            uic.SelectButton[String]().options(Seq("Cheese", "Ham", "Olives")).multiple(true).value(toppings),
 
             // input group composing addons with existing fields
             uic.InputGroup()(
@@ -479,7 +479,7 @@ object ShowcaseCompile:
                 .options(Seq("kg" -> "Kilogram", "lb" -> "Pound"))(_._2)
                 .optionKey(_._1)
                 .value(unit)
-                .filter(true)
+                .filterable(true)
                 .showClear(true)
                 .checkmark(true)
                 .placeholder("Unit"),
@@ -588,7 +588,7 @@ object ShowcaseCompile:
                 .display(uic.MultiSelectDisplay.Chip)
                 .maxSelectedLabels(3)
                 .selectedItemsLabel("{0} fruits")
-                .filter(true)
+                .filterable(true)
                 .showClear(true)
                 .placeholder("Fruits")
                 .onChange(_ => notify),
@@ -714,7 +714,7 @@ object ShowcaseCompile:
         pageIx: SignalRef[Int],
         activeImage: SignalRef[Int],
         expandedRows: SignalRef[Set[String]],
-        collapsedNodes: SignalRef[Set[String]],
+        expandedNodes: SignalRef[Set[String]],
         history: SignalRef[Seq[uic.TerminalCommand]],
         notify: Any < Async
     )(using Frame): UI =
@@ -734,8 +734,8 @@ object ShowcaseCompile:
 
             // picklist: two columns + transfers, sharing the item vocabulary
             uic.PickList[String]()
-                .source(products)(identity)
-                .target(targetList)
+                .sourceItems(products)(identity)
+                .targetItems(targetList)
                 .sourceSelected(productSel)
                 .targetSelected(targetSel),
 
@@ -766,11 +766,10 @@ object ShowcaseCompile:
                 .expanded(expandedRows)
                 .selectionMode(uic.SelectionMode.Single),
 
-            // orgchart: collapsed-keys ref, toggle buttons, selectable boxes
+            // orgchart: expanded-keys ref (Tree's polarity), toggle buttons, selectable boxes
             uic.OrganizationChart()
                 .node(uic.OrgChartNode("CEO", "ceo", children = List(uic.OrgChartNode("CTO", "cto"))))
-                .collapsible(true)
-                .collapsed(collapsedNodes),
+                .expanded(expandedNodes),
 
             // terminal: effect-typed handler + bound history (the server-push showcase)
             uic.Terminal()

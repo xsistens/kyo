@@ -32,19 +32,26 @@ final case class OrgChartNode(
   *
   * Exactly like Prime, a collapsed subtree KEEPS its layout rows and hides them
   * via `visibility` (Prime's inline `childStyle`, expressed as the
-  * `.p-uic-oc-hidden` remainder class). `collapsed` binds two-way to a
-  * `SignalRef[Set[String]]` of COLLAPSED ids (Prime's `collapsedKeys` — empty =
-  * fully expanded, no id enumeration needed); `collapsible(true)` renders the
-  * toggle buttons. Selection (`Single`/`Multiple` + `selected` ref) follows the
-  * Tree contract. DOM deviation (documented): kyo-ui has no `<tbody>` factory,
-  * so rows are direct `<tr>` children and the tbody-scoped cell rule is
-  * re-expressed in the `.p-uic-*` remainder.
+  * `.p-uic-oc-hidden` remainder class).
+  *
+  * `expanded` binds two-way to a `SignalRef[Set[String]]` of EXPANDED ids, the
+  * same polarity and the same name as [[Tree.expanded]] and
+  * [[TreeTable.expanded]], so a ref moves between the three tree-shaped
+  * components without inverting. Prime models this one collapse-keyed
+  * (`collapsedKeys`); the inversion is absorbed here rather than exposed.
+  * Binding the ref is also what makes the chart interactive: with a ref, every
+  * node that has children renders its toggle button (Tree's contract); without
+  * one the chart is static, which is Prime's `collapsible=false`.
+  *
+  * Selection (`Single`/`Multiple` + `selected` ref) follows the Tree contract.
+  * DOM deviation (documented): kyo-ui has no `<tbody>` factory, so rows are
+  * direct `<tr>` children and the tbody-scoped cell rule is re-expressed in the
+  * `.p-uic-*` remainder.
   */
 final case class OrganizationChart private (
     rootNode: Maybe[OrgChartNode] = Absent,
-    collapsedRef: Maybe[SignalRef[Set[String]]] = Absent,
+    expandedRef: Maybe[SignalRef[Set[String]]] = Absent,
     selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
-    collapsibleFlag: Boolean = false,
     selectionModeV: SelectionMode = SelectionMode.None,
     onNodeToggleF: Maybe[String => Any < Async] = Absent,
     onNodeClickF: Maybe[String => Any < Async] = Absent
@@ -54,18 +61,16 @@ final case class OrganizationChart private (
     /** The root node of the chart. */
     def node(n: OrgChartNode): OrganizationChart = copy(rootNode = Present(n))
 
-    /** Binds the COLLAPSED subtrees two-way (Prime's `collapsedKeys`): empty set =
-      * fully expanded; toggles flip membership.
+    /** Binds the EXPANDED subtrees two-way, exactly like [[Tree.expanded]] and
+      * [[TreeTable.expanded]]: the set holds the ids whose children are shown, an
+      * empty set shows the root alone, and toggles flip membership. Binding a ref
+      * also renders the toggle buttons on nodes with children; a chart with no ref
+      * is static.
       */
-    def collapsed(ref: SignalRef[Set[String]]): OrganizationChart = copy(collapsedRef = Present(ref))
+    def expanded(ref: SignalRef[Set[String]]): OrganizationChart = copy(expandedRef = Present(ref))
 
     /** Binds selection two-way to `ref` (a set of node ids). */
     def selected(ref: SignalRef[Set[String]]): OrganizationChart = copy(selectedRef = Present(ref))
-
-    /** Renders the round toggle buttons on nodes with children (default false,
-      * like Prime).
-      */
-    def collapsible(v: Boolean): OrganizationChart = copy(collapsibleFlag = v)
 
     /** Selection semantics: `Single`/`Multiple` on node click; `None` (default)
       * leaves nodes inert.
@@ -82,22 +87,22 @@ final case class OrganizationChart private (
         selectionModeV != SelectionMode.None || onNodeClickF.isDefined
 
     private[uic] def render(using Frame): UI =
-        (collapsedRef, selectedRef) match
-            case (Present(c), Present(s)) => c.render(col => s.render(sel => body(col, sel)))
-            case (Present(c), Absent)     => c.render(col => body(col, Set.empty))
+        (expandedRef, selectedRef) match
+            case (Present(e), Present(s)) => e.render(exp => s.render(sel => body(exp, sel)))
+            case (Present(e), Absent)     => e.render(exp => body(exp, Set.empty))
             case (Absent, Present(s))     => s.render(sel => body(Set.empty, sel))
             case _                        => body(Set.empty, Set.empty)
 
-    private def body(collapsed: Set[String], sel: Set[String])(using Frame): UI =
-        val inner: List[UI] = rootNode.toList.map(n => renderNode(n, collapsed, sel))
+    private def body(expanded: Set[String], sel: Set[String])(using Frame): UI =
+        val inner: List[UI] = rootNode.toList.map(n => renderNode(n, expanded, sel))
         div.cssClass("p-organizationchart").cssClass("p-component")(inner.map(toChild)*)
 
     /** One node's nested table: node row, connector rows (visibility-hidden while
       * collapsed, exactly Prime), and the children row of recursive subtrees.
       */
-    private def renderNode(node: OrgChartNode, collapsed: Set[String], sel: Set[String])(using Frame): UI =
+    private def renderNode(node: OrgChartNode, expanded: Set[String], sel: Set[String])(using Frame): UI =
         val hasChildren = node.children.nonEmpty
-        val isExpanded  = !collapsed.contains(node.id)
+        val isExpanded  = expanded.contains(node.id)
         val isSelected  = sel.contains(node.id)
         val colspan     = if hasChildren then node.children.length * 2 else 1
 
@@ -111,7 +116,7 @@ final case class OrganizationChart private (
             case Present(u) => u
             case Absent     => stringToUI(node.label)
         val toggle: List[UI] =
-            if collapsibleFlag && hasChildren then
+            if expandedRef.isDefined && hasChildren then
                 List(
                     a
                         .cssClass("p-organizationchart-node-toggle-button")
@@ -161,7 +166,7 @@ final case class OrganizationChart private (
                 val childrenRow: UI =
                     var r = tr.cssClass("p-organizationchart-node-children")
                     if !isExpanded then r = r.cssClass("p-uic-oc-hidden")
-                    r(node.children.map(c => toChild(td.colspan(2)(toChild(renderNode(c, collapsed, sel)))))*)
+                    r(node.children.map(c => toChild(td.colspan(2)(toChild(renderNode(c, expanded, sel)))))*)
                 end childrenRow
 
                 List(downRow, linesRow, childrenRow)
@@ -169,11 +174,11 @@ final case class OrganizationChart private (
         table.cssClass("p-organizationchart-table")((nodeRow :: subtreeRows).map(toChild)*)
     end renderNode
 
-    /** A toggle press flips the node in the bound `collapsed` set, then fires
+    /** A toggle press flips the node in the bound `expanded` set, then fires
       * `onNodeToggle`.
       */
     private def toggleNode(id: String)(using Frame): Any < Async =
-        val write: Any < Async = collapsedRef match
+        val write: Any < Async = expandedRef match
             case Present(ref) => ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
             case Absent       => ()
         val fire: Any < Async = onNodeToggleF match

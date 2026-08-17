@@ -22,6 +22,10 @@ import kyo.UI.*
   * is pointer-events:none (gotcha #1), so per-frame re-render never detaches the
   * capture.
   *
+  * A [[NumberFormControl]], so `uic.Knob().bind(field)` wires value, validity,
+  * message, the blur trigger and (for a whole-valued field) the [[integer]]
+  * constraint in one call.
+  *
   * Colors default to the knob tokens (`--p-knob-value-background`,
   * `--p-knob-range-background`, `--p-knob-text-color`) and follow the theme;
   * `valueColor`/`rangeColor`/`textColor` accept any CSS color or `var()`.
@@ -39,11 +43,22 @@ final case class Knob private (
     rangeColorV: Maybe[String] = Absent,
     textColorV: Maybe[String] = Absent,
     readonlyFlag: Boolean = false,
+    integerFlag: Boolean = false,
     disabledFlag: Maybe[BoolValue] = Absent,
+    invalidV: Maybe[BoolValue] = Absent,
+    invalidMsgV: Maybe[String] = Absent,
+    invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
-    onChangeF: Maybe[Double => Any < Async] = Absent
-) extends Node:
+    onChangeF: Maybe[Double => Any < Async] = Absent,
+    onBlurF: Maybe[Double => Any < Async] = Absent,
+    idV: Maybe[String] = Absent
+) extends Node, NumberFormControl:
     type Self = Knob
+
+    /** Native `id` on the focusable dial — pair with `Label.forId`; the form layer stamps
+      * the bound field's id here so focus-first-invalid can target it.
+      */
+    def id(v: String): Knob = copy(idV = Present(v))
 
     /** Sets a constant value (renders the dial statically). */
     def value(v: Double): Knob = copy(valueBinding = Present(ReactiveValue.Const(v)))
@@ -66,6 +81,12 @@ final case class Knob private (
 
     /** Keyboard increment (Prime default 1). */
     def step(v: Double): Knob = copy(stepV = if v <= 0 then 1.0 else v)
+
+    /** Constrains committed values to whole numbers: every keyboard step and drag lands on
+      * a rounded value. The form layer flips this on for a whole-valued (`Int`/`Long`)
+      * [[kyo.uic.form.NumberField]], so a knob bound to one cannot hand it a fraction.
+      */
+    def integer(v: Boolean): Knob = copy(integerFlag = v)
 
     /** Rendered size in px (width = height; Prime default 100). */
     def size(px: Int): Knob = copy(sizeV = math.max(20, px))
@@ -104,14 +125,45 @@ final case class Knob private (
       */
     def accessibleName(sig: Signal[String]): Knob = copy(accNameV = Present(TextValue.Dyn(sig)))
 
+    /** Marks the knob invalid (`.p-invalid` + `aria-invalid`). */
+    def invalid(v: Boolean): Knob = copy(invalidV = Present(BoolValue.Const(v)))
+
+    /** Reactive validity: the bound signal toggles the invalid state on emission. */
+    def invalid(sig: Signal[Boolean]): Knob = copy(invalidV = Present(BoolValue.Dyn(sig)))
+
+    /** Message rendered below the dial while the knob is invalid (kyo extension —
+      * `div.p-uic-invalid-message`).
+      */
+    def invalidMessage(v: String): Knob = copy(invalidMsgV = Present(v))
+
+    /** Reactive invalid message — `Present` shows the row and (by default) marks the knob
+      * invalid; `Absent` clears both.
+      */
+    def invalidMessage(sig: Signal[Maybe[String]]): Knob = copy(invalidMsgDynV = Present(sig))
+
     /** Fired with the NEW (clamped) value after the ref write-back. */
     def onChange(f: Double => Any < Async): Knob = copy(onChangeF = Present(f))
 
+    /** Fires on focus loss with the knob's current value — unlike onChange it fires even
+      * when the dial was not moved. The validation layer's Blur trigger.
+      */
+    def onBlur(f: Double => Any < Async): Knob = copy(onBlurF = Present(f))
+
     private def interactive: Boolean = !readonlyFlag && !disabledFlag.constTrue
 
-    private def clamp(v: Double): Double = math.max(minV, math.min(maxV, v))
+    /** Clamps into range, and rounds to a whole number under [[integer]]. */
+    private def clamp(v: Double): Double =
+        val bounded = math.max(minV, math.min(maxV, v))
+        if integerFlag then math.rint(bounded) else bounded
 
     private[uic] def render(using Frame): UI =
+        (invalidV.dynSig, invalidMsgDynV) match
+            case (Absent, Absent) => renderDisabledResolved
+            case _ => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
+                    copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderDisabledResolved
+                )
+
+    private def renderDisabledResolved(using Frame): UI =
         BoolValue.reactive(disabledFlag): d =>
             copy(disabledFlag = d).renderResolved
 
@@ -125,23 +177,30 @@ final case class Knob private (
                 // LIVE, so a drag onto any angle sets that angle regardless of the
                 // render-time value.
                 val reactiveSvg: UI = ref.render(v => dialSvg(clamp(v), Present(ref)))
-                var root            = div.cssClass("p-knob").cssClass("p-component")
-                if disabledFlag.constTrue then root = root.cssClass("p-disabled")
+                var root            = shellRoot
                 if interactive then
                     val onDrag = (e: PointerEvent) =>
-                        commit(Knob.valueFromPointer(e.x, e.y, e.rectW, e.rectH, minV, maxV, stepV), Present(ref))
+                        commit(clamp(Knob.valueFromPointer(e.x, e.y, e.rectW, e.rectH, minV, maxV, stepV)), Present(ref))
                     root = root.onPointerDown(onDrag).onPointerMove(onDrag)
                 end if
-                root(toChild(reactiveSvg))
+                withInvalidMessage(root(toChild(reactiveSvg)))
             case Present(ReactiveValue.Dyn(sig)) => sig.render(v => staticRoot(clamp(v)))
             case Present(ReactiveValue.Const(v)) => staticRoot(clamp(v))
             case Absent                          => staticRoot(minV)
 
-    private def staticRoot(value: Double)(using Frame): UI =
+    /** The root box shared by the interactive and static paths. */
+    private def shellRoot(using Frame): Ast.Div =
         var root = div.cssClass("p-knob").cssClass("p-component")
         if disabledFlag.constTrue then root = root.cssClass("p-disabled")
-        root(toChild(dialSvg(value, Absent)))
-    end staticRoot
+        if invalidV.constTrue then root = root.cssClass("p-invalid").aria("invalid", "true")
+        root
+    end shellRoot
+
+    private def withInvalidMessage(el: UI)(using Frame): UI =
+        FieldInvalid.withMessage(el, invalidV.constTrue, invalidMsgV)
+
+    private def staticRoot(value: Double)(using Frame): UI =
+        withInvalidMessage(shellRoot(toChild(dialSvg(value, Absent))))
 
     private def commit(next: Double, ref: Maybe[SignalRef[Double]])(using Frame): Any < Async =
         val write: Any < Async = ref match
@@ -201,8 +260,16 @@ final case class Knob private (
             case Present(TextValue.Dyn(s))   => dial = dial.aria("label", s)
             case Absent                      => ()
         end match
+        idV.foreach(v => dial = dial.id(v))
         if readonlyFlag then dial = dial.aria("readonly", "true")
         if !disabledFlag.constTrue then dial = dial.tabIndex(0)
+        // Blur fires even without a turn — the validation layer's Blur trigger. Reads the
+        // ref LIVE where there is one, so it reports the value at blur time.
+        onBlurF.foreach { f =>
+            dial = dial.onBlur(ref match
+                case Present(r) => r.use(v => f(clamp(v)))
+                case Absent     => f(value))
+        }
         if interactive then
             dial = dial.preventScrollKeys.onKeyDown { e =>
                 e.key match

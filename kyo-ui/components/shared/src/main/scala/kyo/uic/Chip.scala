@@ -12,7 +12,7 @@ import kyo.UI.*
   * The remove affordance only renders with `removable(true)` (Prime
   * semantics); `onRemove` runs when it is activated by click, Enter, Space, or
   * Backspace (Prime's key set) — visibility stays app-owned, exactly like
-  * [[Message.onClose]]. DEVIATION: the remove icon renders as a real
+  * [[Message.onDismissed]]. DEVIATION: the remove icon renders as a real
   * `<button class="p-chip-remove-icon">` around the glyph (Prime uses a bare
   * `<svg>` with handlers) — same class vocabulary, native focus/keyboard
   * semantics; the kyo remainder strips the button chrome.

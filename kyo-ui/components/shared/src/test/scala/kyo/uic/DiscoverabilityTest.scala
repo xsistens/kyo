@@ -41,6 +41,98 @@ class DiscoverabilityTest extends UicTest:
         typeCheck(preamble + """def x: uic.Card = uic.Card().title("Players").subtitle("2 joined")""")
     }
 
+    "every control that holds a user-supplied value carries the whole validation vocabulary" in {
+        // The four setters used to be spread unevenly — the pair on some controls, the
+        // constant alone on others, nothing on a third group. FormControl declares all
+        // four, so a control that claims the trait cannot be missing one; asserting the
+        // trait per control is therefore asserting the whole vocabulary per control.
+        typeCheck(preamble + """def x: uic.FormControl = uic.Input()""")
+        typeCheck(preamble + """def x: uic.FormControl = uic.TextArea()""")
+        typeCheck(preamble + """def x: uic.FormControl = uic.Password()""")
+        typeCheck(preamble + """def x: uic.FormControl = uic.InputMask("999")""")
+        typeCheck(preamble + """def x: uic.FormControl = uic.InputOtp()""")
+        typeCheck(preamble + """def x: uic.FormControl = uic.AutoComplete[String]()""")
+        typeCheck(preamble + """def x: uic.FormControl = uic.DatePicker()""")
+        typeCheck(preamble + """def x: uic.FormControl = uic.Select[String]()""")
+        typeCheck(preamble + """def x: uic.FormControl = uic.CascadeSelect[String]()""")
+        typeCheck(preamble + """def x: uic.FormControl = uic.MultiSelect[String]()""")
+        typeCheck(preamble + """def x: uic.FormControl = uic.TreeSelect()""")
+        typeCheck(preamble + """def x: uic.FormControl = uic.InputNumber()""")
+        typeCheck(preamble + """def x: uic.FormControl = uic.CheckBox("a")""")
+        typeCheck(preamble + """def x: uic.FormControl = uic.RadioButton("a")""")
+        typeCheck(preamble + """def x: uic.FormControl = uic.ToggleSwitch()""")
+        // The seven that used to carry none of it.
+        typeCheck(preamble + """def x: uic.FormControl = uic.ToggleButton()""")
+        typeCheck(preamble + """def x: uic.FormControl = uic.SelectButton[String]()""")
+        typeCheck(preamble + """def x: uic.FormControl = uic.Slider()""")
+        typeCheck(preamble + """def x: uic.FormControl = uic.Knob()""")
+        typeCheck(preamble + """def x: uic.FormControl = uic.Rating()""")
+        typeCheck(preamble + """def x: uic.FormControl = uic.ColorPicker()""")
+        typeCheck(preamble + """def x: uic.FormControl = uic.FileUpload()""")
+        typeCheck(preamble + """def x: uic.FormControl = uic.Listbox()""")
+        // A component that holds no user-supplied value is not one.
+        typeCheckFailure(preamble + """def x: uic.FormControl = uic.Button("Save")""")
+        typeCheckFailure(preamble + """def x: uic.FormControl = uic.Tag("Done")""")
+        typeCheckFailure(preamble + """def x: uic.FormControl = uic.DataTable[String]()""")
+
+        typeCheck(preamble + """def x: uic.ToggleButton = uic.ToggleButton().invalid(true).invalidMessage("m").id("t")""")
+        typeCheck(preamble + """def x: uic.Slider = uic.Slider().invalid(true).invalidMessage("m").id("s")""")
+        typeCheck(preamble + """def x: uic.Knob = uic.Knob().invalid(true).invalidMessage("m").id("k")""")
+        typeCheck(preamble + """def x: uic.Rating = uic.Rating().invalid(true).invalidMessage("m").id("r")""")
+        typeCheck(preamble + """def x: uic.ColorPicker = uic.ColorPicker().invalid(true).invalidMessage("m").id("c")""")
+        typeCheck(preamble + """def x: uic.FileUpload = uic.FileUpload().invalid(true).invalidMessage("m").id("f")""")
+        typeCheck(
+            preamble + """def x: uic.SelectButton[String] = uic.SelectButton[String]().options(Seq("A")).invalid(true).invalidMessage("m").id("sb")"""
+        )
+        // ...including the reactive halves.
+        typeCheck(
+            preamble + """def x(b: Signal[Boolean], m: Signal[Maybe[String]]): uic.Slider = uic.Slider().invalid(b).invalidMessage(m)"""
+        )
+        typeCheck(
+            preamble + """def x(b: Signal[Boolean], m: Signal[Maybe[String]]): uic.Rating = uic.Rating().invalid(b).invalidMessage(m)"""
+        )
+        typeCheck(
+            preamble + """def x(b: Signal[Boolean], m: Signal[Maybe[String]]): uic.FileUpload = uic.FileUpload().invalid(b).invalidMessage(m)"""
+        )
+        // size/variant stay off the contract: the PrimeOne sheet styles them only for the
+        // field-shaped controls, so they are not part of "holds a value".
+        typeCheckFailure(preamble + """def x = uic.Slider().size(uic.Size.Small)""")
+        typeCheckFailure(preamble + """def x = uic.Rating().variant(uic.FieldVariant.Filled)""")
+    }
+
+    "the seven controls that could not join a form now bind like the rest" in {
+        val bindable = "import kyo.uic.form.*\n"
+        // NumberFormControl: Slider, Knob, Rating alongside InputNumber.
+        typeCheck(preamble + bindable + """def x(f: FormField[Double])(using Frame): uic.Slider = uic.Slider().bind(f)""")
+        typeCheck(preamble + bindable + """def x(f: FormField[Double])(using Frame): uic.Knob = uic.Knob().bind(f)""")
+        typeCheck(preamble + bindable + """def x(f: FormField[Double])(using Frame): uic.Rating = uic.Rating().bind(f)""")
+        // BooleanFormControl: ToggleButton alongside CheckBox / ToggleSwitch.
+        typeCheck(preamble + bindable + """def x(f: FormField[Boolean])(using Frame): uic.ToggleButton = uic.ToggleButton().bind(f)""")
+        // TextFormControl: ColorPicker's hex, SelectButton's single selection.
+        typeCheck(preamble + bindable + """def x(f: FormField[String])(using Frame): uic.ColorPicker = uic.ColorPicker().bind(f)""")
+        typeCheck(
+            preamble + bindable + """def x(f: FormField[String])(using Frame): uic.SelectButton[String] = uic.SelectButton[String]().options(Seq("A")).bind(f)"""
+        )
+        // MultiSelectFormControl: SelectButton's multi selection, same component, and the
+        // always-visible member of the picker family.
+        typeCheck(
+            preamble + bindable + """def x(f: FormField[Set[String]])(using Frame): uic.SelectButton[String] = uic.SelectButton[String]().options(Seq("A")).multiple(true).bind(f)"""
+        )
+        typeCheck(
+            preamble + bindable + """def x(f: FormField[Set[String]])(using Frame): uic.Listbox = uic.Listbox().item("A", "a").bind(f)"""
+        )
+        // FileFormControl: FileUpload over the picked payloads.
+        typeCheck(
+            preamble + bindable + """def x(f: FormField[Seq[UI.FilePayload]])(using Frame): uic.FileUpload = uic.FileUpload().bind(f)"""
+        )
+        // The value type still has to match the control's family.
+        typeCheckFailure(preamble + bindable + """def x(f: FormField[String])(using Frame) = uic.Slider().bind(f)""")
+        typeCheckFailure(preamble + bindable + """def x(f: FormField[Double])(using Frame) = uic.ColorPicker().bind(f)""")
+        // A component that holds no user value is still not bindable.
+        typeCheckFailure(preamble + bindable + """def x(f: FormField[String])(using Frame) = uic.Button("Save").bind(f)""")
+        typeCheckFailure(preamble + bindable + """def x(f: FormField[String])(using Frame) = uic.Tag("Done").bind(f)""")
+    }
+
     "Button carries an id and a reactive disabled (Signal[Boolean]) alongside the constant" in {
         typeCheck(preamble + """def x: uic.Button = uic.Button("Save").id("save-btn")""")
         typeCheck(preamble + """def x(busy: Signal[Boolean]): uic.Button = uic.Button("Save").disabled(busy)""")
@@ -152,7 +244,7 @@ class DiscoverabilityTest extends UicTest:
 
     "AutoComplete replaces ComboBox: typed options, itemTemplate, minQueryLength, showClear" in {
         typeCheck(
-            preamble + """def x(r: SignalRef[String]): uic.AutoComplete[String] = uic.AutoComplete[String]().options(Seq("A")).value(r).filter(uic.FilterMode.Contains).minQueryLength(2).showClear(true)"""
+            preamble + """def x(r: SignalRef[String]): uic.AutoComplete[String] = uic.AutoComplete[String]().options(Seq("A")).value(r).filterMode(uic.FilterMode.Contains).minQueryLength(2).showClear(true)"""
         )
         typeCheck(
             preamble + """def x(f: (String, String) => Any < Async)(using Frame) = uic.AutoComplete[(String, String)]().options(Seq("a" -> "A"))(_._2).itemTemplate(o => span(o._1)).onSelect(o => f(o._1, o._2))"""
@@ -253,6 +345,20 @@ class DiscoverabilityTest extends UicTest:
         typeCheckFailure(preamble + """def x = uic.Message().hideCloseButton(true)""")
     }
 
+    "onClose belongs to the surfaces that own their visibility; a notify-only dismissal is onDismissed" in {
+        // Dialog/Drawer/Toast hold the ref, write false into it, then run the effect.
+        typeCheck(preamble + """def x(r: SignalRef[Boolean])(using Frame): uic.Dialog = uic.Dialog().open(r).onClose(())""")
+        typeCheck(preamble + """def x(r: SignalRef[Boolean])(using Frame): uic.Drawer = uic.Drawer().open(r).onClose(())""")
+        typeCheck(preamble + """def x(r: SignalRef[Boolean])(using Frame): uic.Toast = uic.Toast().open(r).onClose(())""")
+        // Message owns no ref: it notifies and nothing disappears, so it carries the
+        // past-tense name instead and `onClose` is not on it at all.
+        typeCheck(preamble + """def x(using Frame): uic.Message = uic.Message().closable(true).onDismissed(())""")
+        typeCheckFailure(preamble + """def x(using Frame) = uic.Message().closable(true).onClose(())""")
+        // Chip's remove affordance is the same notify-only contract under its own verb.
+        typeCheck(preamble + """def x(using Frame): uic.Chip = uic.Chip("Tag").removable(true).onRemove(())""")
+        typeCheckFailure(preamble + """def x(using Frame) = uic.Chip("Tag").removable(true).onClose(())""")
+    }
+
     "Panel is toggleable (not ui5-fixed); sticky/noAnimation are retired" in {
         typeCheck(
             preamble + """def x(r: SignalRef[Boolean])(using Frame) = uic.Panel().header("H").toggleable(true).collapsed(r).footer(span("f"))"""
@@ -337,9 +443,29 @@ class DiscoverabilityTest extends UicTest:
         typeCheckFailure(preamble + """def x = uic.ListItem("A", id = "a", itemType = uic.ListItemType.Navigation)""")
     }
 
-    "Listbox.filter takes a SignalRef[String] (server-side filtering), not a Boolean" in {
-        typeCheck(preamble + """def x(q: SignalRef[String]) = uic.Listbox().filter(q).item("A", "a")""")
-        typeCheckFailure(preamble + """def x = uic.Listbox().filter(true)""")
+    "one word per filtering concept across the pickers: filterable / filterQuery / filterMode" in {
+        // The on/off toggle is `filterable` everywhere it exists...
+        typeCheck(preamble + """def x: uic.Listbox = uic.Listbox().filterable(true).item("A", "a")""")
+        typeCheck(preamble + """def x: uic.Select[String] = uic.Select[String]().options(Seq("A")).filterable(true)""")
+        typeCheck(preamble + """def x: uic.MultiSelect[String] = uic.MultiSelect[String]().options(Seq("A")).filterable(true)""")
+        // ...the app-owned query is `filterQuery` everywhere it exists...
+        typeCheck(preamble + """def x(q: SignalRef[String]): uic.Listbox = uic.Listbox().filterQuery(q).item("A", "a")""")
+        typeCheck(preamble + """def x(q: SignalRef[String]): uic.Select[String] = uic.Select[String]().options(Seq("A")).filterQuery(q)""")
+        typeCheck(
+            preamble + """def x(q: SignalRef[String]): uic.MultiSelect[String] = uic.MultiSelect[String]().options(Seq("A")).filterQuery(q)"""
+        )
+        // ...and the matching strategy is `filterMode`, which only AutoComplete has.
+        typeCheck(
+            preamble + """def x: uic.AutoComplete[String] = uic.AutoComplete[String]().options(Seq("A")).filterMode(uic.FilterMode.Contains)"""
+        )
+        typeCheckFailure(preamble + """def x = uic.AutoComplete[String]().options(Seq("A")).filterable(true)""")
+        typeCheckFailure(preamble + """def x(q: SignalRef[String]) = uic.AutoComplete[String]().options(Seq("A")).filterQuery(q)""")
+        typeCheckFailure(preamble + """def x = uic.Select[String]().options(Seq("A")).filterMode(uic.FilterMode.Contains)""")
+        // The one overloaded word that meant three things is gone from all four.
+        typeCheckFailure(preamble + """def x(q: SignalRef[String]) = uic.Listbox().filter(q)""")
+        typeCheckFailure(preamble + """def x = uic.Select[String]().options(Seq("A")).filter(true)""")
+        typeCheckFailure(preamble + """def x = uic.MultiSelect[String]().options(Seq("A")).filter(true)""")
+        typeCheckFailure(preamble + """def x = uic.AutoComplete[String]().options(Seq("A")).filter(uic.FilterMode.Contains)""")
     }
 
     "DataTable replaces Table: typed rows/columns; the old UI-cell API is retired" in {
@@ -395,14 +521,14 @@ def x(sort: SignalRef[List[(String, Boolean)]], q: SignalRef[String], pg: Signal
     "Tabs.selected accepts only SignalRef[String]; Listbox.selected only SignalRef[Set[String]]" in {
         typeCheck(preamble + """def x(r: SignalRef[String]) = uic.Tabs().selected(r)""")
         typeCheckFailure(preamble + """def x(r: SignalRef[Set[String]]) = uic.Tabs().selected(r)""")
-        typeCheck(preamble + """def x(r: SignalRef[Set[String]]) = uic.Listbox().selected(r)""")
-        typeCheckFailure(preamble + """def x(r: SignalRef[String]) = uic.Listbox().selected(r)""")
+        typeCheck(preamble + """def x(r: SignalRef[Set[String]]) = uic.Listbox().value(r)""")
+        typeCheckFailure(preamble + """def x(r: SignalRef[String]) = uic.Listbox().value(r)""")
     }
 
     "Tree binds two Set refs (expanded + selected); Listbox selection is not a bare String" in {
         typeCheck(preamble + """def x(r: SignalRef[Set[String]]) = uic.Tree().expanded(r).selected(r)""")
         typeCheckFailure(preamble + """def x(r: SignalRef[Boolean]) = uic.Tree().expanded(r)""")
-        typeCheckFailure(preamble + """def x = uic.Listbox().selected(Set("a"))""")
+        typeCheckFailure(preamble + """def x = uic.Listbox().value(Set("a"))""")
     }
 
     "structural controls' chained setters keep the concrete type" in {
@@ -450,7 +576,7 @@ def x(sort: SignalRef[List[(String, Boolean)]], q: SignalRef[String], pg: Signal
             preamble + """def x(r: SignalRef[String]): uic.SelectButton[(String, String)] = uic.SelectButton[(String, String)]().options(Seq("a" -> "A"))(_._2).optionKey(_._1).optionDisabled(_ => false).value(r).allowEmpty(false).accessibleName("Language").onChange(_ => ())"""
         )
         typeCheck(
-            preamble + """def x(r: SignalRef[Set[String]]): uic.SelectButton[String] = uic.SelectButton[String]().options(Seq("S", "M")).multiple(true).values(r)"""
+            preamble + """def x(r: SignalRef[Set[String]]): uic.SelectButton[String] = uic.SelectButton[String]().options(Seq("S", "M")).multiple(true).value(r)"""
         )
         typeCheck(preamble + """def x(using Frame): uic.InputGroup = uic.InputGroup()(uic.InputGroup.addon(span("$")), uic.Input())""")
         typeCheck(preamble + """def x: uic.IconField = uic.IconField(uic.Input()).iconStart(uic.Icons.search).iconEnd(uic.Icons.spinner)""")
@@ -474,7 +600,7 @@ def x(sort: SignalRef[List[(String, Boolean)]], q: SignalRef[String], pg: Signal
 
     "wave-F selection state binds only via SignalRef (no bare values)" in {
         typeCheckFailure(preamble + """def x = uic.SelectButton[String]().options(Seq("a")).value("a")""")
-        typeCheckFailure(preamble + """def x = uic.SelectButton[String]().options(Seq("a")).values(Set("a"))""")
+        typeCheckFailure(preamble + """def x = uic.SelectButton[String]().options(Seq("a")).value(Set("a"))""")
         typeCheckFailure(preamble + """def x = uic.Paginator().page(0)""")
         typeCheckFailure(preamble + """def x = uic.Stepper().active(0)""")
     }
@@ -550,6 +676,17 @@ def x(sort: SignalRef[List[(String, Boolean)]], q: SignalRef[String], pg: Signal
         typeCheck(
             preamble + """def x(r: SignalRef[String]): uic.FloatLabel = uic.FloatLabel(uic.AutoComplete[String]().options(Seq("A")).id("c").value(r), "City").variant(uic.FloatLabelVariant.In).forId("c")"""
         )
+        // IftaLabel is the same idea with a fixed placement, so it accepts the same
+        // four hosts — not Input alone.
+        typeCheck(
+            preamble + """def x(r: SignalRef[String]): uic.IftaLabel = uic.IftaLabel(uic.TextArea().id("m").value(r), "Message").forId("m")"""
+        )
+        typeCheck(
+            preamble + """def x(r: SignalRef[String]): uic.IftaLabel = uic.IftaLabel(uic.Select[String]().options(Seq("A")).id("u").value(r), "Unit").forId("u")"""
+        )
+        typeCheck(
+            preamble + """def x(r: SignalRef[String]): uic.IftaLabel = uic.IftaLabel(uic.AutoComplete[String]().options(Seq("A")).id("c").value(r), "City").forId("c")"""
+        )
         typeCheck(preamble + """def x: uic.ToggleSwitch = uic.ToggleSwitch().checked(true).handleIcon(uic.Icons.check, uic.Icons.times)""")
         typeCheck(preamble + """def x(using Frame): uic.Chip = uic.Chip("Tag").removable(true).removeIcon(uic.Icons.times).onRemove(())""")
         typeCheck(
@@ -582,12 +719,12 @@ def x(sort: SignalRef[List[(String, Boolean)]], q: SignalRef[String], pg: Signal
         typeCheckFailure(preamble + """def x(o: SignalRef[Boolean]) = uic.Overlay(o).severity(uic.Severity.Danger)""")
     }
 
-    "Select panel surface: filter/showClear/checkmark are Booleans, open only via SignalRef" in {
+    "Select panel surface: filterable/showClear/checkmark are Booleans, open only via SignalRef" in {
         typeCheck(
-            preamble + """def x(r: SignalRef[String], o: SignalRef[Boolean]): uic.Select[String] = uic.Select[String]().options(Seq("A")).value(r).open(o).filter(true).showClear(true).checkmark(true).emptyMessage("none")"""
+            preamble + """def x(r: SignalRef[String], o: SignalRef[Boolean]): uic.Select[String] = uic.Select[String]().options(Seq("A")).value(r).open(o).filterable(true).showClear(true).checkmark(true).emptyMessage("none")"""
         )
         typeCheckFailure(preamble + """def x = uic.Select[String]().open(true)""")
-        typeCheckFailure(preamble + """def x(q: SignalRef[String]) = uic.Select[String]().filter(q)""")
+        typeCheckFailure(preamble + """def x = uic.Select[String]().filterable(1)""")
     }
 
     "wave-E components expose only their own options" in {
@@ -655,7 +792,7 @@ def x(sort: SignalRef[List[(String, Boolean)]], q: SignalRef[String], pg: Signal
 
     "MultiSelect binds a Set ref, keeps the panel surface; single-value binding is rejected" in {
         typeCheck(
-            preamble + """def x(r: SignalRef[Set[String]], o: SignalRef[Boolean]): uic.MultiSelect[String] = uic.MultiSelect[String]().options(Seq("A", "B")).value(r).open(o).filter(true).showClear(true).showToggleAll(false).highlightOnSelect(true).display(uic.MultiSelectDisplay.Chip).maxSelectedLabels(3).selectedItemsLabel("{0} picked").emptyMessage("none")"""
+            preamble + """def x(r: SignalRef[Set[String]], o: SignalRef[Boolean]): uic.MultiSelect[String] = uic.MultiSelect[String]().options(Seq("A", "B")).value(r).open(o).filterable(true).showClear(true).showToggleAll(false).highlightOnSelect(true).display(uic.MultiSelectDisplay.Chip).maxSelectedLabels(3).selectedItemsLabel("{0} picked").emptyMessage("none")"""
         )
         typeCheck(
             preamble + """def x(r: SignalRef[Set[String]]) = uic.MultiSelect[(String, String)]().options(Seq("a" -> "A"))(_._2).optionKey(_._1).optionDisabled(_ => false).value(r).onChange(_ => ())"""
@@ -672,7 +809,25 @@ def x(sort: SignalRef[List[(String, Boolean)]], q: SignalRef[String], pg: Signal
         )
         typeCheckFailure(preamble + """def x = uic.CascadeSelect[String]().options(Seq("A", "B"))""")
         typeCheckFailure(preamble + """def x = uic.CascadeSelect[String]().value("a")""")
-        typeCheckFailure(preamble + """def x(r: SignalRef[String]) = uic.CascadeSelect[String]().filter(true)""")
+        typeCheckFailure(preamble + """def x(r: SignalRef[String]) = uic.CascadeSelect[String]().filterable(true)""")
+    }
+
+    "TreeSelect carries the picker family's options shape, plus a children projection" in {
+        // options(roots)(label)(children) — the flat pickers' shape with one extra
+        // projection for the structure; the key defaults to the label as elsewhere.
+        typeCheck(
+            preamble + "final case class Dir(name: String, subs: List[Dir])\n" +
+                """def x(r: SignalRef[Set[String]])(using Frame): uic.TreeSelect = uic.TreeSelect().options(Seq(Dir("root", Nil)))(_.name)(_.subs).value(r)"""
+        )
+        // ...and the three-projection overload when the label is not an identity.
+        typeCheck(
+            preamble + "final case class Dir(id: String, name: String, subs: List[Dir])\n" +
+                """def x(r: SignalRef[Set[String]])(using Frame): uic.TreeSelect = uic.TreeSelect().options(Seq(Dir("r", "root", Nil)))(_.name, _.id)(_.subs).value(r)"""
+        )
+        // The hand-authored model stays available for icons/tooltips.
+        typeCheck(preamble + """def x: uic.TreeSelect = uic.TreeSelect().nodes(uic.TreeNode("R", "r", icon = Present(uic.Icons.check)))""")
+        // The key rides in `options`, so there is no separate optionKey setter to miss.
+        typeCheckFailure(preamble + """def x = uic.TreeSelect().optionKey((s: String) => s)""")
     }
 
     "TreeSelect reuses TreeNode + SelectionMode and binds Set refs" in {
@@ -801,15 +956,18 @@ def x(sort: SignalRef[List[(String, Boolean)]], q: SignalRef[String], pg: Signal
 
     "PickList binds two Seq columns + two selections; per-column rails are toggleable" in {
         typeCheck(
-            preamble + """def x(s: SignalRef[Seq[String]], t: SignalRef[Seq[String]], ss: SignalRef[Set[String]], ts: SignalRef[Set[String]])(using Frame): uic.PickList[String] = uic.PickList[String]().source(s)(identity).target(t).itemKey(identity).itemTemplate(x => span(x)).sourceSelected(ss).targetSelected(ts).showSourceControls(false).showTargetControls(false).disabled(false)"""
+            preamble + """def x(s: SignalRef[Seq[String]], t: SignalRef[Seq[String]], ss: SignalRef[Set[String]], ts: SignalRef[Set[String]])(using Frame): uic.PickList[String] = uic.PickList[String]().sourceItems(s)(identity).targetItems(t).itemKey(identity).itemTemplate(x => span(x)).sourceSelected(ss).targetSelected(ts).showSourceControls(false).showTargetControls(false).disabled(false)"""
         )
-        typeCheckFailure(preamble + """def x = uic.PickList[String]().source(Seq("A"))""")
-        typeCheckFailure(preamble + """def x(t: SignalRef[Seq[String]]) = uic.PickList[String]().target(t)(identity)""")
+        typeCheckFailure(preamble + """def x = uic.PickList[String]().sourceItems(Seq("A"))""")
+        typeCheckFailure(preamble + """def x(t: SignalRef[Seq[String]]) = uic.PickList[String]().targetItems(t)(identity)""")
+        // The column bindings read as two of OrderList's one, not as a different model.
+        typeCheckFailure(preamble + """def x(s: SignalRef[Seq[String]]) = uic.PickList[String]().source(s)(identity)""")
+        typeCheckFailure(preamble + """def x(t: SignalRef[Seq[String]]) = uic.PickList[String]().target(t)""")
     }
 
     "Carousel pages a typed item window via an Int ref; JS-era transition props are absent" in {
         typeCheck(
-            preamble + """def x(r: SignalRef[Int])(using Frame): uic.Carousel[String] = uic.Carousel[String]().items(Seq("A"))(s => span(s)).page(r).numVisible(3).numScroll(3).circular(true).vertical(true).verticalViewHeight("330px").showNavigators(false).showIndicators(false).autoplay(3000).onPageChange(_ => ())"""
+            preamble + """def x(r: SignalRef[Int])(using Frame): uic.Carousel[String] = uic.Carousel[String]().items(Seq("A"))(s => span(s)).page(r).numVisible(3).numScroll(3).circular(true).vertical(true).verticalViewHeight("330px").showItemNavigators(false).showIndicators(false).autoplay(3000).onPageChange(_ => ())"""
         )
         typeCheckFailure(preamble + """def x = uic.Carousel[String]().page(0)""")
         typeCheckFailure(preamble + """def x = uic.Carousel[String]().autoplayInterval(3000)""")
@@ -843,12 +1001,18 @@ def x(sort: SignalRef[List[(String, Boolean)]], q: SignalRef[String], pg: Signal
         typeCheckFailure(preamble + """def x = uic.TreeTable[String]().rows(Seq("a"))""")
     }
 
-    "OrganizationChart collapses via a collapsed-keys Set ref (empty = fully expanded)" in {
+    "OrganizationChart expands via the same expanded-keys Set ref as Tree/TreeTable" in {
         typeCheck(
-            preamble + """def x(c: SignalRef[Set[String]], s: SignalRef[Set[String]])(using Frame): uic.OrganizationChart = uic.OrganizationChart().node(uic.OrgChartNode("CEO", "ceo", children = List(uic.OrgChartNode("CTO", "cto")), template = Present(span("x")), className = Present("hl"))).collapsible(true).collapsed(c).selectionMode(uic.SelectionMode.Single).selected(s).onNodeToggle(_ => ()).onNodeClick(_ => ())"""
+            preamble + """def x(e: SignalRef[Set[String]], s: SignalRef[Set[String]])(using Frame): uic.OrganizationChart = uic.OrganizationChart().node(uic.OrgChartNode("CEO", "ceo", children = List(uic.OrgChartNode("CTO", "cto")), template = Present(span("x")), className = Present("hl"))).expanded(e).selectionMode(uic.SelectionMode.Single).selected(s).onNodeToggle(_ => ()).onNodeClick(_ => ())"""
         )
-        typeCheckFailure(preamble + """def x(e: SignalRef[Set[String]]) = uic.OrganizationChart().expanded(e)""")
-        typeCheckFailure(preamble + """def x = uic.OrganizationChart().collapsed(Set("a"))""")
+        // One ref feeds all three tree-shaped components without inverting on the way.
+        typeCheck(
+            preamble + """def x(e: SignalRef[Set[String]])(using Frame): (uic.Tree, uic.OrganizationChart) = (uic.Tree().expanded(e), uic.OrganizationChart().expanded(e))"""
+        )
+        // The collapse-keyed spelling and its separate opt-in flag are gone.
+        typeCheckFailure(preamble + """def x(c: SignalRef[Set[String]]) = uic.OrganizationChart().collapsed(c)""")
+        typeCheckFailure(preamble + """def x = uic.OrganizationChart().collapsible(true)""")
+        typeCheckFailure(preamble + """def x = uic.OrganizationChart().expanded(Set("a"))""")
         typeCheckFailure(preamble + """def x = uic.OrganizationChart().nodes(uic.OrgChartNode("a", "a"))""")
     }
 

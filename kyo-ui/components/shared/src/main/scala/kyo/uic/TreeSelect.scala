@@ -2,6 +2,7 @@ package kyo.uic
 
 import kyo.*
 import kyo.UI.*
+import scala.annotation.targetName
 
 /** TreeSelect — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * TreeSelect anatomy: `div.p-treeselect.p-component.p-inputwrapper
@@ -22,6 +23,13 @@ import kyo.UI.*
   * panel open (Checkbox renders Prime's per-node checkbox column; parent/child
   * check-state cascade stays deferred exactly as in Tree). Expansion state is
   * component-internal unless `expanded(ref)` binds it out.
+  *
+  * Options come in the same shape as the flat pickers': `options(roots)(label)
+  * (children)` projects any `A` to its text and its sub-options, with the option
+  * key defaulting to the label as in [[Select.optionKey]]. The extra `children`
+  * projection is the whole difference between a tree-shaped picker and a flat
+  * one. `nodes(TreeNode*)` remains for hand-authored trees whose nodes carry an
+  * icon, a tooltip or their own accessible name.
   *
   * The trigger shows the selected nodes' labels (tree order, comma-joined) or
   * the placeholder while empty.
@@ -59,12 +67,35 @@ final case class TreeSelect private (
     /** Native `id` on the trigger — pair with `Label.forId`. */
     def id(v: String): TreeSelect = copy(idV = Present(v))
 
-    /** Appends root nodes (the shared [[TreeNode]] model). */
+    /** Appends typed root options in the picker family's shape: `label` projects an
+      * `A` to its visible text and `children` to its sub-options, so the tree
+      * structure arrives as a projection like every other key. The option key
+      * defaults to the label, exactly as in [[Select.optionKey]]; use the
+      * three-projection overload when the label is not a stable identity.
+      *
+      * The family shape does not fit every tree, because a `TreeNode` also carries
+      * an icon, a tooltip and an accessible name that no `A => String` supplies —
+      * reach for [[nodes]] with the hand-authored model when you need those.
+      */
+    def options[A](roots: Seq[A])(label: A => String)(children: A => Seq[A]): TreeSelect =
+        options(roots)(label, label)(children)
+
+    /** [[options]] with an explicit stable key per option — the id written into the
+      * bound selection set.
+      */
+    def options[A](roots: Seq[A])(label: A => String, optionKey: A => String)(children: A => Seq[A]): TreeSelect =
+        copy(nodeList = nodeList ++ roots.toList.map(a => TreeSelect.project(a, label, optionKey, children)))
+
+    /** Appends root nodes of the hand-authored [[TreeNode]] model — the escape hatch
+      * from [[options]] when a node needs an icon, a tooltip or its own accessible
+      * name. [[Listbox.items]] stands in the same relation to [[Listbox.item]].
+      */
     def nodes(ns: TreeNode*): TreeSelect = copy(nodeList = nodeList ++ ns.toList)
 
     /** Binds the selected node id set two-way to `ref`: picks write the updated
       * set back, ref changes reselect the matching nodes.
       */
+    @targetName("valueKeys")
     def value(ref: SignalRef[Set[String]]): TreeSelect = copy(valueRef = Present(ref))
 
     /** Binds the expansion set two-way to `ref` (optional — expansion is
@@ -157,6 +188,7 @@ final case class TreeSelect private (
       * `onChange` it fires even when nothing was changed. The form-validation layer
       * wires its `Blur` trigger here.
       */
+    @targetName("onBlurKeys")
     def onBlur(f: Set[String] => Any < Async): TreeSelect = copy(onBlurF = Present(f))
 
     /** (id, label) pairs of every node in tree order — the trigger-label lookup. */
@@ -352,3 +384,12 @@ end TreeSelect
 
 object TreeSelect:
     def apply(): TreeSelect = new TreeSelect()
+
+    /** Projects one typed option (and, recursively, its sub-options) into the
+      * [[TreeNode]] model the panel's [[Tree]] renders. Termination is the caller's
+      * `children` projection: a cyclic one does not terminate, exactly as a cyclic
+      * hand-authored `TreeNode` structure would not.
+      */
+    private def project[A](a: A, label: A => String, key: A => String, children: A => Seq[A]): TreeNode =
+        TreeNode(label(a), key(a), children = children(a).toList.map(project(_, label, key, children)))
+end TreeSelect

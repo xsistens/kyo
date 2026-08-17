@@ -24,6 +24,11 @@ import kyo.UI.*
   *     `auto`/upload-URL machinery does not apply — the content already IS
   *     server-side in the handler.
   *   - The advanced mode (drag & drop, file list, progress) is deferred.
+  *
+  * A [[FileFormControl]] over `Seq[kyo.UI.FilePayload]`, so
+  * `uic.FileUpload().bind(field)` wires value, validity, message and the blur
+  * trigger — and a validator can read the picked files' sizes and extensions
+  * because the payload metadata IS the bound value.
   */
 final case class FileUpload private (
     inputIdV: String = "p-uic-fileupload",
@@ -32,14 +37,32 @@ final case class FileUpload private (
     acceptV: List[FileAccept] = Nil,
     multipleFlag: Boolean = false,
     disabledFlag: Boolean = false,
-    onSelectF: Maybe[Seq[UI.FilePayload] => Any < Async] = Absent
-) extends Node:
+    filesRef: Maybe[SignalRef[Seq[UI.FilePayload]]] = Absent,
+    invalidV: Maybe[BoolValue] = Absent,
+    invalidMsgV: Maybe[String] = Absent,
+    invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
+    onSelectF: Maybe[Seq[UI.FilePayload] => Any < Async] = Absent,
+    onBlurF: Maybe[Seq[UI.FilePayload] => Any < Async] = Absent
+) extends Node, FileFormControl:
     type Self = FileUpload
 
     /** DOM id of the native file input (the label's `for` target). Give every
       * FileUpload on a page its own id.
       */
     def inputId(v: String): FileUpload = copy(inputIdV = v)
+
+    /** [[inputId]] under the name the form layer uses: `bind` stamps the field's minted id
+      * here so focus-first-invalid lands on the native input, and it is the same `for`
+      * target the choose label points at.
+      */
+    def id(v: String): FileUpload = inputId(v)
+
+    /** Binds the picked files two-way: a pick writes the [[kyo.UI.FilePayload]] metadata
+      * (name, size, MIME type, content) into `ref`, and a ref write of an empty Seq clears
+      * the label back to the empty state. This is what makes a FileUpload validatable — a
+      * rule can read the sizes and extensions it was handed.
+      */
+    def value(ref: SignalRef[Seq[UI.FilePayload]]): FileUpload = copy(filesRef = Present(ref))
 
     /** Label of the choose button (default "Choose", Prime's locale default). */
     def chooseLabel(v: String): FileUpload = copy(chooseLabelV = TextValue.Const(v))
@@ -64,19 +87,44 @@ final case class FileUpload private (
     /** Disables the control: the button dims and the input locks. */
     def disabled(v: Boolean): FileUpload = copy(disabledFlag = v)
 
+    /** Marks the control invalid (`.p-invalid` + `aria-invalid`). */
+    def invalid(v: Boolean): FileUpload = copy(invalidV = Present(BoolValue.Const(v)))
+
+    /** Reactive validity: the bound signal toggles the invalid state on emission. */
+    def invalid(sig: Signal[Boolean]): FileUpload = copy(invalidV = Present(BoolValue.Dyn(sig)))
+
+    /** Message rendered below the control while it is invalid (kyo extension —
+      * `div.p-uic-invalid-message`).
+      */
+    def invalidMessage(v: String): FileUpload = copy(invalidMsgV = Present(v))
+
+    /** Reactive invalid message — `Present` shows the row and (by default) marks the
+      * control invalid; `Absent` clears both.
+      */
+    def invalidMessage(sig: Signal[Maybe[String]]): FileUpload = copy(invalidMsgDynV = Present(sig))
+
     /** Fired with the picked files' [[kyo.UI.FilePayload]] metadata (name, size,
-      * mimeType, content) once a file is chosen.
+      * mimeType, content) once a file is chosen — after the [[value]] write-back.
       */
     def onSelect(f: Seq[UI.FilePayload] => Any < Async): FileUpload = copy(onSelectF = Present(f))
 
+    /** Fires on focus loss with the currently picked files — the validation layer's Blur
+      * trigger. Reports an empty Seq when nothing is bound or picked.
+      */
+    def onBlur(f: Seq[UI.FilePayload] => Any < Async): FileUpload = copy(onBlurF = Present(f))
+
     private[uic] def render(using Frame): UI =
-        // The chosen-name label is reactive: onFileSelect writes the picked name(s)
-        // into an internal signal owned by this mount; the static projection shows
-        // the empty-state label until the transport attaches.
-        UI.mounted {
-            for shown <- Signal.initRef[Maybe[String]](Absent)
-            yield body(Present(shown))
-        }.placeholder(body(Absent))
+        // The chosen-name label is reactive: a pick writes the picked name(s) into the
+        // BOUND value ref when there is one, else into a signal owned by this mount; the
+        // static projection shows the empty-state label until the transport attaches.
+        // The validity boundary is resolved inside `body`, never around `UI.mounted`.
+        filesRef match
+            case Present(_) => body(Absent)
+            case Absent =>
+                UI.mounted {
+                    for shown <- Signal.initRef[Maybe[String]](Absent)
+                    yield body(Present(shown))
+                }.placeholder(body(Absent))
 
     /** The chosen-file label: the joined name(s) once picked (adding Prime's
       * `.p-fileupload-filename`), else the empty-state text.
@@ -90,7 +138,17 @@ final case class FileUpload private (
                     case Present(TextValue.Dyn(s))   => s.render(t => span.cssClass("p-fileupload-filelabel")(t))
                     case Absent                      => span.cssClass("p-fileupload-filelabel")("No file chosen")
 
+    /** Resolves the reactive validity slots, then builds. The boundary sits HERE, inside
+      * the mount, rather than around `UI.mounted`: wrapping the mount would re-mount on
+      * every emission and drop the label signal (see [[FieldInvalid.reactive]]).
+      */
     private def body(shown: Maybe[SignalRef[Maybe[String]]])(using Frame): UI =
+        (invalidV.dynSig, invalidMsgDynV) match
+            case (Absent, Absent) => bodyStatic(shown, invalidV.constTrue, invalidMsgV)
+            case _ =>
+                FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) => bodyStatic(shown, red, msg))
+
+    private def bodyStatic(shown: Maybe[SignalRef[Maybe[String]]], red: Boolean, redMsg: Maybe[String])(using Frame): UI =
         // The choose affordance: a real <label for> wearing Prime's Button classes,
         // so the native file dialog opens without any JS lifecycle.
         var choose = label
@@ -107,36 +165,63 @@ final case class FileUpload private (
             toChild(chooseLabelEl)
         )
 
-        val fileLabelEl: UI = shown match
-            case Present(ref) => ref.render(labelSpan)
-            case Absent       => labelSpan(Absent)
+        // A bound value ref is the label's source of truth; without one the mount's own
+        // signal is (and the static projection has neither).
+        val fileLabelEl: UI = (filesRef, shown) match
+            case (Present(ref), _)      => ref.render(fs => labelSpan(FileUpload.joinedNames(fs)))
+            case (Absent, Present(ref)) => ref.render(labelSpan)
+            case _                      => labelSpan(Absent)
 
         var file = fileInput.id(inputIdV)
         if acceptV.nonEmpty then file = file.accept(acceptV*)
         if multipleFlag then file = file.multiple(true)
         if disabledFlag then file = file.disabled(true)
-        onSelectF.foreach { handler =>
+        // The pick writes through even without an onSelect handler: a bound value ref is
+        // the form's value and must track the picker on its own.
+        if onSelectF.isDefined || filesRef.isDefined then
             file = file.onFileSelect { payloads =>
-                val names = payloads.map(_.name).mkString(", ")
-                val setLabel: Any < Async = shown match
-                    case Present(ref) => ref.set(if payloads.isEmpty then Absent else Present(names))
-                    case Absent       => ()
-                setLabel.andThen(handler(payloads))
+                val setLabel: Any < Async = (filesRef, shown) match
+                    case (Present(ref), _) => ref.set(payloads)
+                    case (Absent, Present(ref)) =>
+                        ref.set(FileUpload.joinedNames(payloads))
+                    case _ => ()
+                val fire: Any < Async = onSelectF match
+                    case Present(handler) => handler(payloads)
+                    case Absent           => ()
+                setLabel.andThen(fire)
             }
+        end if
+        onBlurF.foreach { f =>
+            file = file.onBlur(filesRef match
+                case Present(ref) => ref.use(f)
+                case Absent       => f(Seq.empty))
         }
 
-        div
+        var root = div
             .cssClass("p-fileupload")
             .cssClass("p-fileupload-basic")
-            .cssClass("p-component")(
+            .cssClass("p-component")
+        if red then root = root.cssClass("p-invalid").aria("invalid", "true")
+        FieldInvalid.withMessage(
+            root(
                 div.cssClass("p-fileupload-basic-content")(
                     toChild(chooseEl),
                     toChild(fileLabelEl),
                     toChild(file)
                 )
-            )
-    end body
+            ),
+            red,
+            redMsg
+        )
+    end bodyStatic
 end FileUpload
 
 object FileUpload:
     def apply(): FileUpload = new FileUpload()
+
+    /** The label text for a set of picked files: their names joined, or `Absent` for the
+      * empty state.
+      */
+    private def joinedNames(files: Seq[UI.FilePayload]): Maybe[String] =
+        if files.isEmpty then Absent else Present(files.map(_.name).mkString(", "))
+end FileUpload

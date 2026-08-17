@@ -2,6 +2,7 @@ package kyo.uic
 
 import kyo.*
 import kyo.UI.*
+import scala.annotation.targetName
 
 /** How a [[MultiSelect]] trigger renders its selection: comma-joined label text
   * (Prime's `display="comma"`, the default) or one removable [[Chip]] per
@@ -29,7 +30,7 @@ enum MultiSelectDisplay derives CanEqual:
   * and the panel stays open, exactly Prime's multiselect semantics.
   *
   * The header select-all checkbox follows PrimeVue: checked while every visible
-  * non-disabled option is selected (with `filter(true)` "visible" means the
+  * non-disabled option is selected (with `filterable(true)` "visible" means the
   * FILTERED options), unchecked otherwise — Prime renders no indeterminate
   * state here; checking selects exactly the visible enabled options (replacing
   * the whole value, like Prime), unchecking clears the selection entirely.
@@ -58,7 +59,8 @@ final case class MultiSelect[A] private (
     displayV: MultiSelectDisplay = MultiSelectDisplay.Comma,
     maxSelectedLabelsV: Maybe[Int] = Absent,
     selectedItemsLabelV: Maybe[TextValue] = Absent,
-    filterFlag: Boolean = false,
+    filterableFlag: Boolean = false,
+    filterQueryRefV: Maybe[SignalRef[String]] = Absent,
     showToggleAllFlag: Boolean = true,
     highlightOnSelectFlag: Boolean = false,
     showClearFlag: Boolean = false,
@@ -104,6 +106,7 @@ final case class MultiSelect[A] private (
     /** Binds the selection two-way to `ref`, keyed by [[optionKey]]: toggles write
       * the updated key set back, ref changes reselect the matching options.
       */
+    @targetName("valueKeys")
     def value(ref: SignalRef[Set[String]]): MultiSelect[A] = copy(valueRef = Present(ref))
 
     /** Binds the panel visibility two-way to `ref` (optional — the panel is
@@ -142,11 +145,18 @@ final case class MultiSelect[A] private (
     def selectedItemsLabel(sig: Signal[String]): MultiSelect[A] = copy(selectedItemsLabelV = Present(TextValue.Dyn(sig)))
 
     /** Renders Prime's header filter (an IconField `.p-multiselect-filter-container`
-      * with the `input.p-multiselect-filter`) filtering the options by a
-      * case-insensitive contains on the label projection; the query resets on
-      * every open. Select-all then applies to the FILTERED options (Prime).
+      * with the `input.p-multiselect-filter`) over a query the control allocates
+      * itself, filtering the options by a case-insensitive contains on the label
+      * projection; the query resets on every open. Select-all then applies to the
+      * FILTERED options (Prime). Same word and same meaning on
+      * [[Select.filterable]] and [[Listbox.filterable]].
       */
-    def filter(v: Boolean): MultiSelect[A] = copy(filterFlag = v)
+    def filterable(v: Boolean): MultiSelect[A] = copy(filterableFlag = v)
+
+    /** Renders the same header filter over a query the APP owns: typing writes
+      * `ref`, external writes re-filter the panel. Implies [[filterable]].
+      */
+    def filterQuery(ref: SignalRef[String]): MultiSelect[A] = copy(filterQueryRefV = Present(ref))
 
     /** Whether the header renders the select-all checkbox (default true —
       * Prime's `showToggleAll`).
@@ -234,12 +244,18 @@ final case class MultiSelect[A] private (
       * `onChange` it fires even when nothing was changed. The form-validation layer
       * wires its `Blur` trigger here.
       */
+    @targetName("onBlurKeys")
     def onBlur(f: Set[String] => Any < Async): MultiSelect[A] = copy(onBlurF = Present(f))
 
     /** The stable option key: [[optionKey]] if set, else the label projection. */
     private def key(a: A): String = keyF.getOrElse(labelF)(a)
 
     private def isOptionDisabled(a: A): Boolean = optionDisabledF.exists(_(a))
+
+    /** Whether the header filter renders: asked for by [[filterable]], or implied
+      * by an app-owned [[filterQuery]].
+      */
+    private def filtering: Boolean = filterableFlag || filterQueryRefV.isDefined
 
     /** The wired interaction state, allocated per mount. */
     final private case class State(
@@ -262,7 +278,11 @@ final case class MultiSelect[A] private (
                     case Present(r) => Kyo.lift(r)
                     case Absent     => Signal.initRef(false)
                 hi <- Signal.initRef(-1)
-                q  <- Signal.initRef("")
+                // Same shape as `open` above: an app-owned query ref takes over the
+                // slot the component would otherwise allocate for itself.
+                q <- filterQueryRefV match
+                    case Present(r) => Kyo.lift(r)
+                    case Absent     => Signal.initRef("")
             yield wired(open, hi, q)
         }.placeholder(stat)
     end render
@@ -467,7 +487,7 @@ final case class MultiSelect[A] private (
       */
     private def overlayPanel(current: Set[String], s: State, toggleOption: A => Any < Async)(using Frame): UI =
         val shown =
-            if filterFlag && s.qV.nonEmpty then
+            if filtering && s.qV.nonEmpty then
                 items.filter(a => labelF(a).toLowerCase.contains(s.qV.toLowerCase))
             else items
         val hiEff = if shown.isEmpty then -1 else math.min(s.hiV, shown.size - 1)
@@ -537,7 +557,7 @@ final case class MultiSelect[A] private (
                          .render
                  )
              else Nil) ++
-                (if filterFlag then
+                (if filtering then
                      List(
                          div.cssClass("p-iconfield").cssClass("p-multiselect-filter-container")(
                              toChild(

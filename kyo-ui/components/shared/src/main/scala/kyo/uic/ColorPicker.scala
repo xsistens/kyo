@@ -13,6 +13,9 @@ import kyo.UI.*
   * `div.p-colorpicker-hue` bar > `div.p-colorpicker-hue-handle`), so the
   * extracted `@primeuix` colorpicker CSS applies verbatim.
   *
+  * A [[TextFormControl]] over that hex string, so `uic.ColorPicker().bind(field)`
+  * wires value, validity, message and the blur trigger in one call.
+  *
   * Server-honest: the value is a single hex string bound to a
   * `SignalRef[String]`. HSB is DERIVED from the hex on every render (pure math
   * in [[ColorPicker.hsvOf]]) — the plane's tint, both handle positions, and the
@@ -44,10 +47,20 @@ final case class ColorPicker private (
     inlineFlag: Boolean = false,
     disabledFlag: Maybe[BoolValue] = Absent,
     anchorV: OverlayAnchor = OverlayAnchor.BottomStart,
+    invalidV: Maybe[BoolValue] = Absent,
+    invalidMsgV: Maybe[String] = Absent,
+    invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
-    onChangeF: Maybe[String => Any < Async] = Absent
-) extends Node:
+    onChangeF: Maybe[String => Any < Async] = Absent,
+    onBlurF: Maybe[String => Any < Async] = Absent,
+    idV: Maybe[String] = Absent
+) extends Node, TextFormControl:
     type Self = ColorPicker
+
+    /** Native `id` on the root — pair with `Label.forId`; the form layer stamps the bound
+      * field's id here so focus-first-invalid can target it.
+      */
+    def id(v: String): ColorPicker = copy(idV = Present(v))
 
     /** Sets a constant color (renders the plane/handles/swatch statically). */
     def value(v: String): ColorPicker = copy(valueBinding = Present(Input.Value.Const(v)))
@@ -76,10 +89,41 @@ final case class ColorPicker private (
       */
     def accessibleName(sig: Signal[String]): ColorPicker = copy(accNameV = Present(TextValue.Dyn(sig)))
 
+    /** Marks the picker invalid (`.p-invalid` + `aria-invalid`). */
+    def invalid(v: Boolean): ColorPicker = copy(invalidV = Present(BoolValue.Const(v)))
+
+    /** Reactive validity: the bound signal toggles the invalid state on emission. */
+    def invalid(sig: Signal[Boolean]): ColorPicker = copy(invalidV = Present(BoolValue.Dyn(sig)))
+
+    /** Message rendered below the picker while it is invalid (kyo extension —
+      * `div.p-uic-invalid-message`).
+      */
+    def invalidMessage(v: String): ColorPicker = copy(invalidMsgV = Present(v))
+
+    /** Reactive invalid message — `Present` shows the row and (by default) marks the
+      * picker invalid; `Absent` clears both.
+      */
+    def invalidMessage(sig: Signal[Maybe[String]]): ColorPicker = copy(invalidMsgDynV = Present(sig))
+
     /** Fired with the NEW hex after the ref write-back. */
     def onChange(f: String => Any < Async): ColorPicker = copy(onChangeF = Present(f))
 
+    /** Fires on focus loss with the current hex — unlike onChange it fires even when the
+      * color was not changed. The validation layer's Blur trigger.
+      */
+    def onBlur(f: String => Any < Async): ColorPicker = copy(onBlurF = Present(f))
+
     private def interactive: Boolean = !disabledFlag.constTrue
+
+    /** Resolves the reactive validity slots and hands `build` the `(red, message)`
+      * snapshot. Called INSIDE the overlay mount rather than around it: a reactive
+      * boundary wrapping `UI.mounted` would re-mount on every emission and close an open
+      * panel (see [[FieldInvalid.reactive]]).
+      */
+    private def withValidity(build: (Boolean, Maybe[String]) => UI)(using Frame): UI =
+        (invalidV.dynSig, invalidMsgDynV) match
+            case (Absent, Absent) => build(invalidV.constTrue, invalidMsgV)
+            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)(build)
 
     private[uic] def render(using Frame): UI =
         BoolValue.reactive(disabledFlag): d =>
@@ -167,22 +211,44 @@ final case class ColorPicker private (
 
     private def body(ref: Maybe[SignalRef[String]], fallbackHex: String)(using Frame): UI =
         if inlineFlag then
-            var root = div.cssClass("p-colorpicker").cssClass("p-component")
-            if disabledFlag.constTrue then root = root.cssClass("p-disabled")
-            accNameV match
-                case Present(TextValue.Const(n)) => root = root.aria("label", n)
-                case Present(TextValue.Dyn(s))   => root = root.aria("label", s)
-                case Absent                      => ()
-            end match
-            root(
-                toChild(
-                    div.cssClass("p-colorpicker-panel").cssClass("p-colorpicker-panel-inline")(
-                        toChild(content(ref, fallbackHex))
-                    )
+            withValidity { (red, msg) =>
+                FieldInvalid.withMessage(
+                    shellRoot(red)(
+                        toChild(
+                            div.cssClass("p-colorpicker-panel").cssClass("p-colorpicker-panel-inline")(
+                                toChild(content(ref, fallbackHex))
+                            )
+                        )
+                    ),
+                    red,
+                    msg
                 )
-            )
+            }
         else overlayBody(ref, fallbackHex)
     end body
+
+    /** The root box shared by the inline and overlay paths, with the resolved red state
+      * stamped on it.
+      */
+    private def shellRoot(red: Boolean, extraClasses: String*)(using Frame): Ast.Div =
+        var root = div.cssClass("p-colorpicker").cssClass("p-component")
+        extraClasses.foreach(c => root = root.cssClass(c))
+        idV.foreach(v => root = root.id(v))
+        if disabledFlag.constTrue then root = root.cssClass("p-disabled")
+        if red then root = root.cssClass("p-invalid").aria("invalid", "true")
+        accNameV match
+            case Present(TextValue.Const(n)) => root = root.aria("label", n)
+            case Present(TextValue.Dyn(s))   => root = root.aria("label", s)
+            case Absent                      => ()
+        end match
+        onBlurF.foreach { f =>
+            root = root.onBlur(valueBinding match
+                case Present(Input.Value.Ref(r))   => r.use(f)
+                case Present(Input.Value.Const(v)) => f(v)
+                case Absent                        => f(ColorPicker.DefaultHex))
+        }
+        root
+    end shellRoot
 
     /** The preview swatch trigger (`input.p-colorpicker-preview` per Prime — here a
       * `button` so it needs no value plumbing); its background IS the current hex.
@@ -214,9 +280,15 @@ final case class ColorPicker private (
       */
     private def overlayBody(ref: Maybe[SignalRef[String]], fallbackHex: String)(using Frame): UI =
         val staticRoot: UI =
-            div.cssClass("p-colorpicker").cssClass("p-component").cssClass("p-uic-overlay-anchor")(
-                toChild(previewSwatchOf(hex => previewSwatch(hex, ()), ref, fallbackHex))
-            )
+            withValidity { (red, msg) =>
+                FieldInvalid.withMessage(
+                    shellRoot(red, "p-uic-overlay-anchor")(
+                        toChild(previewSwatchOf(hex => previewSwatch(hex, ()), ref, fallbackHex))
+                    ),
+                    red,
+                    msg
+                )
+            }
         UI.mounted {
             for open <- Signal.initRef(false)
             yield
@@ -229,13 +301,18 @@ final case class ColorPicker private (
                     .matchWidth(false)(
                         div.cssClass("p-colorpicker-panel")(toChild(content(ref, fallbackHex)))
                     )
-                div
-                    .cssClass("p-colorpicker")
-                    .cssClass("p-component")
-                    .cssClass("p-uic-overlay-anchor")(
-                        toChild(previewSwatchOf(hex => previewSwatch(hex, toggle), ref, fallbackHex)),
-                        toChild(panel)
+                // The validity boundary sits INSIDE the mount: around it, an emission would
+                // re-mount and drop `open`, closing the panel mid-interaction.
+                withValidity { (red, msg) =>
+                    FieldInvalid.withMessage(
+                        shellRoot(red, "p-uic-overlay-anchor")(
+                            toChild(previewSwatchOf(hex => previewSwatch(hex, toggle), ref, fallbackHex)),
+                            toChild(panel)
+                        ),
+                        red,
+                        msg
                     )
+                }
         }.placeholder(staticRoot)
     end overlayBody
 end ColorPicker

@@ -17,10 +17,11 @@ import kyo.UI.*
   * the panel seeds focus on open (kyo's `data-kyo-focus-*` client contract) so
   * the keyboard works without any prior click — ArrowDown/ArrowUp move the
   * `.p-focus` highlight (disabled options skipped), Enter picks the highlighted
-  * option, Escape closes and returns focus to the trigger. `filter(true)`
+  * option, Escape closes and returns focus to the trigger. `filterable(true)`
   * renders Prime's header filter input (case-insensitive contains on the label
-  * projection); `showClear(true)` the clear affordance on the trigger while a
-  * value is set; `checkmark(true)` Prime's per-option check column.
+  * projection) over a query the select owns, `filterQuery(ref)` over one the app
+  * owns; `showClear(true)` the clear affordance on the trigger while a value is
+  * set; `checkmark(true)` Prime's per-option check column.
   *
   * Options are TYPED: `options(items)(label)` projects any `A` to its visible
   * text; `optionKey` (defaults to the label projection) supplies the stable value
@@ -44,7 +45,8 @@ final case class Select[A] private (
     valueRef: Maybe[SignalRef[String]] = Absent,
     openRefV: Maybe[SignalRef[Boolean]] = Absent,
     placeholderV: Maybe[TextValue] = Absent,
-    filterFlag: Boolean = false,
+    filterableFlag: Boolean = false,
+    filterQueryRefV: Maybe[SignalRef[String]] = Absent,
     showClearFlag: Boolean = false,
     checkmarkFlag: Boolean = false,
     emptyMessageV: Maybe[TextValue] = Absent,
@@ -133,10 +135,19 @@ final case class Select[A] private (
     def placeholder(sig: Signal[String]): Select[A] = copy(placeholderV = Present(TextValue.Dyn(sig)))
 
     /** Renders Prime's header filter (`div.p-select-header` >
-      * `input.p-select-filter`) filtering the options by a case-insensitive
-      * contains on the label projection; the query resets on every open.
+      * `input.p-select-filter`) over a query the select allocates itself,
+      * filtering the options by a case-insensitive contains on the label
+      * projection; the query resets on every open. Same word and same meaning on
+      * [[MultiSelect.filterable]] and [[Listbox.filterable]].
       */
-    def filter(v: Boolean): Select[A] = copy(filterFlag = v)
+    def filterable(v: Boolean): Select[A] = copy(filterableFlag = v)
+
+    /** Renders the same header filter over a query the APP owns: typing writes
+      * `ref`, external writes re-filter the panel. Implies [[filterable]].
+      * Server-driven option lists bind this and re-`options` on emission; the
+      * matching binding on [[Listbox.filterQuery]] takes the same shape.
+      */
+    def filterQuery(ref: SignalRef[String]): Select[A] = copy(filterQueryRefV = Present(ref))
 
     /** Renders the clear affordance on the trigger while a value is set — clears
       * the bound ref to `""` and fires `onChange("")`.
@@ -241,6 +252,11 @@ final case class Select[A] private (
 
     private def isOptionDisabled(a: A): Boolean = optionDisabledF.exists(_(a))
 
+    /** Whether the header filter renders: asked for by [[filterable]], or implied
+      * by an app-owned [[filterQuery]].
+      */
+    private def filtering: Boolean = filterableFlag || filterQueryRefV.isDefined
+
     private def interactive: Boolean = !disabledFlag && !readonlyFlag
 
     /** The wired interaction state, allocated per mount. */
@@ -265,7 +281,11 @@ final case class Select[A] private (
                     case Present(r) => Kyo.lift(r)
                     case Absent     => Signal.initRef(false)
                 hi <- Signal.initRef(-1)
-                q  <- Signal.initRef("")
+                // Same shape as `open` above: an app-owned query ref takes over the
+                // slot the component would otherwise allocate for itself.
+                q <- filterQueryRefV match
+                    case Present(r) => Kyo.lift(r)
+                    case Absent     => Signal.initRef("")
             yield wired(open, hi, q)
         }.placeholder(stat)
     end render
@@ -453,7 +473,7 @@ final case class Select[A] private (
       */
     private def overlayPanel(current: String, s: State, pick: A => State => Any < Async)(using Frame): UI =
         val shown =
-            if filterFlag && s.qV.nonEmpty then
+            if filtering && s.qV.nonEmpty then
                 items.filter(a => labelF(a).toLowerCase.contains(s.qV.toLowerCase))
             else items
         val hiEff = if shown.isEmpty then -1 else math.min(s.hiV, shown.size - 1)
@@ -495,7 +515,7 @@ final case class Select[A] private (
         // Prime wraps the filter in an IconField with a trailing search icon; the
         // sibling :not(:last-child) sheet rule pads the input for the icon.
         val header: List[UI] =
-            if filterFlag then
+            if filtering then
                 List(
                     div.cssClass("p-select-header")(
                         toChild(
