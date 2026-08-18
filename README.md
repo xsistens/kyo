@@ -326,6 +326,7 @@ The vertical an application developer assembles: HTTP services and clients, SQL 
 | [kyo-config](kyo-config/README.md)           | ✅  | ✅  | ✅     | ✅   | Type-safe config + feature flags with a percentage-rollout DSL, optional kyo-http admin and live sync      |
 | [kyo-flow](kyo-flow/README.md)               | ✅  | ✅  | ✅     | ✅   | Durable workflow engine (Temporal/Cadence/ZIO-Flow space); value-replay execution, auto-generated REST     |
 | [kyo-ui](kyo-ui/README.md)                   | ✅  | ✅  | ✅     | ✅   | Web UIs as pure values: Scala.js DOM app, server HTML-over-SSE or SSR stream with first-class reactivity   |
+| [kyo-ui-components](kyo-ui/components/README.md) | ✅  | ✅  |        |      | Ready-made controls on kyo-ui in PrimeOne markup: typed builders, form binding, generated tokens and icons |
 | [kyo-markdown](kyo-markdown/README.md)       | ✅  | ✅  | ✅     | ✅   | Markdown to a kyo-ui article tree plus a heading outline; pure, total, no third-party Markdown dependency  |
 | [kyo-i18n](kyo-i18n/README.md)               | ✅  | ✅  | ✅     | ✅   | Translate from `.ftl` bundles; active locale as a `Signal` drives reactive `t` leaves; pure Fluent subset  |
 | [kyo-ai](kyo-ai/README.md)                   | ✅  | ✅  | ✅     | ✅   | Typed LLM programs: prompts, tools, thoughts, agents, streaming, provider backends                         |
