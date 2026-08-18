@@ -378,6 +378,8 @@ lazy val kyoJVM: Project = project
         `kyo-browser`.jvm,
         `kyo-slack`.jvm,
         `kyo-ui`.jvm,
+        `kyo-ui-components`.jvm,
+        `kyo-ui-components-gen`,
         `kyo-markdown`.jvm,
         `kyo-i18n`.jvm,
         `kyo-case-app`.jvm,
@@ -457,6 +459,7 @@ lazy val kyoJS = project
         `kyo-browser`.js,
         `kyo-slack`.js,
         `kyo-ui`.js,
+        `kyo-ui-components`.js,
         `kyo-markdown`.js,
         `kyo-i18n`.js,
         `kyo-website`.js,
@@ -2934,6 +2937,47 @@ lazy val `kyo-ui` =
             `wasm-settings`,
             libraryDependencies += "org.scala-js" %%% "scalajs-dom" % "2.8.1"
         )
+
+// The component library for kyo-ui: ready-made controls (inputs, overlays, menus, tables) built
+// from kyo-ui primitives, plus the generated design tokens, icon set, and component CSS.
+//
+// Nested under kyo-ui/ rather than sitting at the repo root: it is one member of the kyo-ui family,
+// and the directory tree says so (same shape as kyo-ffi/it, kyo-test/api, kyo-compat/test, whose
+// project ids likewise stay flat and hyphenated).
+//
+// JS and JVM only, like kyo-website. JS is the real target. The JVM row costs nothing (every
+// component is platform-neutral shared source) and buys two things: server-side rendering for the
+// server-push transport, and golden-render tests that can discharge kyo effects with
+// KyoApp.Unsafe.runAndBlock, which cannot block on JS.
+lazy val `kyo-ui-components` =
+    crossProject(JSPlatform, JVMPlatform)
+        .crossType(CrossType.Full)
+        .in(file("kyo-ui/components"))
+        .dependsOn(`kyo-ui`)
+        .withKyoTest
+        .settings(`kyo-settings`)
+        .jvmSettings(mimaCheck(false))
+        .jsSettings(
+            `js-settings`,
+            // kyo.uic.form.DateCodec uses the java.time API, which on Scala.js comes from
+            // scala-java-time. Declared here so downstream JS consumers link it directly; the
+            // library ships no tzdb, since timezone DATA is the consumer's bundle-size choice.
+            libraryDependencies += "io.github.cquiroz" %%% "scala-java-time" % "2.7.0",
+            scalaJSLinkerConfig ~= { _.withModuleKind(ModuleKind.CommonJSModule) }
+        )
+
+// The code generator behind kyo-ui-components' `kyo.uic.generated` sources: parses pinned npm
+// inputs and emits per-icon defs (one per glyph, so Scala.js method-level DCE strips the path
+// strings of unused icons from downstream bundles), design tokens, and component CSS. Plain JVM,
+// never published, run by hand when the pinned inputs move. Lives in-tree so the committed
+// generated sources keep a reproducible provenance (same rationale as kyo-ffi-codegen).
+lazy val `kyo-ui-components-gen` = project
+    .in(file("kyo-ui/components/gen"))
+    .settings(
+        `kyo-settings`,
+        publish / skip := true,
+        libraryDependencies += "com.lihaoyi" %% "ujson" % "4.1.0"
+    )
 
 // The website: shared apps + page wrapper + content model + cross-platform kyo-parse Markdown
 // transpiler (DocsMarkdown in shared/, no third-party Markdown dependency). JVM side carries the

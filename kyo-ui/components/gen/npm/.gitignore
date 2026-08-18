@@ -1,0 +1,8 @@
+# The repository root ignores *.json, which would swallow the generator's pinned
+# manifest. It is an input, not an artifact: fetch.sh runs `bun install` here and
+# extract.mjs reads what that resolves, so the pin has to be committed for the
+# generated Scala under kyo/uic/generated to stay reproducible.
+!package.json
+
+# What `bun install` writes is not.
+node_modules/
