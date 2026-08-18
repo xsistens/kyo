@@ -388,6 +388,8 @@ lazy val kyoJVM: Project = project
         `kyo-browser`.jvm,
         `kyo-slack`.jvm,
         `kyo-ui`.jvm,
+        `kyo-ui-components`.jvm,
+        `kyo-ui-components-gen`,
         `kyo-markdown`.jvm,
         `kyo-i18n`.jvm,
         `kyo-case-app`.jvm,
@@ -468,6 +470,7 @@ lazy val kyoJS = project
         `kyo-browser`.js,
         `kyo-slack`.js,
         `kyo-ui`.js,
+        `kyo-ui-components`.js,
         `kyo-markdown`.js,
         `kyo-i18n`.js,
         `kyo-website`.js,
@@ -540,6 +543,7 @@ lazy val kyoNative = project
         `kyo-browser`.native,
         `kyo-slack`.native,
         `kyo-ui`.native,
+        `kyo-ui-components`.native,
         `kyo-markdown`.native,
         `kyo-i18n`.native,
         `kyo-pod`.native,
@@ -610,6 +614,7 @@ lazy val kyoWasm = project
         `kyo-browser`.wasm,
         `kyo-slack`.wasm,
         `kyo-ui`.wasm,
+        `kyo-ui-components`.wasm,
         `kyo-markdown`.wasm,
         `kyo-i18n`.wasm,
         `kyo-test-api`.wasm,
@@ -2984,6 +2989,50 @@ lazy val `kyo-ui` =
             `wasm-settings`,
             libraryDependencies += "org.scala-js" %%% "scalajs-dom" % "2.8.1"
         )
+
+// The component library for kyo-ui: ready-made controls (inputs, overlays, menus, tables) built
+// from kyo-ui primitives, plus the generated design tokens, icon set, and component CSS.
+//
+// Nested under kyo-ui/ rather than sitting at the repo root: it is one member of the kyo-ui family,
+// and the directory tree says so (same shape as kyo-ffi/it, kyo-test/api, kyo-compat/test, whose
+// project ids likewise stay flat and hyphenated).
+//
+// Every platform kyo-ui has, because every component is platform-neutral shared source: no
+// `scala.scalajs` facade anywhere, no per-platform directory, the DOM is kyo-ui's concern. Scala.js
+// is the real target and gets a row per linker backend (the Wasm row is that same source linked to
+// WasmGC); the JVM and Native rows carry server-side rendering for the server-push transport, so a
+// server on either can render the same components a browser mounts.
+lazy val `kyo-ui-components` =
+    crossProject(JSPlatform, JVMPlatform, NativePlatform, WasmPlatform)
+        .crossType(CrossType.Full)
+        .in(file("kyo-ui/components"))
+        .dependsOn(`kyo-ui`)
+        .withKyoTest
+        .settings(`kyo-settings`)
+        .jvmSettings(mimaCheck(false))
+        // `openssl-native-settings` as in kyo-ui: kyo-net's bundled TLS shim compiles into THIS binary,
+        // and nativeConfig does not cross a project dependency, so without the system OpenSSL flags the
+        // test link dies on undefined SSL_* symbols.
+        .nativeSettings(`native-settings`, `openssl-native-settings`)
+        .jsSettings(
+            `js-settings`,
+            scalaJSLinkerConfig ~= { _.withModuleKind(ModuleKind.CommonJSModule) }
+        )
+        // No ModuleKind here: the Wasm backend requires ESModule, which WasmPlatform pins.
+        .wasmSettings(`wasm-settings`)
+
+// The code generator behind kyo-ui-components' `kyo.uic.generated` sources: parses pinned npm
+// inputs and emits per-icon defs (one per glyph, so Scala.js method-level DCE strips the path
+// strings of unused icons from downstream bundles), design tokens, and component CSS. Plain JVM,
+// never published, run by hand when the pinned inputs move. Lives in-tree so the committed
+// generated sources keep a reproducible provenance (same rationale as kyo-ffi-codegen).
+lazy val `kyo-ui-components-gen` = project
+    .in(file("kyo-ui/components/gen"))
+    .settings(
+        `kyo-settings`,
+        publish / skip := true,
+        libraryDependencies += "com.lihaoyi" %% "ujson" % "4.1.0"
+    )
 
 // The website: shared apps + page wrapper + content model + cross-platform kyo-parse Markdown
 // transpiler (DocsMarkdown in shared/, no third-party Markdown dependency). JVM side carries the
