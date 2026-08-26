@@ -219,6 +219,13 @@ object Theme:
       |   extracted sheet carries no rules for them. */
       |.p-datatable-tbody > tr.p-datatable-empty-message > td { text-align: center; color: var(--p-text-muted-color); }
       |.p-datatable-tbody > tr.p-datatable-row-expansion > td { background: var(--p-content-hover-background); }
+      |/* PrimeVue scrolls the container and pins the row groups via
+      |   DataTableStyle.inlineStyles (the ToggleSwitch precedent); the extracted sheet
+      |   carries only the inset and z-index half of the sticky rules. The max-height
+      |   itself stays inline, since it is the caller's value. */
+      |.p-datatable-scrollable > .p-datatable-table-container { overflow: auto; }
+      |.p-datatable-scrollable-table > .p-datatable-thead,
+      |.p-datatable-scrollable-table > .p-datatable-tfoot { position: sticky; }
       |/* GlyphSvg spans sized by the extracted component CSS scale their inner svg. */
       |span.p-select-dropdown-icon, span.p-toast-message-icon, span.p-toast-close-icon,
       |span.p-datatable-sort-icon, span.p-datatable-row-toggle-icon,

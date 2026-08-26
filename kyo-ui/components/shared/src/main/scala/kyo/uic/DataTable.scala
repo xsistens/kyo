@@ -26,10 +26,23 @@ final case class Column[A] private (
     textF: Maybe[A => String] = Absent,
     bodyF: Maybe[A => UI] = Absent,
     orderingV: Maybe[Ordering[A]] = Absent,
-    alignV: ColumnAlign = ColumnAlign.Start
+    alignV: ColumnAlign = ColumnAlign.Start,
+    footerTextV: Maybe[String] = Absent,
+    footerF: Maybe[Seq[A] => UI] = Absent
 ):
     /** Custom cell content, replacing (or standing in for) the text projection. */
     def body(f: A => UI): Column[A] = copy(bodyF = Present(f))
+
+    /** Static footer label for this column; any column carrying a footer gives the
+      * table a `tfoot`.
+      */
+    def footer(v: String): Column[A] = copy(footerTextV = Present(v), footerF = Absent)
+
+    /** Footer content computed from the rows that survive the table's global filter,
+      * across every page rather than the visible one. The table owns filtering, so an
+      * aggregate over what the reader is looking at cannot be computed by the caller.
+      */
+    def footer(f: Seq[A] => UI): Column[A] = copy(footerF = Present(f), footerTextV = Absent)
 
     /** Makes the column sortable by the projected key (header clicks cycle
       * ascending → descending → unsorted when the table has a `sort` ref).
@@ -38,6 +51,8 @@ final case class Column[A] private (
         copy(orderingV = Present(Ordering.by(f)))
 
     def align(v: ColumnAlign): Column[A] = copy(alignV = v)
+
+    private[uic] def hasFooter: Boolean = footerTextV.isDefined || footerF.isDefined
 end Column
 
 object Column:
@@ -65,6 +80,10 @@ end Column
   * The header and body rows sit in real `thead.p-datatable-thead` and
   * `tbody.p-datatable-tbody` row groups, which is what the extracted sheet's
   * row, cell, hover, selection, striping and gridline rules are scoped to.
+  * Columns carrying a [[Column.footer]] add a `tfoot.p-datatable-tfoot` summary
+  * row; `header`/`footer` are the two slots outside the table
+  * (`div.p-datatable-header` above it, `div.p-datatable-footer` below the
+  * paginator).
   *
   * Rows are TYPED and every behavior is pure `(data, ui-state refs) → markup`,
   * computed server-side at render:
@@ -82,6 +101,9 @@ end Column
   *   - `expanded(ref)` + `rowExpansionTemplate` — an expander-button column is
   *     auto-added; expanded rows are followed by a full-colspan
   *     `tr.p-datatable-row-expansion`.
+  *   - `loading(flag)` — a spinner over `.p-datatable-mask` covers the table.
+  *   - `scrollHeight(css)` — caps and scrolls the container, pinning the row
+  *     groups to its edges.
   *
   * `rowKey` supplies the stable id behind selection/expansion and the
   * `onRowClick` payload. It is REQUIRED in practice whenever any of those is
@@ -110,7 +132,11 @@ final case class DataTable[A] private (
     emptyMessageV: Maybe[TextValue] = Absent,
     onRowClickF: Maybe[String => Any < Async] = Absent,
     accNameV: Maybe[TextValue] = Absent,
-    accNameRefV: Maybe[String] = Absent
+    accNameRefV: Maybe[String] = Absent,
+    headerV: Maybe[UI] = Absent,
+    footerV: Maybe[UI] = Absent,
+    loadingV: Maybe[BoolValue] = Absent,
+    scrollHeightV: Maybe[String] = Absent
 ) extends Node:
     type Self = DataTable[A]
 
@@ -190,6 +216,31 @@ final case class DataTable[A] private (
 
     /** `aria-labelledby` id reference for the table. */
     def accessibleNameRef(v: String): DataTable[A] = copy(accNameRefV = Present(v))
+
+    /** Toolbar slot above the table (`div.p-datatable-header`) — the place for a
+      * global-filter input, a title, or action buttons.
+      */
+    def header(ui: UI): DataTable[A] = copy(headerV = Present(ui))
+
+    /** Slot below the table and the paginator (`div.p-datatable-footer`). For per
+      * column summary cells use [[Column.footer]], which renders a real `tfoot`.
+      */
+    def footer(ui: UI): DataTable[A] = copy(footerV = Present(ui))
+
+    /** Busy state: a spinner over a dimming mask (`.p-datatable-mask`) covers the
+      * table while data is being fetched.
+      */
+    def loading(v: Boolean): DataTable[A] = copy(loadingV = Present(BoolValue.Const(v)))
+
+    /** Reactive busy state — bind to the data-fetch in-flight signal; the mask toggles
+      * in its own sub-region without re-rendering the rows.
+      */
+    def loading(sig: Signal[Boolean]): DataTable[A] = copy(loadingV = Present(BoolValue.Dyn(sig)))
+
+    /** Caps the table container at a CSS length and scrolls it, pinning the `thead`
+      * (and the `tfoot`, when columns carry footers) to the container edges.
+      */
+    def scrollHeight(v: String): DataTable[A] = copy(scrollHeightV = Present(v))
 
     // ---- render ----
 
@@ -287,7 +338,17 @@ final case class DataTable[A] private (
                 )
             else paged.zipWithIndex.flatMap((a, i) => dataRow(a, i, sel, exp, colCount))
 
+        // The footer aggregates over the FILTERED rows, not the visible page: a
+        // column total that changed when the reader turned the page would be wrong.
+        val footGroup: List[UI] =
+            if !cols.exists(_.hasFooter) then Nil
+            else
+                val leadingTds: List[UI] = List.fill(colCount - cols.length)(td)
+                val footRow: UI          = tr((leadingTds ++ cols.map(footerCell(_, sorted))).map(toChild)*)
+                List(tfoot.cssClass("p-datatable-tfoot")(toChild(footRow)))
+
         var tbl = table.cssClass("p-datatable-table")
+        if scrollHeightV.isDefined then tbl = tbl.cssClass("p-datatable-scrollable-table")
         accNameV match
             case Present(TextValue.Const(v)) => tbl = tbl.aria("label", v)
             case Present(TextValue.Dyn(s))   => tbl = tbl.aria("label", s)
@@ -295,9 +356,18 @@ final case class DataTable[A] private (
         end match
         accNameRefV.foreach(v => tbl = tbl.aria("labelledby", v))
         val tableEl: UI = tbl(
-            toChild(thead.cssClass("p-datatable-thead")(toChild(headRow))),
-            toChild(tbody.cssClass("p-datatable-tbody")(bodyRows.map(toChild)*))
+            (List[UI](
+                thead.cssClass("p-datatable-thead")(toChild(headRow)),
+                tbody.cssClass("p-datatable-tbody")(bodyRows.map(toChild)*)
+            ) ++ footGroup).map(toChild)*
         )
+
+        var container = div.cssClass("p-datatable-table-container")
+        scrollHeightV.foreach(h => container = container.style(_.maxHeight(CssValue.length(h))))
+        val containerEl: UI = container(toChild(tableEl))
+
+        val headerSlot: List[UI] = headerV.toList.map(h => div.cssClass("p-datatable-header")(toChild(h)))
+        val footerSlot: List[UI] = footerV.toList.map(f => div.cssClass("p-datatable-footer")(toChild(f)))
 
         var root = div.cssClass("p-datatable").cssClass("p-component")
         // Prime: hoverable whenever a selection mode is set (checkbox included) or
@@ -306,15 +376,52 @@ final case class DataTable[A] private (
             root = root.cssClass("p-datatable-hoverable")
         if stripedFlag then root = root.cssClass("p-datatable-striped")
         if gridlinesFlag then root = root.cssClass("p-datatable-gridlines")
+        if scrollHeightV.isDefined then root = root.cssClass("p-datatable-scrollable")
         sizeV match
             case Size.Small  => root = root.cssClass("p-datatable-sm")
             case Size.Large  => root = root.cssClass("p-datatable-lg")
             case Size.Normal => ()
         end match
         root(
-            (rowKeyCard ++ ((div.cssClass("p-datatable-table-container")(toChild(tableEl)): UI) :: paginatorUI)).map(toChild)*
+            (rowKeyCard ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
         )
     end body
+
+    /** The busy mask: Prime's absolute `.p-datatable-mask` composed with the dimming
+      * `.p-overlay-mask` (the mask's own `position: fixed` loses to the datatable
+      * rule), holding the spinner. The DataView precedent.
+      */
+    private def loadingMask(using Frame): List[UI] =
+        def maskDiv: UI =
+            div
+                .cssClass("p-datatable-mask")
+                .cssClass("p-overlay-mask")(
+                    toChild(ProgressSpinner().size(Size.Small).accessibleName("Loading").render)
+                )
+        loadingV match
+            case Present(BoolValue.Const(true))  => List(maskDiv)
+            case Present(BoolValue.Dyn(sig))     => List(sig.render(b => if b then maskDiv else UI.empty))
+            case Present(BoolValue.Const(false)) => Nil
+            case Absent                          => Nil
+        end match
+    end loadingMask
+
+    /** One `tfoot` cell. Columns without a footer still render an empty `td` so the
+      * footer row keeps the column grid.
+      */
+    private def footerCell(c: Column[A], inFilter: List[A])(using Frame): UI =
+        var cell = td
+        c.alignV match
+            case ColumnAlign.Center => cell = cell.cssClass("p-uic-dt-center")
+            case ColumnAlign.End    => cell = cell.cssClass("p-uic-dt-end")
+            case ColumnAlign.Start  => ()
+        end match
+        val content: List[UI] = (c.footerTextV, c.footerF) match
+            case (Present(t), _) => List(span.cssClass("p-datatable-column-footer")(t))
+            case (_, Present(f)) => List(span.cssClass("p-datatable-column-footer")(toChild(f(inFilter))))
+            case _               => Nil
+        cell(content.map(toChild)*)
+    end footerCell
 
     /** The loud card rendered above the table when per-row IDENTITY is in use but
       * [[rowKey]] is unset (see [[KeyDiagnostics]]).

@@ -1287,6 +1287,55 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "DataTable header/footer slots, column footers, loading mask and scroll height render Prime anatomy" in {
+        final case class Item(id: String, name: String, price: Int)
+        val items = List(Item("a", "Alpha", 10), Item("b", "Beta", 20), Item("c", "Gamma", 30))
+        def render(query: String, table: uic.DataTable[Item])(using Frame): String < Async =
+            for
+                q   <- Signal.initRef(query)
+                out <- UI.runRender(table.globalFilter(q).render).take(1).run
+            yield out.mkString
+
+        val base = uic.DataTable[Item]()
+            .rows(items)
+            .rowKey(_.id)
+            .columns(
+                uic.Column[Item]("Name")(_.name).footer("Total"),
+                uic.Column[Item]("Price")(_.price.toString)
+                    .align(uic.ColumnAlign.End)
+                    .footer(rs => span(rs.map(_.price).sum.toString))
+            )
+        for
+            all      <- render("", base.header(p("toolbar")).footer(p("3 items")))
+            filtered <- render("alpha", base)
+            busy     <- render("", base.loading(true))
+            idle     <- render("", base.loading(false))
+            scrolled <- render("", base.scrollHeight("240px"))
+        yield
+            assert(groupTag("tfoot", "p-datatable-tfoot").findFirstIn(all).isDefined, "columns with a footer add a tfoot")
+            assert(all.contains("p-datatable-column-footer"), "footer cell content class")
+            assert(all.contains(">Total<"), "static column footer label")
+            assert(all.contains(">60<"), "computed column footer aggregates every row")
+            assert(all.contains("class=\"p-datatable-header\""), "header slot wrapper")
+            assert(all.contains("toolbar"), "header slot content")
+            assert(all.contains("class=\"p-datatable-footer\""), "footer slot wrapper")
+            assert(all.contains("3 items"), "footer slot content")
+            // The table owns filtering, so the aggregate has to follow the filter
+            // rather than the caller's unfiltered list.
+            assert(filtered.contains(">10<"), "computed footer aggregates the FILTERED rows")
+            assert(!filtered.contains(">60<"), "filtered-out rows leave the aggregate")
+            assert(!filtered.contains("class=\"p-datatable-header\""), "no header slot without one bound")
+            assert(busy.contains("p-datatable-mask"), "loading renders Prime's mask")
+            assert(busy.contains("p-overlay-mask"), "mask dims through the shared overlay skin")
+            assert(busy.contains("p-progressspinner"), "mask holds the spinner")
+            assert(!idle.contains("p-datatable-mask"), "loading(false) renders no mask")
+            assert(scrolled.contains("p-datatable-scrollable"), "scroll height marks the root scrollable")
+            assert(scrolled.contains("p-datatable-scrollable-table"), "and the table, which pins the row groups")
+            assert(scrolled.contains("max-height: 240px"), "container capped at the given length")
+            assert(!all.contains("p-datatable-scrollable"), "no scroll classes without a scroll height")
+        end for
+    }
+
     "Tabs renders Prime's compound anatomy and shows only the selected tab's content" in {
         for
             html <-

@@ -885,6 +885,8 @@ val productTable: UI < Async =
 
 Sorting is opt-in per column through `sortBy`, and the header click cycle (ascending, descending, unsorted) needs a `sort` ref on the table to persist. Row expansion pairs `expanded(ref)` with `rowExpansionTemplate`.
 
+Around the rows sit four pieces of chrome. `header(ui)` and `footer(ui)` are free slots, above the table and below the paginator, which is where a filter box or a record count goes. `Column.footer` is a different thing: it renders a real `tfoot` row aligned to the column grid, and its computed form `footer(rows => ...)` receives the rows that survived the global filter, across every page rather than the visible one. That distinction is load-bearing, because the table owns filtering: a column total computed by the caller from its own list would disagree with what the reader is looking at. `loading(flag)` covers the table with a spinner mask, and `scrollHeight("240px")` caps the container and pins the header row group to its top edge while the body scrolls under it.
+
 ### Recursive shapes
 
 `TreeTable[A]` is `DataTable`'s columns over recursive nodes, `Tree` is the plain hierarchy, and `OrganizationChart` is the top-down box diagram. All three bind selection as a `SignalRef[Set[String]]` of node keys, and all three bind their open state through `expanded(ref)` in the same currency and the same polarity, so one ref moves between them without inverting.
