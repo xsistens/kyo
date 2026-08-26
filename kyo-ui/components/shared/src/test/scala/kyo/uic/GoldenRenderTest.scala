@@ -4197,6 +4197,7 @@ class GoldenRenderTest extends UicTest:
         yield
             assert(expanded.contains("p-organizationchart"), "root class")
             assert(expanded.contains("p-organizationchart-table"), "table-based layout")
+            assert(expanded.contains("<tbody"), "every nested table puts its rows in a real row group")
             assert(expanded.contains("p-organizationchart-node"), "node box class")
             assert(expanded.contains("p-organizationchart-node-selectable"), "selectable node class")
             assert(expanded.contains("p-organizationchart-node-selected"), "selected node class")
@@ -4272,7 +4273,11 @@ class GoldenRenderTest extends UicTest:
         )
         assert(extra.contains(".p-uic-tt-toggle-hidden"), "leaf toggler visibility class")
         assert(extra.contains(".p-uic-oc-hidden"), "orgchart collapsed visibility class")
-        assert(extra.contains(".p-organizationchart-table td"), "orgchart cell re-scope")
+        assert(!extra.contains(".p-organizationchart-table td"), "orgchart cell re-scope retired (real tbody)")
+        assert(
+            uic.Theme.primeCss.contains(".p-organizationchart-table > tbody > tr > td"),
+            "generated orgchart cell rule reachable through the real tbody"
+        )
         assert(extra.contains(".p-treetable-table-container { overflow: auto; }"), "treetable inlineStyles expressed")
         assert(uic.Theme.primeCss.contains(".p-accordionheader"), "extracted accordion sheet present")
         assert(uic.Theme.primeCss.contains(".p-orderlist-controls"), "extracted orderlist sheet present")

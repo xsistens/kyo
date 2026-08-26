@@ -44,9 +44,8 @@ final case class OrgChartNode(
   * one the chart is static, which is Prime's `collapsible=false`.
   *
   * Selection (`Single`/`Multiple` + `selected` ref) follows the Tree contract.
-  * DOM deviation (documented): kyo-ui has no `<tbody>` factory, so rows are
-  * direct `<tr>` children and the tbody-scoped cell rule is re-expressed in the
-  * `.p-uic-*` remainder.
+  * Every nested table puts its rows in a real `tbody`, which is what the sheet's
+  * `.p-organizationchart-table > tbody > tr > td` cell rule is scoped to.
   */
 final case class OrganizationChart private (
     rootNode: Maybe[OrgChartNode] = Absent,
@@ -171,7 +170,9 @@ final case class OrganizationChart private (
 
                 List(downRow, linesRow, childrenRow)
 
-        table.cssClass("p-organizationchart-table")((nodeRow :: subtreeRows).map(toChild)*)
+        table.cssClass("p-organizationchart-table")(
+            toChild(tbody((nodeRow :: subtreeRows).map(toChild)*))
+        )
     end renderNode
 
     /** A toggle press flips the node in the bound `expanded` set, then fires
