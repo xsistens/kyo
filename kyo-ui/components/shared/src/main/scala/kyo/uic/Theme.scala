@@ -219,6 +219,19 @@ object Theme:
       |   extracted sheet carries no rules for them. */
       |.p-datatable-tbody > tr.p-datatable-empty-message > td { text-align: center; color: var(--p-text-muted-color); }
       |.p-datatable-tbody > tr.p-datatable-row-expansion > td { background: var(--p-content-hover-background); }
+      |/* Group header and footer rows are template slots too. The header lays its cell
+      |   out as a row so the collapse toggle sits beside the content; the extracted
+      |   sheet's sticky rule for it carries no offset, since PrimeVue measures the
+      |   thead height in JS to place it. */
+      |.p-datatable-tbody > tr.p-datatable-row-group-header > td {
+      |  display: flex; align-items: center; gap: 0.5rem;
+      |  font-weight: var(--p-datatable-column-title-font-weight);
+      |  background: var(--p-content-hover-background);
+      |}
+      |.p-datatable-tbody > tr.p-datatable-row-group-footer > td {
+      |  font-weight: var(--p-datatable-column-footer-font-weight);
+      |  background: var(--p-datatable-footer-cell-background);
+      |}
       |/* PrimeVue scrolls the container and pins the row groups via
       |   DataTableStyle.inlineStyles (the ToggleSwitch precedent); the extracted sheet
       |   carries only the inset and z-index half of the sticky rules. The max-height

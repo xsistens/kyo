@@ -50,6 +50,51 @@ argument is typed. Two things that do NOT work, both tried:
   per-element conversion; the lift has to be a `Conversion` on the sequence as a whole,
   in the element type's companion so it needs no import.
 
+The same shape carries `groupBy(uic.group(_.category))` (`GroupScope[A]`), with one
+difference that matters: `column` takes the header first and reads `A` from the `using`
+clause between its two lists, but a grouping level's first real parameter IS the
+projection, so its `using` clause has to come FIRST (`def group[A](using GroupScope[A])(key:
+A => String)`). Put it after and `A` is still undetermined when `_.category` is typed.
+
+A carrier shared by two components (`Column`, by `DataTable` and `TreeTable`) offers its
+whole setter surface to both. Gate the ones a host cannot honor with a covariant PHANTOM
+kind on the carrier (`Column[A, +K <: FlatOnly]`): the flat-only setters return
+`Column[A, FlatOnly]`, and the narrow host asks for evidence (`AnyTableColumn[K]`). Two
+things this buys that a plain subtype bound does not:
+
+- The error message. With `columns(cs: ColumnOf[A, AnyTable]*)` the mismatch makes the
+  compiler retype the argument without an expected type, the scope is never established,
+  and the failure surfaces as `No given instance of ColumnScope[A]`. With the evidence as
+  a separate `using` after the varargs, the arguments type fine, `K` is solved, and the
+  failure is the evidence's own `@implicitNotFound` message.
+- A cast-free store. Let the evidence carry the coercion (`private[uic] def widen`), since
+  `K = AnyTable` is proven at the call site but not at the copy site.
+
+More than one fact fits in that ONE phantom slot, as a subtyping lattice rather than as
+extra parameters. `Column` carries both "which tables take it" and "does it have a text
+projection" in four traits (`TextAnyTable <: AnyTable <: FlatOnly`, `TextAnyTable <:
+TextFlatOnly <: FlatOnly`), which is what lets the bare `rowSpan` require `K <:<
+TextFlatOnly`. Two consequences to know:
+
+- Because `Column` is covariant in the kind, a caller can always FORGET a fact: a prepared
+  list still annotates `Seq[Column[R, AnyTable]]` even though its elements are
+  `TextAnyTable`. That is what keeps the extra fact free.
+- A setter cannot REMOVE one component of the kind and keep another (`footer` has to drop
+  `AnyTable`, so it drops the text fact with it). A match type would express it and does
+  not compile: it puts `K` in an invariant position, which a covariant parameter forbids.
+  So flat-only setters reset the kind, and the ORDER matters, which the message says.
+
+Also: an implicit failure INSIDE a `columns(...)` argument is reported against the
+`ColumnScope`, not against the constraint that actually failed, for the retype reason
+above. `HasText`'s own `@implicitNotFound` only shows for a standalone column, so
+`ColumnScope`'s message has to name both causes.
+
+`typeCheck`/`typeCheckFailure` results are baked at TEST-compile time. A change to the
+main sources alone may leave them stale: a snippet the real compiler now rejects can still
+report green (observed while adding this gate, `touch` on the test file does not help
+either, since bloop hashes content). After changing a gated signature, edit the test file
+or clean the test module before trusting the suite.
+
 ## Self-addressing: the Commands channel
 
 `UI.commands` (`Env.get[UI.Commands]`) is the escape hatch for the two things a

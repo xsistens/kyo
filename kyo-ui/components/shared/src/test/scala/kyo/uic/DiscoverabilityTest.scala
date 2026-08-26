@@ -584,6 +584,105 @@ def y(using Frame) =
         )
     }
 
+    "grouping levels read the row type from the table, and a merged column is marked on itself" in {
+        typeCheck(
+            preamble +
+                """final case class G(id: String, category: String, brand: String, price: Int)
+def x(open: SignalRef[Set[uic.GroupPath]])(using Frame) =
+  uic.DataTable[G]()
+    .rows(Seq(G("1", "A", "B", 1)))
+    .rowKey(_.id)
+    .columns(
+      uic.column("Category")(_.category).rowSpan,
+      uic.column("Brand").body(g => span(g.brand)).rowSpan(_.brand),
+      uic.column("Price")(_.price.toString)
+    )
+    .groupBy(
+      uic.group(_.category).header((path, rows) => span(s"${path.key} (${rows.size})")),
+      uic.group(_.brand).showHeader(false).footer((_, rows) => span(rows.map(_.price).sum.toString))
+    )
+    .expandedGroups(open)
+// A prepared level list still splats, the same way a prepared column list does.
+def shared(using Frame): Seq[uic.RowGroup[G]] = Seq(uic.RowGroup[G, String](_.category))
+def y(using Frame) = uic.DataTable[G]().groupBy(shared*)"""
+        )
+        // Outside a groupBy(...) call there is no scope to read the row type from.
+        typeCheckFailure(
+            preamble +
+                """final case class G(category: String)
+def x(using Frame) = uic.group((g: G) => g.category)"""
+        )
+        // The merged column is a marker on a column the table has, so there is no name to
+        // get wrong and no mode enum naming one.
+        typeCheckFailure(preamble + """def x = uic.RowGroupMode.Subheader""")
+        typeCheckFailure(preamble + """def x = uic.DataTable[String]().rowGroupMode(uic.RowGroupMode.Subheader)""")
+        typeCheckFailure(preamble + """def x = uic.DataTable[String]().groupBy(identity)""")
+        typeCheckFailure(preamble + """def x = uic.DataTable[String]().groupRowsBy("category")""")
+        // The argument-less form merges by the column's own text projection, so a text
+        // column never writes the same lambda twice. A body-only one has nothing to merge
+        // by, and the kind carries that fact, so the shape does not compile.
+        typeCheck(preamble + """def x(using Frame) = uic.DataTable[String]().columns(uic.column("N")(identity).rowSpan)""")
+        typeCheckFailure(
+            preamble +
+                """final case class G(id: String, name: String)
+def x(using Frame) = uic.DataTable[G]().columns(uic.column("N").body(g => span(g.name)).rowSpan)"""
+        )
+        // A flat-only option drops the projection from the kind, so the short form has to
+        // come first. The explicit key works in either order.
+        typeCheckFailure(
+            preamble + """def x(using Frame) = uic.DataTable[String]().columns(uic.column("N")(identity).footer("T").rowSpan)"""
+        )
+        typeCheck(
+            preamble + """def x(using Frame) = uic.DataTable[String]().columns(uic.column("N")(identity).rowSpan.footer("T"))"""
+        )
+        // A TreeTable still takes both a text column and a body-only one.
+        typeCheck(
+            preamble +
+                """final case class G(name: String)
+def x(using Frame) = uic.TreeTable[G]().columns(uic.column("N")(_.name), uic.column("B").body(g => span(g.name)))"""
+        )
+        // The merge key is never rendered, only compared, so it is any type the compiler
+        // will compare. The group key is rendered, and labels itself through toString.
+        typeCheck(
+            preamble +
+                """final case class G(id: String, year: Int, tier: Boolean)
+def x(using Frame) =
+  uic.DataTable[G]()
+    .columns(
+      uic.column("Year")(_.year.toString).rowSpan(_.year),
+      uic.column("Tier")(_.tier.toString).rowSpan(g => (g.year, g.tier))
+    )
+    .groupBy(uic.group(_.year), uic.group(_.tier))"""
+        )
+        // This build runs strict equality, so a key with no CanEqual is not a key.
+        typeCheckFailure(
+            preamble +
+                """final class Wrapped(val v: Int)
+final case class G(w: Wrapped)
+def x(using Frame) = uic.DataTable[G]().columns(uic.column("W")(_.w.v.toString).rowSpan(_.w))"""
+        )
+        typeCheckFailure(preamble + """def x(using Frame) = uic.DataTable[String]().groupHeader((k, rs) => span(k))""")
+        // Expansion is keyed by path, not by a bare key, and the two are different types.
+        typeCheckFailure(
+            preamble + """def x(r: SignalRef[Set[String]]) = uic.DataTable[String]().expandedGroups(r)"""
+        )
+        // Grouping is a flat-table feature; a TreeTable's rows already carry a hierarchy.
+        typeCheckFailure(preamble + """def x(using Frame) = uic.TreeTable[String]().groupBy(uic.group(identity))""")
+        // Column is shared with DataTable, but its kind parameter is not: footer and rowSpan
+        // return a FlatOnly column, and TreeTable.columns asks for AnyTableColumn evidence,
+        // which only AnyTable has. The shared carrier stops at the host that cannot honor it.
+        typeCheckFailure(
+            preamble + """def x(using Frame) = uic.TreeTable[String]().columns(uic.column("N")(identity).rowSpan(identity))"""
+        )
+        typeCheckFailure(
+            preamble + """def x(using Frame) = uic.TreeTable[String]().columns(uic.column("N")(identity).footer("T"))"""
+        )
+        // A DataTable takes both kinds, mixed in one call.
+        typeCheck(
+            preamble + """def x(using Frame) = uic.DataTable[String]().columns(uic.column("N")(identity).rowSpan(identity), uic.column("M")(identity))"""
+        )
+    }
+
     "emptyContent takes a String, a Signal or arbitrary UI; emptyMessage is retired" in {
         typeCheck(preamble + """def x(using Frame) = uic.DataTable[String]().emptyContent(span("nothing"))""")
         typeCheck(preamble + """def x(using Frame) = uic.DataView[String]().emptyContent(span("nothing"))""")
@@ -628,8 +727,11 @@ def x(using Frame) =
         typeCheck(
             preamble +
                 """final case class R(id: String, name: String)
-def shared(using Frame): Seq[uic.Column[R]] = Seq(uic.Column[R]("Name")(_.name).sortBy(_.name))
-def x(using Frame) = uic.DataTable[R]().columns(shared*)"""
+def shared(using Frame): Seq[uic.Column[R, uic.AnyTable]] = Seq(uic.Column[R]("Name")(_.name).sortBy(_.name))
+def merged(using Frame): Seq[uic.Column[R, uic.FlatOnly]] = Seq(uic.Column[R]("Name")(_.name).rowSpan(_.name))
+def x(using Frame) = uic.DataTable[R]().columns(shared*)
+def y(using Frame) = uic.DataTable[R]().columns(merged*)
+def z(using Frame) = uic.TreeTable[R]().columns(shared*)"""
         )
         // Outside a columns(...) call there is no scope to read from.
         typeCheckFailure(

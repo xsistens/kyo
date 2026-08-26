@@ -1440,6 +1440,187 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "DataTable nests grouping levels, and a group is identified by its path, not its key" in {
+        final case class Item(id: String, category: String, brand: String, name: String, price: Int)
+        val items = List(
+            Item("1", "Watches", "Rolex", "Sub", 10),
+            Item("2", "Watches", "Rolex", "GMT", 20),
+            Item("3", "Bands", "Rolex", "Jubilee", 7),
+            Item("4", "Bands", "Casio", "Strap", 5)
+        )
+        def occurrences(html: String, needle: String): Int = needle.r.findAllIn(html).size
+
+        val base = uic.DataTable[Item]()
+            .rows(items)
+            .rowKey(_.id)
+            .columns(uic.column("Name")(_.name), uic.column("Price")(_.price.toString))
+        for
+            flat   <- renderHtml(base.render)
+            one    <- renderHtml(base.groupBy(uic.group(_.category)).render)
+            nested <- renderHtml(base.groupBy(uic.group(_.category), uic.group(_.brand)).render)
+            pathed <- renderHtml(
+                base.groupBy(
+                    uic.group(_.category),
+                    uic.group(_.brand).header((path, rows) => span(s"${path.keys.mkString("/")}:${rows.size}"))
+                ).render
+            )
+            summed <- renderHtml(
+                base.groupBy(
+                    uic.group(_.category).footer((path, rows) => span(s"${path.key} total ${rows.map(_.price).sum}")),
+                    uic.group(_.brand).showHeader(false).footer((_, rows) => span(s"sub ${rows.map(_.price).sum}"))
+                ).render
+            )
+            // Watches and Bands are open, and Rolex is open UNDER WATCHES ONLY. The Rolex
+            // sitting under Bands carries the same key and a different path, so it stays
+            // shut: that is the whole reason the ref holds paths.
+            open <-
+                for
+                    ref <- Signal.initRef(Set(
+                        uic.GroupPath("Watches"),
+                        uic.GroupPath("Bands"),
+                        uic.GroupPath("Watches", "Rolex")
+                    ))
+                    out <- UI.runRender(
+                        base.groupBy(uic.group(_.category), uic.group(_.brand)).expandedGroups(ref).render
+                    ).take(1).run
+                yield out.mkString
+        yield
+            val headerRow = groupTag("tr", "p-datatable-row-group-header")
+            val footerRow = groupTag("tr", "p-datatable-row-group-footer")
+            assert(headerRow.findAllIn(flat).isEmpty, "no group rows without a level")
+            assert(headerRow.findAllIn(one).size == 2, "one header row per run of the single level")
+            assert(one.contains("colspan=\"2\""), "the header cell spans the whole grid")
+            // Two categories, and three brand runs, because Rolex is split across them.
+            assert(headerRow.findAllIn(nested).size == 5, "a header row per group at every level")
+            assert(nested.indexOf(">Watches<") < nested.indexOf(">Rolex<"), "the outer level heads its groups")
+            assert(occurrences(nested, ">Rolex<") == 2, "one Rolex group per parent, not one overall")
+            assert(pathed.contains(">Watches/Rolex:2<"), "the header template sees the whole path and its rows")
+            assert(pathed.contains(">Bands/Rolex:1<"), "including for the same key under another parent")
+            // Levels close innermost first, so a level's summary sits inside its parent's.
+            assert(footerRow.findAllIn(summed).size == 5, "a summary row per group at every level")
+            assert(headerRow.findAllIn(summed).size == 2, "showHeader(false) drops that level's header rows")
+            assert(summed.contains(">sub 30<") && summed.contains(">Watches total 30<"), "each level aggregates itself")
+            assert(summed.indexOf(">sub 30<") < summed.indexOf(">Watches total 30<"), "the inner summary closes first")
+            assert(occurrences(open, "p-datatable-row-toggle-button") == 5, "every header row carries a toggle")
+            assert(open.contains(">Sub<") && open.contains(">GMT<"), "the open path renders its rows")
+            assert(!open.contains(">Jubilee<"), "the same key under another parent stays shut")
+            assert(!open.contains(">Strap<"), "and so does a sibling that was never opened")
+            assert(headerRow.findAllIn(open).size == 5, "collapsing hides rows, not the headers they hang off")
+        end for
+    }
+
+    "a merge key is any comparable type, and a group key labels itself through toString" in {
+        final case class Item(id: String, year: Int, tier: Boolean, name: String)
+        val items = List(
+            Item("1", 2024, true, "Alpha"),
+            Item("2", 2024, true, "Beta"),
+            Item("3", 2024, false, "Gamma"),
+            Item("4", 2025, false, "Delta")
+        )
+        def occurrences(html: String, needle: String): Int = needle.r.findAllIn(html).size
+
+        for
+            // An Int key, and a tuple of two fields: neither reaches a String on the way.
+            byYear <- renderHtml(
+                uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+                    uic.column("Year")(_.year.toString).rowSpan(_.year),
+                    uic.column("Name")(_.name)
+                ).render
+            )
+            byBoth <- renderHtml(
+                uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+                    uic.column("Year")(_.year.toString).rowSpan(i => (i.year, i.tier)),
+                    uic.column("Name")(_.name)
+                ).render
+            )
+            grouped <- renderHtml(
+                uic.DataTable[Item]().rows(items).rowKey(_.id)
+                    .columns(uic.column("Name")(_.name))
+                    .groupBy(uic.group(_.year), uic.group(_.tier)).render
+            )
+        yield
+            assert(byYear.contains("rowspan=\"3\""), "an Int key merges its run")
+            assert(occurrences(byYear, ">2024<") == 1, "as one cell for the three rows")
+            // The tuple splits 2024 in two, which a key that ignored `tier` would not.
+            assert(byBoth.contains("rowspan=\"2\""), "a tuple key merges by both fields")
+            assert(!byBoth.contains("rowspan=\"3\""), "so the run stops where either changes")
+            assert(occurrences(byBoth, ">2024<") == 2, "and 2024 is emitted once per tier")
+            // A level renders and identifies its key by toString, so a non-String key needs
+            // no projection of its own and a String key passes through untouched.
+            assert(grouped.contains(">2024<") && grouped.contains(">2025<"), "the Int level labels itself")
+            assert(grouped.contains(">true<") && grouped.contains(">false<"), "and so does the Boolean one")
+            assert(groupTag("tr", "p-datatable-row-group-header").findAllIn(grouped).size == 5, "two levels of groups")
+        end for
+    }
+
+    "a rowSpan column merges its runs, clipped by the merged columns left of it and by the group" in {
+        final case class Item(id: String, category: String, brand: String, name: String)
+        val items = List(
+            Item("1", "Watches", "Rolex", "Sub"),
+            Item("2", "Watches", "Rolex", "GMT"),
+            Item("3", "Bands", "Rolex", "Jubilee"),
+            Item("4", "Bands", "Casio", "Strap")
+        )
+        def occurrences(html: String, needle: String): Int = needle.r.findAllIn(html).size
+
+        for
+            // Brand alone would merge all three Rolex rows into one cell crossing the
+            // Category boundary, which is exactly the overlap the clipping prevents.
+            merged <- renderHtml(
+                uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+                    uic.column("Category")(_.category).rowSpan,
+                    uic.column("Brand")(_.brand).rowSpan,
+                    uic.column("Name")(_.name)
+                ).render
+            )
+            loose <- renderHtml(
+                uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+                    uic.column("Category")(_.category),
+                    uic.column("Brand")(_.brand).rowSpan,
+                    uic.column("Name")(_.name)
+                ).render
+            )
+            grouped <- renderHtml(
+                uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+                    uic.column("Brand")(_.brand).rowSpan,
+                    uic.column("Name")(_.name)
+                ).groupBy(uic.group(_.category)).render
+            )
+            templated <- renderHtml(
+                uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+                    uic.column("Brand").body(i => span(i.brand)).rowSpan(_.brand),
+                    uic.column("Name")(_.name)
+                ).render
+            )
+            expanded <-
+                for
+                    ref <- Signal.initRef(Set("1"))
+                    out <- UI.runRender(
+                        uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+                            uic.column("Category")(_.category).rowSpan,
+                            uic.column("Name")(_.name)
+                        ).rowExpansionTemplate(i => span(s"detail ${i.name}")).expanded(ref).render
+                    ).take(1).run
+                yield out.mkString
+        yield
+            // Category twice over two rows, and Brand once, for Rolex inside Watches.
+            assert(occurrences(merged, "rowspan=\"2\"") == 3, "each run spans exactly its own rows")
+            assert(!merged.contains("rowspan=\"3\""), "no span crosses the column left of it")
+            assert(occurrences(merged, ">Rolex<") == 2, "Rolex merges within a category, not across two")
+            assert(occurrences(merged, ">Casio<") == 1, "a run of one row is emitted plainly")
+            assert(!merged.contains("rowspan=\"1\""), "and states no span it does not have")
+            assert(occurrences(merged, ">Sub<") == 1, "unmarked columns still render per row")
+            // Nothing to the left is merged here, so the three Rolex rows are one run.
+            assert(loose.contains("rowspan=\"3\""), "an unclipped run spans every row it covers")
+            assert(occurrences(loose, ">Rolex<") == 1, "which is one cell for all three")
+            assert(occurrences(grouped, ">Rolex<") == 2, "a group clips a run the same way a merged column does")
+            assert(templated.contains("rowspan=\"3\""), "an explicit key merges a body-only column")
+            // The span counts table ROWS, so the expansion row of an expanded row joins it.
+            assert(expanded.contains("rowspan=\"3\""), "an expanded row's expansion row joins the span")
+            assert(expanded.contains("p-datatable-row-expansion"), "the expansion row is there")
+        end for
+    }
+
     "Tabs renders Prime's compound anatomy and shows only the selected tab's content" in {
         for
             html <-
