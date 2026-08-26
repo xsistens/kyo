@@ -52,7 +52,7 @@ final case class TreeTable[A] private (
     selectionModeV: SelectionMode = SelectionMode.None,
     gridlinesFlag: Boolean = false,
     sizeV: Size = Size.Normal,
-    emptyMessageV: Maybe[TextValue] = Absent,
+    emptyContentV: Maybe[EmptyContent] = Absent,
     onNodeToggleF: Maybe[String => Any < Async] = Absent,
     onRowClickF: Maybe[String => Any < Async] = Absent,
     accNameV: Maybe[TextValue] = Absent
@@ -100,13 +100,19 @@ final case class TreeTable[A] private (
     /** Size: `.p-treetable-sm` / default / `.p-treetable-lg` cell paddings. */
     def size(v: Size): TreeTable[A] = copy(sizeV = v)
 
-    /** Text of the full-width `tr.p-treetable-empty-message` row when there are no
+    /** Content of the full-width `tr.p-treetable-empty-message` row when there are no
       * rows.
       */
-    def emptyMessage(v: String): TreeTable[A] = copy(emptyMessageV = Present(TextValue.Const(v)))
+    def emptyContent(v: String): TreeTable[A] = copy(emptyContentV = Present(EmptyContent.const(v)))
 
-    /** Reactive variant — re-renders the empty message in place on signal emission. */
-    def emptyMessage(sig: Signal[String]): TreeTable[A] = copy(emptyMessageV = Present(TextValue.Dyn(sig)))
+    /** Reactive text: re-renders the empty slot in place on signal emission. */
+    def emptyContent(sig: Signal[String]): TreeTable[A] = copy(emptyContentV = Present(EmptyContent.dyn(sig)))
+
+    /** Arbitrary UI for the empty state: an icon over a line of explanation and the
+      * button that creates the first record, rendered in the same slot the text would
+      * occupy.
+      */
+    def emptyContent(ui: UI): TreeTable[A] = copy(emptyContentV = Present(EmptyContent.ui(ui)))
 
     /** Fired with the row key after a toggler press (after the expansion write). */
     def onNodeToggle(f: String => Any < Async): TreeTable[A] = copy(onNodeToggleF = Present(f))
@@ -154,9 +160,9 @@ final case class TreeTable[A] private (
             if nodeList.isEmpty then
                 List(
                     tr.cssClass("p-treetable-empty-message")(
-                        emptyMessageV.getOrElse(TextValue.Const("No records found")) match
-                            case TextValue.Const(t) => td.colspan(math.max(cols.length, 1))(t): UI
-                            case TextValue.Dyn(s)   => s.render(t => td.colspan(math.max(cols.length, 1))(t))
+                        toChild(EmptyContent.render(emptyContentV, "No records found")(c =>
+                            td.colspan(math.max(cols.length, 1))(c)
+                        ))
                     )
                 )
             else

@@ -47,7 +47,7 @@ final case class DataView[A] private (
     footerV: Maybe[UI] = Absent,
     pageSizeV: Maybe[Int] = Absent,
     pageRef: Maybe[SignalRef[Int]] = Absent,
-    emptyMessageV: Maybe[TextValue] = Absent,
+    emptyContentV: Maybe[EmptyContent] = Absent,
     loadingV: Maybe[BoolValue] = Absent
 ) extends Node:
     type Self = DataView[A]
@@ -77,10 +77,16 @@ final case class DataView[A] private (
         copy(pageSizeV = Present(math.max(1, size)), pageRef = Present(ref))
 
     /** Text shown in the content area when there are no items. */
-    def emptyMessage(v: String): DataView[A] = copy(emptyMessageV = Present(TextValue.Const(v)))
+    def emptyContent(v: String): DataView[A] = copy(emptyContentV = Present(EmptyContent.const(v)))
 
-    /** Reactive variant — re-renders the empty message in place on signal emission. */
-    def emptyMessage(sig: Signal[String]): DataView[A] = copy(emptyMessageV = Present(TextValue.Dyn(sig)))
+    /** Reactive text: re-renders the empty slot in place on signal emission. */
+    def emptyContent(sig: Signal[String]): DataView[A] = copy(emptyContentV = Present(EmptyContent.dyn(sig)))
+
+    /** Arbitrary UI for the empty state: an icon over a line of explanation and the
+      * button that creates the first record, rendered in the same slot the text would
+      * occupy.
+      */
+    def emptyContent(ui: UI): DataView[A] = copy(emptyContentV = Present(EmptyContent.ui(ui)))
 
     /** Busy state: a spinner overlay (`.p-dataview-loading-overlay`) dims the
       * content while data is being fetched (PrimeReact's `loading`).
@@ -119,9 +125,7 @@ final case class DataView[A] private (
 
         val contentChildren: List[UI] =
             if paged.isEmpty then
-                List(emptyMessageV.getOrElse(TextValue.Const("No records found")) match
-                    case TextValue.Const(t) => div.cssClass("p-dataview-empty-message")(t): UI
-                    case TextValue.Dyn(s)   => s.render(t => div.cssClass("p-dataview-empty-message")(t)))
+                List(EmptyContent.render(emptyContentV, "No records found")(c => div.cssClass("p-dataview-empty-message")(c)))
             else template.toList.flatMap(f => paged.map(f))
 
         val headerSlot: List[UI] = headerV.toList.map(h => div.cssClass("p-dataview-header")(toChild(h)))

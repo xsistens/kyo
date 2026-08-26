@@ -167,7 +167,7 @@ object ShowcaseCompile:
                 .selectionMode(uic.SelectionMode.Multiple)
                 .checkmark(true)
                 .filterQuery(listQuery)
-                .emptyMessage("No matches")
+                .emptyContent("No matches")
                 .item("Inbox", "inbox", icon = Present(uic.Icons.inbox))
                 .item("Drafts", "drafts")
                 .items(uic.ListItem(uic.TextValue.Const("Sent"), id = "sent", additionalText = Present("12")))

@@ -628,10 +628,12 @@ val inlineList: UI < Async =
         .item("Accessories", "acc", icon = Present(uic.Icons.tag))
         .item("Fitness", "fit")
         .value(picked)
-        .emptyMessage("No matches"): UI
+        .emptyContent("No matches"): UI
 ```
 
 Its bound selection is spelled `value`, like every other picker's, because a Listbox is the always-visible member of the family rather than a different concept — and for the same reason it is a form control, so `uic.Listbox().bind(field)` works on a `Set[String]` field exactly as `MultiSelect` does.
+
+Every component that can run out of rows takes the same `emptyContent`, in three forms: a `String`, a `Signal[String]` for a locale-driven line, or arbitrary `UI`. The UI form matters more than it sounds. An empty state is rarely a sentence; it is an icon over a line of explanation and a button that creates the first record, and a component that only accepted a `String` would push that layout outside itself, where it no longer sits in the list, table body or panel the emptiness belongs to.
 
 Filtering has one word per concept across the whole family, and each component offers the ones it can mean. `filterable(Boolean)` renders the header filter over a query the component allocates itself; `filterQuery(SignalRef[String])` renders the same header over a query *you* own, which is what you want when the option list is fetched per keystroke. `Listbox`, `Select`, and `MultiSelect` all have both. `AutoComplete` has neither, because it filters by construction; what it has instead is `filterMode(FilterMode)`, the matching strategy — `StartsWithPerTerm`, `StartsWith`, `Contains`, or `None` when you pre-filter server-side.
 

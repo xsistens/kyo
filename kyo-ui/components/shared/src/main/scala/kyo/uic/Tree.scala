@@ -55,7 +55,7 @@ final case class Tree private (
     onNodeToggleF: Maybe[String => Any < Async] = Absent,
     onItemClickF: Maybe[String => Any < Async] = Absent,
     selectionModeV: SelectionMode = SelectionMode.None,
-    emptyMessageV: Maybe[TextValue] = Absent,
+    emptyContentV: Maybe[EmptyContent] = Absent,
     accessibleNameV: Maybe[TextValue] = Absent
 ) extends Node:
     type Self = Tree
@@ -85,10 +85,16 @@ final case class Tree private (
     def selectionMode(v: SelectionMode): Tree = copy(selectionModeV = v)
 
     /** Text shown as the `li.p-tree-empty-message` row when the tree has no nodes. */
-    def emptyMessage(v: String): Tree = copy(emptyMessageV = Present(TextValue.Const(v)))
+    def emptyContent(v: String): Tree = copy(emptyContentV = Present(EmptyContent.const(v)))
 
-    /** Reactive variant — re-renders the empty message in place on signal emission. */
-    def emptyMessage(sig: Signal[String]): Tree = copy(emptyMessageV = Present(TextValue.Dyn(sig)))
+    /** Reactive text: re-renders the empty slot in place on signal emission. */
+    def emptyContent(sig: Signal[String]): Tree = copy(emptyContentV = Present(EmptyContent.dyn(sig)))
+
+    /** Arbitrary UI for the empty state: an icon over a line of explanation and the
+      * button that creates the first record, rendered in the same slot the text would
+      * occupy.
+      */
+    def emptyContent(ui: UI): Tree = copy(emptyContentV = Present(EmptyContent.ui(ui)))
 
     /** `aria-label` for the tree. */
     def accessibleName(v: String): Tree = copy(accessibleNameV = Present(TextValue.Const(v)))
@@ -129,10 +135,9 @@ final case class Tree private (
         val nodes = nodeList.map(n => renderNode(n, exp, sel))
         val emptyRow: List[UI] =
             if nodeList.isEmpty then
-                emptyMessageV.toList.map {
-                    case TextValue.Const(t) => li.cssClass("p-tree-empty-message").role("presentation")(t): UI
-                    case TextValue.Dyn(s)   => s.render(t => li.cssClass("p-tree-empty-message").role("presentation")(t))
-                }
+                EmptyContent.whenSet(emptyContentV)(c =>
+                    li.cssClass("p-tree-empty-message").role("presentation")(c)
+                )
             else Nil
         var list = ul.cssClass("p-tree-root-children").role("tree")
         accessibleNameV match

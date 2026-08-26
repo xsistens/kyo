@@ -46,7 +46,7 @@ final case class TreeSelect private (
     openRefV: Maybe[SignalRef[Boolean]] = Absent,
     selectionModeV: SelectionMode = SelectionMode.Single,
     placeholderV: Maybe[TextValue] = Absent,
-    emptyMessageV: Maybe[TextValue] = Absent,
+    emptyContentV: Maybe[EmptyContent] = Absent,
     disabledFlag: Boolean = false,
     nameV: Maybe[String] = Absent,
     tooltipV: Maybe[TextValue] = Absent,
@@ -125,10 +125,16 @@ final case class TreeSelect private (
     /** Text of the `div.p-treeselect-empty-message` when the tree has no nodes
       * (default "No results found" — Prime's default).
       */
-    def emptyMessage(v: String): TreeSelect = copy(emptyMessageV = Present(TextValue.Const(v)))
+    def emptyContent(v: String): TreeSelect = copy(emptyContentV = Present(EmptyContent.const(v)))
 
-    /** Reactive variant — re-renders the empty message in place on signal emission. */
-    def emptyMessage(sig: Signal[String]): TreeSelect = copy(emptyMessageV = Present(TextValue.Dyn(sig)))
+    /** Reactive text: re-renders the empty slot in place on signal emission. */
+    def emptyContent(sig: Signal[String]): TreeSelect = copy(emptyContentV = Present(EmptyContent.dyn(sig)))
+
+    /** Arbitrary UI for the empty state: an icon over a line of explanation and the
+      * button that creates the first record, rendered in the same slot the text would
+      * occupy.
+      */
+    def emptyContent(ui: UI): TreeSelect = copy(emptyContentV = Present(EmptyContent.ui(ui)))
 
     def disabled(v: Boolean): TreeSelect = copy(disabledFlag = v)
 
@@ -328,9 +334,9 @@ final case class TreeSelect private (
         val panelUI: List[UI] = st.toList.map { (open, expRef) =>
             val treeUI: UI =
                 if nodeList.isEmpty then
-                    emptyMessageV.getOrElse(TextValue.Const("No results found")) match
-                        case TextValue.Const(t) => div.cssClass("p-treeselect-empty-message")(t): UI
-                        case TextValue.Dyn(s)   => s.render(t => div.cssClass("p-treeselect-empty-message")(t))
+                    EmptyContent.render(emptyContentV, "No results found")(c =>
+                        div.cssClass("p-treeselect-empty-message")(c)
+                    )
                 else
                     var tree = Tree()
                         .nodes(nodeList*)

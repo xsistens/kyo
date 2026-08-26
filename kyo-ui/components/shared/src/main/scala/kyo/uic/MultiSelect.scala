@@ -64,7 +64,7 @@ final case class MultiSelect[A] private (
     showToggleAllFlag: Boolean = true,
     highlightOnSelectFlag: Boolean = false,
     showClearFlag: Boolean = false,
-    emptyMessageV: Maybe[TextValue] = Absent,
+    emptyContentV: Maybe[EmptyContent] = Absent,
     disabledFlag: Boolean = false,
     nameV: Maybe[String] = Absent,
     tooltipV: Maybe[TextValue] = Absent,
@@ -189,10 +189,16 @@ final case class MultiSelect[A] private (
     /** Text of the `li.p-multiselect-empty-message` row when no options render
       * (default "No results found" — Prime's default).
       */
-    def emptyMessage(v: String): MultiSelect[A] = copy(emptyMessageV = Present(TextValue.Const(v)))
+    def emptyContent(v: String): MultiSelect[A] = copy(emptyContentV = Present(EmptyContent.const(v)))
 
-    /** Reactive variant — re-renders the empty message in place on signal emission. */
-    def emptyMessage(sig: Signal[String]): MultiSelect[A] = copy(emptyMessageV = Present(TextValue.Dyn(sig)))
+    /** Reactive text: re-renders the empty slot in place on signal emission. */
+    def emptyContent(sig: Signal[String]): MultiSelect[A] = copy(emptyContentV = Present(EmptyContent.dyn(sig)))
+
+    /** Arbitrary UI for the empty state: an icon over a line of explanation and the
+      * button that creates the first record, rendered in the same slot the text would
+      * occupy.
+      */
+    def emptyContent(ui: UI): MultiSelect[A] = copy(emptyContentV = Present(EmptyContent.ui(ui)))
 
     def disabled(v: Boolean): MultiSelect[A] = copy(disabledFlag = v)
 
@@ -550,9 +556,9 @@ final case class MultiSelect[A] private (
         }
         val emptyRow: List[UI] =
             if shown.isEmpty then
-                List(emptyMessageV.getOrElse(TextValue.Const("No results found")) match
-                    case TextValue.Const(t) => li.cssClass("p-multiselect-empty-message").role("option")(t): UI
-                    case TextValue.Dyn(s)   => s.render(t => li.cssClass("p-multiselect-empty-message").role("option")(t)))
+                List(EmptyContent.render(emptyContentV, "No results found")(c =>
+                    li.cssClass("p-multiselect-empty-message").role("option")(c)
+                ))
             else Nil
 
         val listUI: UI =
