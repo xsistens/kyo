@@ -7,6 +7,9 @@ import sbt.Keys._
   *
   * Auto-enables on any JVM project. Projects that do not want doctest must opt out with `.disablePlugins(KyoDoctestPlugin)`.
   *
+  * Only the JVM row of a cross project runs the task: `doctest` and `doctestFresh` fork a JVM, so a `js`, `wasm`, or `native`
+  * row refuses rather than handing the fork a classpath it cannot load.
+  *
   * By default validates README.md: first checks the project's own base directory, then one level up (to handle cross-project
   * JVM sub-directories such as `kyo-data/jvm/` resolving to `kyo-data/README.md`).
   *
@@ -122,16 +125,35 @@ object KyoDoctestPlugin extends AutoPlugin {
     // Sub-directory names produced by sbt-crossproject for non-JVM platforms.
     // The doctest task forks a JVM and would crash on scala-native, scala-js, or
     // scala-js/WebAssembly compiled .class files (UndefinedBehaviorError,
-    // NoClassDefFoundError, "native JS type called on the JVM"), so the aggregate
-    // skips these. "wasm" is the Scala.js WebAssembly backend
-    // (WasmPlatform.identifier), in the same JVM-incompatible category as "js".
+    // NoClassDefFoundError, "native JS type called on the JVM"), so neither the
+    // aggregate nor a direct invocation runs on these. "wasm" is the Scala.js
+    // WebAssembly backend (WasmPlatform.identifier), in the same JVM-incompatible
+    // category as "js".
     private val nonJvmCrossDirs = Set("native", "js", "wasm")
+
+    private def isNonJvmRow(base: File): Boolean = nonJvmCrossDirs.contains(base.getName)
+
+    /** Refuses `task` on a platform row the fork cannot load, pointing at the row that can.
+      *
+      * The aggregate command filters these rows out, so nothing reaches this in a normal run. A
+      * direct `<project>JS/doctest` does, and without the refusal it forks a JVM onto Scala.js
+      * artifacts and dies inside the runner with a NoClassDefFoundError that names a kyo class
+      * rather than the mistake. Refusing keeps the diagnosis at the call site.
+      */
+    private def nonJvmRowRefusal(task: String, base: File): MessageOnlyException = {
+        val row = base.getName
+        new MessageOnlyException(
+            s"$task does not run on the '$row' row of a cross project. The task forks a JVM, and this " +
+                s"row's classpath carries $row artifacts a JVM cannot load. The JVM row validates the same " +
+                s"Markdown: run its $task instead."
+        )
+    }
 
     private def projectsWithDoctest(state: State): Seq[ProjectRef] = {
         val structure = Project.extract(state).structure
         structure.allProjectRefs.filter { ref =>
             structure.allProjects.find(_.id == ref.project).exists { p =>
-                p.autoPlugins.contains(KyoDoctestPlugin) && !nonJvmCrossDirs.contains(p.base.getName)
+                p.autoPlugins.contains(KyoDoctestPlugin) && !isNonJvmRow(p.base)
             }
         }
     }
@@ -219,7 +241,31 @@ object KyoDoctestPlugin extends AutoPlugin {
         // compilation) size themselves to that number. Keeps a fork's CPU
         // contribution bounded to ~2 cores regardless of the host's core count.
         doctestForkJavaOptions := Seq("-Xmx8G", "-Xss10M", "-XX:ActiveProcessorCount=2"),
-        doctest := Def.task {
+        doctest := Def.taskDyn {
+            val base = baseDirectory.value
+            if (isNonJvmRow(base)) Def.task[Unit](throw nonJvmRowRefusal("doctest", base))
+            else doctestBody
+        }.value,
+        doctestFresh := Def.taskDyn {
+            val base = baseDirectory.value
+            if (isNonJvmRow(base)) Def.task[Unit](throw nonJvmRowRefusal("doctestFresh", base))
+            else doctestFreshBody
+        }.value,
+        doctestClean := {
+            val log      = streams.value.log
+            val cacheDir = doctestCacheDir.value
+            if (cacheDir.exists()) {
+                IO.delete(cacheDir)
+                log.info(s"doctest: cleaned cache at $cacheDir")
+            } else {
+                log.info(s"doctest: cache dir $cacheDir does not exist, nothing to clean")
+            }
+        }
+    )
+
+    /** The validating run, reached only on a row whose classpath the fork can load. */
+    private def doctestBody: Def.Initialize[Task[Unit]] =
+        Def.task {
             val log         = streams.value.log
             val sources     = doctestSources.value
             val baseCp      = (Test / fullClasspath).value.files
@@ -248,8 +294,11 @@ object KyoDoctestPlugin extends AutoPlugin {
                 writeCache = true,
                 log = log
             )
-        }.tag(DoctestTag).value,
-        doctestFresh := Def.task {
+        }.tag(DoctestTag)
+
+    /** The same run against a throwaway cache, so nothing is read from or written to the shared one. */
+    private def doctestFreshBody: Def.Initialize[Task[Unit]] =
+        Def.task {
             val log         = streams.value.log
             val sources     = doctestSources.value
             val baseCp      = (Test / fullClasspath).value.files
@@ -273,16 +322,5 @@ object KyoDoctestPlugin extends AutoPlugin {
                 writeCache = false,
                 log = log
             )
-        }.tag(DoctestTag).value,
-        doctestClean := {
-            val log      = streams.value.log
-            val cacheDir = doctestCacheDir.value
-            if (cacheDir.exists()) {
-                IO.delete(cacheDir)
-                log.info(s"doctest: cleaned cache at $cacheDir")
-            } else {
-                log.info(s"doctest: cache dir $cacheDir does not exist, nothing to clean")
-            }
-        }
-    )
+        }.tag(DoctestTag)
 }
