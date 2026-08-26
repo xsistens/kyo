@@ -69,9 +69,13 @@ final case class TreeTable[A] private (
     def rowKey(f: A => String): TreeTable[A] = copy(rowKeyF = Present(f))
 
     /** Appends columns (the DataTable [[Column]] carrier — text projection, body
-      * template, `sortBy`, alignment).
+      * template, `sortBy`, alignment). Each argument is authored against the table's
+      * row type, so [[column]] needs no type argument of its own.
       */
-    def columns(cs: Column[A]*): TreeTable[A] = copy(cols = cols ++ cs.toList)
+    def columns(cs: ColumnOf[A]*): TreeTable[A] =
+        given ColumnScope[A] = new ColumnScope[A]()
+        copy(cols = cols ++ cs.map(c => (c: Column[A])).toList)
+    end columns
 
     /** Binds expansion two-way to `ref` (a set of [[rowKey]] ids). */
     def expanded(ref: SignalRef[Set[String]]): TreeTable[A] = copy(expandedRef = Present(ref))

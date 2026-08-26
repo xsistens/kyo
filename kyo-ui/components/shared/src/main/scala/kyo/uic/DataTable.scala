@@ -64,7 +64,49 @@ object Column:
       * (No text projection also means the global filter cannot match it.)
       */
     def apply[A](header: String): Column[A] = new Column[A](header)
+
+    /** Lifts a prepared column list into the shape `columns` takes, so a table built
+      * from a reusable `Seq[Column[A]]` still splats: `columns(sharedCols*)`. A splat
+      * applies no per-element conversion, but it does apply one to the sequence.
+      */
+    given seqAsColumnsOf[A]: Conversion[Seq[Column[A]], Seq[ColumnOf[A]]] =
+        cs => cs.map(c => (_: ColumnScope[A]) ?=> c)
 end Column
+
+/** The typing context a [[column]] constructor reads its row type from.
+  *
+  * `DataTable[A].columns` and `TreeTable[A].columns` take their arguments as context
+  * functions over this type, which fixes `A` before the argument is typed. That is
+  * what makes the type argument unnecessary: `Column("Name")(_.name)` already infers
+  * `A` from the expected element type, but chaining a modifier types the receiver on
+  * its own, `A` widens to `Any`, and `_.name` stops resolving.
+  */
+final class ColumnScope[A] private[uic] ()
+
+/** A column authored inside a `columns(...)` call, reading its row type from the
+  * enclosing [[ColumnScope]].
+  */
+type ColumnOf[A] = ColumnScope[A] ?=> Column[A]
+
+/** A column whose row type comes from the table it is passed to, so it carries no type
+  * argument of its own.
+  *
+  * {{{
+  * DataTable[Product]().columns(
+  *     column("Name")(_.name).sortBy(_.name),
+  *     column("Price")(_.price.toString).align(ColumnAlign.End)
+  * )
+  * }}}
+  *
+  * Outside a `columns(...)` call there is no scope to read, so a standalone column list
+  * still names its row type once: `Column[Product]("Name")(_.name)`.
+  */
+def column[A](header: String)(using ColumnScope[A])(text: A => String): Column[A] =
+    Column[A](header)(text)
+
+/** A scoped column without a text projection; give it a [[Column.body]] template. */
+def column[A](header: String)(using ColumnScope[A]): Column[A] =
+    Column[A](header)
 
 /** DataTable — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * DataTable anatomy: `div.p-datatable.p-component[.p-datatable-hoverable]
@@ -152,8 +194,13 @@ final case class DataTable[A] private (
       */
     def rowKey(f: A => String): DataTable[A] = copy(rowKeyF = Present(f))
 
-    /** Appends columns. */
-    def columns(cs: Column[A]*): DataTable[A] = copy(cols = cols ++ cs.toList)
+    /** Appends columns. Each argument is authored against the table's row type, so
+      * [[column]] needs no type argument of its own.
+      */
+    def columns(cs: ColumnOf[A]*): DataTable[A] =
+        given ColumnScope[A] = new ColumnScope[A]()
+        copy(cols = cols ++ cs.map(c => (c: Column[A])).toList)
+    end columns
 
     /** Binds the ordered sort spec two-way: `(column header, ascending)` entries,
       * first = primary. Header clicks cycle asc → desc → removed; clicks on other

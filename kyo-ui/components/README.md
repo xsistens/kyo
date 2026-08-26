@@ -849,7 +849,9 @@ val wizard: UI < Async =
 
 `DataTable[A]` takes typed rows and a list of `Column[A]`, and every derived view (sorting, filtering, paging, selection, expansion) is a pure function of that data plus the refs you bind. Nothing is stored inside the component.
 
-A column is built one of two ways, and the difference matters. `Column[A]("Name")(_.name)` carries a text projection: it renders that text and the global filter can match against it. `Column[A]("Price").body(...)` carries a template instead: it renders whatever UI you return.
+A column is built one of two ways, and the difference matters. `column("Name")(_.name)` carries a text projection: it renders that text and the global filter can match against it. `column("Price").body(...)` carries a template instead: it renders whatever UI you return.
+
+`column` carries no type argument because it reads the row type from the table it is passed to. That works only inside a `columns(...)` call; a column list built somewhere else names its row type once, `Column[Product]("Name")(_.name)`, and splats in as `columns(sharedCols*)`.
 
 ```scala
 val productTable: UI < Async =
@@ -863,10 +865,10 @@ val productTable: UI < Async =
             .rows(catalog)
             .rowKey(_.id)
             .columns(
-                uic.Column[Product]("Name")(_.name).sortBy(_.name),
-                uic.Column[Product]("Category")(_.category).sortBy(_.category),
-                uic.Column[Product]("Price")(p => f"${p.price}%.2f").sortBy(_.price).align(uic.ColumnAlign.End),
-                uic.Column[Product]("Stock").body(p =>
+                uic.column("Name")(_.name).sortBy(_.name),
+                uic.column("Category")(_.category).sortBy(_.category),
+                uic.column("Price")(p => f"${p.price}%.2f").sortBy(_.price).align(uic.ColumnAlign.End),
+                uic.column("Stock").body(p =>
                     uic.Tag(if p.inStock then "In stock" else "Sold out")
                         .severity(if p.inStock then uic.Severity.Success else uic.Severity.Danger)
                 )
@@ -913,7 +915,7 @@ val hierarchy: UI < Async =
             .selected(picked),
         uic.TreeTable[Product]()
             .nodes(uic.TreeTableNode(catalog(0), List(uic.TreeTableNode(catalog(1)))))
-            .columns(uic.Column[Product]("Name")(_.name), uic.Column[Product]("Category")(_.category))
+            .columns(uic.column("Name")(_.name), uic.column("Category")(_.category))
             .rowKey(_.id)
             .expanded(expanded)
     )

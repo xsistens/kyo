@@ -34,6 +34,22 @@ module's `README.md`.
   and `UI.tbody` made the real row groups available, and every rule it hand-copied
   was already in the extracted sheet, scoped to the anatomy it was avoiding.
 
+## Typed builders: where inference dies
+
+A setter that takes a projection of the component's own element type (`Column`'s
+`_.name`) infers only while the expected type is known. `columns(Column("Name")(_.name))`
+works, because the varargs element type fixes `A`; chaining anything onto it does not,
+because the receiver is then typed alone and `A` widens to `Any`. The fix that works here
+is a context function over a marker scope (`ColumnScope[A]`), which fixes `A` before the
+argument is typed. Two things that do NOT work, both tried:
+
+- Keeping the old signature as an OVERLOAD beside the scoped one. With two alternatives
+  the arguments are typed without a definite expected type, the scope is never
+  established, and every scoped call fails with `No given instance`.
+- Relying on the scoped form to cover a splat of prepared values. A splat applies no
+  per-element conversion; the lift has to be a `Conversion` on the sequence as a whole,
+  in the element type's companion so it needs no import.
+
 ## Self-addressing: the Commands channel
 
 `UI.commands` (`Env.get[UI.Commands]`) is the escape hatch for the two things a
