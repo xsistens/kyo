@@ -78,6 +78,19 @@ private[kyo] object DomBackend:
         own.update(name, true)
     end markOwned
 
+    /** Mirror a patched `value` onto the field's DOM PROPERTY, which is what an input or textarea actually renders.
+      * The property stops tracking the attribute the first time the user types, so `setAttribute("value", ...)` alone
+      * is invisible on any field that has been touched: a clear button writes the bound ref, the attribute changes,
+      * and the field still shows what was typed. Assigning only on a real difference leaves a focused field's caret
+      * alone, since the echo of the user's own keystroke compares equal. Mirrors `__kyoSyncField` in
+      * HtmlRenderer.clientJs.
+      */
+    private def syncFieldProperty(el: dom.Element, name: String, value: String): Unit =
+        if name == "value" && (el.tagName == "INPUT" || el.tagName == "TEXTAREA") then
+            val dyn = el.asInstanceOf[js.Dynamic]
+            if dyn.value.asInstanceOf[String] != value then dyn.value = value
+    end syncFieldProperty
+
     /** Mount a UI into the page body. */
     def mount(ui: UI)(using Frame): Unit < (Async & Scope) =
         mountInto(ui, document.body, NoMountDiagnostics)
@@ -333,6 +346,8 @@ private[kyo] object DomBackend:
                     if el != null then
                         markOwned(el, name)
                         el.setAttribute(name, value)
+                        syncFieldProperty(el, name, value)
+                    end if
                 }
             // measure now + deliver, then attach the continuous scroll/resize observer for `id`.
             case HtmlOp.ObserveViewportById(id) =>
@@ -443,6 +458,8 @@ private[kyo] object DomBackend:
             if el != null then
                 markOwned(el, name)
                 el.setAttribute(name, value)
+                syncFieldProperty(el, name, value)
+            end if
         end attrPatchNow
 
         private def boolAttrPatchNow(path: Seq[String], name: String, value: Boolean): Unit =

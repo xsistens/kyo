@@ -1265,6 +1265,13 @@ private[kyo] object HtmlRenderer:
            |function kyoSetCaret(t,s,e){if(typeof t.setSelectionRange!=="function")return;
            |  try{t.setSelectionRange(s,e);}catch(er){if(er.name!=="InvalidStateError")throw er;}}
            |$reactiveRangesJs
+           |// A field renders its .value PROPERTY, and the property stops tracking the attribute the first time the
+           |// user types. Patching the attribute alone is therefore invisible on any touched field, so mirror it onto
+           |// the property. Assigning only on a real difference leaves a focused field's caret alone (the echo of the
+           |// user's own keystroke compares equal). Twin of DomBackend.syncFieldProperty; keep in lockstep.
+           |function __kyoSyncField(el,name,value){
+           |  if(name==="value"&&(el.tagName==="INPUT"||el.tagName==="TEXTAREA")&&el.value!==value)el.value=value;
+           |}
            |// Mark an attr name as owned by the imperative id-addressed channel: names live in a __kyoOwn expando dict
            |// ON the element (reclaimed with the node), which kyoRangeMorph reads to shield each owned attr from
            |// reconciliation. Mirrors markOwned in DomBackend.
@@ -1350,10 +1357,10 @@ private[kyo] object HtmlRenderer:
            |    if(ssel){__kyoMark(ssel,"style");var ssd=op.SetStyleById.css.split(";");for(var ssi=0;ssi<ssd.length;ssi++){var ssc=ssd[ssi].trim();if(!ssc)continue;var sso=ssc.indexOf(":");if(sso>0)ssel.style.setProperty(ssc.substring(0,sso).trim(),ssc.substring(sso+1).trim());}}
            |  }else if(op.SetAttrById){
            |    // set an attribute in place (element stays put, so a CSS `>` anchored on it keeps matching).
-           |    var sael=document.getElementById(op.SetAttrById.id);if(sael){__kyoMark(sael,op.SetAttrById.name);sael.setAttribute(op.SetAttrById.name,op.SetAttrById.value);}
+           |    var sael=document.getElementById(op.SetAttrById.id);if(sael){__kyoMark(sael,op.SetAttrById.name);sael.setAttribute(op.SetAttrById.name,op.SetAttrById.value);__kyoSyncField(sael,op.SetAttrById.name,op.SetAttrById.value);}
            |  }else if(op.SetAttrByPath){
            |    // Regions carry no element of their own (comment markers), so the path resolves uniquely to the content element.
-           |    var sapp=op.SetAttrByPath.path.join(".");var sapel=document.querySelector(__kyoPathSel(sapp));if(sapel){__kyoMark(sapel,op.SetAttrByPath.name);sapel.setAttribute(op.SetAttrByPath.name,op.SetAttrByPath.value);}
+           |    var sapp=op.SetAttrByPath.path.join(".");var sapel=document.querySelector(__kyoPathSel(sapp));if(sapel){__kyoMark(sapel,op.SetAttrByPath.name);sapel.setAttribute(op.SetAttrByPath.name,op.SetAttrByPath.value);__kyoSyncField(sapel,op.SetAttrByPath.name,op.SetAttrByPath.value);}
            |  }else if(op.SetBoolAttrByPath){
            |    var sbpp=op.SetBoolAttrByPath.path.join(".");var sbpel=document.querySelector(__kyoPathSel(sbpp));if(sbpel){__kyoMark(sbpel,op.SetBoolAttrByPath.name);if(op.SetBoolAttrByPath.value){sbpel.setAttribute(op.SetBoolAttrByPath.name,'');}else{sbpel.removeAttribute(op.SetBoolAttrByPath.name);}}
            |  }else if(op.SetClassByPath){

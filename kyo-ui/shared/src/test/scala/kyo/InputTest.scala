@@ -74,6 +74,48 @@ class InputTest extends UITest:
         }
     }
 
+    // Regression: a field renders its `.value` PROPERTY, and the property stops tracking
+    // the attribute the first time the user types. A programmatic write to the bound ref
+    // patched only the attribute, so a clear button left the typed text on screen while
+    // every other consumer of the ref had already moved on.
+    "a ref write clears an input the user has typed into" in {
+
+        val app: UI < Async =
+            for ref <- Signal.initRef("")
+            yield UI.div(
+                UI.input.id("i").value(ref),
+                UI.button("Clear").id("clear").onClick(ref.set("")),
+                ref.map(v => UI.span(s"[$v]").id("v"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.fill(Selector.id("i"), "typed")
+                _ <- Browser.assertText(Selector.id("v"), "[typed]")
+                _ <- Browser.click(Selector.id("clear"))
+                _ <- Browser.assertText(Selector.id("v"), "[]")
+                // The ref moving is not the claim; the FIELD showing it is.
+                _ <- Browser.assertValueEmpty(Selector.id("i"))
+            yield ()
+        }
+    }
+
+    "a ref write replaces the text of an input the user has typed into" in {
+
+        val app: UI < Async =
+            for ref <- Signal.initRef("")
+            yield UI.div(
+                UI.input.id("i").value(ref),
+                UI.button("Preset").id("preset").onClick(ref.set("from code"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.fill(Selector.id("i"), "typed")
+                _ <- Browser.click(Selector.id("preset"))
+                v <- Browser.value(Selector.id("i"))
+            yield assert(v == "from code", s"field shows '$v', not the value written to the ref")
+        }
+    }
+
     "type in input updates sibling span" in {
 
         val app: UI < Async =
