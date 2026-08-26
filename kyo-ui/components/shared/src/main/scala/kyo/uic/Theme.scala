@@ -697,12 +697,6 @@ object Theme:
       |/* OrgChart: collapsed subtrees keep their rows and hide via visibility —
       |   Prime's inline childStyle. */
       |.p-uic-oc-hidden { visibility: hidden; }
-      |/* OrgChart: no <tbody> factory — the tbody-scoped cell rule re-expressed
-      |   (nested tables make the descendant selector equivalent to Prime's
-      |   per-table child chain). */
-      |.p-organizationchart-table td {
-      |  text-align: center; vertical-align: top; padding: 0 var(--p-organizationchart-gutter);
-      |}
       |/* GlyphSvg spans sized by the extracted component CSS scale their inner svg. */
       |span.p-galleria-prev-icon, span.p-galleria-next-icon,
       |span.p-galleria-thumbnail-prev-icon, span.p-galleria-thumbnail-next-icon,
