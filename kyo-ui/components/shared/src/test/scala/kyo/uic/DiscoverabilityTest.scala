@@ -570,6 +570,18 @@ def x(sort: SignalRef[List[(String, Boolean)]], q: SignalRef[String], pg: Signal
         typeCheckFailure(preamble + """def x = uic.DataTable[String]().row(span("a"))""")
         typeCheckFailure(preamble + """def x = uic.DataTable[String]().nodes()""")
         typeCheckFailure(preamble + """def x = uic.DataTable[String]().item("A", "a")""")
+        typeCheck(
+            preamble +
+                """final case class Q(id: String, price: Int)
+def y(using Frame) =
+  uic.DataTable[Q]()
+    .rows(Seq(Q("1", 1)))
+    .columns(
+      uic.Column[Q]("Price")(_.price.toString).footer("Total"),
+      uic.Column[Q]("Sum").footer(rs => span(rs.map(_.price).sum.toString))
+    )
+    .header(span("toolbar")).footer(span("note")).loading(true).scrollHeight("240px")"""
+        )
     }
 
     "Tree exposes nodes/expansion on the shared SelectionMode; the ui5 riches are retired" in {
