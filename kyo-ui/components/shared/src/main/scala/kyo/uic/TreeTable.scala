@@ -23,11 +23,10 @@ final case class TreeTableNode[A](data: A, children: List[TreeTableNode[A]] = Ni
   * (Prime's inline `marginLeft`; leaf togglers keep their box but hide, Prime's
   * inline `visibility`)), so the extracted `@primeuix` treetable CSS applies.
   *
-  * DOM deviation (documented): kyo-ui has no `<thead>`/`<tbody>` factories, so
-  * header and body rows are direct `<tr>` children and the
-  * `p-treetable-thead`/`p-treetable-tbody`-scoped Prime rules are re-expressed
-  * in the `.p-uic-*` remainder against the stamped row classes
-  * (`.p-uic-tt-header-row` / `.p-uic-tt-row` — the DataTable precedent).
+  * The header and body rows sit in real `thead.p-treetable-thead` and
+  * `tbody.p-treetable-tbody` row groups (the DataTable precedent), which is what
+  * the extracted sheet's row, cell, hover, selection and gridline rules are
+  * scoped to.
   *
   * Rows are TYPED ([[TreeTableNode]] over `A`) and reuse the DataTable
   * [[Column]] carrier; every behavior is pure `(nodes, ui-state refs) → markup`:
@@ -145,7 +144,7 @@ final case class TreeTable[A] private (
 
     private def body(exp: Set[String], sel: Set[String], sort: List[(String, Boolean)])(using Frame): UI =
         val headRow: UI =
-            tr.cssClass("p-uic-tt-header-row")(cols.map(c => toChild(headerCell(c, sort)))*)
+            tr(cols.map(c => toChild(headerCell(c, sort)))*)
 
         val bodyRows: List[UI] =
             if nodeList.isEmpty then
@@ -167,7 +166,10 @@ final case class TreeTable[A] private (
             case Present(TextValue.Dyn(s))   => tbl = tbl.aria("label", s)
             case Absent                      => ()
         end match
-        val tableEl: UI = tbl((headRow :: bodyRows).map(toChild)*)
+        val tableEl: UI = tbl(
+            toChild(thead.cssClass("p-treetable-thead")(toChild(headRow))),
+            toChild(tbody.cssClass("p-treetable-tbody")(bodyRows.map(toChild)*))
+        )
 
         var root = div.cssClass("p-treetable").cssClass("p-component")
         if rowInteractive then root = root.cssClass("p-treetable-hoverable")
@@ -292,7 +294,7 @@ final case class TreeTable[A] private (
             cell(content(contentKids*))
         }
 
-        var row = tr.cssClass("p-uic-tt-row").role("row").aria("level", (depth + 1).toString)
+        var row = tr.role("row").aria("level", (depth + 1).toString)
         if hasChildren then row = row.aria("expanded", isExp.toString)
         if rowInteractive then row = row.cssClass("p-treetable-selectable-row").tabIndex(0).onClick(activate(id))
         if isSel then row = row.cssClass("p-treetable-row-selected")

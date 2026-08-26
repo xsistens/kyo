@@ -29,7 +29,10 @@ module's `README.md`.
   binary, highlightOnSelect is off) come from the live PrimeVue component, not
   the sheet: verify those against the running reference.
 - Where kyo-ui cannot render the target DOM, re-scope the CSS rules onto stamped
-  classes (`tr.p-uic-dt-row`) rather than faking anatomy.
+  classes rather than faking anatomy. Check first whether kyo-ui really cannot:
+  DataTable and TreeTable carried a `tr.p-uic-*-row` re-scope long after `UI.thead`
+  and `UI.tbody` made the real row groups available, and every rule it hand-copied
+  was already in the extracted sheet, scoped to the anatomy it was avoiding.
 
 ## Self-addressing: the Commands channel
 

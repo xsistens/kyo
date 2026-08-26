@@ -20,6 +20,12 @@ class GoldenRenderTest extends UicTest:
     private def renderHtml(ui: UI)(using Frame): String < Async =
         UI.runRender(ui).take(1).run.map(_.mkString)
 
+    /** Matches one table row group by tag AND class: the renderer writes
+      * `data-kyo-path` between the two, so a plain `contains` cannot pair them.
+      */
+    private def groupTag(tag: String, cls: String): scala.util.matching.Regex =
+        s"<$tag [^>]*class=\"$cls\"".r
+
     "Button emits Prime anatomy: class hooks, severity suffix, label span, click registration" in {
         for
             html <- renderHtml(
@@ -181,8 +187,13 @@ class GoldenRenderTest extends UicTest:
         assert(uic.Theme.primeExtraCss.contains(".p-uic-dialog-danger"), "dialog severity accents (remainder)")
         assert(uic.Theme.primeExtraCss.contains(".p-toast { position: fixed"), "toast fixed positioning (remainder)")
         assert(uic.Theme.primeExtraCss.contains(".p-toast-bottom-right"), "toast position tokens (remainder)")
-        assert(uic.Theme.primeExtraCss.contains("tr.p-uic-dt-row"), "datatable tbody re-scope (remainder — no thead/tbody factories)")
-        assert(uic.Theme.primeExtraCss.contains(".p-datatable-striped tr.p-uic-dt-row.p-row-odd"), "datatable striped re-scope (remainder)")
+        assert(!uic.Theme.primeExtraCss.contains("p-uic-dt-row"), "datatable row re-scope retired (real thead/tbody)")
+        assert(!uic.Theme.primeExtraCss.contains("p-uic-tt-row"), "treetable row re-scope retired (real thead/tbody)")
+        assert(prime.contains(".p-datatable-tbody > tr > td"), "generated body-cell rules reachable through the real tbody")
+        assert(
+            prime.contains(".p-datatable.p-datatable-striped .p-datatable-tbody > tr.p-row-odd"),
+            "generated striping reachable through the real tbody"
+        )
         assert(uic.Theme.primeExtraCss.contains(".p-paginator { flex-direction: row; }"), "paginator row restorer (remainder)")
         assert(!uic.Theme.css.contains(".sap"), "NO sap* class rules anywhere in the theme")
         assert(!uic.Theme.css.contains("--sap"), "NO sap tokens anywhere in the theme")
@@ -1250,7 +1261,8 @@ class GoldenRenderTest extends UicTest:
             assert(base.contains("p-datatable-sortable-column"), "sortable column class")
             assert(base.contains("p-datatable-sort-icon"), "sort icon slot")
             assert(base.contains("""data-uic-icon="sort-alt""""), "unsorted glyph")
-            assert(base.contains("p-uic-dt-row"), "body row re-scope class (no tbody factory)")
+            assert(groupTag("thead", "p-datatable-thead").findFirstIn(base).isDefined, "header rows sit in a real thead")
+            assert(groupTag("tbody", "p-datatable-tbody").findFirstIn(base).isDefined, "body rows sit in a real tbody")
             assert(base.contains("p-row-odd"), "odd-row class for striping")
             assert(base.contains("p-datatable-row-selected"), "selected row class from the Set ref")
             assert(base.contains("p-checkbox"), "Checkbox mode renders Prime's checkbox anatomy")
@@ -4001,7 +4013,7 @@ class GoldenRenderTest extends UicTest:
             assert(disabled.contains("disabled"), "disabled locks the input")
     }
 
-    "TreeTable renders stamped header/body rows, depth-indented togglers, selection + sort" in {
+    "TreeTable renders grouped header/body rows, depth-indented togglers, selection + sort" in {
         final case class F(name: String, size: String)
         def nodes = Seq(
             uic.TreeTableNode(F("Applications", "200mb"), List(uic.TreeTableNode(F("Scala", "25mb")))),
@@ -4038,12 +4050,12 @@ class GoldenRenderTest extends UicTest:
             assert(expanded.contains("p-treetable-table-container"), "table container")
             assert(expanded.contains("p-treetable-table"), "table class")
             assert(expanded.contains("""role="treegrid""""), "treegrid role")
-            assert(expanded.contains("p-uic-tt-header-row"), "stamped header row (no thead factory)")
+            assert(groupTag("thead", "p-treetable-thead").findFirstIn(expanded).isDefined, "header rows sit in a real thead")
             assert(expanded.contains("p-treetable-header-cell"), "header cell class")
             assert(expanded.contains("p-treetable-column-title"), "column title span")
             assert(expanded.contains("p-treetable-sortable-column"), "sortable header")
             assert(expanded.contains("""data-uic-icon="sort-alt""""), "unsorted icon")
-            assert(expanded.contains("p-uic-tt-row"), "stamped body rows")
+            assert(groupTag("tbody", "p-treetable-tbody").findFirstIn(expanded).isDefined, "body rows sit in a real tbody")
             assert(expanded.contains("p-treetable-body-cell-content"), "cell content wrapper")
             assert(expanded.contains("p-treetable-node-toggle-button"), "toggler button")
             assert(expanded.contains("""data-uic-icon="chevron-down""""), "expanded toggler chevron")
@@ -4161,7 +4173,10 @@ class GoldenRenderTest extends UicTest:
         assert(extra.contains(".p-terminal-command { display: block; }"), "terminal history rows block")
         assert(extra.contains(".p-carousel-item { display: block; }"), "carousel item block")
         assert(extra.contains("label.p-button { flex-direction: row; }"), "label-as-button row restorer")
-        assert(extra.contains(".p-treetable-table tr.p-uic-tt-row"), "treetable stamped-row re-scope")
+        assert(
+            extra.contains(".p-treetable-tbody > tr.p-treetable-empty-message > td"),
+            "treetable empty-message row (the sheet has no rules for the template slot)"
+        )
         assert(extra.contains(".p-uic-tt-toggle-hidden"), "leaf toggler visibility class")
         assert(extra.contains(".p-uic-oc-hidden"), "orgchart collapsed visibility class")
         assert(extra.contains(".p-organizationchart-table td"), "orgchart cell re-scope")

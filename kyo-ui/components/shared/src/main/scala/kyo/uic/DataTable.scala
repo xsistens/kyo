@@ -62,11 +62,9 @@ end Column
   * `.p-datatable-row-selected`, plus an embedded `div.p-paginator`), so the
   * extracted `@primeuix` datatable + paginator CSS applies.
   *
-  * DOM deviation (documented): kyo-ui 1.0.0-RC5 has no `<thead>`/`<tbody>`
-  * element factories, so the table renders header and body rows as direct
-  * `<tr>` children; the `p-datatable-thead`/`p-datatable-tbody`-scoped Prime
-  * rules are re-expressed in the `.p-uic-*` remainder against the row classes
-  * the component stamps (`.p-uic-dt-header-row` / `.p-uic-dt-row`).
+  * The header and body rows sit in real `thead.p-datatable-thead` and
+  * `tbody.p-datatable-tbody` row groups, which is what the extracted sheet's
+  * row, cell, hover, selection, striping and gridline rules are scoped to.
   *
   * Rows are TYPED and every behavior is pure `(data, ui-state refs) → markup`,
   * computed server-side at render:
@@ -275,7 +273,7 @@ final case class DataTable[A] private (
             val expanderTh: List[UI] = if expanderColumn then List(th.cssClass("p-datatable-header-cell")) else Nil
             val checkboxTh: List[UI] = if checkboxColumn then List(th.cssClass("p-datatable-header-cell")) else Nil
             val colThs: List[UI]     = cols.map(c => headerCell(c, sort))
-            tr.cssClass("p-uic-dt-header-row")((expanderTh ++ checkboxTh ++ colThs).map(toChild)*)
+            tr((expanderTh ++ checkboxTh ++ colThs).map(toChild)*)
         end headRow
 
         val bodyRows: List[UI] =
@@ -296,7 +294,10 @@ final case class DataTable[A] private (
             case Absent                      => ()
         end match
         accNameRefV.foreach(v => tbl = tbl.aria("labelledby", v))
-        val tableEl: UI = tbl(((headRow :: bodyRows)).map(toChild)*)
+        val tableEl: UI = tbl(
+            toChild(thead.cssClass("p-datatable-thead")(toChild(headRow))),
+            toChild(tbody.cssClass("p-datatable-tbody")(bodyRows.map(toChild)*))
+        )
 
         var root = div.cssClass("p-datatable").cssClass("p-component")
         // Prime: hoverable whenever a selection mode is set (checkbox included) or
@@ -431,7 +432,7 @@ final case class DataTable[A] private (
             cell(content)
         }
 
-        var row = tr.cssClass("p-uic-dt-row").cssClass(if index % 2 == 0 then "p-row-even" else "p-row-odd")
+        var row = tr.cssClass(if index % 2 == 0 then "p-row-even" else "p-row-odd")
         if rowClickSelects then row = row.cssClass("p-datatable-selectable-row")
         if isSel then row = row.cssClass("p-datatable-row-selected")
         if selectionModeV != SelectionMode.None then row = row.aria("selected", isSel.toString)
