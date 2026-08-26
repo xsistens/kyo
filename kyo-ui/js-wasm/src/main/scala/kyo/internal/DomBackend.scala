@@ -54,6 +54,19 @@ private[kyo] object DomBackend:
         own.update(name, true)
     end markOwned
 
+    /** Mirror a patched `value` onto the field's DOM PROPERTY, which is what an input or textarea actually renders.
+      * The property stops tracking the attribute the first time the user types, so `setAttribute("value", ...)` alone
+      * is invisible on any field that has been touched: a clear button writes the bound ref, the attribute changes,
+      * and the field still shows what was typed. Assigning only on a real difference leaves a focused field's caret
+      * alone, since the echo of the user's own keystroke compares equal. Mirrors `__kyoSyncField` in
+      * HtmlRenderer.clientJs.
+      */
+    private def syncFieldProperty(el: dom.Element, name: String, value: String): Unit =
+        if name == "value" && (el.tagName == "INPUT" || el.tagName == "TEXTAREA") then
+            val dyn = el.asInstanceOf[js.Dynamic]
+            if dyn.value.asInstanceOf[String] != value then dyn.value = value
+    end syncFieldProperty
+
     /** Mount a UI into the page body. */
     def mount(ui: UI)(using Frame): Unit < (Async & Scope) =
         mountInto(ui, document.body)
@@ -260,6 +273,8 @@ private[kyo] object DomBackend:
                     if el != null then
                         markOwned(el, name)
                         el.setAttribute(name, value)
+                        syncFieldProperty(el, name, value)
+                    end if
                 }
             // measure now + deliver, then attach the continuous scroll/resize observer for `id`.
             case HtmlOp.ObserveViewportById(id) =>
@@ -331,6 +346,8 @@ private[kyo] object DomBackend:
             if el != null then
                 markOwned(el, name)
                 el.setAttribute(name, value)
+                syncFieldProperty(el, name, value)
+            end if
         end attrPatchNow
 
         private def boolAttrPatchNow(path: Seq[String], name: String, value: Boolean): Unit =
@@ -2106,10 +2123,9 @@ private[kyo] object DomBackend:
         val ownDict                     = if js.isUndefined(own) then null else own.asInstanceOf[js.Dictionary[Boolean]]
         def owns(name: String): Boolean = ownDict != null && ownDict.contains(name)
         val tag                         = fromEl.tagName
-        val activeInput =
-            (fromEl eq document.activeElement) && (tag == "INPUT" || tag == "TEXTAREA")
-        val toAttrs = toEl.attributes
-        var i       = 0
+        val isField                     = tag == "INPUT" || tag == "TEXTAREA"
+        val toAttrs                     = toEl.attributes
+        var i                           = 0
         while i < toAttrs.length do
             val a    = toAttrs(i)
             val name = a.name
@@ -2125,10 +2141,12 @@ private[kyo] object DomBackend:
             if !owns(name) && !toEl.hasAttribute(name) then fromEl.removeAttribute(name)
             j -= 1
         end while
-        // Active-input preservation: two-way binding echoes each keystroke back as a re-render. Never overwrite the
-        // focused field's live `.value` (its caret) with its own echo (value already matches); assign only a genuine
-        // external change (submit-clear, programmatic update).
-        if activeInput then
+        // A field renders its `.value` PROPERTY, and the property stops tracking the attribute the moment the user
+        // types (the field goes "dirty"). Reconciling the attribute alone is therefore invisible on any field that
+        // has been touched, focused or not, so the property is assigned too. Assigning only on a real difference is
+        // what preserves a focused field's caret: two-way binding echoes each keystroke back as a re-render, and
+        // that echo compares equal.
+        if isField then
             val nv =
                 if tag == "TEXTAREA" then toEl.textContent
                 else

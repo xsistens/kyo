@@ -1060,10 +1060,10 @@ private[kyo] object HtmlRenderer:
            |    if(ssel){__kyoMark(ssel,"style");var ssd=op.SetStyleById.css.split(";");for(var ssi=0;ssi<ssd.length;ssi++){var ssc=ssd[ssi].trim();if(!ssc)continue;var sso=ssc.indexOf(":");if(sso>0)ssel.style.setProperty(ssc.substring(0,sso).trim(),ssc.substring(sso+1).trim());}}
            |  }else if(op.SetAttrById){
            |    // set an attribute in place (element stays put, so a CSS `>` anchored on it keeps matching).
-           |    var sael=document.getElementById(op.SetAttrById.id);if(sael){__kyoMark(sael,op.SetAttrById.name);sael.setAttribute(op.SetAttrById.name,op.SetAttrById.value);}
+           |    var sael=document.getElementById(op.SetAttrById.id);if(sael){__kyoMark(sael,op.SetAttrById.name);sael.setAttribute(op.SetAttrById.name,op.SetAttrById.value);__kyoSyncField(sael,op.SetAttrById.name,op.SetAttrById.value);}
            |  }else if(op.SetAttrByPath){
            |    // Regions carry no element of their own (comment markers), so the path resolves uniquely to the content element.
-           |    var sapp=op.SetAttrByPath.path.join(".");var sapel=document.querySelector(__kyoPathSel(sapp));if(sapel){__kyoMark(sapel,op.SetAttrByPath.name);sapel.setAttribute(op.SetAttrByPath.name,op.SetAttrByPath.value);}
+           |    var sapp=op.SetAttrByPath.path.join(".");var sapel=document.querySelector(__kyoPathSel(sapp));if(sapel){__kyoMark(sapel,op.SetAttrByPath.name);sapel.setAttribute(op.SetAttrByPath.name,op.SetAttrByPath.value);__kyoSyncField(sapel,op.SetAttrByPath.name,op.SetAttrByPath.value);}
            |  }else if(op.SetBoolAttrByPath){
            |    var sbpp=op.SetBoolAttrByPath.path.join(".");var sbpel=document.querySelector(__kyoPathSel(sbpp));if(sbpel){__kyoMark(sbpel,op.SetBoolAttrByPath.name);if(op.SetBoolAttrByPath.value){sbpel.setAttribute(op.SetBoolAttrByPath.name,'');}else{sbpel.removeAttribute(op.SetBoolAttrByPath.name);}}
            |  }else if(op.SetClassByPath){
@@ -1319,19 +1319,28 @@ private[kyo] object HtmlRenderer:
            |  return c;
            |}
            |function __kyoCompat(a,b){return a.nodeType===b.nodeType&&(a.nodeType!==1||a.tagName===b.tagName);}
+           |// A field renders its .value PROPERTY, and the property stops tracking the attribute the first time the
+           |// user types. Patching the attribute alone is therefore invisible on any touched field, so mirror it onto
+           |// the property. Assigning only on a real difference leaves a focused field's caret alone (the echo of the
+           |// user's own keystroke compares equal). Twin of DomBackend.syncFieldProperty; keep in lockstep.
+           |function __kyoSyncField(el,name,value){
+           |  if(name==="value"&&(el.tagName==="INPUT"||el.tagName==="TEXTAREA")&&el.value!==value)el.value=value;
+           |}
            |function __kyoMorphAttrs(fromEl,toEl){
            |  // An attribute the imperative id-addressed channel owns (its name is in the element's __kyoOwn expando) is
            |  // never reconciled: server HTML never carries the client-set value, so reconciling would clobber it.
            |  var own=fromEl.__kyoOwn;
            |  var tag=fromEl.tagName;
-           |  var activeInput=(fromEl===document.activeElement)&&(tag==="INPUT"||tag==="TEXTAREA");
+           |  var isField=(tag==="INPUT"||tag==="TEXTAREA");
            |  var ta=toEl.attributes,i;
            |  for(i=0;i<ta.length;i++){var a=ta[i];if(!(own&&own[a.name])&&fromEl.getAttribute(a.name)!==a.value)fromEl.setAttribute(a.name,a.value);}
            |  var fa=fromEl.attributes,j;
            |  for(j=fa.length-1;j>=0;j--){var fn=fa[j].name;if(!(own&&own[fn])&&!toEl.hasAttribute(fn))fromEl.removeAttribute(fn);}
-           |  // Never overwrite a focused field's live .value (its caret) with its own two-way-binding echo (value
-           |  // already matches); assign only a genuine external change (submit-clear, programmatic update).
-           |  if(activeInput){var nv=(tag==="TEXTAREA")?toEl.textContent:(toEl.getAttribute("value")||"");if(nv!==fromEl.value)fromEl.value=nv;}
+           |  // A field renders its .value PROPERTY, which stops tracking the attribute once the user has typed, so the
+           |  // property is assigned for every field and not only the focused one. Assigning on a real difference is
+           |  // what preserves a focused field's caret: the two-way-binding echo of the user's own keystroke compares
+           |  // equal and is skipped, while a genuine external change (a clear button, a submit reset) is not.
+           |  if(isField){var nv=(tag==="TEXTAREA")?toEl.textContent:(toEl.getAttribute("value")||"");if(nv!==fromEl.value)fromEl.value=nv;}
            |}
            |// Reconcile the live sibling range [fromStart,fromEnd) toward [toStart,toEnd) (template nodes).
            |// Null bounds = to the end of the parent; a region's close marker is the from-side sentinel, so
