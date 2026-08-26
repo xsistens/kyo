@@ -18,9 +18,15 @@ import kyo.UI.*
 final case class Badge private (
     valueV: Maybe[TextValue] = Absent,
     severityV: Maybe[SeverityValue] = Absent,
-    sizeV: ExtendedSize = Size.Normal
+    sizeV: ExtendedSize = Size.Normal,
+    hostClassesV: List[String] = Nil
 ) extends Node:
     type Self = Badge
+
+    /** Extra class on the badge root, for a host that positions it (the Paginator
+      * precedent): DataTable stamps `.p-datatable-sort-badge` on the multi-sort ordinal.
+      */
+    private[uic] def hostClass(cls: String): Badge = copy(hostClassesV = hostClassesV :+ cls)
 
     /** Semantic accent (`.p-badge-<token>`); unset keeps the primary base skin. */
     def severity(v: Severity): Badge = copy(severityV = Present(SeverityValue.Const(v)))
@@ -65,6 +71,7 @@ final case class Badge private (
             case Size.XLarge => el = el.cssClass("p-badge-xl")
             case Size.Normal => ()
         end match
+        hostClassesV.foreach(c => el = el.cssClass(c))
         valueV match
             case Present(TextValue.Const(v)) => el(v)
             case Present(TextValue.Dyn(s))   => el(toChild(s.render(t => stringToUI(t))))
