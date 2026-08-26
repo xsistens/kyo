@@ -53,7 +53,7 @@ final case class Select[A] private (
     filterQueryRefV: Maybe[SignalRef[String]] = Absent,
     showClearFlag: Boolean = false,
     checkmarkFlag: Boolean = false,
-    emptyMessageV: Maybe[TextValue] = Absent,
+    emptyContentV: Maybe[EmptyContent] = Absent,
     disabledFlag: Boolean = false,
     readonlyFlag: Boolean = false,
     requiredFlag: Boolean = false,
@@ -194,10 +194,16 @@ final case class Select[A] private (
     /** Text of the `li.p-select-empty-message` row when no options render
       * (default "No results found" — Prime's default).
       */
-    def emptyMessage(v: String): Select[A] = copy(emptyMessageV = Present(TextValue.Const(v)))
+    def emptyContent(v: String): Select[A] = copy(emptyContentV = Present(EmptyContent.const(v)))
 
-    /** Reactive variant — re-renders the empty message in place on signal emission. */
-    def emptyMessage(sig: Signal[String]): Select[A] = copy(emptyMessageV = Present(TextValue.Dyn(sig)))
+    /** Reactive text: re-renders the empty slot in place on signal emission. */
+    def emptyContent(sig: Signal[String]): Select[A] = copy(emptyContentV = Present(EmptyContent.dyn(sig)))
+
+    /** Arbitrary UI for the empty state: an icon over a line of explanation and the
+      * button that creates the first record, rendered in the same slot the text would
+      * occupy.
+      */
+    def emptyContent(ui: UI): Select[A] = copy(emptyContentV = Present(EmptyContent.ui(ui)))
 
     def disabled(v: Boolean): Select[A] = copy(disabledFlag = v)
 
@@ -530,9 +536,9 @@ final case class Select[A] private (
         }
         val emptyRow: List[UI] =
             if shown.isEmpty then
-                List(emptyMessageV.getOrElse(TextValue.Const("No results found")) match
-                    case TextValue.Const(t) => li.cssClass("p-select-empty-message").role("presentation")(t): UI
-                    case TextValue.Dyn(s)   => s.render(t => li.cssClass("p-select-empty-message").role("presentation")(t)))
+                List(EmptyContent.render(emptyContentV, "No results found")(c =>
+                    li.cssClass("p-select-empty-message").role("presentation")(c)
+                ))
             else Nil
 
         val listUI: UI =

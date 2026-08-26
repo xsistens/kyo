@@ -709,7 +709,7 @@ class GoldenRenderTest extends UicTest:
         for
             open      <- openHtml(base, "ap")
             closed    <- openHtml(base, "ap", open = false)
-            empty     <- openHtml(uic.AutoComplete[String]().options(Seq("Apple")).emptyMessage("No match"), "zz")
+            empty     <- openHtml(uic.AutoComplete[String]().options(Seq("Apple")).emptyContent("No match"), "zz")
             gated     <- openHtml(base.minQueryLength(3), "ap")
             fullList  <- openHtml(base.dropdown(true), "zz", all = true)
             highlight <- openHtml(base, "ap", hi = 0)
@@ -1098,7 +1098,7 @@ class GoldenRenderTest extends UicTest:
                     out <- UI.runRender(ui).take(1).run
                 yield out.mkString
             checked <- renderHtml(uic.Listbox().checkmark(true).item("Solo", "s"))
-            empty   <- renderHtml(uic.Listbox().emptyMessage("Nothing here"))
+            empty   <- renderHtml(uic.Listbox().emptyContent("Nothing here"))
         yield
             assert(html.contains("p-listbox"), "base class hook")
             assert(html.contains("p-component"), "p-component class")
@@ -1221,7 +1221,7 @@ class GoldenRenderTest extends UicTest:
                 .rowExpansionTemplate(prod => p(s"Details for ${prod.name}"))
                 .stripedRows(true)
                 .showGridlines(true)
-                .emptyMessage("Nothing found")
+                .emptyContent("Nothing found")
 
         def render(
             sortV: List[(String, Boolean)],
@@ -1331,6 +1331,35 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "emptyContent takes arbitrary UI, in the same slot the text occupies" in {
+        def emptyState(using Frame): UI =
+            uic.FlexBox().vertical(true).gap(8)(
+                uic.Icon(uic.Icons.inbox),
+                span("No products yet"),
+                uic.Button("Add the first one")
+            )
+        for
+            tableText <- renderHtml(uic.DataTable[String]().columns(uic.column("Name")(identity)).emptyContent("Nothing"))
+            tableUi   <- renderHtml(uic.DataTable[String]().columns(uic.column("Name")(identity)).emptyContent(emptyState))
+            viewUi    <- renderHtml(uic.DataView[String]().emptyContent(emptyState))
+            listUi    <- renderHtml(uic.Listbox().emptyContent(emptyState))
+            treeUi    <- renderHtml(uic.Tree().emptyContent(emptyState))
+        yield
+            assert(tableText.contains("Nothing"), "the String form still renders text")
+            // The UI form must land INSIDE the same wrapper, not beside the table: that
+            // is the whole reason it belongs to the component rather than the caller.
+            assert(tableUi.contains("p-datatable-empty-message"), "table keeps Prime's empty row")
+            assert(tableUi.contains("No products yet"), "and hosts the UI inside it")
+            assert(tableUi.contains("p-button"), "including interactive content")
+            assert(viewUi.contains("p-dataview-empty-message"), "DataView keeps its empty wrapper")
+            assert(viewUi.contains("No products yet"), "and hosts the UI")
+            assert(listUi.contains("p-listbox-empty-message"), "Listbox keeps its empty row")
+            assert(listUi.contains("No products yet"), "and hosts the UI")
+            assert(treeUi.contains("p-tree-empty-message"), "Tree keeps its empty row")
+            assert(treeUi.contains("No products yet"), "and hosts the UI")
+        end for
+    }
+
     "DataTable header/footer slots, column footers, loading mask and scroll height render Prime anatomy" in {
         final case class Item(id: String, name: String, price: Int)
         val items = List(Item("a", "Alpha", 10), Item("b", "Beta", 20), Item("c", "Gamma", 30))
@@ -1435,7 +1464,7 @@ class GoldenRenderTest extends UicTest:
                         .selected(sel)
                     out <- UI.runRender(ui).take(1).run
                 yield out.mkString
-            empty <- renderHtml(uic.Tree().emptyMessage("No nodes"))
+            empty <- renderHtml(uic.Tree().emptyContent("No nodes"))
         yield
             assert(html.contains("p-tree"), "base class hook")
             assert(html.contains("p-component"), "p-component class")
@@ -2129,7 +2158,7 @@ class GoldenRenderTest extends UicTest:
             page1 <- view(0)
             page2 <- view(1)
             grid  <- renderHtml(uic.DataView[P]().items(items).gridItemTemplate(p => div(span(p.name))).layout(uic.DataViewLayout.Grid))
-            empty <- renderHtml(uic.DataView[String]().emptyMessage("Nothing here"))
+            empty <- renderHtml(uic.DataView[String]().emptyContent("Nothing here"))
         yield
             assert(page1.contains("p-dataview"), "base class")
             assert(page1.contains("p-component"), "p-component class")

@@ -55,7 +55,7 @@ final case class AutoComplete[A] private (
     valueBinding: Maybe[Input.Value] = Absent,
     filterV: FilterMode = FilterMode.StartsWithPerTerm,
     minQueryLengthV: Int = 1,
-    emptyMessageV: Maybe[TextValue] = Absent,
+    emptyContentV: Maybe[EmptyContent] = Absent,
     placeholderText: Maybe[TextValue] = Absent,
     loadingV: Maybe[BoolValue] = Absent,
     showClearFlag: Boolean = false,
@@ -142,10 +142,16 @@ final case class AutoComplete[A] private (
     /** Text of the `li.p-autocomplete-empty-message` row when the query matches no
       * option; without it the panel is suppressed instead.
       */
-    def emptyMessage(v: String): AutoComplete[A] = copy(emptyMessageV = Present(TextValue.Const(v)))
+    def emptyContent(v: String): AutoComplete[A] = copy(emptyContentV = Present(EmptyContent.const(v)))
 
-    /** Reactive variant — re-renders the empty message in place on signal emission. */
-    def emptyMessage(sig: Signal[String]): AutoComplete[A] = copy(emptyMessageV = Present(TextValue.Dyn(sig)))
+    /** Reactive text: re-renders the empty slot in place on signal emission. */
+    def emptyContent(sig: Signal[String]): AutoComplete[A] = copy(emptyContentV = Present(EmptyContent.dyn(sig)))
+
+    /** Arbitrary UI for the empty state: an icon over a line of explanation and the
+      * button that creates the first record, rendered in the same slot the text would
+      * occupy.
+      */
+    def emptyContent(ui: UI): AutoComplete[A] = copy(emptyContentV = Present(EmptyContent.ui(ui)))
 
     def placeholder(v: String): AutoComplete[A] = copy(placeholderText = Present(TextValue.Const(v)))
 
@@ -330,7 +336,7 @@ final case class AutoComplete[A] private (
         // regardless. The panel is suppressed with nothing to show and no message.
         val panelShown: Boolean = st.exists { s =>
             s.isOpen && (s.allV || query.length >= minQueryLengthV) &&
-            (visible.nonEmpty || emptyMessageV.isDefined)
+            (visible.nonEmpty || emptyContentV.isDefined)
         }
 
         // Writes the picked label, fires onSelect/onChange, closes the panel.
@@ -503,10 +509,9 @@ final case class AutoComplete[A] private (
         }
         val emptyRow: List[UI] =
             if visible.isEmpty then
-                emptyMessageV.toList.map {
-                    case TextValue.Const(t) => li.cssClass("p-autocomplete-empty-message").role("presentation")(t): UI
-                    case TextValue.Dyn(s)   => s.render(t => li.cssClass("p-autocomplete-empty-message").role("presentation")(t))
-                }
+                EmptyContent.whenSet(emptyContentV)(c =>
+                    li.cssClass("p-autocomplete-empty-message").role("presentation")(c)
+                )
             else Nil
         val listUI: UI =
             div.cssClass("p-autocomplete-list-container")(

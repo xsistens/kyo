@@ -71,7 +71,7 @@ final case class Listbox private (
     invalidV: Maybe[BoolValue] = Absent,
     invalidMsgV: Maybe[String] = Absent,
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
-    emptyMessageV: Maybe[TextValue] = Absent,
+    emptyContentV: Maybe[EmptyContent] = Absent,
     accessibleNameV: Maybe[TextValue] = Absent,
     accessibleNameRefV: Maybe[String] = Absent,
     onBlurF: Maybe[Set[String] => Any < Async] = Absent,
@@ -173,10 +173,16 @@ final case class Listbox private (
     def onBlur(f: Set[String] => Any < Async): Listbox = copy(onBlurF = Present(f))
 
     /** Text shown as the `li.p-listbox-empty-message` row when no options render. */
-    def emptyMessage(v: String): Listbox = copy(emptyMessageV = Present(TextValue.Const(v)))
+    def emptyContent(v: String): Listbox = copy(emptyContentV = Present(EmptyContent.const(v)))
 
-    /** Reactive variant — re-renders the empty message in place on signal emission. */
-    def emptyMessage(sig: Signal[String]): Listbox = copy(emptyMessageV = Present(TextValue.Dyn(sig)))
+    /** Reactive text: re-renders the empty slot in place on signal emission. */
+    def emptyContent(sig: Signal[String]): Listbox = copy(emptyContentV = Present(EmptyContent.dyn(sig)))
+
+    /** Arbitrary UI for the empty state: an icon over a line of explanation and the
+      * button that creates the first record, rendered in the same slot the text would
+      * occupy.
+      */
+    def emptyContent(ui: UI): Listbox = copy(emptyContentV = Present(EmptyContent.ui(ui)))
 
     /** `aria-label` for the listbox. */
     def accessibleName(v: String): Listbox = copy(accessibleNameV = Present(TextValue.Const(v)))
@@ -246,10 +252,9 @@ final case class Listbox private (
         val rows: List[UI] = OptionItem.rows(shownGroups, "p-listbox-option-group")((it, _) => renderOption(it, sel))
         val emptyRow: List[UI] =
             if shown.isEmpty then
-                emptyMessageV.toList.map {
-                    case TextValue.Const(t) => li.cssClass("p-listbox-empty-message").role("presentation")(t): UI
-                    case TextValue.Dyn(s)   => s.render(t => li.cssClass("p-listbox-empty-message").role("presentation")(t))
-                }
+                EmptyContent.whenSet(emptyContentV)(c =>
+                    li.cssClass("p-listbox-empty-message").role("presentation")(c)
+                )
             else Nil
 
         var list = ul.cssClass("p-listbox-list").role("listbox")

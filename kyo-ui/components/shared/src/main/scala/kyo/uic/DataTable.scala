@@ -175,7 +175,7 @@ final case class DataTable[A] private (
     stripedFlag: Boolean = false,
     gridlinesFlag: Boolean = false,
     sizeV: Size = Size.Normal,
-    emptyMessageV: Maybe[TextValue] = Absent,
+    emptyContentV: Maybe[EmptyContent] = Absent,
     onRowClickF: Maybe[String => Any < Async] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
@@ -246,13 +246,19 @@ final case class DataTable[A] private (
     /** Size: `.p-datatable-sm` / default / `.p-datatable-lg` cell paddings. */
     def size(v: Size): DataTable[A] = copy(sizeV = v)
 
-    /** Text of the full-width `tr.p-datatable-empty-message` row shown when no rows
+    /** Content of the full-width `tr.p-datatable-empty-message` row shown when no rows
       * survive filtering.
       */
-    def emptyMessage(v: String): DataTable[A] = copy(emptyMessageV = Present(TextValue.Const(v)))
+    def emptyContent(v: String): DataTable[A] = copy(emptyContentV = Present(EmptyContent.const(v)))
 
-    /** Reactive variant — re-renders the empty message in place on signal emission. */
-    def emptyMessage(sig: Signal[String]): DataTable[A] = copy(emptyMessageV = Present(TextValue.Dyn(sig)))
+    /** Reactive text: re-renders the empty slot in place on signal emission. */
+    def emptyContent(sig: Signal[String]): DataTable[A] = copy(emptyContentV = Present(EmptyContent.dyn(sig)))
+
+    /** Arbitrary UI for the empty state: an icon over a line of explanation and the
+      * button that creates the first record, rendered in the same slot the text would
+      * occupy.
+      */
+    def emptyContent(ui: UI): DataTable[A] = copy(emptyContentV = Present(EmptyContent.ui(ui)))
 
     /** Fired with the row key after any selection write from a row click. */
     def onRowClick(f: String => Any < Async): DataTable[A] = copy(onRowClickF = Present(f))
@@ -382,9 +388,9 @@ final case class DataTable[A] private (
             if paged.isEmpty then
                 List(
                     tr.cssClass("p-datatable-empty-message")(
-                        emptyMessageV.getOrElse(TextValue.Const("No records found")) match
-                            case TextValue.Const(t) => td.colspan(math.max(colCount, 1))(t): UI
-                            case TextValue.Dyn(s)   => s.render(t => td.colspan(math.max(colCount, 1))(t))
+                        toChild(EmptyContent.render(emptyContentV, "No records found")(c =>
+                            td.colspan(math.max(colCount, 1))(c)
+                        ))
                     )
                 )
             else paged.zipWithIndex.flatMap((a, i) => dataRow(a, i, sel, exp, colCount))
