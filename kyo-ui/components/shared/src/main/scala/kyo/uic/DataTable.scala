@@ -3,12 +3,68 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 import kyo.UI.Ast.HtmlChildVal
+import scala.annotation.implicitNotFound
 
 /** Horizontal alignment of one [[Column]] (applied to the header cell and every
   * body cell of the column via `.p-uic-dt-center` / `.p-uic-dt-end`).
   */
 enum ColumnAlign derives CanEqual:
     case Start, Center, End
+
+/** Which tables accept a [[Column]], carried as the column's second, phantom type
+  * argument so a table can refuse one it could not honor.
+  *
+  * `Column` is shared by [[DataTable]] and [[TreeTable]], and two of its options mean
+  * nothing over a hierarchy: [[Column.footer]] fills a `tfoot` a TreeTable does not
+  * render, and [[Column.rowSpan]] merges runs of equal cells, which consecutive rows at
+  * different depths do not form. Both setters return a `FlatOnly` column, which
+  * `TreeTable.columns` will not take.
+  *
+  * `AnyTable` extends `FlatOnly` because the subtyping runs that way round: a column
+  * every table accepts is in particular one a flat table accepts. With `Column`
+  * covariant in the parameter, that is what lets a mixed list splat into a DataTable.
+  */
+sealed trait FlatOnly
+
+/** A column carrying only options every table honors. See [[FlatOnly]]. */
+sealed trait AnyTable extends FlatOnly
+
+/** A column that has a text projection AND carries a flat-table-only option. */
+sealed trait TextFlatOnly extends FlatOnly
+
+/** A column that has a text projection and carries no flat-table-only option, which is
+  * what the text constructor returns and what [[Column.rowSpan]] needs to merge by.
+  */
+sealed trait TextAnyTable extends AnyTable, TextFlatOnly
+
+/** Evidence that a column has a text projection, which is what the argument-less
+  * [[Column.rowSpan]] merges by. The kind carries the fact, so a column built without one
+  * cannot reach that overload.
+  */
+@implicitNotFound(
+    "rowSpan without a key merges by this column's text projection, and it has none. Give it a key, " +
+        "rowSpan(_.field), or call rowSpan before footer, which drops the projection from the kind."
+)
+type HasText[K] = K <:< TextFlatOnly
+
+/** Evidence that a column kind is one every table takes, which is what
+  * `TreeTable.columns` asks for. Only `AnyTable` has an instance.
+  */
+@implicitNotFound(
+    "A TreeTable column cannot carry footer or rowSpan: a footer needs a tfoot this table does not render, " +
+        "and rowSpan merges runs of equal cells, which rows at different depths do not form."
+)
+sealed trait AnyTableColumn[-K <: FlatOnly]:
+    /** Hands back what the evidence already proves: a `K` column is an `AnyTable` one.
+      * Carrying the coercion here is what lets `TreeTable` store its columns at their
+      * true kind without a cast.
+      */
+    private[uic] def widen[A](c: Column[A, K]): Column[A, AnyTable]
+end AnyTableColumn
+
+object AnyTableColumn:
+    given AnyTableColumn[AnyTable] with
+        private[uic] def widen[A](c: Column[A, AnyTable]): Column[A, AnyTable] = c
 
 /** One column of a [[DataTable]] — a typed, hand-authored carrier: a `header`
   * label (also the column's identity in the `sort` spec), an optional plain-text
@@ -21,59 +77,101 @@ enum ColumnAlign derives CanEqual:
   * Column[Product]("Price").body(p => span(fmt(p))).sortBy(_.price).align(ColumnAlign.End)
   * }}}
   */
-final case class Column[A] private (
+final case class Column[A, +K <: FlatOnly] private (
     headerV: String,
     textF: Maybe[A => String] = Absent,
     bodyF: Maybe[A => UI] = Absent,
     orderingV: Maybe[Ordering[A]] = Absent,
     alignV: ColumnAlign = ColumnAlign.Start,
     footerTextV: Maybe[String] = Absent,
-    footerF: Maybe[Seq[A] => UI] = Absent
+    footerF: Maybe[Seq[A] => UI] = Absent,
+    rowSpanEqF: Maybe[(A, A) => Boolean] = Absent
 ):
     /** Custom cell content, replacing (or standing in for) the text projection. */
-    def body(f: A => UI): Column[A] = copy(bodyF = Present(f))
+    def body(f: A => UI): Column[A, K] = copy(bodyF = Present(f))
 
     /** Static footer label for this column; any column carrying a footer gives the
       * table a `tfoot`.
       */
-    def footer(v: String): Column[A] = copy(footerTextV = Present(v), footerF = Absent)
+    def footer(v: String): Column[A, FlatOnly] = copy(footerTextV = Present(v), footerF = Absent)
 
     /** Footer content computed from the rows that survive the table's global filter,
       * across every page rather than the visible one. The table owns filtering, so an
       * aggregate over what the reader is looking at cannot be computed by the caller.
       */
-    def footer(f: Seq[A] => UI): Column[A] = copy(footerF = Present(f), footerTextV = Absent)
+    def footer(f: Seq[A] => UI): Column[A, FlatOnly] = copy(footerF = Present(f), footerTextV = Absent)
 
     /** Makes the column sortable by the projected key (header clicks cycle
       * ascending → descending → unsorted when the table has a `sort` ref).
       */
-    def sortBy[B](f: A => B)(using ord: Ordering[B]): Column[A] =
+    def sortBy[B](f: A => B)(using ord: Ordering[B]): Column[A, K] =
         copy(orderingV = Present(Ordering.by(f)))
 
-    def align(v: ColumnAlign): Column[A] = copy(alignV = v)
+    def align(v: ColumnAlign): Column[A, K] = copy(alignV = v)
+
+    /** Merges this column's cells across consecutive rows whose key is equal: one cell per
+      * run, spanning it. The marker rides on the column, so unlike a string-keyed prop it
+      * cannot name a column the table does not have, and the key is explicit, so a column
+      * rendering only a [[body]] template can merge as well as a text one.
+      *
+      * The key is never rendered, it only decides which rows count as the same, so it can
+      * be any type the compiler will compare: an id, a tuple of two fields, an opaque
+      * type with a derived `CanEqual`. Going through a `String` would allocate on every
+      * comparison and, worse, merge two keys whose `toString` happened to agree. The
+      * column keeps the comparison rather than the projection, since it has no type
+      * parameter to hold the key's type in.
+      *
+      * Runs are clipped by every merged column to the LEFT and by the innermost group a
+      * row sits in. That is not a nicety: a full-width group header row inside a merged
+      * run would overlap the span and break the table, and two merged columns whose runs
+      * crossed would do the same. Clipping makes both impossible, and it makes column
+      * order the outer-to-inner order, which is how a merged table reads anyway.
+      */
+    def rowSpan[K2](key: A => K2)(using CanEqual[K2, K2]): Column[A, FlatOnly] =
+        copy(rowSpanEqF = Present((x, y) => key(x) == key(y)))
+
+    /** Merges by this column's own text projection, which is the key nine times in ten and
+      * would otherwise be written twice on one line. [[HasText]] is what confines the form
+      * to a column that has one: a body-only column has no text to merge by, and rather
+      * than merging nothing it does not compile.
+      */
+    def rowSpan(using HasText[K]): Column[A, FlatOnly] =
+        // The evidence is exactly the proof that this projection is there.
+        textF.map(f => copy(rowSpanEqF = Present((x, y) => f(x) == f(y)))).getOrElse(this)
 
     private[uic] def hasFooter: Boolean = footerTextV.isDefined || footerF.isDefined
+
+    /** How this column decides that two rows belong to the same merged cell, if it
+      * merges at all.
+      */
+    private[uic] def rowSpanEq: Maybe[(A, A) => Boolean] = rowSpanEqF
 end Column
 
 object Column:
     /** A column rendering (and filtering by) the plain-text projection. */
-    def apply[A](header: String)(text: A => String): Column[A] =
-        new Column[A](header, textF = Present(text))
+    def apply[A](header: String)(text: A => String): Column[A, TextAnyTable] =
+        new Column[A, TextAnyTable](header, textF = Present(text))
 
     /** A column without a text projection — give it a [[Column.body]] template.
       * (No text projection also means the global filter cannot match it.)
       */
-    def apply[A](header: String): Column[A] = new Column[A](header)
+    def apply[A](header: String): Column[A, AnyTable] = new Column[A, AnyTable](header)
 
     /** Lifts a prepared column list into the shape `columns` takes, so a table built
-      * from a reusable `Seq[Column[A]]` still splats: `columns(sharedCols*)`. A splat
-      * applies no per-element conversion, but it does apply one to the sequence.
+      * from a reusable `Seq[Column[A, AnyTable]]` still splats: `columns(sharedCols*)`.
+      * A splat applies no per-element conversion, but it does apply one to the sequence.
       */
-    given seqAsColumnsOf[A]: Conversion[Seq[Column[A]], Seq[ColumnOf[A]]] =
+    given seqAsColumnsOf[A, K <: FlatOnly]: Conversion[Seq[Column[A, K]], Seq[ColumnOf[A, K]]] =
         cs => cs.map(c => (_: ColumnScope[A]) ?=> c)
 end Column
 
 /** The typing context a [[column]] constructor reads its row type from.
+  *
+  * @note
+  *   The message covers the second way this given goes missing. A failure INSIDE a
+  *   `columns(...)` call makes the compiler retype the argument without an expected type,
+  *   which drops the scope, so an argument-less `rowSpan` on a column with no text
+  *   projection surfaces here rather than at [[HasText]].
   *
   * `DataTable[A].columns` and `TreeTable[A].columns` take their arguments as context
   * functions over this type, which fixes `A` before the argument is typed. That is
@@ -81,12 +179,16 @@ end Column
   * `A` from the expected element type, but chaining a modifier types the receiver on
   * its own, `A` widens to `Any`, and `_.name` stops resolving.
   */
+@implicitNotFound(
+    "A column has to be written inside a columns(...) call, which is what fixes its row type. If it is, then " +
+        "an argument-less rowSpan on this column has no text projection to merge by: give it a key, rowSpan(_.field)."
+)
 final class ColumnScope[A] private[uic] ()
 
 /** A column authored inside a `columns(...)` call, reading its row type from the
   * enclosing [[ColumnScope]].
   */
-type ColumnOf[A] = ColumnScope[A] ?=> Column[A]
+type ColumnOf[A, K <: FlatOnly] = ColumnScope[A] ?=> Column[A, K]
 
 /** A column whose row type comes from the table it is passed to, so it carries no type
   * argument of its own.
@@ -101,11 +203,11 @@ type ColumnOf[A] = ColumnScope[A] ?=> Column[A]
   * Outside a `columns(...)` call there is no scope to read, so a standalone column list
   * still names its row type once: `Column[Product]("Name")(_.name)`.
   */
-def column[A](header: String)(using ColumnScope[A])(text: A => String): Column[A] =
+def column[A](header: String)(using ColumnScope[A])(text: A => String): Column[A, TextAnyTable] =
     Column[A](header)(text)
 
 /** A scoped column without a text projection; give it a [[Column.body]] template. */
-def column[A](header: String)(using ColumnScope[A]): Column[A] =
+def column[A](header: String)(using ColumnScope[A]): Column[A, AnyTable] =
     Column[A](header)
 
 /** DataTable — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
@@ -155,6 +257,13 @@ def column[A](header: String)(using ColumnScope[A]): Column[A] =
   *   - `expanded(ref)` + `rowExpansionTemplate` — an expander-button column is
   *     auto-added; expanded rows are followed by a full-colspan
   *     `tr.p-datatable-row-expansion`.
+  *   - `groupBy(levels)`: one nested level per argument, outermost first. Each
+  *     run of consecutive rows sharing a level's key becomes a group, headed by a
+  *     `tr.p-datatable-row-group-header` and optionally closed by a summary row;
+  *     `expandedGroups(ref)` makes them collapsible, keyed by [[GroupPath]].
+  *   - `Column.rowSpan(key)`: the other way to show a key, where that column's cells merge
+  *     across their run, clipped by the merged columns left of them and by the
+  *     innermost group, so two spans can never cross.
   *   - `loading(flag)`: a spinner over `.p-datatable-mask` covers the table.
   *   - `scrollHeight(css)`: caps and scrolls the container, pinning the row
   *     groups to its edges.
@@ -171,7 +280,7 @@ def column[A](header: String)(using ColumnScope[A]): Column[A] =
 final case class DataTable[A] private (
     rowsV: List[A] = Nil,
     rowKeyF: Maybe[A => String] = Absent,
-    cols: List[Column[A]] = Nil,
+    cols: List[Column[A, FlatOnly]] = Nil,
     sortRef: Maybe[SignalRef[List[SortKey]]] = Absent,
     filterRef: Maybe[SignalRef[String]] = Absent,
     pageSizeV: Maybe[Int] = Absent,
@@ -180,6 +289,8 @@ final case class DataTable[A] private (
     selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
     expandedRef: Maybe[SignalRef[Set[String]]] = Absent,
     expansionF: Maybe[A => UI] = Absent,
+    groupsV: List[RowGroup[A]] = Nil,
+    expandedGroupsRef: Maybe[SignalRef[Set[GroupPath]]] = Absent,
     removableSortFlag: Boolean = true,
     stripedFlag: Boolean = false,
     gridlinesFlag: Boolean = false,
@@ -206,9 +317,9 @@ final case class DataTable[A] private (
     /** Appends columns. Each argument is authored against the table's row type, so
       * [[column]] needs no type argument of its own.
       */
-    def columns(cs: ColumnOf[A]*): DataTable[A] =
+    def columns(cs: ColumnOf[A, FlatOnly]*): DataTable[A] =
         given ColumnScope[A] = new ColumnScope[A]()
-        copy(cols = cols ++ cs.map(c => (c: Column[A])).toList)
+        copy(cols = cols ++ cs.map(c => (c: Column[A, FlatOnly])).toList)
     end columns
 
     /** Binds the ordered sort spec two-way: [[SortKey]] entries, the first sorting one
@@ -255,6 +366,36 @@ final case class DataTable[A] private (
       * it auto-adds the expander-button column.
       */
     def rowExpansionTemplate(f: A => UI): DataTable[A] = copy(expansionF = Present(f))
+
+    /** Groups the rows, one nested level per argument, outermost first. Every run of
+      * CONSECUTIVE rows sharing a level's key becomes a group of that level, and the
+      * levels below it split that group further.
+      *
+      * Grouping reads the order the table is about to render in, it does not impose one,
+      * so pair it with a [[sort]] spec that leads with the same projections (or with rows
+      * that already arrive ordered). Group a table by one key while it sorts by another
+      * and the same key legitimately heads several runs, which is what the row order says.
+      *
+      * Each argument is authored against the table's row type, so [[group]] needs no type
+      * argument of its own, and carries its own header row, summary row and visibility.
+      */
+    def groupBy(gs: GroupOf[A]*): DataTable[A] =
+        given GroupScope[A] = new GroupScope[A]()
+        copy(groupsV = groupsV ++ gs.map(g => (g: RowGroup[A])).toList)
+    end groupBy
+
+    /** Makes the groups collapsible and binds the set of EXPANDED paths two-way, so an
+      * empty set starts with every group collapsed. Each level's header row grows a toggle
+      * button; a collapsed group hides everything nested inside it, its own summary row
+      * included, and keeps its slice of the page, since [[paginate]] slices rows before
+      * they are grouped.
+      *
+      * The currency is [[GroupPath]] rather than a key, because a key alone does not
+      * identify a group below the outermost level: the same brand occurs under every
+      * category that sells one, and collapsing it in one place must not collapse it in the
+      * others. A level with [[RowGroup.showHeader]] off has no toggle and stays open.
+      */
+    def expandedGroups(ref: SignalRef[Set[GroupPath]]): DataTable[A] = copy(expandedGroupsRef = Present(ref))
 
     /** Zebra striping (`.p-datatable-striped` + `.p-row-odd` rows). */
     def stripedRows(v: Boolean): DataTable[A] = copy(stripedFlag = v)
@@ -349,7 +490,9 @@ final case class DataTable[A] private (
                 withRef(pageRef, 0) { page =>
                     withRef(selectedRef, Set.empty[String]) { sel =>
                         withRef(expandedRef, Set.empty[String]) { exp =>
-                            body(sort, query, page, sel, exp)
+                            withRef(expandedGroupsRef, Set.empty[GroupPath]) { groups =>
+                                body(sort, query, page, sel, exp, groups)
+                            }
                         }
                     }
                 }
@@ -361,7 +504,8 @@ final case class DataTable[A] private (
         query: String,
         page: Int,
         sel: Set[String],
-        exp: Set[String]
+        exp: Set[String],
+        openGroups: Set[GroupPath]
     )(using Frame): UI =
         // 1. Global filter: contains-match over the columns' text projections.
         val filtered =
@@ -413,7 +557,7 @@ final case class DataTable[A] private (
                         ))
                     )
                 )
-            else paged.zipWithIndex.flatMap((a, i) => dataRow(a, i, sel, exp, colCount))
+            else groupSegments(paged.zipWithIndex, groupsV, Nil, sel, exp, openGroups, colCount)
 
         // The footer aggregates over the FILTERED rows, not the visible page: a
         // column total that changed when the reader turned the page would be wrong.
@@ -486,7 +630,7 @@ final case class DataTable[A] private (
     /** One `tfoot` cell. Columns without a footer still render an empty `td` so the
       * footer row keeps the column grid.
       */
-    private def footerCell(c: Column[A], inFilter: List[A])(using Frame): UI =
+    private def footerCell(c: Column[A, FlatOnly], inFilter: List[A])(using Frame): UI =
         var cell = td
         c.alignV match
             case ColumnAlign.Center => cell = cell.cssClass("p-uic-dt-center")
@@ -551,7 +695,7 @@ final case class DataTable[A] private (
     end selectAllCell
 
     /** One sortable/plain header cell with Prime's header-content anatomy. */
-    private def headerCell(c: Column[A], sort: List[SortKey])(using Frame): UI =
+    private def headerCell(c: Column[A, FlatOnly], sort: List[SortKey])(using Frame): UI =
         val sortable  = c.orderingV.isDefined && sortRef.isDefined
         val sortingKs = SortKey.sorting(sort)
         val rank      = sortingKs.indexWhere(_.column == c.headerV)
@@ -614,8 +758,144 @@ final case class DataTable[A] private (
                 )
             case Absent => ()
 
+    private def isExpanded(a: A, exp: Set[String]): Boolean = expansionF.isDefined && exp.contains(keyOf(a))
+
+    /** How many table rows one data row contributes: itself, plus its expansion row while
+      * it is open. What a merged cell has to span is rows, not records.
+      */
+    private def trCount(a: A, exp: Set[String]): Int = if isExpanded(a, exp) then 2 else 1
+
+    /** Renders one slice of rows under the remaining grouping levels: each level splits the
+      * slice into runs, wraps every run in its header and summary rows, and hands the run
+      * down. With no levels left the rows render directly.
+      *
+      * `path` is the chain of keys taken so far, which is what identifies a group at any
+      * depth and therefore what [[expandedGroups]] holds.
+      */
+    private def groupSegments(
+        rows: List[(A, Int)],
+        levels: List[RowGroup[A]],
+        path: List[String],
+        sel: Set[String],
+        exp: Set[String],
+        openGroups: Set[GroupPath],
+        colCount: Int
+    )(using Frame): List[UI] =
+        levels match
+            case Nil => leafRows(rows, sel, exp, colCount)
+            case level :: rest =>
+                RowGroup.runs(rows)((a, _) => level.keyF(a)).flatMap { (key, run) =>
+                    val groupPath = GroupPath(path :+ key)
+                    val groupRows = run.map(_._1)
+                    // A level without a header row has nowhere to put a toggle, so it can
+                    // never be collapsed: collapsing it would hide its rows with no way
+                    // back.
+                    val collapsible = expandedGroupsRef.isDefined && level.showHeaderFlag
+                    val open        = !collapsible || openGroups.contains(groupPath)
+
+                    val headerRow: List[UI] =
+                        if !level.showHeaderFlag then Nil
+                        else List(groupHeaderRow(level, groupPath, groupRows, colCount, collapsible, open))
+                    val innerRows: List[UI] =
+                        if !open then Nil
+                        else groupSegments(run, rest, groupPath.keys, sel, exp, openGroups, colCount)
+                    val footerRow: List[UI] =
+                        if !open then Nil
+                        else
+                            level.footerF.toList.map(f =>
+                                tr.cssClass("p-datatable-row-group-footer")(
+                                    toChild(td.colspan(math.max(colCount, 1))(toChild(f(groupPath, groupRows))))
+                                )
+                            )
+                    headerRow ++ innerRows ++ footerRow
+                }
+    end groupSegments
+
+    /** The innermost slice: the data rows themselves, carrying whatever merged cells the
+      * [[Column.rowSpan]] columns resolve to over exactly this slice.
+      */
+    private def leafRows(rows: List[(A, Int)], sel: Set[String], exp: Set[String], colCount: Int)(using
+        Frame
+    ): List[UI] =
+        val spans = spanCells(rows.map(_._1), exp)
+        rows.zip(spans).flatMap((row, cells) => dataRow(row._1, row._2, sel, exp, colCount, cells))
+    end leafRows
+
+    /** Resolves the merged cells of one slice: for each row, which of the marked columns it
+      * heads a span of, and which it is covered by.
+      *
+      * The columns are taken left to right, and each one splits the blocks the previous one
+      * produced rather than the whole slice. That nesting is what keeps two spans from
+      * crossing, which the browser would render as a broken grid, and it is why the marked
+      * columns read outer to inner in column order.
+      */
+    private def spanCells(rows: List[A], exp: Set[String]): List[Map[Int, SpanCell]] =
+        val merged = cols.zipWithIndex.collect { case (c, i) if c.rowSpanEq.isDefined => (i, c.rowSpanEq.get) }
+        if merged.isEmpty then List.fill(rows.size)(Map.empty)
+        else
+            val indexed                                                = rows.toVector
+            val start: (Map[Int, Map[Int, SpanCell]], List[List[Int]]) = (Map.empty, List(rows.indices.toList))
+            val (assigned, _) = merged.foldLeft(start) { case ((acc, blocks), (col, same)) =>
+                val split = blocks.flatMap(block => RowGroup.blocks(block)((x, y) => same(indexed(x), indexed(y))))
+                val next = split.foldLeft(acc) { (byRow, run) =>
+                    val spanned = run.map(pos => trCount(indexed(pos), exp)).sum
+                    run.zipWithIndex.foldLeft(byRow) { case (m, (pos, offset)) =>
+                        val cell = if offset == 0 then SpanCell.Head(spanned) else SpanCell.Covered
+                        m.updated(pos, m.getOrElse(pos, Map.empty) + (col -> cell))
+                    }
+                }
+                (next, split)
+            }
+            rows.indices.toList.map(pos => assigned.getOrElse(pos, Map.empty))
+        end if
+    end spanCells
+
+    /** One level's header row: Prime's `tr.p-datatable-row-group-header` over one
+      * full-width cell, the collapse toggle ahead of the content while the level is
+      * collapsible. Without a [[RowGroup.header]] template the cell shows the key alone.
+      */
+    private def groupHeaderRow(
+        level: RowGroup[A],
+        path: GroupPath,
+        rows: List[A],
+        colCount: Int,
+        collapsible: Boolean,
+        open: Boolean
+    )(using Frame): UI =
+        val toggle: List[UI] =
+            if !collapsible then Nil
+            else
+                val glyph = if open then Icons.chevronDown else Icons.chevronRight
+                List(
+                    button
+                        .cssClass("p-datatable-row-toggle-button")
+                        .jsProp("type", "button")
+                        .aria("expanded", open.toString)
+                        .aria("label", if open then "Row Group Collapse" else "Row Group Expand")
+                        .onClick(toggleGroup(path))(toChild(GlyphSvg(glyph, "p-datatable-row-toggle-icon")))
+                )
+        val content: UI = level.headerF match
+            case Present(f) => f(path, rows)
+            case Absent     => stringToUI(path.key)
+        tr.cssClass("p-datatable-row-group-header")(
+            toChild(td.colspan(math.max(colCount, 1))((toggle :+ content).map(toChild)*))
+        )
+    end groupHeaderRow
+
+    private def toggleGroup(path: GroupPath)(using Frame): Any < Async =
+        expandedGroupsRef match
+            case Present(ref) => ref.getAndUpdate(cur => if cur.contains(path) then cur - path else cur + path)
+            case Absent       => ()
+
     /** One data row (plus its expansion row while expanded). */
-    private def dataRow(a: A, index: Int, sel: Set[String], exp: Set[String], colCount: Int)(using Frame): List[UI] =
+    private def dataRow(
+        a: A,
+        index: Int,
+        sel: Set[String],
+        exp: Set[String],
+        colCount: Int,
+        spans: Map[Int, SpanCell]
+    )(using Frame): List[UI] =
         val id    = keyOf(a)
         val isSel = sel.contains(id)
         val isExp = exp.contains(id)
@@ -645,17 +925,27 @@ final case class DataTable[A] private (
                 val icon: List[UI] = if isSel then List(GlyphSvg(Icons.check, "p-checkbox-icon")) else Nil
                 List(td(cb(toChild(div.cssClass("p-checkbox-box")(icon.map(toChild)*)))))
 
-        val dataTds: List[UI] = cols.map { c =>
-            var cell = td
-            c.alignV match
-                case ColumnAlign.Center => cell = cell.cssClass("p-uic-dt-center")
-                case ColumnAlign.End    => cell = cell.cssClass("p-uic-dt-end")
-                case ColumnAlign.Start  => ()
-            end match
-            val content: HtmlChildVal = c.bodyF match
-                case Present(f) => toChild(f(a))
-                case Absent     => toChild(stringToUI(c.textF.map(_(a)).getOrElse("")))
-            cell(content)
+        val dataTds: List[UI] = cols.zipWithIndex.flatMap { (c, i) =>
+            val cellSpan = spans.get(i)
+            if cellSpan.contains(SpanCell.Covered) then Nil
+            else
+                var cell = td
+                cellSpan match
+                    // A run of one row spans nothing; `rowspan="1"` is the default and
+                    // stating it would only make the markup say something it already says.
+                    case Some(SpanCell.Head(n)) if n > 1 => cell = cell.rowspan(n)
+                    case _                               => ()
+                end match
+                c.alignV match
+                    case ColumnAlign.Center => cell = cell.cssClass("p-uic-dt-center")
+                    case ColumnAlign.End    => cell = cell.cssClass("p-uic-dt-end")
+                    case ColumnAlign.Start  => ()
+                end match
+                val content: HtmlChildVal = c.bodyF match
+                    case Present(f) => toChild(f(a))
+                    case Absent     => toChild(stringToUI(c.textF.map(_(a)).getOrElse("")))
+                List(cell(content))
+            end if
         }
 
         var row = tr.cssClass(if index % 2 == 0 then "p-row-even" else "p-row-odd")

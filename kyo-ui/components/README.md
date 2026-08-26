@@ -895,6 +895,61 @@ In `SelectionMode.Checkbox` the checkbox column's header is the select-all. It i
 
 Around the rows sit four pieces of chrome. `header(ui)` and `footer(ui)` are free slots, above the table and below the paginator, which is where a filter box or a record count goes. `Column.footer` is a different thing: it renders a real `tfoot` row aligned to the column grid, and its computed form `footer(rows => ...)` receives the rows that survived the global filter, across every page rather than the visible one. That distinction is load-bearing, because the table owns filtering: a column total computed by the caller from its own list would disagree with what the reader is looking at. `loading(flag)` covers the table with a spinner mask, and `scrollHeight("240px")` caps the container and pins the header row group to its top edge while the body scrolls under it.
 
+`groupBy` takes one nested level per argument, outermost first, and each level presents every run of *consecutive* rows sharing its key as a group. Consecutive is the whole contract: grouping reads the order the table is about to render in, it does not impose one, so it composes with the sort spec instead of competing with it for authority over row order. Pair it with a sort that leads with the same projections, or with rows that already arrive ordered; group by one key while sorting by another and the same key legitimately heads several runs, which is what the row order says.
+
+A level is a value, built by `uic.group(key)` inside the `groupBy(...)` call, so it reads its row type from the table the same way `uic.column` does. It carries its own `header`, its own `footer`, and `showHeader(false)` for a level that only scopes a summary row. Both templates receive a `GroupPath`: `path.key` is that level's own key and `path.keys` the whole chain from the outermost level down. Levels close innermost first, so a level's summary row sits inside its parent's.
+
+The key may be of any type, and it labels itself through `toString`, so `group(_.year)` needs no projection of its own and `group(_.category)` is unchanged, `String`'s `toString` being the identity. That label is also the group's identity: two groups that read the same ARE the same group, which is already what lets a key heading several runs share one collapse state. Project to the text you want shown and you have set both at once.
+
+`expandedGroups(ref)` binds a `Set[GroupPath]` of EXPANDED groups, so an empty set starts everything closed. The currency is a path and not a key, because below the outermost level a key is not an identity: the same brand sits under every category that sells one, and collapsing it in one place must leave the others alone. Collapsing hides everything nested inside a group, its own summary included, and keeps its slice of the page, since `paginate` slices rows before they are grouped.
+
+```scala
+val groupedTable: UI < Async =
+    for
+        sort <- Signal.initRef(List(uic.SortKey.ascending("Category")))
+        open <- Signal.initRef(Set(uic.GroupPath("Accessories")))
+    yield uic.DataTable[Product]()
+        .rows(catalog)
+        .rowKey(_.id)
+        .columns(
+            uic.column("Category")(_.category).sortBy(_.category),
+            uic.column("Name")(_.name).sortBy(_.name),
+            uic.column("Price")(p => f"${p.price}%.2f").align(uic.ColumnAlign.End)
+        )
+        .sort(sort)
+        .groupBy(
+            uic.group(_.category).header((path, rows) => span(s"${path.key} (${rows.size})")),
+            uic.group(_.inStock.toString).footer((_, rows) => span(f"${rows.map(_.price).sum}%.2f"))
+        )
+        .expandedGroups(open): UI
+```
+
+The other way to show a key is `Column.rowSpan`, which merges that column's cells across their run into one spanning cell. It is a marker on the column rather than a name pointing at one, so it cannot select a column the table does not have.
+
+Bare, it merges by the column's own text projection, which is the key nine times in ten and would otherwise be written twice on one line. A column rendering only a `body` template has no text to merge by, and rather than merging nothing it does not compile: the column's kind carries whether a text projection is there. `rowSpan(key)` names the key instead, which is what a body-only column takes and what a text column reaches for when it should merge by something other than what it shows.
+
+That key is never rendered, only compared, so unlike a group key it is any type this build's strict equality will compare: an id, a tuple of two fields, an opaque type with a derived `CanEqual`. Routing it through a `String` would allocate on every comparison and merge two keys whose `toString` happened to agree.
+
+> **Caution:** `footer` and `rowSpan(key)` drop the text projection from the column's kind, since neither needs it. Reach for the bare `rowSpan` before them, or pass the key explicitly.
+
+Runs are clipped by every merged column to the *left* and by the innermost group a row sits in. That is load-bearing rather than tidy: a full-width group header row inside a merged run would overlap the span and break the table, and two merged columns whose runs crossed would do the same. Clipping makes both impossible, and it makes column order the outer-to-inner order, which is how a merged table reads anyway.
+
+```scala
+val mergedTable: UI < Async =
+    for sort <- Signal.initRef(List(uic.SortKey.ascending("Category")))
+    yield uic.DataTable[Product]()
+        .rows(catalog)
+        .rowKey(_.id)
+        .columns(
+            uic.column("Category")(_.category).sortBy(_.category).rowSpan,
+            uic.column("Name")(_.name).sortBy(_.name)
+        )
+        .sort(sort)
+        .showGridlines(true): UI
+```
+
+`Column` is shared with `TreeTable`, and two of its options are not: `footer` fills a `tfoot` a TreeTable does not render, and `rowSpan` merges runs of equal cells, which rows at different depths do not form. Both return a `Column[A, FlatOnly]`, and `TreeTable.columns` takes only `AnyTable` columns, so passing one is a compile error naming the reason rather than an option quietly dropped at render. That second type argument is the only place the distinction shows: `Seq[uic.Column[R, uic.AnyTable]]` for a reusable list every table takes, `Seq[uic.Column[R, uic.FlatOnly]]` for one that merges.
+
 ### Recursive shapes
 
 `TreeTable[A]` is `DataTable`'s columns over recursive nodes, `Tree` is the plain hierarchy, and `OrganizationChart` is the top-down box diagram. All three bind selection as a `SignalRef[Set[String]]` of node keys, and all three bind their open state through `expanded(ref)` in the same currency and the same polarity, so one ref moves between them without inverting.

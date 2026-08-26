@@ -46,7 +46,7 @@ final case class TreeTableNode[A](data: A, children: List[TreeTableNode[A]] = Ni
 final case class TreeTable[A] private (
     nodeList: List[TreeTableNode[A]] = Nil,
     rowKeyF: Maybe[A => String] = Absent,
-    cols: List[Column[A]] = Nil,
+    cols: List[Column[A, AnyTable]] = Nil,
     expandedRef: Maybe[SignalRef[Set[String]]] = Absent,
     selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
     sortRef: Maybe[SignalRef[List[SortKey]]] = Absent,
@@ -70,13 +70,18 @@ final case class TreeTable[A] private (
       */
     def rowKey(f: A => String): TreeTable[A] = copy(rowKeyF = Present(f))
 
-    /** Appends columns (the DataTable [[Column]] carrier — text projection, body
-      * template, `sortBy`, alignment). Each argument is authored against the table's
-      * row type, so [[column]] needs no type argument of its own.
+    /** Appends columns (the DataTable [[Column]] carrier: text projection, body
+      * template, `sortBy`, alignment). Each argument is authored against the table's row
+      * type, so [[column]] needs no type argument of its own.
+      *
+      * The carrier is shared, but two of its options are not: `footer` and `rowSpan` mean
+      * nothing over a hierarchy, and both return a [[FlatOnly]] column. The
+      * [[AnyTableColumn]] evidence is what refuses one here, at compile time and with its
+      * own message, rather than letting the option through to be dropped at render.
       */
-    def columns(cs: ColumnOf[A]*): TreeTable[A] =
+    def columns[K <: FlatOnly](cs: ColumnOf[A, K]*)(using shared: AnyTableColumn[K]): TreeTable[A] =
         given ColumnScope[A] = new ColumnScope[A]()
-        copy(cols = cols ++ cs.map(c => (c: Column[A])).toList)
+        copy(cols = cols ++ cs.map(c => shared.widen((c: Column[A, K]))).toList)
     end columns
 
     /** Binds expansion two-way to `ref` (a set of [[rowKey]] ids). */
@@ -213,7 +218,7 @@ final case class TreeTable[A] private (
         }
 
     /** One sortable/plain header cell with Prime's header-content anatomy. */
-    private def headerCell(c: Column[A], sort: List[SortKey])(using Frame): UI =
+    private def headerCell(c: Column[A, AnyTable], sort: List[SortKey])(using Frame): UI =
         val sortable  = c.orderingV.isDefined && sortRef.isDefined
         val sortingKs = SortKey.sorting(sort)
         val rank      = sortingKs.indexWhere(_.column == c.headerV)
