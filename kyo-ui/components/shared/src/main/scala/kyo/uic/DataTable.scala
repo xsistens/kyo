@@ -130,12 +130,20 @@ def column[A](header: String)(using ColumnScope[A]): Column[A] =
   *
   * Rows are TYPED and every behavior is pure `(data, ui-state refs) → markup`,
   * computed server-side at render:
-  *   - `sort(ref)` — the table SORTS the rows itself. A header click cycles
-  *     ascending → descending → removed (removable-sort semantics); clicking a
-  *     DIFFERENT column appends to the spec, so multi-sort needs no modifier key
-  *     (the spec is ordered: first entry = primary key). While two or more columns
-  *     are sorted, each sorted header carries its 1-based rank in a
-  *     `.p-datatable-sort-badge`, which is the only thing that says which key wins.
+  *   - `sort(ref)`: the table SORTS the rows itself, from an ordered [[SortKey]]
+  *     spec whose first sorting entry is the primary key. What a plain header click does
+  *     depends on how many columns sort. With one, it owns the whole cycle: ascending,
+  *     descending, off. With several, it only REVERSES the clicked column, in place, so a
+  *     spec built up over several clicks cannot lose a key because one header was clicked
+  *     once too often; there, switching a column off belongs to Ctrl or Cmd. A plain
+  *     click on a column that is not sorting makes it the single key either way.
+  *     Ctrl or Cmd click is the multi-key control: it adds a column, or advances the one
+  *     already there WITHOUT moving it (ascending, descending, and, while
+  *     [[removableSort]] is on, unsorted while keeping its slot). Holding the slot is
+  *     what makes a mis-click cheap, since the next Ctrl click on the same header
+  *     restores the column at the rank it had. While two or more columns sort, each
+  *     sorted header carries its 1-based rank in a `.p-datatable-sort-badge`, which is
+  *     the only thing that says which key wins.
   *   - `globalFilter(ref)` — case-insensitive contains-match over the columns'
   *     text projections.
   *   - `paginate(size)(pageRef)` — slices the (filtered, sorted) rows and renders
@@ -164,7 +172,7 @@ final case class DataTable[A] private (
     rowsV: List[A] = Nil,
     rowKeyF: Maybe[A => String] = Absent,
     cols: List[Column[A]] = Nil,
-    sortRef: Maybe[SignalRef[List[(String, Boolean)]]] = Absent,
+    sortRef: Maybe[SignalRef[List[SortKey]]] = Absent,
     filterRef: Maybe[SignalRef[String]] = Absent,
     pageSizeV: Maybe[Int] = Absent,
     pageRef: Maybe[SignalRef[Int]] = Absent,
@@ -172,6 +180,7 @@ final case class DataTable[A] private (
     selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
     expandedRef: Maybe[SignalRef[Set[String]]] = Absent,
     expansionF: Maybe[A => UI] = Absent,
+    removableSortFlag: Boolean = true,
     stripedFlag: Boolean = false,
     gridlinesFlag: Boolean = false,
     sizeV: Size = Size.Normal,
@@ -202,11 +211,21 @@ final case class DataTable[A] private (
         copy(cols = cols ++ cs.map(c => (c: Column[A])).toList)
     end columns
 
-    /** Binds the ordered sort spec two-way: `(column header, ascending)` entries,
-      * first = primary. Header clicks cycle asc → desc → removed; clicks on other
-      * columns append (modifier-free multi-sort).
+    /** Binds the ordered sort spec two-way: [[SortKey]] entries, the first sorting one
+      * being the primary key.
+      *
+      * A plain header click sorts by that column alone. A click holding Ctrl (or Cmd)
+      * adds the column to the spec, or advances the one already there WITHOUT moving it:
+      * ascending, descending, and (while [[removableSort]] is on) unsorted while keeping
+      * its slot. That last state is what makes an accidental click cheap, since one more
+      * click on the same header puts the column back at the rank it had.
       */
-    def sort(ref: SignalRef[List[(String, Boolean)]]): DataTable[A] = copy(sortRef = Present(ref))
+    def sort(ref: SignalRef[List[SortKey]]): DataTable[A] = copy(sortRef = Present(ref))
+
+    /** Whether a header click cycle reaches `Unsorted` (default) or stops at ascending
+      * and descending, which is Prime's default.
+      */
+    def removableSort(v: Boolean): DataTable[A] = copy(removableSortFlag = v)
 
     /** Binds the global filter query: case-insensitive contains-match over the
       * columns' text projections.
@@ -325,7 +344,7 @@ final case class DataTable[A] private (
             case Absent     => k(fallback)
 
     private[uic] def render(using Frame): UI =
-        withRef(sortRef, List.empty[(String, Boolean)]) { sort =>
+        withRef(sortRef, List.empty[SortKey]) { sort =>
             withRef(filterRef, "") { query =>
                 withRef(pageRef, 0) { page =>
                     withRef(selectedRef, Set.empty[String]) { sel =>
@@ -338,7 +357,7 @@ final case class DataTable[A] private (
         }
 
     private def body(
-        sort: List[(String, Boolean)],
+        sort: List[SortKey],
         query: String,
         page: Int,
         sel: Set[String],
@@ -351,11 +370,12 @@ final case class DataTable[A] private (
                 val q = query.toLowerCase
                 rowsV.filter(a => cols.exists(c => c.textF.exists(f => f(a).toLowerCase.contains(q))))
 
-        // 2. Sort: apply the spec back-to-front through stable sorts, so the first
-        //    entry ends up the primary key.
-        val sorted = sort.reverse.foldLeft(filtered) { case (rs, (key, asc)) =>
-            cols.find(_.headerV == key).flatMap(_.orderingV.toOption) match
-                case Some(ord) => rs.sorted(using if asc then ord else ord.reverse)
+        // 2. Sort: apply the SORTING entries back-to-front through stable sorts, so the
+        //    first one ends up the primary key. Unsorted entries hold a slot in the
+        //    priority order and contribute nothing here.
+        val sorted = SortKey.sorting(sort).reverse.foldLeft(filtered) { (rs, k) =>
+            cols.find(_.headerV == k.column).flatMap(_.orderingV.toOption) match
+                case Some(ord) => rs.sorted(using if k.direction == SortDirection.Ascending then ord else ord.reverse)
                 case None      => rs
         }
 
@@ -531,10 +551,11 @@ final case class DataTable[A] private (
     end selectAllCell
 
     /** One sortable/plain header cell with Prime's header-content anatomy. */
-    private def headerCell(c: Column[A], sort: List[(String, Boolean)])(using Frame): UI =
-        val sortable = c.orderingV.isDefined && sortRef.isDefined
-        val rank     = sort.indexWhere(_._1 == c.headerV)
-        val active   = sort.find(_._1 == c.headerV)
+    private def headerCell(c: Column[A], sort: List[SortKey])(using Frame): UI =
+        val sortable  = c.orderingV.isDefined && sortRef.isDefined
+        val sortingKs = SortKey.sorting(sort)
+        val rank      = sortingKs.indexWhere(_.column == c.headerV)
+        val direction = sort.find(_.column == c.headerV).map(_.direction).getOrElse(SortDirection.Unsorted)
 
         var cell = th.cssClass("p-datatable-header-cell")
         c.alignV match
@@ -543,26 +564,26 @@ final case class DataTable[A] private (
             case ColumnAlign.Start  => ()
         end match
         if sortable then
-            cell = cell.cssClass("p-datatable-sortable-column").tabIndex(0).onClick(toggleSort(c.headerV))
-        active.foreach { (_, asc) =>
+            cell = cell.cssClass("p-datatable-sortable-column").tabIndex(0).onClick(e => toggleSort(c.headerV, e))
+        if direction.isSorting then
             cell = cell
                 .cssClass("p-datatable-column-sorted")
-                .aria("sort", if asc then "ascending" else "descending")
-        }
+                .aria("sort", if direction == SortDirection.Ascending then "ascending" else "descending")
+        end if
 
         val sortIcon: List[UI] =
             if !sortable then Nil
             else
-                val glyph = active match
-                    case Some((_, true))  => Icons.sortAmountUpAlt
-                    case Some((_, false)) => Icons.sortAmountDown
-                    case None             => Icons.sortAlt
+                val glyph = direction match
+                    case SortDirection.Ascending  => Icons.sortAmountUpAlt
+                    case SortDirection.Descending => Icons.sortAmountDown
+                    case SortDirection.Unsorted   => Icons.sortAlt
                 List(GlyphSvg(glyph, "p-datatable-sort-icon"))
 
         // Sorting by one column needs no ordinal; sorting by several does, because the
         // spec is ordered and the icons alone cannot say which key is primary.
         val sortBadge: List[UI] =
-            if rank < 0 || sort.length < 2 then Nil
+            if rank < 0 || sortingKs.length < 2 then Nil
             else
                 List(
                     Badge((rank + 1).toString)
@@ -578,18 +599,19 @@ final case class DataTable[A] private (
         )
     end headerCell
 
-    /** Header click: asc → desc → removed on the clicked column; clicking another
-      * column APPENDS its spec (modifier-free multi-sort).
+    /** Header click. Plain: sort by this column alone, advancing it when it is already
+      * the only key so a plain click still cycles. Ctrl or Cmd: add the column, or
+      * advance the one already in the spec IN PLACE, which is what lets an accidental
+      * click be undone by the next one.
       */
-    private def toggleSort(key: String)(using Frame): Any < Async =
+    private def toggleSort(key: String, e: MouseEvent)(using Frame): Any < Async =
         sortRef match
             case Present(ref) =>
-                ref.getAndUpdate { cur =>
-                    cur.find(_._1 == key) match
-                        case Some((_, true))  => cur.map(s => if s._1 == key then (key, false) else s)
-                        case Some((_, false)) => cur.filterNot(_._1 == key)
-                        case None             => cur :+ (key, true)
-                }
+                val multi = e.modifiers.ctrl || e.modifiers.meta
+                ref.getAndUpdate(cur =>
+                    if multi then SortKey.cycle(cur, key, removableSortFlag)
+                    else SortKey.plain(cur, key, removableSortFlag)
+                )
             case Absent => ()
 
     /** One data row (plus its expansion row while expanded). */

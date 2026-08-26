@@ -549,7 +549,7 @@ class DiscoverabilityTest extends UicTest:
         typeCheck(
             preamble +
                 """final case class P(id: String, name: String, price: Int)
-def x(sort: SignalRef[List[(String, Boolean)]], q: SignalRef[String], pg: SignalRef[Int], sel: SignalRef[Set[String]])(using Frame) =
+def x(sort: SignalRef[List[uic.SortKey]], q: SignalRef[String], pg: SignalRef[Int], sel: SignalRef[Set[String]])(using Frame) =
   uic.DataTable[P]()
     .rows(Seq(P("1", "A", 1)))
     .rowKey(_.id)
@@ -1176,7 +1176,7 @@ def x(using Frame) = uic.column("Name")((r: R) => r.name)"""
 
     "TreeTable reuses the DataTable Column carrier over recursive typed nodes; pagination is deferred" in {
         typeCheck(
-            preamble + """def x(e: SignalRef[Set[String]], s: SignalRef[Set[String]], o: SignalRef[List[(String, Boolean)]])(using Frame): uic.TreeTable[String] = uic.TreeTable[String]().nodes(uic.TreeTableNode("root", List(uic.TreeTableNode("leaf")))).columns(uic.Column[String]("Name")(identity).sortBy(identity)).rowKey(identity).expanded(e).selected(s).sort(o).selectionMode(uic.SelectionMode.Multiple).showGridlines(true).size(uic.Size.Small).emptyContent("Empty").onNodeToggle(_ => ()).onRowClick(_ => ()).accessibleName("Files")"""
+            preamble + """def x(e: SignalRef[Set[String]], s: SignalRef[Set[String]], o: SignalRef[List[uic.SortKey]])(using Frame): uic.TreeTable[String] = uic.TreeTable[String]().nodes(uic.TreeTableNode("root", List(uic.TreeTableNode("leaf")))).columns(uic.Column[String]("Name")(identity).sortBy(identity)).rowKey(identity).expanded(e).selected(s).sort(o).selectionMode(uic.SelectionMode.Multiple).showGridlines(true).size(uic.Size.Small).emptyContent("Empty").onNodeToggle(_ => ()).onRowClick(_ => ()).accessibleName("Files")"""
         )
         typeCheckFailure(preamble + """def x(p: SignalRef[Int]) = uic.TreeTable[String]().paginate(5)(p)""")
         typeCheckFailure(preamble + """def x = uic.TreeTable[String]().rows(Seq("a"))""")
