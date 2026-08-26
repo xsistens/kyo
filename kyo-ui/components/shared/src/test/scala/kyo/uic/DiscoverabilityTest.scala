@@ -584,6 +584,44 @@ def y(using Frame) =
         )
     }
 
+    "columns read the row type from the table, so a scoped column carries no type argument" in {
+        // The whole point: modifiers chain without the receiver widening to Any.
+        typeCheck(
+            preamble +
+                """final case class R(id: String, name: String, price: Int)
+def x(using Frame) =
+  uic.DataTable[R]()
+    .rows(Seq(R("1", "A", 1)))
+    .columns(
+      uic.column("Name")(_.name).sortBy(_.name),
+      uic.column("Price")(_.price.toString).align(uic.ColumnAlign.End).footer("Total"),
+      uic.column("Actions").body(r => span(r.id))
+    )"""
+        )
+        // TreeTable shares the carrier and the scope.
+        typeCheck(
+            preamble +
+                """final case class R(name: String, size: String)
+def x(using Frame) =
+  uic.TreeTable[R]()
+    .nodes(uic.TreeTableNode(R("a", "1kb")))
+    .columns(uic.column("Name")(_.name).sortBy(_.name))"""
+        )
+        // A prepared list still splats: the scope is per-argument, the lift is per-sequence.
+        typeCheck(
+            preamble +
+                """final case class R(id: String, name: String)
+def shared(using Frame): Seq[uic.Column[R]] = Seq(uic.Column[R]("Name")(_.name).sortBy(_.name))
+def x(using Frame) = uic.DataTable[R]().columns(shared*)"""
+        )
+        // Outside a columns(...) call there is no scope to read from.
+        typeCheckFailure(
+            preamble +
+                """final case class R(id: String, name: String)
+def x(using Frame) = uic.column("Name")((r: R) => r.name)"""
+        )
+    }
+
     "Tree exposes nodes/expansion on the shared SelectionMode; the ui5 riches are retired" in {
         typeCheck(
             preamble + """def x = uic.Tree().nodes(uic.TreeNode("R", "r")).selectionMode(uic.SelectionMode.Multiple).emptyMessage("m")"""
