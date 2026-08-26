@@ -72,7 +72,8 @@ end Column
   * `div.p-datatable-table-container` > `table.p-datatable-table` with
   * `th.p-datatable-header-cell[.p-datatable-sortable-column][.p-datatable-column-sorted]`
   * headers (each a `div.p-datatable-column-header-content` >
-  * `span.p-datatable-column-title` + `span.p-datatable-sort-icon`) over body rows
+  * `span.p-datatable-column-title` + `span.p-datatable-sort-icon` + the
+  * multi-sort `span.p-datatable-sort-badge`) over body rows
   * carrying `.p-row-even`/`.p-row-odd`, `.p-datatable-selectable-row`, and
   * `.p-datatable-row-selected`, plus an embedded `div.p-paginator`), so the
   * extracted `@primeuix` datatable + paginator CSS applies.
@@ -90,19 +91,22 @@ end Column
   *   - `sort(ref)` — the table SORTS the rows itself. A header click cycles
   *     ascending → descending → removed (removable-sort semantics); clicking a
   *     DIFFERENT column appends to the spec, so multi-sort needs no modifier key
-  *     (the spec is ordered: first entry = primary key).
+  *     (the spec is ordered: first entry = primary key). While two or more columns
+  *     are sorted, each sorted header carries its 1-based rank in a
+  *     `.p-datatable-sort-badge`, which is the only thing that says which key wins.
   *   - `globalFilter(ref)` — case-insensitive contains-match over the columns'
   *     text projections.
   *   - `paginate(size)(pageRef)` — slices the (filtered, sorted) rows and renders
   *     the embedded Prime paginator; the page ref is 0-based and clamped.
   *   - `selectionMode` + `selected(ref)` — `Single`/`Multiple` select on row
-  *     click; `Checkbox` renders Prime's checkbox column (`Radio` follows
-  *     single-select semantics without a radio column for now).
+  *     click; `Checkbox` renders Prime's checkbox column, whose header carries the
+  *     binary select-all over every row that survived the global filter (`Radio`
+  *     follows single-select semantics without a radio column for now).
   *   - `expanded(ref)` + `rowExpansionTemplate` — an expander-button column is
   *     auto-added; expanded rows are followed by a full-colspan
   *     `tr.p-datatable-row-expansion`.
-  *   - `loading(flag)` — a spinner over `.p-datatable-mask` covers the table.
-  *   - `scrollHeight(css)` — caps and scrolls the container, pinning the row
+  *   - `loading(flag)`: a spinner over `.p-datatable-mask` covers the table.
+  *   - `scrollHeight(css)`: caps and scrolls the container, pinning the row
   *     groups to its edges.
   *
   * `rowKey` supplies the stable id behind selection/expansion and the
@@ -217,7 +221,7 @@ final case class DataTable[A] private (
     /** `aria-labelledby` id reference for the table. */
     def accessibleNameRef(v: String): DataTable[A] = copy(accNameRefV = Present(v))
 
-    /** Toolbar slot above the table (`div.p-datatable-header`) — the place for a
+    /** Toolbar slot above the table (`div.p-datatable-header`), the place for a
       * global-filter input, a title, or action buttons.
       */
     def header(ui: UI): DataTable[A] = copy(headerV = Present(ui))
@@ -232,7 +236,7 @@ final case class DataTable[A] private (
       */
     def loading(v: Boolean): DataTable[A] = copy(loadingV = Present(BoolValue.Const(v)))
 
-    /** Reactive busy state — bind to the data-fetch in-flight signal; the mask toggles
+    /** Reactive busy state, bound to the data-fetch in-flight signal; the mask toggles
       * in its own sub-region without re-rendering the rows.
       */
     def loading(sig: Signal[Boolean]): DataTable[A] = copy(loadingV = Present(BoolValue.Dyn(sig)))
@@ -322,7 +326,7 @@ final case class DataTable[A] private (
 
         val headRow: UI =
             val expanderTh: List[UI] = if expanderColumn then List(th.cssClass("p-datatable-header-cell")) else Nil
-            val checkboxTh: List[UI] = if checkboxColumn then List(th.cssClass("p-datatable-header-cell")) else Nil
+            val checkboxTh: List[UI] = if checkboxColumn then List(selectAllCell(sorted, sel)) else Nil
             val colThs: List[UI]     = cols.map(c => headerCell(c, sort))
             tr((expanderTh ++ checkboxTh ++ colThs).map(toChild)*)
         end headRow
@@ -446,9 +450,37 @@ final case class DataTable[A] private (
         end if
     end rowKeyCard
 
+    /** The checkbox column's header cell: Prime's select-all, binary (no partial
+      * state), checked while every row that survived the global filter is selected.
+      *
+      * It works on the FILTERED rows across every page, not the visible slice, which
+      * is the only reading of "all" that stays stable while the reader pages through.
+      * Rows the filter removed keep whatever selection they had, so the write is an
+      * add-or-remove of the visible keys rather than a replacement of the whole set:
+      * narrowing the filter, select-alling, then widening it again must not silently
+      * drop what was selected before.
+      */
+    private def selectAllCell(inFilter: List[A], sel: Set[String])(using Frame): UI =
+        val keys        = inFilter.map(keyOf)
+        val allSelected = keys.nonEmpty && keys.forall(sel.contains)
+        val toggle: Any < Async = selectedRef match
+            case Present(ref) => ref.getAndUpdate(cur => if allSelected then cur -- keys else cur ++ keys)
+            case Absent       => ()
+        th.cssClass("p-datatable-header-cell")(
+            toChild(
+                CheckBox()
+                    .checked(allSelected)
+                    .accessibleName("Select All")
+                    .onChange(_ => toggle)
+                    .render
+            )
+        )
+    end selectAllCell
+
     /** One sortable/plain header cell with Prime's header-content anatomy. */
     private def headerCell(c: Column[A], sort: List[(String, Boolean)])(using Frame): UI =
         val sortable = c.orderingV.isDefined && sortRef.isDefined
+        val rank     = sort.indexWhere(_._1 == c.headerV)
         val active   = sort.find(_._1 == c.headerV)
 
         var cell = th.cssClass("p-datatable-header-cell")
@@ -474,9 +506,21 @@ final case class DataTable[A] private (
                     case None             => Icons.sortAlt
                 List(GlyphSvg(glyph, "p-datatable-sort-icon"))
 
+        // Sorting by one column needs no ordinal; sorting by several does, because the
+        // spec is ordered and the icons alone cannot say which key is primary.
+        val sortBadge: List[UI] =
+            if rank < 0 || sort.length < 2 then Nil
+            else
+                List(
+                    Badge((rank + 1).toString)
+                        .size(Size.Small)
+                        .hostClass("p-datatable-sort-badge")
+                        .render
+                )
+
         cell(
             div.cssClass("p-datatable-column-header-content")(
-                ((span.cssClass("p-datatable-column-title")(c.headerV): UI) :: sortIcon).map(toChild)*
+                ((span.cssClass("p-datatable-column-title")(c.headerV): UI) :: (sortIcon ++ sortBadge)).map(toChild)*
             )
         )
     end headerCell

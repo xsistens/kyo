@@ -1287,6 +1287,50 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "DataTable ranks multi-sort columns with a badge and gives the checkbox column a select-all header" in {
+        final case class Row(id: String, a: String, b: String)
+        val rows = List(Row("r1", "x", "p"), Row("r2", "y", "q"))
+        def render(sortV: List[(String, Boolean)], selV: Set[String])(using Frame): String < Async =
+            for
+                sort <- Signal.initRef(sortV)
+                sel  <- Signal.initRef(selV)
+                out <- UI.runRender(
+                    uic.DataTable[Row]()
+                        .rows(rows)
+                        .rowKey(_.id)
+                        .columns(
+                            uic.Column[Row]("A")(_.a).sortBy(_.a),
+                            uic.Column[Row]("B")(_.b).sortBy(_.b)
+                        )
+                        .sort(sort)
+                        .selectionMode(uic.SelectionMode.Checkbox)
+                        .selected(sel)
+                ).take(1).run
+            yield out.mkString
+        for
+            unsorted <- render(Nil, Set.empty)
+            single   <- render(List("A" -> true), Set.empty)
+            multi    <- render(List("B" -> true, "A" -> false), Set.empty)
+            none     <- render(Nil, Set.empty)
+            some     <- render(Nil, Set("r1"))
+            all      <- render(Nil, Set("r1", "r2"))
+        yield
+            assert(!unsorted.contains("p-datatable-sort-badge"), "no badge while nothing is sorted")
+            // One sorted column needs no ordinal: the icon already says everything.
+            assert(!single.contains("p-datatable-sort-badge"), "no badge on a single sort key")
+            assert(multi.contains("p-datatable-sort-badge"), "multi-sort ranks the columns")
+            assert(multi.contains("p-badge"), "the rank rides Prime's badge skin")
+            // Column A renders first and carries rank 2, because the spec's first
+            // entry (B) is the primary key.
+            assert(multi.indexOf(">2<") < multi.indexOf(">1<"), "the ordinal follows the spec order, not the column order")
+            // Prime's select-all is binary: a partial selection reads unchecked.
+            assert(none.contains("p-checkbox"), "checkbox column stamps a select-all header")
+            assert(!none.contains("p-checkbox-checked"), "nothing selected: header unchecked")
+            assert("p-checkbox-checked".r.findAllIn(some).size == 1, "one row selected: only that row's box is checked")
+            assert("p-checkbox-checked".r.findAllIn(all).size == 3, "all rows selected: both rows plus the header")
+        end for
+    }
+
     "DataTable header/footer slots, column footers, loading mask and scroll height render Prime anatomy" in {
         final case class Item(id: String, name: String, price: Int)
         val items = List(Item("a", "Alpha", 10), Item("b", "Beta", 20), Item("c", "Gamma", 30))
