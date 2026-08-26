@@ -35,9 +35,10 @@ final case class TreeTableNode[A](data: A, children: List[TreeTableNode[A]] = Ni
   *     their parent is expanded.
   *   - `selectionMode` + `selected(ref)` — `Single`/`Multiple` select on row
   *     click (Prime's checkbox cascade with partial states is deferred).
-  *   - `sort(ref)` — DataTable's ordered `(column header, ascending)` spec;
-  *     sorting applies PER SIBLING LEVEL (children sort within their parent),
-  *     header clicks cycle asc → desc → removed.
+  *   - `sort(ref)`: DataTable's ordered [[SortKey]] spec, applied PER SIBLING LEVEL
+  *     (children sort within their parent). Clicks follow the DataTable contract: a
+  *     plain click cycles the only sorted column through all three states but merely
+  *     reverses one of several, Ctrl or Cmd adds a column or advances one in place.
   *
   * Pagination is deferred (Prime paginates root rows only — revisit with a
   * concrete need).
@@ -48,8 +49,9 @@ final case class TreeTable[A] private (
     cols: List[Column[A]] = Nil,
     expandedRef: Maybe[SignalRef[Set[String]]] = Absent,
     selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
-    sortRef: Maybe[SignalRef[List[(String, Boolean)]]] = Absent,
+    sortRef: Maybe[SignalRef[List[SortKey]]] = Absent,
     selectionModeV: SelectionMode = SelectionMode.None,
+    removableSortFlag: Boolean = true,
     gridlinesFlag: Boolean = false,
     sizeV: Size = Size.Normal,
     emptyContentV: Maybe[EmptyContent] = Absent,
@@ -83,11 +85,16 @@ final case class TreeTable[A] private (
     /** Binds selection two-way to `ref` (a set of [[rowKey]] ids). */
     def selected(ref: SignalRef[Set[String]]): TreeTable[A] = copy(selectedRef = Present(ref))
 
-    /** Binds the ordered sort spec two-way (per sibling level): `(column header,
-      * ascending)` entries, first = primary; header clicks cycle asc → desc →
-      * removed.
+    /** Binds the ordered sort spec two-way (applied per sibling level): [[SortKey]]
+      * entries, the first sorting one being the primary key. Clicks follow the DataTable
+      * contract, plain for single-key and Ctrl or Cmd for multi-key in place.
       */
-    def sort(ref: SignalRef[List[(String, Boolean)]]): TreeTable[A] = copy(sortRef = Present(ref))
+    def sort(ref: SignalRef[List[SortKey]]): TreeTable[A] = copy(sortRef = Present(ref))
+
+    /** Whether a header click cycle reaches `Unsorted` (default) or stops at ascending
+      * and descending, which is Prime's default.
+      */
+    def removableSort(v: Boolean): TreeTable[A] = copy(removableSortFlag = v)
 
     /** Selection semantics: `Single`/`Multiple` select on row click; `None`
       * (default) leaves rows inert.
@@ -146,13 +153,13 @@ final case class TreeTable[A] private (
     private[uic] def render(using Frame): UI =
         withRef(expandedRef, Set.empty[String]) { exp =>
             withRef(selectedRef, Set.empty[String]) { sel =>
-                withRef(sortRef, List.empty[(String, Boolean)]) { sort =>
+                withRef(sortRef, List.empty[SortKey]) { sort =>
                     body(exp, sel, sort)
                 }
             }
         }
 
-    private def body(exp: Set[String], sel: Set[String], sort: List[(String, Boolean)])(using Frame): UI =
+    private def body(exp: Set[String], sel: Set[String], sort: List[SortKey])(using Frame): UI =
         val headRow: UI =
             tr(cols.map(c => toChild(headerCell(c, sort)))*)
 
@@ -195,19 +202,22 @@ final case class TreeTable[A] private (
     /** Applies the sort spec to one sibling list (stable, back-to-front — the
       * DataTable technique, per level).
       */
-    private def sortSiblings(ns: List[TreeTableNode[A]], sort: List[(String, Boolean)]): List[TreeTableNode[A]] =
-        sort.reverse.foldLeft(ns) { case (rs, (key, asc)) =>
-            cols.find(_.headerV == key).flatMap(_.orderingV.toOption) match
+    private def sortSiblings(ns: List[TreeTableNode[A]], sort: List[SortKey]): List[TreeTableNode[A]] =
+        SortKey.sorting(sort).reverse.foldLeft(ns) { (rs, k) =>
+            cols.find(_.headerV == k.column).flatMap(_.orderingV.toOption) match
                 case Some(ord) =>
-                    val nodeOrd = Ordering.by[TreeTableNode[A], A](_.data)(using if asc then ord else ord.reverse)
+                    val dir     = if k.direction == SortDirection.Ascending then ord else ord.reverse
+                    val nodeOrd = Ordering.by[TreeTableNode[A], A](_.data)(using dir)
                     rs.sorted(using nodeOrd)
                 case None => rs
         }
 
     /** One sortable/plain header cell with Prime's header-content anatomy. */
-    private def headerCell(c: Column[A], sort: List[(String, Boolean)])(using Frame): UI =
-        val sortable = c.orderingV.isDefined && sortRef.isDefined
-        val active   = sort.find(_._1 == c.headerV)
+    private def headerCell(c: Column[A], sort: List[SortKey])(using Frame): UI =
+        val sortable  = c.orderingV.isDefined && sortRef.isDefined
+        val sortingKs = SortKey.sorting(sort)
+        val rank      = sortingKs.indexWhere(_.column == c.headerV)
+        val direction = sort.find(_.column == c.headerV).map(_.direction).getOrElse(SortDirection.Unsorted)
 
         var cell = th.cssClass("p-treetable-header-cell")
         c.alignV match
@@ -216,41 +226,44 @@ final case class TreeTable[A] private (
             case ColumnAlign.Start  => ()
         end match
         if sortable then
-            cell = cell.cssClass("p-treetable-sortable-column").tabIndex(0).onClick(toggleSort(c.headerV))
-        active.foreach { (_, asc) =>
+            cell = cell.cssClass("p-treetable-sortable-column").tabIndex(0).onClick(e => toggleSort(c.headerV, e))
+        if direction.isSorting then
             cell = cell
                 .cssClass("p-treetable-column-sorted")
-                .aria("sort", if asc then "ascending" else "descending")
-        }
+                .aria("sort", if direction == SortDirection.Ascending then "ascending" else "descending")
+        end if
 
         val sortIcon: List[UI] =
             if !sortable then Nil
             else
-                val glyph = active match
-                    case Some((_, true))  => Icons.sortAmountUpAlt
-                    case Some((_, false)) => Icons.sortAmountDown
-                    case None             => Icons.sortAlt
+                val glyph = direction match
+                    case SortDirection.Ascending  => Icons.sortAmountUpAlt
+                    case SortDirection.Descending => Icons.sortAmountDown
+                    case SortDirection.Unsorted   => Icons.sortAlt
                 List(GlyphSvg(glyph, "p-treetable-sort-icon"))
+
+        val sortBadge: List[UI] =
+            if rank < 0 || sortingKs.length < 2 then Nil
+            else List(Badge((rank + 1).toString).size(Size.Small).hostClass("p-treetable-sort-badge").render)
 
         cell(
             div.cssClass("p-treetable-column-header-content")(
-                ((span.cssClass("p-treetable-column-title")(c.headerV): UI) :: sortIcon).map(toChild)*
+                ((span.cssClass("p-treetable-column-title")(c.headerV): UI) :: (sortIcon ++ sortBadge)).map(toChild)*
             )
         )
     end headerCell
 
-    /** Header click: asc → desc → removed on the clicked column; clicking another
-      * column APPENDS its spec (the DataTable multi-sort contract).
+    /** Header click, the DataTable contract: plain sorts by this column alone, Ctrl or
+      * Cmd adds it or advances it in place.
       */
-    private def toggleSort(key: String)(using Frame): Any < Async =
+    private def toggleSort(key: String, e: MouseEvent)(using Frame): Any < Async =
         sortRef match
             case Present(ref) =>
-                ref.getAndUpdate { cur =>
-                    cur.find(_._1 == key) match
-                        case Some((_, true))  => cur.map(s => if s._1 == key then (key, false) else s)
-                        case Some((_, false)) => cur.filterNot(_._1 == key)
-                        case None             => cur :+ (key, true)
-                }
+                val multi = e.modifiers.ctrl || e.modifiers.meta
+                ref.getAndUpdate(cur =>
+                    if multi then SortKey.cycle(cur, key, removableSortFlag)
+                    else SortKey.plain(cur, key, removableSortFlag)
+                )
             case Absent => ()
 
     /** One row (plus, while expanded, its recursively rendered children). */
@@ -260,7 +273,7 @@ final case class TreeTable[A] private (
         path: String,
         exp: Set[String],
         sel: Set[String],
-        sort: List[(String, Boolean)]
+        sort: List[SortKey]
     )(using Frame): List[UI] =
         val id          = keyOf(node.data, path)
         val hasChildren = node.children.nonEmpty

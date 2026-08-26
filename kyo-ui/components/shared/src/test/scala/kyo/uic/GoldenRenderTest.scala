@@ -1199,7 +1199,7 @@ class GoldenRenderTest extends UicTest:
             Product("p4", "Gold Ring", 40)
         )
         def tableOf(
-            sort: SignalRef[List[(String, Boolean)]],
+            sort: SignalRef[List[uic.SortKey]],
             query: SignalRef[String],
             page: SignalRef[Int],
             sel: SignalRef[Set[String]],
@@ -1224,7 +1224,7 @@ class GoldenRenderTest extends UicTest:
                 .emptyContent("Nothing found")
 
         def render(
-            sortV: List[(String, Boolean)],
+            sortV: List[uic.SortKey],
             queryV: String,
             pageV: Int,
             selV: Set[String],
@@ -1241,7 +1241,7 @@ class GoldenRenderTest extends UicTest:
         for
 
             base     <- render(Nil, "", 0, Set("p2"), Set("p1"))
-            sortedD  <- render(List("Price" -> false), "", 0, Set.empty, Set.empty)
+            sortedD  <- render(List(uic.SortKey("Price", uic.SortDirection.Descending)), "", 0, Set.empty, Set.empty)
             filtered <- render(Nil, "watch", 0, Set.empty, Set.empty)
             page2    <- render(Nil, "", 1, Set.empty, Set.empty)
             empty    <- render(Nil, "zzz", 0, Set.empty, Set.empty)
@@ -1290,7 +1290,7 @@ class GoldenRenderTest extends UicTest:
     "DataTable ranks multi-sort columns with a badge and gives the checkbox column a select-all header" in {
         final case class Row(id: String, a: String, b: String)
         val rows = List(Row("r1", "x", "p"), Row("r2", "y", "q"))
-        def render(sortV: List[(String, Boolean)], selV: Set[String])(using Frame): String < Async =
+        def render(sortV: List[uic.SortKey], selV: Set[String])(using Frame): String < Async =
             for
                 sort <- Signal.initRef(sortV)
                 sel  <- Signal.initRef(selV)
@@ -1309,8 +1309,8 @@ class GoldenRenderTest extends UicTest:
             yield out.mkString
         for
             unsorted <- render(Nil, Set.empty)
-            single   <- render(List("A" -> true), Set.empty)
-            multi    <- render(List("B" -> true, "A" -> false), Set.empty)
+            single   <- render(List(uic.SortKey.ascending("A")), Set.empty)
+            multi    <- render(List(uic.SortKey.ascending("B"), uic.SortKey("A", uic.SortDirection.Descending)), Set.empty)
             none     <- render(Nil, Set.empty)
             some     <- render(Nil, Set("r1"))
             all      <- render(Nil, Set("r1", "r2"))
@@ -1328,6 +1328,37 @@ class GoldenRenderTest extends UicTest:
             assert(!none.contains("p-checkbox-checked"), "nothing selected: header unchecked")
             assert("p-checkbox-checked".r.findAllIn(some).size == 1, "one row selected: only that row's box is checked")
             assert("p-checkbox-checked".r.findAllIn(all).size == 3, "all rows selected: both rows plus the header")
+        end for
+    }
+
+    "an unsorted sort key holds its slot: no sorted skin, no rank, but the columns behind it keep theirs" in {
+        final case class Row(id: String, a: String, b: String)
+        val rows = List(Row("r1", "y", "q"), Row("r2", "x", "p"))
+        def render(sortV: List[uic.SortKey])(using Frame): String < Async =
+            for
+                sort <- Signal.initRef(sortV)
+                out <- UI.runRender(
+                    uic.DataTable[Row]()
+                        .rows(rows)
+                        .rowKey(_.id)
+                        .columns(
+                            uic.column("A")(_.a).sortBy(_.a),
+                            uic.column("B")(_.b).sortBy(_.b)
+                        )
+                        .sort(sort)
+                ).take(1).run
+            yield out.mkString
+        for
+            both <- render(List(uic.SortKey.ascending("A"), uic.SortKey.ascending("B")))
+            held <- render(List(uic.SortKey("A", uic.SortDirection.Unsorted), uic.SortKey.ascending("B")))
+        yield
+            assert("p-datatable-sort-badge".r.findAllIn(both).size == 2, "two sorting keys, two ranks")
+            // A holds slot 0 while unsorted, so B is the only sorting key: no ranks at all,
+            // and A renders as a plain sortable header rather than a sorted one.
+            assert(!held.contains("p-datatable-sort-badge"), "one sorting key needs no ordinal")
+            assert("p-datatable-column-sorted".r.findAllIn(held).size == 1, "only B wears the sorted skin")
+            assert(held.contains("""data-uic-icon="sort-alt""""), "A falls back to the neutral glyph")
+            assert(held.indexOf("Row") < 0 && held.indexOf(">x<") < held.indexOf(">y<"), "rows follow B ascending")
         end for
     }
 
@@ -4150,7 +4181,7 @@ class GoldenRenderTest extends UicTest:
                 for
                     exp  <- Signal.initRef(Set("Applications"))
                     sel  <- Signal.initRef(Set("Scala"))
-                    sort <- Signal.initRef(List.empty[(String, Boolean)])
+                    sort <- Signal.initRef(List.empty[uic.SortKey])
                     out <- UI.runRender(
                         uic.TreeTable[F]()
                             .nodes(nodes*)
