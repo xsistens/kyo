@@ -215,36 +215,10 @@ object Theme:
       |.p-toast-bottom-center { bottom: 20px; left: 50%; }
       |.p-toast-bottom-right { bottom: 20px; right: 20px; }
       |.p-toast-center { top: 50%; left: 50%; }
-      |/* DataTable: kyo-ui has no <thead>/<tbody> factories, so the thead/tbody-
-      |   scoped Prime rules are re-expressed against the row classes the component
-      |   stamps (.p-uic-dt-header-row / .p-uic-dt-row). */
-      |.p-datatable-table tr.p-uic-dt-row, .p-datatable-table tr.p-datatable-empty-message, .p-datatable-table tr.p-datatable-row-expansion {
-      |  background: var(--p-datatable-row-background); color: var(--p-datatable-row-color);
-      |}
-      |.p-datatable-table tr > td {
-      |  text-align: start; padding: var(--p-datatable-body-cell-padding);
-      |  border-color: var(--p-datatable-body-cell-border-color); border-style: solid; border-width: 0 0 1px 0;
-      |}
-      |.p-datatable-hoverable tr.p-uic-dt-row:not(.p-datatable-row-selected):hover {
-      |  background: var(--p-datatable-row-hover-background); color: var(--p-datatable-row-hover-color);
-      |}
-      |.p-datatable-table tr.p-datatable-row-selected {
-      |  background: var(--p-datatable-row-selected-background); color: var(--p-datatable-row-selected-color);
-      |}
-      |.p-datatable-striped tr.p-uic-dt-row.p-row-odd { background: var(--p-datatable-row-striped-background); }
-      |.p-datatable-striped tr.p-uic-dt-row.p-row-odd.p-datatable-row-selected {
-      |  background: var(--p-datatable-row-selected-background); color: var(--p-datatable-row-selected-color);
-      |}
-      |.p-datatable-gridlines th.p-datatable-header-cell { border-width: 1px 0 1px 1px; }
-      |.p-datatable-gridlines th.p-datatable-header-cell:last-child { border-width: 1px; }
-      |.p-datatable-gridlines .p-datatable-table tr > td { border-width: 0 0 1px 1px; }
-      |.p-datatable-gridlines .p-datatable-table tr > td:last-child { border-width: 0 1px 1px 1px; }
-      |.p-datatable-sm th.p-datatable-header-cell { padding: var(--p-datatable-header-cell-sm-padding); }
-      |.p-datatable-sm .p-datatable-table tr > td { padding: var(--p-datatable-body-cell-sm-padding); }
-      |.p-datatable-lg th.p-datatable-header-cell { padding: var(--p-datatable-header-cell-lg-padding); }
-      |.p-datatable-lg .p-datatable-table tr > td { padding: var(--p-datatable-body-cell-lg-padding); }
-      |.p-datatable-table tr.p-datatable-empty-message > td { text-align: center; color: var(--p-text-muted-color); }
-      |.p-datatable-table tr.p-datatable-row-expansion > td { background: var(--p-content-hover-background); }
+      |/* The empty-message and expansion rows are template slots in Prime, so the
+      |   extracted sheet carries no rules for them. */
+      |.p-datatable-tbody > tr.p-datatable-empty-message > td { text-align: center; color: var(--p-text-muted-color); }
+      |.p-datatable-tbody > tr.p-datatable-row-expansion > td { background: var(--p-content-hover-background); }
       |/* GlyphSvg spans sized by the extracted component CSS scale their inner svg. */
       |span.p-select-dropdown-icon, span.p-toast-message-icon, span.p-toast-close-icon,
       |span.p-datatable-sort-icon, span.p-datatable-row-toggle-icon,
@@ -256,11 +230,14 @@ object Theme:
       |span.p-datatable-sort-icon > svg, span.p-datatable-row-toggle-icon > svg,
       |span.p-paginator-first-icon > svg, span.p-paginator-prev-icon > svg,
       |span.p-paginator-next-icon > svg, span.p-paginator-last-icon > svg { width: 100%; height: 100%; }
-      |/* Column alignment helpers (Prime aligns via per-column styles). */
+      |/* Column alignment helpers (Prime aligns via per-column styles); shared by
+      |   DataTable and TreeTable, whose header content wrappers differ in name. */
       |.p-uic-dt-center { text-align: center; }
-      |.p-uic-dt-center > .p-datatable-column-header-content { justify-content: center; }
+      |.p-uic-dt-center > .p-datatable-column-header-content,
+      |.p-uic-dt-center > .p-treetable-column-header-content { justify-content: center; }
       |.p-uic-dt-end { text-align: end; }
-      |.p-uic-dt-end > .p-datatable-column-header-content { justify-content: flex-end; }
+      |.p-uic-dt-end > .p-datatable-column-header-content,
+      |.p-uic-dt-end > .p-treetable-column-header-content { justify-content: flex-end; }
       |/* ==== Divider / Avatar / Chip / MeterGroup / Skeleton / OverlayBadge / Fieldset / ScrollPanel ==== */
       |/* Row restorers (kyo base CSS: every div/ol is a COLUMN flexbox; Prime never
       |   declares flex-direction and relies on the browser's row default). */
@@ -702,35 +679,9 @@ object Theme:
       |   stay small (Prime's showcase sizes both from the item templates). */
       |img.p-uic-galleria-image { width: 100%; display: block; }
       |img.p-uic-galleria-thumbnail-image { display: block; }
-      |/* TreeTable: kyo-ui has no <thead>/<tbody> factories, so the thead/tbody-
-      |   scoped Prime rules are re-expressed against the stamped row classes
-      |   (.p-uic-tt-header-row / .p-uic-tt-row — the DataTable precedent). */
-      |.p-treetable-table tr.p-uic-tt-row {
-      |  outline-color: transparent;
-      |  background: var(--p-treetable-row-background); color: var(--p-treetable-row-color);
-      |}
-      |.p-treetable-table tr.p-uic-tt-row > td {
-      |  text-align: start; padding: var(--p-treetable-body-cell-padding);
-      |  border-color: var(--p-treetable-body-cell-border-color); border-style: solid; border-width: 0 0 1px 0;
-      |}
-      |.p-treetable-hoverable tr.p-uic-tt-row:not(.p-treetable-row-selected):hover {
-      |  background: var(--p-treetable-row-hover-background); color: var(--p-treetable-row-hover-color);
-      |}
-      |.p-treetable-table tr.p-treetable-row-selected {
-      |  background: var(--p-treetable-row-selected-background); color: var(--p-treetable-row-selected-color);
-      |}
-      |.p-treetable-table tr.p-treetable-row-selected > td {
-      |  border-block-end-color: var(--p-treetable-body-cell-selected-border-color);
-      |}
-      |.p-treetable-gridlines th.p-treetable-header-cell { border-width: 1px 0 1px 1px; }
-      |.p-treetable-gridlines th.p-treetable-header-cell:last-child { border-width: 1px; }
-      |.p-treetable-gridlines .p-treetable-table tr > td { border-width: 0 0 1px 1px; }
-      |.p-treetable-gridlines .p-treetable-table tr > td:last-child { border-width: 0 1px 1px 1px; }
-      |.p-treetable-sm th.p-treetable-header-cell { padding: 0.375rem 0.5rem; }
-      |.p-treetable-sm .p-treetable-table tr > td { padding: 0.375rem 0.5rem; }
-      |.p-treetable-lg th.p-treetable-header-cell { padding: 0.9375rem 1.25rem; }
-      |.p-treetable-lg .p-treetable-table tr > td { padding: 0.9375rem 1.25rem; }
-      |.p-treetable-table tr.p-treetable-empty-message > td { text-align: center; color: var(--p-text-muted-color); }
+      |/* The empty-message row is a template slot in Prime, so the extracted sheet
+      |   carries no rules for it (the DataTable precedent). */
+      |.p-treetable-tbody > tr.p-treetable-empty-message > td { text-align: center; color: var(--p-text-muted-color); }
       |/* PrimeVue scrolls the container via TreeTableStyle.inlineStyles — expressed
       |   as CSS here (the ToggleSwitch precedent). */
       |.p-treetable-table-container { overflow: auto; }
