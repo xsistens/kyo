@@ -192,4 +192,39 @@ class TableTest extends UITest:
         }
     }
 
+    "explicit thead renders as a real header row group" in {
+        withUI(UI.div(UI.table(UI.thead(UI.tr(UI.th("H").id("th-cell")))).id("th-table"))) {
+            for
+                _ <- Browser.assertText(Selector.css("#th-table thead th"), "H")
+                _ <- Browser.assertText(Selector.id("th-cell"), "H")
+            yield ()
+        }
+    }
+
+    "explicit tfoot renders as a real footer row group" in {
+        withUI(UI.div(UI.table(UI.tfoot(UI.tr(UI.td("F").id("tf-cell")))).id("tf-table"))) {
+            for
+                _ <- Browser.assertText(Selector.css("#tf-table tfoot td"), "F")
+                _ <- Browser.assertText(Selector.id("tf-cell"), "F")
+            yield ()
+        }
+    }
+
+    // The parser groups every direct <table> row child into ONE implied tbody, so the
+    // three groups only stay distinct (and stay in header/body/footer order) when they
+    // are written out. Pins that the section elements survive rendering side by side.
+    "thead, tbody and tfoot stay distinct groups in one table" in {
+        withUI(UI.div(UI.table(
+            UI.thead(UI.tr(UI.th("H"))),
+            UI.tbody(UI.tr(UI.td("B"))),
+            UI.tfoot(UI.tr(UI.td("F")))
+        ).id("grp-table"))) {
+            for
+                _ <- Browser.assertText(Selector.css("#grp-table thead > tr > th"), "H")
+                _ <- Browser.assertText(Selector.css("#grp-table tbody > tr > td"), "B")
+                _ <- Browser.assertText(Selector.css("#grp-table tfoot > tr > td"), "F")
+            yield ()
+        }
+    }
+
 end TableTest

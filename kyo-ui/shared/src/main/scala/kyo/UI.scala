@@ -122,7 +122,9 @@ object UI:
     def blockquote(using Frame): Blockquote       = Blockquote()
     def code(using Frame): Code                   = Code()
     def table(using Frame): Table                 = Table()
+    def thead(using Frame): Thead                 = Thead()
     def tbody(using Frame): Tbody                 = Tbody()
+    def tfoot(using Frame): Tfoot                 = Tfoot()
     def tr(using Frame): Tr                       = Tr()
     def td(using Frame): Td                       = Td()
     def th(using Frame): Th                       = Th()
@@ -1955,6 +1957,17 @@ object UI:
             def apply(cs: HtmlChildVal*): Table = copy(children = children ++ Chunk.from(cs.map(_.value)))
         end Table
 
+        /** Table header row group. The parser never synthesizes a `<thead>`: header rows written as direct
+          * `<table>` children become part of the implied body group, so `thead`-scoped selectors (and the
+          * sticky-header layout that rides on them) never match. Wrap the header rows in `UI.thead`.
+          */
+        final case class Thead(attrs: Attrs = Attrs(), children: Chunk[UI] = Chunk.empty)(using val frame: Frame) extends Block
+            with Interactive:
+            type Self = Thead
+            def withAttrs(a: Attrs): Thead      = copy(attrs = a)
+            def apply(cs: HtmlChildVal*): Thead = copy(children = children ++ Chunk.from(cs.map(_.value)))
+        end Thead
+
         /** Explicit table row group for authored table structure and styling. Reactive rows placed directly under
           * [[Table]] receive their own legal row-group host automatically.
           */
@@ -1964,6 +1977,17 @@ object UI:
             def withAttrs(a: Attrs): Tbody      = copy(attrs = a)
             def apply(cs: HtmlChildVal*): Tbody = copy(children = children ++ Chunk.from(cs.map(_.value)))
         end Tbody
+
+        /** Table footer row group, the counterpart of [[Thead]] for summary rows. A footer row written as a
+          * direct `<table>` child joins the implied body group instead, which puts it above later body rows
+          * and out of reach of `tfoot`-scoped selectors.
+          */
+        final case class Tfoot(attrs: Attrs = Attrs(), children: Chunk[UI] = Chunk.empty)(using val frame: Frame) extends Block
+            with Interactive:
+            type Self = Tfoot
+            def withAttrs(a: Attrs): Tfoot      = copy(attrs = a)
+            def apply(cs: HtmlChildVal*): Tfoot = copy(children = children ++ Chunk.from(cs.map(_.value)))
+        end Tfoot
 
         // ====== Headings (Block) ======
 
