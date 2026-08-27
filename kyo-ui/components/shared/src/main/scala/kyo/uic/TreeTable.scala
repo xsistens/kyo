@@ -156,17 +156,44 @@ final case class TreeTable[A] private (
             case Absent     => k(fallback)
 
     private[uic] def render(using Frame): UI =
-        withRef(expandedRef, Set.empty[String]) { exp =>
-            withRef(selectedRef, Set.empty[String]) { sel =>
-                withRef(sortRef, List.empty[SortKey]) { sort =>
-                    body(exp, sel, sort)
+        withSortableFlags { flags =>
+            withRef(expandedRef, Set.empty[String]) { exp =>
+                withRef(selectedRef, Set.empty[String]) { sel =>
+                    withRef(sortRef, List.empty[SortKey]) { sort =>
+                        body(exp, sel, sort, flags)
+                    }
                 }
             }
         }
 
-    private def body(exp: Set[String], sel: Set[String], sort: List[SortKey])(using Frame): UI =
+    /** Resolves every reactive [[Column.sortable]] flag to a plain boolean before the table
+      * builds, one nested subscription per signal-backed column, as DataTable does.
+      */
+    private def withSortableFlags(build: Map[String, Boolean] => UI)(using Frame): UI =
+        val reactive = cols.flatMap(c => c.sortableSig.toList.map(sig => (c.headerV, sig)))
+        def loop(rest: List[(String, Signal[Boolean])], acc: Map[String, Boolean]): UI =
+            rest match
+                case Nil              => build(acc)
+                case (h, sig) :: tail => sig.render(b => loop(tail, acc + (h -> b)))
+        loop(reactive, Map.empty)
+    end withSortableFlags
+
+    private def body(exp: Set[String], sel: Set[String], sort: List[SortKey], flags: Map[String, Boolean])(using
+        Frame
+    ): UI =
+        // The paths whose headers the reader can actually click; the rest of the spec is
+        // the caller's to keep, so no click may clear it.
+        val interactive: Set[List[String]] =
+            if sortRef.isEmpty then Set.empty
+            else
+                cols.collect {
+                    case c if c.isSortable(flags.getOrElse(c.headerV, c.sortableConst)) => List(c.headerV)
+                }.toSet
+
         val headRow: UI =
-            tr(cols.map(c => toChild(headerCell(c, sort)))*)
+            tr(cols.map(c =>
+                toChild(headerCell(c, sort, flags.getOrElse(c.headerV, c.sortableConst), interactive))
+            )*)
 
         val bodyRows: List[UI] =
             if nodeList.isEmpty then
@@ -218,8 +245,10 @@ final case class TreeTable[A] private (
         }
 
     /** One sortable/plain header cell with Prime's header-content anatomy. */
-    private def headerCell(c: Column[A, AnyTable], sort: List[SortKey])(using Frame): UI =
-        val sortable  = c.orderingV.isDefined && sortRef.isDefined
+    private def headerCell(c: Column[A, AnyTable], sort: List[SortKey], flag: Boolean, interactive: Set[List[String]])(
+        using Frame
+    ): UI =
+        val sortable  = c.isSortable(flag) && sortRef.isDefined
         val sortingKs = SortKey.sorting(sort)
         // A TreeTable renders one header row, so a column's path is its header alone.
         val path      = List(c.headerV)
@@ -233,15 +262,17 @@ final case class TreeTable[A] private (
             case ColumnAlign.Start  => ()
         end match
         if sortable then
-            cell = cell.cssClass("p-treetable-sortable-column").tabIndex(0).onClick(e => toggleSort(path, e))
+            cell = cell.cssClass("p-treetable-sortable-column").tabIndex(0).onClick(e => toggleSort(path, e, interactive))
         if direction.isSorting then
             cell = cell
                 .cssClass("p-treetable-column-sorted")
                 .aria("sort", if direction == SortDirection.Ascending then "ascending" else "descending")
         end if
 
+        // The neutral icon is the affordance and the directional one is state, so a column
+        // the reader may not re-sort still says which way it currently sorts.
         val sortIcon: List[UI] =
-            if !sortable then Nil
+            if !sortable && !direction.isSorting then Nil
             else
                 val glyph = direction match
                     case SortDirection.Ascending  => Icons.sortAmountUpAlt
@@ -263,13 +294,15 @@ final case class TreeTable[A] private (
     /** Header click, the DataTable contract: plain sorts by this column alone, Ctrl or
       * Cmd adds it or advances it in place.
       */
-    private def toggleSort(path: List[String], e: MouseEvent)(using Frame): Any < Async =
+    private def toggleSort(path: List[String], e: MouseEvent, interactive: Set[List[String]])(using
+        Frame
+    ): Any < Async =
         sortRef match
             case Present(ref) =>
                 val multi = e.modifiers.ctrl || e.modifiers.meta
                 ref.getAndUpdate(cur =>
-                    if multi then SortKey.cycle(cur, path, removableSortFlag)
-                    else SortKey.plain(cur, path, removableSortFlag)
+                    if multi then SortKey.cycle(cur, path, removableSortFlag, interactive.contains)
+                    else SortKey.plain(cur, path, removableSortFlag, interactive.contains)
                 )
             case Absent => ()
 

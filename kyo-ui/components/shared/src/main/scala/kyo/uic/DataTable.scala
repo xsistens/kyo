@@ -36,7 +36,10 @@ import kyo.UI.Ast.HtmlChildVal
   *     descending, off. With several, it only REVERSES the clicked column, in place, so a
   *     spec built up over several clicks cannot lose a key because one header was clicked
   *     once too often; there, switching a column off belongs to Ctrl or Cmd. A plain
-  *     click on a column that is not sorting makes it the single key either way.
+  *     click on a column that is not sorting makes it the single key the reader
+  *     controls either way: entries they cannot reach, a column carrying
+  *     `sortable(false)` or a path naming no column here, keep their slots ahead of
+  *     it, since a click may only clear what a click could put back.
   *     Ctrl or Cmd click is the multi-key control: it adds a column, or advances the one
   *     already there WITHOUT moving it (ascending, descending, and, while
   *     [[removableSort]] is on, unsorted while keeping its slot). Holding the slot is
@@ -297,13 +300,15 @@ final case class DataTable[A] private (
             case Absent     => k(fallback)
 
     private[uic] def render(using Frame): UI =
-        withRef(sortRef, List.empty[SortKey]) { sort =>
-            withRef(filterRef, "") { query =>
-                withRef(pageRef, 0) { page =>
-                    withRef(selectedRef, Set.empty[String]) { sel =>
-                        withRef(expandedRef, Set.empty[String]) { exp =>
-                            withRef(expandedGroupsRef, Set.empty[GroupPath]) { groups =>
-                                body(sort, query, page, sel, exp, groups)
+        withSortableFlags { flags =>
+            withRef(sortRef, List.empty[SortKey]) { sort =>
+                withRef(filterRef, "") { query =>
+                    withRef(pageRef, 0) { page =>
+                        withRef(selectedRef, Set.empty[String]) { sel =>
+                            withRef(expandedRef, Set.empty[String]) { exp =>
+                                withRef(expandedGroupsRef, Set.empty[GroupPath]) { groups =>
+                                    body(sort, query, page, sel, exp, groups, flags)
+                                }
                             }
                         }
                     }
@@ -311,13 +316,38 @@ final case class DataTable[A] private (
             }
         }
 
+    /** Resolves every reactive [[Column.sortable]] flag to a plain boolean before the table
+      * builds, one nested subscription per signal-backed column.
+      *
+      * The flag reaches the class, the tab stop, the icon and the click handler of one
+      * header cell, so patching it in place would mean keeping four channels in step. The
+      * table already re-renders its whole subtree whenever a bound signal moves, sort,
+      * filter, page, selection, expansion, groups, and this is the seventh of those: the
+      * cost is a sort click's worth of render, and the cell code reads a plain boolean.
+      */
+    private def withSortableFlags(build: Map[List[String], Boolean] => UI)(using Frame): UI =
+        val reactive = leafPaths.flatMap((p, c) => c.sortableSig.toList.map(sig => (p, sig)))
+        def loop(rest: List[(List[String], Signal[Boolean])], acc: Map[List[String], Boolean]): UI =
+            rest match
+                case Nil              => build(acc)
+                case (p, sig) :: tail => sig.render(b => loop(tail, acc + (p -> b)))
+        loop(reactive, Map.empty)
+    end withSortableFlags
+
+    /** This column's resolved sortable flag: the reactive ones are in `flags`, the rest
+      * carry theirs statically.
+      */
+    private def sortableFlag(c: Column[A, FlatOnly], path: List[String], flags: Map[List[String], Boolean]): Boolean =
+        flags.getOrElse(path, c.sortableConst)
+
     private def body(
         sort: List[SortKey],
         query: String,
         page: Int,
         sel: Set[String],
         exp: Set[String],
-        openGroups: Set[GroupPath]
+        openGroups: Set[GroupPath],
+        flags: Map[List[String], Boolean]
     )(using Frame): UI =
         // 1. Global filter: contains-match over the columns' text projections.
         val filtered =
@@ -351,6 +381,12 @@ final case class DataTable[A] private (
                 (sorted.slice(cur * size, cur * size + size), List(pag.render))
             case Absent => (sorted, Nil)
 
+        // The paths whose headers the reader can actually click, which is what both click
+        // transitions may clear. Everything else in the spec is the caller's to keep.
+        val interactive: Set[List[String]] =
+            if sortRef.isEmpty then Set.empty
+            else leafPaths.collect { case (p, c) if c.isSortable(sortableFlag(c, p, flags)) => p }.toSet
+
         val colCount = leafCols.length + (if checkboxColumn then 1 else 0) + (if expanderColumn then 1 else 0)
 
         // One tr per header level. The leading expander and checkbox cells belong to the
@@ -371,7 +407,7 @@ final case class DataTable[A] private (
             end leading
             val rows = if matrix.isEmpty then List(Nil) else matrix
             rows.zipWithIndex.map { (cells, i) =>
-                val ths = cells.map(headerSpanCell(_, sort))
+                val ths = cells.map(headerSpanCell(_, sort, flags, interactive))
                 tr((if i == 0 then leading ++ ths else ths).map(toChild)*)
             }
         end headRows
@@ -432,7 +468,10 @@ final case class DataTable[A] private (
             case Size.Normal => ()
         end match
         root(
-            (rowKeyCard ++ headerCards(sort) ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
+            (rowKeyCard ++ headerCards(
+                sort,
+                flags
+            ) ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
         )
     end body
 
@@ -505,13 +544,18 @@ final case class DataTable[A] private (
       * by the SAME path cannot be told apart by a spec at all: the table sorts by
       * whichever sits left and lights both headers up.
       */
-    private def headerCards(sort: List[SortKey])(using Frame): List[UI] =
+    private def headerCards(sort: List[SortKey], flags: Map[List[String], Boolean])(using Frame): List[UI] =
         def show(path: List[String]): String = path.mkString(" / ")
         val empties                          = ColumnTree.emptyGroups(cols)
         val sortable                         = leafPaths.filter(_._2.orderingV.isDefined).map(_._1)
         val unknown                          = if sortRef.isEmpty then Nil else sort.map(_.path).filterNot(sortable.contains).map(show)
         val ambiguous =
             if sortRef.isEmpty then Nil else KeyDiagnostics.duplicates(sortable.map(show))
+        // A column asked to be sortable with nothing to sort by: the flag decides whether the
+        // reader may change the spec, and an ordering is what a change would act on.
+        val noOrdering = leafPaths.collect {
+            case (p, c) if c.orderingV.isEmpty && c.sortableV.isDefined && sortableFlag(c, p, flags) => show(p)
+        }
         val emptyCard =
             if empties.isEmpty then Nil
             else
@@ -538,7 +582,16 @@ final case class DataTable[A] private (
                         "them under different headerGroups",
                     ambiguous
                 ))
-        emptyCard ++ unknownCard ++ ambiguousCard
+        val noOrderingCard =
+            if noOrdering.isEmpty then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "sortable(true) on a column with no ordering has nothing to sort by; add sortBy, or drop " +
+                        "the flag",
+                    noOrdering
+                ))
+        emptyCard ++ unknownCard ++ ambiguousCard ++ noOrderingCard
     end headerCards
 
     /** The checkbox column's header cell: Prime's select-all, binary (no partial
@@ -573,9 +626,15 @@ final case class DataTable[A] private (
     /** One cell of the header matrix: a leaf renders its column header, a group a plain
       * title cell as wide as the leaves beneath it.
       */
-    private def headerSpanCell(sp: ColumnTree.HeaderSpan[A], sort: List[SortKey])(using Frame): UI =
+    private def headerSpanCell(
+        sp: ColumnTree.HeaderSpan[A],
+        sort: List[SortKey],
+        flags: Map[List[String], Boolean],
+        interactive: Set[List[String]]
+    )(using Frame): UI =
         sp.node.asColumn match
-            case Present(c) => headerCell(c, sp.path, sort, sp.rowspan)
+            case Present(c) =>
+                headerCell(c, sp.path, sort, sp.rowspan, sortableFlag(c, sp.path, flags), interactive)
             case Absent =>
                 var cell = th.cssClass("p-datatable-header-cell")
                 if sp.colspan > 1 then cell = cell.colspan(sp.colspan)
@@ -590,8 +649,15 @@ final case class DataTable[A] private (
     /** One sortable/plain header cell with Prime's header-content anatomy, reaching down
       * `rows` header rows so an ungrouped column lines up with a grouped one.
       */
-    private def headerCell(c: Column[A, FlatOnly], path: List[String], sort: List[SortKey], rows: Int)(using Frame): UI =
-        val sortable  = c.orderingV.isDefined && sortRef.isDefined
+    private def headerCell(
+        c: Column[A, FlatOnly],
+        path: List[String],
+        sort: List[SortKey],
+        rows: Int,
+        flag: Boolean,
+        interactive: Set[List[String]]
+    )(using Frame): UI =
+        val sortable  = c.isSortable(flag) && sortRef.isDefined
         val sortingKs = SortKey.sorting(sort)
         val rank      = sortingKs.indexWhere(_.path == path)
         val direction = sort.find(_.path == path).map(_.direction).getOrElse(SortDirection.Unsorted)
@@ -604,15 +670,17 @@ final case class DataTable[A] private (
             case ColumnAlign.Start  => ()
         end match
         if sortable then
-            cell = cell.cssClass("p-datatable-sortable-column").tabIndex(0).onClick(e => toggleSort(path, e))
+            cell = cell.cssClass("p-datatable-sortable-column").tabIndex(0).onClick(e => toggleSort(path, e, interactive))
         if direction.isSorting then
             cell = cell
                 .cssClass("p-datatable-column-sorted")
                 .aria("sort", if direction == SortDirection.Ascending then "ascending" else "descending")
         end if
 
+        // The neutral icon is the affordance and the directional one is state, so a column
+        // the reader may not re-sort still says which way it currently sorts.
         val sortIcon: List[UI] =
-            if !sortable then Nil
+            if !sortable && !direction.isSorting then Nil
             else
                 val glyph = direction match
                     case SortDirection.Ascending  => Icons.sortAmountUpAlt
@@ -644,13 +712,15 @@ final case class DataTable[A] private (
       * advance the one already in the spec IN PLACE, which is what lets an accidental
       * click be undone by the next one.
       */
-    private def toggleSort(path: List[String], e: MouseEvent)(using Frame): Any < Async =
+    private def toggleSort(path: List[String], e: MouseEvent, interactive: Set[List[String]])(using
+        Frame
+    ): Any < Async =
         sortRef match
             case Present(ref) =>
                 val multi = e.modifiers.ctrl || e.modifiers.meta
                 ref.getAndUpdate(cur =>
-                    if multi then SortKey.cycle(cur, path, removableSortFlag)
-                    else SortKey.plain(cur, path, removableSortFlag)
+                    if multi then SortKey.cycle(cur, path, removableSortFlag, interactive.contains)
+                    else SortKey.plain(cur, path, removableSortFlag, interactive.contains)
                 )
             case Absent => ()
 

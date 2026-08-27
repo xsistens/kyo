@@ -1711,6 +1711,90 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "Column.sortable gates the affordance without hiding the sort the spec applied" in {
+        final case class Row(id: String, name: String, note: String)
+        val rows                                           = List(Row("1", "B", "x"), Row("2", "A", "y"))
+        def occurrences(html: String, needle: String): Int = needle.r.findAllIn(html).size
+
+        for
+            open <-
+                for
+                    ref <- Signal.initRef(List(uic.SortKey.ascending("Name")))
+                    out <- UI.runRender(
+                        uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
+                            uic.column("Name")(_.name).sortBy(_.name)
+                        ).sort(ref).render
+                    ).take(1).run
+                yield out.mkString
+            locked <-
+                for
+                    ref <- Signal.initRef(List(uic.SortKey.ascending("Name")))
+                    out <- UI.runRender(
+                        uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
+                            uic.column("Name")(_.name).sortBy(_.name).sortable(false)
+                        ).sort(ref).render
+                    ).take(1).run
+                yield out.mkString
+            idle <-
+                for
+                    ref <- Signal.initRef(List.empty[uic.SortKey])
+                    out <- UI.runRender(
+                        uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
+                            uic.column("Name")(_.name).sortBy(_.name).sortable(false)
+                        ).sort(ref).render
+                    ).take(1).run
+                yield out.mkString
+            reactive <-
+                for
+                    flag <- Signal.initRef(false)
+                    ref  <- Signal.initRef(List.empty[uic.SortKey])
+                    out <- UI.runRender(
+                        uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
+                            uic.column("Name")(_.name).sortBy(_.name).sortable(flag)
+                        ).sort(ref).render
+                    ).take(1).run
+                yield out.mkString
+            noOrdering <-
+                for
+                    ref <- Signal.initRef(List.empty[uic.SortKey])
+                    out <- UI.runRender(
+                        uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
+                            uic.column("Note")(_.note).sortable(true)
+                        ).sort(ref).render
+                    ).take(1).run
+                yield out.mkString
+            tree <-
+                for
+                    ref <- Signal.initRef(List.empty[uic.SortKey])
+                    out <- UI.runRender(
+                        uic.TreeTable[Row]().nodes(uic.TreeTableNode(rows.head)).columns(
+                            uic.column("Name")(_.name).sortBy(_.name).sortable(false)
+                        ).sort(ref).render
+                    ).take(1).run
+                yield out.mkString
+        yield
+            // Unset, a column with an ordering is what it always was.
+            assert(open.contains("p-datatable-sortable-column"), "an ordering alone still makes the header live")
+            assert(occurrences(open, "tabindex=\"0\"") == 1, "and gives it a tab stop")
+            assert(open.contains("p-datatable-column-sorted") && open.contains("p-datatable-sort-icon"))
+            // sortable(false) drops the affordance and keeps the state, which is the pair
+            // that lets a table sort by a column the reader may not re-sort.
+            assert(!locked.contains("p-datatable-sortable-column"), "the affordance goes")
+            assert(!locked.contains("tabindex="), "including the tab stop")
+            assert(locked.contains("p-datatable-column-sorted"), "the sorted state stays")
+            assert(locked.contains("aria-sort=\"ascending\""), "and so does what it says to a reader")
+            assert(locked.contains("p-datatable-sort-icon"), "the direction icon is state, not affordance")
+            assert(locked.indexOf(">A<") < locked.indexOf(">B<"), "and the spec still sorts the rows")
+            // Nothing to show and nothing to offer: no icon at all.
+            assert(!idle.contains("p-datatable-sort-icon"), "an inert unsorted column shows no icon")
+            assert(!idle.contains("p-datatable-sortable-column"))
+            // The reactive form resolves to its current value before the table builds.
+            assert(!reactive.contains("p-datatable-sortable-column"), "a signal reading false is inert")
+            assert(noOrdering.contains("p-uic-key-error"), "sortable(true) with no ordering is reported")
+            assert(!tree.contains("p-treetable-sortable-column"), "TreeTable honors the same flag")
+        end for
+    }
+
     "Tabs renders Prime's compound anatomy and shows only the selected tab's content" in {
         for
             html <-
