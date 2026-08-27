@@ -3,212 +3,6 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 import kyo.UI.Ast.HtmlChildVal
-import scala.annotation.implicitNotFound
-
-/** Horizontal alignment of one [[Column]] (applied to the header cell and every
-  * body cell of the column via `.p-uic-dt-center` / `.p-uic-dt-end`).
-  */
-enum ColumnAlign derives CanEqual:
-    case Start, Center, End
-
-/** Which tables accept a [[Column]], carried as the column's second, phantom type
-  * argument so a table can refuse one it could not honor.
-  *
-  * `Column` is shared by [[DataTable]] and [[TreeTable]], and two of its options mean
-  * nothing over a hierarchy: [[Column.footer]] fills a `tfoot` a TreeTable does not
-  * render, and [[Column.rowSpan]] merges runs of equal cells, which consecutive rows at
-  * different depths do not form. Both setters return a `FlatOnly` column, which
-  * `TreeTable.columns` will not take.
-  *
-  * `AnyTable` extends `FlatOnly` because the subtyping runs that way round: a column
-  * every table accepts is in particular one a flat table accepts. With `Column`
-  * covariant in the parameter, that is what lets a mixed list splat into a DataTable.
-  */
-sealed trait FlatOnly
-
-/** A column carrying only options every table honors. See [[FlatOnly]]. */
-sealed trait AnyTable extends FlatOnly
-
-/** A column that has a text projection AND carries a flat-table-only option. */
-sealed trait TextFlatOnly extends FlatOnly
-
-/** A column that has a text projection and carries no flat-table-only option, which is
-  * what the text constructor returns and what [[Column.rowSpan]] needs to merge by.
-  */
-sealed trait TextAnyTable extends AnyTable, TextFlatOnly
-
-/** Evidence that a column has a text projection, which is what the argument-less
-  * [[Column.rowSpan]] merges by. The kind carries the fact, so a column built without one
-  * cannot reach that overload.
-  */
-@implicitNotFound(
-    "rowSpan without a key merges by this column's text projection, and it has none. Give it a key, " +
-        "rowSpan(_.field), or call rowSpan before footer, which drops the projection from the kind."
-)
-type HasText[K] = K <:< TextFlatOnly
-
-/** Evidence that a column kind is one every table takes, which is what
-  * `TreeTable.columns` asks for. Only `AnyTable` has an instance.
-  */
-@implicitNotFound(
-    "A TreeTable column cannot carry footer or rowSpan: a footer needs a tfoot this table does not render, " +
-        "and rowSpan merges runs of equal cells, which rows at different depths do not form."
-)
-sealed trait AnyTableColumn[-K <: FlatOnly]:
-    /** Hands back what the evidence already proves: a `K` column is an `AnyTable` one.
-      * Carrying the coercion here is what lets `TreeTable` store its columns at their
-      * true kind without a cast.
-      */
-    private[uic] def widen[A](c: Column[A, K]): Column[A, AnyTable]
-end AnyTableColumn
-
-object AnyTableColumn:
-    given AnyTableColumn[AnyTable] with
-        private[uic] def widen[A](c: Column[A, AnyTable]): Column[A, AnyTable] = c
-
-/** One column of a [[DataTable]] — a typed, hand-authored carrier: a `header`
-  * label (also the column's identity in the `sort` spec), an optional plain-text
-  * projection (used for cell text AND the global filter), an optional `body`
-  * template rendering arbitrary UI per row, an optional `sortBy` ordering (which
-  * makes the header clickable when the table has a `sort` ref), and an `align`.
-  *
-  * {{{
-  * Column[Product]("Name")(_.name).sortBy(_.name)
-  * Column[Product]("Price").body(p => span(fmt(p))).sortBy(_.price).align(ColumnAlign.End)
-  * }}}
-  */
-final case class Column[A, +K <: FlatOnly] private (
-    headerV: String,
-    textF: Maybe[A => String] = Absent,
-    bodyF: Maybe[A => UI] = Absent,
-    orderingV: Maybe[Ordering[A]] = Absent,
-    alignV: ColumnAlign = ColumnAlign.Start,
-    footerTextV: Maybe[String] = Absent,
-    footerF: Maybe[Seq[A] => UI] = Absent,
-    rowSpanEqF: Maybe[(A, A) => Boolean] = Absent
-):
-    /** Custom cell content, replacing (or standing in for) the text projection. */
-    def body(f: A => UI): Column[A, K] = copy(bodyF = Present(f))
-
-    /** Static footer label for this column; any column carrying a footer gives the
-      * table a `tfoot`.
-      */
-    def footer(v: String): Column[A, FlatOnly] = copy(footerTextV = Present(v), footerF = Absent)
-
-    /** Footer content computed from the rows that survive the table's global filter,
-      * across every page rather than the visible one. The table owns filtering, so an
-      * aggregate over what the reader is looking at cannot be computed by the caller.
-      */
-    def footer(f: Seq[A] => UI): Column[A, FlatOnly] = copy(footerF = Present(f), footerTextV = Absent)
-
-    /** Makes the column sortable by the projected key (header clicks cycle
-      * ascending → descending → unsorted when the table has a `sort` ref).
-      */
-    def sortBy[B](f: A => B)(using ord: Ordering[B]): Column[A, K] =
-        copy(orderingV = Present(Ordering.by(f)))
-
-    def align(v: ColumnAlign): Column[A, K] = copy(alignV = v)
-
-    /** Merges this column's cells across consecutive rows whose key is equal: one cell per
-      * run, spanning it. The marker rides on the column, so unlike a string-keyed prop it
-      * cannot name a column the table does not have, and the key is explicit, so a column
-      * rendering only a [[body]] template can merge as well as a text one.
-      *
-      * The key is never rendered, it only decides which rows count as the same, so it can
-      * be any type the compiler will compare: an id, a tuple of two fields, an opaque
-      * type with a derived `CanEqual`. Going through a `String` would allocate on every
-      * comparison and, worse, merge two keys whose `toString` happened to agree. The
-      * column keeps the comparison rather than the projection, since it has no type
-      * parameter to hold the key's type in.
-      *
-      * Runs are clipped by every merged column to the LEFT and by the innermost group a
-      * row sits in. That is not a nicety: a full-width group header row inside a merged
-      * run would overlap the span and break the table, and two merged columns whose runs
-      * crossed would do the same. Clipping makes both impossible, and it makes column
-      * order the outer-to-inner order, which is how a merged table reads anyway.
-      */
-    def rowSpan[K2](key: A => K2)(using CanEqual[K2, K2]): Column[A, FlatOnly] =
-        copy(rowSpanEqF = Present((x, y) => key(x) == key(y)))
-
-    /** Merges by this column's own text projection, which is the key nine times in ten and
-      * would otherwise be written twice on one line. [[HasText]] is what confines the form
-      * to a column that has one: a body-only column has no text to merge by, and rather
-      * than merging nothing it does not compile.
-      */
-    def rowSpan(using HasText[K]): Column[A, FlatOnly] =
-        // The evidence is exactly the proof that this projection is there.
-        textF.map(f => copy(rowSpanEqF = Present((x, y) => f(x) == f(y)))).getOrElse(this)
-
-    private[uic] def hasFooter: Boolean = footerTextV.isDefined || footerF.isDefined
-
-    /** How this column decides that two rows belong to the same merged cell, if it
-      * merges at all.
-      */
-    private[uic] def rowSpanEq: Maybe[(A, A) => Boolean] = rowSpanEqF
-end Column
-
-object Column:
-    /** A column rendering (and filtering by) the plain-text projection. */
-    def apply[A](header: String)(text: A => String): Column[A, TextAnyTable] =
-        new Column[A, TextAnyTable](header, textF = Present(text))
-
-    /** A column without a text projection — give it a [[Column.body]] template.
-      * (No text projection also means the global filter cannot match it.)
-      */
-    def apply[A](header: String): Column[A, AnyTable] = new Column[A, AnyTable](header)
-
-    /** Lifts a prepared column list into the shape `columns` takes, so a table built
-      * from a reusable `Seq[Column[A, AnyTable]]` still splats: `columns(sharedCols*)`.
-      * A splat applies no per-element conversion, but it does apply one to the sequence.
-      */
-    given seqAsColumnsOf[A, K <: FlatOnly]: Conversion[Seq[Column[A, K]], Seq[ColumnOf[A, K]]] =
-        cs => cs.map(c => (_: ColumnScope[A]) ?=> c)
-end Column
-
-/** The typing context a [[column]] constructor reads its row type from.
-  *
-  * @note
-  *   The message covers the second way this given goes missing. A failure INSIDE a
-  *   `columns(...)` call makes the compiler retype the argument without an expected type,
-  *   which drops the scope, so an argument-less `rowSpan` on a column with no text
-  *   projection surfaces here rather than at [[HasText]].
-  *
-  * `DataTable[A].columns` and `TreeTable[A].columns` take their arguments as context
-  * functions over this type, which fixes `A` before the argument is typed. That is
-  * what makes the type argument unnecessary: `Column("Name")(_.name)` already infers
-  * `A` from the expected element type, but chaining a modifier types the receiver on
-  * its own, `A` widens to `Any`, and `_.name` stops resolving.
-  */
-@implicitNotFound(
-    "A column has to be written inside a columns(...) call, which is what fixes its row type. If it is, then " +
-        "an argument-less rowSpan on this column has no text projection to merge by: give it a key, rowSpan(_.field)."
-)
-final class ColumnScope[A] private[uic] ()
-
-/** A column authored inside a `columns(...)` call, reading its row type from the
-  * enclosing [[ColumnScope]].
-  */
-type ColumnOf[A, K <: FlatOnly] = ColumnScope[A] ?=> Column[A, K]
-
-/** A column whose row type comes from the table it is passed to, so it carries no type
-  * argument of its own.
-  *
-  * {{{
-  * DataTable[Product]().columns(
-  *     column("Name")(_.name).sortBy(_.name),
-  *     column("Price")(_.price.toString).align(ColumnAlign.End)
-  * )
-  * }}}
-  *
-  * Outside a `columns(...)` call there is no scope to read, so a standalone column list
-  * still names its row type once: `Column[Product]("Name")(_.name)`.
-  */
-def column[A](header: String)(using ColumnScope[A])(text: A => String): Column[A, TextAnyTable] =
-    Column[A](header)(text)
-
-/** A scoped column without a text projection; give it a [[Column.body]] template. */
-def column[A](header: String)(using ColumnScope[A]): Column[A, AnyTable] =
-    Column[A](header)
 
 /** DataTable — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * DataTable anatomy: `div.p-datatable.p-component[.p-datatable-hoverable]
@@ -223,7 +17,8 @@ def column[A](header: String)(using ColumnScope[A]): Column[A, AnyTable] =
   * extracted `@primeuix` datatable + paginator CSS applies.
   *
   * The header and body rows sit in real `thead.p-datatable-thead` and
-  * `tbody.p-datatable-tbody` row groups, which is what the extracted sheet's
+  * `tbody.p-datatable-tbody` row groups, the `thead` holding one `tr` per level of
+  * [[headerGroup]] nesting, which is what the extracted sheet's
   * row, cell, hover, selection, striping and gridline rules are scoped to.
   * Columns carrying a [[Column.footer]] add a `tfoot.p-datatable-tfoot` summary
   * row; `header`/`footer` are the two slots outside the table
@@ -233,7 +28,10 @@ def column[A](header: String)(using ColumnScope[A]): Column[A, AnyTable] =
   * Rows are TYPED and every behavior is pure `(data, ui-state refs) → markup`,
   * computed server-side at render:
   *   - `sort(ref)`: the table SORTS the rows itself, from an ordered [[SortKey]]
-  *     spec whose first sorting entry is the primary key. What a plain header click does
+  *     spec whose first sorting entry is the primary key. An entry names its column
+  *     by path, the labels of the [[headerGroup]]s around it followed by its own
+  *     header, so a column in no group is named by its header alone and one header
+  *     under two groups still names two different columns. What a plain header click does
   *     depends on how many columns sort. With one, it owns the whole cycle: ascending,
   *     descending, off. With several, it only REVERSES the clicked column, in place, so a
   *     spec built up over several clicks cannot lose a key because one header was clicked
@@ -261,6 +59,10 @@ def column[A](header: String)(using ColumnScope[A]): Column[A, AnyTable] =
   *     run of consecutive rows sharing a level's key becomes a group, headed by a
   *     `tr.p-datatable-row-group-header` and optionally closed by a summary row;
   *     `expandedGroups(ref)` makes them collapsible, keyed by [[GroupPath]].
+  *   - `headerGroup(label)(columns)`: a labelled cell spanning the columns written
+  *     under it, adding one header row per level of nesting. The spans are read off
+  *     that tree rather than declared, so a header of any depth cannot fall out of
+  *     step with the columns beneath it.
   *   - `Column.rowSpan(key)`: the other way to show a key, where that column's cells merge
   *     across their run, clipped by the merged columns left of them and by the
   *     innermost group, so two spans can never cross.
@@ -280,7 +82,7 @@ def column[A](header: String)(using ColumnScope[A]): Column[A, AnyTable] =
 final case class DataTable[A] private (
     rowsV: List[A] = Nil,
     rowKeyF: Maybe[A => String] = Absent,
-    cols: List[Column[A, FlatOnly]] = Nil,
+    cols: List[ColumnTree[A]] = Nil,
     sortRef: Maybe[SignalRef[List[SortKey]]] = Absent,
     filterRef: Maybe[SignalRef[String]] = Absent,
     pageSizeV: Maybe[Int] = Absent,
@@ -315,12 +117,22 @@ final case class DataTable[A] private (
     def rowKey(f: A => String): DataTable[A] = copy(rowKeyF = Present(f))
 
     /** Appends columns. Each argument is authored against the table's row type, so
-      * [[column]] needs no type argument of its own.
+      * [[column]] needs no type argument of its own, and each may be a single [[column]]
+      * or a [[headerGroup]] spanning several, which is what makes the header multi-row.
       */
-    def columns(cs: ColumnOf[A, FlatOnly]*): DataTable[A] =
+    def columns(cs: HeaderOf[A]*): DataTable[A] =
         given ColumnScope[A] = new ColumnScope[A]()
-        copy(cols = cols ++ cs.map(c => (c: Column[A, FlatOnly])).toList)
+        copy(cols = cols ++ cs.map(c => (c: ColumnTree[A])).toList)
     end columns
+
+    /** The real columns, left to right, with any [[headerGroup]] flattened away. The
+      * body, the footer and the filter are functions of these alone; only the header
+      * reads the tree.
+      */
+    private lazy val leafCols: List[Column[A, FlatOnly]] = cols.flatMap(_.leaves)
+
+    /** The same columns paired with the path that identifies them in the sort spec. */
+    private lazy val leafPaths: List[(List[String], Column[A, FlatOnly])] = ColumnTree.leafPaths(cols)
 
     /** Binds the ordered sort spec two-way: [[SortKey]] entries, the first sorting one
       * being the primary key.
@@ -512,13 +324,13 @@ final case class DataTable[A] private (
             if query.isEmpty then rowsV
             else
                 val q = query.toLowerCase
-                rowsV.filter(a => cols.exists(c => c.textF.exists(f => f(a).toLowerCase.contains(q))))
+                rowsV.filter(a => leafCols.exists(c => c.textF.exists(f => f(a).toLowerCase.contains(q))))
 
         // 2. Sort: apply the SORTING entries back-to-front through stable sorts, so the
         //    first one ends up the primary key. Unsorted entries hold a slot in the
         //    priority order and contribute nothing here.
         val sorted = SortKey.sorting(sort).reverse.foldLeft(filtered) { (rs, k) =>
-            cols.find(_.headerV == k.column).flatMap(_.orderingV.toOption) match
+            leafPaths.find(_._1 == k.path).flatMap(_._2.orderingV.toOption) match
                 case Some(ord) => rs.sorted(using if k.direction == SortDirection.Ascending then ord else ord.reverse)
                 case None      => rs
         }
@@ -539,14 +351,30 @@ final case class DataTable[A] private (
                 (sorted.slice(cur * size, cur * size + size), List(pag.render))
             case Absent => (sorted, Nil)
 
-        val colCount = cols.length + (if checkboxColumn then 1 else 0) + (if expanderColumn then 1 else 0)
+        val colCount = leafCols.length + (if checkboxColumn then 1 else 0) + (if expanderColumn then 1 else 0)
 
-        val headRow: UI =
-            val expanderTh: List[UI] = if expanderColumn then List(th.cssClass("p-datatable-header-cell")) else Nil
-            val checkboxTh: List[UI] = if checkboxColumn then List(selectAllCell(sorted, sel)) else Nil
-            val colThs: List[UI]     = cols.map(c => headerCell(c, sort))
-            tr((expanderTh ++ checkboxTh ++ colThs).map(toChild)*)
-        end headRow
+        // One tr per header level. The leading expander and checkbox cells belong to the
+        // top row and reach down through every other one, so they line up with a column
+        // whatever depth the header has.
+        val headRows: List[UI] =
+            val matrix = ColumnTree.spans(cols)
+            val depth  = math.max(matrix.length, 1)
+            val leading: List[UI] =
+                val expanderTh: List[UI] =
+                    if !expanderColumn then Nil
+                    else
+                        var cell = th.cssClass("p-datatable-header-cell")
+                        if depth > 1 then cell = cell.rowspan(depth)
+                        List(cell)
+                val checkboxTh: List[UI] = if checkboxColumn then List(selectAllCell(sorted, sel, depth)) else Nil
+                expanderTh ++ checkboxTh
+            end leading
+            val rows = if matrix.isEmpty then List(Nil) else matrix
+            rows.zipWithIndex.map { (cells, i) =>
+                val ths = cells.map(headerSpanCell(_, sort))
+                tr((if i == 0 then leading ++ ths else ths).map(toChild)*)
+            }
+        end headRows
 
         val bodyRows: List[UI] =
             if paged.isEmpty then
@@ -562,10 +390,10 @@ final case class DataTable[A] private (
         // The footer aggregates over the FILTERED rows, not the visible page: a
         // column total that changed when the reader turned the page would be wrong.
         val footGroup: List[UI] =
-            if !cols.exists(_.hasFooter) then Nil
+            if !leafCols.exists(_.hasFooter) then Nil
             else
-                val leadingTds: List[UI] = List.fill(colCount - cols.length)(td)
-                val footRow: UI          = tr((leadingTds ++ cols.map(footerCell(_, sorted))).map(toChild)*)
+                val leadingTds: List[UI] = List.fill(colCount - leafCols.length)(td)
+                val footRow: UI          = tr((leadingTds ++ leafCols.map(footerCell(_, sorted))).map(toChild)*)
                 List(tfoot.cssClass("p-datatable-tfoot")(toChild(footRow)))
 
         var tbl = table.cssClass("p-datatable-table")
@@ -578,7 +406,7 @@ final case class DataTable[A] private (
         accNameRefV.foreach(v => tbl = tbl.aria("labelledby", v))
         val tableEl: UI = tbl(
             (List[UI](
-                thead.cssClass("p-datatable-thead")(toChild(headRow)),
+                thead.cssClass("p-datatable-thead")(headRows.map(toChild)*),
                 tbody.cssClass("p-datatable-tbody")(bodyRows.map(toChild)*)
             ) ++ footGroup).map(toChild)*
         )
@@ -604,7 +432,7 @@ final case class DataTable[A] private (
             case Size.Normal => ()
         end match
         root(
-            (rowKeyCard ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
+            (rowKeyCard ++ headerCards(sort) ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
         )
     end body
 
@@ -667,6 +495,52 @@ final case class DataTable[A] private (
         end if
     end rowKeyCard
 
+    /** The loud cards for the ways a column tree and a sort spec mislead at render time
+      * rather than at compile time (see [[KeyDiagnostics]]).
+      *
+      * A group holding no column occupies nothing, so it disappears from the header
+      * instead of reporting itself. A spec entry that matches no sortable column does
+      * nothing at all, which covers a mistyped part, a column that never got a `sortBy`,
+      * and a path missing the group labels above it. And two sortable columns reachable
+      * by the SAME path cannot be told apart by a spec at all: the table sorts by
+      * whichever sits left and lights both headers up.
+      */
+    private def headerCards(sort: List[SortKey])(using Frame): List[UI] =
+        def show(path: List[String]): String = path.mkString(" / ")
+        val empties                          = ColumnTree.emptyGroups(cols)
+        val sortable                         = leafPaths.filter(_._2.orderingV.isDefined).map(_._1)
+        val unknown                          = if sortRef.isEmpty then Nil else sort.map(_.path).filterNot(sortable.contains).map(show)
+        val ambiguous =
+            if sortRef.isEmpty then Nil else KeyDiagnostics.duplicates(sortable.map(show))
+        val emptyCard =
+            if empties.isEmpty then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "a headerGroup holds no column, so it renders nothing; give it columns or drop it",
+                    empties
+                ))
+        val unknownCard =
+            if unknown.isEmpty then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "the sort spec names a column this table cannot sort; a path is the group labels around " +
+                        "the column followed by its header, and the column needs a sortBy",
+                    unknown
+                ))
+        val ambiguousCard =
+            if ambiguous.isEmpty then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "two sortable columns share a path, so no spec can tell them apart; rename one or put " +
+                        "them under different headerGroups",
+                    ambiguous
+                ))
+        emptyCard ++ unknownCard ++ ambiguousCard
+    end headerCards
+
     /** The checkbox column's header cell: Prime's select-all, binary (no partial
       * state), checked while every row that survived the global filter is selected.
       *
@@ -677,13 +551,15 @@ final case class DataTable[A] private (
       * narrowing the filter, select-alling, then widening it again must not silently
       * drop what was selected before.
       */
-    private def selectAllCell(inFilter: List[A], sel: Set[String])(using Frame): UI =
+    private def selectAllCell(inFilter: List[A], sel: Set[String], rows: Int)(using Frame): UI =
         val keys        = inFilter.map(keyOf)
         val allSelected = keys.nonEmpty && keys.forall(sel.contains)
         val toggle: Any < Async = selectedRef match
             case Present(ref) => ref.getAndUpdate(cur => if allSelected then cur -- keys else cur ++ keys)
             case Absent       => ()
-        th.cssClass("p-datatable-header-cell")(
+        var cell = th.cssClass("p-datatable-header-cell")
+        if rows > 1 then cell = cell.rowspan(rows)
+        cell(
             toChild(
                 CheckBox()
                     .checked(allSelected)
@@ -694,21 +570,41 @@ final case class DataTable[A] private (
         )
     end selectAllCell
 
-    /** One sortable/plain header cell with Prime's header-content anatomy. */
-    private def headerCell(c: Column[A, FlatOnly], sort: List[SortKey])(using Frame): UI =
+    /** One cell of the header matrix: a leaf renders its column header, a group a plain
+      * title cell as wide as the leaves beneath it.
+      */
+    private def headerSpanCell(sp: ColumnTree.HeaderSpan[A], sort: List[SortKey])(using Frame): UI =
+        sp.node.asColumn match
+            case Present(c) => headerCell(c, sp.path, sort, sp.rowspan)
+            case Absent =>
+                var cell = th.cssClass("p-datatable-header-cell")
+                if sp.colspan > 1 then cell = cell.colspan(sp.colspan)
+                cell(
+                    div.cssClass("p-datatable-column-header-content")(
+                        toChild(span.cssClass("p-datatable-column-title")(sp.node.label))
+                    )
+                )
+        end match
+    end headerSpanCell
+
+    /** One sortable/plain header cell with Prime's header-content anatomy, reaching down
+      * `rows` header rows so an ungrouped column lines up with a grouped one.
+      */
+    private def headerCell(c: Column[A, FlatOnly], path: List[String], sort: List[SortKey], rows: Int)(using Frame): UI =
         val sortable  = c.orderingV.isDefined && sortRef.isDefined
         val sortingKs = SortKey.sorting(sort)
-        val rank      = sortingKs.indexWhere(_.column == c.headerV)
-        val direction = sort.find(_.column == c.headerV).map(_.direction).getOrElse(SortDirection.Unsorted)
+        val rank      = sortingKs.indexWhere(_.path == path)
+        val direction = sort.find(_.path == path).map(_.direction).getOrElse(SortDirection.Unsorted)
 
         var cell = th.cssClass("p-datatable-header-cell")
+        if rows > 1 then cell = cell.rowspan(rows)
         c.alignV match
             case ColumnAlign.Center => cell = cell.cssClass("p-uic-dt-center")
             case ColumnAlign.End    => cell = cell.cssClass("p-uic-dt-end")
             case ColumnAlign.Start  => ()
         end match
         if sortable then
-            cell = cell.cssClass("p-datatable-sortable-column").tabIndex(0).onClick(e => toggleSort(c.headerV, e))
+            cell = cell.cssClass("p-datatable-sortable-column").tabIndex(0).onClick(e => toggleSort(path, e))
         if direction.isSorting then
             cell = cell
                 .cssClass("p-datatable-column-sorted")
@@ -748,13 +644,13 @@ final case class DataTable[A] private (
       * advance the one already in the spec IN PLACE, which is what lets an accidental
       * click be undone by the next one.
       */
-    private def toggleSort(key: String, e: MouseEvent)(using Frame): Any < Async =
+    private def toggleSort(path: List[String], e: MouseEvent)(using Frame): Any < Async =
         sortRef match
             case Present(ref) =>
                 val multi = e.modifiers.ctrl || e.modifiers.meta
                 ref.getAndUpdate(cur =>
-                    if multi then SortKey.cycle(cur, key, removableSortFlag)
-                    else SortKey.plain(cur, key, removableSortFlag)
+                    if multi then SortKey.cycle(cur, path, removableSortFlag)
+                    else SortKey.plain(cur, path, removableSortFlag)
                 )
             case Absent => ()
 
@@ -830,7 +726,7 @@ final case class DataTable[A] private (
       * columns read outer to inner in column order.
       */
     private def spanCells(rows: List[A], exp: Set[String]): List[Map[Int, SpanCell]] =
-        val merged = cols.zipWithIndex.collect { case (c, i) if c.rowSpanEq.isDefined => (i, c.rowSpanEq.get) }
+        val merged = leafCols.zipWithIndex.collect { case (c, i) if c.rowSpanEq.isDefined => (i, c.rowSpanEq.get) }
         if merged.isEmpty then List.fill(rows.size)(Map.empty)
         else
             val indexed                                                = rows.toVector
@@ -925,7 +821,7 @@ final case class DataTable[A] private (
                 val icon: List[UI] = if isSel then List(GlyphSvg(Icons.check, "p-checkbox-icon")) else Nil
                 List(td(cb(toChild(div.cssClass("p-checkbox-box")(icon.map(toChild)*)))))
 
-        val dataTds: List[UI] = cols.zipWithIndex.flatMap { (c, i) =>
+        val dataTds: List[UI] = leafCols.zipWithIndex.flatMap { (c, i) =>
             val cellSpan = spans.get(i)
             if cellSpan.contains(SpanCell.Covered) then Nil
             else

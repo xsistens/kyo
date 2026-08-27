@@ -1621,6 +1621,96 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "a headerGroup gives the table a multi-row header whose spans are read off the tree" in {
+        final case class Sale(id: String, code: String, q1: String, q2: String, total: String)
+        val sales                                          = List(Sale("1", "A-1", "10", "20", "30"), Sale("2", "A-2", "5", "6", "11"))
+        def occurrences(html: String, needle: String): Int = needle.r.findAllIn(html).size
+        def twoYears(using Frame) = uic.DataTable[Sale]().rows(sales).rowKey(_.id).columns(
+            uic.headerGroup("2024")(uic.column("Q1")(_.q1).sortBy(_.q1)),
+            uic.headerGroup("2025")(uic.column("Q1")(_.q2).sortBy(_.q2))
+        )
+
+        for
+            grouped <- renderHtml(
+                uic.DataTable[Sale]().rows(sales).rowKey(_.id).columns(
+                    uic.column("Code")(_.code),
+                    uic.headerGroup("Revenue")(
+                        uic.headerGroup("2025")(uic.column("Q1")(_.q1), uic.column("Q2")(_.q2)),
+                        uic.column("Total")(_.total)
+                    )
+                ).render
+            )
+            flat <- renderHtml(
+                uic.DataTable[Sale]().rows(sales).rowKey(_.id).columns(uic.column("Code")(_.code)).render
+            )
+            checked <-
+                for
+                    ref <- Signal.initRef(Set.empty[String])
+                    out <- UI.runRender(
+                        uic.DataTable[Sale]().rows(sales).rowKey(_.id).columns(
+                            uic.headerGroup("Revenue")(uic.column("Q1")(_.q1), uic.column("Q2")(_.q2))
+                        ).selectionMode(uic.SelectionMode.Checkbox).selected(ref).render
+                    ).take(1).run
+                yield out.mkString
+            empty <- renderHtml(
+                uic.DataTable[Sale]().rows(sales).rowKey(_.id).columns(
+                    uic.headerGroup("Nothing")(),
+                    uic.column("Code")(_.code)
+                ).render
+            )
+            // The same header under two groups is two paths, so a qualified spec picks one
+            // of them and neither needs renaming.
+            qualified <-
+                for
+                    ref <- Signal.initRef(List(uic.SortKey.ascending("2025", "Q1")))
+                    out <- UI.runRender(twoYears.sort(ref).render).take(1).run
+                yield out.mkString
+            unqualified <-
+                for
+                    ref <- Signal.initRef(List(uic.SortKey.ascending("Q1")))
+                    out <- UI.runRender(twoYears.sort(ref).render).take(1).run
+                yield out.mkString
+            samePath <-
+                for
+                    ref <- Signal.initRef(List.empty[uic.SortKey])
+                    out <- UI.runRender(
+                        uic.DataTable[Sale]().rows(sales).rowKey(_.id).columns(
+                            uic.headerGroup("2025")(
+                                uic.column("Q1")(_.q1).sortBy(_.q1),
+                                uic.column("Q1")(_.q2).sortBy(_.q2)
+                            )
+                        ).sort(ref).render
+                    ).take(1).run
+                yield out.mkString
+        yield
+            // Three levels deep: Code and Revenue, then 2025 and Total, then Q1 and Q2.
+            assert(occurrences(grouped, "<tr") == 2 + 3, "one header row per level, plus the two data rows")
+            assert(grouped.contains("colspan=\"3\""), "Revenue spans the three columns under it")
+            assert(grouped.contains("colspan=\"2\""), "and 2025 the two under itself")
+            assert(occurrences(grouped, "rowspan=\"3\"") == 1, "Code reaches the bottom of the header")
+            assert(occurrences(grouped, "rowspan=\"2\"") == 1, "and Total from its own level down")
+            assert(occurrences(grouped, "<td") == 8, "the body still has one cell per leaf column")
+            // A group states no span it does not have, and a flat header states none at all.
+            assert(!grouped.contains("colspan=\"1\"") && !grouped.contains("rowspan=\"1\""))
+            assert(!flat.contains("colspan=") && !flat.contains("rowspan="), "a one-row header spans nothing")
+            // The checkbox column sits beside the leaves, not beside the group, so it has to
+            // reach down the full header the way an ungrouped column does.
+            assert(checked.contains("rowspan=\"2\""), "the select-all cell reaches down the header")
+            assert(empty.contains(">Code<") && !empty.contains(">Nothing<"), "an empty group renders no cell")
+            assert(empty.contains("p-uic-key-error") && empty.contains("Nothing"), "and is reported instead")
+            // Both headers read "Q1", so which one the spec picked shows in which th carries
+            // the sorted class: the second, whose path is 2025 / Q1.
+            val firstQ1  = qualified.indexOf(">Q1<")
+            val secondQ1 = qualified.indexOf(">Q1<", firstQ1 + 1)
+            val sortedTh = qualified.indexOf("p-datatable-column-sorted")
+            assert(occurrences(qualified, "p-datatable-column-sorted") == 1, "one column sorts")
+            assert(sortedTh > firstQ1 && sortedTh < secondQ1, "and it is the one the path names")
+            assert(!qualified.contains("p-uic-key-error"), "and a shared header under two groups is no fault")
+            assert(unqualified.contains("p-uic-key-error"), "a path missing its group labels matches nothing")
+            assert(samePath.contains("p-uic-key-error"), "two columns reachable by one path are reported")
+        end for
+    }
+
     "Tabs renders Prime's compound anatomy and shows only the selected tab's content" in {
         for
             html <-

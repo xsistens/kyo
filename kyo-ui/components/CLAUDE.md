@@ -47,8 +47,12 @@ argument is typed. Two things that do NOT work, both tried:
   the arguments are typed without a definite expected type, the scope is never
   established, and every scoped call fails with `No given instance`.
 - Relying on the scoped form to cover a splat of prepared values. A splat applies no
-  per-element conversion; the lift has to be a `Conversion` on the sequence as a whole,
-  in the element type's companion so it needs no import.
+  per-element conversion; the lift has to be a `Conversion` on the sequence as a whole.
+  Put it in the SCOPE's companion (`object ColumnScope`), generic in the element type, not
+  in each element type's own. Once the element types are related (`Column <: ColumnTree`)
+  two element-specific givens both match a `Seq[Column]` argument whose expected element
+  is the supertype, and the call fails as ambiguous. The scope is the one type every such
+  query mentions, so one given there serves every element type without overlap.
 
 The same shape carries `groupBy(uic.group(_.category))` (`GroupScope[A]`), with one
 difference that matters: `column` takes the header first and reads `A` from the `using`
@@ -84,10 +88,17 @@ TextFlatOnly`. Two consequences to know:
   not compile: it puts `K` in an invariant position, which a covariant parameter forbids.
   So flat-only setters reset the kind, and the ORDER matters, which the message says.
 
-Also: an implicit failure INSIDE a `columns(...)` argument is reported against the
-`ColumnScope`, not against the constraint that actually failed, for the retype reason
-above. `HasText`'s own `@implicitNotFound` only shows for a standalone column, so
-`ColumnScope`'s message has to name both causes.
+Also: ANY failure INSIDE a `columns(...)` argument is reported against the `ColumnScope`,
+not against the constraint that actually failed, for the retype reason above. `HasText`'s
+own `@implicitNotFound` only shows for a standalone column, and a column setter reached for
+on a `HeaderGroup` (which has none) surfaces there too, so `ColumnScope`'s message has to
+name every cause it stands in front of.
+
+The header is a sealed ADT over the columns (`ColumnTree` = `Column` | `HeaderGroup`), and
+Scala 3 wants a sealed trait's direct children in ITS file. That is what moved the whole
+column vocabulary out of `DataTable.scala` into `Column.scala`: a sealed family cannot be
+split across files, so the split has to be drawn around the family, not around the
+component that consumes it.
 
 `typeCheck`/`typeCheckFailure` results are baked at TEST-compile time. A change to the
 main sources alone may leave them stale: a snippet the real compiler now rejects can still
