@@ -1300,11 +1300,25 @@ final case class DataTable[A] private (
                     if edit.live then b = b.onClick(action)
                     b.render
                 end btn
+                // Where focus goes when a BUTTON closed the row. Not onto the button that
+                // replaces the one just pressed: that element is new, and a self-command
+                // resolves `getElementById` the moment it lands, which can be before the
+                // insert. The row's first editable cell is a `td` that was already there,
+                // and it is where the keyboard would want to continue anyway.
+                val backToRow: Any < Async =
+                    editableLeaves.headOption match
+                        case Some((path, _)) => focusCell(nav, CellPath(id, path))
+                        case None            => ()
                 val buttons: List[UI] =
                     if rowEdit then
                         List(
-                            btn("p-datatable-row-editor-save", Icons.check, "Save Edit", commitRow(id, a, edit)),
-                            btn("p-datatable-row-editor-cancel", Icons.times, "Cancel Edit", cancelRow(id, edit))
+                            btn(
+                                "p-datatable-row-editor-save",
+                                Icons.check,
+                                "Save Edit",
+                                commitRow(id, a, edit).map(closed => if closed then backToRow else ())
+                            ),
+                            btn("p-datatable-row-editor-cancel", Icons.times, "Cancel Edit", cancelRow(id, edit).andThen(backToRow))
                         )
                     else
                         List(btn("p-datatable-row-editor-init", Icons.pencil, "Row Edit", beginRowEditing(id, a, edit)))
@@ -1436,6 +1450,21 @@ final case class DataTable[A] private (
             case (Present(r), Present((path, c))) => openCell(CellPath(keyOf(r), path), r, c, Absent, edit)
             case _                                => ()
 
+    /** Puts DOM focus back on a cell, by the id it was rendered with.
+      *
+      * This is what an editor owes the cursor when it closes. While it is open the EDITOR
+      * is the focused element, and closing removes it, so without this focus falls back to
+      * the document and the next arrow key goes nowhere. The cell itself is never
+      * replaced, only its content, so the command has a target the moment it arrives.
+      */
+    private def focusCell(nav: NavState[A], cell: CellPath)(using Frame): Any < Async =
+        if !nav.on then ()
+        else
+            val col = leafPaths.indexWhere(_._1 == cell.column)
+            (nav.indexOf(cell.row, keyOf), col) match
+                case (Present(row), c) if c >= 0 => nav.focus(cellId(nav, GridNav.Pos(row, c)))
+                case _                           => ()
+
     /** One key over one cell: read it against the grid, then do what it says.
       *
       * `Absent` from [[GridNav]] means the key was never ours, so the browser keeps it,
@@ -1459,14 +1488,19 @@ final case class DataTable[A] private (
                 // means doing nothing at all, since the row stays open and its drafts are
                 // per column, not per cell.
                 val isTab = !step.moveFocus
+                // An editor that closes hands focus back to its cell. Not on Tab, where the
+                // browser is moving focus itself and the cell it lands on opens instead.
+                def closing(closed: Boolean < Async): Any < Async =
+                    closed.map(c => if c && !isTab then focusCell(nav, cell) else ())
                 val editStep: Any < Async = step.edit match
                     case GridNav.EditOp.Keep       => ()
                     case GridNav.EditOp.Open(seed) => openCell(cell, row, c, seed, edit)
                     case GridNav.EditOp.Commit =>
-                        if rowEdit then (if isTab then () else commitRow(cell.row, row, edit))
-                        else commitCell(cell, row, c, edit)
+                        if rowEdit then (if isTab then () else closing(commitRow(cell.row, row, edit)))
+                        else closing(commitCell(cell, row, c, edit))
                     case GridNav.EditOp.Cancel =>
-                        if rowEdit then cancelRow(cell.row, edit) else cancelCell(edit)
+                        if rowEdit then closing(cancelRow(cell.row, edit).andThen(true))
+                        else closing(cancelCell(edit).andThen(true))
                 val focusStep: Any < Async = step.focus match
                     case Present(to) if step.moveFocus => nav.focus(cellId(nav, to))
                     case Present(to)                   => if rowEdit then () else openAt(to, nav, edit)
@@ -1566,8 +1600,13 @@ final case class DataTable[A] private (
       * cell already showed closes without writing and without reporting, which is where
       * "fires only when the value changed" comes from: the comparison is on the TEXT, so
       * it needs no equality on the row type.
+      *
+      * Answers whether the cell CLOSED, which is what the caller needs to decide where
+      * focus goes: a cell that stayed open still has the reader in it.
       */
-    private def commitCell(cell: CellPath, row: A, c: Column[A, FlatOnly], edit: EditState)(using Frame): Any < Async =
+    private def commitCell(cell: CellPath, row: A, c: Column[A, FlatOnly], edit: EditState)(using
+        Frame
+    ): Boolean < Async =
         (c.editV, edit.draftOf(cell.column)) match
             case (Present(ed), Present(ref)) =>
                 for
@@ -1579,14 +1618,14 @@ final case class DataTable[A] private (
                             for
                                 _ <- moved
                                 _ <- clearError(edit)
-                                r <- setEditingCell(Absent)
-                            yield r
+                                _ <- setEditingCell(Absent)
+                            yield true
                             end for
-                        case Result.Failure(e) => setError(cell, e, edit)
+                        case Result.Failure(e) => setError(cell, e, edit).andThen(false)
                         case Result.Panic(ex) =>
-                            setError(cell, FieldError("error", Map.empty, Maybe(ex.getMessage)), edit)
+                            setError(cell, FieldError("error", Map.empty, Maybe(ex.getMessage)), edit).andThen(false)
                 yield out
-            case _ => setEditingCell(Absent)
+            case _ => setEditingCell(Absent).andThen(true)
 
     /** Cancels a cell: the draft is dropped by the next seed, so there is nothing to undo. */
     private def cancelCell(edit: EditState)(using Frame): Any < Async =
@@ -1602,7 +1641,7 @@ final case class DataTable[A] private (
       * through [[applyCell]] before the row's own [[onRowValueChanged]] does, which is the
       * order AG Grid's `cellValueChanged` and `rowValueChanged` run in.
       */
-    private def commitRow(id: String, row: A, edit: EditState)(using Frame): Any < Async =
+    private def commitRow(id: String, row: A, edit: EditState)(using Frame): Boolean < Async =
         def loop(rest: List[(List[String], Column[A, FlatOnly])], acc: A): Result[(CellPath, FieldError), A] < Async =
             rest match
                 case Nil => Kyo.lift(Result.succeed(acc))
@@ -1634,11 +1673,11 @@ final case class DataTable[A] private (
                     for
                         _ <- fire
                         _ <- clearError(edit)
-                        r <- setRowEditing(id, false)
-                    yield r
+                        _ <- setRowEditing(id, false)
+                    yield true
                     end for
-                case Result.Failure((cell, e)) => setError(cell, e, edit)
-                case Result.Panic(ex)          => setRowEditing(id, false)
+                case Result.Failure((cell, e)) => setError(cell, e, edit).andThen(false)
+                case Result.Panic(ex)          => setRowEditing(id, false).andThen(true)
         yield out
         end for
     end commitRow
