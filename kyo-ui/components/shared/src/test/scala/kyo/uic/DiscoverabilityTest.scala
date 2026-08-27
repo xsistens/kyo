@@ -741,29 +741,85 @@ def x(using Frame) = uic.column("Name")((r: R) => r.name)"""
         )
     }
 
-    "Column.editor is a flat-table option, and the editing state binds by row or by cell" in {
+    "Column.editable carries the whole round trip, and the kind carries the fact that it does" in {
         typeCheck(
             preamble +
-                """final case class R(id: String, name: String)
+                """final case class R(id: String, name: String, price: Int) derives CanEqual
 def x(rows: SignalRef[Set[String]])(using Frame) =
   uic.DataTable[R]().rowKey(_.id)
-    .columns(uic.column("Name")(_.name).editor(r => span(r.name)))
-    .editingRows(rows).onRowEditSave(_ => ()).onRowEditCancel(_ => ())
-def y(cell: SignalRef[Maybe[uic.CellPath]])(using Frame) =
-  uic.DataTable[R]().rowKey(_.id)
-    .columns(uic.column("Name")(_.name).editor(r => span(r.name)))
-    .editingCell(cell).onCellEditSave(_ => ()).onCellEditCancel(_ => ())"""
+    .columns(
+      uic.column("Name")(_.name).editable(_.name)((r, v) => r.copy(name = v)),
+      uic.column("Price")(_.price.toString).editable(_.price)((r, v) => r.copy(price = v))
+    )
+    .editingRows(rows).onRowValueChanged(_ => ())
+def y(cell: SignalRef[Maybe[uic.CellPath]], rs: SignalRef[Seq[R]])(using Frame) =
+  uic.DataTable[R]().rowKey(_.id).rows(rs)
+    .columns(uic.column("Name")(_.name).editable(_.name)((r, v) => r.copy(name = v)))
+    .editingCell(cell).onCellValueChanged(_ => ())"""
         )
-        // A hierarchy binds no editing state, so a column carrying an editor does not fit it.
+        // A cell type given explicitly covers a domain type, and per-row gating and the
+        // column-scoped event refine an edit that is already there.
+        typeCheck(
+            preamble +
+                """enum Size derives CanEqual:
+  case S, M, L
+final case class R(id: String, size: Size, name: String)
+def x(using Frame) =
+  uic.DataTable[R]().rowKey(_.id).columns(
+    uic.column("Size")(_.size.toString)
+      .editableAs(uic.CellType.of(Size.values.toSeq)(_.toString))(_.size)((r, v) => r.copy(size = v))
+      .editableWhen(_.name.nonEmpty)
+      .onValueChanged((_, _) => ()),
+    uic.column("Name")(_.name)
+      .editableAs(uic.CellType.string.validate(kyo.uic.form.Validator.required()))(_.name)((r, v) => r.copy(name = v))
+  ).onCellValueChanged(_ => ())"""
+        )
+        // read and write are two halves of ONE value type, so they cannot disagree.
+        typeCheckFailure(
+            preamble +
+                """final case class R(name: String, price: Int)
+def x(using Frame) = uic.column("Price")((r: R) => r.price.toString).editable(_.price)((r, v: String) => r.copy(name = v))"""
+        )
+        // A type kyo has no CellType for needs one; there is no untyped fallback.
+        typeCheckFailure(
+            preamble +
+                """final case class Money(cents: Int)
+final case class R(price: Money)
+def x(using Frame) = uic.column("Price")((r: R) => r.price.toString).editable(_.price)((r, v) => r.copy(price = v))"""
+        )
+        // editableWhen refines an edit, so a column with none does not compile.
         typeCheckFailure(
             preamble +
                 """final case class R(name: String)
-def x(using Frame) = uic.TreeTable[R]().columns(uic.column("Name")(_.name).editor(r => span(r.name)))"""
+def x(using Frame) = uic.column("Name")((r: R) => r.name).editableWhen(_.name.nonEmpty)"""
+        )
+        // ...and the kind is reset by footer, so the order is part of the contract.
+        typeCheckFailure(
+            preamble +
+                """final case class R(name: String)
+def x(using Frame) =
+  uic.column("Name")((r: R) => r.name).editable(_.name)((r, v) => r.copy(name = v)).footer("t").editableWhen(_ => true)"""
+        )
+        // A hierarchy binds no editing state, so an editable column does not fit it.
+        typeCheckFailure(
+            preamble +
+                """final case class R(name: String)
+def x(using Frame) =
+  uic.TreeTable[R]().columns(uic.column("Name")(_.name).editable(_.name)((r, v) => r.copy(name = v)))"""
         )
         // The cell address is a row crossed with a column path, not a bare key.
         typeCheckFailure(preamble + """def x(r: SignalRef[Set[String]]) = uic.DataTable[String]().editingCell(r)""")
         typeCheckFailure(
             preamble + """def x(r: SignalRef[Maybe[uic.CellPath]]) = uic.DataTable[String]().editingRows(r)"""
+        )
+        // The hooks the pipeline replaced are gone, path and all.
+        typeCheckFailure(
+            preamble + """def x(using Frame) = uic.DataTable[String]().onCellEditSave(_ => ())"""
+        )
+        typeCheckFailure(
+            preamble +
+                """final case class R(name: String)
+def x(using Frame) = uic.column("Name")((r: R) => r.name).editor(r => span(r.name))"""
         )
     }
 

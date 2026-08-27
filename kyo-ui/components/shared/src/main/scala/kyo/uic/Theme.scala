@@ -238,6 +238,20 @@ object Theme:
       |.p-datatable-tbody > tr > td.p-uic-dt-editor {
       |  display: flex; align-items: center; justify-content: center; gap: 0.25rem;
       |}
+      |/* An open cell is a slot too. The padding goes so the editor fills the cell instead
+      |   of sitting in a smaller box than the text it replaced, and the refused-commit
+      |   message sits under it in the invalid colour the form fields already use. */
+      |.p-datatable-tbody > tr > td.p-cell-editing {
+      |  padding: 0.25rem;
+      |}
+      |.p-datatable-tbody > tr > td.p-cell-editing.p-invalid {
+      |  outline: 1px solid var(--p-form-field-invalid-border-color, #ef4444);
+      |  outline-offset: -1px;
+      |}
+      |.p-uic-dt-cell-error {
+      |  color: var(--p-form-field-invalid-placeholder-color, #ef4444);
+      |  font-size: 0.8125rem; padding-top: 0.125rem;
+      |}
       |/* PrimeVue scrolls the container and pins the row groups via
       |   DataTableStyle.inlineStyles (the ToggleSwitch precedent); the extracted sheet
       |   carries only the inset and z-index half of the sticky rules. The max-height

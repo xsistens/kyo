@@ -3,6 +3,8 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 import kyo.UI.Ast.HtmlChildVal
+import kyo.uic.form.ErrorTranslator
+import kyo.uic.form.FieldError
 
 /** The address of one cell: the row's [[DataTable.rowKey]] and the column's path, the
   * same path the sort spec names a column by. It is what [[DataTable.editingCell]] holds,
@@ -10,10 +12,38 @@ import kyo.UI.Ast.HtmlChildVal
   */
 final case class CellPath(row: String, column: List[String]) derives CanEqual
 
-/** What the table is currently editing: the rows in row mode, the one cell in cell mode.
-  * Threaded to the row renderer as one value, since both reach the same cells.
+/** What the table is currently editing: the rows in row mode, the one cell in cell mode,
+  * the per-column drafts an open editor writes into, and the error a refused commit left
+  * behind. Threaded to the row renderer as one value, since all four reach the same cells.
+  *
+  * `drafts` is keyed by COLUMN path and not by cell, because only one row edits at a time:
+  * one draft per editable column covers a single open cell and a whole open row alike, and
+  * a fixed set of refs is what a mount can allocate once. It is deliberately a ref map and
+  * not resolved values: the table never subscribes to a draft, so typing re-renders the
+  * editor's own cell and nothing else.
   */
-final private[uic] case class EditState(rows: Set[String], cell: Maybe[CellPath])
+final private[uic] case class EditState(
+    rows: Set[String],
+    cell: Maybe[CellPath],
+    drafts: Map[List[String], SignalRef[String]] = Map.empty,
+    errorRef: Maybe[SignalRef[Maybe[(CellPath, FieldError)]]] = Absent,
+    error: Maybe[(CellPath, FieldError)] = Absent,
+    // False in the static projection, where the mount has not run and there are no drafts
+    // to write into. The anatomy still renders; what it does not do is offer an
+    // affordance that could not work, which is the same trade Select's placeholder makes.
+    live: Boolean = false
+):
+    private[uic] def draftOf(path: List[String]): Maybe[SignalRef[String]] = Maybe.fromOption(drafts.get(path))
+
+    private[uic] def errorAt(cell: CellPath): Maybe[FieldError] =
+        error.flatMap((c, e) => if c == cell then Present(e) else Absent)
+end EditState
+
+/** The row before and after a committed cell edit, plus the column that wrote it. */
+final case class CellChange[A](rowKey: String, column: List[String], before: A, after: A)
+
+/** The row before and after a committed row edit. */
+final case class RowChange[A](rowKey: String, before: A, after: A)
 
 /** DataTable — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * DataTable anatomy: `div.p-datatable.p-component[.p-datatable-hoverable]
@@ -132,12 +162,10 @@ final case class DataTable[A] private (
     scrollHeightV: Maybe[String] = Absent,
     editingRowsRef: Maybe[SignalRef[Set[String]]] = Absent,
     editingCellRef: Maybe[SignalRef[Maybe[CellPath]]] = Absent,
-    onRowEditInitF: Maybe[String => Any < Async] = Absent,
-    onRowEditSaveF: Maybe[String => Any < Async] = Absent,
-    onRowEditCancelF: Maybe[String => Any < Async] = Absent,
-    onCellEditInitF: Maybe[CellPath => Any < Async] = Absent,
-    onCellEditSaveF: Maybe[CellPath => Any < Async] = Absent,
-    onCellEditCancelF: Maybe[CellPath => Any < Async] = Absent
+    rowsRefV: Maybe[SignalRef[Seq[A]]] = Absent,
+    onCellChangedF: Maybe[CellChange[A] => Any < Async] = Absent,
+    onRowChangedF: Maybe[RowChange[A] => Any < Async] = Absent,
+    translatorV: ErrorTranslator = ErrorTranslator.default
 ) extends Node:
     type Self = DataTable[A]
 
@@ -166,6 +194,11 @@ final case class DataTable[A] private (
 
     /** The same columns paired with the path that identifies them in the sort spec. */
     private lazy val leafPaths: List[(List[String], Column[A, FlatOnly])] = ColumnTree.leafPaths(cols)
+
+    /** The leaves that carry an edit pipeline, in column order. The drafts a mount
+      * allocates are keyed by these paths, and a row edit walks them left to right.
+      */
+    private lazy val editableLeaves: List[(List[String], Column[A, FlatOnly])] = leafPaths.filter(_._2.isEditable)
 
     /** Binds the ordered sort spec two-way: [[SortKey]] entries, the first sorting one
       * being the primary key.
@@ -213,52 +246,60 @@ final case class DataTable[A] private (
     def rowExpansionTemplate(f: A => UI): DataTable[A] = copy(expansionF = Present(f))
 
     /** Binds row editing two-way to `ref` (a set of [[rowKey]] ids): every column carrying
-      * a [[Column.editor]] shows it for those rows, and an editor-button column appears at
-      * the trailing edge with Prime's init, save and cancel buttons.
+      * a [[Column.editable]] pipeline shows its editor for those rows, and an
+      * editor-button column appears at the trailing edge with Prime's init, save and
+      * cancel buttons.
       *
-      * The table owns WHICH rows are being edited and nothing else. The editor and the
-      * draft it writes into are the caller's, so saving is theirs too: [[onRowEditSave]]
-      * fires with the row's key BEFORE the row leaves the set, which is what lets a save
-      * that cannot complete leave the row open.
+      * The table owns the draft as well as the state, and both come from the column: the
+      * editor is the one its [[CellType]] carries, seeded from `read`, and save writes
+      * back through `write`. Save fires [[onRowValueChanged]] with the row before and
+      * after; a value that will not parse, or a rule that refuses it, leaves the row open
+      * on the screen it failed on.
       */
     def editingRows(ref: SignalRef[Set[String]]): DataTable[A] = copy(editingRowsRef = Present(ref))
 
-    /** Runs when a row's edit button is pressed, with its [[rowKey]] id, before the row
-      * joins the editing set. This is where a caller seeds the draft its editor writes
-      * into, which is the only moment the table can offer for it: the editor itself
-      * renders in a pure position and cannot write.
-      */
-    def onRowEditInit(f: String => Any < Async): DataTable[A] = copy(onRowEditInitF = Present(f))
-
-    /** Runs when a row's save button is pressed, with its [[rowKey]] id, before the row
-      * leaves the editing set.
-      */
-    def onRowEditSave(f: String => Any < Async): DataTable[A] = copy(onRowEditSaveF = Present(f))
-
-    /** Runs when a row's cancel button is pressed, with its [[rowKey]] id, before the row
-      * leaves the editing set. This is where a caller discards the draft.
-      */
-    def onRowEditCancel(f: String => Any < Async): DataTable[A] = copy(onRowEditCancelF = Present(f))
-
-    /** Binds cell editing two-way to `ref`: at most one cell shows its
-      * [[Column.editor]], and clicking a cell of an editable column moves the editor
-      * there. Enter commits through [[onCellEditSave]], Escape discards through
-      * [[onCellEditCancel]], and both clear the ref.
+    /** Binds cell editing two-way to `ref`: at most one cell shows its column's editor,
+      * and clicking a cell of an editable column moves the editor there. Enter commits,
+      * Escape discards, and both clear the ref.
       *
       * A [[CellPath]] rather than a key, since a cell is a row crossed with a column.
       */
     def editingCell(ref: SignalRef[Maybe[CellPath]]): DataTable[A] = copy(editingCellRef = Present(ref))
 
-    /** Runs when a cell is clicked open, with its [[CellPath]], before the ref moves. The
-      * seeding moment, as [[onRowEditInit]] is for a row.
+    /** Binds the rows two-way, which is what lets the table apply a committed edit itself,
+      * through the column's own `write`.
+      *
+      * The alternative is [[rows(rs:Seq[A])*]] plus [[onCellValueChanged]]: the table
+      * computes the new row and hands it over instead of storing it, which is the mode for
+      * a caller whose rows live somewhere the table cannot reach. Binding both is a
+      * mistake and says so, since then two things claim to be the row list.
+      *
+      * The ref itself asks the row type for `CanEqual`, as every `Signal` does; a row type
+      * that is a case class gets there with `derives CanEqual`.
       */
-    def onCellEditInit(f: CellPath => Any < Async): DataTable[A] = copy(onCellEditInitF = Present(f))
+    def rows(ref: SignalRef[Seq[A]]): DataTable[A] = copy(rowsRefV = Present(ref))
 
-    /** Runs when the edited cell is committed with Enter, before the ref is cleared. */
-    def onCellEditSave(f: CellPath => Any < Async): DataTable[A] = copy(onCellEditSaveF = Present(f))
+    /** Runs after a committed cell edit, with the row before and after the column's write.
+      * With [[rows(ref:SignalRef[Seq[A]])*]] bound this is a notification; without it, it
+      * is the only exit, and storing the new row is the caller's.
+      *
+      * It does not fire when the value did not change, when the text will not parse, or
+      * when a rule refuses it. A column-scoped variant is [[Column.onValueChanged]].
+      */
+    def onCellValueChanged(f: CellChange[A] => Any < Async): DataTable[A] = copy(onCellChangedF = Present(f))
 
-    /** Runs when the edited cell is dismissed with Escape, before the ref is cleared. */
-    def onCellEditCancel(f: CellPath => Any < Async): DataTable[A] = copy(onCellEditCancelF = Present(f))
+    /** Runs after a committed row edit, once, with the row before and after every editable
+      * column's write. The per-cell [[onCellValueChanged]] fires for each column that
+      * actually changed, before this.
+      */
+    def onRowValueChanged(f: RowChange[A] => Any < Async): DataTable[A] = copy(onRowChangedF = Present(f))
+
+    /** Turns a refused commit's [[kyo.uic.form.FieldError]] into the message shown under
+      * the open editor. Defaults to `ErrorTranslator.default`, which shows the error's own
+      * fallback text, or its code when it has none; an app with i18n passes its own, the
+      * way a `Form` takes one.
+      */
+    def errorTranslator(t: ErrorTranslator): DataTable[A] = copy(translatorV = t)
 
     /** Groups the rows, one nested level per argument, outermost first. Every run of
       * CONSECUTIVE rows sharing a level's key becomes a group of that level, and the
@@ -354,6 +395,11 @@ final case class DataTable[A] private (
 
     // ---- render ----
 
+    /** A row's identity. Without a [[rowKey]] it falls back to the row's position in the
+      * appended list, which is why every feature that needs identity reports a missing
+      * `rowKey` in a card: a bound row list has no appended one to index into, and a
+      * position is not an identity across a sort in any case.
+      */
     private def keyOf(a: A): String =
         rowKeyF match
             case Present(f) => f(a)
@@ -383,18 +429,56 @@ final case class DataTable[A] private (
             case Present(r) => r.render(k)
             case Absent     => k(fallback)
 
+    /** Whether anything can be edited at all, which is what decides whether the table
+      * needs state of its own.
+      */
+    private def editingBound: Boolean = editingCellRef.isDefined || editingRowsRef.isDefined
+
+    /** A table that edits owns two things no caller supplies: one draft per editable
+      * column, and the error a refused commit left standing. Both are allocated in a mount,
+      * since a pure render cannot, and the placeholder is the same table without them, which
+      * is exactly what a table that does not edit renders anyway.
+      *
+      * The drafts are allocated per COLUMN and not per cell because only one row edits at a
+      * time, and a mount can only allocate a fixed set. They are never subscribed: typing
+      * re-renders the editor's own cell and leaves the table alone.
+      */
     private[uic] def render(using Frame): UI =
+        if !editingBound then renderWith(EditState(Set.empty, Absent))
+        else
+            UI.mounted {
+                for
+                    drafts <- Kyo.foreach(editableLeaves)((path, _) => Signal.initRef("").map(path -> _))
+                    err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+                yield wired(drafts.toMap, err)
+            }.placeholder(renderWith(EditState(Set.empty, Absent)))
+
+    /** The subscription tree the mount publishes, and the seam golden tests render
+      * directly: a top-down render shows a mounted region as its placeholder, so the
+      * editing anatomy is only reachable here.
+      */
+    private[uic] def wired(
+        drafts: Map[List[String], SignalRef[String]],
+        errRef: SignalRef[Maybe[(CellPath, FieldError)]]
+    )(using Frame): UI =
+        errRef.render(e =>
+            withRef(editingRowsRef, Set.empty[String]) { editRows =>
+                withRef(editingCellRef, Absent: Maybe[CellPath]) { editCell =>
+                    renderWith(EditState(editRows, editCell, drafts, Present(errRef), e, live = true))
+                }
+            }
+        )
+
+    private def renderWith(edit: EditState)(using Frame): UI =
         withSortableFlags { flags =>
-            withRef(sortRef, List.empty[SortKey]) { sort =>
-                withRef(filterRef, "") { query =>
-                    withRef(pageRef, 0) { page =>
-                        withRef(selectedRef, Set.empty[String]) { sel =>
-                            withRef(expandedRef, Set.empty[String]) { exp =>
-                                withRef(expandedGroupsRef, Set.empty[GroupPath]) { groups =>
-                                    withRef(editingRowsRef, Set.empty[String]) { editRows =>
-                                        withRef(editingCellRef, Absent: Maybe[CellPath]) { editCell =>
-                                            body(sort, query, page, sel, exp, groups, flags, EditState(editRows, editCell))
-                                        }
+            withRows { rows =>
+                withRef(sortRef, List.empty[SortKey]) { sort =>
+                    withRef(filterRef, "") { query =>
+                        withRef(pageRef, 0) { page =>
+                            withRef(selectedRef, Set.empty[String]) { sel =>
+                                withRef(expandedRef, Set.empty[String]) { exp =>
+                                    withRef(expandedGroupsRef, Set.empty[GroupPath]) { groups =>
+                                        body(rows, sort, query, page, sel, exp, groups, flags, edit)
                                     }
                                 }
                             }
@@ -403,6 +487,15 @@ final case class DataTable[A] private (
                 }
             }
         }
+
+    /** The rows the table renders: the bound list when there is one, the appended list
+      * otherwise. A bound list is what lets a committed edit reach the screen, since the
+      * table stores the new row into it.
+      */
+    private def withRows(k: Seq[A] => UI)(using Frame): UI =
+        rowsRefV match
+            case Present(ref) => ref.render(k)
+            case Absent       => k(rowsV)
 
     /** Resolves every reactive [[Column.sortable]] flag to a plain boolean before the table
       * builds, one nested subscription per signal-backed column.
@@ -429,6 +522,7 @@ final case class DataTable[A] private (
         flags.getOrElse(path, c.sortableConst)
 
     private def body(
+        rowsIn: Seq[A],
         sort: List[SortKey],
         query: String,
         page: Int,
@@ -439,11 +533,12 @@ final case class DataTable[A] private (
         edit: EditState
     )(using Frame): UI =
         // 1. Global filter: contains-match over the columns' text projections.
+        val rows = rowsIn.toList
         val filtered =
-            if query.isEmpty then rowsV
+            if query.isEmpty then rows
             else
                 val q = query.toLowerCase
-                rowsV.filter(a => leafCols.exists(c => c.textF.exists(f => f(a).toLowerCase.contains(q))))
+                rows.filter(a => leafCols.exists(c => c.textF.exists(f => f(a).toLowerCase.contains(q))))
 
         // 2. Sort: apply the SORTING entries back-to-front through stable sorts, so the
         //    first one ends up the primary key. Unsorted entries hold a slot in the
@@ -714,8 +809,31 @@ final case class DataTable[A] private (
             else
                 List(KeyDiagnostics.card(
                     "DataTable",
-                    "an editing state is bound but no column carries an editor, so nothing can be edited; add " +
-                        "Column.editor",
+                    "an editing state is bound but no column is editable, so nothing can be edited; add " +
+                        "Column.editable",
+                    Nil
+                ))
+        // The inverse mistake, and the more expensive one: a column says how to read and
+        // write a value, and the table has nowhere to put the result, so a commit is
+        // computed and dropped.
+        val nowhere =
+            if !editable || rowsRefV.isDefined || onCellChangedF.isDefined then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "a column is editable but the table cannot save an edit; bind rows(ref) or add " +
+                        "onCellValueChanged",
+                    Nil
+                ))
+        // Two row lists means two answers to what the table shows, and a commit would
+        // write into the one that is not being rendered.
+        val twoSources =
+            if !(rowsRefV.isDefined && rowsV.nonEmpty) then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "rows(Seq) and rows(ref) are both set; the bound list is what renders, so the appended rows " +
+                        "are dead",
                     Nil
                 ))
         val both =
@@ -727,7 +845,7 @@ final case class DataTable[A] private (
                         "bind one",
                     Nil
                 ))
-        nothing ++ both
+        nothing ++ nowhere ++ twoSources ++ both
     end editCards
 
     /** The checkbox column's header cell: Prime's select-all, binary (no partial
@@ -1050,10 +1168,11 @@ final case class DataTable[A] private (
                 // Cell editing addresses one cell, row editing every editable cell of a row.
                 val here     = CellPath(id, path)
                 val cellEdit = edit.cell.exists(_ == here)
-                val editing  = c.isEditable && (rowEdit || cellEdit)
-                val cellMode = editingCellRef.isDefined && c.isEditable
+                val openable = c.isEditableAt(a)
+                val editing  = openable && (rowEdit || cellEdit)
+                val cellMode = editingCellRef.isDefined && openable && edit.live
                 if cellMode then
-                    cell = cell.cssClass("p-editable-column").onClick(beginCellEditing(here))
+                    cell = cell.cssClass("p-editable-column").onClick(beginCellEditing(here, a, c, edit))
                     // The click picks a cell, it does not also pick the row; and while the
                     // editor is open the keystrokes that leave it stop here rather than
                     // reaching the row's own handler.
@@ -1063,18 +1182,20 @@ final case class DataTable[A] private (
                     cell = cell
                         .cssClass("p-cell-editing")
                         .tabIndex(0)
-                        .focusAuto(true)
                         .onKeyDown(e =>
                             e.key match
-                                case Keyboard.Enter  => endCellEditing(here, onCellEditSaveF)
-                                case Keyboard.Escape => endCellEditing(here, onCellEditCancelF)
+                                case Keyboard.Enter  => commitCell(here, a, c, edit)
+                                case Keyboard.Escape => cancelCell(edit)
                                 case _               => ()
                         )
                 end if
-                val content: HtmlChildVal = (editing, c.editorF, c.bodyF) match
-                    case (true, Present(f), _) => toChild(f(a))
-                    case (_, _, Present(f))    => toChild(f(a))
-                    case _                     => toChild(stringToUI(c.textF.map(_(a)).getOrElse("")))
+                if editing && edit.errorAt(here).isDefined then cell = cell.cssClass("p-invalid")
+                val content: HtmlChildVal =
+                    if editing then toChild(editorCell(here, a, c, edit))
+                    else
+                        c.bodyF match
+                            case Present(f) => toChild(f(a))
+                            case Absent     => toChild(stringToUI(c.textF.map(_(a)).getOrElse("")))
                 List(cell(content))
             end if
         }
@@ -1087,7 +1208,7 @@ final case class DataTable[A] private (
                 // its own for them, so the component is what gives them their look; the Prime
                 // class rides along as the hook a consumer's own CSS would reach for.
                 def btn(cls: String, glyph: IconGlyph, label: String, action: Any < Async): UI =
-                    Button()
+                    var b = Button()
                         .icon(glyph)
                         .variant(ButtonVariant.Text)
                         .severity(Severity.Secondary)
@@ -1095,21 +1216,20 @@ final case class DataTable[A] private (
                         .size(Size.Small)
                         .accessibleName(label)
                         .extraClass(cls)
-                        .onClick(action)
-                        .render
+                    // Inert in the static projection: the button is part of the anatomy, so
+                    // it renders and the grid keeps its column count, but there is nothing
+                    // for a click to write into until the mount has run.
+                    if edit.live then b = b.onClick(action)
+                    b.render
+                end btn
                 val buttons: List[UI] =
                     if rowEdit then
                         List(
-                            btn("p-datatable-row-editor-save", Icons.check, "Save Edit", endRowEditing(id, onRowEditSaveF)),
-                            btn(
-                                "p-datatable-row-editor-cancel",
-                                Icons.times,
-                                "Cancel Edit",
-                                endRowEditing(id, onRowEditCancelF)
-                            )
+                            btn("p-datatable-row-editor-save", Icons.check, "Save Edit", commitRow(id, a, edit)),
+                            btn("p-datatable-row-editor-cancel", Icons.times, "Cancel Edit", cancelRow(id, edit))
                         )
                     else
-                        List(btn("p-datatable-row-editor-init", Icons.pencil, "Row Edit", beginRowEditing(id)))
+                        List(btn("p-datatable-row-editor-init", Icons.pencil, "Row Edit", beginRowEditing(id, a, edit)))
                 List(td.cssClass("p-uic-dt-editor")(buttons.map(toChild)*))
 
         var row = tr.cssClass(if index % 2 == 0 then "p-row-even" else "p-row-odd")
@@ -1118,14 +1238,14 @@ final case class DataTable[A] private (
         if selectionModeV != SelectionMode.None then row = row.aria("selected", isSel.toString)
         if rowInteractive then row = row.tabIndex(0).onClick(activate(id))
         if rowEdit then
-            // Enter and Escape reach here from the caller's editor, since a keystroke
-            // bubbles the logical tree the way a click does.
+            // Enter and Escape reach here from whichever cell editor has focus, since a
+            // keystroke bubbles the logical tree the way a click does.
             row = row
                 .cssClass("p-datatable-editing-row")
                 .onKeyDown(e =>
                     e.key match
-                        case Keyboard.Enter  => endRowEditing(id, onRowEditSaveF)
-                        case Keyboard.Escape => endRowEditing(id, onRowEditCancelF)
+                        case Keyboard.Enter  => commitRow(id, a, edit)
+                        case Keyboard.Escape => cancelRow(id, edit)
                         case _               => ()
                 )
         end if
@@ -1153,52 +1273,40 @@ final case class DataTable[A] private (
             case Present(ref) => ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
             case Absent       => ()
 
-    /** Clicking a row updates the bound selection set (per the mode), then fires `onRowClick`. */
+    /** What one open cell shows: the column's editor over the table's draft, and under it
+      * the message of a commit this cell refused.
+      *
+      * The editor binds the draft ref rather than a rendered value, so a keystroke
+      * re-renders this cell and nothing above it, and an unrelated re-render (a push into
+      * the bound row list, a sort) finds the text still in the ref rather than resetting
+      * the field to the row's stored value.
+      */
+    private def editorCell(cell: CellPath, row: A, c: Column[A, FlatOnly], edit: EditState)(using Frame): UI =
+        (c.editV, edit.draftOf(cell.column)) match
+            case (Present(ed), Present(draft)) =>
+                val params = EditorParams(
+                    draft = draft,
+                    commit = commitCell(cell, row, c, edit),
+                    cancel = cancelCell(edit)
+                )
+                edit.errorAt(cell) match
+                    case Absent => ed.editor(params)
+                    case Present(e) =>
+                        fragment(
+                            ed.editor(params),
+                            div.cssClass("p-uic-dt-cell-error")(toChild(translatorV.translate(e).render(stringToUI)))
+                        )
+                end match
+            case _ =>
+                // A draft map with no entry for this column means the table is rendering
+                // its placeholder (no mount, no refs), which is the static projection.
+                stringToUI(c.editV.map(_.show(row)).getOrElse(""))
+
     /** Puts a row into the editing set, or takes it out. */
     private def setRowEditing(id: String, on: Boolean)(using Frame): Any < Async =
         editingRowsRef match
             case Present(ref) => ref.getAndUpdate(cur => if on then cur + id else cur - id)
             case Absent       => ()
-
-    /** Opens a row for editing, seeding callback first: a seed that cannot complete leaves
-      * the row closed rather than open over an empty draft.
-      */
-    private def beginRowEditing(id: String)(using Frame): Any < Async =
-        val fire: Any < Async = onRowEditInitF match
-            case Present(g) => g(id)
-            case Absent     => ()
-        for
-            _ <- fire
-            r <- setRowEditing(id, true)
-        yield r
-        end for
-    end beginRowEditing
-
-    /** Opens a cell for editing, seeding callback first, as [[beginRowEditing]] does. */
-    private def beginCellEditing(cell: CellPath)(using Frame): Any < Async =
-        val fire: Any < Async = onCellEditInitF match
-            case Present(g) => g(cell)
-            case Absent     => ()
-        for
-            _ <- fire
-            r <- setEditingCell(Present(cell))
-        yield r
-        end for
-    end beginCellEditing
-
-    /** Leaves row editing. The callback runs BEFORE the row leaves the set, so a save that
-      * cannot complete leaves the row open on the screen it failed on.
-      */
-    private def endRowEditing(id: String, f: Maybe[String => Any < Async])(using Frame): Any < Async =
-        val fire: Any < Async = f match
-            case Present(g) => g(id)
-            case Absent     => ()
-        for
-            _ <- fire
-            r <- setRowEditing(id, false)
-        yield r
-        end for
-    end endRowEditing
 
     /** Moves the cell editor, or clears it. */
     private def setEditingCell(cell: Maybe[CellPath])(using Frame): Any < Async =
@@ -1206,18 +1314,164 @@ final case class DataTable[A] private (
             case Present(ref) => ref.set(cell)
             case Absent       => ()
 
-    /** Leaves cell editing, callback first, for the reason [[endRowEditing]] gives. */
-    private def endCellEditing(cell: CellPath, f: Maybe[CellPath => Any < Async])(using Frame): Any < Async =
-        val fire: Any < Async = f match
-            case Present(g) => g(cell)
+    /** Fills a column's draft with what the row currently shows there, which is what an
+      * editor opens on. The seed is the table's job precisely because the editor renders
+      * in a pure position and cannot write into anything.
+      */
+    private def seedDraft(row: A, path: List[String], c: Column[A, FlatOnly], edit: EditState)(using Frame): Any < Async =
+        (c.editV, edit.draftOf(path)) match
+            case (Present(ed), Present(ref)) => ref.set(ed.show(row))
+            case _                           => ()
+
+    /** Seeds every editable column of one row: row editing opens them all at once. */
+    private def seedRowDrafts(row: A, edit: EditState)(using Frame): Any < Async =
+        Kyo.foreachDiscard(editableLeaves)((path, c) => seedDraft(row, path, c, edit))
+
+    private def clearError(edit: EditState)(using Frame): Any < Async =
+        edit.errorRef match
+            case Present(ref) => ref.set(Absent)
+            case Absent       => ()
+
+    private def setError(cell: CellPath, e: FieldError, edit: EditState)(using Frame): Any < Async =
+        edit.errorRef match
+            case Present(ref) => ref.set(Present((cell, e)))
+            case Absent       => ()
+
+    /** Opens a cell: seed its draft from the row, drop any standing error, then move the
+      * editor. Seeding first is what makes the editor's first paint the row's own value.
+      */
+    private def beginCellEditing(cell: CellPath, row: A, c: Column[A, FlatOnly], edit: EditState)(using Frame): Any < Async =
+        for
+            _ <- seedDraft(row, cell.column, c, edit)
+            _ <- clearError(edit)
+            r <- setEditingCell(Present(cell))
+        yield r
+
+    /** Opens a row: every editable column's draft is seeded before the row joins the set. */
+    private def beginRowEditing(id: String, row: A, edit: EditState)(using Frame): Any < Async =
+        for
+            _ <- seedRowDrafts(row, edit)
+            _ <- clearError(edit)
+            r <- setRowEditing(id, true)
+        yield r
+
+    /** Writes one committed row back where the table can reach it, and reports it.
+      *
+      * With `rows(ref)` bound the table stores the row itself; without it the change
+      * leaves through the callbacks and storing it is the caller's. Both run, so a bound
+      * table can still observe.
+      */
+    private def applyCell(cell: CellPath, before: A, after: A, ed: CellEdit[A])(using Frame): Any < Async =
+        val store: Any < Async = rowsRefV match
+            case Present(ref) => ref.getAndUpdate(_.map(r => if keyOf(r) == cell.row then after else r))
+            case Absent       => ()
+        val column: Any < Async = ed.changed match
+            case Present(f) => f(before, after)
+            case Absent     => ()
+        val table: Any < Async = onCellChangedF match
+            case Present(f) => f(CellChange(cell.row, cell.column, before, after))
             case Absent     => ()
         for
-            _ <- fire
-            r <- setEditingCell(Absent)
+            _ <- store
+            _ <- column
+            r <- table
         yield r
         end for
-    end endCellEditing
+    end applyCell
 
+    /** Commits one cell: read the draft, run the column's pipeline over it, and let the
+      * result decide whether the cell closes.
+      *
+      * Text that will not parse, and a value a rule refuses, both keep the cell open on
+      * what the reader typed, with the error under the editor. A value equal to what the
+      * cell already showed closes without writing and without reporting, which is where
+      * "fires only when the value changed" comes from: the comparison is on the TEXT, so
+      * it needs no equality on the row type.
+      */
+    private def commitCell(cell: CellPath, row: A, c: Column[A, FlatOnly], edit: EditState)(using Frame): Any < Async =
+        (c.editV, edit.draftOf(cell.column)) match
+            case (Present(ed), Present(ref)) =>
+                for
+                    text <- ref.get
+                    res  <- ed.commit(row, text)
+                    out <- res match
+                        case Result.Success(after) =>
+                            val moved: Any < Async = if ed.show(row) == text then () else applyCell(cell, row, after, ed)
+                            for
+                                _ <- moved
+                                _ <- clearError(edit)
+                                r <- setEditingCell(Absent)
+                            yield r
+                            end for
+                        case Result.Failure(e) => setError(cell, e, edit)
+                        case Result.Panic(ex) =>
+                            setError(cell, FieldError("error", Map.empty, Maybe(ex.getMessage)), edit)
+                yield out
+            case _ => setEditingCell(Absent)
+
+    /** Cancels a cell: the draft is dropped by the next seed, so there is nothing to undo. */
+    private def cancelCell(edit: EditState)(using Frame): Any < Async =
+        for
+            _ <- clearError(edit)
+            r <- setEditingCell(Absent)
+        yield r
+
+    /** Commits a whole row, one editable column at a time, left to right.
+      *
+      * The first column that refuses stops the fold and leaves the row open with its error
+      * showing, so a row never lands half written. Every column that changed reports
+      * through [[applyCell]] before the row's own [[onRowValueChanged]] does, which is the
+      * order AG Grid's `cellValueChanged` and `rowValueChanged` run in.
+      */
+    private def commitRow(id: String, row: A, edit: EditState)(using Frame): Any < Async =
+        def loop(rest: List[(List[String], Column[A, FlatOnly])], acc: A): Result[(CellPath, FieldError), A] < Async =
+            rest match
+                case Nil => Kyo.lift(Result.succeed(acc))
+                case (path, c) :: tail =>
+                    val cell = CellPath(id, path)
+                    (c.editV, edit.draftOf(path)) match
+                        case (Present(ed), Present(ref)) =>
+                            for
+                                text <- ref.get
+                                res  <- ed.commit(acc, text)
+                                out <- res match
+                                    case Result.Success(next) =>
+                                        val moved: Any < Async =
+                                            if ed.show(acc) == text then () else applyCell(cell, acc, next, ed)
+                                        moved.andThen(loop(tail, next))
+                                    case Result.Failure(e) => Kyo.lift(Result.fail((cell, e)))
+                                    case Result.Panic(ex) =>
+                                        Kyo.lift(Result.fail((cell, FieldError("error", Map.empty, Maybe(ex.getMessage)))))
+                            yield out
+                        case _ => loop(tail, acc)
+                    end match
+        for
+            res <- loop(editableLeaves.filter((_, c) => c.editV.exists(_.when(row))), row)
+            out <- res match
+                case Result.Success(after) =>
+                    val fire: Any < Async = onRowChangedF match
+                        case Present(f) => f(RowChange(id, row, after))
+                        case Absent     => ()
+                    for
+                        _ <- fire
+                        _ <- clearError(edit)
+                        r <- setRowEditing(id, false)
+                    yield r
+                    end for
+                case Result.Failure((cell, e)) => setError(cell, e, edit)
+                case Result.Panic(ex)          => setRowEditing(id, false)
+        yield out
+        end for
+    end commitRow
+
+    /** Cancels a row edit: the drafts are re-seeded the next time it opens. */
+    private def cancelRow(id: String, edit: EditState)(using Frame): Any < Async =
+        for
+            _ <- clearError(edit)
+            r <- setRowEditing(id, false)
+        yield r
+
+    /** Clicking a row updates the bound selection set (per the mode), then fires `onRowClick`. */
     private def activate(id: String)(using Frame): Any < Async =
         val setSelection: Any < Async = (selectedRef, selectionModeV) match
             case (Present(ref), SelectionMode.Single | SelectionMode.Radio) =>

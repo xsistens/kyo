@@ -23,7 +23,11 @@ object Validator:
     def async[A](f: A => Maybe[FieldError] < Async): Validator[A] = f
 
     extension [A](self: Validator[A])
-        private[form] def run(a: A)(using Frame): Maybe[FieldError] < Async = self(a)
+        // `private[uic]` and not `private[form]`: a form field was the first host of these
+        // rules and is no longer the only one. A DataTable cell runs the same chain over
+        // the value its column parsed, and the opaque type is what keeps the function
+        // itself out of reach either way.
+        private[uic] def run(a: A)(using Frame): Maybe[FieldError] < Async = self(a)
 
         /** Ordered short-circuit: run `self`; on the first failure stop and report it,
           * otherwise run `next`. A field shows only ONE error at a time — the first
