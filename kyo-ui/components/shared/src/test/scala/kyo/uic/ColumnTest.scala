@@ -14,6 +14,11 @@ class ColumnTest extends UicTest:
     private def spans(ns: ColumnTree[R]*): List[List[(String, Int, Int)]] =
         ColumnTree.spans(ns.toList).map(_.map(s => (s.node.label, s.colspan, s.rowspan)))
 
+    /** The same, over the tree left after pruning. */
+    private def prunedSpans(keep: Int => Boolean)(ns: ColumnTree[R]*): List[List[(String, Int, Int)]] =
+        val kept = ColumnTree.prune(ns.toList, keep)
+        ColumnTree.spans(kept).map(_.map(s => (s.node.label, s.colspan, s.rowspan)))
+
     "a table without columns has no header rows" in {
         assert(spans() == Nil)
     }
@@ -87,6 +92,36 @@ class ColumnTest extends UicTest:
             List(List("Code"), List("Sales")),
             List(List("Sales", "Q1"))
         ))
+    }
+
+    // Pruning is by leaf POSITION and not by label: two columns under different groups
+    // share a header, and hiding one of them may not take the other with it.
+    "prune drops the columns it rejects, counting leaves in the order they were written" in {
+        val tree = List[ColumnTree[R]](col("A"), grp("G")(col("B"), col("C")), col("D"))
+        assert(ColumnTree.prune(tree, i => i != 2).flatMap(_.leaves).map(_.headerV) == List("A", "B", "D"))
+        assert(ColumnTree.prune(tree, _ => true).flatMap(_.leaves).map(_.headerV) == List("A", "B", "C", "D"))
+        assert(ColumnTree.prune(tree, _ => false) == Nil)
+    }
+
+    "a group narrows to the columns it keeps, and the header rows follow" in {
+        assert(prunedSpans(i => i != 1)(col("A"), grp("G")(col("B"), col("C"))) == List(
+            List(("A", 1, 2), ("G", 1, 1)),
+            List(("C", 1, 1))
+        ))
+    }
+
+    // A header cell over nothing spans nothing, so a group that loses every column leaves
+    // with them, and the columns beside it stop reaching down a row that is no longer there.
+    "a group that loses every column disappears" in {
+        assert(prunedSpans(i => i == 0)(col("A"), grp("G")(col("B"), col("C"))) == List(List(("A", 1, 1))))
+    }
+
+    // The group that never had a column is a different thing from one hidden away, and it
+    // is a mistake: pruning leaves it standing so the diagnostic still names it.
+    "a group authored with no column survives pruning, since it is still reported" in {
+        val tree = List[ColumnTree[R]](grp("Empty")(), col("A"))
+        assert(ColumnTree.emptyGroups(ColumnTree.prune(tree, _ => true)) == List("Empty"))
+        assert(ColumnTree.emptyGroups(ColumnTree.prune(tree, _ => false)) == List("Empty"))
     }
 
     "a column is one row tall and a group one more than its tallest child" in {

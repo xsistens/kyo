@@ -195,6 +195,40 @@ class DataTableTest extends UicTest:
             assert(seen.isEmpty, "no focus command: the browser's tab order already moved it")
     }
 
+    private def hasCell(node: UI, id: String)(using Frame): Boolean < Sync =
+        elements(node).map(_.exists(_.attrs.identifier.contains(id)))
+
+    // A column that is not on the screen is not in the grid either: the cursor addresses
+    // cells by position, so the position has to mean what the reader sees.
+    "hiding a column renumbers the grid the keyboard moves over" in {
+        for
+            rows    <- Signal.initRef[Seq[Item]](items)
+            editing <- Signal.initRef(Absent: Maybe[CellPath])
+            name    <- Signal.initRef("")
+            price   <- Signal.initRef("")
+            err     <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            shown   <- Signal.initRef(true)
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v)),
+                uic.column("Note")(_ => "note").visible(shown),
+                uic.column("Price")(_.price.toString).editable(_.price)((i, v) => i.copy(price = v))
+            ).editingCell(editing).wired("t", Map(List("Name") -> name, List("Price") -> price), err, _ => ())
+            wide      <- cellWithId(ui, "t-c0-1")
+            _         <- press(wide, UI.Keyboard.Enter)
+            overNote  <- editing.get
+            third     <- hasCell(ui, "t-c0-2")
+            _         <- shown.set(false)
+            narrow    <- cellWithId(ui, "t-c0-1")
+            _         <- press(narrow, UI.Keyboard.Enter)
+            overPrice <- editing.get
+            gone      <- hasCell(ui, "t-c0-2")
+        yield
+            assert(third, "three columns are three cells")
+            assert(overNote == Absent, "and the second one carries no pipeline, so Enter does nothing")
+            assert(!gone, "hiding one leaves two")
+            assert(overPrice == Present(CellPath("1", List("Price"))), "and the second one is now the price")
+    }
+
     // The same defect on the mouse path. Focus cannot go to the button that replaces the
     // one just pressed: that element is new, and a self-command resolves its id the moment
     // it lands, which can be before the insert. It goes to a cell, which was already there.

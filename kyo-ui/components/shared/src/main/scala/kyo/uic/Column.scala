@@ -121,6 +121,12 @@ sealed trait ColumnTree[A]:
       * renderer off a type test the erasure cannot check.
       */
     private[uic] def asColumn: Maybe[Column[A, FlatOnly]]
+
+    /** This node with its children replaced, which only a group has: the same reason
+      * [[asColumn]] lives here, so [[ColumnTree.prune]] rebuilds a narrowed group without
+      * a type test.
+      */
+    private[uic] def withChildren(cs: List[ColumnTree[A]]): ColumnTree[A]
 end ColumnTree
 
 object ColumnTree:
@@ -177,6 +183,24 @@ object ColumnTree:
       */
     private[uic] def emptyGroups[A](nodes: List[ColumnTree[A]]): List[String] =
         nodes.flatMap(n => if n.leaves.isEmpty then List(n.label) else emptyGroups(n.children))
+
+    /** The tree without the columns `keep` rejects, addressed by their position among the
+      * leaves in [[leafPaths]] order. A group that loses every column it had goes with
+      * them, since a header cell over nothing would span nothing; a group authored with
+      * no columns at all stays, so the diagnostic that names it still fires.
+      */
+    private[uic] def prune[A](nodes: List[ColumnTree[A]], keep: Int => Boolean): List[ColumnTree[A]] =
+        def walk(ns: List[ColumnTree[A]], next: Int): (List[ColumnTree[A]], Int) =
+            ns.foldLeft((List.empty[ColumnTree[A]], next)) { case ((acc, i), n) =>
+                n.asColumn match
+                    case Present(_) => (if keep(i) then acc :+ n else acc, i + 1)
+                    case Absent =>
+                        val (kept, after) = walk(n.children, i)
+                        val group         = n.withChildren(kept)
+                        (if kept.nonEmpty || n.children.isEmpty then acc :+ group else acc, after)
+            }
+        walk(nodes, 0)._1
+    end prune
 end ColumnTree
 
 /** One column of a [[DataTable]], a typed, hand-authored carrier: a `header`
@@ -222,7 +246,8 @@ final case class Column[A, +K <: FlatOnly] private (
     rowSpanEqF: Maybe[(A, A) => Boolean] = Absent,
     sortableV: Maybe[BoolValue] = Absent,
     editV: Maybe[CellEdit[A]] = Absent,
-    navigableFlag: Boolean = true
+    navigableFlag: Boolean = true,
+    visibleV: Maybe[BoolValue] = Absent
 ) extends ColumnTree[A]:
     private[uic] def label: String                        = headerV
     private[uic] def leaves: List[Column[A, FlatOnly]]    = List(this)
@@ -230,6 +255,8 @@ final case class Column[A, +K <: FlatOnly] private (
     private[uic] def height: Int                          = 1
     private[uic] def rowspan(depth: Int, row: Int): Int   = depth - row
     private[uic] def asColumn: Maybe[Column[A, FlatOnly]] = Present(this)
+
+    private[uic] def withChildren(cs: List[ColumnTree[A]]): ColumnTree[A] = this
 
     /** Custom cell content, replacing (or standing in for) the text projection. */
     def body(f: A => UI): Column[A, K] = copy(bodyF = Present(f))
@@ -324,6 +351,24 @@ final case class Column[A, +K <: FlatOnly] private (
       */
     def sortable(sig: Signal[Boolean]): Column[A, K] = copy(sortableV = Present(BoolValue.Dyn(sig)))
 
+    /** Whether this column is rendered at all. A hidden column contributes no header
+      * cell, no body cells and no footer cell, so the table is exactly as wide as the
+      * columns the reader can see and every colspan follows.
+      *
+      * What it does NOT do is leave the table: the column is still authored, so the
+      * sort spec keeps sorting by it and hiding one never reshuffles the rows under the
+      * reader. The global filter is the other way round, and deliberately: a query
+      * matches what is on the screen, so a hidden column's text is not searched.
+      *
+      * A [[headerGroup]] whose columns are all hidden disappears with them.
+      */
+    def visible(v: Boolean): Column[A, K] = copy(visibleV = Present(BoolValue.Const(v)))
+
+    /** Reactive [[visible]], which is how a column becomes one the reader shows and
+      * hides: bind the signal a toggle writes.
+      */
+    def visible(sig: Signal[Boolean]): Column[A, K] = copy(visibleV = Present(BoolValue.Dyn(sig)))
+
     def align(v: ColumnAlign): Column[A, K] = copy(alignV = v)
 
     /** Whether the keyboard cursor may land on this column's cells, AG Grid's
@@ -391,6 +436,14 @@ final case class Column[A, +K <: FlatOnly] private (
     /** The signal behind a reactive [[sortable]], if it is reactive. */
     private[uic] def sortableSig: Maybe[Signal[Boolean]] = sortableV.dynSig
 
+    /** The visible flag as a plain boolean where it is statically known; a signal-backed
+      * one is resolved by the host before it builds, as the sortable flag is.
+      */
+    private[uic] def visibleConst: Boolean = BoolValue.const(visibleV).getOrElse(true)
+
+    /** The signal behind a reactive [[visible]], if it is reactive. */
+    private[uic] def visibleSig: Maybe[Signal[Boolean]] = visibleV.dynSig
+
     /** How this column decides that two rows belong to the same merged cell, if it
       * merges at all.
       */
@@ -423,6 +476,8 @@ final case class HeaderGroup[A] private (labelV: String, childrenV: List[ColumnT
     private[uic] def height: Int                          = 1 + childrenV.map(_.height).maxOption.getOrElse(0)
     private[uic] def rowspan(depth: Int, row: Int): Int   = 1
     private[uic] def asColumn: Maybe[Column[A, FlatOnly]] = Absent
+
+    private[uic] def withChildren(cs: List[ColumnTree[A]]): ColumnTree[A] = copy(childrenV = cs)
 end HeaderGroup
 
 object HeaderGroup:
