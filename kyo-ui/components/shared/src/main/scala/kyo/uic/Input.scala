@@ -46,7 +46,8 @@ final case class Input private (
     inputFilterV: Maybe[String] = Absent,
     inputMaskV: Maybe[String] = Absent,
     extraClassesV: List[String] = Nil,
-    idV: Maybe[String] = Absent
+    idV: Maybe[String] = Absent,
+    focusAutoFlag: Boolean = false
 ) extends Node, TextFormControl:
     type Self = Input
 
@@ -57,6 +58,18 @@ final case class Input private (
 
     /** Native element `id` — pair with `Label.forId` / `FloatLabel.forId`. */
     def id(v: String): Input = copy(idV = Present(v))
+
+    /** Seeds focus onto this field when a re-render inserts it into the DOM for the first
+      * time, kyo-ui's `focusAuto`. A field that appears in place of something else, a cell
+      * that swaps its text for an editor being the case this exists for, is focusable but
+      * not focused: the element is new, so nothing carried focus into it, and a handler
+      * that fired before the insert cannot reach it either. The flag is declarative for
+      * that reason, and it is why an imperative `focusId` is the wrong tool here.
+      *
+      * At most one focus-auto element is seeded per patch, so several fields appearing
+      * together (a row of editors) hand focus to the first.
+      */
+    def focusAuto(v: Boolean): Input = copy(focusAutoFlag = v)
 
     /** Sets a constant value. */
     def value(v: String): Input = copy(valueBinding = Present(Input.Value.Const(v)))
@@ -197,9 +210,11 @@ final case class Input private (
       * F-bounded refinement (`Self <: T`) keeps every `Self`-returning setter
       * chainable across the six concrete input types selected by [[InputType]]; the
       * four setters kyo declares only on the concrete classes (not on the
-      * `TextInput` trait) arrive as lambdas.
+      * `TextInput` trait) arrive as lambdas. The bound intersects `Interactive` because
+      * focus seeding lives there and not on `TextInput`, while every concrete input class
+      * is both.
       */
-    private def buildField[T <: UI.Ast.TextInput { type Self <: T }](
+    private def buildField[T <: (UI.Ast.TextInput & UI.Ast.Interactive) { type Self <: T }](
         base: T,
         setPlaceholder: (T, String) => T,
         setOnInput: (T, String => Any < Async) => T,
@@ -209,6 +224,7 @@ final case class Input private (
         var b: T = base.cssClass("p-inputtext").cssClass("p-component")
         extraClassesV.foreach(c => b = b.cssClass(c))
         idV.foreach(v => b = b.id(v))
+        if focusAutoFlag then b = b.focusAuto(true)
         sizeV match
             case Size.Small  => b = b.cssClass("p-inputtext-sm")
             case Size.Large  => b = b.cssClass("p-inputtext-lg")

@@ -55,6 +55,9 @@ class GoldenRenderTest extends UicTest:
                     out <- UI.runRender(uic.Input().placeholder("Your name").value(ref)).take(1).run
                 yield out.mkString
             invalid <- renderHtml(uic.Input().value("x").invalid(true).invalidMessage("This value is invalid"))
+            seeded  <- renderHtml(uic.Input().value("x").focusAuto(true))
+            unseeded <- renderHtml(uic.Input().value("x"))
+            number  <- renderHtml(uic.InputNumber().value(3.0).focusAuto(true))
         yield
             assert(html.contains("p-inputtext"), "has p-inputtext class")
             assert(html.contains("p-component"), "has p-component class")
@@ -65,6 +68,9 @@ class GoldenRenderTest extends UicTest:
             assert(invalid.contains("""aria-invalid="true""""), "invalid(true) sets aria-invalid")
             assert(invalid.contains("p-uic-invalid-message"), "invalidMessage renders the message row")
             assert(invalid.contains("This value is invalid"), "message text rendered")
+            assert(seeded.contains("""data-kyo-focus-auto="1""""), "focusAuto(true) seeds focus on insert")
+            assert(!unseeded.contains("data-kyo-focus-auto"), "and a field that did not ask for it carries no seed")
+            assert(number.contains("""data-kyo-focus-auto="1""""), "InputNumber carries the same seed")
     }
 
     "Dialog (open) renders Prime mask + anatomy; (closed) renders no mask" in {
