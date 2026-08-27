@@ -98,6 +98,35 @@ object RowGroup:
         loop(rows, Nil)
     end runs
 
+    /** The rows a grouped table actually RENDERS, in render order: the same walk
+      * `groupSegments` makes, minus the header, footer and cell rendering.
+      *
+      * Keyboard navigation needs this and nothing else about groups. A collapsed group
+      * renders none of its rows, so the row a cursor moves to is a position in this list
+      * rather than in the paged one, and moving by the paged index would step onto rows
+      * that are not on the screen.
+      *
+      * `collapsible` mirrors the host's rule that a level with no header row cannot be
+      * collapsed, since it would have nowhere to put the toggle that opens it again.
+      */
+    def visible[A](
+        rows: List[A],
+        levels: List[RowGroup[A]],
+        path: List[String],
+        openGroups: Set[GroupPath],
+        collapsible: Boolean
+    ): List[A] =
+        levels match
+            case Nil => rows
+            case level :: rest =>
+                runs(rows)(a => level.keyF(a)).flatMap { (key, run) =>
+                    val groupPath = GroupPath(path :+ key)
+                    val closes    = collapsible && level.showHeaderFlag
+                    if closes && !openGroups.contains(groupPath) then Nil
+                    else visible(run, rest, groupPath.keys, openGroups, collapsible)
+                }
+    end visible
+
     /** [[runs]] without the keys, split by an equivalence on the rows themselves rather
       * than by a projection, which is what a merged column carries: it compares by a key
       * whose type it does not keep.

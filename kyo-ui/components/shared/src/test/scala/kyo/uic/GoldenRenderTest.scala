@@ -1823,7 +1823,7 @@ class GoldenRenderTest extends UicTest:
                 cellR  <- Signal.initRef(cell)
                 rowsR  <- Signal.initRef(rows)
                 out <- UI.runRender(
-                    t.editingCell(cellR).wired(Map(List("Name") -> drafts, List("Price") -> price), err)
+                    t.editingCell(cellR).wired("t", Map(List("Name") -> drafts, List("Price") -> price), err, _ => ())
                 ).take(1).run
             yield out.mkString
 
@@ -1843,7 +1843,7 @@ class GoldenRenderTest extends UicTest:
                     err    <- Signal.initRef(Absent: Maybe[(uic.CellPath, kyo.uic.form.FieldError)])
                     rowsR  <- Signal.initRef(Set("1"))
                     out <- UI.runRender(
-                        table.editingRows(rowsR).wired(Map(List("Name") -> drafts, List("Price") -> price), err)
+                        table.editingRows(rowsR).wired("t", Map(List("Name") -> drafts, List("Price") -> price), err, _ => ())
                     ).take(1).run
                 yield out.mkString
             refused <-
@@ -1862,7 +1862,7 @@ class GoldenRenderTest extends UicTest:
                     )
                     cellR <- Signal.initRef(Present(uic.CellPath("1", List("Price"))): Maybe[uic.CellPath])
                     out <- UI.runRender(
-                        table.editingCell(cellR).wired(Map(List("Name") -> drafts, List("Price") -> price), err)
+                        table.editingCell(cellR).wired("t", Map(List("Name") -> drafts, List("Price") -> price), err, _ => ())
                     ).take(1).run
                 yield out.mkString
             perRow <-
@@ -1873,7 +1873,7 @@ class GoldenRenderTest extends UicTest:
                     out <- UI.runRender(
                         uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
                             uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v)).editableWhen(_.id == "1")
-                        ).onCellValueChanged(_ => ()).editingCell(cellR).wired(Map(List("Name") -> drafts), err)
+                        ).onCellValueChanged(_ => ()).editingCell(cellR).wired("t", Map(List("Name") -> drafts), err, _ => ())
                     ).take(1).run
                 yield out.mkString
             noEditable <-
@@ -1945,6 +1945,71 @@ class GoldenRenderTest extends UicTest:
             assert(twoSources.contains("p-uic-key-error"), "and two row lists")
             assert(bothModes.contains("p-uic-key-error"), "and binding both modes at once")
             assert(noKey.contains("p-uic-key-error"), "editing is keyed by rowKey, so it needs one")
+        end for
+    }
+
+    "cell navigation makes the editable cells the tab stops, and leaves a plain table alone" in {
+        final case class Item(id: String, name: String, note: String) derives CanEqual
+        val items                                          = List(Item("1", "A", "n1"), Item("2", "B", "n2"))
+        def occurrences(html: String, needle: String): Int = needle.r.findAllIn(html).size
+
+        def navTable(using Frame) = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+            uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v)),
+            uic.column("Note")(_.note)
+        ).onCellValueChanged(_ => ())
+
+        for
+            nav <-
+                for
+                    draft <- Signal.initRef("d")
+                    err   <- Signal.initRef(Absent: Maybe[(uic.CellPath, kyo.uic.form.FieldError)])
+                    cell  <- Signal.initRef(Absent: Maybe[uic.CellPath])
+                    out <- UI.runRender(
+                        navTable.editingCell(cell).wired("t", Map(List("Name") -> draft), err, _ => ())
+                    ).take(1).run
+                yield out.mkString
+            // A column nobody may land on is stepped over, and never a tab stop.
+            locked <-
+                for
+                    draft <- Signal.initRef("d")
+                    err   <- Signal.initRef(Absent: Maybe[(uic.CellPath, kyo.uic.form.FieldError)])
+                    cell  <- Signal.initRef(Absent: Maybe[uic.CellPath])
+                    out <- UI.runRender(
+                        uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+                            uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v)),
+                            uic.column("Note")(_.note).navigable(false)
+                        ).onCellValueChanged(_ => ()).editingCell(cell)
+                            .wired("t", Map(List("Name") -> draft), err, _ => ())
+                    ).take(1).run
+                yield out.mkString
+            plain <- renderHtml(
+                uic.DataTable[Item]().rows(items).rowKey(_.id)
+                    .columns(uic.column("Name")(_.name), uic.column("Note")(_.note))
+            )
+            optedOut <-
+                for
+                    draft <- Signal.initRef("d")
+                    err   <- Signal.initRef(Absent: Maybe[(uic.CellPath, kyo.uic.form.FieldError)])
+                    cell  <- Signal.initRef(Absent: Maybe[uic.CellPath])
+                    out <- UI.runRender(
+                        navTable.cellNavigation(false).editingCell(cell)
+                            .wired("t", Map(List("Name") -> draft), err, _ => ())
+                    ).take(1).run
+                yield out.mkString
+        yield
+            // Every cell is addressable, and the editable ones are the tab stops. The DOM
+            // is row-major, so that IS "the next editable cell, wrapping into the row
+            // below", with nothing prevented to make it so.
+            assert(nav.contains("""id="t-c0-0"""") && nav.contains("""id="t-c1-1""""), "cells are addressed by position")
+            assert(occurrences(nav, """tabindex="0"""") == 2, "one tab stop per editable cell")
+            assert(occurrences(nav, """tabindex="-1"""") == 2, "and the rest are reachable only by the cursor")
+            assert(nav.contains("p-uic-dt-nav") && nav.contains("data-kyo-scroll-keys"), "the arrows do not scroll the page")
+            assert(occurrences(locked, """tabindex="0"""") == 2, "a locked column changes no tab stop")
+            assert(!locked.contains("""id="t-c0-1""""), "and carries no cursor address at all")
+            // A table that does not navigate renders what it always rendered.
+            assert(!plain.contains("tabindex") && !plain.contains("p-uic-dt-nav"), "a plain table is untouched")
+            assert(!optedOut.contains("p-uic-dt-nav"), "and so is one that opts out")
+            assert(optedOut.contains("p-editable-column"), "which still edits, by mouse")
         end for
     }
 

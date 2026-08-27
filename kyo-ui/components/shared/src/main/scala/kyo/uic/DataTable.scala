@@ -39,6 +39,26 @@ final private[uic] case class EditState(
         error.flatMap((c, e) => if c == cell then Present(e) else Absent)
 end EditState
 
+/** What the keyboard needs to know about the grid it is moving over: the rows that are
+  * actually on the screen, in render order, the id prefix their cells are addressed by,
+  * and the command that moves DOM focus.
+  *
+  * There is no cursor here, and that is the design: the focused cell IS the focused `td`.
+  * A cursor in a ref would make every arrow key a re-render of the table, and the browser
+  * already holds the one piece of state involved.
+  */
+final private[uic] case class NavState[A](
+    on: Boolean = false,
+    idPrefix: String = "",
+    rows: Vector[A] = Vector.empty[A],
+    page: Int = 1,
+    focus: String => Any < Async = (_: String) => ()
+):
+    private[uic] def indexOf(key: String, keyOf: A => String): Maybe[Int] =
+        val i = rows.indexWhere(r => keyOf(r) == key)
+        if i < 0 then Absent else Present(i)
+end NavState
+
 /** The row before and after a committed cell edit, plus the column that wrote it. */
 final case class CellChange[A](rowKey: String, column: List[String], before: A, after: A)
 
@@ -163,6 +183,7 @@ final case class DataTable[A] private (
     editingRowsRef: Maybe[SignalRef[Set[String]]] = Absent,
     editingCellRef: Maybe[SignalRef[Maybe[CellPath]]] = Absent,
     rowsRefV: Maybe[SignalRef[Seq[A]]] = Absent,
+    cellNavV: Maybe[Boolean] = Absent,
     onCellChangedF: Maybe[CellChange[A] => Any < Async] = Absent,
     onRowChangedF: Maybe[RowChange[A] => Any < Async] = Absent,
     translatorV: ErrorTranslator = ErrorTranslator.default
@@ -265,6 +286,19 @@ final case class DataTable[A] private (
       * A [[CellPath]] rather than a key, since a cell is a row crossed with a column.
       */
     def editingCell(ref: SignalRef[Maybe[CellPath]]): DataTable[A] = copy(editingCellRef = Present(ref))
+
+    /** Whether the reader may move a cursor over the cells: arrows move it, Home and End
+      * take it to the ends of a row (of the grid under ctrl or cmd), Page keys move it a
+      * page, Enter and F2 open the cell it is on, and any printable key opens it on that
+      * character. Tab visits the editable cells in reading order, wrapping into the next
+      * row, and commits what it leaves.
+      *
+      * On by default once a column is editable, since editing without a keyboard is half a
+      * feature; set it explicitly to give a read-only table a cursor, or to take one away
+      * from an editable table that is driven by the mouse. A table that opts out renders
+      * exactly the markup and the tab order it rendered before this existed.
+      */
+    def cellNavigation(v: Boolean): DataTable[A] = copy(cellNavV = Present(v))
 
     /** Binds the rows two-way, which is what lets the table apply a committed edit itself,
       * through the column's own `write`.
@@ -434,6 +468,9 @@ final case class DataTable[A] private (
       */
     private def editingBound: Boolean = editingCellRef.isDefined || editingRowsRef.isDefined
 
+    /** Navigation follows editing unless the caller says otherwise. */
+    private def navOn: Boolean = cellNavV.getOrElse(leafCols.exists(_.isEditable))
+
     /** A table that edits owns two things no caller supplies: one draft per editable
       * column, and the error a refused commit left standing. Both are allocated in a mount,
       * since a pure render cannot, and the placeholder is the same table without them, which
@@ -444,32 +481,39 @@ final case class DataTable[A] private (
       * re-renders the editor's own cell and leaves the table alone.
       */
     private[uic] def render(using Frame): UI =
-        if !editingBound then renderWith(EditState(Set.empty, Absent))
+        if !editingBound && !navOn then renderWith(EditState(Set.empty, Absent), NavState[A]())
         else
             UI.mounted {
                 for
+                    cmds   <- UI.commands
+                    prefix <- cmds.freshId
                     drafts <- Kyo.foreach(editableLeaves)((path, _) => Signal.initRef("").map(path -> _))
                     err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
-                yield wired(drafts.toMap, err)
-            }.placeholder(renderWith(EditState(Set.empty, Absent)))
+                yield wired(prefix, drafts.toMap, err, id => cmds.focusId(id))
+            }.placeholder(renderWith(EditState(Set.empty, Absent), NavState[A]()))
 
     /** The subscription tree the mount publishes, and the seam golden tests render
       * directly: a top-down render shows a mounted region as its placeholder, so the
       * editing anatomy is only reachable here.
       */
     private[uic] def wired(
+        idPrefix: String,
         drafts: Map[List[String], SignalRef[String]],
-        errRef: SignalRef[Maybe[(CellPath, FieldError)]]
+        errRef: SignalRef[Maybe[(CellPath, FieldError)]],
+        focus: String => Any < Async
     )(using Frame): UI =
         errRef.render(e =>
             withRef(editingRowsRef, Set.empty[String]) { editRows =>
                 withRef(editingCellRef, Absent: Maybe[CellPath]) { editCell =>
-                    renderWith(EditState(editRows, editCell, drafts, Present(errRef), e, live = true))
+                    renderWith(
+                        EditState(editRows, editCell, drafts, Present(errRef), e, live = true),
+                        NavState[A](on = navOn, idPrefix = idPrefix, focus = focus)
+                    )
                 }
             }
         )
 
-    private def renderWith(edit: EditState)(using Frame): UI =
+    private def renderWith(edit: EditState, nav: NavState[A])(using Frame): UI =
         withSortableFlags { flags =>
             withRows { rows =>
                 withRef(sortRef, List.empty[SortKey]) { sort =>
@@ -478,7 +522,7 @@ final case class DataTable[A] private (
                             withRef(selectedRef, Set.empty[String]) { sel =>
                                 withRef(expandedRef, Set.empty[String]) { exp =>
                                     withRef(expandedGroupsRef, Set.empty[GroupPath]) { groups =>
-                                        body(rows, sort, query, page, sel, exp, groups, flags, edit)
+                                        body(rows, sort, query, page, sel, exp, groups, flags, edit, nav)
                                     }
                                 }
                             }
@@ -530,7 +574,8 @@ final case class DataTable[A] private (
         exp: Set[String],
         openGroups: Set[GroupPath],
         flags: Map[List[String], Boolean],
-        edit: EditState
+        edit: EditState,
+        nav: NavState[A]
     )(using Frame): UI =
         // 1. Global filter: contains-match over the columns' text projections.
         val rows = rowsIn.toList
@@ -606,6 +651,15 @@ final case class DataTable[A] private (
             }
         end headRows
 
+        // The rows the keyboard moves over are the ones on the SCREEN: a collapsed group
+        // renders none of its own, so stepping by the paged index would land on a row
+        // nobody can see.
+        val navHere =
+            if !nav.on then nav
+            else
+                val shown = RowGroup.visible(paged, groupsV, Nil, openGroups, expandedGroupsRef.isDefined)
+                nav.copy(rows = shown.toVector, page = pageSizeV.getOrElse(math.max(shown.size, 1)))
+
         val bodyRows: List[UI] =
             if paged.isEmpty then
                 List(
@@ -615,7 +669,7 @@ final case class DataTable[A] private (
                         ))
                     )
                 )
-            else groupSegments(paged.zipWithIndex, groupsV, Nil, sel, exp, openGroups, colCount, edit)
+            else groupSegments(paged.zipWithIndex, groupsV, Nil, sel, exp, openGroups, colCount, edit, navHere)
 
         // The footer aggregates over the FILTERED rows, not the visible page: a
         // column total that changed when the reader turned the page would be wrong.
@@ -659,6 +713,11 @@ final case class DataTable[A] private (
         if stripedFlag then root = root.cssClass("p-datatable-striped")
         if gridlinesFlag then root = root.cssClass("p-datatable-gridlines")
         if scrollHeightV.isDefined then root = root.cssClass("p-datatable-scrollable")
+        // The cursor keys must not ALSO scroll the page under the table. A kyo handler is
+        // async and cannot decline the browser default in time, so the suppression is
+        // declarative: the client reads the attribute before it posts the event. The class
+        // is what gives the focused cell its ring.
+        if nav.on then root = root.cssClass("p-uic-dt-nav").preventScrollKeys
         sizeV match
             case Size.Small  => root = root.cssClass("p-datatable-sm")
             case Size.Large  => root = root.cssClass("p-datatable-lg")
@@ -1000,10 +1059,11 @@ final case class DataTable[A] private (
         exp: Set[String],
         openGroups: Set[GroupPath],
         colCount: Int,
-        edit: EditState
+        edit: EditState,
+        nav: NavState[A]
     )(using Frame): List[UI] =
         levels match
-            case Nil => leafRows(rows, sel, exp, colCount, edit)
+            case Nil => leafRows(rows, sel, exp, colCount, edit, nav)
             case level :: rest =>
                 RowGroup.runs(rows)((a, _) => level.keyF(a)).flatMap { (key, run) =>
                     val groupPath = GroupPath(path :+ key)
@@ -1019,7 +1079,7 @@ final case class DataTable[A] private (
                         else List(groupHeaderRow(level, groupPath, groupRows, colCount, collapsible, open))
                     val innerRows: List[UI] =
                         if !open then Nil
-                        else groupSegments(run, rest, groupPath.keys, sel, exp, openGroups, colCount, edit)
+                        else groupSegments(run, rest, groupPath.keys, sel, exp, openGroups, colCount, edit, nav)
                     val footerRow: List[UI] =
                         if !open then Nil
                         else
@@ -1035,11 +1095,16 @@ final case class DataTable[A] private (
     /** The innermost slice: the data rows themselves, carrying whatever merged cells the
       * [[Column.rowSpan]] columns resolve to over exactly this slice.
       */
-    private def leafRows(rows: List[(A, Int)], sel: Set[String], exp: Set[String], colCount: Int, edit: EditState)(using
-        Frame
-    ): List[UI] =
+    private def leafRows(
+        rows: List[(A, Int)],
+        sel: Set[String],
+        exp: Set[String],
+        colCount: Int,
+        edit: EditState,
+        nav: NavState[A]
+    )(using Frame): List[UI] =
         val spans = spanCells(rows.map(_._1), exp)
-        rows.zip(spans).flatMap((row, cells) => dataRow(row._1, row._2, sel, exp, colCount, cells, edit))
+        rows.zip(spans).flatMap((row, cells) => dataRow(row._1, row._2, sel, exp, colCount, cells, edit, nav))
     end leafRows
 
     /** Resolves the merged cells of one slice: for each row, which of the marked columns it
@@ -1116,12 +1181,14 @@ final case class DataTable[A] private (
         exp: Set[String],
         colCount: Int,
         spans: Map[Int, SpanCell],
-        edit: EditState
+        edit: EditState,
+        nav: NavState[A]
     )(using Frame): List[UI] =
         val id      = keyOf(a)
         val isSel   = sel.contains(id)
         val isExp   = exp.contains(id)
         val rowEdit = edit.rows.contains(id)
+        val navRow  = nav.indexOf(id, keyOf).getOrElse(-1)
 
         val expanderTd: List[UI] =
             if !expanderColumn then Nil
@@ -1178,14 +1245,25 @@ final case class DataTable[A] private (
                     // reaching the row's own handler.
                     cell = cell.stopPropagation(true)
                 end if
-                if cellEdit then
+                if cellEdit then cell = cell.cssClass("p-cell-editing")
+                // With navigation on, every cell is addressable and the editable ones are
+                // the tab stops: the DOM is row-major, so the browser's own tab order IS
+                // "the next editable cell, wrapping into the next row", and nothing has to
+                // be prevented to make Tab mean that.
+                if nav.on && c.isNavigable then
+                    val pos = GridNav.Pos(navRow, i)
                     cell = cell
-                        .cssClass("p-cell-editing")
+                        .id(cellId(nav, pos))
+                        .tabIndex(if openable then 0 else -1)
+                        .onKeyDown(onCellKey(pos, here, a, c, cellEdit, rowEdit, nav, edit))
+                        .stopPropagation(true)
+                else if cellEdit then
+                    cell = cell
                         .tabIndex(0)
                         .onKeyDown(e =>
                             e.key match
-                                case Keyboard.Enter  => commitCell(here, a, c, edit)
-                                case Keyboard.Escape => cancelCell(edit)
+                                case Keyboard.Enter  => if rowEdit then commitRow(id, a, edit) else commitCell(here, a, c, edit)
+                                case Keyboard.Escape => if rowEdit then cancelRow(id, edit) else cancelCell(edit)
                                 case _               => ()
                         )
                 end if
@@ -1301,6 +1379,107 @@ final case class DataTable[A] private (
                 // A draft map with no entry for this column means the table is rendering
                 // its placeholder (no mount, no refs), which is the static projection.
                 stringToUI(c.editV.map(_.show(row)).getOrElse(""))
+
+    // ---- keyboard navigation ----
+
+    /** A cell's DOM id. Positional, because focus is positional: the cursor a reader moves
+      * is "the cell below this one", not "this row's cell". The prefix is minted once per
+      * mount, so two tables on a page cannot collide.
+      */
+    private def cellId(nav: NavState[A], pos: GridNav.Pos): String =
+        s"${nav.idPrefix}-c${pos.row}-${pos.col}"
+
+    private def rowAt(nav: NavState[A], pos: GridNav.Pos): Maybe[A] =
+        if pos.row >= 0 && pos.row < nav.rows.size then Present(nav.rows(pos.row)) else Absent
+
+    private def colAt(pos: GridNav.Pos): Maybe[(List[String], Column[A, FlatOnly])] =
+        if pos.col >= 0 && pos.col < leafPaths.size then Present(leafPaths(pos.col)) else Absent
+
+    /** The grid one key is read against, rebuilt per keystroke from what is on the screen.
+      *
+      * A cell counts as editable for the keyboard only in CELL mode: in row mode a row is
+      * opened by its button and every editable cell of it opens at once, so there is no
+      * single cell for Enter to open.
+      */
+    private def gridFor(nav: NavState[A]): GridNav.Grid =
+        GridNav.Grid(
+            rows = nav.rows.size,
+            cols = leafPaths.size,
+            editable = pos =>
+                editingCellRef.isDefined && ((rowAt(nav, pos), colAt(pos)) match
+                    case (Present(r), Present((_, c))) => c.isNavigable && c.isEditableAt(r)
+                    case _                             => false),
+            page = math.max(nav.page, 1),
+            navigable = pos => colAt(pos).exists((_, c) => c.isNavigable)
+        )
+
+    /** Opens a cell on a seed: a printable key that started the edit, or the row's own
+      * value when the reader pressed Enter or F2.
+      */
+    private def openCell(cell: CellPath, row: A, c: Column[A, FlatOnly], seed: Maybe[String], edit: EditState)(
+        using Frame
+    ): Any < Async =
+        val fill: Any < Async = (seed, edit.draftOf(cell.column)) match
+            case (Present(text), Present(ref)) => ref.set(text)
+            case _                             => seedDraft(row, cell.column, c, edit)
+        for
+            _ <- fill
+            _ <- clearError(edit)
+            r <- setEditingCell(Present(cell))
+        yield r
+        end for
+    end openCell
+
+    /** Carries an open edit into the cell Tab is taking focus to. */
+    private def openAt(pos: GridNav.Pos, nav: NavState[A], edit: EditState)(using Frame): Any < Async =
+        (rowAt(nav, pos), colAt(pos)) match
+            case (Present(r), Present((path, c))) => openCell(CellPath(keyOf(r), path), r, c, Absent, edit)
+            case _                                => ()
+
+    /** One key over one cell: read it against the grid, then do what it says.
+      *
+      * `Absent` from [[GridNav]] means the key was never ours, so the browser keeps it,
+      * which is how a caret keeps its arrows and Ctrl-C keeps its meaning.
+      */
+    private def onCellKey(
+        pos: GridNav.Pos,
+        cell: CellPath,
+        row: A,
+        c: Column[A, FlatOnly],
+        cellEdit: Boolean,
+        rowEdit: Boolean,
+        nav: NavState[A],
+        edit: EditState
+    )(e: KeyboardEvent)(using Frame): Any < Async =
+        GridNav.onKey(gridFor(nav), pos, cellEdit || rowEdit, e.key, e.modifiers) match
+            case Absent        => ()
+            case Present(step) =>
+                // A step with `moveFocus` false is Tab: the browser is already moving
+                // focus, so the table only agrees about where. Inside an open ROW that
+                // means doing nothing at all, since the row stays open and its drafts are
+                // per column, not per cell.
+                val isTab = !step.moveFocus
+                val editStep: Any < Async = step.edit match
+                    case GridNav.EditOp.Keep       => ()
+                    case GridNav.EditOp.Open(seed) => openCell(cell, row, c, seed, edit)
+                    case GridNav.EditOp.Commit =>
+                        if rowEdit then (if isTab then () else commitRow(cell.row, row, edit))
+                        else commitCell(cell, row, c, edit)
+                    case GridNav.EditOp.Cancel =>
+                        if rowEdit then cancelRow(cell.row, edit) else cancelCell(edit)
+                val focusStep: Any < Async = step.focus match
+                    case Present(to) if step.moveFocus => nav.focus(cellId(nav, to))
+                    case Present(to)                   => if rowEdit then () else openAt(to, nav, edit)
+                    case Absent                        => ()
+                val selectStep: Any < Async =
+                    if step.selectRow && rowInteractive then activate(cell.row) else ()
+                for
+                    _ <- editStep
+                    _ <- focusStep
+                    r <- selectStep
+                yield r
+                end for
+    end onCellKey
 
     /** Puts a row into the editing set, or takes it out. */
     private def setRowEditing(id: String, on: Boolean)(using Frame): Any < Async =

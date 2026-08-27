@@ -221,7 +221,8 @@ final case class Column[A, +K <: FlatOnly] private (
     footerF: Maybe[Seq[A] => UI] = Absent,
     rowSpanEqF: Maybe[(A, A) => Boolean] = Absent,
     sortableV: Maybe[BoolValue] = Absent,
-    editV: Maybe[CellEdit[A]] = Absent
+    editV: Maybe[CellEdit[A]] = Absent,
+    navigableFlag: Boolean = true
 ) extends ColumnTree[A]:
     private[uic] def label: String                        = headerV
     private[uic] def leaves: List[Column[A, FlatOnly]]    = List(this)
@@ -325,6 +326,15 @@ final case class Column[A, +K <: FlatOnly] private (
 
     def align(v: ColumnAlign): Column[A, K] = copy(alignV = v)
 
+    /** Whether the keyboard cursor may land on this column's cells, AG Grid's
+      * `suppressNavigable`. A column that answers false is stepped OVER by the arrows
+      * rather than absorbing them, and it is never a tab stop.
+      *
+      * It says nothing about the mouse or about the value: a non-navigable column still
+      * renders, still sorts, and a click still reaches whatever it renders.
+      */
+    def navigable(v: Boolean): Column[A, K] = copy(navigableFlag = v)
+
     /** Merges this column's cells across consecutive rows whose key is equal: one cell per
       * run, spanning it. The marker rides on the column, so unlike a string-keyed prop it
       * cannot name a column the table does not have, and the key is explicit, so a column
@@ -356,6 +366,9 @@ final case class Column[A, +K <: FlatOnly] private (
         textF.map(f => copy(rowSpanEqF = Present((x, y) => f(x) == f(y)))).getOrElse(this)
 
     private[uic] def hasFooter: Boolean = footerTextV.isDefined || footerF.isDefined
+
+    /** Whether the keyboard cursor may land here. See [[navigable]]. */
+    private[uic] def isNavigable: Boolean = navigableFlag
 
     /** Whether this column carries an edit pipeline at all. */
     private[uic] def isEditable: Boolean = editV.isDefined
