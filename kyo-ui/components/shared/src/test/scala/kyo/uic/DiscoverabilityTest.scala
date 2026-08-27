@@ -741,6 +741,32 @@ def x(using Frame) = uic.column("Name")((r: R) => r.name)"""
         )
     }
 
+    "Column.editor is a flat-table option, and the editing state binds by row or by cell" in {
+        typeCheck(
+            preamble +
+                """final case class R(id: String, name: String)
+def x(rows: SignalRef[Set[String]])(using Frame) =
+  uic.DataTable[R]().rowKey(_.id)
+    .columns(uic.column("Name")(_.name).editor(r => span(r.name)))
+    .editingRows(rows).onRowEditSave(_ => ()).onRowEditCancel(_ => ())
+def y(cell: SignalRef[Maybe[uic.CellPath]])(using Frame) =
+  uic.DataTable[R]().rowKey(_.id)
+    .columns(uic.column("Name")(_.name).editor(r => span(r.name)))
+    .editingCell(cell).onCellEditSave(_ => ()).onCellEditCancel(_ => ())"""
+        )
+        // A hierarchy binds no editing state, so a column carrying an editor does not fit it.
+        typeCheckFailure(
+            preamble +
+                """final case class R(name: String)
+def x(using Frame) = uic.TreeTable[R]().columns(uic.column("Name")(_.name).editor(r => span(r.name)))"""
+        )
+        // The cell address is a row crossed with a column path, not a bare key.
+        typeCheckFailure(preamble + """def x(r: SignalRef[Set[String]]) = uic.DataTable[String]().editingCell(r)""")
+        typeCheckFailure(
+            preamble + """def x(r: SignalRef[Maybe[uic.CellPath]]) = uic.DataTable[String]().editingRows(r)"""
+        )
+    }
+
     "Column.sortable takes a Boolean or a Signal[Boolean] and keeps the column's kind" in {
         typeCheck(
             preamble +

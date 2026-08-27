@@ -946,6 +946,32 @@ A column in no group has a path of one part, so every spec written before groups
 
 Two things stay reported at render time in a `.p-uic-key-error` card, because neither is a type error: a group holding no column occupies nothing and would otherwise vanish without a word, and a spec entry that matches no sortable column does nothing at all, which covers a mistyped part, a column that never got a `sortBy`, and a path missing the group labels above it. That last one is the cost of the path: wrap an existing column in a group and a stored spec stops matching it, where the bare header used to survive. It stops matching loudly.
 
+Editing splits the same way sorting does. `Column.editor(a => UI)` is what a cell shows while it is being edited, and the table decides only WHICH cells those are: the editor and the draft it writes into are the caller's, over refs they already own. That is the whole contract, and it is why there is no draft model here to disagree with yours.
+
+`editingRows(ref)` binds a `Set` of `rowKey` ids and adds Prime's editor-button column at the trailing edge, with init, save and cancel. `editingCell(ref)` binds one `CellPath`, a row crossed with a column path (the same path the sort spec names a column by), and clicking a cell of an editable column moves the editor there. Enter commits and Escape discards in both modes, since a keystroke bubbles out of the caller's editor the way a click does.
+
+Three callbacks per mode, and the order they run in is load-bearing. `onRowEditInit` / `onCellEditInit` fires before the cell opens, which is where the draft gets seeded: the editor renders in a pure position and cannot write, so this is the only moment the table can offer for it. `onRowEditSave` and `onRowEditCancel` (and their cell twins) fire before the cell closes, so a save that cannot complete leaves the row open on the screen it failed on rather than closing over a lost draft.
+
+```scala
+val editable: UI < Async =
+    for
+        editing <- Signal.initRef(Set.empty[String])
+        draft   <- Signal.initRef("")
+    yield uic.DataTable[Product]()
+        .rows(catalog)
+        .rowKey(_.id)
+        .columns(
+            uic.column("Name")(_.name).editor(_ => uic.Input().value(draft)),
+            uic.column("Category")(_.category)
+        )
+        .editingRows(editing)
+        .onRowEditInit(id => draft.set(catalog.find(_.id == id).map(_.name).getOrElse("")))
+        .onRowEditSave(_ => ())
+        .onRowEditCancel(_ => draft.set("")): UI
+```
+
+A bound editing state with no `editor` anywhere can do nothing, and binding both modes at once leaves a cell inside an edited row open for two reasons with two ways out; both say so in a card. Editing is keyed by `rowKey`, so it joins selection and expansion in requiring one.
+
 `groupBy` takes one nested level per argument, outermost first, and each level presents every run of *consecutive* rows sharing its key as a group. Consecutive is the whole contract: grouping reads the order the table is about to render in, it does not impose one, so it composes with the sort spec instead of competing with it for authority over row order. Pair it with a sort that leads with the same projections, or with rows that already arrive ordered; group by one key while sorting by another and the same key legitimately heads several runs, which is what the row order says.
 
 A level is a value, built by `uic.group(key)` inside the `groupBy(...)` call, so it reads its row type from the table the same way `uic.column` does. It carries its own `header`, its own `footer`, and `showHeader(false)` for a level that only scopes a summary row. Both templates receive a `GroupPath`: `path.key` is that level's own key and `path.keys` the whole chain from the outermost level down. Levels close innermost first, so a level's summary row sits inside its parent's.
