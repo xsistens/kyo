@@ -209,7 +209,7 @@ final case class TreeTable[A] private (
       */
     private def sortSiblings(ns: List[TreeTableNode[A]], sort: List[SortKey]): List[TreeTableNode[A]] =
         SortKey.sorting(sort).reverse.foldLeft(ns) { (rs, k) =>
-            cols.find(_.headerV == k.column).flatMap(_.orderingV.toOption) match
+            cols.find(c => k.path == List(c.headerV)).flatMap(_.orderingV.toOption) match
                 case Some(ord) =>
                     val dir     = if k.direction == SortDirection.Ascending then ord else ord.reverse
                     val nodeOrd = Ordering.by[TreeTableNode[A], A](_.data)(using dir)
@@ -221,8 +221,10 @@ final case class TreeTable[A] private (
     private def headerCell(c: Column[A, AnyTable], sort: List[SortKey])(using Frame): UI =
         val sortable  = c.orderingV.isDefined && sortRef.isDefined
         val sortingKs = SortKey.sorting(sort)
-        val rank      = sortingKs.indexWhere(_.column == c.headerV)
-        val direction = sort.find(_.column == c.headerV).map(_.direction).getOrElse(SortDirection.Unsorted)
+        // A TreeTable renders one header row, so a column's path is its header alone.
+        val path      = List(c.headerV)
+        val rank      = sortingKs.indexWhere(_.path == path)
+        val direction = sort.find(_.path == path).map(_.direction).getOrElse(SortDirection.Unsorted)
 
         var cell = th.cssClass("p-treetable-header-cell")
         c.alignV match
@@ -231,7 +233,7 @@ final case class TreeTable[A] private (
             case ColumnAlign.Start  => ()
         end match
         if sortable then
-            cell = cell.cssClass("p-treetable-sortable-column").tabIndex(0).onClick(e => toggleSort(c.headerV, e))
+            cell = cell.cssClass("p-treetable-sortable-column").tabIndex(0).onClick(e => toggleSort(path, e))
         if direction.isSorting then
             cell = cell
                 .cssClass("p-treetable-column-sorted")
@@ -261,13 +263,13 @@ final case class TreeTable[A] private (
     /** Header click, the DataTable contract: plain sorts by this column alone, Ctrl or
       * Cmd adds it or advances it in place.
       */
-    private def toggleSort(key: String, e: MouseEvent)(using Frame): Any < Async =
+    private def toggleSort(path: List[String], e: MouseEvent)(using Frame): Any < Async =
         sortRef match
             case Present(ref) =>
                 val multi = e.modifiers.ctrl || e.modifiers.meta
                 ref.getAndUpdate(cur =>
-                    if multi then SortKey.cycle(cur, key, removableSortFlag)
-                    else SortKey.plain(cur, key, removableSortFlag)
+                    if multi then SortKey.cycle(cur, path, removableSortFlag)
+                    else SortKey.plain(cur, path, removableSortFlag)
                 )
             case Absent => ()
 

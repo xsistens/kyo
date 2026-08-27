@@ -887,13 +887,45 @@ val productTable: UI < Async =
 
 > **Caution:** `rowKey` is what selection, expansion, and the `onRowClick` payload key on. Its fallback is the row's position in the original list, which survives sorting and filtering but not a change to the data: reorder the rows and every selection re-associates with a different record. Because the table cannot tell a static list from a live one, binding any of those three without a `rowKey` renders a loud `.p-uic-key-error` card above the table instead of shipping that failure to production data.
 
-Sorting is opt-in per column through `sortBy`, and needs a `sort` ref on the table to persist. The ref holds an ordered `List[SortKey]`, and the first entry that is actually sorting is the primary key. The plain click and the modifier click do different jobs, and the plain one changes with the size of the spec. While a single column sorts it owns the whole cycle, ascending, descending, off, because there is no priority order to damage and no reason to make clearing one sort reach for a modifier. Once several columns sort it only reverses the clicked one, in place: a spec built up over several clicks must not lose a key because a header was clicked once too often, so switching a column off moves to Ctrl or Cmd. A plain click on a column that is not sorting makes it the single key either way. Ctrl or Cmd click is the multi-key control: it adds a column, or advances one already in the spec.
+Sorting is opt-in per column through `sortBy`, and needs a `sort` ref on the table to persist. The ref holds an ordered `List[SortKey]`, each entry naming its column by path (its header, preceded by the labels of any `headerGroup`s around it), and the first entry that is actually sorting is the primary key. The plain click and the modifier click do different jobs, and the plain one changes with the size of the spec. While a single column sorts it owns the whole cycle, ascending, descending, off, because there is no priority order to damage and no reason to make clearing one sort reach for a modifier. Once several columns sort it only reverses the clicked one, in place: a spec built up over several clicks must not lose a key because a header was clicked once too often, so switching a column off moves to Ctrl or Cmd. A plain click on a column that is not sorting makes it the single key either way. Ctrl or Cmd click is the multi-key control: it adds a column, or advances one already in the spec.
 
 The advance happens *in place*, which is the part that matters. `SortDirection` has three cases, not two: ascending, descending, and unsorted, and only the modifier click can reach the third. A column switched off keeps its slot in the priority order rather than leaving the list, so the next Ctrl click on that same header brings it back at the rank it had. Without the third case, switching off the second of three keys promotes the third, and putting things back means clearing the third, re-adding the second, and re-adding the third. `removableSort(false)` drops the third case and leaves the two-state cycle, which is Prime's default. Once two or more columns sort, each sorted header shows its rank, because the direction icons alone cannot say which key wins. Row expansion pairs `expanded(ref)` with `rowExpansionTemplate`.
 
 In `SelectionMode.Checkbox` the checkbox column's header is the select-all. It is binary, matching Prime: a partial selection reads unchecked. It covers every row that survived the global filter rather than the page in view, and it adds or removes those keys instead of replacing the selection, so narrowing the filter, selecting all, and widening it again does not quietly drop what was selected before.
 
 Around the rows sit four pieces of chrome. `header(ui)` and `footer(ui)` are free slots, above the table and below the paginator, which is where a filter box or a record count goes. `Column.footer` is a different thing: it renders a real `tfoot` row aligned to the column grid, and its computed form `footer(rows => ...)` receives the rows that survived the global filter, across every page rather than the visible one. That distinction is load-bearing, because the table owns filtering: a column total computed by the caller from its own list would disagree with what the reader is looking at. `loading(flag)` covers the table with a spinner mask, and `scrollHeight("240px")` caps the container and pins the header row group to its top edge while the body scrolls under it.
+
+A header of more than one row is a `headerGroup`: a label written *around* the columns it spans, nested as deep as it needs to be. Prime writes the header cells beside the column list and has the caller put `colSpan` and `rowSpan` on each of them; here the leaves ARE the columns, so a group is as wide as what it holds, a column beside a group reaches down to the bottom of the header, and there is no second list to fall out of step with the first. Everything else stays on the leaves: a group carries a label and nothing more, so sorting, footers, filtering and merging keep working exactly as they do without one.
+
+```scala
+val groupedHeader: UI < Async =
+    for sort <- Signal.initRef(List(uic.SortKey.ascending("Stock", "Retail", "Price")))
+    yield uic.DataTable[Product]()
+        .rows(catalog)
+        .rowKey(_.id)
+        .columns(
+            uic.column("Name")(_.name).sortBy(_.name),
+            uic.headerGroup("Stock")(
+                uic.headerGroup("Retail")(
+                    uic.column("Price")(p => f"${p.price}%.2f").sortBy(_.price).align(uic.ColumnAlign.End),
+                    uic.column("Category")(_.category)
+                ),
+                uic.column("Available")(_.inStock.toString)
+            )
+        )
+        .sort(sort): UI
+```
+
+A grouped column is addressed by its **path**: the labels of the groups around it, outermost first, then its own header. That is why `SortKey` carries a list of parts and not one joined string, so no separator ever becomes part of the API:
+
+```scala
+uic.SortKey.ascending("Category")                 // a column in no group
+uic.SortKey.ascending("Stock", "Retail", "Price") // one inside two groups
+```
+
+A column in no group has a path of one part, so every spec written before groups existed means exactly what it meant. It also means a `Q1` under two year groups is two different columns to the spec, which is what lets the group carry the disambiguation instead of the cell label.
+
+Two things stay reported at render time in a `.p-uic-key-error` card, because neither is a type error: a group holding no column occupies nothing and would otherwise vanish without a word, and a spec entry that matches no sortable column does nothing at all, which covers a mistyped part, a column that never got a `sortBy`, and a path missing the group labels above it. That last one is the cost of the path: wrap an existing column in a group and a stored spec stops matching it, where the bare header used to survive. It stops matching loudly.
 
 `groupBy` takes one nested level per argument, outermost first, and each level presents every run of *consecutive* rows sharing its key as a group. Consecutive is the whole contract: grouping reads the order the table is about to render in, it does not impose one, so it composes with the sort spec instead of competing with it for authority over row order. Pair it with a sort that leads with the same projections, or with rows that already arrive ordered; group by one key while sorting by another and the same key legitimately heads several runs, which is what the row order says.
 
@@ -948,7 +980,7 @@ val mergedTable: UI < Async =
         .showGridlines(true): UI
 ```
 
-`Column` is shared with `TreeTable`, and two of its options are not: `footer` fills a `tfoot` a TreeTable does not render, and `rowSpan` merges runs of equal cells, which rows at different depths do not form. Both return a `Column[A, FlatOnly]`, and `TreeTable.columns` takes only `AnyTable` columns, so passing one is a compile error naming the reason rather than an option quietly dropped at render. That second type argument is the only place the distinction shows: `Seq[uic.Column[R, uic.AnyTable]]` for a reusable list every table takes, `Seq[uic.Column[R, uic.FlatOnly]]` for one that merges.
+A `headerGroup` is a `DataTable` shape only: a `TreeTable` renders one header row over a hierarchy, and passing it a group is a compile error. `Column` itself is shared with `TreeTable`, and two of its options are not: `footer` fills a `tfoot` a TreeTable does not render, and `rowSpan` merges runs of equal cells, which rows at different depths do not form. Both return a `Column[A, FlatOnly]`, and `TreeTable.columns` takes only `AnyTable` columns, so passing one is a compile error naming the reason rather than an option quietly dropped at render. That second type argument is the only place the distinction shows: `Seq[uic.Column[R, uic.AnyTable]]` for a reusable list every table takes, `Seq[uic.Column[R, uic.FlatOnly]]` for one that merges.
 
 ### Recursive shapes
 

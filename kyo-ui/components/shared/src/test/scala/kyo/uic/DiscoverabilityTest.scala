@@ -741,6 +741,57 @@ def x(using Frame) = uic.column("Name")((r: R) => r.name)"""
         )
     }
 
+    "a headerGroup nests inside columns(...), takes no column setter, and no hierarchy takes it" in {
+        // Columns written under a group read the same scope, so they still carry no type
+        // argument, and a group nests in a group.
+        typeCheck(
+            preamble +
+                """final case class R(code: String, q1: Int, q2: Int)
+def x(using Frame) =
+  uic.DataTable[R]()
+    .columns(
+      uic.column("Code")(_.code),
+      uic.headerGroup("Revenue")(
+        uic.headerGroup("2025")(uic.column("Q1")(_.q1.toString).sortBy(_.q1), uic.column("Q2")(_.q2.toString)),
+        uic.column("Total")(r => (r.q1 + r.q2).toString)
+      )
+    )"""
+        )
+        // A prepared tree list splats the way a prepared column list does.
+        typeCheck(
+            preamble +
+                """final case class R(code: String)
+def prepared(using Frame): Seq[uic.ColumnTree[R]] =
+  Seq(uic.Column[R]("Code")(_.code), uic.HeaderGroup[R]("G")(uic.Column[R]("Code")(_.code)))
+def x(using Frame) = uic.DataTable[R]().columns(prepared*)"""
+        )
+        // The group is a label over columns and nothing else: sorting, footers and merging
+        // belong to the leaves, so none of them is reachable on it.
+        typeCheckFailure(
+            preamble +
+                """final case class R(code: String)
+def x(using Frame) = uic.DataTable[R]().columns(uic.headerGroup("G")(uic.column("Code")(_.code)).sortBy(_.code))"""
+        )
+        typeCheckFailure(
+            preamble +
+                """final case class R(code: String)
+def x(using Frame) = uic.DataTable[R]().columns(uic.headerGroup("G")(uic.column("Code")(_.code)).footer("T"))"""
+        )
+        // A TreeTable renders one header row over a hierarchy, and takes columns only.
+        typeCheckFailure(
+            preamble +
+                """final case class R(name: String)
+def x(using Frame) = uic.TreeTable[R]().columns(uic.headerGroup("G")(uic.column("Name")(_.name)))"""
+        )
+        // Outside a columns(...) call there is no scope to read the row type from, the same
+        // way there is none for a column.
+        typeCheckFailure(
+            preamble +
+                """final case class R(name: String)
+def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
+        )
+    }
+
     "Tree exposes nodes/expansion on the shared SelectionMode; the ui5 riches are retired" in {
         typeCheck(
             preamble + """def x = uic.Tree().nodes(uic.TreeNode("R", "r")).selectionMode(uic.SelectionMode.Multiple).emptyContent("m")"""
