@@ -201,6 +201,10 @@ class GoldenRenderTest extends UicTest:
             "generated striping reachable through the real tbody"
         )
         assert(uic.Theme.primeExtraCss.contains(".p-paginator { flex-direction: row; }"), "paginator row restorer (remainder)")
+        assert(
+            uic.Theme.primeExtraCss.contains(".p-datatable-inline-filter { flex-direction: row; }"),
+            "filter row restorer (remainder): the extracted rule leaves the direction at the browser default"
+        )
         assert(!uic.Theme.css.contains(".sap"), "NO sap* class rules anywhere in the theme")
         assert(!uic.Theme.css.contains("--sap"), "NO sap tokens anywhere in the theme")
         assert(!uic.Theme.primeExtraCss.contains(".sap"), "no sap* rules in the Prime remainder")
@@ -1889,6 +1893,83 @@ class GoldenRenderTest extends UicTest:
             assert(!sorted.contains("p-uic-key-error"), "and the spec that names it is not called unknown")
             assert(!tree.contains(">B<"), "TreeTable honors the same flag")
             assert(tree.contains("p-treetable-node-toggle-button"), "and the toggler moves onto the column that is left")
+        end for
+    }
+
+    "per-column filters render Prime's inline filter row, and the mode menu it opens" in {
+        final case class Row(id: String, name: String, price: Int) derives CanEqual
+        val rows                                           = List(Row("1", "Bamboo", 65), Row("2", "Black", 72))
+        def occurrences(html: String, needle: String): Int = java.util.regex.Pattern.quote(needle).r.findAllIn(html).size
+
+        def table(using Frame) = uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
+            uic.column("Name")(_.name).filterBy,
+            uic.column("Note")(_ => "n"),
+            uic.column("Price")(_.price.toString).filterBy(_.price)
+        )
+
+        for
+            plain <- UI.runRender(
+                uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name)).render
+            ).take(1).run.map(_.mkString)
+            unbound <- UI.runRender(table.render).take(1).run.map(_.mkString)
+            live <-
+                for
+                    specs <- Signal.initRef(Map.empty[List[String], uic.ColumnFilter])
+                    err   <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    menu  <- Signal.initRef(false)
+                    out <- UI.runRender(
+                        table.columnFilters(specs).wired("t", Map.empty, err, _ => (), Map(List("Name") -> menu))
+                    ).take(1).run
+                yield out.mkString
+            filtering <-
+                for
+                    specs <- Signal.initRef(Map(
+                        List("Name")  -> uic.ColumnFilter("Bam", uic.MatchMode.StartsWith),
+                        List("Price") -> uic.ColumnFilter("nope", uic.MatchMode.Equals)
+                    ))
+                    err  <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    menu <- Signal.initRef(false)
+                    out <- UI.runRender(
+                        table.columnFilters(specs).wired("t", Map.empty, err, _ => (), Map(List("Name") -> menu))
+                    ).take(1).run
+                yield out.mkString
+            opened <-
+                for
+                    specs <- Signal.initRef(Map(List("Name") -> uic.ColumnFilter("Bam", uic.MatchMode.StartsWith)))
+                    err   <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    menu  <- Signal.initRef(true)
+                    out <- UI.runRender(
+                        table.columnFilters(specs).wired("t", Map.empty, err, _ => (), Map(List("Name") -> menu))
+                    ).take(1).run
+                yield out.mkString
+        yield
+            // Nothing to filter, nothing bound: the header is what it always was.
+            assert(!plain.contains("p-datatable-inline-filter"))
+            assert(!unbound.contains("p-datatable-inline-filter"), "a pipeline with no state bound renders no row")
+            assert(unbound.contains("p-uic-key-error"), "and says so")
+            // One inline filter per filterable column, and an empty header cell over the
+            // column that carries no pipeline.
+            assert(occurrences(live, "p-datatable-inline-filter") == 2)
+            assert(occurrences(live, "p-datatable-filter-element-container") == 2)
+            assert(occurrences(live, "p-datatable-column-filter-button") == 2, "both columns offer more than one mode")
+            assert(
+                occurrences(live, "p-datatable-header-cell\"></th>") == 1,
+                "the column that carries no pipeline keeps an empty cell, so the row still lines up"
+            )
+            assert(!live.contains("p-uic-key-error"), "a bound filter row reports nothing")
+            // The funnel says whether its column is narrowing the table without being opened.
+            assert(live.contains(uic.Icons.filter.pathData) && !live.contains(uic.Icons.filterFill.pathData))
+            assert(filtering.contains(uic.Icons.filterFill.pathData), "a filtering column carries the filled funnel")
+            assert(filtering.contains("value=\"Bam\""), "the input shows what was typed")
+            assert(filtering.contains("p-invalid"), "and a query the column cannot read marks its own input")
+            assert(filtering.contains(">Bamboo<") && !filtering.contains(">Black<"), "the rows the filter left")
+            // The mode menu is the column's own list, with the current one marked.
+            assert(!live.contains("p-datatable-filter-constraint-list"), "closed, it renders nothing")
+            assert(opened.contains("p-datatable-filter-overlay"))
+            assert(occurrences(opened, "p-datatable-filter-constraint\"") == 5, "six modes, one of them selected")
+            assert(opened.contains("p-datatable-filter-constraint p-datatable-filter-constraint-selected"))
+            assert(opened.contains(">Starts with<") && opened.contains(">Not contains<"))
+            assert(!opened.contains(">Less than<"), "a text column offers no comparison")
         end for
     }
 

@@ -81,6 +81,21 @@ class CellTypeTest extends UicTest:
             assert(high == Absent)
     }
 
+    // What makes a filter over the type a comparison: the numbers carry it, the types
+    // whose order is only their spelling do not.
+    "a type says whether its values compare" in {
+        assert(CellType.int.order.isDefined && CellType.double.order.isDefined)
+        assert(CellType.long.order.isDefined && CellType.bigDecimal.order.isDefined)
+        assert(CellType.string.order == Absent)
+        assert(CellType.boolean.order == Absent)
+        assert(CellType.of(Seq(1, 2))(_.toString).order == Absent, "an option list is a set, not a scale")
+        assert(CellType.string.ordered.order.isDefined, "and a caller can say otherwise")
+        // The ordering is part of the value domain, so neither a new editor nor a new
+        // rule drops it.
+        assert(CellType.int.withEditor(CellEditor.text).order.isDefined)
+        assert(CellType.int.validate(Validator.min(1)).order.isDefined)
+    }
+
     "withEditor keeps the value domain and swaps only what edits it" in {
         val custom = CellType.int.withEditor(CellEditor.text)
         assert(parsed(custom, "7") == Result.succeed(7))

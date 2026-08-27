@@ -841,6 +841,39 @@ def x(using Frame) = uic.TreeTable[R]().columns(uic.column("Name")(_.name).sortB
         typeCheckFailure(preamble + """def x = uic.DataTable[String]().sortable(false)""")
     }
 
+    "Column.filterBy names the value it filters by, or takes the text projection" in {
+        typeCheck(
+            preamble +
+                """final case class R(name: String, price: Int)
+def x(using Frame) = uic.DataTable[R]().columns(uic.column("Name")(_.name).filterBy)
+def y(using Frame) = uic.DataTable[R]().columns(uic.column("Price")(_.price.toString).filterBy(_.price))
+def z(r: SignalRef[Map[List[String], uic.ColumnFilter]])(using Frame) =
+  uic.DataTable[R]().rows(Nil).columns(uic.column("Name")(_.name).filterBy).columnFilters(r)"""
+        )
+        // The bare form filters by the text projection, so a column that renders only a
+        // body template has nothing to filter by and says so rather than filtering nothing.
+        typeCheckFailure(
+            preamble +
+                """final case class R(name: String)
+def x(using Frame) = uic.DataTable[R]().columns(uic.column("Name").body(r => span(r.name)).filterBy)"""
+        )
+        // footer resets the kind, and the text fact goes with it, as it does for rowSpan.
+        typeCheckFailure(
+            preamble +
+                """final case class R(name: String)
+def x(using Frame) = uic.DataTable[R]().columns(uic.column("Name")(_.name).footer("f").filterBy)"""
+        )
+        // A hierarchy filter is a different question: a row that matches has to keep its
+        // parents, so a filtered column does not fit a TreeTable.
+        typeCheckFailure(
+            preamble +
+                """final case class R(name: String)
+def x(using Frame) = uic.TreeTable[R]().columns(uic.column("Name")(_.name).filterBy)"""
+        )
+        // The filters are a map of column paths, not one query.
+        typeCheckFailure(preamble + """def x(r: SignalRef[String]) = uic.DataTable[String]().columnFilters(r)""")
+    }
+
     "Column.visible takes a Boolean or a Signal[Boolean] and keeps the column's kind" in {
         typeCheck(
             preamble +

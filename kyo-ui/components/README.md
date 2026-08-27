@@ -912,6 +912,24 @@ The advance happens *in place*, which is the part that matters. `SortDirection` 
 
 In `SelectionMode.Checkbox` the checkbox column's header is the select-all. It is binary, matching Prime: a partial selection reads unchecked. It covers every row that survived the global filter rather than the page in view, and it adds or removes those keys instead of replacing the selection, so narrowing the filter, selecting all, and widening it again does not quietly drop what was selected before.
 
+Filtering has a second form beside the global query, and it is per column. `Column.filterBy` gives a column its own filter over the value it names, and the `CellType` in scope decides how that filter reads: a type that compares (every provided number, anything through `CellType.ordered`) gets `=`, `<`, `>` and their negations and reads the query as a VALUE, everything else is matched as text, with contains, starts-with and the rest over what the type formats the value as. `filterBy` on its own filters by the column's text projection, which is the projection nine times in ten. `columnFilters(ref)` binds the filters, keyed by the same path the sort spec names a column by, and gives the table Prime's filter row: one input per filterable column, with the mode menu behind the funnel beside it.
+
+```scala
+val perColumn: UI < Async =
+    for filters <- Signal.initRef(Map.empty[List[String], uic.ColumnFilter])
+    yield uic.DataTable[Product]()
+        .rows(catalog)
+        .rowKey(_.id)
+        .columns(
+            uic.column("Name")(_.name).filterBy,
+            uic.column("Category")(_.category).filterBy,
+            uic.column("Price")(p => f"${p.price}%.2f").filterBy(_.price).align(uic.ColumnAlign.End)
+        )
+        .columnFilters(filters): UI
+```
+
+That is what the type buys: `filterBy(_.price)` answers "less than 50" over the number, where a text match would put 100 before 50 and match 5 against 15. Every bound filter has to pass, and the global query with them. A query the column cannot read as a value of its type filters nothing and marks its own input instead of emptying the table behind a typo, and a mode a column never offered is refused the same way, which only a hand-seeded map can reach. A hidden column does not filter, for the same reason the global query does not search it: an input the reader cannot see is one they cannot clear. That is the opposite of the sort spec, which keeps sorting by a hidden column, and for the reason that tells them apart, a filter takes rows away and a sort only moves them.
+
 Which columns a table has is its shape; which of them the reader sees is each column's own business, so `Column.visible` carries it, as a constant or as a signal a toggle writes. A hidden column contributes no header cell, no body cells and no footer cell, so the table is exactly as wide as what is on the screen, every colspan follows, and a `headerGroup` whose columns are all hidden goes with them.
 
 ```scala

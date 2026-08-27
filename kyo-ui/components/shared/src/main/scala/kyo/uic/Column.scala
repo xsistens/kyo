@@ -69,9 +69,10 @@ type HasText[K] = K <:< TextFlatOnly
   */
 @implicitNotFound(
     "A TreeTable takes plain columns only. It renders one header row, so a headerGroup has no place in it, and it " +
-        "renders no tfoot, no merged runs and no editing state, so a column carrying footer, rowSpan or editable " +
-        "does not fit either: a footer needs the tfoot, rowSpan merges runs of equal cells, which rows at different " +
-        "depths do not form, and an edit pipeline is read by an editing state this table does not bind."
+        "renders no tfoot, no merged runs, no editing state and no filter row, so a column carrying footer, rowSpan, " +
+        "editable or filterBy does not fit either: a footer needs the tfoot, rowSpan merges runs of equal cells, which " +
+        "rows at different depths do not form, an edit pipeline is read by an editing state this table does not bind, " +
+        "and filtering a hierarchy is a different question, since a row that matches has to keep its parents."
 )
 sealed trait AnyTableColumn[-K <: FlatOnly]:
     /** Hands back what the evidence already proves: a `K` column is an `AnyTable` one.
@@ -235,6 +236,21 @@ final private[uic] case class CellEdit[A](
     changed: Maybe[(A, A) => Any < Async] = Absent
 )
 
+/** The filter pipeline of one column, with the cell type closed over, as [[CellEdit]]
+  * closes over the one that edits it.
+  *
+  * `modes` is what the reader may pick from and `default` what an untouched column starts
+  * on, both decided by the [[CellType]]: a type that compares gets the comparison modes,
+  * everything else the text ones. `predicate` reads one filter into a row test, or answers
+  * `Absent` when this column cannot apply it, which is a query that is not a value of its
+  * type, or a mode it never offered.
+  */
+final private[uic] case class CellFilter[A](
+    modes: List[MatchMode],
+    default: MatchMode,
+    predicate: ColumnFilter => Maybe[A => Boolean]
+)
+
 final case class Column[A, +K <: FlatOnly] private (
     headerV: String,
     textF: Maybe[A => String] = Absent,
@@ -247,7 +263,8 @@ final case class Column[A, +K <: FlatOnly] private (
     sortableV: Maybe[BoolValue] = Absent,
     editV: Maybe[CellEdit[A]] = Absent,
     navigableFlag: Boolean = true,
-    visibleV: Maybe[BoolValue] = Absent
+    visibleV: Maybe[BoolValue] = Absent,
+    filterV: Maybe[CellFilter[A]] = Absent
 ) extends ColumnTree[A]:
     private[uic] def label: String                        = headerV
     private[uic] def leaves: List[Column[A, FlatOnly]]    = List(this)
@@ -313,6 +330,50 @@ final case class Column[A, +K <: FlatOnly] private (
       */
     def onValueChanged(f: (A, A) => Any < Async)(using IsEditable[K]): Column[A, K] =
         copy(editV = editV.map(_.copy(changed = Present(f))))
+
+    /** Gives this column its own filter, over the value `read` projects out of the row.
+      * The [[CellType]] in scope decides how it reads: a type that compares (every
+      * provided number, anything through `CellType.ordered`) gets `=`, `<`, `>` and their
+      * negations and reads the query as a VALUE; everything else is matched as text, with
+      * "contains", "starts with" and the rest, over what the type formats the value as.
+      *
+      * That is the whole difference from a stringly filter: `filterBy(_.price)` on an
+      * `Int` column answers `< 50` correctly, where a text match would put 100 before 50
+      * and match 5 against 15. The reader picks the mode from the column's own list, so
+      * nothing here has to be configured twice.
+      *
+      * The table needs [[DataTable.columnFilters]] bound, which is where the filters live
+      * and what gives the table its filter row.
+      */
+    def filterBy[V](read: A => V)(using ct: CellType[V]): Column[A, FlatOnly] =
+        copy(filterV = Present(cellFilter(read, ct)))
+
+    /** Filters by this column's own text projection, which is the projection nine times
+      * in ten and would otherwise be written twice on one line. [[HasText]] confines the
+      * form to a column that has one, as it does for the bare [[rowSpan]].
+      *
+      * The text projection is text, so this always matches as text. A column whose values
+      * should COMPARE names them: `filterBy(_.price)`.
+      */
+    def filterBy(using HasText[K]): Column[A, FlatOnly] =
+        // The evidence is exactly the proof that this projection is there.
+        textF.map(f =>
+            copy(filterV =
+                Present(CellFilter[A](
+                    ColumnFilter.textModes,
+                    MatchMode.Contains,
+                    ColumnFilter.onText(f)
+                ))
+            )
+        ).getOrElse(this)
+
+    /** The filter pipeline for one value type, comparison where the type compares. */
+    private def cellFilter[V](read: A => V, ct: CellType[V]): CellFilter[A] =
+        ct.order match
+            case Present(ord) =>
+                CellFilter[A](ColumnFilter.orderedModes, MatchMode.Equals, ColumnFilter.onOrdered(read, ct.parse, ord))
+            case Absent =>
+                CellFilter[A](ColumnFilter.textModes, MatchMode.Contains, ColumnFilter.onText(a => ct.format(read(a))))
 
     /** Static footer label for this column; any column carrying a footer gives the
       * table a `tfoot`.
@@ -417,6 +478,9 @@ final case class Column[A, +K <: FlatOnly] private (
 
     /** Whether this column carries an edit pipeline at all. */
     private[uic] def isEditable: Boolean = editV.isDefined
+
+    /** Whether this column carries a filter pipeline at all. */
+    private[uic] def isFilterable: Boolean = filterV.isDefined
 
     /** Whether THIS row's cell may open, which is [[editableWhen]] over an editable
       * column and false over one that carries no pipeline.

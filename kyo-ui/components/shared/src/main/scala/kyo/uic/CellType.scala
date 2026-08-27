@@ -20,10 +20,22 @@ final class CellType[V] private (
     private[uic] val format: V => String,
     private[uic] val parse: String => Result[FieldError, V],
     private[uic] val editor: CellEditor,
-    private[uic] val check: Validator[V]
+    private[uic] val check: Validator[V],
+    private[uic] val order: Maybe[Ordering[V]]
 ):
     /** The same value domain behind a different editor: the parser is what stays. */
-    def withEditor(e: CellEditor): CellType[V] = new CellType(format, parse, e, check)
+    def withEditor(e: CellEditor): CellType[V] = new CellType(format, parse, e, check, order)
+
+    /** Declares that values of this type compare, which is what makes a
+      * [[Column.filterBy]] over them a comparison rather than a text match: the reader
+      * gets `<`, `<=`, `>` and `>=` instead of "contains" and "starts with", and the
+      * query is read as a VALUE rather than as the text a value happens to print as.
+      *
+      * The provided numeric types carry it already. Reach for this on a domain type whose
+      * order means something (a version, a grade, a size), and leave it off one whose
+      * order is only its spelling.
+      */
+    def ordered(using ord: Ordering[V]): CellType[V] = new CellType(format, parse, editor, check, Present(ord))
 
     /** Rules the parsed value has to pass before it is written, in the vocabulary
       * `kyo.uic.form` already speaks: `Validator.min`, `Validator.pattern`, an async rule
@@ -35,13 +47,13 @@ final class CellType[V] private (
       * One rule per type; compose several with `Validator.all` or `and` at the call site,
       * where a `Frame` is in scope.
       */
-    def validate(v: Validator[V]): CellType[V] = new CellType(format, parse, editor, v)
+    def validate(v: Validator[V]): CellType[V] = new CellType(format, parse, editor, v, order)
 end CellType
 
 object CellType:
 
     def apply[V](format: V => String)(parse: String => Result[FieldError, V])(editor: CellEditor): CellType[V] =
-        new CellType(format, parse, editor, always)
+        new CellType(format, parse, editor, always, Absent)
 
     /** The empty rule chain: every parsed value passes. Not `Validator.all()`, which needs
       * a `Frame` this object cannot derive.
@@ -68,17 +80,17 @@ object CellType:
     given int: CellType[Int] =
         CellType[Int](_.toString)(whole("integer", "a whole number", s => Maybe.fromOption(s.toIntOption)))(
             CellEditor.number(integer = true)
-        )
+        ).ordered
 
     given long: CellType[Long] =
         CellType[Long](_.toString)(whole("integer", "a whole number", s => Maybe.fromOption(s.toLongOption)))(
             CellEditor.number(integer = true)
-        )
+        ).ordered
 
     given double: CellType[Double] =
         CellType[Double](CellEditor.numberText)(whole("number", "a number", s => Maybe.fromOption(s.toDoubleOption)))(
             CellEditor.number()
-        )
+        ).ordered
 
     given bigDecimal: CellType[BigDecimal] =
         CellType[BigDecimal](_.toString)(
@@ -86,7 +98,7 @@ object CellType:
             // built from the text itself, so nothing is rounded through a Double on the
             // way in.
             whole("number", "a number", s => Maybe.fromOption(s.toDoubleOption).map(_ => BigDecimal(s)))
-        )(CellEditor.number())
+        )(CellEditor.number()).ordered
 
     given boolean: CellType[Boolean] =
         CellType[Boolean](_.toString)(s =>

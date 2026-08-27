@@ -261,6 +261,14 @@ object Theme:
       |  color: var(--p-form-field-invalid-placeholder-color, #ef4444);
       |  font-size: 0.8125rem; padding-top: 0.125rem;
       |}
+      |/* The filter row's inline filter is a ROW, and the extracted rule says so only by
+      |   leaving flex-direction at the browser default; kyo renders every div as a column
+      |   flex box, so without this the input and its mode button stack and the input, whose
+      |   own rule gives it `width: 1%` to grow from, stays 1% wide. */
+      |.p-datatable-inline-filter { flex-direction: row; }
+      |/* The filter row's cells carry a field, so they get the padding a field needs rather
+      |   than the header cell's, which is sized for a label. */
+      |.p-datatable-thead > tr > th:has(> .p-datatable-inline-filter) { padding: 0.5rem; }
       |/* PrimeVue scrolls the container and pins the row groups via
       |   DataTableStyle.inlineStyles (the ToggleSwitch precedent); the extracted sheet
       |   carries only the inset and z-index half of the sticky rules. The max-height
