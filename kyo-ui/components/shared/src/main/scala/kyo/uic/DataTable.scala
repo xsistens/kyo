@@ -59,6 +59,23 @@ final private[uic] case class NavState[A](
         if i < 0 then Absent else Present(i)
 end NavState
 
+/** What the filter row needs to know: the filters that are bound, which of them this
+  * table cannot apply, the open state of each column's mode menu, and whether the mount
+  * has run.
+  *
+  * The specs are the CALLER's, so they are read fresh on every render; the open refs are
+  * the table's own and are allocated once, one per filterable column, which is what lets
+  * two menus be independent without a second piece of caller state.
+  */
+final private[uic] case class FilterState(
+    open: Map[List[String], SignalRef[Boolean]] = Map.empty,
+    live: Boolean = false,
+    specs: Map[List[String], ColumnFilter] = Map.empty,
+    unusable: Set[List[String]] = Set.empty
+):
+    private[uic] def openOf(path: List[String]): Maybe[SignalRef[Boolean]] = Maybe.fromOption(open.get(path))
+end FilterState
+
 /** The row before and after a committed cell edit, plus the column that wrote it. */
 final case class CellChange[A](rowKey: String, column: List[String], before: A, after: A)
 
@@ -187,7 +204,8 @@ final case class DataTable[A] private (
     onCellChangedF: Maybe[CellChange[A] => Any < Async] = Absent,
     onRowChangedF: Maybe[RowChange[A] => Any < Async] = Absent,
     translatorV: ErrorTranslator = ErrorTranslator.default,
-    hiddenPaths: List[(List[String], Column[A, FlatOnly])] = Nil
+    hiddenPaths: List[(List[String], Column[A, FlatOnly])] = Nil,
+    columnFiltersRef: Maybe[SignalRef[Map[List[String], ColumnFilter]]] = Absent
 ) extends Node:
     type Self = DataTable[A]
 
@@ -227,6 +245,11 @@ final case class DataTable[A] private (
       */
     private lazy val editableLeaves: List[(List[String], Column[A, FlatOnly])] = leafPaths.filter(_._2.isEditable)
 
+    /** The leaves that carry a filter pipeline, in column order. A mount allocates one
+      * menu-open ref per entry.
+      */
+    private lazy val filterableLeaves: List[(List[String], Column[A, FlatOnly])] = leafPaths.filter(_._2.isFilterable)
+
     /** Binds the ordered sort spec two-way: [[SortKey]] entries, the first sorting one
       * being the primary key.
       *
@@ -247,6 +270,22 @@ final case class DataTable[A] private (
       * columns' text projections.
       */
     def globalFilter(ref: SignalRef[String]): DataTable[A] = copy(filterRef = Present(ref))
+
+    /** Binds the per-column filters two-way, keyed by the column path the sort spec
+      * already names a column by, and gives the table its filter row: one input per
+      * [[Column.filterBy]] column, with the mode menu beside it.
+      *
+      * The filters are read the way the reader sees the table. A column that is hidden
+      * ([[Column.visible]]) does not filter, exactly as the global filter does not search
+      * it, since an input the reader cannot reach is one they cannot clear either. That
+      * is the opposite of the sort spec, which keeps sorting by a hidden column, and for
+      * the same reason: filtering removes rows the reader is looking for, sorting only
+      * moves them.
+      *
+      * Every bound filter has to pass, and the global filter with them.
+      */
+    def columnFilters(ref: SignalRef[Map[List[String], ColumnFilter]]): DataTable[A] =
+        copy(columnFiltersRef = Present(ref))
 
     /** Slices the rows into pages of `size` and renders the embedded paginator;
       * `ref` holds the 0-based page index (clamped at render).
@@ -477,17 +516,29 @@ final case class DataTable[A] private (
     /** Navigation follows editing unless the caller says otherwise. */
     private def navOn: Boolean = cellNavV.getOrElse(leafCols.exists(_.isEditable))
 
+    /** Whether the table owns state no caller supplies, which is what decides whether it
+      * renders through a mount: the drafts and the standing error of an editing table,
+      * and the menu-open state of a filter row.
+      */
+    private def ownsState: Boolean = editingBound || navOn || filterRowOn
+
+    /** Whether the filter row is rendered: the filters have to be bound somewhere, and
+      * some column has to carry a pipeline for the row to hold anything.
+      */
+    private def filterRowOn: Boolean = columnFiltersRef.isDefined && leafCols.exists(_.isFilterable)
+
     /** A table that edits owns two things no caller supplies: one draft per editable
-      * column, and the error a refused commit left standing. Both are allocated in a mount,
-      * since a pure render cannot, and the placeholder is the same table without them, which
-      * is exactly what a table that does not edit renders anyway.
+      * column, and the error a refused commit left standing; a table that filters owns a
+      * third, the open state of each column's mode menu. All of them are allocated in a
+      * mount, since a pure render cannot, and the placeholder is the same table without
+      * them, which is exactly what a table that does neither renders anyway.
       *
       * The drafts are allocated per COLUMN and not per cell because only one row edits at a
       * time, and a mount can only allocate a fixed set. They are never subscribed: typing
       * re-renders the editor's own cell and leaves the table alone.
       */
     private[uic] def render(using Frame): UI =
-        if !editingBound && !navOn then renderWith(EditState(Set.empty, Absent), NavState[A]())
+        if !ownsState then renderWith(EditState(Set.empty, Absent), NavState[A](), FilterState())
         else
             UI.mounted {
                 for
@@ -495,8 +546,9 @@ final case class DataTable[A] private (
                     prefix <- cmds.freshId
                     drafts <- Kyo.foreach(editableLeaves)((path, _) => Signal.initRef("").map(path -> _))
                     err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
-                yield wired(prefix, drafts.toMap, err, id => cmds.focusId(id))
-            }.placeholder(renderWith(EditState(Set.empty, Absent), NavState[A]()))
+                    menus  <- Kyo.foreach(filterableLeaves)((path, _) => Signal.initRef(false).map(path -> _))
+                yield wired(prefix, drafts.toMap, err, id => cmds.focusId(id), menus.toMap)
+            }.placeholder(renderWith(EditState(Set.empty, Absent), NavState[A](), FilterState()))
 
     /** The subscription tree the mount publishes, and the seam golden tests render
       * directly: a top-down render shows a mounted region as its placeholder, so the
@@ -506,21 +558,23 @@ final case class DataTable[A] private (
         idPrefix: String,
         drafts: Map[List[String], SignalRef[String]],
         errRef: SignalRef[Maybe[(CellPath, FieldError)]],
-        focus: String => Any < Async
+        focus: String => Any < Async,
+        menus: Map[List[String], SignalRef[Boolean]] = Map.empty
     )(using Frame): UI =
         errRef.render(e =>
             withRef(editingRowsRef, Set.empty[String]) { editRows =>
                 withRef(editingCellRef, Absent: Maybe[CellPath]) { editCell =>
                     renderWith(
                         EditState(editRows, editCell, drafts, Present(errRef), e, live = true),
-                        NavState[A](on = navOn, idPrefix = idPrefix, focus = focus)
+                        NavState[A](on = navOn, idPrefix = idPrefix, focus = focus),
+                        FilterState(open = menus, live = true)
                     )
                 }
             }
         )
 
-    private def renderWith(edit: EditState, nav: NavState[A])(using Frame): UI =
-        withVisibleColumns(_.buildAll(edit, nav))
+    private def renderWith(edit: EditState, nav: NavState[A], filter: FilterState)(using Frame): UI =
+        withVisibleColumns(_.buildAll(edit, nav, filter))
 
     /** Resolves every [[Column.visible]] flag and hands on the table WITHOUT the columns
       * they hide, so the header spans, the body cells, the footer, the filter, the colspans
@@ -557,16 +611,30 @@ final case class DataTable[A] private (
             hiddenPaths = leafPaths.zipWithIndex.collect { case (entry, i) if !keep(i) => entry }
         )
 
-    private def buildAll(edit: EditState, nav: NavState[A])(using Frame): UI =
+    private def buildAll(edit: EditState, nav: NavState[A], filter: FilterState)(using Frame): UI =
         withSortableFlags { flags =>
             withRows { rows =>
                 withRef(sortRef, List.empty[SortKey]) { sort =>
                     withRef(filterRef, "") { query =>
-                        withRef(pageRef, 0) { page =>
-                            withRef(selectedRef, Set.empty[String]) { sel =>
-                                withRef(expandedRef, Set.empty[String]) { exp =>
-                                    withRef(expandedGroupsRef, Set.empty[GroupPath]) { groups =>
-                                        body(rows, sort, query, page, sel, exp, groups, flags, edit, nav)
+                        withRef(columnFiltersRef, Map.empty[List[String], ColumnFilter]) { specs =>
+                            withRef(pageRef, 0) { page =>
+                                withRef(selectedRef, Set.empty[String]) { sel =>
+                                    withRef(expandedRef, Set.empty[String]) { exp =>
+                                        withRef(expandedGroupsRef, Set.empty[GroupPath]) { groups =>
+                                            body(
+                                                rows,
+                                                sort,
+                                                query,
+                                                page,
+                                                sel,
+                                                exp,
+                                                groups,
+                                                flags,
+                                                edit,
+                                                nav,
+                                                filter.copy(specs = specs)
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -603,6 +671,24 @@ final case class DataTable[A] private (
         loop(reactive, Map.empty)
     end withSortableFlags
 
+    /** Every bound filter with something in it, paired with the row test its column reads
+      * it as, or `Absent` where the column cannot: a query that is not a value of its
+      * type, or a mode it does not offer.
+      *
+      * The list walks the VISIBLE leaves, which is what leaves a hidden column's filter
+      * inert: an input the reader cannot reach is one they cannot clear either. Each
+      * query is read once here, so the predicate a row is tested with closes over a value
+      * that was parsed a single time.
+      */
+    private def filterReads(specs: Map[List[String], ColumnFilter]): List[(List[String], Maybe[A => Boolean])] =
+        if specs.isEmpty then Nil
+        else
+            leafPaths.flatMap { (path, c) =>
+                (Maybe.fromOption(specs.get(path)), c.filterV) match
+                    case (Present(f), Present(cf)) if f.query.trim.nonEmpty => List((path, cf.predicate(f)))
+                    case _                                                  => Nil
+            }
+
     /** This column's resolved sortable flag: the reactive ones are in `flags`, the rest
       * carry theirs statically.
       */
@@ -619,15 +705,23 @@ final case class DataTable[A] private (
         openGroups: Set[GroupPath],
         flags: Map[List[String], Boolean],
         edit: EditState,
-        nav: NavState[A]
+        nav: NavState[A],
+        filterIn: FilterState
     )(using Frame): UI =
         // 1. Global filter: contains-match over the columns' text projections.
         val rows = rowsIn.toList
-        val filtered =
+        val global =
             if query.isEmpty then rows
             else
                 val q = query.toLowerCase
                 rows.filter(a => leafCols.exists(c => c.textF.exists(f => f(a).toLowerCase.contains(q))))
+
+        // 1b. Column filters: every bound one has to pass. A query this table cannot read
+        //     as a value of its column's type filters nothing and says so on its own
+        //     input, rather than emptying the table behind a typo.
+        val reads    = filterReads(filterIn.specs)
+        val filter   = filterIn.copy(unusable = reads.collect { case (p, Absent) => p }.toSet)
+        val filtered = reads.foldLeft(global)((rs, r) => r._2.fold(rs)(p => rs.filter(p)))
 
         // 2. Sort: apply the SORTING entries back-to-front through stable sorts, so the
         //    first one ends up the primary key. Unsorted entries hold a slot in the
@@ -695,6 +789,22 @@ final case class DataTable[A] private (
             }
         end headRows
 
+        // Prime's row filter display: one more header row, an inline filter per column
+        // that carries a pipeline, an empty cell where a column carries none. The reader
+        // types into the input and picks the mode from the funnel beside it.
+        val filterRowUI: List[UI] =
+            if !filterRowOn then Nil
+            else
+                val leading: List[UI] =
+                    List.fill((if expanderColumn then 1 else 0) + (if checkboxColumn then 1 else 0))(
+                        th.cssClass("p-datatable-header-cell")
+                    )
+                val trailing: List[UI] = List.fill(if editorColumn then 1 else 0)(th.cssClass("p-datatable-header-cell"))
+                val cells              = leafPaths.map((p, c) => filterCell(p, c, filter))
+                List(tr((leading ++ cells ++ trailing).map(toChild)*))
+            end if
+        end filterRowUI
+
         // The rows the keyboard moves over are the ones on the SCREEN: a collapsed group
         // renders none of its own, so stepping by the paged index would land on a row
         // nobody can see.
@@ -737,7 +847,7 @@ final case class DataTable[A] private (
         accNameRefV.foreach(v => tbl = tbl.aria("labelledby", v))
         val tableEl: UI = tbl(
             (List[UI](
-                thead.cssClass("p-datatable-thead")(headRows.map(toChild)*),
+                thead.cssClass("p-datatable-thead")((headRows ++ filterRowUI).map(toChild)*),
                 tbody.cssClass("p-datatable-tbody")(bodyRows.map(toChild)*)
             ) ++ footGroup).map(toChild)*
         )
@@ -771,7 +881,7 @@ final case class DataTable[A] private (
             (rowKeyCard ++ headerCards(
                 sort,
                 flags
-            ) ++ editCards ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
+            ) ++ editCards ++ filterCards(filter) ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
         )
     end body
 
@@ -896,6 +1006,53 @@ final case class DataTable[A] private (
         emptyCard ++ unknownCard ++ ambiguousCard ++ noOrderingCard
     end headerCards
 
+    /** The loud cards for a filter that cannot do anything.
+      *
+      * The two halves of a per-column filter are bound in different places, the pipeline
+      * on the column and the state on the table, so either can be there without the other
+      * and neither says anything by itself: a filter row with no pipeline behind it takes
+      * input nothing reads, and a pipeline with no state bound has nowhere to put what the
+      * reader types. And a spec entry naming no filterable column of this table filters
+      * nothing at all, which is the same mistake the sort spec's card names.
+      */
+    private def filterCards(filter: FilterState)(using Frame): List[UI] =
+        val filterable = leafPaths.exists(_._2.isFilterable) || hiddenPaths.exists(_._2.isFilterable)
+        val nothing =
+            if columnFiltersRef.isEmpty || filterable then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "columnFilters is bound but no column can be filtered, so the filter row has nothing to hold; " +
+                        "add Column.filterBy",
+                    Nil
+                ))
+        val nowhere =
+            if !filterable || columnFiltersRef.isDefined then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "a column carries filterBy and no columnFilters ref is bound, so there is nowhere to put what " +
+                        "the reader types and no filter row to type it into; bind columnFilters",
+                    Nil
+                ))
+        // The paths, not the visible ones: a filter on a hidden column is deliberately
+        // inert, and reporting it as unknown would name a mistake nobody made.
+        val known = (leafPaths ++ hiddenPaths).collect { case (p, c) if c.isFilterable => p }.toSet
+        val unknown =
+            if columnFiltersRef.isEmpty then Nil
+            else filter.specs.keys.toList.filterNot(known.contains).map(_.mkString(" / ")).sorted
+        val unknownCard =
+            if unknown.isEmpty then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "the column filters name a column this table cannot filter; a path is the group labels around " +
+                        "the column followed by its header, and the column needs a filterBy",
+                    unknown
+                ))
+        nothing ++ nowhere ++ unknownCard
+    end filterCards
+
     /** The loud cards for an editing binding that cannot do anything.
       *
       * The table only decides which cell shows its editor, so a bound editing state with no
@@ -1002,6 +1159,117 @@ final case class DataTable[A] private (
                 )
         end match
     end headerSpanCell
+
+    /** One cell of the filter row: Prime's inline-filter anatomy over a column that
+      * carries a pipeline, an empty header cell over one that does not.
+      *
+      * The input is uncontrolled and writes the bound map on every keystroke, so the
+      * table re-filters as the reader types, the way the global filter already does. A
+      * query this table cannot read is marked invalid rather than emptying the table:
+      * a filter it cannot apply is not a filter, and hiding the rows behind a typo would
+      * take away the data the reader is looking at.
+      */
+    private def filterCell(path: List[String], c: Column[A, FlatOnly], filter: FilterState)(using Frame): UI =
+        val cell = th.cssClass("p-datatable-header-cell")
+        c.filterV match
+            case Absent => cell
+            case Present(cf) =>
+                val cur = filter.specs.getOrElse(path, ColumnFilter("", cf.default))
+                val input = Input()
+                    .value(cur.query)
+                    .fluid(true)
+                    .invalid(filter.unusable.contains(path))
+                    .accessibleName(s"Filter by ${c.headerV}")
+                    .onInput(t => writeFilter(path, cur.mode, t))
+                val element = div.cssClass("p-datatable-filter-element-container")(toChild(input))
+                cell(div.cssClass("p-datatable-inline-filter")((element :: modeMenu(path, c, cf, cur, filter)).map(toChild)*))
+        end match
+    end filterCell
+
+    /** The funnel beside a filter input, and the constraint list it opens.
+      *
+      * A column offering one mode has nothing to pick, so it gets no funnel. Before the
+      * mount runs there is no open state to write, so the button renders inert rather
+      * than as an affordance that could not work, which is the trade the row editor's
+      * buttons already make.
+      */
+    private def modeMenu(
+        path: List[String],
+        c: Column[A, FlatOnly],
+        cf: CellFilter[A],
+        cur: ColumnFilter,
+        filter: FilterState
+    )(using Frame): List[UI] =
+        if cf.modes.sizeIs <= 1 then Nil
+        else
+            // Filled while the column is filtering, hollow while it is not: which columns
+            // are narrowing the table has to be readable without opening anything.
+            val glyph = if cur.query.trim.isEmpty then Icons.filter else Icons.filterFill
+            // Prime renders this one as a Button too, and the extracted sheet carries no
+            // rule of its own for it, so the component is what gives it its look and the
+            // Prime class rides along as the hook a consumer's own CSS would reach for.
+            def trigger(onOpen: Maybe[SignalRef[Boolean]]): UI =
+                var b = Button()
+                    .icon(glyph)
+                    .variant(ButtonVariant.Text)
+                    .severity(Severity.Secondary)
+                    .rounded(true)
+                    .size(Size.Small)
+                    .accessibleName(s"Filter mode for ${c.headerV}")
+                    .extraClass("p-datatable-column-filter-button")
+                onOpen.foreach(ref => b = b.onClick(ref.getAndUpdate(!_)))
+                b.render
+            end trigger
+            filter.openOf(path) match
+                case Present(openRef) if filter.live =>
+                    List(
+                        Overlay(openRef)
+                            .matchWidth(false)
+                            .panelClass("p-datatable-filter-overlay")
+                            .panelClass("p-component")
+                            .trigger(trigger(Present(openRef)))(constraintList(path, cur, cf, openRef))
+                            .render
+                    )
+                case _ => List(trigger(Absent))
+            end match
+        end if
+    end modeMenu
+
+    /** The modes one column offers, the current one marked. */
+    private def constraintList(
+        path: List[String],
+        cur: ColumnFilter,
+        cf: CellFilter[A],
+        openRef: SignalRef[Boolean]
+    )(using Frame): UI =
+        ul.cssClass("p-datatable-filter-constraint-list")(
+            cf.modes.map { m =>
+                var item = li.cssClass("p-datatable-filter-constraint").tabIndex(0)
+                if m == cur.mode then item = item.cssClass("p-datatable-filter-constraint-selected")
+                item.onClick(pickMode(path, cur, m, openRef))(m.label)
+            }.map(toChild)*
+        )
+
+    /** Writes what the reader typed, keeping the mode they picked: an emptied input is no
+      * filter, but it is still the column's own mode, so clearing the text and typing
+      * again does not silently go back to "contains".
+      */
+    private def writeFilter(path: List[String], mode: MatchMode, query: String)(using Frame): Any < Async =
+        columnFiltersRef match
+            case Present(ref) => ref.getAndUpdate(_ + (path -> ColumnFilter(query, mode)))
+            case Absent       => ()
+
+    private def pickMode(
+        path: List[String],
+        cur: ColumnFilter,
+        mode: MatchMode,
+        openRef: SignalRef[Boolean]
+    )(using Frame): Any < Async =
+        val write: Any < Async = columnFiltersRef match
+            case Present(ref) => ref.getAndUpdate(_ + (path -> cur.copy(mode = mode)))
+            case Absent       => ()
+        write.andThen(openRef.set(false))
+    end pickMode
 
     /** One sortable/plain header cell with Prime's header-content anatomy, reaching down
       * `rows` header rows so an ungrouped column lines up with a grouped one.

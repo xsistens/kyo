@@ -30,7 +30,13 @@ class DataTableTest extends UicTest:
             case f: UI.Ast.Fragment[?] =>
                 Kyo.foreach(f.children)(elements).map(_.flatten)
             case k: UI.Ast.KeyedChild[?] => elements(k.child)
-            case _                       => Chunk.empty
+            // A mount is shown as its placeholder, which is what the golden renderer does
+            // and what an overlay's own reposition mount wraps its panel in.
+            case m: UI.Ast.Mounted =>
+                m.placeholderUI match
+                    case Present(ui) => elements(ui)
+                    case Absent      => Chunk.empty
+            case _ => Chunk.empty
 
     private def cellWithId(node: UI, id: String)(using Frame): UI.Ast.Element < Sync =
         elements(node).map(_.find(_.attrs.identifier.contains(id)).getOrElse(
@@ -193,6 +199,102 @@ class DataTableTest extends UicTest:
             assert(open == Present(CellPath("1", List("Price"))), "and what it lands on is open")
             assert(draft == "10", "seeded from that cell's own row")
             assert(seen.isEmpty, "no focus command: the browser's tab order already moved it")
+    }
+
+    /** The text inputs of the rendered tree, in render order. The handler is on the input
+      * node itself and not in `attrs`, since only a text input has one.
+      */
+    private def inputs(node: UI)(using Frame): Chunk[UI.Ast.TextInput] < Sync =
+        elements(node).map(_.collect { case i: UI.Ast.TextInput => i })
+
+    private def type_(i: UI.Ast.TextInput, text: String)(using Frame): Any < Async =
+        i.onInput match
+            case Present(f) => f(text)
+            case Absent     => throw new AssertionError("the input declares no handler")
+
+    /** A table filtered by two columns, one text and one that compares. */
+    private def filtered(using Frame) =
+        for
+            rows    <- Signal.initRef[Seq[Item]](items)
+            filters <- Signal.initRef(Map.empty[List[String], ColumnFilter])
+            err     <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            menus   <- Kyo.foreach(List(List("Name"), List("Price")))(p => Signal.initRef(false).map(p -> _))
+        yield
+            val table = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name).filterBy,
+                uic.column("Price")(_.price.toString).filterBy(_.price)
+            ).columnFilters(filters)
+            val ui = table.wired("t", Map.empty, err, _ => (), menus.toMap)
+            (ui, filters, menus.toMap)
+
+    /** The row names the table currently renders, read off its body cells. */
+    private def bodyNames(node: UI)(using Frame): Chunk[String] < Sync =
+        elements(node).map(_.filter(_.attrs.cssClasses.contains("p-datatable-tbody")).flatMap(_.children.collect {
+            case r: UI.Ast.Element => r
+        })).map(_.flatMap(_.children.collect { case c: UI.Ast.Element => c }.headOption))
+            .map(_.flatMap(_.children.collect { case t: UI.Ast.Text => t.value }))
+
+    "typing into a filter cell writes the column's own filter and narrows the rows" in {
+        for
+            (ui, filters, _) <- filtered
+            fields           <- inputs(ui)
+            _                <- type_(fields.head, "A")
+            spec             <- filters.get
+            names            <- bodyNames(ui)
+        yield
+            assert(spec == Map(List("Name") -> ColumnFilter("A", MatchMode.Contains)), "the text column starts on contains")
+            assert(names == Chunk("A"), "and the table narrows to what matches")
+    }
+
+    // The comparison is over the VALUE: read as text, 20 does not come before 15.
+    "a column that compares reads the query as a value" in {
+        for
+            (ui, filters, _) <- filtered
+            fields           <- inputs(ui)
+            _                <- type_(fields(1), "20")
+            spec             <- filters.get
+            equal            <- bodyNames(ui)
+            _                <- filters.set(Map(List("Price") -> ColumnFilter("15", MatchMode.Less)))
+            below            <- bodyNames(ui)
+        yield
+            assert(fields.size == 2, "one input per filterable column")
+            assert(spec == Map(List("Price") -> ColumnFilter("20", MatchMode.Equals)), "a column that compares starts on equals")
+            assert(equal == Chunk("B"))
+            assert(below == Chunk("A"), "and a seeded mode is read the same way")
+    }
+
+    // A filter the table cannot apply is not a filter: the rows stay and the input says so.
+    "a query the column cannot read keeps every row and marks its own input" in {
+        for
+            (ui, filters, _) <- filtered
+            fields           <- inputs(ui)
+            _                <- type_(fields(1), "nope")
+            names            <- bodyNames(ui)
+            after            <- inputs(ui)
+            spec             <- filters.get
+        yield
+            assert(names == Chunk("A", "B"), "the table is not emptied behind a typo")
+            assert(after(1).attrs.cssClasses.contains("p-invalid"), "and the input carries the refusal")
+            assert(spec(List("Price")).query == "nope", "what was typed is still what is there")
+    }
+
+    "picking a mode rewrites that column's filter and closes the menu" in {
+        for
+            (ui, filters, menus) <- filtered
+            fields               <- inputs(ui)
+            _                    <- type_(fields.head, "A")
+            _                    <- menus(List("Name")).set(true)
+            open                 <- elements(ui)
+            starts = open.find(e =>
+                e.attrs.cssClasses.contains("p-datatable-filter-constraint") &&
+                    e.children.collect { case t: UI.Ast.Text => t.value }.contains("Starts with")
+            ).getOrElse(throw new AssertionError("the menu shows no modes"))
+            _     <- click(starts)
+            spec  <- filters.get
+            still <- menus(List("Name")).get
+        yield
+            assert(spec == Map(List("Name") -> ColumnFilter("A", MatchMode.StartsWith)), "the query survives the mode")
+            assert(!still, "and picking one closes the menu")
     }
 
     private def hasCell(node: UI, id: String)(using Frame): Boolean < Sync =
