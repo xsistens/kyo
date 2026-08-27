@@ -61,7 +61,8 @@ final case class InputNumber private (
     idV: Maybe[String] = Absent,
     onChangeF: Maybe[Double => Any < Async] = Absent,
     onBlurF: Maybe[Double => Any < Async] = Absent,
-    integerFlag: Boolean = false
+    integerFlag: Boolean = false,
+    focusAutoFlag: Boolean = false
 ) extends Node, NumberFormControl:
     type Self = InputNumber
 
@@ -154,6 +155,13 @@ final case class InputNumber private (
       */
     def integer(v: Boolean): InputNumber = copy(integerFlag = v)
 
+    /** Seeds focus onto this field when a re-render inserts it into the DOM for the first
+      * time, kyo-ui's `focusAuto`. Same contract as `Input.focusAuto`: the element has to
+      * be NEW for the seed to fire, which is what makes it the right tool for a field that
+      * appears in place of something else.
+      */
+    def focusAuto(v: Boolean): InputNumber = copy(focusAutoFlag = v)
+
     /** Fired with the NEW (clamped) value after the ref write-back. */
     def onChange(f: Double => Any < Async): InputNumber = copy(onChangeF = Present(f))
 
@@ -209,6 +217,7 @@ final case class InputNumber private (
             .cssClass("p-inputtext")
             .cssClass("p-component")
         idV.foreach(v => in = in.id(v))
+        if focusAutoFlag then in = in.focusAuto(true)
         sizeV match
             case Size.Small  => in = in.cssClass("p-inputtext-sm")
             case Size.Large  => in = in.cssClass("p-inputtext-lg")
