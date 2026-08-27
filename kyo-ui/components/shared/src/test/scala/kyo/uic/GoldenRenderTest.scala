@@ -1795,6 +1795,99 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "row and cell editing put the caller's editor in the cells the table says are being edited" in {
+        final case class Item(id: String, name: String, note: String)
+        val items                                          = List(Item("1", "A", "n1"), Item("2", "B", "n2"))
+        def occurrences(html: String, needle: String): Int = needle.r.findAllIn(html).size
+        def table(using Frame) = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+            uic.column("Name")(_.name).editor(i => span(s"edit-${i.id}")),
+            uic.column("Note")(_.note)
+        )
+
+        for
+            resting <-
+                for
+                    ref <- Signal.initRef(Set.empty[String])
+                    out <- UI.runRender(table.editingRows(ref).render).take(1).run
+                yield out.mkString
+            editingRow <-
+                for
+                    ref <- Signal.initRef(Set("1"))
+                    out <- UI.runRender(table.editingRows(ref).render).take(1).run
+                yield out.mkString
+            withFooter <-
+                for
+                    ref <- Signal.initRef(Set.empty[String])
+                    out <- UI.runRender(
+                        uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+                            uic.column("Name")(_.name).editor(i => span(s"edit-${i.id}")).footer("Total"),
+                            uic.column("Note")(_.note)
+                        ).editingRows(ref).render
+                    ).take(1).run
+                yield out.mkString
+            cellIdle <-
+                for
+                    ref <- Signal.initRef(Absent: Maybe[uic.CellPath])
+                    out <- UI.runRender(table.editingCell(ref).render).take(1).run
+                yield out.mkString
+            cellOpen <-
+                for
+                    ref <- Signal.initRef(Present(uic.CellPath("2", List("Name"))): Maybe[uic.CellPath])
+                    out <- UI.runRender(table.editingCell(ref).render).take(1).run
+                yield out.mkString
+            noEditor <-
+                for
+                    ref <- Signal.initRef(Set.empty[String])
+                    out <- UI.runRender(
+                        uic.DataTable[Item]().rows(items).rowKey(_.id)
+                            .columns(uic.column("Name")(_.name)).editingRows(ref).render
+                    ).take(1).run
+                yield out.mkString
+            bothModes <-
+                for
+                    rows <- Signal.initRef(Set.empty[String])
+                    cell <- Signal.initRef(Absent: Maybe[uic.CellPath])
+                    out  <- UI.runRender(table.editingRows(rows).editingCell(cell).render).take(1).run
+                yield out.mkString
+            noKey <-
+                for
+                    ref <- Signal.initRef(Set.empty[String])
+                    out <- UI.runRender(
+                        uic.DataTable[Item]().rows(items)
+                            .columns(uic.column("Name")(_.name).editor(i => span("e")))
+                            .editingRows(ref).render
+                    ).take(1).run
+                yield out.mkString
+        yield
+            // The editor column is one more cell per row, and it appears at the trailing edge.
+            assert(resting.contains("p-datatable-row-editor-init"), "a resting row offers the edit button")
+            assert(!resting.contains("p-datatable-row-editor-save"), "and nothing to commit yet")
+            assert(!resting.contains("edit-1"), "the editor stays out of a row that is not being edited")
+            assert(occurrences(resting, "<td") == 2 * 3, "two rows of two columns, plus the editor cell each")
+            // "<th" alone would also count the <thead that opens the row group.
+            assert(occurrences(resting, "<th[ >]") == 3, "and one header cell to match")
+            // Being edited swaps the content of the editable column only.
+            assert(editingRow.contains("p-datatable-editing-row"), "the row says it is being edited")
+            assert(editingRow.contains("edit-1") && !editingRow.contains("edit-2"), "for that row alone")
+            assert(editingRow.contains(">n1<"), "a column with no editor keeps its own content")
+            assert(editingRow.contains("p-datatable-row-editor-save") && editingRow.contains("p-datatable-row-editor-cancel"))
+            assert(occurrences(editingRow, "p-datatable-row-editor-init") == 1, "the other row still rests")
+            // The footer row keeps the grid, editor column included.
+            assert(occurrences(withFooter, "<tfoot") == 1)
+            assert(occurrences(withFooter.split("<tfoot")(1), "<td") == 3, "footer cells match the column count")
+            // Cell mode marks what can be clicked, and one cell at a time is open.
+            assert(occurrences(cellIdle, "p-editable-column") == 2, "one editable cell per row")
+            assert(!cellIdle.contains("p-cell-editing") && !cellIdle.contains("edit-"))
+            assert(occurrences(cellOpen, "p-cell-editing") == 1, "exactly one cell is open")
+            assert(cellOpen.contains("edit-2") && !cellOpen.contains("edit-1"), "the one the path names")
+            assert(!cellOpen.contains("p-datatable-row-editor-init"), "cell mode adds no editor column")
+            // What a binding cannot do, it says.
+            assert(noEditor.contains("p-uic-key-error"), "editing bound with no editor anywhere is reported")
+            assert(bothModes.contains("p-uic-key-error"), "and so is binding both modes at once")
+            assert(noKey.contains("p-uic-key-error"), "editing is keyed by rowKey, so it needs one")
+        end for
+    }
+
     "Tabs renders Prime's compound anatomy and shows only the selected tab's content" in {
         for
             html <-

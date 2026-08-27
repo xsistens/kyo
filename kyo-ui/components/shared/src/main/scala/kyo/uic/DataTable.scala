@@ -4,6 +4,17 @@ import kyo.*
 import kyo.UI.*
 import kyo.UI.Ast.HtmlChildVal
 
+/** The address of one cell: the row's [[DataTable.rowKey]] and the column's path, the
+  * same path the sort spec names a column by. It is what [[DataTable.editingCell]] holds,
+  * and a pair rather than a single key because a cell is the crossing of the two.
+  */
+final case class CellPath(row: String, column: List[String]) derives CanEqual
+
+/** What the table is currently editing: the rows in row mode, the one cell in cell mode.
+  * Threaded to the row renderer as one value, since both reach the same cells.
+  */
+final private[uic] case class EditState(rows: Set[String], cell: Maybe[CellPath])
+
 /** DataTable — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * DataTable anatomy: `div.p-datatable.p-component[.p-datatable-hoverable]
   * [.p-datatable-striped][.p-datatable-gridlines][.p-datatable-sm|-lg]` >
@@ -58,6 +69,17 @@ import kyo.UI.Ast.HtmlChildVal
   *   - `expanded(ref)` + `rowExpansionTemplate` — an expander-button column is
   *     auto-added; expanded rows are followed by a full-colspan
   *     `tr.p-datatable-row-expansion`.
+  *   - `editingRows(ref)` / `editingCell(ref)` + `Column.editor`: the table decides
+  *     WHICH cell shows its editor and nothing else, so the editor and the draft it
+  *     writes into are the caller's. Row mode adds Prime's editor-button column at the
+  *     trailing edge (init, save, cancel) and marks the row
+  *     `tr.p-datatable-editing-row`; cell mode opens one cell at a time, marking the
+  *     editable cells `.p-editable-column` and the open one `.p-cell-editing`. Enter
+  *     commits and Escape discards in both, since a keystroke bubbles out of the
+  *     caller's editor. `onRowEditInit` / `onCellEditInit` is where the draft gets
+  *     seeded, the two `Save` and `Cancel` callbacks where it is committed or dropped;
+  *     each runs BEFORE the state moves, so one that cannot complete leaves the cell
+  *     where the reader can see it.
   *   - `groupBy(levels)`: one nested level per argument, outermost first. Each
   *     run of consecutive rows sharing a level's key becomes a group, headed by a
   *     `tr.p-datatable-row-group-header` and optionally closed by a summary row;
@@ -107,7 +129,15 @@ final case class DataTable[A] private (
     headerV: Maybe[UI] = Absent,
     footerV: Maybe[UI] = Absent,
     loadingV: Maybe[BoolValue] = Absent,
-    scrollHeightV: Maybe[String] = Absent
+    scrollHeightV: Maybe[String] = Absent,
+    editingRowsRef: Maybe[SignalRef[Set[String]]] = Absent,
+    editingCellRef: Maybe[SignalRef[Maybe[CellPath]]] = Absent,
+    onRowEditInitF: Maybe[String => Any < Async] = Absent,
+    onRowEditSaveF: Maybe[String => Any < Async] = Absent,
+    onRowEditCancelF: Maybe[String => Any < Async] = Absent,
+    onCellEditInitF: Maybe[CellPath => Any < Async] = Absent,
+    onCellEditSaveF: Maybe[CellPath => Any < Async] = Absent,
+    onCellEditCancelF: Maybe[CellPath => Any < Async] = Absent
 ) extends Node:
     type Self = DataTable[A]
 
@@ -181,6 +211,54 @@ final case class DataTable[A] private (
       * it auto-adds the expander-button column.
       */
     def rowExpansionTemplate(f: A => UI): DataTable[A] = copy(expansionF = Present(f))
+
+    /** Binds row editing two-way to `ref` (a set of [[rowKey]] ids): every column carrying
+      * a [[Column.editor]] shows it for those rows, and an editor-button column appears at
+      * the trailing edge with Prime's init, save and cancel buttons.
+      *
+      * The table owns WHICH rows are being edited and nothing else. The editor and the
+      * draft it writes into are the caller's, so saving is theirs too: [[onRowEditSave]]
+      * fires with the row's key BEFORE the row leaves the set, which is what lets a save
+      * that cannot complete leave the row open.
+      */
+    def editingRows(ref: SignalRef[Set[String]]): DataTable[A] = copy(editingRowsRef = Present(ref))
+
+    /** Runs when a row's edit button is pressed, with its [[rowKey]] id, before the row
+      * joins the editing set. This is where a caller seeds the draft its editor writes
+      * into, which is the only moment the table can offer for it: the editor itself
+      * renders in a pure position and cannot write.
+      */
+    def onRowEditInit(f: String => Any < Async): DataTable[A] = copy(onRowEditInitF = Present(f))
+
+    /** Runs when a row's save button is pressed, with its [[rowKey]] id, before the row
+      * leaves the editing set.
+      */
+    def onRowEditSave(f: String => Any < Async): DataTable[A] = copy(onRowEditSaveF = Present(f))
+
+    /** Runs when a row's cancel button is pressed, with its [[rowKey]] id, before the row
+      * leaves the editing set. This is where a caller discards the draft.
+      */
+    def onRowEditCancel(f: String => Any < Async): DataTable[A] = copy(onRowEditCancelF = Present(f))
+
+    /** Binds cell editing two-way to `ref`: at most one cell shows its
+      * [[Column.editor]], and clicking a cell of an editable column moves the editor
+      * there. Enter commits through [[onCellEditSave]], Escape discards through
+      * [[onCellEditCancel]], and both clear the ref.
+      *
+      * A [[CellPath]] rather than a key, since a cell is a row crossed with a column.
+      */
+    def editingCell(ref: SignalRef[Maybe[CellPath]]): DataTable[A] = copy(editingCellRef = Present(ref))
+
+    /** Runs when a cell is clicked open, with its [[CellPath]], before the ref moves. The
+      * seeding moment, as [[onRowEditInit]] is for a row.
+      */
+    def onCellEditInit(f: CellPath => Any < Async): DataTable[A] = copy(onCellEditInitF = Present(f))
+
+    /** Runs when the edited cell is committed with Enter, before the ref is cleared. */
+    def onCellEditSave(f: CellPath => Any < Async): DataTable[A] = copy(onCellEditSaveF = Present(f))
+
+    /** Runs when the edited cell is dismissed with Escape, before the ref is cleared. */
+    def onCellEditCancel(f: CellPath => Any < Async): DataTable[A] = copy(onCellEditCancelF = Present(f))
 
     /** Groups the rows, one nested level per argument, outermost first. Every run of
       * CONSECUTIVE rows sharing a level's key becomes a group of that level, and the
@@ -289,6 +367,12 @@ final case class DataTable[A] private (
 
     private def expanderColumn: Boolean = expansionF.isDefined
 
+    /** Row editing adds Prime's editor-button column, at the trailing edge. Binding the
+      * state IS the switch, the way `expanded(ref)` is for the expander column: a second
+      * flag would only be a way to bind one without the other.
+      */
+    private def editorColumn: Boolean = editingRowsRef.isDefined
+
     private def rowInteractive: Boolean = rowClickSelects || onRowClickF.isDefined
 
     /** Renders through whichever ui-state refs are bound (nested reactive nodes
@@ -307,7 +391,11 @@ final case class DataTable[A] private (
                         withRef(selectedRef, Set.empty[String]) { sel =>
                             withRef(expandedRef, Set.empty[String]) { exp =>
                                 withRef(expandedGroupsRef, Set.empty[GroupPath]) { groups =>
-                                    body(sort, query, page, sel, exp, groups, flags)
+                                    withRef(editingRowsRef, Set.empty[String]) { editRows =>
+                                        withRef(editingCellRef, Absent: Maybe[CellPath]) { editCell =>
+                                            body(sort, query, page, sel, exp, groups, flags, EditState(editRows, editCell))
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -347,7 +435,8 @@ final case class DataTable[A] private (
         sel: Set[String],
         exp: Set[String],
         openGroups: Set[GroupPath],
-        flags: Map[List[String], Boolean]
+        flags: Map[List[String], Boolean],
+        edit: EditState
     )(using Frame): UI =
         // 1. Global filter: contains-match over the columns' text projections.
         val filtered =
@@ -387,7 +476,9 @@ final case class DataTable[A] private (
             if sortRef.isEmpty then Set.empty
             else leafPaths.collect { case (p, c) if c.isSortable(sortableFlag(c, p, flags)) => p }.toSet
 
-        val colCount = leafCols.length + (if checkboxColumn then 1 else 0) + (if expanderColumn then 1 else 0)
+        val colCount =
+            leafCols.length + (if checkboxColumn then 1 else 0) + (if expanderColumn then 1 else 0) +
+                (if editorColumn then 1 else 0)
 
         // One tr per header level. The leading expander and checkbox cells belong to the
         // top row and reach down through every other one, so they line up with a column
@@ -406,9 +497,17 @@ final case class DataTable[A] private (
                 expanderTh ++ checkboxTh
             end leading
             val rows = if matrix.isEmpty then List(Nil) else matrix
+            // The editor-button column has no header of its own, but it still needs a cell,
+            // and one that reaches down the header the way the leading ones do.
+            val trailing: List[UI] =
+                if !editorColumn then Nil
+                else
+                    var cell = th.cssClass("p-datatable-header-cell")
+                    if depth > 1 then cell = cell.rowspan(depth)
+                    List(cell)
             rows.zipWithIndex.map { (cells, i) =>
                 val ths = cells.map(headerSpanCell(_, sort, flags, interactive))
-                tr((if i == 0 then leading ++ ths else ths).map(toChild)*)
+                tr((if i == 0 then leading ++ ths ++ trailing else ths).map(toChild)*)
             }
         end headRows
 
@@ -421,15 +520,18 @@ final case class DataTable[A] private (
                         ))
                     )
                 )
-            else groupSegments(paged.zipWithIndex, groupsV, Nil, sel, exp, openGroups, colCount)
+            else groupSegments(paged.zipWithIndex, groupsV, Nil, sel, exp, openGroups, colCount, edit)
 
         // The footer aggregates over the FILTERED rows, not the visible page: a
         // column total that changed when the reader turned the page would be wrong.
         val footGroup: List[UI] =
             if !leafCols.exists(_.hasFooter) then Nil
             else
-                val leadingTds: List[UI] = List.fill(colCount - leafCols.length)(td)
-                val footRow: UI          = tr((leadingTds ++ leafCols.map(footerCell(_, sorted))).map(toChild)*)
+                val leadingTds: List[UI] =
+                    List.fill((if checkboxColumn then 1 else 0) + (if expanderColumn then 1 else 0))(td)
+                val trailingTds: List[UI] = List.fill(if editorColumn then 1 else 0)(td)
+                val footRow: UI =
+                    tr((leadingTds ++ leafCols.map(footerCell(_, sorted)) ++ trailingTds).map(toChild)*)
                 List(tfoot.cssClass("p-datatable-tfoot")(toChild(footRow)))
 
         var tbl = table.cssClass("p-datatable-table")
@@ -471,7 +573,7 @@ final case class DataTable[A] private (
             (rowKeyCard ++ headerCards(
                 sort,
                 flags
-            ) ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
+            ) ++ editCards ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
         )
     end body
 
@@ -522,7 +624,9 @@ final case class DataTable[A] private (
       * the moment identity is actually consumed the key stops being optional.
       */
     private def rowKeyCard(using Frame): List[UI] =
-        val usesIdentity = selectedRef.isDefined || expandedRef.isDefined || onRowClickF.isDefined
+        val usesIdentity =
+            selectedRef.isDefined || expandedRef.isDefined || onRowClickF.isDefined ||
+                editingRowsRef.isDefined || editingCellRef.isDefined
         if rowKeyF.isDefined || !usesIdentity then Nil
         else
             List(KeyDiagnostics.card(
@@ -593,6 +697,38 @@ final case class DataTable[A] private (
                 ))
         emptyCard ++ unknownCard ++ ambiguousCard ++ noOrderingCard
     end headerCards
+
+    /** The loud cards for an editing binding that cannot do anything.
+      *
+      * The table only decides which cell shows its editor, so a bound editing state with no
+      * [[Column.editor]] anywhere has nothing to show: the buttons would appear and drive a
+      * set nothing reads. And the two modes address different things, one row against one
+      * cell, so binding both leaves a cell inside an edited row showing its editor for two
+      * reasons at once, with two ways out that do not agree.
+      */
+    private def editCards(using Frame): List[UI] =
+        val bound    = editingRowsRef.isDefined || editingCellRef.isDefined
+        val editable = leafCols.exists(_.isEditable)
+        val nothing =
+            if !bound || editable then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "an editing state is bound but no column carries an editor, so nothing can be edited; add " +
+                        "Column.editor",
+                    Nil
+                ))
+        val both =
+            if !(editingRowsRef.isDefined && editingCellRef.isDefined) then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "editingRows and editingCell are both bound; a table edits by row or by cell, not both, so " +
+                        "bind one",
+                    Nil
+                ))
+        nothing ++ both
+    end editCards
 
     /** The checkbox column's header cell: Prime's select-all, binary (no partial
       * state), checked while every row that survived the global filter is selected.
@@ -745,10 +881,11 @@ final case class DataTable[A] private (
         sel: Set[String],
         exp: Set[String],
         openGroups: Set[GroupPath],
-        colCount: Int
+        colCount: Int,
+        edit: EditState
     )(using Frame): List[UI] =
         levels match
-            case Nil => leafRows(rows, sel, exp, colCount)
+            case Nil => leafRows(rows, sel, exp, colCount, edit)
             case level :: rest =>
                 RowGroup.runs(rows)((a, _) => level.keyF(a)).flatMap { (key, run) =>
                     val groupPath = GroupPath(path :+ key)
@@ -764,7 +901,7 @@ final case class DataTable[A] private (
                         else List(groupHeaderRow(level, groupPath, groupRows, colCount, collapsible, open))
                     val innerRows: List[UI] =
                         if !open then Nil
-                        else groupSegments(run, rest, groupPath.keys, sel, exp, openGroups, colCount)
+                        else groupSegments(run, rest, groupPath.keys, sel, exp, openGroups, colCount, edit)
                     val footerRow: List[UI] =
                         if !open then Nil
                         else
@@ -780,11 +917,11 @@ final case class DataTable[A] private (
     /** The innermost slice: the data rows themselves, carrying whatever merged cells the
       * [[Column.rowSpan]] columns resolve to over exactly this slice.
       */
-    private def leafRows(rows: List[(A, Int)], sel: Set[String], exp: Set[String], colCount: Int)(using
+    private def leafRows(rows: List[(A, Int)], sel: Set[String], exp: Set[String], colCount: Int, edit: EditState)(using
         Frame
     ): List[UI] =
         val spans = spanCells(rows.map(_._1), exp)
-        rows.zip(spans).flatMap((row, cells) => dataRow(row._1, row._2, sel, exp, colCount, cells))
+        rows.zip(spans).flatMap((row, cells) => dataRow(row._1, row._2, sel, exp, colCount, cells, edit))
     end leafRows
 
     /** Resolves the merged cells of one slice: for each row, which of the marked columns it
@@ -860,11 +997,13 @@ final case class DataTable[A] private (
         sel: Set[String],
         exp: Set[String],
         colCount: Int,
-        spans: Map[Int, SpanCell]
+        spans: Map[Int, SpanCell],
+        edit: EditState
     )(using Frame): List[UI] =
-        val id    = keyOf(a)
-        val isSel = sel.contains(id)
-        val isExp = exp.contains(id)
+        val id      = keyOf(a)
+        val isSel   = sel.contains(id)
+        val isExp   = exp.contains(id)
+        val rowEdit = edit.rows.contains(id)
 
         val expanderTd: List[UI] =
             if !expanderColumn then Nil
@@ -891,8 +1030,9 @@ final case class DataTable[A] private (
                 val icon: List[UI] = if isSel then List(GlyphSvg(Icons.check, "p-checkbox-icon")) else Nil
                 List(td(cb(toChild(div.cssClass("p-checkbox-box")(icon.map(toChild)*)))))
 
-        val dataTds: List[UI] = leafCols.zipWithIndex.flatMap { (c, i) =>
-            val cellSpan = spans.get(i)
+        val dataTds: List[UI] = leafPaths.zipWithIndex.flatMap { (entry, i) =>
+            val (path, c) = entry
+            val cellSpan  = spans.get(i)
             if cellSpan.contains(SpanCell.Covered) then Nil
             else
                 var cell = td
@@ -907,19 +1047,89 @@ final case class DataTable[A] private (
                     case ColumnAlign.End    => cell = cell.cssClass("p-uic-dt-end")
                     case ColumnAlign.Start  => ()
                 end match
-                val content: HtmlChildVal = c.bodyF match
-                    case Present(f) => toChild(f(a))
-                    case Absent     => toChild(stringToUI(c.textF.map(_(a)).getOrElse("")))
+                // Cell editing addresses one cell, row editing every editable cell of a row.
+                val here     = CellPath(id, path)
+                val cellEdit = edit.cell.exists(_ == here)
+                val editing  = c.isEditable && (rowEdit || cellEdit)
+                val cellMode = editingCellRef.isDefined && c.isEditable
+                if cellMode then
+                    cell = cell.cssClass("p-editable-column").onClick(beginCellEditing(here))
+                    // The click picks a cell, it does not also pick the row; and while the
+                    // editor is open the keystrokes that leave it stop here rather than
+                    // reaching the row's own handler.
+                    cell = cell.stopPropagation(true)
+                end if
+                if cellEdit then
+                    cell = cell
+                        .cssClass("p-cell-editing")
+                        .tabIndex(0)
+                        .focusAuto(true)
+                        .onKeyDown(e =>
+                            e.key match
+                                case Keyboard.Enter  => endCellEditing(here, onCellEditSaveF)
+                                case Keyboard.Escape => endCellEditing(here, onCellEditCancelF)
+                                case _               => ()
+                        )
+                end if
+                val content: HtmlChildVal = (editing, c.editorF, c.bodyF) match
+                    case (true, Present(f), _) => toChild(f(a))
+                    case (_, _, Present(f))    => toChild(f(a))
+                    case _                     => toChild(stringToUI(c.textF.map(_(a)).getOrElse("")))
                 List(cell(content))
             end if
         }
+
+        // Prime's row editor: one button while the row rests, two while it is being edited.
+        val editorTd: List[UI] =
+            if !editorColumn then Nil
+            else
+                // Prime renders these as Buttons, and the extracted sheet carries no rules of
+                // its own for them, so the component is what gives them their look; the Prime
+                // class rides along as the hook a consumer's own CSS would reach for.
+                def btn(cls: String, glyph: IconGlyph, label: String, action: Any < Async): UI =
+                    Button()
+                        .icon(glyph)
+                        .variant(ButtonVariant.Text)
+                        .severity(Severity.Secondary)
+                        .rounded(true)
+                        .size(Size.Small)
+                        .accessibleName(label)
+                        .extraClass(cls)
+                        .onClick(action)
+                        .render
+                val buttons: List[UI] =
+                    if rowEdit then
+                        List(
+                            btn("p-datatable-row-editor-save", Icons.check, "Save Edit", endRowEditing(id, onRowEditSaveF)),
+                            btn(
+                                "p-datatable-row-editor-cancel",
+                                Icons.times,
+                                "Cancel Edit",
+                                endRowEditing(id, onRowEditCancelF)
+                            )
+                        )
+                    else
+                        List(btn("p-datatable-row-editor-init", Icons.pencil, "Row Edit", beginRowEditing(id)))
+                List(td.cssClass("p-uic-dt-editor")(buttons.map(toChild)*))
 
         var row = tr.cssClass(if index % 2 == 0 then "p-row-even" else "p-row-odd")
         if rowClickSelects then row = row.cssClass("p-datatable-selectable-row")
         if isSel then row = row.cssClass("p-datatable-row-selected")
         if selectionModeV != SelectionMode.None then row = row.aria("selected", isSel.toString)
         if rowInteractive then row = row.tabIndex(0).onClick(activate(id))
-        val rowEl: UI = row((expanderTd ++ checkboxTd ++ dataTds).map(toChild)*)
+        if rowEdit then
+            // Enter and Escape reach here from the caller's editor, since a keystroke
+            // bubbles the logical tree the way a click does.
+            row = row
+                .cssClass("p-datatable-editing-row")
+                .onKeyDown(e =>
+                    e.key match
+                        case Keyboard.Enter  => endRowEditing(id, onRowEditSaveF)
+                        case Keyboard.Escape => endRowEditing(id, onRowEditCancelF)
+                        case _               => ()
+                )
+        end if
+        val rowEl: UI = row((expanderTd ++ checkboxTd ++ dataTds ++ editorTd).map(toChild)*)
 
         val expansionRow: List[UI] =
             if isExp then
@@ -944,6 +1154,70 @@ final case class DataTable[A] private (
             case Absent       => ()
 
     /** Clicking a row updates the bound selection set (per the mode), then fires `onRowClick`. */
+    /** Puts a row into the editing set, or takes it out. */
+    private def setRowEditing(id: String, on: Boolean)(using Frame): Any < Async =
+        editingRowsRef match
+            case Present(ref) => ref.getAndUpdate(cur => if on then cur + id else cur - id)
+            case Absent       => ()
+
+    /** Opens a row for editing, seeding callback first: a seed that cannot complete leaves
+      * the row closed rather than open over an empty draft.
+      */
+    private def beginRowEditing(id: String)(using Frame): Any < Async =
+        val fire: Any < Async = onRowEditInitF match
+            case Present(g) => g(id)
+            case Absent     => ()
+        for
+            _ <- fire
+            r <- setRowEditing(id, true)
+        yield r
+        end for
+    end beginRowEditing
+
+    /** Opens a cell for editing, seeding callback first, as [[beginRowEditing]] does. */
+    private def beginCellEditing(cell: CellPath)(using Frame): Any < Async =
+        val fire: Any < Async = onCellEditInitF match
+            case Present(g) => g(cell)
+            case Absent     => ()
+        for
+            _ <- fire
+            r <- setEditingCell(Present(cell))
+        yield r
+        end for
+    end beginCellEditing
+
+    /** Leaves row editing. The callback runs BEFORE the row leaves the set, so a save that
+      * cannot complete leaves the row open on the screen it failed on.
+      */
+    private def endRowEditing(id: String, f: Maybe[String => Any < Async])(using Frame): Any < Async =
+        val fire: Any < Async = f match
+            case Present(g) => g(id)
+            case Absent     => ()
+        for
+            _ <- fire
+            r <- setRowEditing(id, false)
+        yield r
+        end for
+    end endRowEditing
+
+    /** Moves the cell editor, or clears it. */
+    private def setEditingCell(cell: Maybe[CellPath])(using Frame): Any < Async =
+        editingCellRef match
+            case Present(ref) => ref.set(cell)
+            case Absent       => ()
+
+    /** Leaves cell editing, callback first, for the reason [[endRowEditing]] gives. */
+    private def endCellEditing(cell: CellPath, f: Maybe[CellPath => Any < Async])(using Frame): Any < Async =
+        val fire: Any < Async = f match
+            case Present(g) => g(cell)
+            case Absent     => ()
+        for
+            _ <- fire
+            r <- setEditingCell(Absent)
+        yield r
+        end for
+    end endCellEditing
+
     private def activate(id: String)(using Frame): Any < Async =
         val setSelection: Any < Async = (selectedRef, selectionModeV) match
             case (Present(ref), SelectionMode.Single | SelectionMode.Radio) =>

@@ -232,6 +232,12 @@ object Theme:
       |  font-weight: var(--p-datatable-column-footer-font-weight);
       |  background: var(--p-datatable-footer-cell-background);
       |}
+      |/* Prime renders the row editor through a template slot, so the extracted sheet carries
+      |   no rules for it at all. This one keeps the save and cancel buttons a pair rather than
+      |   two inline boxes touching, the same kind of remainder the group header rows need. */
+      |.p-datatable-tbody > tr > td.p-uic-dt-editor {
+      |  display: flex; align-items: center; justify-content: center; gap: 0.25rem;
+      |}
       |/* PrimeVue scrolls the container and pins the row groups via
       |   DataTableStyle.inlineStyles (the ToggleSwitch precedent); the extracted sheet
       |   carries only the inset and z-index half of the sticky rules. The max-height

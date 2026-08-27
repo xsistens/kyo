@@ -14,10 +14,11 @@ enum ColumnAlign derives CanEqual:
 /** Which tables accept a [[Column]], carried as the column's second, phantom type
   * argument so a table can refuse one it could not honor.
   *
-  * `Column` is shared by [[DataTable]] and [[TreeTable]], and two of its options mean
+  * `Column` is shared by [[DataTable]] and [[TreeTable]], and three of its options mean
   * nothing over a hierarchy: [[Column.footer]] fills a `tfoot` a TreeTable does not
-  * render, and [[Column.rowSpan]] merges runs of equal cells, which consecutive rows at
-  * different depths do not form. Both setters return a `FlatOnly` column, which
+  * render, [[Column.rowSpan]] merges runs of equal cells, which consecutive rows at
+  * different depths do not form, and [[Column.editor]] is shown by an editing state a
+  * TreeTable does not carry. All three setters return a `FlatOnly` column, which
   * `TreeTable.columns` will not take.
   *
   * `AnyTable` extends `FlatOnly` because the subtyping runs that way round: a column
@@ -51,9 +52,10 @@ type HasText[K] = K <:< TextFlatOnly
   * `TreeTable.columns` asks for. Only `AnyTable` has an instance.
   */
 @implicitNotFound(
-    "A TreeTable takes plain columns only. It renders one header row, so a headerGroup has no place in it, and " +
-        "it renders neither a tfoot nor merged runs, so a column carrying footer or rowSpan does not fit either: " +
-        "a footer needs the tfoot, and rowSpan merges runs of equal cells, which rows at different depths do not form."
+    "A TreeTable takes plain columns only. It renders one header row, so a headerGroup has no place in it, and it " +
+        "renders no tfoot, no merged runs and no editing state, so a column carrying footer, rowSpan or editor does " +
+        "not fit either: a footer needs the tfoot, rowSpan merges runs of equal cells, which rows at different depths " +
+        "do not form, and an editor is shown by an editing state this table does not bind."
 )
 sealed trait AnyTableColumn[-K <: FlatOnly]:
     /** Hands back what the evidence already proves: a `K` column is an `AnyTable` one.
@@ -182,7 +184,8 @@ final case class Column[A, +K <: FlatOnly] private (
     footerTextV: Maybe[String] = Absent,
     footerF: Maybe[Seq[A] => UI] = Absent,
     rowSpanEqF: Maybe[(A, A) => Boolean] = Absent,
-    sortableV: Maybe[BoolValue] = Absent
+    sortableV: Maybe[BoolValue] = Absent,
+    editorF: Maybe[A => UI] = Absent
 ) extends ColumnTree[A]:
     private[uic] def label: String                        = headerV
     private[uic] def leaves: List[Column[A, FlatOnly]]    = List(this)
@@ -193,6 +196,16 @@ final case class Column[A, +K <: FlatOnly] private (
 
     /** Custom cell content, replacing (or standing in for) the text projection. */
     def body(f: A => UI): Column[A, K] = copy(bodyF = Present(f))
+
+    /** Cell content while this cell is being edited, in place of [[body]] or the text
+      * projection. What it renders is the caller's, and so is the draft it writes into,
+      * which is the point: the table decides WHICH cell shows its editor and nothing else,
+      * so an editor is any UI over refs the caller already owns.
+      *
+      * The table needs one of [[DataTable.editingRows]] or [[DataTable.editingCell]] bound
+      * to ever show it.
+      */
+    def editor(f: A => UI): Column[A, FlatOnly] = copy(editorF = Present(f))
 
     /** Static footer label for this column; any column carrying a footer gives the
       * table a `tfoot`.
@@ -264,6 +277,9 @@ final case class Column[A, +K <: FlatOnly] private (
         textF.map(f => copy(rowSpanEqF = Present((x, y) => f(x) == f(y)))).getOrElse(this)
 
     private[uic] def hasFooter: Boolean = footerTextV.isDefined || footerF.isDefined
+
+    /** Whether this column can show an editor at all. */
+    private[uic] def isEditable: Boolean = editorF.isDefined
 
     /** Whether the header is interactive, given the flag resolved to a plain boolean.
       * An ordering is the precondition: without one there is nothing a click could do.
