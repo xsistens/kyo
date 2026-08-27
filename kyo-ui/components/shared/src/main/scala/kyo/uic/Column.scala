@@ -181,7 +181,8 @@ final case class Column[A, +K <: FlatOnly] private (
     alignV: ColumnAlign = ColumnAlign.Start,
     footerTextV: Maybe[String] = Absent,
     footerF: Maybe[Seq[A] => UI] = Absent,
-    rowSpanEqF: Maybe[(A, A) => Boolean] = Absent
+    rowSpanEqF: Maybe[(A, A) => Boolean] = Absent,
+    sortableV: Maybe[BoolValue] = Absent
 ) extends ColumnTree[A]:
     private[uic] def label: String                        = headerV
     private[uic] def leaves: List[Column[A, FlatOnly]]    = List(this)
@@ -206,9 +207,29 @@ final case class Column[A, +K <: FlatOnly] private (
 
     /** Makes the column sortable by the projected key (header clicks cycle
       * ascending → descending → unsorted when the table has a `sort` ref).
+      *
+      * This is HOW the column sorts; [[sortable]] is whether the reader may change it.
       */
     def sortBy[B](f: A => B)(using ord: Ordering[B]): Column[A, K] =
         copy(orderingV = Present(Ordering.by(f)))
+
+    /** Whether the reader may change this column's place in the sort spec, which is a
+      * separate question from whether the column HAS an ordering ([[sortBy]]) and from
+      * whether it currently sorts (the spec).
+      *
+      * Unset, a column with an ordering is interactive, which is what it always was. Set
+      * to false, the header goes inert: no click, no tab stop, no sort affordance. What it
+      * keeps is the STATE, the sorted class, `aria-sort`, the direction icon and the rank
+      * badge, because a spec that names the column still sorts it and hiding that would
+      * misreport the rows the reader is looking at. That pair is the point: a column the
+      * table sorts by and the reader may not re-sort.
+      */
+    def sortable(v: Boolean): Column[A, K] = copy(sortableV = Present(BoolValue.Const(v)))
+
+    /** Reactive [[sortable]]: the affordance follows the signal, which is what suspends
+      * re-sorting while a mutation is in flight.
+      */
+    def sortable(sig: Signal[Boolean]): Column[A, K] = copy(sortableV = Present(BoolValue.Dyn(sig)))
 
     def align(v: ColumnAlign): Column[A, K] = copy(alignV = v)
 
@@ -243,6 +264,19 @@ final case class Column[A, +K <: FlatOnly] private (
         textF.map(f => copy(rowSpanEqF = Present((x, y) => f(x) == f(y)))).getOrElse(this)
 
     private[uic] def hasFooter: Boolean = footerTextV.isDefined || footerF.isDefined
+
+    /** Whether the header is interactive, given the flag resolved to a plain boolean.
+      * An ordering is the precondition: without one there is nothing a click could do.
+      */
+    private[uic] def isSortable(flag: Boolean): Boolean = orderingV.isDefined && flag
+
+    /** The sortable flag as a plain boolean where it is statically known, which is every
+      * case except a signal-backed one; those are resolved by the host before it builds.
+      */
+    private[uic] def sortableConst: Boolean = BoolValue.const(sortableV).getOrElse(true)
+
+    /** The signal behind a reactive [[sortable]], if it is reactive. */
+    private[uic] def sortableSig: Maybe[Signal[Boolean]] = sortableV.dynSig
 
     /** How this column decides that two rows belong to the same merged cell, if it
       * merges at all.

@@ -741,6 +741,24 @@ def x(using Frame) = uic.column("Name")((r: R) => r.name)"""
         )
     }
 
+    "Column.sortable takes a Boolean or a Signal[Boolean] and keeps the column's kind" in {
+        typeCheck(
+            preamble +
+                """final case class R(name: String)
+def x(using Frame) = uic.DataTable[R]().columns(uic.column("Name")(_.name).sortBy(_.name).sortable(false))
+def y(f: SignalRef[Boolean])(using Frame) =
+  uic.DataTable[R]().columns(uic.column("Name")(_.name).sortBy(_.name).sortable(f))"""
+        )
+        // It says nothing about a tfoot or about merged runs, so a hierarchy takes it too.
+        typeCheck(
+            preamble +
+                """final case class R(name: String)
+def x(using Frame) = uic.TreeTable[R]().columns(uic.column("Name")(_.name).sortBy(_.name).sortable(false))"""
+        )
+        // The flag is the reader's control, not the table's: it is not a DataTable setter.
+        typeCheckFailure(preamble + """def x = uic.DataTable[String]().sortable(false)""")
+    }
+
     "a headerGroup nests inside columns(...), takes no column setter, and no hierarchy takes it" in {
         // Columns written under a group read the same scope, so they still carry no type
         // argument, and a group nests in a group.

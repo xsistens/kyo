@@ -60,9 +60,21 @@ object SortKey:
       * appended. Trailing `Unsorted` entries are dropped, since an unsorted entry behind
       * the last sorting one carries no priority a later click could not reproduce by
       * appending, and without the pruning the spec would only ever grow.
+      *
+      * `controllable` is the one rule both click transitions obey: a click may clear the
+      * entries the reader could have cleared themselves, and nothing else. An entry whose
+      * column carries `sortable(false)`, or that names no column of this table at all, has
+      * no header the reader can click, so it is theirs to keep and not the click's to
+      * remove. Without that, a single click on a free column would reset a locked one, by
+      * the long way round.
       */
-    private[uic] def cycle(spec: List[SortKey], path: List[String], removable: Boolean): List[SortKey] =
-        if spec.exists(_.path == path) then advance(spec, path, removable)
+    private[uic] def cycle(
+        spec: List[SortKey],
+        path: List[String],
+        removable: Boolean,
+        controllable: List[String] => Boolean
+    ): List[SortKey] =
+        if spec.exists(_.path == path) then advance(spec, path, removable, controllable)
         else spec :+ SortKey(path, SortDirection.Ascending)
 
     /** The plain-click transition, which depends on how many columns are sorting.
@@ -76,23 +88,41 @@ object SortKey:
       * clicks must not lose a key because one header was clicked one time too many, so
       * switching a column off stays with the modifier, through [[cycle]].
       *
+      * SEVERAL counts the entries the reader can act on, not every sorting entry. A locked
+      * column beside the reader's single key would otherwise take the plain click's third
+      * state away for a reason nothing on screen explains.
+      *
       * A column that is not sorting (absent, or holding a slot as `Unsorted`) becomes the
-      * single key either way, which is how a spec collapses back to one column.
+      * single key the reader controls, which is how a spec collapses back to one column.
+      * The entries the reader cannot control keep their slots ahead of it.
       */
-    private[uic] def plain(spec: List[SortKey], path: List[String], removable: Boolean): List[SortKey] =
+    private[uic] def plain(
+        spec: List[SortKey],
+        path: List[String],
+        removable: Boolean,
+        controllable: List[String] => Boolean
+    ): List[SortKey] =
         spec.find(k => k.path == path && k.direction.isSorting) match
-            case Some(k) if sorting(spec).sizeIs == 1 => advance(spec, path, removable)
+            case Some(k) if spec.count(e => e.direction.isSorting && controllable(e.path)) == 1 =>
+                advance(spec, path, removable, controllable)
             case Some(k) => spec.map(e => if e.path == path then e.copy(direction = k.direction.flipped) else e)
-            case None    => List(SortKey(path, SortDirection.Ascending))
+            case None    => spec.filterNot(e => controllable(e.path)) :+ SortKey(path, SortDirection.Ascending)
 
     /** Moves the column at `path` to its next direction without moving it in the order,
-      * then drops trailing `Unsorted` entries. An unsorted entry behind the last sorting
-      * one carries no priority a later click could not reproduce by appending, and without
-      * the pruning the spec would only ever grow.
+      * then drops trailing `Unsorted` entries the reader could reproduce by clicking. An
+      * unsorted entry behind the last sorting one carries no priority a later click could
+      * not reproduce by appending, and without the pruning the spec would only ever grow.
       */
-    private def advance(spec: List[SortKey], path: List[String], removable: Boolean): List[SortKey] =
+    private def advance(
+        spec: List[SortKey],
+        path: List[String],
+        removable: Boolean,
+        controllable: List[String] => Boolean
+    ): List[SortKey] =
         val advanced = spec.map(k => if k.path == path then k.copy(direction = k.direction.next(removable)) else k)
-        advanced.reverse.dropWhile(!_.direction.isSorting).reverse
+        // The pruning clears what the reader's own clicks left behind, so it stops at an
+        // entry they cannot reach: that slot is the caller's, and no click could restore it.
+        advanced.reverse.dropWhile(k => !k.direction.isSorting && controllable(k.path)).reverse
     end advance
 
     /** The sorting entries in priority order, which is what both the fold that sorts the
