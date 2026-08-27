@@ -2,6 +2,8 @@ package kyo.uic
 
 import kyo.*
 import kyo.UI.*
+import kyo.uic.form.FieldError
+import kyo.uic.form.Validator
 import scala.annotation.implicitNotFound
 import scala.annotation.tailrec
 
@@ -17,7 +19,7 @@ enum ColumnAlign derives CanEqual:
   * `Column` is shared by [[DataTable]] and [[TreeTable]], and three of its options mean
   * nothing over a hierarchy: [[Column.footer]] fills a `tfoot` a TreeTable does not
   * render, [[Column.rowSpan]] merges runs of equal cells, which consecutive rows at
-  * different depths do not form, and [[Column.editor]] is shown by an editing state a
+  * different depths do not form, and [[Column.editable]] is read by an editing state a
   * TreeTable does not carry. All three setters return a `FlatOnly` column, which
   * `TreeTable.columns` will not take.
   *
@@ -38,6 +40,20 @@ sealed trait TextFlatOnly extends FlatOnly
   */
 sealed trait TextAnyTable extends AnyTable, TextFlatOnly
 
+/** A column carrying a typed cell-edit pipeline, which is what [[Column.editableWhen]]
+  * and [[Column.onValueChanged]] refine. Those two say something about an edit, so a
+  * column with no edit to speak of does not compile rather than reporting a card at
+  * render time.
+  */
+sealed trait EditableFlatOnly extends FlatOnly
+
+/** Evidence that a column is editable. See [[EditableFlatOnly]]. */
+@implicitNotFound(
+    "editableWhen and onValueChanged refine an edit, and this column has none. Call editable(read)(write) " +
+        "(or editableAs) first, and call it before footer or rowSpan, which reset the kind."
+)
+type IsEditable[K] = K <:< EditableFlatOnly
+
 /** Evidence that a column has a text projection, which is what the argument-less
   * [[Column.rowSpan]] merges by. The kind carries the fact, so a column built without one
   * cannot reach that overload.
@@ -53,9 +69,9 @@ type HasText[K] = K <:< TextFlatOnly
   */
 @implicitNotFound(
     "A TreeTable takes plain columns only. It renders one header row, so a headerGroup has no place in it, and it " +
-        "renders no tfoot, no merged runs and no editing state, so a column carrying footer, rowSpan or editor does " +
-        "not fit either: a footer needs the tfoot, rowSpan merges runs of equal cells, which rows at different depths " +
-        "do not form, and an editor is shown by an editing state this table does not bind."
+        "renders no tfoot, no merged runs and no editing state, so a column carrying footer, rowSpan or editable " +
+        "does not fit either: a footer needs the tfoot, rowSpan merges runs of equal cells, which rows at different " +
+        "depths do not form, and an edit pipeline is read by an editing state this table does not bind."
 )
 sealed trait AnyTableColumn[-K <: FlatOnly]:
     /** Hands back what the evidence already proves: a `K` column is an `AnyTable` one.
@@ -175,6 +191,26 @@ end ColumnTree
   * Column[Product]("Price").body(p => span(fmt(p))).sortBy(_.price).align(ColumnAlign.End)
   * }}}
   */
+/** The value round trip of one editable column, with the cell type closed over.
+  *
+  * `Column[A, +K]` has no type parameter to hold a cell type in, exactly as it has none
+  * for `rowSpan`'s key, and the answer is the same one: keep the COMPOSED functions
+  * rather than the typed halves. `V` is fixed where [[Column.editable]] is called and is
+  * sealed in here, so the table moves text and rows and never learns a value type.
+  *
+  * `commit` is the whole write path in one function: parse the editor's text, run the
+  * column's rules over the parsed value, then write it into the row. A failure comes back
+  * as the `FieldError` that caused it, which is what keeps the cell open on the screen it
+  * failed on.
+  */
+final private[uic] case class CellEdit[A](
+    show: A => String,
+    commit: (A, String) => Frame ?=> (Result[FieldError, A] < Async),
+    editor: CellEditor,
+    when: A => Boolean = (_: A) => true,
+    changed: Maybe[(A, A) => Any < Async] = Absent
+)
+
 final case class Column[A, +K <: FlatOnly] private (
     headerV: String,
     textF: Maybe[A => String] = Absent,
@@ -185,7 +221,7 @@ final case class Column[A, +K <: FlatOnly] private (
     footerF: Maybe[Seq[A] => UI] = Absent,
     rowSpanEqF: Maybe[(A, A) => Boolean] = Absent,
     sortableV: Maybe[BoolValue] = Absent,
-    editorF: Maybe[A => UI] = Absent
+    editV: Maybe[CellEdit[A]] = Absent
 ) extends ColumnTree[A]:
     private[uic] def label: String                        = headerV
     private[uic] def leaves: List[Column[A, FlatOnly]]    = List(this)
@@ -197,15 +233,58 @@ final case class Column[A, +K <: FlatOnly] private (
     /** Custom cell content, replacing (or standing in for) the text projection. */
     def body(f: A => UI): Column[A, K] = copy(bodyF = Present(f))
 
-    /** Cell content while this cell is being edited, in place of [[body]] or the text
-      * projection. What it renders is the caller's, and so is the draft it writes into,
-      * which is the point: the table decides WHICH cell shows its editor and nothing else,
-      * so an editor is any UI over refs the caller already owns.
+    /** Makes this column editable: `read` projects the cell's value out of the row, `write`
+      * puts an edited one back, and the [[CellType]] in scope supplies the editor, the
+      * formatter and the parser between them.
       *
-      * The table needs one of [[DataTable.editingRows]] or [[DataTable.editingCell]] bound
-      * to ever show it.
+      * The whole round trip is the column's, which is the point. The table decides WHICH
+      * cell is open and nothing else, so nothing downstream has to ask which column an
+      * edit belongs to, or dispatch on a path to find the field it maps to. Where a value
+      * comes from and where it goes is written once, here, and checked against the row
+      * type.
+      *
+      * The table needs one of [[DataTable.editingCell]] or [[DataTable.editingRows]]
+      * bound, or nothing to open the editor with, and a `rowKey`, since a commit finds its
+      * row by key.
       */
-    def editor(f: A => UI): Column[A, FlatOnly] = copy(editorF = Present(f))
+    def editable[V](read: A => V)(write: (A, V) => A)(using ct: CellType[V]): Column[A, EditableFlatOnly] =
+        editableAs(ct)(read)(write)
+
+    /** [[editable]] with the cell type given explicitly: a domain type through
+      * `CellType.of(values)(label)`, a second editor over a type that already has one, or
+      * a type carrying its own rules through `CellType.validate`.
+      */
+    def editableAs[V](ct: CellType[V])(read: A => V)(write: (A, V) => A): Column[A, EditableFlatOnly] =
+        copy(editV =
+            Present(CellEdit[A](
+                show = a => ct.format(read(a)),
+                commit = (a, raw) =>
+                    ct.parse(raw) match
+                        case Result.Success(v) =>
+                            ct.check.run(v).map {
+                                case Absent     => Result.succeed(write(a, v))
+                                case Present(e) => Result.fail(e)
+                            }
+                        case Result.Failure(e) => Result.fail(e)
+                        case other             => other.asInstanceOf[Result[FieldError, A]]
+                ,
+                editor = ct.editor
+            ))
+        )
+
+    /** Which rows of an editable column may actually be edited, AG Grid's `editable`
+      * callback. A cell the predicate rejects stays navigable and shows its value, it just
+      * does not open, and Tab passes over it.
+      */
+    def editableWhen(p: A => Boolean)(using IsEditable[K]): Column[A, K] =
+        copy(editV = editV.map(_.copy(when = p)))
+
+    /** Runs after a committed edit of THIS column, with the row before and after the
+      * write. The table-wide `onCellValueChanged` fires for every column; this one is for
+      * a rule that belongs to a single field.
+      */
+    def onValueChanged(f: (A, A) => Any < Async)(using IsEditable[K]): Column[A, K] =
+        copy(editV = editV.map(_.copy(changed = Present(f))))
 
     /** Static footer label for this column; any column carrying a footer gives the
       * table a `tfoot`.
@@ -278,8 +357,13 @@ final case class Column[A, +K <: FlatOnly] private (
 
     private[uic] def hasFooter: Boolean = footerTextV.isDefined || footerF.isDefined
 
-    /** Whether this column can show an editor at all. */
-    private[uic] def isEditable: Boolean = editorF.isDefined
+    /** Whether this column carries an edit pipeline at all. */
+    private[uic] def isEditable: Boolean = editV.isDefined
+
+    /** Whether THIS row's cell may open, which is [[editableWhen]] over an editable
+      * column and false over one that carries no pipeline.
+      */
+    private[uic] def isEditableAt(a: A): Boolean = editV.exists(_.when(a))
 
     /** Whether the header is interactive, given the flag resolved to a plain boolean.
       * An ordering is the precondition: without one there is nothing a click could do.

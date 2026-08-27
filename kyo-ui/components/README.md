@@ -946,31 +946,36 @@ A column in no group has a path of one part, so every spec written before groups
 
 Two things stay reported at render time in a `.p-uic-key-error` card, because neither is a type error: a group holding no column occupies nothing and would otherwise vanish without a word, and a spec entry that matches no sortable column does nothing at all, which covers a mistyped part, a column that never got a `sortBy`, and a path missing the group labels above it. That last one is the cost of the path: wrap an existing column in a group and a stored spec stops matching it, where the bare header used to survive. It stops matching loudly.
 
-Editing splits the same way sorting does. `Column.editor(a => UI)` is what a cell shows while it is being edited, and the table decides only WHICH cells those are: the editor and the draft it writes into are the caller's, over refs they already own. That is the whole contract, and it is why there is no draft model here to disagree with yours.
+Editing puts the whole round trip on the column. `editable(read)(write)` says where a cell's value comes from and where an edited one goes, and the `CellType` in scope supplies the rest: the editor, the formatter that fills it, and the parser that reads it back. Those three travel together on purpose, since an editor over labels a parser has never heard of would compile and then refuse every commit.
 
-`editingRows(ref)` binds a `Set` of `rowKey` ids and adds Prime's editor-button column at the trailing edge, with init, save and cancel. `editingCell(ref)` binds one `CellPath`, a row crossed with a column path (the same path the sort spec names a column by), and clicking a cell of an editable column moves the editor there. Enter commits and Escape discards in both modes, since a keystroke bubbles out of the caller's editor the way a click does.
+That is the difference from a table that owns only the editing STATE. Nothing downstream has to ask which column an edit belongs to, or dispatch on a path to find the field it maps to, or keep a draft ref per column: the table seeds the draft from `read`, the editor writes into it, and the commit goes back through `write`. Where a value comes from and where it goes is written once, and checked against the row type.
 
-Three callbacks per mode, and the order they run in is load-bearing. `onRowEditInit` / `onCellEditInit` fires before the cell opens, which is where the draft gets seeded: the editor renders in a pure position and cannot write, so this is the only moment the table can offer for it. `onRowEditSave` and `onRowEditCancel` (and their cell twins) fire before the cell closes, so a save that cannot complete leaves the row open on the screen it failed on rather than closing over a lost draft.
+`editingCell(ref)` binds one `CellPath`, a row crossed with a column path (the same path the sort spec names a column by), and clicking a cell of an editable column moves the editor there. `editingRows(ref)` binds a `Set` of `rowKey` ids and adds Prime's editor-button column at the trailing edge, opening every editable cell of a row at once. Enter commits and Escape discards in both.
+
+Where a commit LANDS is the second binding. `rows(ref)` over a `SignalRef[Seq[A]]` lets the table store the new row itself; with the plain `rows(Seq)` it computes the row and hands it to `onCellValueChanged` instead, which is the mode for rows the table cannot reach. A column that is editable while the table can do neither is reported in a card, because the commit would be computed and dropped.
 
 ```scala
-val editable: UI < Async =
+val editableTable: UI < Async =
     for
-        editing <- Signal.initRef(Set.empty[String])
-        draft   <- Signal.initRef("")
+        rows <- Signal.initRef(catalog)
+        cell <- Signal.initRef(Absent: Maybe[uic.CellPath])
     yield uic.DataTable[Product]()
-        .rows(catalog)
+        .rows(rows)
         .rowKey(_.id)
         .columns(
-            uic.column("Name")(_.name).editor(_ => uic.Input().value(draft)),
-            uic.column("Category")(_.category)
+            uic.column("Name")(_.name).editable(_.name)((p, v) => p.copy(name = v)),
+            uic.column("Price")(_.price.toString)
+                .editableAs(uic.CellType.double.validate(Validator.min(1.0)))(_.price)((p, v) => p.copy(price = v)),
+            uic.column("In stock")(_.inStock.toString).editable(_.inStock)((p, v) => p.copy(inStock = v))
         )
-        .editingRows(editing)
-        .onRowEditInit(id => draft.set(catalog.find(_.id == id).map(_.name).getOrElse("")))
-        .onRowEditSave(_ => ())
-        .onRowEditCancel(_ => draft.set("")): UI
+        .editingCell(cell): UI
 ```
 
-A bound editing state with no `editor` anywhere can do nothing, and binding both modes at once leaves a cell inside an edited row open for two reasons with two ways out; both say so in a card. Editing is keyed by `rowKey`, so it joins selection and expansion in requiring one.
+`editableAs` is the same thing with the cell type given explicitly: a domain type through `CellType.of(values)(label)`, which derives both halves from one label function, or a type carrying its own rules. Rules are `kyo.uic.form.Validator`, the ones a form field already uses, and they run over the PARSED value. Text that will not parse and a value a rule refuses are the same outcome: the cell stays open on what the reader typed, marked invalid, with the message under the editor. That message is the one thing a `valueSetter` returning a boolean cannot carry.
+
+`editableWhen(p)` gates a column per row, and `Column.onValueChanged` is the column-scoped twin of `onCellValueChanged`. Editing is keyed by `rowKey`, so it joins selection and expansion in requiring one, and binding both modes at once is a card, since a cell inside an edited row would be open for two reasons with two ways out.
+
+A table that binds an editing state owns state no caller supplies (one draft per editable column, and the error a refused commit left standing), so it renders through a mount: the static projection is the same table with its editors closed and its affordances inert, and the live one arrives when the transport attaches. A table that does not edit is untouched by this.
 
 `groupBy` takes one nested level per argument, outermost first, and each level presents every run of *consecutive* rows sharing its key as a group. Consecutive is the whole contract: grouping reads the order the table is about to render in, it does not impose one, so it composes with the sort spec instead of competing with it for authority over row order. Pair it with a sort that leads with the same projections, or with rows that already arrive ordered; group by one key while sorting by another and the same key legitimately heads several runs, which is what the row order says.
 

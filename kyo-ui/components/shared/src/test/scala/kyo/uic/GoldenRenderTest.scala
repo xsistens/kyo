@@ -54,10 +54,10 @@ class GoldenRenderTest extends UicTest:
                     ref <- Signal.initRef("Ada")
                     out <- UI.runRender(uic.Input().placeholder("Your name").value(ref)).take(1).run
                 yield out.mkString
-            invalid <- renderHtml(uic.Input().value("x").invalid(true).invalidMessage("This value is invalid"))
-            seeded  <- renderHtml(uic.Input().value("x").focusAuto(true))
+            invalid  <- renderHtml(uic.Input().value("x").invalid(true).invalidMessage("This value is invalid"))
+            seeded   <- renderHtml(uic.Input().value("x").focusAuto(true))
             unseeded <- renderHtml(uic.Input().value("x"))
-            number  <- renderHtml(uic.InputNumber().value(3.0).focusAuto(true))
+            number   <- renderHtml(uic.InputNumber().value(3.0).focusAuto(true))
         yield
             assert(html.contains("p-inputtext"), "has p-inputtext class")
             assert(html.contains("p-component"), "has p-component class")
@@ -1801,53 +1801,103 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
-    "row and cell editing put the caller's editor in the cells the table says are being edited" in {
-        final case class Item(id: String, name: String, note: String)
-        val items                                          = List(Item("1", "A", "n1"), Item("2", "B", "n2"))
+    "editing renders the column's own editor over the table's draft, and reports what it refuses" in {
+        final case class Item(id: String, name: String, price: Int) derives CanEqual
+        val items                                          = List(Item("1", "A", 10), Item("2", "B", 20))
         def occurrences(html: String, needle: String): Int = needle.r.findAllIn(html).size
+
         def table(using Frame) = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
-            uic.column("Name")(_.name).editor(i => span(s"edit-${i.id}")),
-            uic.column("Note")(_.note)
-        )
+            uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v)),
+            uic.column("Price")(_.price.toString).editable(_.price)((i, v) => i.copy(price = v)),
+            uic.column("Note")(_ => "n")
+        ).onCellValueChanged(_ => ())
+
+        /** The editing anatomy lives behind a mount, so a top-down render shows the
+          * placeholder. `wired` is the seam that publishes it.
+          */
+        def wired(t: uic.DataTable[Item], cell: Maybe[uic.CellPath] = Absent, rows: Set[String] = Set.empty)(using Frame) =
+            for
+                drafts <- Signal.initRef("name-draft")
+                price  <- Signal.initRef("99")
+                err    <- Signal.initRef(Absent: Maybe[(uic.CellPath, kyo.uic.form.FieldError)])
+                cellR  <- Signal.initRef(cell)
+                rowsR  <- Signal.initRef(rows)
+                out <- UI.runRender(
+                    t.editingCell(cellR).wired(Map(List("Name") -> drafts, List("Price") -> price), err)
+                ).take(1).run
+            yield out.mkString
 
         for
-            resting <-
-                for
-                    ref <- Signal.initRef(Set.empty[String])
-                    out <- UI.runRender(table.editingRows(ref).render).take(1).run
-                yield out.mkString
-            editingRow <-
-                for
-                    ref <- Signal.initRef(Set("1"))
-                    out <- UI.runRender(table.editingRows(ref).render).take(1).run
-                yield out.mkString
-            withFooter <-
-                for
-                    ref <- Signal.initRef(Set.empty[String])
-                    out <- UI.runRender(
-                        uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
-                            uic.column("Name")(_.name).editor(i => span(s"edit-${i.id}")).footer("Total"),
-                            uic.column("Note")(_.note)
-                        ).editingRows(ref).render
-                    ).take(1).run
-                yield out.mkString
-            cellIdle <-
+            placeholder <-
                 for
                     ref <- Signal.initRef(Absent: Maybe[uic.CellPath])
                     out <- UI.runRender(table.editingCell(ref).render).take(1).run
                 yield out.mkString
-            cellOpen <-
+            idle    <- wired(table)
+            open    <- wired(table, cell = Present(uic.CellPath("2", List("Name"))))
+            numeric <- wired(table, cell = Present(uic.CellPath("1", List("Price"))))
+            rowOpen <-
                 for
-                    ref <- Signal.initRef(Present(uic.CellPath("2", List("Name"))): Maybe[uic.CellPath])
-                    out <- UI.runRender(table.editingCell(ref).render).take(1).run
+                    drafts <- Signal.initRef("name-draft")
+                    price  <- Signal.initRef("99")
+                    err    <- Signal.initRef(Absent: Maybe[(uic.CellPath, kyo.uic.form.FieldError)])
+                    rowsR  <- Signal.initRef(Set("1"))
+                    out <- UI.runRender(
+                        table.editingRows(rowsR).wired(Map(List("Name") -> drafts, List("Price") -> price), err)
+                    ).take(1).run
                 yield out.mkString
-            noEditor <-
+            refused <-
                 for
-                    ref <- Signal.initRef(Set.empty[String])
+                    drafts <- Signal.initRef("nope")
+                    price  <- Signal.initRef("nope")
+                    err <- Signal.initRef(
+                        Maybe((
+                            uic.CellPath("1", List("Price")),
+                            kyo.uic.form.FieldError(
+                                "integer",
+                                Map.empty,
+                                Present("nope is not a whole number")
+                            )
+                        ))
+                    )
+                    cellR <- Signal.initRef(Present(uic.CellPath("1", List("Price"))): Maybe[uic.CellPath])
+                    out <- UI.runRender(
+                        table.editingCell(cellR).wired(Map(List("Name") -> drafts, List("Price") -> price), err)
+                    ).take(1).run
+                yield out.mkString
+            perRow <-
+                for
+                    drafts <- Signal.initRef("d")
+                    err    <- Signal.initRef(Absent: Maybe[(uic.CellPath, kyo.uic.form.FieldError)])
+                    cellR  <- Signal.initRef(Absent: Maybe[uic.CellPath])
+                    out <- UI.runRender(
+                        uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+                            uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v)).editableWhen(_.id == "1")
+                        ).onCellValueChanged(_ => ()).editingCell(cellR).wired(Map(List("Name") -> drafts), err)
+                    ).take(1).run
+                yield out.mkString
+            noEditable <-
+                for
+                    ref <- Signal.initRef(Absent: Maybe[uic.CellPath])
                     out <- UI.runRender(
                         uic.DataTable[Item]().rows(items).rowKey(_.id)
-                            .columns(uic.column("Name")(_.name)).editingRows(ref).render
+                            .columns(uic.column("Name")(_.name)).editingCell(ref).render
                     ).take(1).run
+                yield out.mkString
+            nowhereToSave <-
+                for
+                    ref <- Signal.initRef(Absent: Maybe[uic.CellPath])
+                    out <- UI.runRender(
+                        uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+                            uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v))
+                        ).editingCell(ref).render
+                    ).take(1).run
+                yield out.mkString
+            twoSources <-
+                for
+                    rowsR <- Signal.initRef[Seq[Item]](items)
+                    ref   <- Signal.initRef(Absent: Maybe[uic.CellPath])
+                    out   <- UI.runRender(table.rows(rowsR).editingCell(ref).render).take(1).run
                 yield out.mkString
             bothModes <-
                 for
@@ -1857,39 +1907,43 @@ class GoldenRenderTest extends UicTest:
                 yield out.mkString
             noKey <-
                 for
-                    ref <- Signal.initRef(Set.empty[String])
+                    ref <- Signal.initRef(Absent: Maybe[uic.CellPath])
                     out <- UI.runRender(
-                        uic.DataTable[Item]().rows(items)
-                            .columns(uic.column("Name")(_.name).editor(i => span("e")))
-                            .editingRows(ref).render
+                        uic.DataTable[Item]().rows(items).columns(
+                            uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v))
+                        ).onCellValueChanged(_ => ()).editingCell(ref).render
                     ).take(1).run
                 yield out.mkString
         yield
-            // The editor column is one more cell per row, and it appears at the trailing edge.
-            assert(resting.contains("p-datatable-row-editor-init"), "a resting row offers the edit button")
-            assert(!resting.contains("p-datatable-row-editor-save"), "and nothing to commit yet")
-            assert(!resting.contains("edit-1"), "the editor stays out of a row that is not being edited")
-            assert(occurrences(resting, "<td") == 2 * 3, "two rows of two columns, plus the editor cell each")
-            // "<th" alone would also count the <thead that opens the row group.
-            assert(occurrences(resting, "<th[ >]") == 3, "and one header cell to match")
-            // Being edited swaps the content of the editable column only.
-            assert(editingRow.contains("p-datatable-editing-row"), "the row says it is being edited")
-            assert(editingRow.contains("edit-1") && !editingRow.contains("edit-2"), "for that row alone")
-            assert(editingRow.contains(">n1<"), "a column with no editor keeps its own content")
-            assert(editingRow.contains("p-datatable-row-editor-save") && editingRow.contains("p-datatable-row-editor-cancel"))
-            assert(occurrences(editingRow, "p-datatable-row-editor-init") == 1, "the other row still rests")
-            // The footer row keeps the grid, editor column included.
-            assert(occurrences(withFooter, "<tfoot") == 1)
-            assert(occurrences(withFooter.split("<tfoot")(1), "<td") == 3, "footer cells match the column count")
-            // Cell mode marks what can be clicked, and one cell at a time is open.
-            assert(occurrences(cellIdle, "p-editable-column") == 2, "one editable cell per row")
-            assert(!cellIdle.contains("p-cell-editing") && !cellIdle.contains("edit-"))
-            assert(occurrences(cellOpen, "p-cell-editing") == 1, "exactly one cell is open")
-            assert(cellOpen.contains("edit-2") && !cellOpen.contains("edit-1"), "the one the path names")
-            assert(!cellOpen.contains("p-datatable-row-editor-init"), "cell mode adds no editor column")
+            // The placeholder is the table without its editing state: same rows, no editor.
+            assert(placeholder.contains("p-datatable-table"), "the placeholder is still the table")
+            assert(!placeholder.contains("p-editable-column"), "and carries no editing affordance")
+            // Cell mode marks what can be opened, one cell at a time is open.
+            assert(occurrences(idle, "p-editable-column") == 4, "two editable columns over two rows")
+            assert(!idle.contains("p-cell-editing"), "and nothing is open")
+            assert(!idle.contains("p-datatable-row-editor-init"), "cell mode adds no editor column")
+            assert(occurrences(open, "p-cell-editing") == 1, "exactly one cell is open")
+            // The open cell shows the column's editor over the draft, not the row's text.
+            assert(open.contains("p-inputtext"), "the text column's editor is Prime's input")
+            assert(open.contains("""value="name-draft""""), "opened on the draft the table seeded")
+            assert(open.contains("""data-kyo-focus-auto="1""""), "and it takes focus, since it is new")
+            assert(numeric.contains("p-inputnumber"), "the Int column's editor is Prime's number field")
+            assert(numeric.contains("""value="99""""), "over its own draft")
+            // Row mode opens every editable column of the row and keeps the button column.
+            assert(occurrences(rowOpen, "p-datatable-editing-row") == 1)
+            assert(occurrences(rowOpen, "p-inputtext") >= 1 && rowOpen.contains("p-inputnumber"), "both editors open")
+            assert(rowOpen.contains("p-datatable-row-editor-save") && rowOpen.contains("p-datatable-row-editor-cancel"))
+            assert(occurrences(rowOpen, "p-datatable-row-editor-init") == 1, "the other row still rests")
+            // A refused commit keeps the cell open and says why.
+            assert(refused.contains("p-cell-editing") && refused.contains("p-invalid"), "the cell stays open, marked")
+            assert(refused.contains("nope is not a whole number"), "with the error's own message")
+            // editableWhen gates the affordance per row.
+            assert(occurrences(perRow, "p-editable-column") == 1, "only the row the predicate admits can open")
             // What a binding cannot do, it says.
-            assert(noEditor.contains("p-uic-key-error"), "editing bound with no editor anywhere is reported")
-            assert(bothModes.contains("p-uic-key-error"), "and so is binding both modes at once")
+            assert(noEditable.contains("p-uic-key-error"), "editing bound with no editable column is reported")
+            assert(nowhereToSave.contains("p-uic-key-error"), "and an editable column the table cannot save from")
+            assert(twoSources.contains("p-uic-key-error"), "and two row lists")
+            assert(bothModes.contains("p-uic-key-error"), "and binding both modes at once")
             assert(noKey.contains("p-uic-key-error"), "editing is keyed by rowKey, so it needs one")
         end for
     }
