@@ -841,6 +841,24 @@ def x(using Frame) = uic.TreeTable[R]().columns(uic.column("Name")(_.name).sortB
         typeCheckFailure(preamble + """def x = uic.DataTable[String]().sortable(false)""")
     }
 
+    "Column.visible takes a Boolean or a Signal[Boolean] and keeps the column's kind" in {
+        typeCheck(
+            preamble +
+                """final case class R(name: String)
+def x(using Frame) = uic.DataTable[R]().columns(uic.column("Name")(_.name).visible(false))
+def y(f: SignalRef[Boolean])(using Frame) = uic.DataTable[R]().columns(uic.column("Name")(_.name).visible(f))
+def z(using Frame) = uic.TreeTable[R]().columns(uic.column("Name")(_.name).visible(false))"""
+        )
+        // The kind is untouched, so the bare rowSpan still finds the text projection through it.
+        typeCheck(
+            preamble +
+                """final case class R(name: String)
+def x(using Frame) = uic.DataTable[R]().columns(uic.column("Name")(_.name).visible(false).rowSpan)"""
+        )
+        // Which columns exist is the table's shape; which of them show is each column's own.
+        typeCheckFailure(preamble + """def x = uic.DataTable[String]().visible(false)""")
+    }
+
     "a headerGroup nests inside columns(...), takes no column setter, and no hierarchy takes it" in {
         // Columns written under a group read the same scope, so they still carry no type
         // argument, and a group nests in a group.

@@ -186,7 +186,8 @@ final case class DataTable[A] private (
     cellNavV: Maybe[Boolean] = Absent,
     onCellChangedF: Maybe[CellChange[A] => Any < Async] = Absent,
     onRowChangedF: Maybe[RowChange[A] => Any < Async] = Absent,
-    translatorV: ErrorTranslator = ErrorTranslator.default
+    translatorV: ErrorTranslator = ErrorTranslator.default,
+    hiddenPaths: List[(List[String], Column[A, FlatOnly])] = Nil
 ) extends Node:
     type Self = DataTable[A]
 
@@ -215,6 +216,11 @@ final case class DataTable[A] private (
 
     /** The same columns paired with the path that identifies them in the sort spec. */
     private lazy val leafPaths: List[(List[String], Column[A, FlatOnly])] = ColumnTree.leafPaths(cols)
+
+    /** Every column, whether or not [[Column.visible]] hides it: the two lookups that
+      * must not lose one. See [[withVisibleColumns]].
+      */
+    private def allPaths: List[(List[String], Column[A, FlatOnly])] = leafPaths ++ hiddenPaths
 
     /** The leaves that carry an edit pipeline, in column order. The drafts a mount
       * allocates are keyed by these paths, and a row edit walks them left to right.
@@ -514,6 +520,44 @@ final case class DataTable[A] private (
         )
 
     private def renderWith(edit: EditState, nav: NavState[A])(using Frame): UI =
+        withVisibleColumns(_.buildAll(edit, nav))
+
+    /** Resolves every [[Column.visible]] flag and hands on the table WITHOUT the columns
+      * they hide, so the header spans, the body cells, the footer, the filter, the colspans
+      * and the keyboard grid all narrow at once and no builder below has to ask whether a
+      * column is on the screen.
+      *
+      * The columns pruning removes are kept in `hiddenPaths` rather than dropped, for the
+      * two questions the answer to which must not change when a column is hidden: which
+      * spec entries this table can sort by, and whether anything here is editable. Both are
+      * about what the table was AUTHORED with, so a reader hiding a column neither
+      * reshuffles the rows nor raises a diagnostic.
+      *
+      * A table where no column carries the flag builds itself, so it renders exactly what
+      * it rendered before the setter existed.
+      */
+    private def withVisibleColumns(k: DataTable[A] => UI)(using Frame): UI =
+        val reactive = leafCols.zipWithIndex.flatMap((c, i) => c.visibleSig.toList.map(sig => (i, sig)))
+        if reactive.isEmpty && leafCols.forall(_.visibleConst) then k(this)
+        else
+            def loop(rest: List[(Int, Signal[Boolean])], acc: Map[Int, Boolean]): UI =
+                rest match
+                    case Nil              => k(pruned(i => acc.getOrElse(i, leafCols(i).visibleConst)))
+                    case (i, sig) :: tail => sig.render(b => loop(tail, acc + (i -> b)))
+            loop(reactive, Map.empty)
+        end if
+    end withVisibleColumns
+
+    /** This table narrowed to the columns `keep` accepts, with the rest parked in
+      * `hiddenPaths`.
+      */
+    private def pruned(keep: Int => Boolean): DataTable[A] =
+        copy(
+            cols = ColumnTree.prune(cols, keep),
+            hiddenPaths = leafPaths.zipWithIndex.collect { case (entry, i) if !keep(i) => entry }
+        )
+
+    private def buildAll(edit: EditState, nav: NavState[A])(using Frame): UI =
         withSortableFlags { flags =>
             withRows { rows =>
                 withRef(sortRef, List.empty[SortKey]) { sort =>
@@ -589,7 +633,7 @@ final case class DataTable[A] private (
         //    first one ends up the primary key. Unsorted entries hold a slot in the
         //    priority order and contribute nothing here.
         val sorted = SortKey.sorting(sort).reverse.foldLeft(filtered) { (rs, k) =>
-            leafPaths.find(_._1 == k.path).flatMap(_._2.orderingV.toOption) match
+            allPaths.find(_._1 == k.path).flatMap(_._2.orderingV.toOption) match
                 case Some(ord) => rs.sorted(using if k.direction == SortDirection.Ascending then ord else ord.reverse)
                 case None      => rs
         }
@@ -805,7 +849,7 @@ final case class DataTable[A] private (
     private def headerCards(sort: List[SortKey], flags: Map[List[String], Boolean])(using Frame): List[UI] =
         def show(path: List[String]): String = path.mkString(" / ")
         val empties                          = ColumnTree.emptyGroups(cols)
-        val sortable                         = leafPaths.filter(_._2.orderingV.isDefined).map(_._1)
+        val sortable                         = allPaths.filter(_._2.orderingV.isDefined).map(_._1)
         val unknown                          = if sortRef.isEmpty then Nil else sort.map(_.path).filterNot(sortable.contains).map(show)
         val ambiguous =
             if sortRef.isEmpty then Nil else KeyDiagnostics.duplicates(sortable.map(show))
@@ -862,7 +906,7 @@ final case class DataTable[A] private (
       */
     private def editCards(using Frame): List[UI] =
         val bound    = editingRowsRef.isDefined || editingCellRef.isDefined
-        val editable = leafCols.exists(_.isEditable)
+        val editable = allPaths.exists(_._2.isEditable)
         val nothing =
             if !bound || editable then Nil
             else

@@ -912,6 +912,23 @@ The advance happens *in place*, which is the part that matters. `SortDirection` 
 
 In `SelectionMode.Checkbox` the checkbox column's header is the select-all. It is binary, matching Prime: a partial selection reads unchecked. It covers every row that survived the global filter rather than the page in view, and it adds or removes those keys instead of replacing the selection, so narrowing the filter, selecting all, and widening it again does not quietly drop what was selected before.
 
+Which columns a table has is its shape; which of them the reader sees is each column's own business, so `Column.visible` carries it, as a constant or as a signal a toggle writes. A hidden column contributes no header cell, no body cells and no footer cell, so the table is exactly as wide as what is on the screen, every colspan follows, and a `headerGroup` whose columns are all hidden goes with them.
+
+```scala
+val hideable: UI < Async =
+    for shown <- Signal.initRef(Set("Category"))
+    yield uic.DataTable[Product]()
+        .rows(catalog)
+        .rowKey(_.id)
+        .columns(
+            uic.column("Name")(_.name),
+            uic.column("Category")(_.category).visible(shown.map(_.contains("Category"))),
+            uic.column("Price")(p => f"${p.price}%.2f").visible(shown.map(_.contains("Price")))
+        ): UI
+```
+
+What hiding does not do is take the column out of the table. The sort spec keeps sorting by it, so hiding a column never reshuffles the rows under the reader and the card that names an unsortable spec entry does not start firing at one. The global filter is the other way round, and deliberately: a query matches what is on the screen, so a hidden column's text is not searched. Where the keyboard grid is on, it renumbers with the header, since the cursor addresses cells by position and a position has to mean what the reader sees.
+
 Around the rows sit four pieces of chrome. `header(ui)` and `footer(ui)` are free slots, above the table and below the paginator, which is where a filter box or a record count goes. `Column.footer` is a different thing: it renders a real `tfoot` row aligned to the column grid, and its computed form `footer(rows => ...)` receives the rows that survived the global filter, across every page rather than the visible one. That distinction is load-bearing, because the table owns filtering: a column total computed by the caller from its own list would disagree with what the reader is looking at. `loading(flag)` covers the table with a spinner mask, and `scrollHeight("240px")` caps the container and pins the header row group to its top edge while the body scrolls under it.
 
 A header of more than one row is a `headerGroup`: a label written *around* the columns it spans, nested as deep as it needs to be. Prime writes the header cells beside the column list and has the caller put `colSpan` and `rowSpan` on each of them; here the leaves ARE the columns, so a group is as wide as what it holds, a column beside a group reaches down to the bottom of the header, and there is no second list to fall out of step with the first. Everything else stays on the leaves: a group carries a label and nothing more, so sorting, footers, filtering and merging keep working exactly as they do without one.

@@ -1801,6 +1801,97 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "Column.visible narrows the table to what the reader can see, without losing what it sorts by" in {
+        final case class Row(id: String, name: String, note: String, code: String)
+        val rows                                           = List(Row("1", "B", "x", "c1"), Row("2", "A", "y", "c2"))
+        def occurrences(html: String, needle: String): Int = needle.r.findAllIn(html).size
+
+        def render(t: Frame ?=> uic.DataTable[Row])(using Frame) =
+            UI.runRender(t.render).take(1).run.map(_.mkString)
+
+        for
+            all <- render(uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name),
+                uic.column("Note")(_.note),
+                uic.column("Code")(_.code)
+            ))
+            flagged <- render(uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name).visible(true),
+                uic.column("Note")(_.note).visible(true),
+                uic.column("Code")(_.code).visible(true)
+            ))
+            hidden <- render(uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name),
+                uic.column("Note")(_.note).visible(false),
+                uic.column("Code")(_.code)
+            ))
+            grouped <- render(uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name),
+                uic.headerGroup("Detail")(
+                    uic.column("Note")(_.note).visible(false),
+                    uic.column("Code")(_.code).visible(false)
+                )
+            ))
+            footers <- render(uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name),
+                uic.column("Note")(_.note).footer("total").visible(false)
+            ))
+            empty <- render(uic.DataTable[Row]().rowKey(_.id).columns(
+                uic.column("Name")(_.name),
+                uic.column("Note")(_.note).visible(false),
+                uic.column("Code")(_.code)
+            ))
+            filtered <-
+                for
+                    q <- Signal.initRef("x")
+                    out <- render(uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
+                        uic.column("Name")(_.name),
+                        uic.column("Note")(_.note).visible(false)
+                    ).globalFilter(q))
+                yield out
+            sorted <-
+                for
+                    spec <- Signal.initRef(List(uic.SortKey(List("Note"), uic.SortDirection.Descending)))
+                    out <- render(uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
+                        uic.column("Name")(_.name),
+                        uic.column("Note")(_.note).sortBy(_.note).visible(false)
+                    ).sort(spec))
+                yield out
+            tree <- UI.runRender(
+                uic.TreeTable[Row]().nodes(uic.TreeTableNode(rows.head)).columns(
+                    uic.column("Name")(_.name).visible(false),
+                    uic.column("Code")(_.code)
+                ).render
+            ).take(1).run.map(_.mkString)
+        yield
+            // The flag written out as true is the default written down, so it may not
+            // change one byte of what the table renders.
+            assert(flagged == all, "visible(true) renders what an unflagged column renders")
+            assert(hidden != all)
+            // A hidden column contributes no cell anywhere, so the table is exactly as
+            // wide as the columns left and every count follows.
+            assert(!hidden.contains(">Note<"), "no header cell")
+            assert(!hidden.contains(">x<") && !hidden.contains(">y<"), "and no body cells")
+            assert(occurrences(hidden, "<th[ >]") == 2 && occurrences(all, "<th[ >]") == 3)
+            assert(occurrences(hidden, "<td") == 4, "two rows of two columns")
+            assert(empty.contains("colspan=\"2\""), "the empty message spans the columns that are there")
+            // A header cell over nothing spans nothing, so the group leaves with its columns.
+            assert(!grouped.contains(">Detail<"), "a group whose columns are all hidden goes with them")
+            assert(grouped.contains(">Name<") && occurrences(grouped, "<tr") == 3, "one header row left, plus two rows")
+            assert(!grouped.contains("p-uic-key-error"), "and it is not reported as an empty group")
+            assert(!footers.contains("p-datatable-tfoot"), "the only footer was on a hidden column")
+            // The filter matches what is ON THE SCREEN: the query hits the hidden column's
+            // text alone, so it matches nothing.
+            assert(!filtered.contains(">B<") && !filtered.contains(">A<"), "a hidden column is not searched")
+            // The spec is the caller's, so hiding a column never reshuffles the rows: it
+            // still sorts, and it is still not reported as a column the table cannot sort.
+            assert(sorted.indexOf(">A<") < sorted.indexOf(">B<"), "the hidden column still sorts")
+            assert(!sorted.contains("p-uic-key-error"), "and the spec that names it is not called unknown")
+            assert(!tree.contains(">B<"), "TreeTable honors the same flag")
+            assert(tree.contains("p-treetable-node-toggle-button"), "and the toggler moves onto the column that is left")
+        end for
+    }
+
     "editing renders the column's own editor over the table's draft, and reports what it refuses" in {
         final case class Item(id: String, name: String, price: Int) derives CanEqual
         val items                                          = List(Item("1", "A", 10), Item("2", "B", 20))

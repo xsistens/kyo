@@ -57,7 +57,8 @@ final case class TreeTable[A] private (
     emptyContentV: Maybe[EmptyContent] = Absent,
     onNodeToggleF: Maybe[String => Any < Async] = Absent,
     onRowClickF: Maybe[String => Any < Async] = Absent,
-    accNameV: Maybe[TextValue] = Absent
+    accNameV: Maybe[TextValue] = Absent,
+    hiddenCols: List[Column[A, AnyTable]] = Nil
 ) extends Node:
     type Self = TreeTable[A]
 
@@ -156,6 +157,9 @@ final case class TreeTable[A] private (
             case Absent     => k(fallback)
 
     private[uic] def render(using Frame): UI =
+        withVisibleColumns(_.buildAll)
+
+    private def buildAll(using Frame): UI =
         withSortableFlags { flags =>
             withRef(expandedRef, Set.empty[String]) { exp =>
                 withRef(selectedRef, Set.empty[String]) { sel =>
@@ -165,6 +169,29 @@ final case class TreeTable[A] private (
                 }
             }
         }
+
+    /** Resolves every [[Column.visible]] flag and hands on the table without the columns
+      * they hide, as DataTable does. The hidden ones are kept rather than dropped, since
+      * the sort spec still sorts by them: hiding a column changes what the reader sees and
+      * not the order the rows are in.
+      *
+      * Hiding the first column moves the node toggler onto the one that takes its place,
+      * which is what keeps the hierarchy readable however many columns are on the screen.
+      */
+    private def withVisibleColumns(k: TreeTable[A] => UI)(using Frame): UI =
+        val reactive = cols.zipWithIndex.flatMap((c, i) => c.visibleSig.toList.map(sig => (i, sig)))
+        if reactive.isEmpty && cols.forall(_.visibleConst) then k(this)
+        else
+            def narrow(keep: Int => Boolean): TreeTable[A] =
+                val (shown, hidden) = cols.zipWithIndex.partition((_, i) => keep(i))
+                copy(cols = shown.map(_._1), hiddenCols = hidden.map(_._1))
+            def loop(rest: List[(Int, Signal[Boolean])], acc: Map[Int, Boolean]): UI =
+                rest match
+                    case Nil              => k(narrow(i => acc.getOrElse(i, cols(i).visibleConst)))
+                    case (i, sig) :: tail => sig.render(b => loop(tail, acc + (i -> b)))
+            loop(reactive, Map.empty)
+        end if
+    end withVisibleColumns
 
     /** Resolves every reactive [[Column.sortable]] flag to a plain boolean before the table
       * builds, one nested subscription per signal-backed column, as DataTable does.
@@ -236,7 +263,7 @@ final case class TreeTable[A] private (
       */
     private def sortSiblings(ns: List[TreeTableNode[A]], sort: List[SortKey]): List[TreeTableNode[A]] =
         SortKey.sorting(sort).reverse.foldLeft(ns) { (rs, k) =>
-            cols.find(c => k.path == List(c.headerV)).flatMap(_.orderingV.toOption) match
+            (cols ++ hiddenCols).find(c => k.path == List(c.headerV)).flatMap(_.orderingV.toOption) match
                 case Some(ord) =>
                     val dir     = if k.direction == SortDirection.Ascending then ord else ord.reverse
                     val nodeOrd = Ordering.by[TreeTableNode[A], A](_.data)(using dir)
