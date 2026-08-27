@@ -248,6 +248,15 @@ object Theme:
       |  outline: 1px solid var(--p-form-field-invalid-border-color, #ef4444);
       |  outline-offset: -1px;
       |}
+      |/* The focused cell's ring. Prime has one for a focused ROW and none for a cell, since
+      |   its own tables put the cursor on rows; this reuses the row tokens so a table that
+      |   themes one themes the other. `:focus` and not `:focus-visible`, because the ring
+      |   has to show after a focus the keyboard handler moved, and the heuristics behind
+      |   focus-visible do not promise that. */
+      |.p-uic-dt-nav .p-datatable-tbody > tr > td:focus {
+      |  outline: var(--p-focus-ring-width, 1px) solid var(--p-datatable-row-focus-ring-color, var(--p-primary-color));
+      |  outline-offset: calc(var(--p-focus-ring-offset, 0px) - 1px);
+      |}
       |.p-uic-dt-cell-error {
       |  color: var(--p-form-field-invalid-placeholder-color, #ef4444);
       |  font-size: 0.8125rem; padding-top: 0.125rem;

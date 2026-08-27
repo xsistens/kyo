@@ -63,4 +63,30 @@ class RowGroupTest extends UicTest:
         assert(one != two)
         assert(GroupPath("Accessories") == GroupPath(List("Accessories")))
     }
+
+    // Keyboard navigation moves over the rows that are ON THE SCREEN, so the walk that
+    // decides which those are is the same one the renderer makes, minus the rendering.
+    "visible drops the rows of a collapsed group, and keeps render order" in {
+        val rows    = List("a1", "a2", "b1", "c1")
+        val levels  = List(RowGroup[String, String](_.take(1)))
+        val allOpen = Set("a", "b", "c").map(k => GroupPath(List(k)))
+        assert(RowGroup.visible(rows, levels, Nil, allOpen, collapsible = true) == rows)
+        assert(
+            RowGroup.visible(rows, levels, Nil, Set(GroupPath(List("b"))), collapsible = true) == List("b1"),
+            "only the open group renders its rows"
+        )
+        assert(
+            RowGroup.visible(rows, levels, Nil, Set.empty, collapsible = false) == rows,
+            "a table that cannot collapse shows everything, whatever the set says"
+        )
+        assert(RowGroup.visible(rows, Nil, Nil, Set.empty, collapsible = true) == rows, "and an ungrouped one too")
+    }
+
+    "visible closes an inner group inside an open outer one" in {
+        val rows   = List("ax", "ay", "bx")
+        val levels = List(RowGroup[String, String](_.take(1)), RowGroup[String, String](_.drop(1)))
+        val open   = Set(GroupPath(List("a")), GroupPath(List("a", "x")), GroupPath(List("b")))
+        assert(RowGroup.visible(rows, levels, Nil, open, collapsible = true) == List("ax"))
+    }
+
 end RowGroupTest
