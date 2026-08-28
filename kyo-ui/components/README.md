@@ -967,6 +967,24 @@ val resizable: UI < Async =
 
 A drag moves one BOUNDARY rather than sizing one column: the two columns it sits between trade width and their total stays where it was, so the table never grows past the space it was given and no column the reader is not touching moves. That is also why a handle needs a resizable column on both sides of it, and why the last column never carries one: what is to its right is the edge of the table, which has no width to trade. The widths the reader is given to drag are MEASURED when they grab, not read out of the map, so a column the caller never sized is as draggable as one that was.
 
+A column the reader has to keep in sight while the rest scrolls past is `Column.frozen(true)`, or `frozen(FrozenEdge.End)` against the trailing edge. Declaring one puts the table in a scroll container, since a column can only be frozen against something that moves; `scrollHeight` adds a cap on the height, and freezing on its own scrolls sideways, which is what a table wider than its page needs.
+
+```scala
+val frozenColumns: UI < Async =
+    for widths <- Signal.initRef(Map.empty[List[String], Double])
+    yield uic.DataTable[Product]()
+        .rows(catalog)
+        .rowKey(_.id)
+        .columns(
+            uic.column("Name")(_.name).width(260).frozen(true),
+            uic.column("Category")(_.category).width(220),
+            uic.column("Price")(p => f"${p.price}%.2f").width(160).align(uic.ColumnAlign.End)
+        )
+        .columnWidths(widths): UI
+```
+
+A frozen column has to be somewhere, so it holds at the distance the columns between it and the edge take up, and the table adds that up from their widths. Two rules follow. A frozen column needs a `width`, and the frozen ones have to REACH the edge they hold against: a free column left between them and it would carry the frozen one away as it scrolled. A table that breaks either freezes nothing at all and says which column it was, because an offset computed from a width that is not there is a column parked over the middle of the table, which is worse than one that scrolls. The checkbox, expander and row-editor columns are between a frozen column and the edge too, so they hold with it and their width counts toward the offset; that width is a CSS variable (`--p-uic-dt-select-width` and its two neighbours) rather than a number, so what the `col` is given and what the offset counts are one quantity a theme can move. Prime computes the same two properties in JavaScript, measuring the previous cell on every render; here the widths are already known, so the offsets are written once and a resize drag moves them with the column that changed.
+
 Around the rows sit four pieces of chrome. `header(ui)` and `footer(ui)` are free slots, above the table and below the paginator, which is where a filter box or a record count goes. `Column.footer` is a different thing: it renders a real `tfoot` row aligned to the column grid, and its computed form `footer(rows => ...)` receives the rows that survived the global filter, across every page rather than the visible one. That distinction is load-bearing, because the table owns filtering: a column total computed by the caller from its own list would disagree with what the reader is looking at. `loading(flag)` covers the table with a spinner mask, and `scrollHeight("240px")` caps the container and pins the header row group to its top edge while the body scrolls under it.
 
 A header of more than one row is a `headerGroup`: a label written *around* the columns it spans, nested as deep as it needs to be. Prime writes the header cells beside the column list and has the caller put `colSpan` and `rowSpan` on each of them; here the leaves ARE the columns, so a group is as wide as what it holds, a column beside a group reaches down to the bottom of the header, and there is no second list to fall out of step with the first. Everything else stays on the leaves: a group carries a label and nothing more, so sorting, footers, filtering and merging keep working exactly as they do without one.

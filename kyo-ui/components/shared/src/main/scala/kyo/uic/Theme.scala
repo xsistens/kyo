@@ -276,6 +276,19 @@ object Theme:
       |   (`overflow: hidden` and `white-space: nowrap` on every cell of a resizable table)
       |   and not the algorithm itself, so the mode is set here. */
       |.p-uic-table-fixed { table-layout: fixed; }
+      |/* How wide the table's own columns are. Under the fixed layout a column with no
+      |   width takes an equal share of what the sized ones leave over, which over a
+      |   checkbox is far more than a checkbox can use; Prime never meets this, since it
+      |   renders a colgroup only for a scrollable table. They are variables rather than
+      |   numbers because a frozen column's offset reaches past whichever of them stand
+      |   between it and the edge, and a width and an offset that are two separate numbers
+      |   are two numbers that can drift apart. The 2rem is the cell's own padding, which
+      |   Prime carries as one shorthand token a stylesheet cannot take the sides out of. */
+      |.p-datatable {
+      |  --p-uic-dt-toggle-width: calc(var(--p-datatable-row-toggle-button-size, 1.75rem) + 2rem);
+      |  --p-uic-dt-select-width: calc(var(--p-checkbox-width, 1.25rem) + 2rem);
+      |  --p-uic-dt-editor-width: 7rem;
+      |}
       |/* PrimeVue scrolls the container and pins the row groups via
       |   DataTableStyle.inlineStyles (the ToggleSwitch precedent); the extracted sheet
       |   carries only the inset and z-index half of the sticky rules. The max-height

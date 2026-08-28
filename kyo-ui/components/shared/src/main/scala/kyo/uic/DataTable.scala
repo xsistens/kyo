@@ -3,6 +3,7 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 import kyo.UI.Ast.HtmlChildVal
+import kyo.internal.NumberFormat
 import kyo.uic.form.ErrorTranslator
 import kyo.uic.form.FieldError
 
@@ -96,6 +97,46 @@ final private[uic] case class SizeState(
     measure: String => Rect < Async = (_: String) => Rect(0, 0, 0, 0, 0, 0),
     grab: Maybe[SignalRef[Maybe[ColumnGrab]]] = Absent
 )
+
+/** Where one frozen cell holds: which edge it holds against, and how far from it.
+  *
+  * The distance is a [[Length]] and not a number because the columns it sums over are
+  * not all measured in the same unit. A data column's width is the caller's, in pixels;
+  * the checkbox, expander and row-editor columns are the component's, in a CSS variable
+  * a theme can move, so an offset that reaches past one of them is a `calc` over both.
+  */
+final private[uic] case class FrozenSlot(edge: FrozenEdge, offset: Length)
+
+/** Which cells of a row hold against an edge, resolved once per render.
+  *
+  * `cells` is one entry per VISIBLE leaf, so hiding a frozen column shifts the ones
+  * behind it without anything else being asked. The leading cells (expander, checkbox)
+  * and the trailing one (the row editor) hold with them: they sit between a frozen
+  * column and its edge, so a scroll that carried them away would leave the frozen
+  * column standing over a gap.
+  */
+final private[uic] case class FrozenPlan(
+    lead: List[FrozenSlot] = Nil,
+    cells: List[Maybe[FrozenSlot]] = Nil,
+    trail: List[FrozenSlot] = Nil
+):
+    private[uic] def at(i: Int): Maybe[FrozenSlot]      = Maybe.fromOption(cells.lift(i)).flatten
+    private[uic] def leadAt(i: Int): Maybe[FrozenSlot]  = Maybe.fromOption(lead.lift(i))
+    private[uic] def trailAt(i: Int): Maybe[FrozenSlot] = Maybe.fromOption(trail.lift(i))
+
+    /** The slot a header cell spanning leaves `from` until `until` holds in: the
+      * outermost of theirs while they all hold against the same edge, and nothing at all
+      * otherwise, since one cell cannot half scroll.
+      */
+    private[uic] def span(from: Int, until: Int): Maybe[FrozenSlot] =
+        val slots = (from until until).toList.map(at)
+        slots match
+            case Present(first) :: _ if slots.forall(_.exists(_.edge == first.edge)) =>
+                if first.edge == FrozenEdge.Start then Present(first) else slots.last
+            case _ => Absent
+        end match
+    end span
+end FrozenPlan
 
 /** The row before and after a committed cell edit, plus the column that wrote it. */
 final case class CellChange[A](rowKey: String, column: List[String], before: A, after: A)
@@ -598,6 +639,123 @@ final case class DataTable[A] private (
       */
     private def hasWidths: Boolean = columnWidthsRef.isDefined || leafCols.exists(_.widthV.isDefined)
 
+    /** Whether any column asks to be held against an edge, which is also what puts the
+      * table in a scroll container: a column can only be frozen against something that
+      * scrolls, and a wide table with no cap on its height still scrolls sideways.
+      */
+    private def frozenOn: Boolean = leafCols.exists(_.frozenV.isDefined)
+
+    private def frozenAt(i: Int, edge: FrozenEdge): Boolean =
+        i >= 0 && i < leafCols.length && leafCols(i).frozenV.exists(_ == edge)
+
+    /** The component's own columns between the leading edge and the first data column,
+      * as the CSS terms an offset reaching past them is written in.
+      */
+    private def leadTerms: List[String] =
+        (if expanderColumn then List(DataTable.ToggleWidth) else Nil) ++
+            (if checkboxColumn then List(DataTable.SelectWidth) else Nil)
+
+    private def trailTerms: List[String] = if editorColumn then List(DataTable.EditorWidth) else Nil
+
+    /** One offset: the pixels of the data columns it reaches past, plus the variables of
+      * the component's own. A sum with no variable in it stays a plain length, so a table
+      * that freezes nothing but its own columns keeps `calc` out of its markup.
+      */
+    private def offset(px: Double, vars: List[String]): Length =
+        if vars.isEmpty then Length.Px(px)
+        else if px == 0.0 then Length.Calc(vars.mkString(" + "))
+        else Length.Calc((vars :+ s"${NumberFormat.double(px)}px").mkString(" + "))
+
+    /** The frozen columns with no width to compute an offset from. */
+    private def unsizedFrozen(size: SizeState): List[List[String]] =
+        leafPaths.collect { case (p, c) if c.frozenV.isDefined && widthOf(p, c, size).isEmpty => p }
+
+    /** The frozen columns a free one stands between and their edge, which is the
+      * arrangement that cannot be rendered: the free column scrolls, and it would carry
+      * the frozen one along or leave it standing over the gap it left.
+      */
+    private def adriftFrozen: List[List[String]] =
+        leafPaths.zipWithIndex.collect {
+            case ((p, c), i)
+                if (c.frozenV.exists(_ == FrozenEdge.Start) && (0 until i).exists(j => !frozenAt(j, FrozenEdge.Start))) ||
+                    (c.frozenV.exists(_ == FrozenEdge.End) &&
+                        (i + 1 until leafCols.length).exists(j => !frozenAt(j, FrozenEdge.End))) =>
+                p
+        }
+
+    /** The header groups spanning a frozen column and a free one, or two frozen against
+      * opposite edges. One cell cannot half scroll, so the group says the columns under
+      * it disagree about where they belong.
+      */
+    private def splitFrozenGroups: List[List[String]] =
+        ColumnTree.spans(cols).flatMap(withLeafOffsets).collect {
+            case (sp, at) if sp.node.asColumn.isEmpty && mixedEdges(at, at + sp.colspan) => sp.path
+        }
+
+    private def mixedEdges(from: Int, until: Int): Boolean =
+        val edges = (from until until).toList.map(i => leafCols(i).frozenV)
+        edges.exists(_.isDefined) && edges.distinct.length > 1
+
+    /** Each header cell of one row paired with the index of its leftmost leaf. The spans
+      * tile the columns left to right, so the running sum of the colspans IS that index,
+      * and no second walk of the tree can disagree with the one the header rendered.
+      */
+    private def withLeafOffsets(cells: List[ColumnTree.HeaderSpan[A]]): List[(ColumnTree.HeaderSpan[A], Int)] =
+        cells.scanLeft(0)((at, sp) => at + sp.colspan).zip(cells).map((at, sp) => (sp, at))
+
+    /** Where every frozen cell of this table holds, or nothing at all.
+      *
+      * It is all or nothing on purpose. An offset is a sum over the columns between a
+      * cell and its edge, so one column that cannot contribute its width makes every
+      * offset behind it wrong, and a wrong offset is a column parked over the middle of
+      * the table rather than a missing feature. The card says which column it was, the
+      * same trade the filter row makes with a query it cannot read.
+      */
+    private def frozenPlan(size: SizeState): FrozenPlan =
+        if !frozenOn || unsizedFrozen(size).nonEmpty || adriftFrozen.nonEmpty || splitFrozenGroups.nonEmpty then
+            FrozenPlan()
+        else
+            val anyStart                                                 = leafCols.exists(_.frozenV.exists(_ == FrozenEdge.Start))
+            val anyEnd                                                   = leafCols.exists(_.frozenV.exists(_ == FrozenEdge.End))
+            def widthPx(p: List[String], c: Column[A, FlatOnly]): Double = widthOf(p, c, size).getOrElse(0.0)
+
+            // Every one of the component's own leading columns stands between the edge and
+            // every data column, so a data column's offset reaches past all of them and
+            // the variable part of it is the same for all.
+            val fromStart = leafPaths.foldLeft((0.0, List.empty[Maybe[FrozenSlot]])) {
+                case ((px, acc), (p, c)) =>
+                    if !c.frozenV.exists(_ == FrozenEdge.Start) then (px, acc :+ Absent)
+                    else (px + widthPx(p, c), acc :+ Present(FrozenSlot(FrozenEdge.Start, offset(px, leadTerms))))
+            }._2
+            val fromEnd = leafPaths.reverse.foldLeft((0.0, List.empty[Maybe[FrozenSlot]])) {
+                case ((px, acc), (p, c)) =>
+                    if !c.frozenV.exists(_ == FrozenEdge.End) then (px, Absent :: acc)
+                    else (px + widthPx(p, c), Present(FrozenSlot(FrozenEdge.End, offset(px, trailTerms))) :: acc)
+            }._2
+            FrozenPlan(
+                lead = if !anyStart then Nil
+                else leadTerms.indices.toList.map(i => FrozenSlot(FrozenEdge.Start, offset(0.0, leadTerms.take(i)))),
+                cells = fromStart.zip(fromEnd).map((a, b) => a.orElse(b)),
+                trail = if !anyEnd then Nil
+                else trailTerms.indices.toList.map(i => FrozenSlot(FrozenEdge.End, offset(0.0, trailTerms.drop(i + 1))))
+            )
+        end if
+    end frozenPlan
+
+    /** Sticks one cell to its edge. Prime computes the same two properties in JavaScript,
+      * measuring the cell before it on every render; here the widths are already known,
+      * so the offset is written once, declaratively, and a resize drag moves it with the
+      * column.
+      */
+    private def freeze(cell: Ast.Element, slot: Maybe[FrozenSlot]): Ast.Element =
+        slot match
+            case Absent => cell
+            case Present(s) =>
+                val stuck = cell.cssClass("p-datatable-frozen-column")
+                if s.edge == FrozenEdge.Start then stuck.style(_.left(s.offset)) else stuck.style(_.right(s.offset))
+        end match
+    end freeze
+
     /** A table that edits owns two things no caller supplies: one draft per editable
       * column, and the error a refused commit left standing; a table that filters owns a
       * third, the open state of each column's mode menu. All of them are allocated in a
@@ -845,6 +1003,8 @@ final case class DataTable[A] private (
             leafCols.length + (if checkboxColumn then 1 else 0) + (if expanderColumn then 1 else 0) +
                 (if editorColumn then 1 else 0)
 
+        val frozen = frozenPlan(size)
+
         // One tr per header level. The leading expander and checkbox cells belong to the
         // top row and reach down through every other one, so they line up with a column
         // whatever depth the header has.
@@ -852,14 +1012,14 @@ final case class DataTable[A] private (
             val matrix = ColumnTree.spans(cols)
             val depth  = math.max(matrix.length, 1)
             val leading: List[UI] =
-                val expanderTh: List[UI] =
+                val expanderTh: List[Ast.Element] =
                     if !expanderColumn then Nil
                     else
                         var cell = th.cssClass("p-datatable-header-cell")
                         if depth > 1 then cell = cell.rowspan(depth)
                         List(cell)
-                val checkboxTh: List[UI] = if checkboxColumn then List(selectAllCell(sorted, sel, depth)) else Nil
-                expanderTh ++ checkboxTh
+                val checkboxTh: List[Ast.Element] = if checkboxColumn then List(selectAllCell(sorted, sel, depth)) else Nil
+                (expanderTh ++ checkboxTh).zipWithIndex.map((cell, i) => freeze(cell, frozen.leadAt(i)))
             end leading
             val rows = if matrix.isEmpty then List(Nil) else matrix
             // The editor-button column has no header of its own, but it still needs a cell,
@@ -869,9 +1029,9 @@ final case class DataTable[A] private (
                 else
                     var cell = th.cssClass("p-datatable-header-cell")
                     if depth > 1 then cell = cell.rowspan(depth)
-                    List(cell)
+                    List(freeze(cell, frozen.trailAt(0)))
             rows.zipWithIndex.map { (cells, i) =>
-                val ths = cells.map(headerSpanCell(_, sort, flags, interactive, size))
+                val ths = withLeafOffsets(cells).map((sp, at) => headerSpanCell(sp, at, sort, flags, interactive, size, frozen))
                 tr((if i == 0 then leading ++ ths ++ trailing else ths).map(toChild)*)
             }
         end headRows
@@ -883,11 +1043,10 @@ final case class DataTable[A] private (
             if !filterRowOn then Nil
             else
                 val leading: List[UI] =
-                    List.fill((if expanderColumn then 1 else 0) + (if checkboxColumn then 1 else 0))(
-                        th.cssClass("p-datatable-header-cell")
-                    )
-                val trailing: List[UI] = List.fill(if editorColumn then 1 else 0)(th.cssClass("p-datatable-header-cell"))
-                val cells              = leafPaths.map((p, c) => filterCell(p, c, filter))
+                    leadTerms.indices.toList.map(i => freeze(th.cssClass("p-datatable-header-cell"), frozen.leadAt(i)))
+                val trailing: List[UI] =
+                    trailTerms.indices.toList.map(i => freeze(th.cssClass("p-datatable-header-cell"), frozen.trailAt(i)))
+                val cells = leafPaths.zipWithIndex.map((entry, i) => freeze(filterCell(entry._1, entry._2, filter), frozen.at(i)))
                 List(tr((leading ++ cells ++ trailing).map(toChild)*))
             end if
         end filterRowUI
@@ -910,22 +1069,22 @@ final case class DataTable[A] private (
                         ))
                     )
                 )
-            else groupSegments(paged.zipWithIndex, groupsV, Nil, sel, exp, openGroups, colCount, edit, navHere)
+            else groupSegments(paged.zipWithIndex, groupsV, Nil, sel, exp, openGroups, colCount, edit, navHere, frozen)
 
         // The footer aggregates over the FILTERED rows, not the visible page: a
         // column total that changed when the reader turned the page would be wrong.
         val footGroup: List[UI] =
             if !leafCols.exists(_.hasFooter) then Nil
             else
-                val leadingTds: List[UI] =
-                    List.fill((if checkboxColumn then 1 else 0) + (if expanderColumn then 1 else 0))(td)
-                val trailingTds: List[UI] = List.fill(if editorColumn then 1 else 0)(td)
-                val footRow: UI =
-                    tr((leadingTds ++ leafCols.map(footerCell(_, sorted)) ++ trailingTds).map(toChild)*)
+                val leadingTds: List[UI]  = leadTerms.indices.toList.map(i => freeze(td, frozen.leadAt(i)))
+                val trailingTds: List[UI] = trailTerms.indices.toList.map(i => freeze(td, frozen.trailAt(i)))
+                val footTds: List[UI] =
+                    leafCols.zipWithIndex.map((c, i) => freeze(footerCell(c, sorted), frozen.at(i)))
+                val footRow: UI = tr((leadingTds ++ footTds ++ trailingTds).map(toChild)*)
                 List(tfoot.cssClass("p-datatable-tfoot")(toChild(footRow)))
 
         var tbl = table.cssClass("p-datatable-table")
-        if scrollHeightV.isDefined then tbl = tbl.cssClass("p-datatable-scrollable-table")
+        if scrollHeightV.isDefined || frozenOn then tbl = tbl.cssClass("p-datatable-scrollable-table")
         // Prime's own classes carry the clipping a sized column needs (a value too long
         // for its column is cut rather than widening it); the layout mode they leave to
         // the host, which is what the `.p-uic-table-fixed` rule supplies.
@@ -959,7 +1118,9 @@ final case class DataTable[A] private (
             root = root.cssClass("p-datatable-hoverable")
         if stripedFlag then root = root.cssClass("p-datatable-striped")
         if gridlinesFlag then root = root.cssClass("p-datatable-gridlines")
-        if scrollHeightV.isDefined then root = root.cssClass("p-datatable-scrollable")
+        // Prime's frozen rules only apply inside a scrollable table, and rightly so: a
+        // column held against an edge means nothing until something moves past it.
+        if scrollHeightV.isDefined || frozenOn then root = root.cssClass("p-datatable-scrollable")
         // The cursor keys must not ALSO scroll the page under the table. A kyo handler is
         // async and cannot decline the browser default in time, so the suppression is
         // declarative: the client reads the attribute before it posts the event. The class
@@ -976,7 +1137,7 @@ final case class DataTable[A] private (
                 flags
             ) ++ editCards ++ filterCards(filter) ++ sizeCards(
                 size
-            ) ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
+            ) ++ frozenCards(size) ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
         )
     end body
 
@@ -1002,7 +1163,7 @@ final case class DataTable[A] private (
     /** One `tfoot` cell. Columns without a footer still render an empty `td` so the
       * footer row keeps the column grid.
       */
-    private def footerCell(c: Column[A, FlatOnly], inFilter: List[A])(using Frame): UI =
+    private def footerCell(c: Column[A, FlatOnly], inFilter: List[A])(using Frame): Ast.Element =
         var cell = td
         c.alignV match
             case ColumnAlign.Center => cell = cell.cssClass("p-uic-dt-center")
@@ -1187,6 +1348,33 @@ final case class DataTable[A] private (
         pinned ++ unknownCard
     end sizeCards
 
+    /** What stops a table from freezing at all. Each one is an arrangement whose offsets
+      * cannot be worked out, and a table that renders them anyway parks a column over the
+      * middle of itself; naming the column instead is the same trade the filter row makes
+      * with a query it cannot read.
+      */
+    private def frozenCards(size: SizeState)(using Frame): List[UI] =
+        if !frozenOn then Nil
+        else
+            def card(text: String, paths: List[List[String]]): List[UI] =
+                if paths.isEmpty then Nil
+                else List(KeyDiagnostics.card("DataTable", text, paths.map(_.mkString(" / ")).sorted))
+            card(
+                "a frozen column has no width, so how far from the edge it holds cannot be worked out; give it " +
+                    "Column.width, or a width through the bound columnWidths",
+                unsizedFrozen(size)
+            ) ++ card(
+                "a frozen column has a free column between it and its edge, which would carry it away as it " +
+                    "scrolled; the frozen columns have to reach the edge they hold against",
+                adriftFrozen
+            ) ++ card(
+                "a header group spans columns that do not agree where they belong, and one cell cannot half " +
+                    "scroll; freeze every column under the group, or none of them",
+                splitFrozenGroups
+            )
+        end if
+    end frozenCards
+
     private def editCards(using Frame): List[UI] =
         val bound    = editingRowsRef.isDefined || editingCellRef.isDefined
         val editable = allPaths.exists(_._2.isEditable)
@@ -1244,7 +1432,7 @@ final case class DataTable[A] private (
       * narrowing the filter, select-alling, then widening it again must not silently
       * drop what was selected before.
       */
-    private def selectAllCell(inFilter: List[A], sel: Set[String], rows: Int)(using Frame): UI =
+    private def selectAllCell(inFilter: List[A], sel: Set[String], rows: Int)(using Frame): Ast.Element =
         val keys        = inFilter.map(keyOf)
         val allSelected = keys.nonEmpty && keys.forall(sel.contains)
         val toggle: Any < Async = selectedRef match
@@ -1268,30 +1456,26 @@ final case class DataTable[A] private (
       */
     private def headerSpanCell(
         sp: ColumnTree.HeaderSpan[A],
+        at: Int,
         sort: List[SortKey],
         flags: Map[List[String], Boolean],
         interactive: Set[List[String]],
-        size: SizeState
+        size: SizeState,
+        frozen: FrozenPlan
     )(using Frame): UI =
         sp.node.asColumn match
             case Present(c) =>
-                headerCell(
-                    c,
-                    sp.path,
-                    sort,
-                    sp.rowspan,
-                    sortableFlag(c, sp.path, flags),
-                    interactive,
-                    leafPaths.indexWhere(_._1 == sp.path),
-                    size
-                )
+                headerCell(c, sp.path, sort, sp.rowspan, sortableFlag(c, sp.path, flags), interactive, at, size, frozen)
             case Absent =>
                 var cell = th.cssClass("p-datatable-header-cell")
                 if sp.colspan > 1 then cell = cell.colspan(sp.colspan)
-                cell(
-                    div.cssClass("p-datatable-column-header-content")(
-                        toChild(span.cssClass("p-datatable-column-title")(sp.node.label))
-                    )
+                freeze(
+                    cell(
+                        div.cssClass("p-datatable-column-header-content")(
+                            toChild(span.cssClass("p-datatable-column-title")(sp.node.label))
+                        )
+                    ),
+                    frozen.span(at, at + sp.colspan)
                 )
         end match
     end headerSpanCell
@@ -1305,7 +1489,7 @@ final case class DataTable[A] private (
       * a filter it cannot apply is not a filter, and hiding the rows behind a typo would
       * take away the data the reader is looking at.
       */
-    private def filterCell(path: List[String], c: Column[A, FlatOnly], filter: FilterState)(using Frame): UI =
+    private def filterCell(path: List[String], c: Column[A, FlatOnly], filter: FilterState)(using Frame): Ast.Element =
         val cell = th.cssClass("p-datatable-header-cell")
         c.filterV match
             case Absent => cell
@@ -1421,9 +1605,9 @@ final case class DataTable[A] private (
     private def colGroup(size: SizeState)(using Frame): List[UI] =
         if !hasWidths then Nil
         else
-            val leading: List[UI] =
-                List.fill((if expanderColumn then 1 else 0) + (if checkboxColumn then 1 else 0))(col)
-            val trailing: List[UI] = List.fill(if editorColumn then 1 else 0)(col)
+            // Sized rather than left to share the leftover: see DataTable.ToggleWidth.
+            val leading: List[UI]  = leadTerms.map(v => col.style(_.width(Length.Calc(v))))
+            val trailing: List[UI] = trailTerms.map(v => col.style(_.width(Length.Calc(v))))
             val cells: List[UI] = leafPaths.map { (p, c) =>
                 widthOf(p, c, size) match
                     case Present(w) => col.style(_.width(w.px))
@@ -1503,7 +1687,8 @@ final case class DataTable[A] private (
         flag: Boolean,
         interactive: Set[List[String]],
         index: Int,
-        size: SizeState
+        size: SizeState,
+        frozen: FrozenPlan
     )(using Frame): UI =
         val sortable  = c.isSortable(flag) && sortRef.isDefined
         val sortingKs = SortKey.sorting(sort)
@@ -1556,7 +1741,7 @@ final case class DataTable[A] private (
             div.cssClass("p-datatable-column-header-content")(
                 ((span.cssClass("p-datatable-column-title")(c.headerV): UI) :: (sortIcon ++ sortBadge)).map(toChild)*
             )
-        cell((content :: (if index >= 0 then resizer(index, size) else Nil)).map(toChild)*)
+        freeze(cell((content :: (if index >= 0 then resizer(index, size) else Nil)).map(toChild)*), frozen.at(index))
     end headerCell
 
     /** Header click. Plain: sort by this column alone, advancing it when it is already
@@ -1599,10 +1784,11 @@ final case class DataTable[A] private (
         openGroups: Set[GroupPath],
         colCount: Int,
         edit: EditState,
-        nav: NavState[A]
+        nav: NavState[A],
+        frozen: FrozenPlan
     )(using Frame): List[UI] =
         levels match
-            case Nil => leafRows(rows, sel, exp, colCount, edit, nav)
+            case Nil => leafRows(rows, sel, exp, colCount, edit, nav, frozen)
             case level :: rest =>
                 RowGroup.runs(rows)((a, _) => level.keyF(a)).flatMap { (key, run) =>
                     val groupPath = GroupPath(path :+ key)
@@ -1618,7 +1804,7 @@ final case class DataTable[A] private (
                         else List(groupHeaderRow(level, groupPath, groupRows, colCount, collapsible, open))
                     val innerRows: List[UI] =
                         if !open then Nil
-                        else groupSegments(run, rest, groupPath.keys, sel, exp, openGroups, colCount, edit, nav)
+                        else groupSegments(run, rest, groupPath.keys, sel, exp, openGroups, colCount, edit, nav, frozen)
                     val footerRow: List[UI] =
                         if !open then Nil
                         else
@@ -1640,10 +1826,11 @@ final case class DataTable[A] private (
         exp: Set[String],
         colCount: Int,
         edit: EditState,
-        nav: NavState[A]
+        nav: NavState[A],
+        frozen: FrozenPlan
     )(using Frame): List[UI] =
         val spans = spanCells(rows.map(_._1), exp)
-        rows.zip(spans).flatMap((row, cells) => dataRow(row._1, row._2, sel, exp, colCount, cells, edit, nav))
+        rows.zip(spans).flatMap((row, cells) => dataRow(row._1, row._2, sel, exp, colCount, cells, edit, nav, frozen))
     end leafRows
 
     /** Resolves the merged cells of one slice: for each row, which of the marked columns it
@@ -1721,7 +1908,8 @@ final case class DataTable[A] private (
         colCount: Int,
         spans: Map[Int, SpanCell],
         edit: EditState,
-        nav: NavState[A]
+        nav: NavState[A],
+        frozen: FrozenPlan
     )(using Frame): List[UI] =
         val id      = keyOf(a)
         val isSel   = sel.contains(id)
@@ -1733,16 +1921,15 @@ final case class DataTable[A] private (
             if !expanderColumn then Nil
             else
                 val glyph = if isExp then Icons.chevronDown else Icons.chevronRight
-                List(
-                    td(
-                        button
-                            .cssClass("p-datatable-row-toggle-button")
-                            .jsProp("type", "button")
-                            .aria("expanded", isExp.toString)
-                            .aria("label", if isExp then "Row Collapse" else "Row Expand")
-                            .onClick(toggleExpand(id))(toChild(GlyphSvg(glyph, "p-datatable-row-toggle-icon")))
-                    )
+                val cell = td(
+                    button
+                        .cssClass("p-datatable-row-toggle-button")
+                        .jsProp("type", "button")
+                        .aria("expanded", isExp.toString)
+                        .aria("label", if isExp then "Row Collapse" else "Row Expand")
+                        .onClick(toggleExpand(id))(toChild(GlyphSvg(glyph, "p-datatable-row-toggle-icon")))
                 )
+                List(freeze(cell, frozen.leadAt(0)))
 
         // Checkbox selection reuses Prime's checkbox anatomy (as Tree does).
         val checkboxTd: List[UI] =
@@ -1752,7 +1939,8 @@ final case class DataTable[A] private (
                 if isSel then cb = cb.cssClass("p-checkbox-checked")
                 cb = cb.onClick(toggleSelect(id))
                 val icon: List[UI] = if isSel then List(GlyphSvg(Icons.check, "p-checkbox-icon")) else Nil
-                List(td(cb(toChild(div.cssClass("p-checkbox-box")(icon.map(toChild)*)))))
+                val cell           = td(cb(toChild(div.cssClass("p-checkbox-box")(icon.map(toChild)*))))
+                List(freeze(cell, frozen.leadAt(if expanderColumn then 1 else 0)))
 
         val dataTds: List[UI] = leafPaths.zipWithIndex.flatMap { (entry, i) =>
             val (path, c) = entry
@@ -1813,7 +2001,7 @@ final case class DataTable[A] private (
                         c.bodyF match
                             case Present(f) => toChild(f(a))
                             case Absent     => toChild(stringToUI(c.textF.map(_(a)).getOrElse("")))
-                List(cell(content))
+                List(freeze(cell(content), frozen.at(i)))
             end if
         }
 
@@ -1861,7 +2049,7 @@ final case class DataTable[A] private (
                         )
                     else
                         List(btn("p-datatable-row-editor-init", Icons.pencil, "Row Edit", beginRowEditing(id, a, edit)))
-                List(td.cssClass("p-uic-dt-editor")(buttons.map(toChild)*))
+                List(freeze(td.cssClass("p-uic-dt-editor")(buttons.map(toChild)*), frozen.trailAt(0)))
 
         var row = tr.cssClass(if index % 2 == 0 then "p-row-even" else "p-row-odd")
         if rowClickSelects then row = row.cssClass("p-datatable-selectable-row")
@@ -2255,6 +2443,23 @@ object DataTable:
       * they would need to pull it back is still there.
       */
     private[uic] val MinColumnWidth = 15.0
+
+    /** How wide the component's own columns are, as the CSS variables that carry it.
+      *
+      * They exist because a frozen column's offset reaches past whichever of them stand
+      * between it and the edge, and a width and an offset that are two separate numbers
+      * are two numbers that can disagree. Being one variable, a theme that widens the
+      * checkbox column moves everything stuck beside it in the same step.
+      *
+      * They are also what the fixed layout needs. Under it a column with no width takes
+      * an equal share of what the sized ones leave over, which over a checkbox is far
+      * more than a checkbox can use; Prime never meets this, since it renders a
+      * `colgroup` only for a scrollable table and lets the browser size those columns by
+      * their content everywhere else.
+      */
+    private[uic] val ToggleWidth = "var(--p-uic-dt-toggle-width)"
+    private[uic] val SelectWidth = "var(--p-uic-dt-select-width)"
+    private[uic] val EditorWidth = "var(--p-uic-dt-editor-width)"
 
     /** The two widths after the boundary between them moves by `delta`.
       *
