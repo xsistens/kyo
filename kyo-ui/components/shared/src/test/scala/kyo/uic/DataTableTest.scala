@@ -362,4 +362,132 @@ class DataTableTest extends UicTest:
             assert(seen == List("t-c0-0"), "and focus lands on the row's first editable cell")
     }
 
+    /** A table whose three columns the reader may resize, with the header measurement
+      * stubbed: what the grab reads is the width the browser would report, and the test
+      * supplies it so the arithmetic is the only thing under test.
+      */
+    private def sized(widths: Map[String, Double], pinMiddle: Boolean = false)(using Frame) =
+        for
+            rows <- Signal.initRef[Seq[Item]](items)
+            cols <- Signal.initRef(Map.empty[List[String], Double])
+            err  <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            grab <- Signal.initRef(Absent: Maybe[ColumnGrab])
+        yield
+            val base = uic.DataTable[Item]().rows(rows).rowKey(_.id)
+            val table =
+                if pinMiddle then
+                    base.columns(
+                        uic.column("Name")(_.name),
+                        uic.column("Price")(_.price.toString).resizable(false),
+                        uic.column("Id")(_.id)
+                    ).columnWidths(cols)
+                else
+                    base.columns(
+                        uic.column("Name")(_.name),
+                        uic.column("Price")(_.price.toString),
+                        uic.column("Id")(_.id)
+                    ).columnWidths(cols)
+            // The stub answers by header id: `t-h0` is the first leaf column's cell.
+            val measure = (id: String) =>
+                UI.Rect(0, 0, widths.getOrElse(id, 0.0), 30, 1000, 800): UI.Rect < Async
+            (table.wired("t", Map.empty, err, _ => (), Map.empty, measure, Present(grab)), cols, grab)
+        end for
+    end sized
+
+    private def pointerAt(x: Double): UI.PointerEvent = UI.PointerEvent(x, 0, 0, 0, 6, 30, 1, Absent)
+
+    private def resizers(node: UI)(using Frame): Chunk[UI.Ast.Element] < Sync =
+        elements(node).map(_.filter(_.attrs.cssClasses.contains("p-datatable-column-resizer")))
+
+    private def drag(handle: UI.Ast.Element, from: Double, to: Double)(using Frame): Any < Async =
+        (handle.attrs.onPointerDown, handle.attrs.onPointerMove) match
+            case (Present(down), Present(move)) => down(pointerAt(from)).andThen(move(pointerAt(to)))
+            case _                              => throw new AssertionError("the handle declares no drag")
+
+    // The whole point of moving a boundary rather than sizing a column: the pair trades
+    // width, so the table stays as wide as the space it was given.
+    "dragging a boundary writes both columns and keeps their total" in {
+        for
+            (ui, cols, _) <- sized(Map("t-h0" -> 200, "t-h1" -> 100))
+            handles       <- resizers(ui)
+            _             <- drag(handles.head, 200, 240)
+            widths        <- cols.get
+        yield
+            assert(widths == Map(List("Name") -> 240.0, List("Price") -> 60.0))
+            assert(widths.values.sum == 300.0, "and the two of them still cover what they covered")
+    }
+
+    // Computed from the grab and not from the last frame: a pointer that outruns the
+    // render posts the moves it made, and a per-frame delta would lose the ones between.
+    "a drag follows the pointer from where it was grabbed" in {
+        for
+            (ui, cols, _) <- sized(Map("t-h0" -> 200, "t-h1" -> 100))
+            handles       <- resizers(ui)
+            down = handles.head.attrs.onPointerDown.getOrElse(throw new AssertionError("no grab"))
+            move = handles.head.attrs.onPointerMove.getOrElse(throw new AssertionError("no drag"))
+            _      <- down(pointerAt(200))
+            _      <- move(pointerAt(220))
+            _      <- move(pointerAt(250))
+            widths <- cols.get
+        yield assert(widths == Map(List("Name") -> 250.0, List("Price") -> 50.0), "the second move is absolute, not cumulative")
+    }
+
+    "a drag past the end of a column stops at the minimum" in {
+        for
+            (ui, cols, _) <- sized(Map("t-h0" -> 200, "t-h1" -> 100))
+            handles       <- resizers(ui)
+            _             <- drag(handles.head, 200, 900)
+            widths        <- cols.get
+        yield
+            assert(widths == Map(List("Name") -> 285.0, List("Price") -> 15.0), "the neighbour keeps the floor")
+            assert(widths.values.sum == 300.0, "and the total is still preserved")
+    }
+
+    // A boundary belongs to two columns, so one of them refusing takes it away.
+    "a boundary needs a resizable column on both sides, and the last column has none" in {
+        for
+            (plain, _, _)  <- sized(Map.empty)
+            (locked, _, _) <- sized(Map.empty, pinMiddle = true)
+            all            <- resizers(plain)
+            fewer          <- resizers(locked)
+        yield
+            assert(all.size == 2, "three columns are two boundaries")
+            assert(fewer.isEmpty, "pinning the middle one takes both of its boundaries")
+    }
+
+    // The width has to reach the column, and a cell cannot carry it: a header cell of a
+    // grouped table spans several columns and cannot name a width for any of them.
+    "the widths render as a colgroup, one col per rendered column" in {
+        for
+            rows  <- Signal.initRef[Seq[Item]](items)
+            shown <- Signal.initRef(true)
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name).width(220),
+                uic.column("Note")(_ => "note").width(80).visible(shown),
+                uic.column("Price")(_.price.toString)
+            ).render
+            wide   <- elements(ui).map(_.collect { case c: UI.Ast.Col => c })
+            _      <- shown.set(false)
+            narrow <- elements(ui).map(_.collect { case c: UI.Ast.Col => c })
+        yield
+            assert(wide.size == 3, "one per column, sized or not")
+            assert(wide.count(_.attrs.uiStyle.props.nonEmpty) == 2, "and only the two that have a width carry one")
+            assert(narrow.size == 2, "a hidden column takes its col with it")
+    }
+
+    "a bound width map nothing can write into is reported" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](items)
+            cols <- Signal.initRef(Map(List("Nmae") -> 200.0))
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name)
+            ).columnWidths(cols).render
+            cards <- elements(ui).map(_.filter(_.attrs.cssClasses.contains("p-uic-key-error")))
+            text = cards.flatMap(_.children.collect { case t: UI.Ast.Text => t.value }).mkString(" ")
+        yield
+            assert(cards.size == 2, "one column is no boundary, and the entry names no column")
+            assert(text.contains("no boundary is draggable"))
+            assert(text.contains("Nmae"), "the unknown path is named")
+    }
+
 end DataTableTest

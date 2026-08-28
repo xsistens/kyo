@@ -76,6 +76,27 @@ final private[uic] case class FilterState(
     private[uic] def openOf(path: List[String]): Maybe[SignalRef[Boolean]] = Maybe.fromOption(open.get(path))
 end FilterState
 
+/** What one grab of a column boundary holds on to: where the pointer started, and the
+  * two widths it started from. The paths are the handler's own, since a boundary only
+  * ever moves the pair it sits between.
+  */
+final private[uic] case class ColumnGrab(startX: Double, width: Double, next: Double) derives CanEqual
+
+/** What the column widths need: the bound map, and, once the mount has run, the way to
+  * measure a header cell and somewhere to park a grab.
+  *
+  * The widths are the CALLER's, read fresh on every render like the sort spec, so a
+  * seeded map opens the table on the widths it names. What the table owns is the grab,
+  * which lives only between a pointer going down on a boundary and coming back up.
+  */
+final private[uic] case class SizeState(
+    widths: Map[List[String], Double] = Map.empty,
+    idPrefix: String = "",
+    live: Boolean = false,
+    measure: String => Rect < Async = (_: String) => Rect(0, 0, 0, 0, 0, 0),
+    grab: Maybe[SignalRef[Maybe[ColumnGrab]]] = Absent
+)
+
 /** The row before and after a committed cell edit, plus the column that wrote it. */
 final case class CellChange[A](rowKey: String, column: List[String], before: A, after: A)
 
@@ -205,7 +226,8 @@ final case class DataTable[A] private (
     onRowChangedF: Maybe[RowChange[A] => Any < Async] = Absent,
     translatorV: ErrorTranslator = ErrorTranslator.default,
     hiddenPaths: List[(List[String], Column[A, FlatOnly])] = Nil,
-    columnFiltersRef: Maybe[SignalRef[Map[List[String], ColumnFilter]]] = Absent
+    columnFiltersRef: Maybe[SignalRef[Map[List[String], ColumnFilter]]] = Absent,
+    columnWidthsRef: Maybe[SignalRef[Map[List[String], Double]]] = Absent
 ) extends Node:
     type Self = DataTable[A]
 
@@ -286,6 +308,22 @@ final case class DataTable[A] private (
       */
     def columnFilters(ref: SignalRef[Map[List[String], ColumnFilter]]): DataTable[A] =
         copy(columnFiltersRef = Present(ref))
+
+    /** Binds the column widths two-way, keyed by the column path the sort spec already
+      * names a column by, and gives every boundary between two resizable columns a drag
+      * handle.
+      *
+      * A seeded map opens the table on the widths it names; what the reader drags is
+      * written straight back into it, so the widths outlive the table that rendered them
+      * and a caller who wants them remembered has them already.
+      *
+      * A drag moves ONE boundary: the two columns it sits between trade width and the
+      * total stays where it was, so the table never grows past the space it was given and
+      * no column the reader is not touching moves. The last column has no boundary to its
+      * right, and neither does one whose neighbour says [[Column.resizable]] is false.
+      */
+    def columnWidths(ref: SignalRef[Map[List[String], Double]]): DataTable[A] =
+        copy(columnWidthsRef = Present(ref))
 
     /** Slices the rows into pages of `size` and renders the embedded paginator;
       * `ref` holds the 0-based page index (clamped at render).
@@ -520,12 +558,45 @@ final case class DataTable[A] private (
       * renders through a mount: the drafts and the standing error of an editing table,
       * and the menu-open state of a filter row.
       */
-    private def ownsState: Boolean = editingBound || navOn || filterRowOn
+    private def ownsState: Boolean = editingBound || navOn || filterRowOn || resizeOn
 
     /** Whether the filter row is rendered: the filters have to be bound somewhere, and
       * some column has to carry a pipeline for the row to hold anything.
       */
     private def filterRowOn: Boolean = columnFiltersRef.isDefined && leafCols.exists(_.isFilterable)
+
+    /** Whether any boundary is draggable: the widths have to be bound somewhere, and a
+      * boundary needs a resizable column on both sides of it, so a single column has none
+      * and neither does a table whose columns are all pinned.
+      */
+    private def resizeOn: Boolean =
+        columnWidthsRef.isDefined && leafCols.sliding(2).exists(p => p.size == 2 && p.forall(_.resizableFlag))
+
+    /** This column's width: the one the reader dragged if they have, the authored one
+      * otherwise.
+      */
+    private def widthOf(path: List[String], c: Column[A, FlatOnly], size: SizeState): Maybe[Double] =
+        Maybe.fromOption(size.widths.get(path)).orElse(c.widthV)
+
+    /** Whether the boundary to the RIGHT of visible leaf `i` is draggable. A boundary
+      * moves two columns, so it needs both of them to allow it, and the last column has
+      * none: what is to its right is the edge of the table, which a fit-mode drag has
+      * nothing to trade against.
+      */
+    private def resizableAt(i: Int): Boolean =
+        columnWidthsRef.isDefined && i + 1 < leafCols.length &&
+            leafCols(i).resizableFlag && leafCols(i + 1).resizableFlag
+
+    /** The id one header cell carries so a grab can measure it. Every leaf header gets
+      * one, the last included: it carries no handle itself, but it is the neighbour the
+      * one before it trades width with.
+      */
+    private def headerId(i: Int, size: SizeState): String = s"${size.idPrefix}-h$i"
+
+    /** Whether the table sizes its columns itself, which is what puts a `colgroup` in
+      * front of the header and makes the widths in it authoritative.
+      */
+    private def hasWidths: Boolean = columnWidthsRef.isDefined || leafCols.exists(_.widthV.isDefined)
 
     /** A table that edits owns two things no caller supplies: one draft per editable
       * column, and the error a refused commit left standing; a table that filters owns a
@@ -538,7 +609,7 @@ final case class DataTable[A] private (
       * re-renders the editor's own cell and leaves the table alone.
       */
     private[uic] def render(using Frame): UI =
-        if !ownsState then renderWith(EditState(Set.empty, Absent), NavState[A](), FilterState())
+        if !ownsState then renderWith(EditState(Set.empty, Absent), NavState[A](), FilterState(), SizeState())
         else
             UI.mounted {
                 for
@@ -547,8 +618,17 @@ final case class DataTable[A] private (
                     drafts <- Kyo.foreach(editableLeaves)((path, _) => Signal.initRef("").map(path -> _))
                     err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
                     menus  <- Kyo.foreach(filterableLeaves)((path, _) => Signal.initRef(false).map(path -> _))
-                yield wired(prefix, drafts.toMap, err, id => cmds.focusId(id), menus.toMap)
-            }.placeholder(renderWith(EditState(Set.empty, Absent), NavState[A](), FilterState()))
+                    held   <- Signal.initRef(Absent: Maybe[ColumnGrab])
+                yield wired(
+                    prefix,
+                    drafts.toMap,
+                    err,
+                    id => cmds.focusId(id),
+                    menus.toMap,
+                    id => cmds.requestMeasureById(id),
+                    Present(held)
+                )
+            }.placeholder(renderWith(EditState(Set.empty, Absent), NavState[A](), FilterState(), SizeState()))
 
     /** The subscription tree the mount publishes, and the seam golden tests render
       * directly: a top-down render shows a mounted region as its placeholder, so the
@@ -559,7 +639,9 @@ final case class DataTable[A] private (
         drafts: Map[List[String], SignalRef[String]],
         errRef: SignalRef[Maybe[(CellPath, FieldError)]],
         focus: String => Any < Async,
-        menus: Map[List[String], SignalRef[Boolean]] = Map.empty
+        menus: Map[List[String], SignalRef[Boolean]] = Map.empty,
+        measure: String => Rect < Async = (_: String) => Rect(0, 0, 0, 0, 0, 0),
+        held: Maybe[SignalRef[Maybe[ColumnGrab]]] = Absent
     )(using Frame): UI =
         errRef.render(e =>
             withRef(editingRowsRef, Set.empty[String]) { editRows =>
@@ -567,14 +649,15 @@ final case class DataTable[A] private (
                     renderWith(
                         EditState(editRows, editCell, drafts, Present(errRef), e, live = true),
                         NavState[A](on = navOn, idPrefix = idPrefix, focus = focus),
-                        FilterState(open = menus, live = true)
+                        FilterState(open = menus, live = true),
+                        SizeState(idPrefix = idPrefix, live = true, measure = measure, grab = held)
                     )
                 }
             }
         )
 
-    private def renderWith(edit: EditState, nav: NavState[A], filter: FilterState)(using Frame): UI =
-        withVisibleColumns(_.buildAll(edit, nav, filter))
+    private def renderWith(edit: EditState, nav: NavState[A], filter: FilterState, size: SizeState)(using Frame): UI =
+        withVisibleColumns(_.buildAll(edit, nav, filter, size))
 
     /** Resolves every [[Column.visible]] flag and hands on the table WITHOUT the columns
       * they hide, so the header spans, the body cells, the footer, the filter, the colspans
@@ -611,29 +694,32 @@ final case class DataTable[A] private (
             hiddenPaths = leafPaths.zipWithIndex.collect { case (entry, i) if !keep(i) => entry }
         )
 
-    private def buildAll(edit: EditState, nav: NavState[A], filter: FilterState)(using Frame): UI =
+    private def buildAll(edit: EditState, nav: NavState[A], filter: FilterState, size: SizeState)(using Frame): UI =
         withSortableFlags { flags =>
             withRows { rows =>
                 withRef(sortRef, List.empty[SortKey]) { sort =>
                     withRef(filterRef, "") { query =>
                         withRef(columnFiltersRef, Map.empty[List[String], ColumnFilter]) { specs =>
-                            withRef(pageRef, 0) { page =>
-                                withRef(selectedRef, Set.empty[String]) { sel =>
-                                    withRef(expandedRef, Set.empty[String]) { exp =>
-                                        withRef(expandedGroupsRef, Set.empty[GroupPath]) { groups =>
-                                            body(
-                                                rows,
-                                                sort,
-                                                query,
-                                                page,
-                                                sel,
-                                                exp,
-                                                groups,
-                                                flags,
-                                                edit,
-                                                nav,
-                                                filter.copy(specs = specs)
-                                            )
+                            withRef(columnWidthsRef, Map.empty[List[String], Double]) { widths =>
+                                withRef(pageRef, 0) { page =>
+                                    withRef(selectedRef, Set.empty[String]) { sel =>
+                                        withRef(expandedRef, Set.empty[String]) { exp =>
+                                            withRef(expandedGroupsRef, Set.empty[GroupPath]) { groups =>
+                                                body(
+                                                    rows,
+                                                    sort,
+                                                    query,
+                                                    page,
+                                                    sel,
+                                                    exp,
+                                                    groups,
+                                                    flags,
+                                                    edit,
+                                                    nav,
+                                                    filter.copy(specs = specs),
+                                                    size.copy(widths = widths)
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -706,7 +792,8 @@ final case class DataTable[A] private (
         flags: Map[List[String], Boolean],
         edit: EditState,
         nav: NavState[A],
-        filterIn: FilterState
+        filterIn: FilterState,
+        size: SizeState
     )(using Frame): UI =
         // 1. Global filter: contains-match over the columns' text projections.
         val rows = rowsIn.toList
@@ -784,7 +871,7 @@ final case class DataTable[A] private (
                     if depth > 1 then cell = cell.rowspan(depth)
                     List(cell)
             rows.zipWithIndex.map { (cells, i) =>
-                val ths = cells.map(headerSpanCell(_, sort, flags, interactive))
+                val ths = cells.map(headerSpanCell(_, sort, flags, interactive, size))
                 tr((if i == 0 then leading ++ ths ++ trailing else ths).map(toChild)*)
             }
         end headRows
@@ -839,6 +926,12 @@ final case class DataTable[A] private (
 
         var tbl = table.cssClass("p-datatable-table")
         if scrollHeightV.isDefined then tbl = tbl.cssClass("p-datatable-scrollable-table")
+        // Prime's own classes carry the clipping a sized column needs (a value too long
+        // for its column is cut rather than widening it); the layout mode they leave to
+        // the host, which is what the `.p-uic-table-fixed` rule supplies.
+        if hasWidths then tbl = tbl.cssClass("p-uic-table-fixed")
+        if resizeOn then
+            tbl = tbl.cssClass("p-datatable-resizable-table").cssClass("p-datatable-resizable-table-fit")
         accNameV match
             case Present(TextValue.Const(v)) => tbl = tbl.aria("label", v)
             case Present(TextValue.Dyn(s))   => tbl = tbl.aria("label", s)
@@ -846,7 +939,7 @@ final case class DataTable[A] private (
         end match
         accNameRefV.foreach(v => tbl = tbl.aria("labelledby", v))
         val tableEl: UI = tbl(
-            (List[UI](
+            (colGroup(size) ++ List[UI](
                 thead.cssClass("p-datatable-thead")((headRows ++ filterRowUI).map(toChild)*),
                 tbody.cssClass("p-datatable-tbody")(bodyRows.map(toChild)*)
             ) ++ footGroup).map(toChild)*
@@ -881,7 +974,9 @@ final case class DataTable[A] private (
             (rowKeyCard ++ headerCards(
                 sort,
                 flags
-            ) ++ editCards ++ filterCards(filter) ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
+            ) ++ editCards ++ filterCards(filter) ++ sizeCards(
+                size
+            ) ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
         )
     end body
 
@@ -1061,6 +1156,37 @@ final case class DataTable[A] private (
       * cell, so binding both leaves a cell inside an edited row showing its editor for two
       * reasons at once, with two ways out that do not agree.
       */
+    /** The two width mistakes no type catches: a bound ref no boundary can ever write
+      * into, and an entry naming a column this table does not have.
+      */
+    private def sizeCards(size: SizeState)(using Frame): List[UI] =
+        val pinned =
+            if columnWidthsRef.isEmpty || resizeOn then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "columnWidths is bound but no boundary is draggable, so nothing can ever write into it; a " +
+                        "boundary needs a resizable column on both sides of it, and the last column has none",
+                    Nil
+                ))
+        // Over the authored columns rather than the visible ones: a width on a hidden
+        // column is what a reader showing it again gets back, not a mistake.
+        val known = (leafPaths ++ hiddenPaths).map(_._1).toSet
+        val unknown =
+            if columnWidthsRef.isEmpty then Nil
+            else size.widths.keys.toList.filterNot(known.contains).map(_.mkString(" / ")).sorted
+        val unknownCard =
+            if unknown.isEmpty then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "the column widths name a column this table does not have; a path is the group labels around " +
+                        "the column followed by its header",
+                    unknown
+                ))
+        pinned ++ unknownCard
+    end sizeCards
+
     private def editCards(using Frame): List[UI] =
         val bound    = editingRowsRef.isDefined || editingCellRef.isDefined
         val editable = allPaths.exists(_._2.isEditable)
@@ -1144,11 +1270,21 @@ final case class DataTable[A] private (
         sp: ColumnTree.HeaderSpan[A],
         sort: List[SortKey],
         flags: Map[List[String], Boolean],
-        interactive: Set[List[String]]
+        interactive: Set[List[String]],
+        size: SizeState
     )(using Frame): UI =
         sp.node.asColumn match
             case Present(c) =>
-                headerCell(c, sp.path, sort, sp.rowspan, sortableFlag(c, sp.path, flags), interactive)
+                headerCell(
+                    c,
+                    sp.path,
+                    sort,
+                    sp.rowspan,
+                    sortableFlag(c, sp.path, flags),
+                    interactive,
+                    leafPaths.indexWhere(_._1 == sp.path),
+                    size
+                )
             case Absent =>
                 var cell = th.cssClass("p-datatable-header-cell")
                 if sp.colspan > 1 then cell = cell.colspan(sp.colspan)
@@ -1274,13 +1410,100 @@ final case class DataTable[A] private (
     /** One sortable/plain header cell with Prime's header-content anatomy, reaching down
       * `rows` header rows so an ungrouped column lines up with a grouped one.
       */
+    /** The `colgroup` in front of the header: one `col` per rendered column, carrying the
+      * width of the ones that have one.
+      *
+      * This is the only structure that can size a column: a width on a cell sizes the row
+      * it is in, and a grouped header's cell spans several columns and cannot name a width
+      * for any single one of them. It also keeps the header, the body and the footer in
+      * step for free, since all three read their widths off the same list.
+      */
+    private def colGroup(size: SizeState)(using Frame): List[UI] =
+        if !hasWidths then Nil
+        else
+            val leading: List[UI] =
+                List.fill((if expanderColumn then 1 else 0) + (if checkboxColumn then 1 else 0))(col)
+            val trailing: List[UI] = List.fill(if editorColumn then 1 else 0)(col)
+            val cells: List[UI] = leafPaths.map { (p, c) =>
+                widthOf(p, c, size) match
+                    case Present(w) => col.style(_.width(w.px))
+                    case Absent     => col
+            }
+            List(colgroup((leading ++ cells ++ trailing).map(toChild)*))
+        end if
+    end colGroup
+
+    /** Prime's resize handle: a full-height strip on the trailing edge of a header cell,
+      * carrying the `col-resize` cursor.
+      *
+      * The click handler is the point of the pair with `stopPropagation`: the handle sits
+      * inside a header cell that may sort when clicked, and letting go of a drag on it
+      * would otherwise re-sort the table the reader was only resizing. Before the mount
+      * runs there is nothing to write a grab into, so the handle renders without one,
+      * which is the trade the filter row's funnel already makes.
+      */
+    private def resizer(i: Int, size: SizeState)(using Frame): List[UI] =
+        if !resizableAt(i) then Nil
+        else
+            var handle = span
+                .cssClass("p-datatable-column-resizer")
+                .aria("hidden", "true")
+                .onClick(())
+                .stopPropagation(true)
+            if size.live then
+                val path = leafPaths(i)._1
+                val next = leafPaths(i + 1)._1
+                handle = handle
+                    .onPointerDown(e => beginResize(i, e, size))
+                    .onPointerMove(e => dragResize(path, next, e, size))
+            end if
+            List(handle)
+        end if
+    end resizer
+
+    /** A pointer going down on a boundary: measure the two columns it sits between and
+      * remember them with the pointer's own x.
+      *
+      * The widths are MEASURED rather than read out of the bound map, since a column the
+      * caller never gave one is as draggable as any other; what the reader grabs is what
+      * the browser is currently showing.
+      */
+    private def beginResize(i: Int, e: PointerEvent, size: SizeState)(using Frame): Any < Async =
+        size.grab match
+            case Present(ref) =>
+                for
+                    a <- size.measure(headerId(i, size))
+                    b <- size.measure(headerId(i + 1, size))
+                    r <- ref.set(Present(ColumnGrab(e.rectX + e.x, a.width, b.width)))
+                yield r
+            case Absent => ()
+
+    /** The pointer moving with a boundary held: write both columns of the pair, computed
+      * from where the grab started rather than from the last frame, so a drag that
+      * outruns the render does not drift.
+      */
+    private def dragResize(path: List[String], next: List[String], e: PointerEvent, size: SizeState)(using
+        Frame
+    ): Any < Async =
+        (size.grab, columnWidthsRef) match
+            case (Present(g), Present(ref)) =>
+                g.get.map {
+                    case Present(held) =>
+                        val (w, n) = DataTable.resizeTo(held.width, held.next, e.rectX + e.x - held.startX)
+                        ref.getAndUpdate(_ + (path -> w) + (next -> n))
+                    case Absent => ()
+                }
+            case _ => ()
+
     private def headerCell(
         c: Column[A, FlatOnly],
         path: List[String],
         sort: List[SortKey],
         rows: Int,
         flag: Boolean,
-        interactive: Set[List[String]]
+        interactive: Set[List[String]],
+        index: Int,
+        size: SizeState
     )(using Frame): UI =
         val sortable  = c.isSortable(flag) && sortRef.isDefined
         val sortingKs = SortKey.sorting(sort)
@@ -1289,6 +1512,10 @@ final case class DataTable[A] private (
 
         var cell = th.cssClass("p-datatable-header-cell")
         if rows > 1 then cell = cell.rowspan(rows)
+        // Only once the mount has run: the id exists to be measured, and stamping it in the
+        // static projection would put the same one on every table of a page.
+        if size.live && columnWidthsRef.isDefined && index >= 0 then cell = cell.id(headerId(index, size))
+        if index >= 0 && resizableAt(index) then cell = cell.cssClass("p-datatable-resizable-column")
         c.alignV match
             case ColumnAlign.Center => cell = cell.cssClass("p-uic-dt-center")
             case ColumnAlign.End    => cell = cell.cssClass("p-uic-dt-end")
@@ -1325,11 +1552,11 @@ final case class DataTable[A] private (
                         .render
                 )
 
-        cell(
+        val content: UI =
             div.cssClass("p-datatable-column-header-content")(
                 ((span.cssClass("p-datatable-column-title")(c.headerV): UI) :: (sortIcon ++ sortBadge)).map(toChild)*
             )
-        )
+        cell((content :: (if index >= 0 then resizer(index, size) else Nil)).map(toChild)*)
     end headerCell
 
     /** Header click. Plain: sort by this column alone, advancing it when it is already
@@ -2022,3 +2249,21 @@ end DataTable
 
 object DataTable:
     def apply[A](): DataTable[A] = new DataTable[A]()
+
+    /** How narrow a drag may leave a column, in CSS pixels. Prime's own floor: low enough
+      * that a reader can push a column almost out of the way, high enough that the handle
+      * they would need to pull it back is still there.
+      */
+    private[uic] val MinColumnWidth = 15.0
+
+    /** The two widths after the boundary between them moves by `delta`.
+      *
+      * Their sum is preserved, which is what keeps the table exactly as wide as the space
+      * it was given and leaves every column the reader is not touching alone. The delta is
+      * clamped before it is applied rather than each width after, so a drag past the end
+      * of one column stops the boundary instead of quietly pushing width into the other.
+      */
+    private[uic] def resizeTo(width: Double, next: Double, delta: Double): (Double, Double) =
+        val d = math.max(math.min(delta, next - MinColumnWidth), MinColumnWidth - width)
+        (width + d, next - d)
+end DataTable

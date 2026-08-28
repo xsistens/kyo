@@ -947,6 +947,26 @@ val hideable: UI < Async =
 
 What hiding does not do is take the column out of the table. The sort spec keeps sorting by it, so hiding a column never reshuffles the rows under the reader and the card that names an unsortable spec entry does not start firing at one. The global filter is the other way round, and deliberately: a query matches what is on the screen, so a hidden column's text is not searched. Where the keyboard grid is on, it renumbers with the header, since the cursor addresses cells by position and a position has to mean what the reader sees.
 
+How wide a column is, is the column's own: `Column.width(px)` says it. The width reaches the column through a `col` element rather than through its cells, which is the only place that can carry one, since a cell sizes the row it is in and a grouped header's cell spans several columns at once. It is authoritative rather than a suggestion: a value too long for its column is clipped instead of widening it, and the columns with no width share what is left.
+
+`columnWidths(ref)` hands the widths to the reader, keyed by the same path the sort spec and the column filters use. Every boundary between two resizable columns grows a drag handle, and what the reader drags is written straight back into the map, so the widths outlive the table that rendered them.
+
+```scala
+val resizable: UI < Async =
+    for widths <- Signal.initRef(Map(List("Name") -> 260.0))
+    yield uic.DataTable[Product]()
+        .rows(catalog)
+        .rowKey(_.id)
+        .columns(
+            uic.column("Name")(_.name),
+            uic.column("Category")(_.category),
+            uic.column("Price")(p => f"${p.price}%.2f").resizable(false)
+        )
+        .columnWidths(widths): UI
+```
+
+A drag moves one BOUNDARY rather than sizing one column: the two columns it sits between trade width and their total stays where it was, so the table never grows past the space it was given and no column the reader is not touching moves. That is also why a handle needs a resizable column on both sides of it, and why the last column never carries one: what is to its right is the edge of the table, which has no width to trade. The widths the reader is given to drag are MEASURED when they grab, not read out of the map, so a column the caller never sized is as draggable as one that was.
+
 Around the rows sit four pieces of chrome. `header(ui)` and `footer(ui)` are free slots, above the table and below the paginator, which is where a filter box or a record count goes. `Column.footer` is a different thing: it renders a real `tfoot` row aligned to the column grid, and its computed form `footer(rows => ...)` receives the rows that survived the global filter, across every page rather than the visible one. That distinction is load-bearing, because the table owns filtering: a column total computed by the caller from its own list would disagree with what the reader is looking at. `loading(flag)` covers the table with a spinner mask, and `scrollHeight("240px")` caps the container and pins the header row group to its top edge while the body scrolls under it.
 
 A header of more than one row is a `headerGroup`: a label written *around* the columns it spans, nested as deep as it needs to be. Prime writes the header cells beside the column list and has the caller put `colSpan` and `rowSpan` on each of them; here the leaves ARE the columns, so a group is as wide as what it holds, a column beside a group reaches down to the bottom of the header, and there is no second list to fall out of step with the first. Everything else stays on the leaves: a group carries a label and nothing more, so sorting, footers, filtering and merging keep working exactly as they do without one.

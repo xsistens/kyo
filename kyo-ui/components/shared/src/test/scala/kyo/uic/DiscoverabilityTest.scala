@@ -892,6 +892,34 @@ def x(using Frame) = uic.DataTable[R]().columns(uic.column("Name")(_.name).visib
         typeCheckFailure(preamble + """def x = uic.DataTable[String]().visible(false)""")
     }
 
+    "Column.width and resizable are the column's, and columnWidths the table's" in {
+        typeCheck(
+            preamble +
+                """final case class R(name: String)
+def x(using Frame) = uic.DataTable[R]().columns(uic.column("Name")(_.name).width(180).resizable(false))
+def y(r: SignalRef[Map[List[String], Double]])(using Frame) =
+  uic.DataTable[R]().columns(uic.column("Name")(_.name)).columnWidths(r)
+def z(using Frame) = uic.TreeTable[R]().columns(uic.column("Name")(_.name).width(180))"""
+        )
+        // Neither setter touches the kind, so the bare rowSpan still reads the projection.
+        typeCheck(
+            preamble +
+                """final case class R(name: String)
+def x(using Frame) = uic.DataTable[R]().columns(uic.column("Name")(_.name).width(180).rowSpan)"""
+        )
+        // How wide a column is belongs to the column; the map the reader writes into
+        // belongs to the table.
+        typeCheckFailure(preamble + """def x = uic.DataTable[String]().width(180)""")
+        typeCheckFailure(
+            preamble +
+                """final case class R(name: String)
+def x(r: SignalRef[Map[List[String], Double]])(using Frame) =
+  uic.DataTable[R]().columns(uic.column("Name")(_.name).columnWidths(r))"""
+        )
+        // Widths are keyed by column path, as the sort spec and the column filters are.
+        typeCheckFailure(preamble + """def x(r: SignalRef[Map[String, Double]]) = uic.DataTable[String]().columnWidths(r)""")
+    }
+
     "a headerGroup nests inside columns(...), takes no column setter, and no hierarchy takes it" in {
         // Columns written under a group read the same scope, so they still carry no type
         // argument, and a group nests in a group.

@@ -205,6 +205,10 @@ class GoldenRenderTest extends UicTest:
             uic.Theme.primeExtraCss.contains(".p-datatable-inline-filter { flex-direction: row; }"),
             "filter row restorer (remainder): the extracted rule leaves the direction at the browser default"
         )
+        assert(
+            uic.Theme.primeExtraCss.contains(".p-uic-table-fixed { table-layout: fixed; }"),
+            "the layout mode a column width needs (remainder): the extracted sheet carries the clipping, not the mode"
+        )
         assert(!uic.Theme.css.contains(".sap"), "NO sap* class rules anywhere in the theme")
         assert(!uic.Theme.css.contains("--sap"), "NO sap tokens anywhere in the theme")
         assert(!uic.Theme.primeExtraCss.contains(".sap"), "no sap* rules in the Prime remainder")
@@ -1970,6 +1974,85 @@ class GoldenRenderTest extends UicTest:
             assert(opened.contains("p-datatable-filter-constraint p-datatable-filter-constraint-selected"))
             assert(opened.contains(">Starts with<") && opened.contains(">Not contains<"))
             assert(!opened.contains(">Less than<"), "a text column offers no comparison")
+        end for
+    }
+
+    "column widths render as a colgroup, and a bound map puts a handle on every boundary" in {
+        final case class Row(id: String, name: String, price: Int) derives CanEqual
+        val rows                                           = List(Row("1", "Bamboo", 65), Row("2", "Black", 72))
+        def occurrences(html: String, needle: String): Int = java.util.regex.Pattern.quote(needle).r.findAllIn(html).size
+
+        def table(using Frame) = uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
+            uic.column("Name")(_.name).width(220),
+            uic.column("Note")(_ => "n"),
+            uic.column("Price")(_.price.toString)
+        )
+
+        for
+            plain <- UI.runRender(
+                uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name)).render
+            ).take(1).run.map(_.mkString)
+            authored <- UI.runRender(table.render).take(1).run.map(_.mkString)
+            live <-
+                for
+                    widths <- Signal.initRef(Map.empty[List[String], Double])
+                    err    <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    out <- UI.runRender(
+                        table.columnWidths(widths).wired("t", Map.empty, err, _ => ())
+                    ).take(1).run
+                yield out.mkString
+            dragged <-
+                for
+                    widths <- Signal.initRef(Map(List("Name") -> 300.0, List("Note") -> 90.0))
+                    err    <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    out <- UI.runRender(
+                        table.columnWidths(widths).wired("t", Map.empty, err, _ => ())
+                    ).take(1).run
+                yield out.mkString
+            pinned <-
+                for
+                    widths <- Signal.initRef(Map.empty[List[String], Double])
+                    err    <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    out <- UI.runRender(
+                        uic.DataTable[Row]().rows(rows).rowKey(_.id).selectionMode(uic.SelectionMode.Checkbox).columns(
+                            uic.column("Name")(_.name),
+                            uic.column("Price")(_.price.toString).resizable(false)
+                        ).columnWidths(widths).wired("t", Map.empty, err, _ => ())
+                    ).take(1).run
+                yield out.mkString
+            tree <- UI.runRender(
+                uic.TreeTable[Row]().nodes(uic.TreeTableNode(rows.head)).columns(
+                    uic.column("Name")(_.name).width(140),
+                    uic.column("Price")(_.price.toString)
+                ).render
+            ).take(1).run.map(_.mkString)
+        yield
+            // A table nobody sized renders what it always rendered.
+            assert(!plain.contains("<colgroup") && !plain.contains("p-uic-table-fixed"))
+            assert(!plain.contains("p-datatable-column-resizer"))
+            // One col per column, sized or not, and the layout mode that makes a width mean
+            // what it says.
+            assert(occurrences(authored, "<colgroup") == 1)
+            assert(occurrences(authored, "<col ") == 3, "one per column, sized or not")
+            assert(authored.contains("width: 220px"))
+            assert(authored.contains("p-uic-table-fixed"))
+            assert(!authored.contains("p-datatable-column-resizer"), "an authored width is not an invitation to drag it")
+            assert(!authored.contains("p-datatable-resizable-table"))
+            // Bound: Prime's resizable table, a handle per boundary, and an id on every
+            // header cell, the last one included, since it is measured as a neighbour.
+            assert(live.contains("p-datatable-resizable-table") && live.contains("p-datatable-resizable-table-fit"))
+            assert(occurrences(live, "p-datatable-column-resizer") == 2, "three columns are two boundaries")
+            assert(occurrences(live, "p-datatable-resizable-column") == 2, "and the last column carries none")
+            assert(live.contains("id=\"t-h0\"") && live.contains("id=\"t-h2\""))
+            // What the reader dragged wins over what the caller authored.
+            assert(dragged.contains("width: 300px") && dragged.contains("width: 90px"))
+            assert(!dragged.contains("width: 220px"), "the bound width replaces the authored one")
+            // The checkbox column is a column of the table too, so the list has to count it
+            // or every width would land one column to the left.
+            assert(occurrences(pinned, "<col ") == 3, "the selection column gets a col of its own")
+            assert(!pinned.contains("p-datatable-column-resizer"), "a pinned neighbour takes the only boundary away")
+            assert(tree.contains("<colgroup") && tree.contains("width: 140px"), "a hierarchy sizes its columns the same way")
+            assert(tree.contains("p-uic-table-fixed"))
         end for
     }
 
