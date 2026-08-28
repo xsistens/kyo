@@ -121,6 +121,8 @@ object UI:
     def blockquote(using Frame): Blockquote       = Blockquote()
     def code(using Frame): Code                   = Code()
     def table(using Frame): Table                 = Table()
+    def colgroup(using Frame): Colgroup           = Colgroup()
+    def col(using Frame): Col                     = Col()
     def thead(using Frame): Thead                 = Thead()
     def tbody(using Frame): Tbody                 = Tbody()
     def tfoot(using Frame): Tfoot                 = Tfoot()
@@ -1866,6 +1868,26 @@ object UI:
             def withAttrs(a: Attrs): Table      = copy(attrs = a)
             def apply(cs: HtmlChildVal*): Table = copy(children = children ++ Chunk.from(cs.map(_.value)))
         end Table
+
+        /** Column definitions for a table: the one place a per-column width belongs, since a
+          * `<col>` sizes its whole column at once while a width written on a cell sizes only the
+          * row it is in. A header spanning several columns cannot carry a per-column width at all,
+          * which is what makes this the only structure that works under a grouped header.
+          */
+        final case class Colgroup(attrs: Attrs = Attrs(), children: Chunk[UI] = Chunk.empty)(using val frame: Frame)
+            extends Block:
+            type Self = Colgroup
+            def withAttrs(a: Attrs): Colgroup      = copy(attrs = a)
+            def apply(cs: HtmlChildVal*): Colgroup = copy(children = children ++ Chunk.from(cs.map(_.value)))
+        end Colgroup
+
+        /** One column of a [[Colgroup]], matched to a body column by position. Void, and the only
+          * element whose styling reaches cells it does not contain: a `width` here is the column's,
+          * a `background` paints behind every cell of it.
+          */
+        final case class Col(attrs: Attrs = Attrs())(using val frame: Frame) extends Block with Void:
+            type Self = Col
+            def withAttrs(a: Attrs): Col = copy(attrs = a)
 
         /** Table header row group. The parser never synthesizes a `<thead>`: header rows written as direct
           * `<table>` children become part of the implied body group, so `thead`-scoped selectors (and the

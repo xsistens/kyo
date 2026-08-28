@@ -1,6 +1,7 @@
 package kyo
 
 import kyo.Browser.*
+import kyo.Length.*
 import kyo.UI.foreach
 
 class TableTest extends UITest:
@@ -224,6 +225,35 @@ class TableTest extends UITest:
                 _ <- Browser.assertText(Selector.css("#grp-table tbody > tr > td"), "B")
                 _ <- Browser.assertText(Selector.css("#grp-table tfoot > tr > td"), "F")
             yield ()
+        }
+    }
+
+    // A width belongs on the column, not on a cell: a cell sizes the row it is in, and a
+    // header cell spanning two columns cannot say how wide either of them is. The col
+    // element is the only place that names one column at a time.
+    "colgroup sizes a column the cells never mention" in {
+        withUI(UI.div(UI.table(
+            UI.colgroup(UI.col.style(Style.width(200.px)).id("c1"), UI.col.style(Style.width(100.px))),
+            UI.tbody(UI.tr(UI.td("A").id("cell-a"), UI.td("B")))
+        ).style(Style.width(300.px)).id("cg-table"))) {
+            for
+                _ <- Browser.assertExists(Selector.id("c1"))
+                w <- Browser.eval("String(document.getElementById('cell-a').offsetWidth)")
+            yield assert(w == "200")
+        }
+    }
+
+    "col is void: it takes no children and closes itself" in {
+        withUI(UI.div(UI.table(
+            UI.colgroup(UI.col.id("void-col")),
+            UI.tbody(UI.tr(UI.td("A")))
+        ).id("void-table"))) {
+            for
+                kids <- Browser.eval("String(document.getElementById('void-col').childNodes.length)")
+                tag  <- Browser.eval("document.getElementById('void-col').tagName")
+            yield
+                assert(kids == "0")
+                assert(tag == "COL")
         }
     }
 
