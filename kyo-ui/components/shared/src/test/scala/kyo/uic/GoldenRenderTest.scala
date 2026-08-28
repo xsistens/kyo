@@ -213,6 +213,10 @@ class GoldenRenderTest extends UicTest:
             uic.Theme.primeExtraCss.contains("--p-uic-dt-select-width: calc(var(--p-checkbox-width, 1.25rem) + 2rem);"),
             "the width of the table's own columns (remainder): the extracted sheet sizes them only by their content"
         )
+        assert(
+            uic.Theme.primeExtraCss.contains(".p-uic-dt-dragging { opacity: 0.5; }"),
+            "the dragged header cell (remainder): the extracted sheet has the cursor and nothing else"
+        )
         assert(!uic.Theme.css.contains(".sap"), "NO sap* class rules anywhere in the theme")
         assert(!uic.Theme.css.contains("--sap"), "NO sap tokens anywhere in the theme")
         assert(!uic.Theme.primeExtraCss.contains(".sap"), "no sap* rules in the Prime remainder")
@@ -2057,6 +2061,80 @@ class GoldenRenderTest extends UicTest:
             assert(!pinned.contains("p-datatable-column-resizer"), "a pinned neighbour takes the only boundary away")
             assert(tree.contains("<colgroup") && tree.contains("width: 140px"), "a hierarchy sizes its columns the same way")
             assert(tree.contains("p-uic-table-fixed"))
+        end for
+    }
+
+    "a reorderable header carries Prime's grip, and a drag renders the line it would land on" in {
+        final case class Row(id: String, name: String, price: Int) derives CanEqual
+        val rows                                           = List(Row("1", "Bamboo", 65), Row("2", "Black", 72))
+        def occurrences(html: String, needle: String): Int = java.util.regex.Pattern.quote(needle).r.findAllIn(html).size
+
+        def table(using Frame) = uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
+            uic.column("Name")(_.name),
+            uic.column("Note")(_ => "n"),
+            uic.column("Price")(_.price.toString)
+        )
+
+        def wire(t: uic.DataTable[Row], drag: Maybe[uic.ColumnDrag] = Absent)(using Frame) =
+            for
+                order <- Signal.initRef(List.empty[List[String]])
+                err   <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                move  <- Signal.initRef(drag)
+                out <- UI.runRender(
+                    t.columnOrder(order).wired(
+                        "t",
+                        Map.empty,
+                        err,
+                        _ => (),
+                        Map.empty,
+                        (_: String) => UI.Rect(0, 0, 0, 0, 0, 0),
+                        Absent,
+                        Present(move)
+                    )
+                ).take(1).run
+            yield out.mkString
+
+        for
+            plain <- UI.runRender(table.render).take(1).run.map(_.mkString)
+            live  <- wire(table)
+            grouped <- wire(uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name),
+                uic.headerGroup("G")(uic.column("Note")(_ => "n"), uic.column("Price")(_.price.toString)),
+                uic.column("Extra")(_ => "e")
+            ))
+            pinned <- wire(uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name),
+                uic.column("Note")(_ => "n").reorderable(false)
+            ))
+            dragging <- wire(table, Present(uic.ColumnDrag(0, 1, 2, 0, List(0, 100, 200, 300), List(2, 3), moved = true)))
+            ordered <-
+                for
+                    order <- Signal.initRef(List(List("Price")))
+                    out   <- UI.runRender(table.columnOrder(order).render).take(1).run
+                yield out.mkString
+        yield
+            // A table nobody bound an order to renders what it always rendered.
+            assert(!plain.contains("p-datatable-reorderable-column"))
+            // Three columns that may all trade places: every header cell is a grip, and
+            // every one of them carries the id the grab measures it by.
+            assert(occurrences(live, "p-datatable-reorderable-column") == 3)
+            assert(live.contains("id=\"t-h0\"") && live.contains("id=\"t-h2\""), "measured without a width in sight")
+            // A header of more than one row does not tile the same columns in each of them,
+            // so a cell that counted its own row from zero would answer for the wrong
+            // column and two cells would carry the same id.
+            assert(
+                List("t-h0", "t-h1", "t-h2", "t-h3").forall(i => occurrences(grouped, s"id=\"$i\"") == 1),
+                "one id per column, whatever row its header cell sits in"
+            )
+            // A pinned column leaves its neighbour nowhere to go, so neither is a grip.
+            assert(!pinned.contains("p-datatable-reorderable-column"))
+            // The line sits on the cell the drop would land in front of, and the cell being
+            // carried is the dimmed one.
+            assert(dragging.contains("p-uic-dt-dragging"))
+            assert(occurrences(dragging, "p-uic-dt-drop-before") == 1)
+            assert(!dragging.contains("p-uic-dt-drop-after"), "the drop is not past the last column")
+            // A seeded order is the order the header renders in, before anyone drags.
+            assert(ordered.indexOf(">Price<") < ordered.indexOf(">Name<"))
         end for
     }
 

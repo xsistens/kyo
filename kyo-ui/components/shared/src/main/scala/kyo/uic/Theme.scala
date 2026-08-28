@@ -276,6 +276,17 @@ object Theme:
       |   (`overflow: hidden` and `white-space: nowrap` on every cell of a resizable table)
       |   and not the algorithm itself, so the mode is set here. */
       |.p-uic-table-fixed { table-layout: fixed; }
+      |/* Where a dragged column would land. Prime positions two floating arrows in
+      |   JavaScript, measured against the container on every move; the same information is
+      |   a line on the cell the drop would land beside, which needs no measurement and
+      |   moves with the cell when anything else re-renders. The header cell it sits on is
+      |   already `position: relative` (resizable) or `sticky` (frozen), so the line is an
+      |   inset shadow rather than a border, which would move the text by a pixel. */
+      |.p-uic-dt-drop-before, .p-uic-dt-drop-after {
+      |  box-shadow: inset 2px 0 0 0 var(--p-primary-color);
+      |}
+      |.p-uic-dt-drop-after { box-shadow: inset -2px 0 0 0 var(--p-primary-color); }
+      |.p-uic-dt-dragging { opacity: 0.5; }
       |/* How wide the table's own columns are. Under the fixed layout a column with no
       |   width takes an equal share of what the sized ones leave over, which over a
       |   checkbox is far more than a checkbox can use; Prime never meets this, since it

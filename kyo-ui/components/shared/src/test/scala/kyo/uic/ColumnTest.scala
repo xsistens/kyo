@@ -96,6 +96,75 @@ class ColumnTest extends UicTest:
 
     // Pruning is by leaf POSITION and not by label: two columns under different groups
     // share a header, and hiding one of them may not take the other with it.
+    /** Every header cell as (label, leaf offset), one list per header row: which column
+      * of the body each cell starts over.
+      */
+    private def offsets(ns: ColumnTree[R]*): List[List[(String, Int)]] =
+        ColumnTree.spans(ns.toList).map(_.map(s => (s.node.label, s.at)))
+
+    // The rows do not tile the same columns: a column beside a group reaches down through
+    // the header and appears in the FIRST row only, so a second row that counted its own
+    // cells from zero would put every cell under it over the wrong column.
+    "a header cell knows which column it starts over, whatever row it sits in" in {
+        assert(
+            offsets(col("A"), grp("G")(col("B"), col("C")), col("D")) ==
+                List(List(("A", 0), ("G", 1), ("D", 3)), List(("B", 1), ("C", 2)))
+        )
+    }
+
+    "nested groups count from their parent, not from the row" in {
+        assert(
+            offsets(col("A"), grp("G")(grp("H")(col("B"), col("C")), col("D"))) ==
+                List(List(("A", 0), ("G", 1)), List(("H", 1), ("D", 3)), List(("B", 1), ("C", 2)))
+        )
+    }
+
+    /** The leaves of a reordered tree, by header, which is what a reader sees left to
+      * right.
+      */
+    private def ordered(order: List[List[String]])(ns: ColumnTree[R]*): List[List[String]] =
+        ColumnTree.leafPaths(ColumnTree.reorder(ns.toList, order)).map(_._1)
+
+    "an empty order leaves the columns where they were authored" in {
+        assert(ordered(Nil)(col("A"), col("B")) == List(List("A"), List("B")))
+    }
+
+    "the order the columns are named in is the order they render in" in {
+        assert(ordered(List(List("B"), List("A")))(col("A"), col("B")) == List(List("B"), List("A")))
+    }
+
+    // A partial order means "these first", which is what lets a caller open a table on one
+    // column without writing every other one down.
+    "a column the order does not name keeps its authored place behind the ones it does" in {
+        assert(
+            ordered(List(List("C")))(col("A"), col("B"), col("C")) ==
+                List(List("C"), List("A"), List("B"))
+        )
+    }
+
+    "a group travels with its columns, and its place is its first one's" in {
+        assert(
+            ordered(List(List("G", "B")))(col("A"), grp("G")(col("B"), col("C"))) ==
+                List(List("G", "B"), List("G", "C"), List("A"))
+        )
+    }
+
+    // One header cell cannot sit in two places, so an order that asks for a group's
+    // columns apart brings them back together where the first of them was asked for.
+    "an order that splits a group renders it whole" in {
+        assert(
+            ordered(List(List("G", "B"), List("A"), List("G", "C")))(grp("G")(col("B"), col("C")), col("A")) ==
+                List(List("G", "B"), List("G", "C"), List("A"))
+        )
+    }
+
+    "columns inside a group reorder among themselves" in {
+        assert(
+            ordered(List(List("G", "C"), List("G", "B")))(grp("G")(col("B"), col("C"))) ==
+                List(List("G", "C"), List("G", "B"))
+        )
+    }
+
     "prune drops the columns it rejects, counting leaves in the order they were written" in {
         val tree = List[ColumnTree[R]](col("A"), grp("G")(col("B"), col("C")), col("D"))
         assert(ColumnTree.prune(tree, i => i != 2).flatMap(_.leaves).map(_.headerV) == List("A", "B", "D"))

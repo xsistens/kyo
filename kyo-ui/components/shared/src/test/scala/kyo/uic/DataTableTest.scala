@@ -396,6 +396,8 @@ class DataTableTest extends UicTest:
 
     private def pointerAt(x: Double): UI.PointerEvent = UI.PointerEvent(x, 0, 0, 0, 6, 30, 1, Absent)
 
+    private val mouseAt: UI.MouseEvent = UI.MouseEvent(Absent, UI.Modifiers.none)
+
     private def resizers(node: UI)(using Frame): Chunk[UI.Ast.Element] < Sync =
         elements(node).map(_.filter(_.attrs.cssClasses.contains("p-datatable-column-resizer")))
 
@@ -646,6 +648,205 @@ class DataTableTest extends UicTest:
         yield
             assert(before == List(Style.Prop.Left(200.px)), "the bound width is what the offset counts")
             assert(after == List(Style.Prop.Left(260.px)), "and it follows the drag that wrote it")
+    }
+
+    /** A table whose columns the reader may drag, with the header measurement stubbed:
+      * every leaf header cell is 100 wide, so `t-h0` starts at 0, `t-h1` at 100, and an
+      * absolute x of 250 is the middle of the third column.
+      */
+    private def movable(
+        pin: Boolean = false,
+        freeze: Boolean = false,
+        group: Boolean = false,
+        hide: Boolean = false
+    )(using Frame) =
+        for
+            rows  <- Signal.initRef[Seq[Item]](items)
+            order <- Signal.initRef(List.empty[List[String]])
+            sort  <- Signal.initRef(List.empty[SortKey])
+            shown <- Signal.initRef(!hide)
+            err   <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            move  <- Signal.initRef(Absent: Maybe[ColumnDrag])
+        yield
+            val base = uic.DataTable[Item]().rows(rows).rowKey(_.id).sort(sort)
+            val table =
+                if group then
+                    base.columns(
+                        uic.headerGroup("G")(
+                            uic.column("Name")(_.name).sortBy(_.name),
+                            uic.column("Price")(_.price.toString)
+                        ),
+                        uic.column("Id")(_.id)
+                    )
+                else if pin then
+                    base.columns(
+                        uic.column("Name")(_.name).sortBy(_.name),
+                        uic.column("Price")(_.price.toString).reorderable(false),
+                        uic.column("Id")(_.id)
+                    )
+                else if freeze then
+                    base.columns(
+                        uic.column("Name")(_.name).sortBy(_.name).width(100).frozen(true),
+                        uic.column("Price")(_.price.toString),
+                        uic.column("Id")(_.id)
+                    )
+                else
+                    base.columns(
+                        uic.column("Name")(_.name).sortBy(_.name),
+                        uic.column("Price")(_.price.toString).visible(shown),
+                        uic.column("Id")(_.id)
+                    )
+            val measure = (id: String) =>
+                val i = id.drop(id.indexOf("-h") + 2).toInt
+                UI.Rect(i * 100.0, 0, 100, 30, 1000, 800): UI.Rect < Async
+            (
+                table.columnOrder(order).wired("t", Map.empty, err, _ => (), Map.empty, measure, Absent, Present(move)),
+                order,
+                sort
+            )
+        end for
+    end movable
+
+    /** Grabs a header cell and lets go somewhere else, the three events a real pointer
+      * posts in that order.
+      */
+    private def dragHeader(node: UI, id: String, from: Double, to: Double)(using Frame): Any < Async =
+        for
+            cell <- cellWithId(node, id)
+            down = cell.attrs.onPointerDown.getOrElse(throw new AssertionError("the header declares no grab"))
+            move = cell.attrs.onPointerMove.getOrElse(throw new AssertionError("the header declares no drag"))
+            up   = cell.attrs.onPointerUp.getOrElse(throw new AssertionError("the header declares no release"))
+            _ <- down(pointerAt(from))
+            _ <- move(pointerAt(to))
+            r <- up(pointerAt(to))
+        yield r
+
+    "dragging a header past another writes the new order" in {
+        for
+            (ui, order, _) <- movable()
+            _              <- dragHeader(ui, "t-h0", 50, 210)
+            moved          <- order.get
+        yield assert(moved == List(List("Price"), List("Name"), List("Id")), "the grabbed column lands where it was dropped")
+    }
+
+    // A header that sorts is also a header that can be dragged, so what tells the two
+    // apart is whether the pointer travelled at all.
+    "a press that does not travel leaves the order alone and still sorts" in {
+        for
+            (ui, order, sort) <- movable()
+            cell              <- cellWithId(ui, "t-h0")
+            down = cell.attrs.onPointerDown.getOrElse(throw new AssertionError("no grab"))
+            up   = cell.attrs.onPointerUp.getOrElse(throw new AssertionError("no release"))
+            _     <- down(pointerAt(50))
+            _     <- up(pointerAt(50))
+            still <- order.get
+            _     <- cell.attrs.onClickEvt.getOrElse(throw new AssertionError("no click"))(mouseAt)
+            keys  <- sort.get
+        yield
+            assert(still.isEmpty, "nothing was written")
+            assert(keys.map(_.path) == List(List("Name")), "the press was the click that sorts")
+    }
+
+    // The browser still owes the cell the click that ends the press, and a header that
+    // sorts would answer a gesture the reader did not make.
+    "the click that ends a drag does not sort, and the next one does" in {
+        for
+            (ui, _, sort) <- movable()
+            _             <- dragHeader(ui, "t-h0", 50, 210)
+            // Name is the second column now, which is the whole point: the columns moved
+            // under the pointer that was still holding them.
+            cell <- cellWithId(ui, "t-h1")
+            clickIt = cell.attrs.onClickEvt.getOrElse(throw new AssertionError("the header declares no click"))
+            _     <- clickIt(mouseAt)
+            after <- sort.get
+            // Freshly off the tree, as the browser has it: swallowing the click cleared the
+            // state, and the re-render that followed handed the cell a handler that sorts.
+            again <- cellWithId(ui, "t-h1")
+            _     <- again.attrs.onClickEvt.getOrElse(throw new AssertionError("no click"))(mouseAt)
+            later <- sort.get
+        yield
+            assert(after.isEmpty, "the click that ended the drag is swallowed")
+            assert(later.map(_.path) == List(List("Name")), "and the one after it sorts")
+    }
+
+    // A pinned column keeps its INDEX and not merely its neighbours, so every drop that
+    // would carry it one place along is taken away rather than quietly moving it.
+    "a column that refuses to be reordered takes away the drops that would move it" in {
+        for
+            (pinned, _, _) <- movable(pin = true)
+            first          <- cellWithId(pinned, "t-h0")
+            last           <- cellWithId(pinned, "t-h2")
+        yield
+            assert(!first.attrs.cssClasses.contains("p-datatable-reorderable-column"), "nowhere to go past the pin")
+            assert(!last.attrs.cssClasses.contains("p-datatable-reorderable-column"))
+    }
+
+    "a drop that would leave a frozen column adrift is not offered" in {
+        for
+            (ui, order, _) <- movable(freeze = true)
+            _              <- dragHeader(ui, "t-h1", 150, 10)
+            still          <- order.get
+            _              <- dragHeader(ui, "t-h1", 150, 310)
+            moved          <- order.get
+        yield
+            assert(still.isEmpty, "nothing may pass in front of the frozen column")
+            assert(moved == List(List("Name"), List("Id"), List("Price")), "and behind it everything still moves")
+    }
+
+    // The header is a tree, and a boundary inside another group would ask one cell to sit
+    // in two places at once.
+    "a column moves among its own siblings and no further" in {
+        for
+            (ui, order, _) <- movable(group = true)
+            _              <- dragHeader(ui, "t-h0", 50, 310)
+            outside        <- order.get
+            _              <- dragHeader(ui, "t-h0", 50, 210)
+            inside         <- order.get
+        yield
+            assert(outside.isEmpty, "a boundary past the group is not one this column may land on")
+            assert(
+                inside == List(List("G", "Price"), List("G", "Name"), List("Id")),
+                "and the far end of its own group is"
+            )
+    }
+
+    // The order a drop writes is the whole authored list, so a column the reader is
+    // hiding comes back where it was rather than behind everything that moved.
+    "a hidden column keeps its place in the order a drag writes" in {
+        for
+            (ui, order, _) <- movable(hide = true)
+            _              <- dragHeader(ui, "t-h0", 50, 190)
+            moved          <- order.get
+        yield assert(moved == List(List("Price"), List("Id"), List("Name")), "the hidden Price keeps its own place")
+    }
+
+    "the order names a column this table does not have" in {
+        for
+            rows  <- Signal.initRef[Seq[Item]](items)
+            order <- Signal.initRef(List(List("Nmae")))
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name),
+                uic.column("Price")(_.price.toString)
+            ).columnOrder(order).render
+            text <- cards(ui)
+        yield
+            assert(text.contains("names a column this table does not have"))
+            assert(text.contains("Nmae"))
+    }
+
+    "moveBlock lifts a block out and puts it back in front of what it was dropped on" in {
+        val xs = List("a", "b", "c", "d")
+        assert(DataTable.moveBlock(xs, 0, 1, 3) == List("b", "c", "a", "d"), "forwards, past what it passed")
+        assert(DataTable.moveBlock(xs, 3, 4, 1) == List("a", "d", "b", "c"), "backwards, in front of the anchor")
+        assert(DataTable.moveBlock(xs, 0, 2, 4) == List("c", "d", "a", "b"), "a block of two travels together")
+        assert(DataTable.moveBlock(xs, 1, 2, 1) == xs, "a drop where it already is changes nothing")
+        assert(DataTable.moveBlock(xs, 1, 2, 2) == xs, "and neither does the boundary behind it")
+    }
+
+    "holdsPinned refuses a move that shifts a column which would not be moved" in {
+        val free = List(true, false, true)
+        assert(!DataTable.holdsPinned(free, 0, 1, 2), "the pinned middle would slide to the front")
+        assert(DataTable.holdsPinned(List(true, true, false), 0, 1, 2), "here the pinned one keeps index 2")
     }
 
 end DataTableTest
