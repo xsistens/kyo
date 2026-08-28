@@ -236,15 +236,30 @@ final case class TreeTable[A] private (
                     renderNode(n, depth = 0, path = i.toString, exp, sel, sort)
                 }
 
+        // One `col` per column when any of them is sized, which is the only place a width
+        // can go: a width on a cell sizes the row it is in, not the column it is under.
+        val colGroupUI: List[UI] =
+            if !cols.exists(_.widthV.isDefined) then Nil
+            else
+                val cs: List[UI] = cols.map(c =>
+                    c.widthV match
+                        case Present(w) => col.style(_.width(w.px))
+                        case Absent     => col
+                )
+                List(colgroup(cs.map(toChild)*))
+
         var tbl = table.cssClass("p-treetable-table").role("treegrid")
+        if colGroupUI.nonEmpty then tbl = tbl.cssClass("p-uic-table-fixed")
         accNameV match
             case Present(TextValue.Const(v)) => tbl = tbl.aria("label", v)
             case Present(TextValue.Dyn(s))   => tbl = tbl.aria("label", s)
             case Absent                      => ()
         end match
         val tableEl: UI = tbl(
-            toChild(thead.cssClass("p-treetable-thead")(toChild(headRow))),
-            toChild(tbody.cssClass("p-treetable-tbody")(bodyRows.map(toChild)*))
+            (colGroupUI ++ List[UI](
+                thead.cssClass("p-treetable-thead")(toChild(headRow)),
+                tbody.cssClass("p-treetable-tbody")(bodyRows.map(toChild)*)
+            )).map(toChild)*
         )
 
         var root = div.cssClass("p-treetable").cssClass("p-component")

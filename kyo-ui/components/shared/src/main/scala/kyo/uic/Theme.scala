@@ -269,6 +269,13 @@ object Theme:
       |/* The filter row's cells carry a field, so they get the padding a field needs rather
       |   than the header cell's, which is sized for a label. */
       |.p-datatable-thead > tr > th:has(> .p-datatable-inline-filter) { padding: 0.5rem; }
+      |/* A width the caller or the reader set is a fact, not a suggestion, and only the
+      |   fixed algorithm treats it as one: under the automatic one the browser may widen a
+      |   column whose content does not fit, which would undo a drag as it happens. The
+      |   extracted sheet carries the clipping that belongs with the fixed algorithm
+      |   (`overflow: hidden` and `white-space: nowrap` on every cell of a resizable table)
+      |   and not the algorithm itself, so the mode is set here. */
+      |.p-uic-table-fixed { table-layout: fixed; }
       |/* PrimeVue scrolls the container and pins the row groups via
       |   DataTableStyle.inlineStyles (the ToggleSwitch precedent); the extracted sheet
       |   carries only the inset and z-index half of the sticky rules. The max-height

@@ -264,7 +264,9 @@ final case class Column[A, +K <: FlatOnly] private (
     editV: Maybe[CellEdit[A]] = Absent,
     navigableFlag: Boolean = true,
     visibleV: Maybe[BoolValue] = Absent,
-    filterV: Maybe[CellFilter[A]] = Absent
+    filterV: Maybe[CellFilter[A]] = Absent,
+    widthV: Maybe[Double] = Absent,
+    resizableFlag: Boolean = true
 ) extends ColumnTree[A]:
     private[uic] def label: String                        = headerV
     private[uic] def leaves: List[Column[A, FlatOnly]]    = List(this)
@@ -429,6 +431,28 @@ final case class Column[A, +K <: FlatOnly] private (
       * hides: bind the signal a toggle writes.
       */
     def visible(sig: Signal[Boolean]): Column[A, K] = copy(visibleV = Present(BoolValue.Dyn(sig)))
+
+    /** How wide this column is, in CSS pixels.
+      *
+      * The width reaches the column through a `col` element and not through its cells,
+      * which is the only place that can carry one: a cell sizes the row it is in, and a
+      * grouped header's cell spans several columns and cannot say how wide any single one
+      * of them is. It is authoritative rather than a suggestion, so a value too long for
+      * it is clipped instead of widening the column under the reader.
+      *
+      * Columns with no width share what the ones that have it leave over.
+      */
+    def width(px: Double): Column[A, K] = copy(widthV = Present(px))
+
+    /** Whether the reader may drag this column's width, which is a separate question from
+      * whether it HAS one ([[width]]) and needs [[DataTable.columnWidths]] bound to write
+      * the new one into.
+      *
+      * A drag moves the BOUNDARY between two columns and changes both, so the handle
+      * appears only where both sides allow it, and a column that answers false pins its
+      * own width and its neighbour's edge with it.
+      */
+    def resizable(v: Boolean): Column[A, K] = copy(resizableFlag = v)
 
     def align(v: ColumnAlign): Column[A, K] = copy(alignV = v)
 
