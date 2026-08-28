@@ -490,4 +490,162 @@ class DataTableTest extends UicTest:
             assert(text.contains("Nmae"), "the unknown path is named")
     }
 
+    /** The cells of one column, header and body together, taken by position rather than by
+      * class: what is under test is which of them hold and where, and a cell that has
+      * stopped holding is exactly a cell with no class left to look up.
+      */
+    private def cellsAt(node: UI, index: Int)(using Frame): Chunk[UI.Ast.Element] < Sync =
+        elements(node).map(_.collect {
+            case r: UI.Ast.Tr => r
+        }.flatMap(r => r.children.collect { case e: UI.Ast.Element => e }.lift(index)))
+
+    private def held(el: UI.Ast.Element): Boolean = el.attrs.cssClasses.contains("p-datatable-frozen-column")
+
+    private def offsets(cells: Chunk[UI.Ast.Element]): List[Style.Prop] =
+        cells.toList.flatMap(_.attrs.uiStyle.props.filter {
+            case _: Style.Prop.Left | _: Style.Prop.Right => true
+            case _                                        => false
+        }).distinct
+
+    private def cards(node: UI)(using Frame): String < Sync =
+        elements(node).map(_.filter(_.attrs.cssClasses.contains("p-uic-key-error"))
+            .flatMap(_.children.collect { case t: UI.Ast.Text => t.value }).mkString(" "))
+
+    // The whole arithmetic in one table: a frozen column holds at the distance the columns
+    // between it and the edge take up, so the first sits on the edge and the second stands
+    // off it by exactly the first one's width.
+    "a frozen column holds at the width of the columns before it" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](items)
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name).width(220).frozen(true),
+                uic.column("Price")(_.price.toString).width(120).frozen(true),
+                uic.column("Id")(_.id)
+            ).render
+            first  <- cellsAt(ui, 0)
+            second <- cellsAt(ui, 1)
+            third  <- cellsAt(ui, 2)
+        yield
+            assert(first.forall(held) && second.forall(held), "header and body cells alike")
+            assert(!third.exists(held), "the free column scrolls")
+            assert(offsets(first) == List(Style.Prop.Left(0.px)))
+            assert(offsets(second) == List(Style.Prop.Left(220.px)), "the width of the one before it")
+    }
+
+    // The table's own columns stand between a frozen one and the edge, so they hold too,
+    // and their width is part of the offset. It is a variable rather than a number because
+    // the width the col carries and the width the offset counts have to be one quantity.
+    "the checkbox column holds with the frozen ones, and its width is in their offset" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](items)
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).selectionMode(SelectionMode.Checkbox).columns(
+                uic.column("Name")(_.name).width(220).frozen(true),
+                uic.column("Price")(_.price.toString).width(120).frozen(true),
+                uic.column("Id")(_.id)
+            ).render
+            lead   <- cellsAt(ui, 0)
+            name   <- cellsAt(ui, 1)
+            price  <- cellsAt(ui, 2)
+            widths <- elements(ui).map(_.collect { case c: UI.Ast.Col => c })
+        yield
+            assert(lead.forall(held), "the checkbox column is between the frozen one and the edge")
+            assert(offsets(lead) == List(Style.Prop.Left(0.px)))
+            assert(offsets(name) == List(Style.Prop.Left(Length.Calc("var(--p-uic-dt-select-width)"))))
+            assert(
+                offsets(price) == List(Style.Prop.Left(Length.Calc("var(--p-uic-dt-select-width) + 220px"))),
+                "past the checkbox column and the column before it"
+            )
+            assert(
+                widths.head.attrs.uiStyle.props == Seq(Style.Prop.Width(Length.Calc("var(--p-uic-dt-select-width)"))),
+                "and the col carries the same quantity, so the two cannot drift"
+            )
+    }
+
+    "a column frozen against the end holds at the width of the ones after it" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](items)
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name),
+                uic.column("Price")(_.price.toString).width(150).frozen(FrozenEdge.End),
+                uic.column("Id")(_.id).width(100).frozen(FrozenEdge.End)
+            ).render
+            free   <- cellsAt(ui, 0)
+            middle <- cellsAt(ui, 1)
+            last   <- cellsAt(ui, 2)
+        yield
+            assert(!free.exists(held))
+            assert(offsets(last) == List(Style.Prop.Right(0.px)), "the last column sits on the trailing edge")
+            assert(offsets(middle) == List(Style.Prop.Right(100.px)), "and the one before it stands off by its width")
+    }
+
+    // All or nothing: an offset is a sum over the columns in front of a cell, so one that
+    // cannot contribute its width makes every offset behind it wrong, and a wrong offset
+    // is a column parked over the middle of the table.
+    "a frozen column with no width freezes nothing and names itself" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](items)
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name).frozen(true),
+                uic.column("Price")(_.price.toString).width(120)
+            ).render
+            first <- cellsAt(ui, 0)
+            text  <- cards(ui)
+        yield
+            assert(!first.exists(held), "nothing holds")
+            assert(text.contains("has no width"))
+            assert(text.contains("Name"), "and the column is named")
+    }
+
+    "a free column between a frozen one and its edge freezes nothing" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](items)
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name).width(220),
+                uic.column("Price")(_.price.toString).width(120).frozen(true)
+            ).render
+            second <- cellsAt(ui, 1)
+            text   <- cards(ui)
+        yield
+            assert(!second.exists(held))
+            assert(text.contains("free column between it and its edge"))
+            assert(text.contains("Price"))
+    }
+
+    // One header cell cannot half scroll, so a group has to agree with itself.
+    "a header group over a frozen and a free column is reported" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](items)
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
+                uic.headerGroup("Item")(
+                    uic.column("Name")(_.name).width(220).frozen(true),
+                    uic.column("Price")(_.price.toString).width(120)
+                )
+            ).render
+            first <- cellsAt(ui, 0)
+            text  <- cards(ui)
+        yield
+            assert(!first.exists(held), "the group disagrees with itself, so the table freezes nothing")
+            assert(text.contains("do not agree where they belong"))
+            assert(text.contains("Item"))
+    }
+
+    // A width the reader dragged is the width the offsets are computed from, since both
+    // read the same bound map on the same render.
+    "a dragged width moves the column stuck behind it" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](items)
+            cols <- Signal.initRef(Map(List("Name") -> 200.0))
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name).frozen(true),
+                uic.column("Price")(_.price.toString).width(120).frozen(true),
+                uic.column("Id")(_.id)
+            ).columnWidths(cols).render
+            before <- cellsAt(ui, 1).map(offsets)
+            _      <- cols.set(Map(List("Name") -> 260.0))
+            after  <- cellsAt(ui, 1).map(offsets)
+        yield
+            assert(before == List(Style.Prop.Left(200.px)), "the bound width is what the offset counts")
+            assert(after == List(Style.Prop.Left(260.px)), "and it follows the drag that wrote it")
+    }
+
 end DataTableTest

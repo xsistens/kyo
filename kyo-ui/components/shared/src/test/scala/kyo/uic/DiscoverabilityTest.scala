@@ -920,6 +920,34 @@ def x(r: SignalRef[Map[List[String], Double]])(using Frame) =
         typeCheckFailure(preamble + """def x(r: SignalRef[Map[String, Double]]) = uic.DataTable[String]().columnWidths(r)""")
     }
 
+    "Column.frozen takes an edge, and the hierarchy that cannot scroll refuses it" in {
+        typeCheck(
+            preamble +
+                """final case class R(name: String)
+def x(using Frame) = uic.DataTable[R]().columns(
+  uic.column("Name")(_.name).width(180).frozen(true),
+  uic.column("Note")(_.name).width(90).frozen(uic.FrozenEdge.End)
+)"""
+        )
+        // A TreeTable puts its table in no scroll container, so there is no edge to hold
+        // against, and the kind is what says so before anything renders.
+        typeCheckFailure(
+            preamble +
+                """final case class R(name: String)
+def x(using Frame) = uic.TreeTable[R]().columns(uic.column("Name")(_.name).width(180).frozen(true))"""
+        )
+        // Freezing is the column's, as its width is; the table decides nothing about it.
+        typeCheckFailure(preamble + """def x = uic.DataTable[String]().frozen(true)""")
+        // It resets the kind, so an edit has to be declared before the column is frozen.
+        typeCheckFailure(
+            preamble +
+                """final case class R(name: String)
+def x(using Frame) = uic.DataTable[R]().columns(
+  uic.column("Name")(_.name).editable(_.name)((r, v) => r.copy(name = v)).frozen(true).editableWhen(_ => true)
+)"""
+        )
+    }
+
     "a headerGroup nests inside columns(...), takes no column setter, and no hierarchy takes it" in {
         // Columns written under a group read the same scope, so they still carry no type
         // argument, and a group nests in a group.

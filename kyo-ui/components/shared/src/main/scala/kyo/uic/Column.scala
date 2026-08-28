@@ -13,14 +13,26 @@ import scala.annotation.tailrec
 enum ColumnAlign derives CanEqual:
     case Start, Center, End
 
+/** Which edge of the table a frozen [[Column]] holds on to while the rest scrolls past
+  * it, Prime's `alignFrozen`.
+  *
+  * `Start` and `End` and not left and right, because that is what the rest of the
+  * component says: an [[ColumnAlign]] of `End` puts a number against the trailing edge
+  * whichever way the text runs.
+  */
+enum FrozenEdge derives CanEqual:
+    case Start, End
+
 /** Which tables accept a [[Column]], carried as the column's second, phantom type
   * argument so a table can refuse one it could not honor.
   *
-  * `Column` is shared by [[DataTable]] and [[TreeTable]], and three of its options mean
+  * `Column` is shared by [[DataTable]] and [[TreeTable]], and several of its options mean
   * nothing over a hierarchy: [[Column.footer]] fills a `tfoot` a TreeTable does not
   * render, [[Column.rowSpan]] merges runs of equal cells, which consecutive rows at
-  * different depths do not form, and [[Column.editable]] is read by an editing state a
-  * TreeTable does not carry. All three setters return a `FlatOnly` column, which
+  * different depths do not form, [[Column.editable]] is read by an editing state a
+  * TreeTable does not carry, [[Column.filterBy]] fills a filter row it does not render,
+  * and [[Column.frozen]] holds a column against the edge of a scroll container it does
+  * not put its table in. Every one of those setters returns a `FlatOnly` column, which
   * `TreeTable.columns` will not take.
   *
   * `AnyTable` extends `FlatOnly` because the subtyping runs that way round: a column
@@ -50,7 +62,7 @@ sealed trait EditableFlatOnly extends FlatOnly
 /** Evidence that a column is editable. See [[EditableFlatOnly]]. */
 @implicitNotFound(
     "editableWhen and onValueChanged refine an edit, and this column has none. Call editable(read)(write) " +
-        "(or editableAs) first, and call it before footer or rowSpan, which reset the kind."
+        "(or editableAs) first, and call it before footer, rowSpan, filterBy or frozen, which reset the kind."
 )
 type IsEditable[K] = K <:< EditableFlatOnly
 
@@ -69,10 +81,11 @@ type HasText[K] = K <:< TextFlatOnly
   */
 @implicitNotFound(
     "A TreeTable takes plain columns only. It renders one header row, so a headerGroup has no place in it, and it " +
-        "renders no tfoot, no merged runs, no editing state and no filter row, so a column carrying footer, rowSpan, " +
-        "editable or filterBy does not fit either: a footer needs the tfoot, rowSpan merges runs of equal cells, which " +
-        "rows at different depths do not form, an edit pipeline is read by an editing state this table does not bind, " +
-        "and filtering a hierarchy is a different question, since a row that matches has to keep its parents."
+        "renders no tfoot, no merged runs, no editing state, no filter row and no scroll container, so a column " +
+        "carrying footer, rowSpan, editable, filterBy or frozen does not fit either: a footer needs the tfoot, " +
+        "rowSpan merges runs of equal cells, which rows at different depths do not form, an edit pipeline is read " +
+        "by an editing state this table does not bind, filtering a hierarchy is a different question, since a row " +
+        "that matches has to keep its parents, and a frozen column needs something to be frozen against."
 )
 sealed trait AnyTableColumn[-K <: FlatOnly]:
     /** Hands back what the evidence already proves: a `K` column is an `AnyTable` one.
@@ -266,7 +279,8 @@ final case class Column[A, +K <: FlatOnly] private (
     visibleV: Maybe[BoolValue] = Absent,
     filterV: Maybe[CellFilter[A]] = Absent,
     widthV: Maybe[Double] = Absent,
-    resizableFlag: Boolean = true
+    resizableFlag: Boolean = true,
+    frozenV: Maybe[FrozenEdge] = Absent
 ) extends ColumnTree[A]:
     private[uic] def label: String                        = headerV
     private[uic] def leaves: List[Column[A, FlatOnly]]    = List(this)
@@ -453,6 +467,28 @@ final case class Column[A, +K <: FlatOnly] private (
       * own width and its neighbour's edge with it.
       */
     def resizable(v: Boolean): Column[A, K] = copy(resizableFlag = v)
+
+    /** Holds this column against the leading edge of the table while the columns beside
+      * it scroll past, Prime's `frozen`.
+      *
+      * A frozen column is one the reader keeps in sight, so it has to be somewhere: the
+      * cell is stuck at the distance from the edge that the columns between it and the
+      * edge take up, and the table works that distance out from their widths. That is why
+      * a frozen column needs a [[width]], and why the frozen ones have to REACH the edge:
+      * a free column between them and it would carry the frozen one away as it scrolled.
+      * A table that breaks either rule freezes nothing and says so in a card.
+      *
+      * Declaring one puts the table in a scroll container, since a column can only be
+      * frozen against something that scrolls. [[DataTable.scrollHeight]] adds a cap on
+      * the height; freezing on its own scrolls sideways, which is all a wide table needs.
+      */
+    def frozen(v: Boolean): Column[A, FlatOnly] =
+        copy(frozenV = if v then Present(FrozenEdge.Start) else Absent)
+
+    /** [[frozen]] against a chosen edge: `End` holds the column against the trailing one,
+      * which is where a column of row actions belongs.
+      */
+    def frozen(edge: FrozenEdge): Column[A, FlatOnly] = copy(frozenV = Present(edge))
 
     def align(v: ColumnAlign): Column[A, K] = copy(alignV = v)
 

@@ -209,6 +209,10 @@ class GoldenRenderTest extends UicTest:
             uic.Theme.primeExtraCss.contains(".p-uic-table-fixed { table-layout: fixed; }"),
             "the layout mode a column width needs (remainder): the extracted sheet carries the clipping, not the mode"
         )
+        assert(
+            uic.Theme.primeExtraCss.contains("--p-uic-dt-select-width: calc(var(--p-checkbox-width, 1.25rem) + 2rem);"),
+            "the width of the table's own columns (remainder): the extracted sheet sizes them only by their content"
+        )
         assert(!uic.Theme.css.contains(".sap"), "NO sap* class rules anywhere in the theme")
         assert(!uic.Theme.css.contains("--sap"), "NO sap tokens anywhere in the theme")
         assert(!uic.Theme.primeExtraCss.contains(".sap"), "no sap* rules in the Prime remainder")
@@ -2053,6 +2057,57 @@ class GoldenRenderTest extends UicTest:
             assert(!pinned.contains("p-datatable-column-resizer"), "a pinned neighbour takes the only boundary away")
             assert(tree.contains("<colgroup") && tree.contains("width: 140px"), "a hierarchy sizes its columns the same way")
             assert(tree.contains("p-uic-table-fixed"))
+        end for
+    }
+
+    "a frozen column renders Prime's sticky cell, at the offset the widths add up to" in {
+        final case class Row(id: String, name: String, price: Int) derives CanEqual
+        val rows                                           = List(Row("1", "Bamboo", 65), Row("2", "Black", 72))
+        def occurrences(html: String, needle: String): Int = java.util.regex.Pattern.quote(needle).r.findAllIn(html).size
+
+        for
+            plain <- UI.runRender(
+                uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
+                    uic.column("Name")(_.name).width(220)
+                ).render
+            ).take(1).run.map(_.mkString)
+            start <- UI.runRender(
+                uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
+                    uic.column("Name")(_.name).width(220).frozen(true),
+                    uic.column("Price")(_.price.toString).width(120).frozen(true),
+                    uic.column("Note")(_ => "n")
+                ).render
+            ).take(1).run.map(_.mkString)
+            withLead <- UI.runRender(
+                uic.DataTable[Row]().rows(rows).rowKey(_.id).selectionMode(uic.SelectionMode.Checkbox).columns(
+                    uic.column("Name")(_.name).width(220).frozen(true),
+                    uic.column("Note")(_ => "n")
+                ).render
+            ).take(1).run.map(_.mkString)
+            end <- UI.runRender(
+                uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
+                    uic.column("Name")(_.name),
+                    uic.column("Price")(_.price.toString).width(150).frozen(uic.FrozenEdge.End),
+                    uic.column("Note")(_ => "n").width(100).frozen(uic.FrozenEdge.End)
+                ).render
+            ).take(1).run.map(_.mkString)
+        yield
+            // A table that freezes nothing stays out of the scroll container: freezing is
+            // what asks for one, since a column can only be frozen against something moving.
+            assert(!plain.contains("p-datatable-scrollable") && !plain.contains("p-datatable-frozen-column"))
+            assert(start.contains("p-datatable-scrollable") && start.contains("p-datatable-scrollable-table"))
+            // Two rows of data plus the header row, for each of the two frozen columns.
+            assert(occurrences(start, "p-datatable-frozen-column") == 6)
+            assert(start.contains("left: 0"), "the first one sits on the edge")
+            assert(start.contains("left: 220px"), "and the second stands off it by the first one's width")
+            assert(!start.contains("left: 340px"), "the free column carries no offset of its own")
+            // The checkbox column stands between the frozen one and the edge, so it holds
+            // too, and its width is the same variable in the col and in the offset.
+            assert(withLead.contains("width: calc(var(--p-uic-dt-select-width))"))
+            assert(withLead.contains("left: calc(var(--p-uic-dt-select-width))"))
+            assert(!withLead.contains("left: 220px"), "nothing is frozen past the sized column")
+            assert(end.contains("right: 0") && end.contains("right: 100px"), "the trailing edge counts backwards")
+            assert(!end.contains("left: "), "and a column held against one edge names only that one")
         end for
     }
 
