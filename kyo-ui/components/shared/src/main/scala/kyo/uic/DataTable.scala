@@ -83,6 +83,43 @@ end FilterState
   */
 final private[uic] case class ColumnGrab(startX: Double, width: Double, next: Double) derives CanEqual
 
+/** A header cell on the move: the block of leaf columns it covers, the boundary the
+  * reader has pulled it to, and the boundaries it is allowed to land on.
+  *
+  * `edges` are the absolute x of every boundary in the header, measured once when the
+  * pointer goes down; a reorder changes no width, so what was measured on the grab is
+  * still true when the pointer lets go, which is what keeps a drag from measuring the
+  * header again on every frame the way Prime's does. `allowed` is the subset a drop may
+  * land on. Both are kept, and not just the allowed ones, because the boundary the
+  * pointer is nearest has to be found before it can be judged: snapping to the nearest
+  * ALLOWED one instead would drag a column somewhere the reader never pointed as soon as
+  * only one place was left to put it.
+  *
+  * `moved` is what separates a drag from a click: a header that sorts is also a header
+  * that can be dragged, and a pointer that went down and up without travelling meant the
+  * click. `done` carries that decision to the click which follows a real drag, and the
+  * sort handler swallows it rather than re-sorting a column the reader only moved.
+  */
+final private[uic] case class ColumnDrag(
+    from: Int,
+    until: Int,
+    target: Int,
+    startX: Double,
+    edges: List[Double] = Nil,
+    allowed: List[Int] = Nil,
+    moved: Boolean = false,
+    done: Boolean = false
+) derives CanEqual
+
+/** What the column order needs once the mount has run: somewhere to park the drag that
+  * is rewriting it, and the drag itself, resolved for the cells that render it.
+  */
+final private[uic] case class OrderState(
+    drag: Maybe[SignalRef[Maybe[ColumnDrag]]] = Absent,
+    held: Maybe[ColumnDrag] = Absent,
+    requested: List[List[String]] = Nil
+)
+
 /** What the column widths need: the bound map, and, once the mount has run, the way to
   * measure a header cell and somewhere to park a grab.
   *
@@ -268,7 +305,9 @@ final case class DataTable[A] private (
     translatorV: ErrorTranslator = ErrorTranslator.default,
     hiddenPaths: List[(List[String], Column[A, FlatOnly])] = Nil,
     columnFiltersRef: Maybe[SignalRef[Map[List[String], ColumnFilter]]] = Absent,
-    columnWidthsRef: Maybe[SignalRef[Map[List[String], Double]]] = Absent
+    columnWidthsRef: Maybe[SignalRef[Map[List[String], Double]]] = Absent,
+    columnOrderRef: Maybe[SignalRef[List[List[String]]]] = Absent,
+    orderedPaths: List[List[String]] = Nil
 ) extends Node:
     type Self = DataTable[A]
 
@@ -365,6 +404,25 @@ final case class DataTable[A] private (
       */
     def columnWidths(ref: SignalRef[Map[List[String], Double]]): DataTable[A] =
         copy(columnWidthsRef = Present(ref))
+
+    /** Binds the order the columns render in, as their paths from left to right, and lets
+      * the reader drag a header cell to another place.
+      *
+      * The order is the same currency the sort spec, the column filters and the widths
+      * already speak, so a reordered table sorts and filters by the columns it was
+      * authored with and nothing downstream has to be told they moved. A leaf the order
+      * does not name keeps its authored place behind the ones it does, so a seeded
+      * `List(List("Price"))` means "Price first" rather than "the rest is undefined", and
+      * what a drag writes is the whole list, hidden columns included, so a column shown
+      * again after a reorder comes back where it was and not at the end.
+      *
+      * What may be dropped where follows from the table rather than from a rule of its
+      * own: a cell moves among its own siblings, since a header is a tree and one cell
+      * cannot sit in two groups, and a drop that would leave a frozen column adrift is
+      * not offered, since freezing is what the reader would silently lose.
+      */
+    def columnOrder(ref: SignalRef[List[List[String]]]): DataTable[A] =
+        copy(columnOrderRef = Present(ref))
 
     /** Slices the rows into pages of `size` and renders the embedded paginator;
       * `ref` holds the 0-based page index (clamped at render).
@@ -599,7 +657,7 @@ final case class DataTable[A] private (
       * renders through a mount: the drafts and the standing error of an editing table,
       * and the menu-open state of a filter row.
       */
-    private def ownsState: Boolean = editingBound || navOn || filterRowOn || resizeOn
+    private def ownsState: Boolean = editingBound || navOn || filterRowOn || resizeOn || reorderOn
 
     /** Whether the filter row is rendered: the filters have to be bound somewhere, and
       * some column has to carry a pipeline for the row to hold anything.
@@ -639,14 +697,52 @@ final case class DataTable[A] private (
       */
     private def hasWidths: Boolean = columnWidthsRef.isDefined || leafCols.exists(_.widthV.isDefined)
 
+    /** Whether the reader may move a column, which needs the order bound to write into
+      * and two columns willing to trade places.
+      */
+    private def reorderOn: Boolean = columnOrderRef.isDefined && leafCols.count(_.reorderableFlag) > 1
+
+    /** The full order this table renders in, hidden columns included: what a drop rewrites.
+      * Before a bound order has been resolved it is the authored one.
+      */
+    private def effectiveOrder: List[List[String]] =
+        if orderedPaths.nonEmpty then orderedPaths else leafPaths.map(_._1)
+
+    /** The leaf boundaries a header cell covering `[from, until)` may be dropped at.
+      *
+      * Two rules, and both are read off the table rather than declared. A cell moves among
+      * its own SIBLINGS, since the header is a tree and a boundary inside another group
+      * would ask one cell to sit in two places at once; and a boundary that would leave a
+      * frozen column adrift is dropped from the list, since the reader would otherwise
+      * lose the freezing by moving something else. The second is checked by moving the
+      * columns and asking the frozen rule, so the two can never disagree.
+      */
+    private def dropStops(path: List[String], from: Int, until: Int): List[Int] =
+        val parent = path.dropRight(1)
+        val under  = leafPaths.zipWithIndex.collect { case ((p, _), i) if p.startsWith(parent) => i }
+        if under.isEmpty then Nil
+        else
+            // The siblings tile the parent's leaves, so a change in the label at the
+            // parent's own depth is where one sibling ends and the next begins.
+            val starts = under.filter { i =>
+                val label = leafPaths(i)._1.lift(parent.length)
+                i == under.head || leafPaths(i - 1)._1.lift(parent.length) != label
+            }
+            val edges = leafCols.map(_.frozenV)
+            val free  = leafCols.map(_.reorderableFlag)
+            (starts :+ (under.last + 1)).filter { b =>
+                (b < from || b > until) &&
+                DataTable.adrift(DataTable.moveBlock(edges, from, until, b)).isEmpty &&
+                DataTable.holdsPinned(free, from, until, b)
+            }
+        end if
+    end dropStops
+
     /** Whether any column asks to be held against an edge, which is also what puts the
       * table in a scroll container: a column can only be frozen against something that
       * scrolls, and a wide table with no cap on its height still scrolls sideways.
       */
     private def frozenOn: Boolean = leafCols.exists(_.frozenV.isDefined)
-
-    private def frozenAt(i: Int, edge: FrozenEdge): Boolean =
-        i >= 0 && i < leafCols.length && leafCols(i).frozenV.exists(_ == edge)
 
     /** The component's own columns between the leading edge and the first data column,
       * as the CSS terms an offset reaching past them is written in.
@@ -675,33 +771,20 @@ final case class DataTable[A] private (
       * the frozen one along or leave it standing over the gap it left.
       */
     private def adriftFrozen: List[List[String]] =
-        leafPaths.zipWithIndex.collect {
-            case ((p, c), i)
-                if (c.frozenV.exists(_ == FrozenEdge.Start) && (0 until i).exists(j => !frozenAt(j, FrozenEdge.Start))) ||
-                    (c.frozenV.exists(_ == FrozenEdge.End) &&
-                        (i + 1 until leafCols.length).exists(j => !frozenAt(j, FrozenEdge.End))) =>
-                p
-        }
+        DataTable.adrift(leafCols.map(_.frozenV)).map(i => leafPaths(i)._1)
 
     /** The header groups spanning a frozen column and a free one, or two frozen against
       * opposite edges. One cell cannot half scroll, so the group says the columns under
       * it disagree about where they belong.
       */
     private def splitFrozenGroups: List[List[String]] =
-        ColumnTree.spans(cols).flatMap(withLeafOffsets).collect {
-            case (sp, at) if sp.node.asColumn.isEmpty && mixedEdges(at, at + sp.colspan) => sp.path
+        ColumnTree.spans(cols).flatten.collect {
+            case sp if sp.node.asColumn.isEmpty && mixedEdges(sp.at, sp.at + sp.colspan) => sp.path
         }
 
     private def mixedEdges(from: Int, until: Int): Boolean =
         val edges = (from until until).toList.map(i => leafCols(i).frozenV)
         edges.exists(_.isDefined) && edges.distinct.length > 1
-
-    /** Each header cell of one row paired with the index of its leftmost leaf. The spans
-      * tile the columns left to right, so the running sum of the colspans IS that index,
-      * and no second walk of the tree can disagree with the one the header rendered.
-      */
-    private def withLeafOffsets(cells: List[ColumnTree.HeaderSpan[A]]): List[(ColumnTree.HeaderSpan[A], Int)] =
-        cells.scanLeft(0)((at, sp) => at + sp.colspan).zip(cells).map((at, sp) => (sp, at))
 
     /** Where every frozen cell of this table holds, or nothing at all.
       *
@@ -742,6 +825,156 @@ final case class DataTable[A] private (
         end if
     end frozenPlan
 
+    /** Prime's reorderable header cell: the whole cell is the grip, which is what the
+      * `cursor: move` in the extracted sheet says, plus the line showing where a drop
+      * would land.
+      *
+      * Prime positions two floating arrows in JavaScript, measured against the container
+      * on every move. The same information is a border on the cell the drop would land
+      * beside, which needs no measurement at all and moves with the cell if anything else
+      * re-renders underneath.
+      */
+    private def reorderCell(
+        cell: Ast.Th,
+        path: List[String],
+        from: Int,
+        until: Int,
+        size: SizeState,
+        order: OrderState,
+        sorts: Boolean
+    )(using Frame): Ast.Th =
+        val mine  = (from until until).toList
+        val stops = if !reorderOn || !mine.forall(i => leafCols(i).reorderableFlag) then Nil else dropStops(path, from, until)
+        var c     = cell
+        // Whatever cell the pointer was over when it let go still owes the browser a
+        // click, and after the drop that is not the cell the drag started on: the columns
+        // moved under it. A cell that does not sort takes that click and drops it, so the
+        // press cannot reach the NEXT header the reader clicks.
+        if reorderOn && size.live && !sorts then c = c.onClick(clearDrag(order))
+        if stops.nonEmpty then
+            c = c.cssClass("p-datatable-reorderable-column")
+            // Before the mount runs there is nothing to park a drag in, so the cell says
+            // what it is and does nothing, the trade the resize handle already makes.
+            if size.live then
+                c = c
+                    .onPointerDown(e => beginReorder(from, until, stops, e, size, order))
+                    .onPointerMove(e => dragReorder(e, order))
+                    .onPointerUp(_ => endReorder(order))
+            end if
+        end if
+        order.held match
+            case Present(d) if d.moved && !d.done =>
+                if d.from == from && d.until == until then c = c.cssClass("p-uic-dt-dragging")
+                if d.target == from then c = c.cssClass("p-uic-dt-drop-before")
+                else if d.target == until && until == leafCols.length then c = c.cssClass("p-uic-dt-drop-after")
+            case _ => ()
+        end match
+        c
+    end reorderCell
+
+    /** A pointer going down on a header cell: measure the header once and remember where
+      * every boundary this cell may land on sits.
+      *
+      * Measuring here and not on every move is what a reorder can afford and a resize
+      * cannot: moving a column changes no width, so the header the reader grabbed is the
+      * header they let go of.
+      */
+    private def beginReorder(from: Int, until: Int, stops: List[Int], e: PointerEvent, size: SizeState, order: OrderState)(
+        using Frame
+    ): Any < Async =
+        order.drag match
+            case Present(ref) =>
+                for
+                    rects <- Kyo.foreach(leafPaths.indices.toList)(i => size.measure(headerId(i, size)))
+                    edges = rects.map(_.x).toList :+ rects.lastOption.map(r => r.x + r.width).getOrElse(0.0)
+                    r <- ref.set(Present(ColumnDrag(from, until, from, e.rectX + e.x, edges, stops)))
+                yield r
+            case Absent => ()
+
+    /** A pointer moving with a header cell: the drop lands on the boundary nearest to it.
+      *
+      * The state is written only when the answer CHANGES, which is what keeps a reorder
+      * from re-rendering the table on every animation frame the way a resize has to: what
+      * the reader sees is one line, and it moves when it moves to another boundary.
+      */
+    private def dragReorder(e: PointerEvent, order: OrderState)(using Frame): Any < Async =
+        order.drag match
+            case Present(ref) =>
+                ref.get.map {
+                    case Present(d) if !d.done =>
+                        val x     = e.rectX + e.x
+                        val moved = d.moved || math.abs(x - d.startX) >= DataTable.DragThreshold
+                        val t     = if !moved then d.target else nearestStop(d, x)
+                        if moved == d.moved && t == d.target then ()
+                        else ref.set(Present(d.copy(target = t, moved = moved)))
+                    case _ => ()
+                }
+            case Absent => ()
+
+    /** The boundary a pointer at `x` is asking for: the nearest one in the header, taken
+      * only if a drop may land there. A pointer over a place this column cannot go answers
+      * where it started, so the line disappears and letting go writes nothing.
+      */
+    private def nearestStop(d: ColumnDrag, x: Double): Int =
+        val near = d.edges.zipWithIndex.minByOption((at, _) => math.abs(at - x)).map(_._2).getOrElse(d.from)
+        if d.allowed.contains(near) then near else d.from
+
+    /** A pointer letting go: write the new order, or drop a press that never travelled.
+      *
+      * A completed drag leaves `done` behind rather than clearing the state, because the
+      * browser still owes this cell the click that ends the press, and a header that
+      * sorts would take it.
+      */
+    private def endReorder(order: OrderState)(using Frame): Any < Async =
+        (order.drag, columnOrderRef) match
+            case (Present(ref), Present(target)) =>
+                ref.get.map {
+                    case Present(d) if d.moved =>
+                        val next               = reorderedPaths(d)
+                        val write: Any < Async = if next == effectiveOrder then () else target.set(next)
+                        write.andThen(ref.set(Present(ColumnDrag(d.from, d.until, d.target, d.startX, done = true))))
+                    case _ => ref.set(Absent)
+                }
+            case _ => ()
+
+    /** The full order a completed drag writes: the dragged block lifted out of the order
+      * this table renders and put back in front of the column it was dropped on.
+      *
+      * It is written in PATHS and over the whole order, hidden columns included, so a
+      * column a visibility flag is hiding keeps its place while the reader moves the
+      * others, and comes back where it was rather than behind them.
+      */
+    private def reorderedPaths(d: ColumnDrag): List[List[String]] =
+        if d.target >= d.from && d.target <= d.until then effectiveOrder
+        else reorderedAround(d)
+
+    private def reorderedAround(d: ColumnDrag): List[List[String]] =
+        val block = (d.from until d.until).toList.map(i => leafPaths(i)._1)
+        val rest  = effectiveOrder.filterNot(block.contains)
+        if d.target >= leafPaths.length then rest ++ block
+        else
+            val i = rest.indexOf(leafPaths(d.target)._1)
+            if i < 0 then rest ++ block else rest.take(i) ++ block ++ rest.drop(i)
+        end if
+    end reorderedAround
+
+    /** A header click, which is a sort everywhere except right after a drag: the press
+      * that moved a column also ends in a click, and re-sorting on it would answer a
+      * gesture the reader did not make.
+      */
+    private def headerClick(path: List[String], e: MouseEvent, interactive: Set[List[String]], order: OrderState)(using
+        Frame
+    ): Any < Async =
+        (order.drag, order.held) match
+            case (Present(ref), Present(d)) if d.done => ref.set(Absent)
+            case _                                    => toggleSort(path, e, interactive)
+
+    /** Swallows the click a finished drag left behind, and nothing else. */
+    private def clearDrag(order: OrderState)(using Frame): Any < Async =
+        (order.drag, order.held) match
+            case (Present(ref), Present(d)) if d.done => ref.set(Absent)
+            case _                                    => ()
+
     /** Sticks one cell to its edge. Prime computes the same two properties in JavaScript,
       * measuring the cell before it on every render; here the widths are already known,
       * so the offset is written once, declaratively, and a resize drag moves it with the
@@ -767,7 +1000,7 @@ final case class DataTable[A] private (
       * re-renders the editor's own cell and leaves the table alone.
       */
     private[uic] def render(using Frame): UI =
-        if !ownsState then renderWith(EditState(Set.empty, Absent), NavState[A](), FilterState(), SizeState())
+        if !ownsState then renderWith(EditState(Set.empty, Absent), NavState[A](), FilterState(), SizeState(), OrderState())
         else
             UI.mounted {
                 for
@@ -777,6 +1010,7 @@ final case class DataTable[A] private (
                     err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
                     menus  <- Kyo.foreach(filterableLeaves)((path, _) => Signal.initRef(false).map(path -> _))
                     held   <- Signal.initRef(Absent: Maybe[ColumnGrab])
+                    moving <- Signal.initRef(Absent: Maybe[ColumnDrag])
                 yield wired(
                     prefix,
                     drafts.toMap,
@@ -784,9 +1018,10 @@ final case class DataTable[A] private (
                     id => cmds.focusId(id),
                     menus.toMap,
                     id => cmds.requestMeasureById(id),
-                    Present(held)
+                    Present(held),
+                    Present(moving)
                 )
-            }.placeholder(renderWith(EditState(Set.empty, Absent), NavState[A](), FilterState(), SizeState()))
+            }.placeholder(renderWith(EditState(Set.empty, Absent), NavState[A](), FilterState(), SizeState(), OrderState()))
 
     /** The subscription tree the mount publishes, and the seam golden tests render
       * directly: a top-down render shows a mounted region as its placeholder, so the
@@ -799,23 +1034,47 @@ final case class DataTable[A] private (
         focus: String => Any < Async,
         menus: Map[List[String], SignalRef[Boolean]] = Map.empty,
         measure: String => Rect < Async = (_: String) => Rect(0, 0, 0, 0, 0, 0),
-        held: Maybe[SignalRef[Maybe[ColumnGrab]]] = Absent
+        held: Maybe[SignalRef[Maybe[ColumnGrab]]] = Absent,
+        moving: Maybe[SignalRef[Maybe[ColumnDrag]]] = Absent
     )(using Frame): UI =
         errRef.render(e =>
             withRef(editingRowsRef, Set.empty[String]) { editRows =>
                 withRef(editingCellRef, Absent: Maybe[CellPath]) { editCell =>
-                    renderWith(
-                        EditState(editRows, editCell, drafts, Present(errRef), e, live = true),
-                        NavState[A](on = navOn, idPrefix = idPrefix, focus = focus),
-                        FilterState(open = menus, live = true),
-                        SizeState(idPrefix = idPrefix, live = true, measure = measure, grab = held)
-                    )
+                    withRef(moving, Absent: Maybe[ColumnDrag]) { drag =>
+                        renderWith(
+                            EditState(editRows, editCell, drafts, Present(errRef), e, live = true),
+                            NavState[A](on = navOn, idPrefix = idPrefix, focus = focus),
+                            FilterState(open = menus, live = true),
+                            SizeState(idPrefix = idPrefix, live = true, measure = measure, grab = held),
+                            OrderState(drag = moving, held = drag)
+                        )
+                    }
                 }
             }
         )
 
-    private def renderWith(edit: EditState, nav: NavState[A], filter: FilterState, size: SizeState)(using Frame): UI =
-        withVisibleColumns(_.buildAll(edit, nav, filter, size))
+    private def renderWith(edit: EditState, nav: NavState[A], filter: FilterState, size: SizeState, order: OrderState)(
+        using Frame
+    ): UI =
+        withColumnOrder(order)((t, o) => t.withVisibleColumns(_.buildAll(edit, nav, filter, size, o)))
+
+    /** Resolves a bound [[columnOrder]] and hands on the table with its columns in that
+      * order, so the header, the body, the footer, the widths and the keyboard grid all
+      * move together and no builder below has to ask where a column went.
+      *
+      * It runs BEFORE the visibility pass, which is what keeps the hidden columns' places:
+      * the order this resolves to is the whole authored list, and it is the list a drop
+      * rewrites, so hiding a column and moving another one does not lose the first one's
+      * place.
+      */
+    private def withColumnOrder(order: OrderState)(k: (DataTable[A], OrderState) => UI)(using Frame): UI =
+        columnOrderRef match
+            case Absent => k(this, order)
+            case Present(ref) =>
+                ref.render { o =>
+                    val tree = ColumnTree.reorder(cols, o)
+                    k(copy(cols = tree, orderedPaths = ColumnTree.leafPaths(tree).map(_._1)), order.copy(requested = o))
+                }
 
     /** Resolves every [[Column.visible]] flag and hands on the table WITHOUT the columns
       * they hide, so the header spans, the body cells, the footer, the filter, the colspans
@@ -852,7 +1111,9 @@ final case class DataTable[A] private (
             hiddenPaths = leafPaths.zipWithIndex.collect { case (entry, i) if !keep(i) => entry }
         )
 
-    private def buildAll(edit: EditState, nav: NavState[A], filter: FilterState, size: SizeState)(using Frame): UI =
+    private def buildAll(edit: EditState, nav: NavState[A], filter: FilterState, size: SizeState, order: OrderState)(
+        using Frame
+    ): UI =
         withSortableFlags { flags =>
             withRows { rows =>
                 withRef(sortRef, List.empty[SortKey]) { sort =>
@@ -875,7 +1136,8 @@ final case class DataTable[A] private (
                                                     edit,
                                                     nav,
                                                     filter.copy(specs = specs),
-                                                    size.copy(widths = widths)
+                                                    size.copy(widths = widths),
+                                                    order
                                                 )
                                             }
                                         }
@@ -951,7 +1213,8 @@ final case class DataTable[A] private (
         edit: EditState,
         nav: NavState[A],
         filterIn: FilterState,
-        size: SizeState
+        size: SizeState,
+        order: OrderState
     )(using Frame): UI =
         // 1. Global filter: contains-match over the columns' text projections.
         val rows = rowsIn.toList
@@ -1031,7 +1294,7 @@ final case class DataTable[A] private (
                     if depth > 1 then cell = cell.rowspan(depth)
                     List(freeze(cell, frozen.trailAt(0)))
             rows.zipWithIndex.map { (cells, i) =>
-                val ths = withLeafOffsets(cells).map((sp, at) => headerSpanCell(sp, at, sort, flags, interactive, size, frozen))
+                val ths = cells.map(sp => headerSpanCell(sp, sort, flags, interactive, size, frozen, order))
                 tr((if i == 0 then leading ++ ths ++ trailing else ths).map(toChild)*)
             }
         end headRows
@@ -1137,7 +1400,9 @@ final case class DataTable[A] private (
                 flags
             ) ++ editCards ++ filterCards(filter) ++ sizeCards(
                 size
-            ) ++ frozenCards(size) ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
+            ) ++ frozenCards(size) ++ orderCards(
+                order
+            ) ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
         )
     end body
 
@@ -1348,6 +1613,54 @@ final case class DataTable[A] private (
         pinned ++ unknownCard
     end sizeCards
 
+    /** What a bound column order cannot do, which is the same three shapes the widths
+      * report: nothing to write into it, a column it does not know, and an arrangement
+      * this header cannot take.
+      */
+    private def orderCards(order: OrderState)(using Frame): List[UI] =
+        if columnOrderRef.isEmpty then Nil
+        else
+            val known = (leafPaths ++ hiddenPaths).map(_._1).toSet
+            val nothing =
+                if reorderOn then Nil
+                else
+                    List(KeyDiagnostics.card(
+                        "DataTable",
+                        "columnOrder is bound but no column may be dragged, so nothing can ever write into it; a move " +
+                            "needs two columns willing to trade places",
+                        Nil
+                    ))
+            val unknown = order.requested.filterNot(known.contains).map(_.mkString(" / ")).sorted
+            val strangers =
+                if unknown.isEmpty then Nil
+                else
+                    List(KeyDiagnostics.card(
+                        "DataTable",
+                        "the column order names a column this table does not have; a path is the group labels around " +
+                            "the column followed by its header",
+                        unknown
+                    ))
+            // A group whose columns are not asked for together cannot be rendered, since one
+            // header cell cannot sit in two places; they come back together where the first
+            // of them was asked for.
+            val split =
+                ColumnTree.spans(cols).flatten.filter(_.node.asColumn.isEmpty).map(_.path).distinct.filter { g =>
+                    val idx = order.requested.zipWithIndex.collect { case (p, i) if p.startsWith(g) => i }
+                    idx.nonEmpty && idx.max - idx.min + 1 != idx.length
+                }
+            val torn =
+                if split.isEmpty then Nil
+                else
+                    List(KeyDiagnostics.card(
+                        "DataTable",
+                        "the column order asks for a header group's columns apart, and a group is one cell; they are " +
+                            "rendered together where the first of them was asked for",
+                        split.map(_.mkString(" / ")).sorted
+                    ))
+            nothing ++ strangers ++ torn
+        end if
+    end orderCards
+
     /** What stops a table from freezing at all. Each one is an arrangement whose offsets
       * cannot be worked out, and a table that renders them anyway parks a column over the
       * middle of itself; naming the column instead is the same trade the filter row makes
@@ -1456,25 +1769,28 @@ final case class DataTable[A] private (
       */
     private def headerSpanCell(
         sp: ColumnTree.HeaderSpan[A],
-        at: Int,
         sort: List[SortKey],
         flags: Map[List[String], Boolean],
         interactive: Set[List[String]],
         size: SizeState,
-        frozen: FrozenPlan
+        frozen: FrozenPlan,
+        order: OrderState
     )(using Frame): UI =
+        val at = sp.at
         sp.node.asColumn match
             case Present(c) =>
-                headerCell(c, sp.path, sort, sp.rowspan, sortableFlag(c, sp.path, flags), interactive, at, size, frozen)
+                headerCell(c, sp.path, sort, sp.rowspan, sortableFlag(c, sp.path, flags), interactive, at, size, frozen, order)
             case Absent =>
                 var cell = th.cssClass("p-datatable-header-cell")
                 if sp.colspan > 1 then cell = cell.colspan(sp.colspan)
+                // A group moves as one, since its columns are its columns wherever it goes.
+                val built = cell(
+                    div.cssClass("p-datatable-column-header-content")(
+                        toChild(span.cssClass("p-datatable-column-title")(sp.node.label))
+                    )
+                )
                 freeze(
-                    cell(
-                        div.cssClass("p-datatable-column-header-content")(
-                            toChild(span.cssClass("p-datatable-column-title")(sp.node.label))
-                        )
-                    ),
+                    reorderCell(built, sp.path, at, at + sp.colspan, size, order, sorts = false),
                     frozen.span(at, at + sp.colspan)
                 )
         end match
@@ -1688,7 +2004,8 @@ final case class DataTable[A] private (
         interactive: Set[List[String]],
         index: Int,
         size: SizeState,
-        frozen: FrozenPlan
+        frozen: FrozenPlan,
+        order: OrderState
     )(using Frame): UI =
         val sortable  = c.isSortable(flag) && sortRef.isDefined
         val sortingKs = SortKey.sorting(sort)
@@ -1699,7 +2016,7 @@ final case class DataTable[A] private (
         if rows > 1 then cell = cell.rowspan(rows)
         // Only once the mount has run: the id exists to be measured, and stamping it in the
         // static projection would put the same one on every table of a page.
-        if size.live && columnWidthsRef.isDefined && index >= 0 then cell = cell.id(headerId(index, size))
+        if size.live && (columnWidthsRef.isDefined || reorderOn) && index >= 0 then cell = cell.id(headerId(index, size))
         if index >= 0 && resizableAt(index) then cell = cell.cssClass("p-datatable-resizable-column")
         c.alignV match
             case ColumnAlign.Center => cell = cell.cssClass("p-uic-dt-center")
@@ -1707,7 +2024,11 @@ final case class DataTable[A] private (
             case ColumnAlign.Start  => ()
         end match
         if sortable then
-            cell = cell.cssClass("p-datatable-sortable-column").tabIndex(0).onClick(e => toggleSort(path, e, interactive))
+            cell = cell
+                .cssClass("p-datatable-sortable-column")
+                .tabIndex(0)
+                .onClick(e => headerClick(path, e, interactive, order))
+        end if
         if direction.isSorting then
             cell = cell
                 .cssClass("p-datatable-column-sorted")
@@ -1741,7 +2062,11 @@ final case class DataTable[A] private (
             div.cssClass("p-datatable-column-header-content")(
                 ((span.cssClass("p-datatable-column-title")(c.headerV): UI) :: (sortIcon ++ sortBadge)).map(toChild)*
             )
-        freeze(cell((content :: (if index >= 0 then resizer(index, size) else Nil)).map(toChild)*), frozen.at(index))
+        val built = cell((content :: (if index >= 0 then resizer(index, size) else Nil)).map(toChild)*)
+        freeze(
+            if index < 0 then built else reorderCell(built, path, index, index + 1, size, order, sortable),
+            frozen.at(index)
+        )
     end headerCell
 
     /** Header click. Plain: sort by this column alone, advancing it when it is already
@@ -2468,6 +2793,47 @@ object DataTable:
       * clamped before it is applied rather than each width after, so a drag past the end
       * of one column stops the boundary instead of quietly pushing width into the other.
       */
+    /** How far a pointer travels before a press on a header becomes a drag rather than the
+      * click that sorts it, in CSS pixels.
+      */
+    private[uic] val DragThreshold = 4.0
+
+    /** `xs` with the block `[from, until)` lifted out and put back in front of what was at
+      * `at`, which is the one move a reorder makes. `at` addresses the list BEFORE the
+      * block is lifted, since that is what the reader is pointing at.
+      */
+    private[uic] def moveBlock[T](xs: List[T], from: Int, until: Int, at: Int): List[T] =
+        if from < 0 || until > xs.length || from >= until || (at >= from && at <= until) then xs
+        else
+            val block  = xs.slice(from, until)
+            val rest   = xs.take(from) ++ xs.drop(until)
+            val insert = if at <= from then at else at - (until - from)
+            rest.take(insert) ++ block ++ rest.drop(insert)
+
+    /** The frozen columns a free one stands between and their edge, by index. A `Start`
+      * column with anything free in front of it, or an `End` one with anything free
+      * behind it, is adrift: what is between a frozen column and its edge scrolls, and it
+      * would take the frozen one along or leave it standing over the gap.
+      */
+    private[uic] def adrift(edges: List[Maybe[FrozenEdge]]): List[Int] =
+        def isEdge(e: Maybe[FrozenEdge], side: FrozenEdge) = e.exists(_ == side)
+        edges.zipWithIndex.collect {
+            case (e, i)
+                if (isEdge(e, FrozenEdge.Start) && edges.take(i).exists(!isEdge(_, FrozenEdge.Start))) ||
+                    (isEdge(e, FrozenEdge.End) && edges.drop(i + 1).exists(!isEdge(_, FrozenEdge.End))) =>
+                i
+        }
+    end adrift
+
+    /** Whether a move leaves every column that refused to be reordered exactly where it
+      * was. A pinned column keeps its INDEX and not merely its neighbours, so a block
+      * passing over it is refused rather than quietly carrying it one place along.
+      */
+    private[uic] def holdsPinned(free: List[Boolean], from: Int, until: Int, at: Int): Boolean =
+        moveBlock(free.zipWithIndex, from, until, at).zipWithIndex.forall {
+            case ((movable, was), now) => movable || was == now
+        }
+
     private[uic] def resizeTo(width: Double, next: Double, delta: Double): (Double, Double) =
         val d = math.max(math.min(delta, next - MinColumnWidth), MinColumnWidth - width)
         (width + d, next - d)

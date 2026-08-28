@@ -985,6 +985,24 @@ val frozenColumns: UI < Async =
 
 A frozen column has to be somewhere, so it holds at the distance the columns between it and the edge take up, and the table adds that up from their widths. Two rules follow. A frozen column needs a `width`, and the frozen ones have to REACH the edge they hold against: a free column left between them and it would carry the frozen one away as it scrolled. A table that breaks either freezes nothing at all and says which column it was, because an offset computed from a width that is not there is a column parked over the middle of the table, which is worse than one that scrolls. The checkbox, expander and row-editor columns are between a frozen column and the edge too, so they hold with it and their width counts toward the offset; that width is a CSS variable (`--p-uic-dt-select-width` and its two neighbours) rather than a number, so what the `col` is given and what the offset counts are one quantity a theme can move. Prime computes the same two properties in JavaScript, measuring the previous cell on every render; here the widths are already known, so the offsets are written once and a resize drag moves them with the column that changed.
 
+Where the columns are is `columnOrder(ref)`, a list of column paths from left to right, and with it bound the reader may drag a header cell somewhere else. `Column.reorderable(false)` pins one column where it was authored, the same per-column axis `sortable` and `resizable` already are, where Prime has one `reorderableColumns` flag for the whole table.
+
+```scala
+val reorderable: UI < Async =
+    for order <- Signal.initRef(List(List("Price")))
+    yield uic.DataTable[Product]()
+        .rows(catalog)
+        .rowKey(_.id)
+        .columns(
+            uic.column("Name")(_.name),
+            uic.column("Category")(_.category),
+            uic.column("Price")(p => f"${p.price}%.2f").reorderable(false)
+        )
+        .columnOrder(order): UI
+```
+
+A column the order does not name keeps its authored place behind the ones it does, so the seeded `List(List("Price"))` above means "Price first" rather than "the rest is undefined". What a drag writes is the whole list, hidden columns included, so a column `Column.visible` is hiding keeps its place while the reader moves the others and comes back where it was. Where a cell may be dropped follows from the table rather than from a rule of its own: it moves among its own siblings, since the header is a tree and one cell cannot sit in two groups at once, and a drop that would leave a frozen column adrift or carry a pinned one along is not offered at all. A header group drags as one, which Prime does not do: with a ColumnGroup its reordering is off entirely. The line showing where the column would land is a border on the cell beside it, where Prime positions two floating arrows in JavaScript, and the state is written only when the answer changes, so a drag across a wide table re-renders once per boundary crossed rather than once per frame.
+
 Around the rows sit four pieces of chrome. `header(ui)` and `footer(ui)` are free slots, above the table and below the paginator, which is where a filter box or a record count goes. `Column.footer` is a different thing: it renders a real `tfoot` row aligned to the column grid, and its computed form `footer(rows => ...)` receives the rows that survived the global filter, across every page rather than the visible one. That distinction is load-bearing, because the table owns filtering: a column total computed by the caller from its own list would disagree with what the reader is looking at. `loading(flag)` covers the table with a spinner mask, and `scrollHeight("240px")` caps the container and pins the header row group to its top edge while the body scrolls under it.
 
 A header of more than one row is a `headerGroup`: a label written *around* the columns it spans, nested as deep as it needs to be. Prime writes the header cells beside the column list and has the caller put `colSpan` and `rowSpan` on each of them; here the leaves ARE the columns, so a group is as wide as what it holds, a column beside a group reaches down to the bottom of the header, and there is no second list to fall out of step with the first. Everything else stays on the leaves: a group carries a label and nothing more, so sorting, footers, filtering and merging keep working exactly as they do without one.

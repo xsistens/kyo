@@ -151,7 +151,8 @@ object ColumnTree:
         node: ColumnTree[A],
         path: List[String],
         colspan: Int,
-        rowspan: Int
+        rowspan: Int,
+        at: Int
     )
 
     /** The header cells, one list per header row, top row first.
@@ -162,19 +163,30 @@ object ColumnTree:
       */
     private[uic] def spans[A](nodes: List[ColumnTree[A]]): List[List[HeaderSpan[A]]] =
         val depth = nodes.map(_.height).maxOption.getOrElse(0)
+        // The leaf offset is carried DOWN from the parent and not counted along each row,
+        // because the rows do not tile the same columns: a column beside a group reaches
+        // down through the header and appears in the first row alone, so a row that
+        // counted its own cells from zero would put everything under it over the wrong
+        // column.
+        def spread(ns: List[ColumnTree[A]], prefix: List[String], at: Int): List[(ColumnTree[A], List[String], Int)] =
+            ns.foldLeft((at, List.empty[(ColumnTree[A], List[String], Int)])) { case ((off, acc), n) =>
+                (off + n.leaves.size, acc :+ (n, prefix, off))
+            }._2
         @tailrec def loop(
-            level: List[(ColumnTree[A], List[String])],
+            level: List[(ColumnTree[A], List[String], Int)],
             row: Int,
             acc: List[List[HeaderSpan[A]]]
         ): List[List[HeaderSpan[A]]] =
             val live = level.filter(_._1.leaves.nonEmpty)
             if live.isEmpty then acc.reverse
             else
-                val cells = live.map((n, prefix) => HeaderSpan(n, prefix :+ n.label, n.leaves.size, n.rowspan(depth, row)))
-                loop(live.flatMap((n, prefix) => n.children.map(c => (c, prefix :+ n.label))), row + 1, cells :: acc)
+                val cells =
+                    live.map((n, prefix, at) => HeaderSpan(n, prefix :+ n.label, n.leaves.size, n.rowspan(depth, row), at))
+                val next = live.flatMap((n, prefix, at) => spread(n.children, prefix :+ n.label, at))
+                loop(next, row + 1, cells :: acc)
             end if
         end loop
-        loop(nodes.map(n => (n, Nil)), 0, Nil)
+        loop(spread(nodes, Nil, 0), 0, Nil)
     end spans
 
     /** Every column with the path that identifies it: the labels of the groups it sits
@@ -203,6 +215,42 @@ object ColumnTree:
       * them, since a header cell over nothing would span nothing; a group authored with
       * no columns at all stays, so the diagnostic that names it still fires.
       */
+    /** These nodes with every level's children put in the order `order` names them in,
+      * where a node's place is the place of its FIRST leaf.
+      *
+      * The order is a flat list of leaf paths, which is what makes it the same currency
+      * the sort spec, the column filters and the widths already speak, and what lets a
+      * reader's reorder be one list rather than a shape mirroring the header tree. A leaf
+      * the order does not name keeps its authored place behind the ones it does, so a
+      * caller can say "Price first" without writing every column down.
+      *
+      * Reading a group's place off its first leaf is what keeps the header a tree: an
+      * order that splits a group cannot be rendered, since one header cell cannot sit in
+      * two places, so the group's columns come back together where its first leaf asks
+      * for. [[DataTable]] names that in a card rather than leaving it silent.
+      */
+    private[uic] def reorder[A](nodes: List[ColumnTree[A]], order: List[List[String]]): List[ColumnTree[A]] =
+        if order.isEmpty then nodes
+        else
+            val rank = order.zipWithIndex.toMap
+            def walk(ns: List[ColumnTree[A]], prefix: List[String]): List[ColumnTree[A]] =
+                val placed = ns.zipWithIndex.map { (n, authored) =>
+                    val named = leafPaths(List(n)).flatMap(e => rank.get(prefix ++ e._1))
+                    val moved = n.asColumn match
+                        case Present(_) => n
+                        case Absent     => n.withChildren(walk(n.children, prefix :+ n.label))
+                    (moved, named.minOption, authored)
+                }
+                // Named nodes first, in the order they were named; the rest hold their
+                // authored places behind them, which is what makes a partial order mean
+                // "these first" rather than "everything else is undefined".
+                val (named, rest) = placed.partition(_._2.isDefined)
+                named.sortBy(_._2.getOrElse(0)).map(_._1) ++ rest.sortBy(_._3).map(_._1)
+            end walk
+            walk(nodes, Nil)
+        end if
+    end reorder
+
     private[uic] def prune[A](nodes: List[ColumnTree[A]], keep: Int => Boolean): List[ColumnTree[A]] =
         def walk(ns: List[ColumnTree[A]], next: Int): (List[ColumnTree[A]], Int) =
             ns.foldLeft((List.empty[ColumnTree[A]], next)) { case ((acc, i), n) =>
@@ -280,7 +328,8 @@ final case class Column[A, +K <: FlatOnly] private (
     filterV: Maybe[CellFilter[A]] = Absent,
     widthV: Maybe[Double] = Absent,
     resizableFlag: Boolean = true,
-    frozenV: Maybe[FrozenEdge] = Absent
+    frozenV: Maybe[FrozenEdge] = Absent,
+    reorderableFlag: Boolean = true
 ) extends ColumnTree[A]:
     private[uic] def label: String                        = headerV
     private[uic] def leaves: List[Column[A, FlatOnly]]    = List(this)
@@ -489,6 +538,15 @@ final case class Column[A, +K <: FlatOnly] private (
       * which is where a column of row actions belongs.
       */
     def frozen(edge: FrozenEdge): Column[A, FlatOnly] = copy(frozenV = Present(edge))
+
+    /** Whether the reader may drag this column to another place, which needs
+      * [[DataTable.columnOrder]] bound to write the new order into.
+      *
+      * A column that answers false stays where it was authored and no drop lands beside
+      * it, which is how a column that means something by its position (a leading
+      * identifier, a trailing total) keeps it while the rest of the header stays free.
+      */
+    def reorderable(v: Boolean): Column[A, K] = copy(reorderableFlag = v)
 
     def align(v: ColumnAlign): Column[A, K] = copy(alignV = v)
 

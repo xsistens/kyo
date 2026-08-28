@@ -920,6 +920,26 @@ def x(r: SignalRef[Map[List[String], Double]])(using Frame) =
         typeCheckFailure(preamble + """def x(r: SignalRef[Map[String, Double]]) = uic.DataTable[String]().columnWidths(r)""")
     }
 
+    "columnOrder is the table's and reorderable the column's" in {
+        typeCheck(
+            preamble +
+                """final case class R(name: String)
+def x(r: SignalRef[List[List[String]]])(using Frame) =
+  uic.DataTable[R]().columns(uic.column("Name")(_.name).reorderable(false)).columnOrder(r)
+def y(using Frame) = uic.TreeTable[R]().columns(uic.column("Name")(_.name).reorderable(false))"""
+        )
+        // Whether a column may be moved is the column's; where the columns are is the
+        // table's, and it is keyed by path, as the sort spec and the widths are.
+        typeCheckFailure(preamble + """def x = uic.DataTable[String]().reorderable(false)""")
+        typeCheckFailure(
+            preamble +
+                """final case class R(name: String)
+def x(r: SignalRef[List[List[String]]])(using Frame) =
+  uic.DataTable[R]().columns(uic.column("Name")(_.name).columnOrder(r))"""
+        )
+        typeCheckFailure(preamble + """def x(r: SignalRef[List[String]]) = uic.DataTable[String]().columnOrder(r)""")
+    }
+
     "Column.frozen takes an edge, and the hierarchy that cannot scroll refuses it" in {
         typeCheck(
             preamble +
