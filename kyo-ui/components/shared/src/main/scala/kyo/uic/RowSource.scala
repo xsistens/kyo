@@ -18,10 +18,16 @@ enum Total derives CanEqual:
     /** The query matched `count` rows in all. */
     case Known(count: Int)
 
-    /** How many rows the query matched is not known; `hasMore` says whether anything
-      * follows the rows just delivered.
+    /** How many rows the query matched is not known. `hasMore` says whether anything
+      * follows the rows just delivered, and `atLeast` how many the source has served so
+      * far, which is the floor under the length of the whole.
+      *
+      * A caller answers with `hasMore` alone and leaves `atLeast` at zero: a fetch knows
+      * about its own block and nothing else. [[RowSource]] fills it in, and never lets it
+      * fall, because a viewport that sized its scrollbar off what it had seen must not
+      * see it shrink when the reader scrolls back up.
       */
-    case Unknown(hasMore: Boolean)
+    case Unknown(hasMore: Boolean, atLeast: Int = 0)
 end Total
 
 object Total:
@@ -33,10 +39,13 @@ object Total:
       */
     private[uic] def combine(parts: Seq[Total]): Total =
         parts.collectFirst { case k: Total.Known => k }.getOrElse(
-            Total.Unknown(parts.lastOption.exists {
-                case Total.Unknown(more) => more
-                case _                   => false
-            })
+            Total.Unknown(
+                parts.lastOption.exists {
+                    case Total.Unknown(more, _) => more
+                    case _                      => false
+                },
+                parts.collect { case Total.Unknown(_, a) => a }.maxOption.getOrElse(0)
+            )
         )
 end Total
 
@@ -89,12 +98,23 @@ final class RowSource[Q, A] private[uic] (
       * table gets it written from [[page]].
       */
     val demand: SignalRef[RowSource.Demand],
-    private[uic] val rowsRef: SignalRef[Seq[A]],
+    private[uic] val windowRef: SignalRef[RowSource.Window[A]],
     private[uic] val totalRef: SignalRef[Total],
     private[uic] val loadingRef: SignalRef[Boolean]
-):
-    /** The rows of the range currently asked for. */
-    def rows: Signal[Seq[A]] = rowsRef
+)(using CanEqual[A, A], Frame):
+    /** The rows currently served, together with the row index the first of them sits at.
+      *
+      * The offset travels WITH the rows because a consumer that positions them, a virtual
+      * viewport above all, must not position what it asked for at where it asked for it: a
+      * window published for the previous range would then be drawn at the new one's
+      * offsets for exactly one frame.
+      */
+    def window: Signal[RowSource.Window[A]] = windowRef
+
+    /** The rows of the range currently asked for, for a consumer that renders them in
+      * order and has no offsets to place them at.
+      */
+    def rows: Signal[Seq[A]] = windowRef.map(_.rows)
 
     /** What is known about the size of the whole set. */
     def total: Signal[Total] = totalRef
@@ -109,6 +129,9 @@ object RowSource:
 
     /** The row range a component is asking for: `limit` rows starting at `offset`. */
     final case class Demand(offset: Int, limit: Int) derives CanEqual
+
+    /** The rows of one range, and the row index the first of them sits at. */
+    final case class Window[A](offset: Int, rows: Seq[A]) derives CanEqual
 
     /** How the buffer behaves.
       *
@@ -165,19 +188,20 @@ object RowSource:
         for
             pageRef    <- Signal.initRef(0)
             demandRef  <- Signal.initRef(Demand(0, size))
-            rowsRef    <- Signal.initRef(Seq.empty[A])
+            windowRef  <- Signal.initRef(Window(0, Seq.empty[A]))
             totalRef   <- Signal.initRef(Total.Unknown(false): Total)
             loadingRef <- Signal.initRef(true)
             cache <- Cache.init[(Q, Int), Fiber[(Seq[A], Total), Any]](
                 maxSize = room,
                 expireAfterWrite = config.expireAfterWrite
             )
-            feed = new Feed(query, fetch, cache, block, ahead, rowsRef, totalRef, loadingRef)
+            seen <- AtomicRef.init(Absent: Maybe[(Q, Int)])
+            feed = new Feed(query, fetch, cache, seen, block, ahead, windowRef, totalRef, loadingRef)
             // A page is a range that starts on a page boundary. Keeping the two refs
             // rather than folding them is what lets a viewport write the range directly.
             _ <- UI.fork(pageRef.observe(p => demandRef.set(Demand(math.max(0, p) * size, size))))
             _ <- UI.fork(query.combineLatest(demandRef).observe((q, d) => feed.serve(q, d)))
-        yield new RowSource(size, pageRef, demandRef, rowsRef, totalRef, loadingRef)
+        yield new RowSource(size, pageRef, demandRef, windowRef, totalRef, loadingRef)
         end for
     end init
 
@@ -188,12 +212,13 @@ object RowSource:
         query: Signal[Q],
         fetch: (Q, Int, Int) => (Seq[A], Total) < Async,
         cache: Cache[(Q, Int), Fiber[(Seq[A], Total), Any]],
+        seen: AtomicRef[Maybe[(Q, Int)]],
         block: Int,
         ahead: Int,
-        rowsRef: SignalRef[Seq[A]],
+        windowRef: SignalRef[Window[A]],
         totalRef: SignalRef[Total],
         loadingRef: SignalRef[Boolean]
-    ):
+    )(using CanEqual[Q, Q]):
         /** The block already in flight or done for this key, or a fresh one started for it.
           *
           * Synchronous on purpose: every call runs on the observer's own fiber, so two
@@ -221,15 +246,38 @@ object RowSource:
                 ready <- Kyo.foreach(wanted)(_.poll).map(_.forall(_.isDefined))
                 _     <- loadingRef.set(!ready)
                 parts <- Kyo.foreach(wanted)(_.get)
-                total = Total.combine(parts.map(_._2))
-                _ <- report(parts, first, total)
-                _ <- rowsRef.set(slice(parts, first, d))
-                _ <- totalRef.set(total)
-                _ <- loadingRef.set(false)
-                _ <- Kyo.foreach(neighbours(first, last, total))(warm(q, _))
+                total <- settle(q, first, parts)
+                _     <- report(parts, first, total)
+                _     <- windowRef.set(Window(math.max(0, d.offset), slice(parts, first, d)))
+                _     <- totalRef.set(total)
+                _     <- loadingRef.set(false)
+                _     <- Kyo.foreach(neighbours(first, last, total))(warm(q, _))
             yield ()
             end for
         end serve
+
+        /** What the blocks say together, with everything the source knows added to it.
+          *
+          * Two things are known that no single fetch is: how far the source has served for
+          * this query, which is the floor under an unknown length and must never fall, and
+          * that a block saying nothing follows it makes the length exact. The floor is kept
+          * WITH its query, so a new one starts from nothing rather than inheriting the
+          * length of the last.
+          */
+        private def settle(q: Q, first: Int, parts: Seq[(Seq[A], Total)])(using Frame): Total < Sync =
+            val served = first * block + parts.map(_._1.size).sum
+            seen.updateAndGet {
+                case Present((prev, floor)) if prev == q => Present((q, math.max(floor, served)))
+                case _                                   => Present((q, served))
+            }.map { held =>
+                val floor = held.fold(served)(_._2)
+                Total.combine(parts.map(_._2)) match
+                    case Total.Known(n)            => Total.Known(n)
+                    case Total.Unknown(false, _)   => Total.Known(served)
+                    case Total.Unknown(true, said) => Total.Unknown(true, math.max(said, floor))
+                end match
+            }
+        end settle
 
         /** The rows of the range, cut out of the blocks that cover it. */
         private def slice(parts: Seq[(Seq[A], Total)], first: Int, d: Demand): Seq[A] =
@@ -245,8 +293,8 @@ object RowSource:
                 case Total.Known(n) =>
                     val lastBlock = math.max(0, (n - 1) / block)
                     ((last + 1) to math.min(last + ahead, lastBlock)).toList
-                case Total.Unknown(true)  => ((last + 1) to (last + ahead)).toList
-                case Total.Unknown(false) => Nil
+                case Total.Unknown(true, _)  => ((last + 1) to (last + ahead)).toList
+                case Total.Unknown(false, _) => Nil
             before ++ after
         end neighbours
 
@@ -257,8 +305,8 @@ object RowSource:
           */
         private def report(parts: Seq[(Seq[A], Total)], first: Int, total: Total)(using Frame): Unit < Async =
             val lastBlock = total match
-                case Total.Known(n)   => Present(math.max(0, (n - 1) / block))
-                case Total.Unknown(_) => Absent
+                case Total.Known(n)      => Present(math.max(0, (n - 1) / block))
+                case Total.Unknown(_, _) => Absent
             val odd = parts.zipWithIndex.collect {
                 case ((rows, _), i) if rows.size > block =>
                     s"block ${first + i} answered with ${rows.size} rows for a block size of $block"

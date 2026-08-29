@@ -77,6 +77,10 @@ class RowSourceTest extends UicTest:
         assert(Total.combine(Seq(Total.Known(9), Total.Unknown(true))) == Total.Known(9))
         assert(Total.combine(Seq(Total.Unknown(true), Total.Unknown(false))) == Total.Unknown(false))
         assert(Total.combine(Nil) == Total.Unknown(false), "nothing said is nothing known")
+        assert(
+            Total.combine(Seq(Total.Unknown(true, 40), Total.Unknown(true, 12))) == Total.Unknown(true, 40),
+            "and the floor under the length is the highest any block put there"
+        )
     }
 
     "a source serves the page it was asked for and reaches one block past it" in {
@@ -210,6 +214,45 @@ class RowSourceTest extends UicTest:
             _    <- p.source.demand.set(RowSource.Demand(1, 4))
             rows <- until(p.rows)(_.size == 4)
         yield assert(rows == all.slice(1, 5), "rows 1 to 4, out of blocks 0, 1 and 2")
+    }
+
+    // A viewport sizes its scrollbar off the floor under the length, so the floor falling
+    // would shrink the scrollbar the moment the reader scrolled back up.
+    "the floor under an unknown length never falls" in {
+        for
+            p    <- probe(total = Present(Total.Unknown(true)))
+            _    <- until(p.rows)(_ == all.take(2))
+            _    <- p.source.demand.set(RowSource.Demand(6, 2))
+            _    <- until(p.rows)(_ == all.slice(6, 8))
+            far  <- p.source.total.currentWith(t => t)
+            _    <- p.source.demand.set(RowSource.Demand(0, 2))
+            _    <- until(p.rows)(_ == all.take(2))
+            back <- p.source.total.currentWith(t => t)
+        yield
+            assert(far == Total.Unknown(true, 8), "eight rows served is eight rows known to exist")
+            assert(back == Total.Unknown(true, 8), "and scrolling back does not unknow them")
+    }
+
+    "a block saying nothing follows it makes the length exact" in {
+        for
+            p <- probe(total = Present(Total.Unknown(false)))
+            _ <- until(p.rows)(_ == all.take(2))
+            t <- p.source.total.currentWith(t => t)
+        yield assert(t == Total.Known(2), "nothing after row 1 is a total of two")
+    }
+
+    "a new query starts the floor again" in {
+        for
+            p     <- probe(total = Present(Total.Unknown(true)))
+            _     <- until(p.rows)(_ == all.take(2))
+            _     <- p.source.demand.set(RowSource.Demand(6, 2))
+            _     <- until(p.rows)(_ == all.slice(6, 8))
+            _     <- p.source.demand.set(RowSource.Demand(0, 2))
+            _     <- until(p.rows)(_ == all.take(2))
+            _     <- p.query.set("b")
+            _     <- until(p.calls)(c => blocksOf(c, "b").nonEmpty)
+            fresh <- p.source.total.currentWith(t => t)
+        yield assert(fresh == Total.Unknown(true, 2), "the old query's length is not this one's")
     }
 
 end RowSourceTest
