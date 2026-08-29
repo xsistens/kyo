@@ -255,4 +255,37 @@ class RowSourceTest extends UicTest:
         yield assert(fresh == Total.Unknown(true, 2), "the old query's length is not this one's")
     }
 
+    // ---- the viewport arithmetic ----
+
+    /** Five rows fit (200 / 40), and one overscan row is added on either side. */
+    private val view = RowSource.Viewport(itemSize = 40, height = 200, overscan = 1)
+
+    "a viewport asks for what fits, plus the overscan on either side" in {
+        assert(view.visible == 5, "five rows of forty fit two hundred")
+        assert(view.windowSize == 8, "five, one over each edge, and the row a scroll of less than one reaches")
+        assert(view.span(0.0) == (0, 8), "at rest it starts at the top rather than one row above it")
+        assert(view.span(400.0) == (9, 17), "ten rows down, and one above that")
+        assert(view.demand(400.0) == RowSource.Demand(9, 8), "which is exactly what it asks for")
+        assert(view.span(-50.0) == (0, 8), "a position the browser should never report is still a position")
+    }
+
+    "a partial row still counts as a row that fits" in {
+        val odd = RowSource.Viewport(itemSize = 30, height = 100, overscan = 0)
+        assert(odd.visible == 4, "three whole rows and the sliver of a fourth")
+    }
+
+    "how far a viewport reaches is what the total says, or a screen past what has loaded" in {
+        assert(view.extent(Total.Known(100), 6) == 100, "a known count speaks for the whole list")
+        assert(view.extent(Total.Unknown(true, 0), 6) == 11, "six loaded and a screen to scroll into")
+        assert(view.extent(Total.Unknown(true, 40), 6) == 45, "or as far as the source has ever served")
+        assert(view.extent(Total.Unknown(false, 0), 6) == 6, "and nothing following stops at what there is")
+    }
+
+    "a viewport cannot be scrolled past the end of what it holds" in {
+        assert(view.maxScroll(100) == 3800.0, "a hundred rows of forty, less the two hundred on the screen")
+        assert(view.maxScroll(2) == 0.0, "a list that fits does not scroll at all")
+        assert(view.clamp(9999.0, 100) == 3800.0)
+        assert(view.clamp(-1.0, 100) == 0.0)
+    }
+
 end RowSourceTest

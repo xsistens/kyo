@@ -135,6 +135,14 @@ final private[uic] case class SizeState(
     grab: Maybe[SignalRef[Maybe[ColumnGrab]]] = Absent
 )
 
+/** Where the scroll position of a windowed body lives once the mount has run.
+  *
+  * The ref is the table's own, since no caller supplies one and none has a use for it: it
+  * says which rows are drawn, and the browser is what writes it. A static projection has
+  * none and draws the window at rest.
+  */
+final private[uic] case class ScrollState(ref: Maybe[SignalRef[Double]] = Absent)
+
 /** Where one frozen cell holds: which edge it holds against, and how far from it.
   *
   * The distance is a [[Length]] and not a number because the columns it sums over are
@@ -309,6 +317,9 @@ final case class DataTable[A] private (
     footerV: Maybe[UI] = Absent,
     loadingV: Maybe[BoolValue] = Absent,
     scrollHeightV: Maybe[String] = Absent,
+    rowHeightV: Maybe[Int] = Absent,
+    scrollOverscanV: Int = 3,
+    sourceV: Maybe[RowSource[?, A]] = Absent,
     lazyTotalV: Maybe[ReactiveValue[Total]] = Absent,
     rowsSigV: Maybe[Signal[Seq[A]]] = Absent,
     editingRowsRef: Maybe[SignalRef[Set[String]]] = Absent,
@@ -487,6 +498,7 @@ final case class DataTable[A] private (
       */
     def source(src: RowSource[?, A]): DataTable[A] =
         copy(
+            sourceV = Present(src),
             rowsSigV = Present(src.rows),
             lazyTotalV = Present(ReactiveValue.Dyn(src.total)),
             loadingV = Present(BoolValue.Dyn(src.loading)),
@@ -673,6 +685,33 @@ final case class DataTable[A] private (
       */
     def scrollHeight(v: String): DataTable[A] = copy(scrollHeightV = Present(v))
 
+    /** Renders only the rows the reader can see, plus `overscan` of them on either side,
+      * inside the scroll container [[scrollHeight]] gives the table. `itemSize` is the row
+      * height in px, and it is what turns a scroll position into a row index, so the rows
+      * really have to be that tall. It reaches the row as a height, which the browser
+      * reads as a floor: pick it at least as tall as the row renders on its own and every
+      * row is exactly it, pick it shorter and the rows drift past the window that placed
+      * them.
+      *
+      * The table then scrolls instead of paginating, so the page list is dropped and
+      * nothing slices the rows. Over a [[source]] it is the demand that the scroll writes,
+      * so nothing is held either: a list of any length costs the blocks the reader has
+      * actually looked at, and how far it reaches comes from [[Total]], which is what
+      * makes infinite scrolling fall out rather than need a mode. A row inside the window
+      * that has not arrived yet is drawn as a row of `Skeleton` cells the same height, so
+      * the geometry never moves under the reader, and the waiting is shown per row rather
+      * than behind a mask over the whole table.
+      *
+      * Both halves of the arithmetic need every row to be exactly `itemSize` tall, which
+      * three things break: [[groupBy]] and a [[RowGroup]] summary put rows of their own
+      * between the data rows, [[rowExpansionTemplate]] puts one below the open row, and
+      * [[Column.rowSpan]] merges cells across several. Each of them is named in a card and
+      * leaves the table rendering every row, which is slower and right rather than faster
+      * and wrong.
+      */
+    def scrollRows(itemSize: Int, overscan: Int = 3): DataTable[A] =
+        copy(rowHeightV = Present(math.max(1, itemSize)), scrollOverscanV = math.max(0, overscan))
+
     // ---- render ----
 
     /** A row's identity. Without a [[rowKey]] it falls back to the row's position in the
@@ -717,14 +756,47 @@ final case class DataTable[A] private (
       */
     private def editingBound: Boolean = editingCellRef.isDefined || editingRowsRef.isDefined
 
-    /** Navigation follows editing unless the caller says otherwise. */
-    private def navOn: Boolean = cellNavV.getOrElse(leafCols.exists(_.isEditable))
+    /** Navigation follows editing unless the caller says otherwise, and never runs over a
+      * windowed body: the cursor addresses cells by their position among the RENDERED
+      * rows, and a window renders a few of them.
+      */
+    private def navOn: Boolean = !windowOn && cellNavV.getOrElse(leafCols.exists(_.isEditable))
+
+    /** The viewport height in pixels, where [[scrollHeight]] is a length the window
+      * arithmetic can read. Every other CSS length is one only the browser can resolve,
+      * and how many rows fit is the first thing the arithmetic needs.
+      */
+    private def viewportPx: Maybe[Int] = scrollHeightV.flatMap(DataTable.pixels)
+
+    /** The ways a table renders rows that are not all one height, which is what a windowed
+      * body cannot have: each one is named in a card and turns the windowing off.
+      */
+    private def unevenRows: List[String] =
+        List(
+            if groupsV.nonEmpty then List("row grouping") else Nil,
+            if expansionF.isDefined then List("row expansion") else Nil,
+            leafPaths.collect { case (p, c) if c.rowSpanEq.isDefined => s"rowSpan on ${p.mkString(" / ")}" }
+        ).flatten
+
+    /** Whether the body renders a window onto its rows rather than all of them. */
+    private def windowOn: Boolean = rowHeightV.isDefined && viewportPx.isDefined && unevenRows.isEmpty
+
+    /** Whether the window is fed by a [[RowSource]], which is the case where the rows the
+      * table holds are a window too and the scroll writes what the next one should be.
+      */
+    private def windowedSource: Boolean = windowOn && sourceV.isDefined
+
+    /** The window arithmetic, shared with [[VirtualScroller]] so a range asked for and a
+      * range drawn are one calculation.
+      */
+    private def viewport: RowSource.Viewport =
+        RowSource.Viewport(rowHeightV.getOrElse(1), viewportPx.getOrElse(1), scrollOverscanV)
 
     /** Whether the table owns state no caller supplies, which is what decides whether it
       * renders through a mount: the drafts and the standing error of an editing table,
       * and the menu-open state of a filter row.
       */
-    private def ownsState: Boolean = editingBound || navOn || filterRowOn || resizeOn || reorderOn
+    private def ownsState: Boolean = editingBound || navOn || filterRowOn || resizeOn || reorderOn || windowOn
 
     /** Whether the filter row is rendered: the filters have to be bound somewhere, and
       * some column has to carry a pipeline for the row to hold anything.
@@ -1067,7 +1139,16 @@ final case class DataTable[A] private (
       * re-renders the editor's own cell and leaves the table alone.
       */
     private[uic] def render(using Frame): UI =
-        if !ownsState then renderWith(EditState(Set.empty, Absent), NavState[A](), FilterState(), SizeState(), OrderState())
+        def static: UI =
+            renderWith(
+                EditState(Set.empty, Absent),
+                NavState[A](),
+                FilterState(),
+                SizeState(),
+                OrderState(),
+                ScrollState()
+            )
+        if !ownsState then static
         else
             UI.mounted {
                 for
@@ -1078,6 +1159,13 @@ final case class DataTable[A] private (
                     menus  <- Kyo.foreach(filterableLeaves)((path, _) => Signal.initRef(false).map(path -> _))
                     held   <- Signal.initRef(Absent: Maybe[ColumnGrab])
                     moving <- Signal.initRef(Absent: Maybe[ColumnDrag])
+                    scroll <- Signal.initRef(0.0)
+                    // The first range has to be asked for by someone, and no scroll has
+                    // happened yet to ask for it.
+                    _ <- ((sourceV, windowOn) match
+                        case (Present(src), true) => src.demand.set(viewport.demand(0.0))
+                        case _                    => ()
+                    ): Unit < Async
                 yield wired(
                     prefix,
                     drafts.toMap,
@@ -1086,9 +1174,12 @@ final case class DataTable[A] private (
                     menus.toMap,
                     id => cmds.requestMeasureById(id),
                     Present(held),
-                    Present(moving)
+                    Present(moving),
+                    if windowOn then Present(scroll) else Absent
                 )
-            }.placeholder(renderWith(EditState(Set.empty, Absent), NavState[A](), FilterState(), SizeState(), OrderState()))
+            }.placeholder(static)
+        end if
+    end render
 
     /** The subscription tree the mount publishes, and the seam golden tests render
       * directly: a top-down render shows a mounted region as its placeholder, so the
@@ -1102,7 +1193,8 @@ final case class DataTable[A] private (
         menus: Map[List[String], SignalRef[Boolean]] = Map.empty,
         measure: String => Rect < Async = (_: String) => Rect(0, 0, 0, 0, 0, 0),
         held: Maybe[SignalRef[Maybe[ColumnGrab]]] = Absent,
-        moving: Maybe[SignalRef[Maybe[ColumnDrag]]] = Absent
+        moving: Maybe[SignalRef[Maybe[ColumnDrag]]] = Absent,
+        scroll: Maybe[SignalRef[Double]] = Absent
     )(using Frame): UI =
         errRef.render(e =>
             withRef(editingRowsRef, Set.empty[String]) { editRows =>
@@ -1113,17 +1205,23 @@ final case class DataTable[A] private (
                             NavState[A](on = navOn, idPrefix = idPrefix, focus = focus),
                             FilterState(open = menus, live = true),
                             SizeState(idPrefix = idPrefix, live = true, measure = measure, grab = held),
-                            OrderState(drag = moving, held = drag)
+                            OrderState(drag = moving, held = drag),
+                            ScrollState(scroll)
                         )
                     }
                 }
             }
         )
 
-    private def renderWith(edit: EditState, nav: NavState[A], filter: FilterState, size: SizeState, order: OrderState)(
-        using Frame
-    ): UI =
-        withColumnOrder(order)((t, o) => t.withVisibleColumns(_.buildAll(edit, nav, filter, size, o)))
+    private def renderWith(
+        edit: EditState,
+        nav: NavState[A],
+        filter: FilterState,
+        size: SizeState,
+        order: OrderState,
+        scroll: ScrollState
+    )(using Frame): UI =
+        withColumnOrder(order)((t, o) => t.withVisibleColumns(_.buildAll(edit, nav, filter, size, o, scroll)))
 
     /** Resolves a bound [[columnOrder]] and hands on the table with its columns in that
       * order, so the header, the body, the footer, the widths and the keyboard grid all
@@ -1178,11 +1276,16 @@ final case class DataTable[A] private (
             hiddenPaths = leafPaths.zipWithIndex.collect { case (entry, i) if !keep(i) => entry }
         )
 
-    private def buildAll(edit: EditState, nav: NavState[A], filter: FilterState, size: SizeState, order: OrderState)(
-        using Frame
-    ): UI =
+    private def buildAll(
+        edit: EditState,
+        nav: NavState[A],
+        filter: FilterState,
+        size: SizeState,
+        order: OrderState,
+        scroll: ScrollState
+    )(using Frame): UI =
         withSortableFlags { flags =>
-            withRows { rows =>
+            withRows { (rows, offset) =>
                 withRef(sortRef, List.empty[SortKey]) { sort =>
                     withRef(filterRef, "") { query =>
                         withRef(columnFiltersRef, Map.empty[List[String], ColumnFilter]) { specs =>
@@ -1194,6 +1297,7 @@ final case class DataTable[A] private (
                                                 withTotal { total =>
                                                     body(
                                                         rows,
+                                                        offset,
                                                         sort,
                                                         query,
                                                         page,
@@ -1206,7 +1310,8 @@ final case class DataTable[A] private (
                                                         nav,
                                                         filter.copy(specs = specs),
                                                         size.copy(widths = widths),
-                                                        order
+                                                        order,
+                                                        scroll
                                                     )
                                                 }
                                             }
@@ -1220,17 +1325,24 @@ final case class DataTable[A] private (
             }
         }
 
-    /** The rows the table renders: the bound list when there is one, the appended list
-      * otherwise. A bound list is what lets a committed edit reach the screen, since the
-      * table stores the new row into it.
+    /** The rows the table renders, and the row index the first of them sits at: the bound
+      * list when there is one, the appended list otherwise. A bound list is what lets a
+      * committed edit reach the screen, since the table stores the new row into it.
+      *
+      * The offset is zero everywhere but under a windowed [[source]], which publishes a
+      * window rather than a page: there the rows have to be placed by their own index, and
+      * the one they were asked for at is not the one they came back at while a fetch is in
+      * flight.
       */
-    private def withRows(k: Seq[A] => UI)(using Frame): UI =
-        rowsSigV match
-            case Present(sig) => sig.render(k)
-            case Absent =>
-                rowsRefV match
-                    case Present(ref) => ref.render(k)
-                    case Absent       => k(rowsV)
+    private def withRows(k: (Seq[A], Int) => UI)(using Frame): UI =
+        if windowedSource then sourceV.get.window.render(w => k(w.rows, w.offset))
+        else
+            rowsSigV match
+                case Present(sig) => sig.render(k(_, 0))
+                case Absent =>
+                    rowsRefV match
+                        case Present(ref) => ref.render(k(_, 0))
+                        case Absent       => k(rowsV, 0)
 
     /** How many rows the page the table was given came out of, zero where it was given no
       * total and computes its own. It is resolved innermost, so a total that moves without
@@ -1301,6 +1413,7 @@ final case class DataTable[A] private (
 
     private def body(
         rowsIn: Seq[A],
+        rowOffset: Int,
         sort: List[SortKey],
         query: String,
         page: Int,
@@ -1313,7 +1426,8 @@ final case class DataTable[A] private (
         nav: NavState[A],
         filterIn: FilterState,
         size: SizeState,
-        order: OrderState
+        order: OrderState,
+        scroll: ScrollState
     )(using Frame): UI =
         // A lazily loaded table is handed a window onto rows prepared elsewhere, so the
         // three passes below would filter a page, sort a page and slice a slice. It skips
@@ -1354,29 +1468,34 @@ final case class DataTable[A] private (
         //    page-ref subscription). A prepared table slices nothing, the rows ARE the page,
         //    and paginates over the total it was given, which is the one thing it knows
         //    about the pages it was not given.
-        val (paged, paginatorUI) = pageSizeV match
-            case Present(size) =>
-                val at = math.max(page, 0)
-                // An unknown total counts the furthest the source has reached, never less
-                // than what is on the screen, and adds one page while anything follows.
-                // Counting the screen alone would shrink the page list on the way back.
-                val count =
-                    if !prepared then sorted.size
-                    else
-                        total match
-                            case Total.Known(n) => n
-                            case Total.Unknown(more, atLeast) =>
-                                math.max(at * size + sorted.size, atLeast) + (if more then 1 else 0)
-                val totalPages = math.max(1, (count + size - 1) / size)
-                val cur        = math.min(at, totalPages - 1)
-                var pag = Paginator()
-                    .totalRecords(count)
-                    .rows(size)
-                    .currentPage(cur)
-                    .hostClass("p-datatable-paginator-bottom")
-                pageRef.foreach(ref => pag = pag.page(ref))
-                (if prepared then sorted else sorted.slice(cur * size, cur * size + size), List(pag.render))
-            case Absent => (sorted, Nil)
+        // A windowed table scrolls instead of paginating: the scrollbar answers the same
+        // question the page list does, and only one of them can be right about which rows
+        // are on the screen.
+        val (paged, paginatorUI) = if windowOn then (sorted, Nil)
+        else
+            pageSizeV match
+                case Present(size) =>
+                    val at = math.max(page, 0)
+                    // An unknown total counts the furthest the source has reached, never less
+                    // than what is on the screen, and adds one page while anything follows.
+                    // Counting the screen alone would shrink the page list on the way back.
+                    val count =
+                        if !prepared then sorted.size
+                        else
+                            total match
+                                case Total.Known(n) => n
+                                case Total.Unknown(more, atLeast) =>
+                                    math.max(at * size + sorted.size, atLeast) + (if more then 1 else 0)
+                    val totalPages = math.max(1, (count + size - 1) / size)
+                    val cur        = math.min(at, totalPages - 1)
+                    var pag = Paginator()
+                        .totalRecords(count)
+                        .rows(size)
+                        .currentPage(cur)
+                        .hostClass("p-datatable-paginator-bottom")
+                    pageRef.foreach(ref => pag = pag.page(ref))
+                    (if prepared then sorted else sorted.slice(cur * size, cur * size + size), List(pag.render))
+                case Absent => (sorted, Nil)
 
         // The paths whose headers the reader can actually click, which is what both click
         // transitions may clear. Everything else in the spec is the caller's to keep.
@@ -1445,16 +1564,97 @@ final case class DataTable[A] private (
                 val shown = RowGroup.visible(paged, groupsV, Nil, openGroups, expandedGroupsRef.isDefined)
                 nav.copy(rows = shown.toVector, page = pageSizeV.getOrElse(math.max(shown.size, 1)))
 
-        val bodyRows: List[UI] =
-            if paged.isEmpty then
-                List(
-                    tr.cssClass("p-datatable-empty-message")(
-                        toChild(EmptyContent.render(emptyContentV, "No records found")(c =>
-                            td.colspan(math.max(colCount, 1))(c)
-                        ))
-                    )
-                )
+        def emptyRow: UI =
+            tr.cssClass("p-datatable-empty-message")(
+                toChild(EmptyContent.render(emptyContentV, "No records found")(c => td.colspan(math.max(colCount, 1))(c)))
+            )
+
+        lazy val bodyRows: List[UI] =
+            if paged.isEmpty then List(emptyRow)
             else groupSegments(paged.zipWithIndex, groupsV, Nil, sel, exp, openGroups, colCount, edit, navHere, frozen)
+
+        /** One spacer row, which is what holds the height of the rows that are not drawn.
+          *
+          * Prime's own, and the only shape that works: an empty `tr` collapses to nothing
+          * in table layout, and `.p-datatable-virtualscroller-spacer` makes it a flex box,
+          * which takes the height it is given. There is one of them ahead of the window
+          * and one behind it, so the drawn rows sit at the scroll position they belong to
+          * without any of them being positioned.
+          */
+        def padRow(px: Int)(using Frame): Ast.Element =
+            tr.cssClass("p-datatable-virtualscroller-spacer").style(_.height(math.max(0, px).px))
+
+        /** A row of the window the source has not reached yet: one `Skeleton` per column,
+          * so the grid stays whole and the geometry never moves once the rows land.
+          */
+        def slotRow(using Frame): UI =
+            val height = rowHeightV.getOrElse(1)
+            // A line's worth of skeleton, which is what the cell would hold: the row is as
+            // tall as every other one because the row says so, not because the slot does.
+            def slot(f: Maybe[FrozenSlot]): UI =
+                freeze(td(toChild(Skeleton().height("1rem").render)), f)
+            val leading  = leadTerms.indices.toList.map(i => slot(frozen.leadAt(i)))
+            val cells    = leafCols.indices.toList.map(i => slot(frozen.at(i)))
+            val trailing = trailTerms.indices.toList.map(i => slot(frozen.trailAt(i)))
+            tr.style(_.height(height.px))((leading ++ cells ++ trailing).map(toChild)*)
+        end slotRow
+
+        /** How many rows there are to scroll over, which does not depend on where the
+          * reader is: the rows themselves locally, and how far the source reaches over one.
+          */
+        lazy val windowCount: Int =
+            if windowedSource then viewport.extent(total, rowOffset + paged.size) else paged.size
+
+        /** The rows of the window at `scrollTop`, between the two spacers.
+          *
+          * The row a slot shows is found by its ABSOLUTE index, and the rows the table holds
+          * start at `rowOffset`, which over a source is the offset of the window it
+          * published rather than the one this viewport last asked for. Those two differ for
+          * exactly as long as a fetch is in flight, and drawing the published rows at the
+          * asked-for offsets is how a list flickers through wrong rows while it loads.
+          */
+        def windowRows(scrollTop: Double)(using Frame): List[UI] =
+            val vp        = viewport
+            val held      = paged.toVector
+            val loadedEnd = rowOffset + held.size
+            val count     = windowCount
+            if count <= 0 then List(emptyRow)
+            else
+                val (from, reach) = vp.span(vp.clamp(scrollTop, count))
+                val until         = math.min(count, reach)
+                val drawn = (from until until).toList.flatMap { i =>
+                    if i >= rowOffset && i < loadedEnd then
+                        dataRow(held(i - rowOffset), i, sel, exp, colCount, Map.empty, edit, navHere, frozen, rowHeightV)
+                    else List(slotRow)
+                }
+                // Both spacers are always emitted, one of them at nothing at either end of
+                // the list, so a window is the same shape wherever it sits and the leading
+                // one is always there to say where it starts.
+                val lead = padRow(from * vp.itemSize)
+                    .data("uic-vs-first", from.toString)
+                    .data("uic-vs-count", (until - from).toString)
+                (lead :: drawn) :+ padRow((count - until) * vp.itemSize)
+            end if
+        end windowRows
+
+        /** The `tbody`. Over a windowed body the reactive region is its ROWS rather than the
+          * group itself, and that is what keeps the scroll position: replacing a region
+          * takes its nodes out before it puts the new ones in, and a table that loses its
+          * whole row group for that instant is a table the browser clamps the scroll of.
+          * The group stays put, and it carries the height of the whole list, which the two
+          * spacers add up to anyway.
+          */
+        val tbodyEl: UI =
+            if !windowOn then tbody.cssClass("p-datatable-tbody")(bodyRows.map(toChild)*)
+            else
+                val group = tbody
+                    .cssClass("p-datatable-tbody")
+                    .style(_.height((windowCount * viewport.itemSize).px))
+                scroll.ref match
+                    case Present(r) => group(toChild(r.render(top => UI.fragment(windowRows(top)*))))
+                    case Absent     => group(windowRows(0.0).map(toChild)*)
+            end if
+        end tbodyEl
 
         // The footer aggregates over the FILTERED rows, not the visible page: a
         // column total that changed when the reader turned the page would be wrong.
@@ -1485,13 +1685,41 @@ final case class DataTable[A] private (
         val tableEl: UI = tbl(
             (colGroup(size) ++ List[UI](
                 thead.cssClass("p-datatable-thead")((headRows ++ filterRowUI).map(toChild)*),
-                tbody.cssClass("p-datatable-tbody")(bodyRows.map(toChild)*)
+                tbodyEl
             ) ++ footGroup).map(toChild)*
         )
 
         var container = div.cssClass("p-datatable-table-container")
-        scrollHeightV.foreach(h => container = container.style(_.maxHeight(CssValue.length(h))))
-        val containerEl: UI = container(toChild(tableEl))
+        // A windowed table hangs its height on the scroller instead, which is then the one
+        // element that scrolls: the container holds exactly it, so nothing overflows there
+        // and the sticky header and the frozen columns resolve against the same box in
+        // both directions.
+        if !windowOn then scrollHeightV.foreach(h => container = container.style(_.maxHeight(CssValue.length(h))))
+        val containerEl: UI =
+            if !windowOn then container(toChild(tableEl))
+            else
+                // Prime's own nesting for a virtually scrolled table, which the extracted
+                // sheet names beside the plain one: the scroller sits between the
+                // container and the table.
+                val px = viewportPx.getOrElse(1)
+                var vs = div
+                    .cssClass("p-virtualscroller")
+                    .cssClass("p-uic-vs-viewport")
+                    .style(_.height(px.px).minHeight(px.px))
+                scroll.ref.foreach { r =>
+                    vs = vs.onScrollPosition { (e: ScrollPositionEvent) =>
+                        // The position drawn at and the range asked for come out of the
+                        // SAME reported number, so the window can never be drawn at a
+                        // scroll position it did not ask rows for.
+                        val top = math.max(0.0, e.scrollTop)
+                        (sourceV match
+                            case Present(src) => r.set(top).andThen(src.demand.set(viewport.demand(top)))
+                            case Absent       => r.set(top)
+                        ): Unit < Async
+                    }
+                }
+                container(toChild(vs(toChild(tableEl))))
+        end containerEl
 
         val headerSlot: List[UI] = headerV.toList.map(h => div.cssClass("p-datatable-header")(toChild(h)))
         val footerSlot: List[UI] = footerV.toList.map(f => div.cssClass("p-datatable-footer")(toChild(f)))
@@ -1524,7 +1752,7 @@ final case class DataTable[A] private (
                 size
             ) ++ frozenCards(size) ++ orderCards(
                 order
-            ) ++ rowsCards ++ lazyCards(
+            ) ++ rowsCards ++ windowCards ++ lazyCards(
                 rows,
                 total
             ) ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
@@ -1542,12 +1770,17 @@ final case class DataTable[A] private (
                 .cssClass("p-overlay-mask")(
                     toChild(ProgressSpinner().size(Size.Small).accessibleName("Loading").render)
                 )
-        loadingV match
-            case Present(BoolValue.Const(true))  => List(maskDiv)
-            case Present(BoolValue.Dyn(sig))     => List(sig.render(b => if b then maskDiv else UI.empty))
-            case Present(BoolValue.Const(false)) => Nil
-            case Absent                          => Nil
-        end match
+        // A windowed table says what it is waiting for per ROW, in the slots the window
+        // leaves for the rows that have not arrived. A mask over the whole of it would
+        // dim the rows that did, on every scroll that reaches past the buffer.
+        if windowOn then Nil
+        else
+            loadingV match
+                case Present(BoolValue.Const(true))  => List(maskDiv)
+                case Present(BoolValue.Dyn(sig))     => List(sig.render(b => if b then maskDiv else UI.empty))
+                case Present(BoolValue.Const(false)) => Nil
+                case Absent                          => Nil
+        end if
     end loadingMask
 
     /** One `tfoot` cell. Columns without a footer still render an empty `td` so the
@@ -1818,6 +2051,55 @@ final case class DataTable[A] private (
             ))
         end if
     end rowsCards
+
+    /** What stops a body from being windowed, and what a window costs the rest of the
+      * table. The first two turn the windowing off and leave every row rendered, which is
+      * slower and right rather than faster and wrong; the last two are the table dropping
+      * something the caller asked for, since a scrollbar and a page list cannot both say
+      * which rows are on the screen, and a cursor cannot step onto a row nobody drew.
+      */
+    private def windowCards(using Frame): List[UI] =
+        if rowHeightV.isEmpty then Nil
+        else
+            val geometry =
+                if viewportPx.isDefined then Nil
+                else
+                    List(KeyDiagnostics.card(
+                        "DataTable",
+                        "scrollRows works out how many rows fit from the scroll height, so it needs one, in px; " +
+                            "the table renders every row instead",
+                        scrollHeightV.toList.map(h => s"scrollHeight is $h")
+                    ))
+            val uneven =
+                if viewportPx.isEmpty || unevenRows.isEmpty then Nil
+                else
+                    List(KeyDiagnostics.card(
+                        "DataTable",
+                        "a windowed body places its rows by counting them, so every row has to be the same height, " +
+                            "and these render rows of their own; the table renders every row instead",
+                        unevenRows
+                    ))
+            val paginated =
+                if !windowOn || sourceV.isDefined || pageSizeV.isEmpty then Nil
+                else
+                    List(KeyDiagnostics.card(
+                        "DataTable",
+                        "a windowed table scrolls instead of paginating, so the page list is not rendered and the " +
+                            "page size goes unread; drop one of the two",
+                        pageSizeV.toList.map(n => s"a page of $n rows")
+                    ))
+            val navigable =
+                if !windowOn || !cellNavV.getOrElse(leafCols.exists(_.isEditable)) then Nil
+                else
+                    List(KeyDiagnostics.card(
+                        "DataTable",
+                        "the keyboard cursor addresses cells by their position among the rendered rows, and a " +
+                            "windowed body renders a window; navigation is off while the rows are windowed",
+                        Nil
+                    ))
+            geometry ++ uneven ++ paginated ++ navigable
+        end if
+    end windowCards
 
     private def lazyCards(rows: List[A], total: Total)(using Frame): List[UI] =
         if !lazyOn then Nil
@@ -2423,7 +2705,8 @@ final case class DataTable[A] private (
         spans: Map[Int, SpanCell],
         edit: EditState,
         nav: NavState[A],
-        frozen: FrozenPlan
+        frozen: FrozenPlan,
+        height: Maybe[Int] = Absent
     )(using Frame): List[UI] =
         val id      = keyOf(a)
         val isSel   = sel.contains(id)
@@ -2566,6 +2849,11 @@ final case class DataTable[A] private (
                 List(freeze(td.cssClass("p-uic-dt-editor")(buttons.map(toChild)*), frozen.trailAt(0)))
 
         var row = tr.cssClass(if index % 2 == 0 then "p-row-even" else "p-row-odd")
+        // A windowed row is placed by counting rows, so it says how tall it is rather than
+        // leaving it to its content. The browser reads it as a floor and a row whose
+        // content outgrows it still grows, which is the drift a scrollRows itemSize that
+        // does not match the real row height shows up as.
+        height.foreach(px => row = row.style(_.height(px.px)))
         if rowClickSelects then row = row.cssClass("p-datatable-selectable-row")
         if isSel then row = row.cssClass("p-datatable-row-selected")
         if selectionModeV != SelectionMode.None then row = row.aria("selected", isSel.toString)
@@ -2957,6 +3245,18 @@ object DataTable:
       * they would need to pull it back is still there.
       */
     private[uic] val MinColumnWidth = 15.0
+
+    /** A CSS length in whole pixels, where it is one the window arithmetic can read.
+      *
+      * Only `px` is a length whose value is known here: every other unit needs the
+      * browser, and how many rows fit in the viewport is the first thing a window has to
+      * work out. A length in any other unit is reported rather than guessed at.
+      */
+    private[uic] def pixels(css: String): Maybe[Int] =
+        val t = css.trim
+        if !t.endsWith("px") then Absent
+        else Maybe.fromOption(t.dropRight(2).trim.toDoubleOption).filter(_ >= 1).map(_.toInt)
+    end pixels
 
     /** How wide the component's own columns are, as the CSS variables that carry it.
       *

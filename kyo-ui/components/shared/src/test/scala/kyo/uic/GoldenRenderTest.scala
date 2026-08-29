@@ -1342,6 +1342,44 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "DataTable windows its rows inside Prime's scroller, between two spacer rows" in {
+        final case class Row(id: String, name: String) derives CanEqual
+        val rows = (1 to 40).toList.map(i => Row(i.toString, s"R$i"))
+        for
+            err    <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+            scroll <- Signal.initRef(0.0)
+            table = uic.DataTable[Row]()
+                .rows(rows)
+                .rowKey(_.id)
+                .columns(uic.Column[Row]("Name")(_.name))
+                .scrollHeight("200px")
+                .scrollRows(40, overscan = 0)
+            out <- renderHtml(table.wired("t", Map.empty, err, _ => (), scroll = Present(scroll)))
+        yield
+            // Prime's own nesting for a virtually scrolled table, which the extracted
+            // sheet names beside the plain one.
+            assert(
+                out.contains("p-datatable-table-container") &&
+                    out.indexOf("p-virtualscroller") > out.indexOf("p-datatable-table-container") &&
+                    out.indexOf("<table") > out.indexOf("p-virtualscroller"),
+                "the scroller sits between the container and the table"
+            )
+            assert(out.contains("p-uic-vs-viewport"), "and it is the element that scrolls")
+            assert(out.contains("height: 200px"), "at the height the caller gave it")
+            assert(out.contains("p-datatable-scrollable"), "which is what pins the header to its edge")
+            assert(out.contains("p-datatable-virtualscroller-spacer"), "Prime's spacer row holds what is not drawn")
+            assert(out.contains("height: 1360px"), "thirty-four rows of forty behind the six that are")
+            // The group is as tall as the whole list, which the spacers add up to anyway.
+            // It is what keeps the table from collapsing under the scroll position while
+            // the rows are rewritten, since they are rewritten in document order.
+            assert(out.contains("height: 1600px"), "and the body says the height of all forty")
+            assert(out.contains(">R6<") && !out.contains(">R7<"), "the window reaches six rows and stops")
+            assert(out.contains("""data-uic-vs-first="0""""), "window start attr")
+            assert(out.contains("""data-uic-vs-count="6""""), "window size attr")
+            assert(!out.contains("p-paginator"), "a windowed table scrolls instead of paginating")
+        end for
+    }
+
     "DataTable ranks multi-sort columns with a badge and gives the checkbox column a select-all header" in {
         final case class Row(id: String, a: String, b: String)
         val rows = List(Row("r1", "x", "p"), Row("r2", "y", "q"))

@@ -133,6 +133,63 @@ object RowSource:
     /** The rows of one range, and the row index the first of them sits at. */
     final case class Window[A](offset: Int, rows: Seq[A]) derives CanEqual
 
+    /** The geometry of a viewport whose rows are all the same height: what fits in it,
+      * what it should ask for at a given scroll position, and how far it reaches.
+      *
+      * It is the whole arithmetic a windowed list is made of, and it is the same
+      * arithmetic whether the rows are `div`s or table rows, so it lives beside the
+      * [[Demand]] it computes rather than inside either component. A window that a
+      * component draws and a range that it asks for are then one calculation and cannot
+      * drift apart.
+      *
+      * @param itemSize
+      *   Row height in px. The rows really have to be this tall: it is what turns a scroll
+      *   position into a row index.
+      * @param height
+      *   Viewport height in px.
+      * @param overscan
+      *   Rows drawn above and below what fits, so a scroll of less than one row has
+      *   somewhere to go before the next window arrives.
+      */
+    final private[uic] case class Viewport(itemSize: Int, height: Int, overscan: Int):
+        /** Rows that fit the viewport, which is the window before the overscan. */
+        def visible: Int = math.ceil(height.toDouble / math.max(1, itemSize)).toInt
+
+        /** How many rows one window holds, the overscan on both sides included. */
+        def windowSize: Int = visible + 2 * overscan + 1
+
+        /** The row range at `scrollTop`, before any clamp at the end: a scroll handler has
+          * no row count to clamp against, and the render that has one clamps it there.
+          */
+        def span(scrollTop: Double): (Int, Int) =
+            val first = math.max(0, (math.max(0.0, scrollTop) / math.max(1, itemSize)).toInt - overscan)
+            (first, first + windowSize)
+
+        /** The range to ask a [[RowSource]] for at `scrollTop`, which is the range about to
+          * be drawn.
+          */
+        def demand(scrollTop: Double): Demand =
+            val (first, last) = span(scrollTop)
+            Demand(first, last - first)
+
+        /** How many rows there are to scroll over. A [[Total.Known]] count says it
+          * outright; an unknown one spans what has loaded plus one screen while anything
+          * follows, so there is always somewhere left to scroll into and the next scroll
+          * asks for it. That is infinite scrolling, and it needs no mode of its own.
+          */
+        def extent(total: Total, loadedEnd: Int): Int = total match
+            case Total.Known(n)                => math.max(0, n)
+            case Total.Unknown(true, atLeast)  => math.max(loadedEnd, atLeast) + visible
+            case Total.Unknown(false, atLeast) => math.max(loadedEnd, atLeast)
+
+        /** The furthest `count` rows can be scrolled. */
+        def maxScroll(count: Int): Double = math.max(0.0, (count * itemSize - height).toDouble)
+
+        /** `scrollTop` held inside what `count` rows can be scrolled by. */
+        def clamp(scrollTop: Double, count: Int): Double =
+            math.max(0.0, math.min(maxScroll(count), scrollTop))
+    end Viewport
+
     /** How the buffer behaves.
       *
       * @param blockSize

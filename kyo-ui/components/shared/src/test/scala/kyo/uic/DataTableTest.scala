@@ -228,10 +228,25 @@ class DataTableTest extends UicTest:
             (ui, filters, menus.toMap)
 
     /** The row names the table currently renders, read off its body cells. */
+    /** One node's own elements, with a reactive or fragment layer resolved away: a windowed
+      * body wraps its rows in one, since the rows are what a scroll replaces and the row
+      * group is what has to stay put.
+      */
+    private def resolve(node: UI)(using Frame): Chunk[UI.Ast.Element] < Sync =
+        node match
+            case e: UI.Ast.Element       => Chunk(e)
+            case r: UI.Ast.Reactive[?]   => r.signal.current(using r.frame).map(resolve)
+            case f: UI.Ast.Fragment[?]   => Kyo.foreach(f.children)(resolve).map(_.flatten)
+            case k: UI.Ast.KeyedChild[?] => resolve(k.child)
+            case _                       => Chunk.empty
+
+    private def rowsUnder(e: UI.Ast.Element)(using Frame): Chunk[UI.Ast.Element] < Sync =
+        Kyo.foreach(e.children)(resolve).map(_.flatten)
+
     private def bodyNames(node: UI)(using Frame): Chunk[String] < Sync =
-        elements(node).map(_.filter(_.attrs.cssClasses.contains("p-datatable-tbody")).flatMap(_.children.collect {
-            case r: UI.Ast.Element => r
-        })).map(_.flatMap(_.children.collect { case c: UI.Ast.Element => c }.headOption))
+        elements(node).map(_.filter(_.attrs.cssClasses.contains("p-datatable-tbody")))
+            .flatMap(bs => Kyo.foreach(bs)(rowsUnder).map(_.flatten))
+            .map(_.flatMap(_.children.collect { case c: UI.Ast.Element => c }.headOption))
             .map(_.flatMap(_.children.collect { case t: UI.Ast.Text => t.value }))
 
     "typing into a filter cell writes the column's own filter and narrows the rows" in {
@@ -1088,6 +1103,202 @@ class DataTableTest extends UicTest:
         yield
             assert(text.contains("bound twice"))
             assert(text.contains("source") && text.contains("rows(ref)"), "and both bindings are named")
+    }
+
+    // ---- a windowed body ----
+
+    /** A hundred rows, more than any viewport in these tests can hold. */
+    private val hundred = (1 to 100).toList.map(i => Item(i.toString, s"R$i", i))
+
+    /** Five rows fit the viewport (200 / 40), and with no overscan the window at rest is
+      * rows 0 to 5 plus the one the arithmetic reaches into.
+      */
+    private def windowed(using Frame): DataTable[Item] =
+        uic.DataTable[Item]().rowKey(_.id).columns(uic.column("Name")(_.name))
+            .scrollHeight("200px").scrollRows(40, overscan = 0)
+
+    private def bodyEl(node: UI)(using Frame): UI.Ast.Element < Sync =
+        elementWithClass(node, "p-datatable-tbody")
+
+    private def bodyTrs(node: UI)(using Frame): List[UI.Ast.Element] < Sync =
+        bodyEl(node).flatMap(rowsUnder).map(_.toList)
+
+    private def heightOf(e: UI.Ast.Element): Maybe[Length] =
+        Maybe.fromOption(e.attrs.uiStyle.props.collect { case Style.Prop.Height(v) => v }.headOption)
+
+    /** The two spacers, ahead of the window and behind it, by the height each holds. */
+    private def spacers(node: UI)(using Frame): List[Maybe[Length]] < Sync =
+        bodyTrs(node).map(_.filter(_.attrs.cssClasses.contains("p-datatable-virtualscroller-spacer")).map(heightOf))
+
+    private def isSlotRow(e: UI.Ast.Element): Boolean =
+        e.children.collect { case c: UI.Ast.Element => c }
+            .flatMap(_.children.collect { case c: UI.Ast.Element => c })
+            .exists(_.attrs.cssClasses.contains("p-skeleton"))
+
+    /** What the window says about itself, which the LEADING spacer carries: the row group
+      * outlives every scroll, so nothing on it could say where the window sits.
+      */
+    private def windowAttrs(node: UI)(using Frame): (Maybe[String], Maybe[String]) < Sync =
+        bodyTrs(node).map(_.head).map(e =>
+            (Maybe.fromOption(e.attrs.dataAttrs.get("uic-vs-first")), Maybe.fromOption(e.attrs.dataAttrs.get("uic-vs-count")))
+        )
+
+    "a windowed table draws the rows in view and holds the rest of the list in a spacer" in {
+        for
+            rows   <- Signal.initRef[Seq[Item]](hundred)
+            err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            scroll <- Signal.initRef(0.0)
+            ui = windowed.rows(rows).wired("t", Map.empty, err, _ => (), scroll = Present(scroll))
+            names   <- bodyNames(ui)
+            pad     <- spacers(ui)
+            attrs   <- windowAttrs(ui)
+            body    <- bodyEl(ui)
+            offered <- pages(ui).map(_._1)
+        yield
+            assert(names == Chunk("R1", "R2", "R3", "R4", "R5", "R6"), "the six rows the arithmetic reaches")
+            assert(pad == List(Present(0.px), Present(3760.px)), "and one spacer holding the ninety-four behind them")
+            // A floor under the table while its rows are rewritten: they go in document
+            // order, so a leading spacer shrinking before the trailing one grows would
+            // collapse it under the scroll position for an instant.
+            assert(heightOf(body) == Present(4000.px), "the body is as tall as the whole list")
+            assert(attrs == (Present("0"), Present("6")))
+            assert(offered.isEmpty, "a windowed table scrolls instead of paginating")
+    }
+
+    // The scroll position is a row index in disguise, and the stripe follows the row it
+    // belongs to rather than its place in the window.
+    "a scroll moves the window, and the rows keep the stripe their own index gives them" in {
+        for
+            rows   <- Signal.initRef[Seq[Item]](hundred)
+            err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            scroll <- Signal.initRef(0.0)
+            ui = windowed.rows(rows).wired("t", Map.empty, err, _ => (), scroll = Present(scroll))
+            _     <- scroll.set(400.0)
+            names <- bodyNames(ui)
+            pad   <- spacers(ui)
+            trs   <- bodyTrs(ui)
+            attrs <- windowAttrs(ui)
+        yield
+            assert(names == Chunk("R11", "R12", "R13", "R14", "R15", "R16"), "ten rows down")
+            assert(pad == List(Present(400.px), Present(3360.px)), "held apart by what is above and below")
+            assert(attrs == (Present("10"), Present("6")))
+            val first = trs.filterNot(_.attrs.cssClasses.contains("p-datatable-virtualscroller-spacer")).head
+            assert(first.attrs.cssClasses.contains("p-row-even"), "row ten is an even row wherever it is drawn")
+            assert(heightOf(first) == Present(40.px), "and says how tall it is, since it is placed by counting")
+    }
+
+    "a windowed source is asked for the range the scroll is about to draw" in {
+        for
+            query  <- Signal.initRef("a")
+            src    <- RowSource.init(query, pageSize = 6)((_, o, l) => (hundred.slice(o, o + l), Total.Known(100)))
+            err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            scroll <- Signal.initRef(0.0)
+            ui = windowed.source(src).wired("t", Map.empty, err, _ => (), scroll = Present(scroll))
+            vs <- elementWithClass(ui, "p-virtualscroller")
+            _ <- vs.attrs.onScrollPos.getOrElse(throw new AssertionError("the scroller reports no scroll"))(
+                UI.ScrollPositionEvent(400.0, 0.0, Absent)
+            )
+            at  <- scroll.get
+            ask <- src.demand.get
+        yield
+            assert(at == 400.0, "the position the browser reported")
+            assert(ask == RowSource.Demand(10, 6), "and the rows that position puts on the screen")
+    }
+
+    // Between a scroll and the window it asked for there is a fetch, and the rows on the
+    // screen are the ones the source published, at the offset it published them at.
+    "a row the source has not reached is drawn as a row of slots the same height" in {
+        for
+            query  <- Signal.initRef("a")
+            src    <- RowSource.init(query, pageSize = 6)((_, o, l) => (hundred.slice(o, o + l), Total.Known(100)))
+            seen   <- Channel.init[Seq[Item]](16)
+            _      <- Fiber.init(src.rows.observe(v => seen.put(v)))
+            _      <- served(seen)
+            err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            scroll <- Signal.initRef(0.0)
+            ui = windowed.source(src).wired("t", Map.empty, err, _ => (), scroll = Present(scroll))
+            here  <- bodyNames(ui)
+            _     <- scroll.set(400.0)
+            trs   <- bodyTrs(ui)
+            names <- bodyNames(ui)
+            pad   <- spacers(ui)
+        yield
+            assert(here == Chunk("R1", "R2", "R3", "R4", "R5", "R6"), "the range the source served")
+            assert(names.isEmpty, "none of which is in the window the scroll moved to")
+            val drawn = trs.filterNot(_.attrs.cssClasses.contains("p-datatable-virtualscroller-spacer"))
+            assert(drawn.size == 6 && drawn.forall(isSlotRow), "so the window is six slots")
+            assert(drawn.forall(t => heightOf(t) == Present(40.px)), "each as tall as the row it stands in for")
+            assert(pad == List(Present(400.px), Present(3360.px)), "and the list is as long as it was")
+    }
+
+    // Infinite scrolling is the total saying it does not know, and it reaches one screen
+    // past whatever has been served so far.
+    "an unknown total leaves a screen to scroll into while anything follows" in {
+        for
+            query <- Signal.initRef("a")
+            src <- RowSource.init(query, pageSize = 6)((_, o, l) =>
+                (hundred.slice(o, o + l), Total.Unknown(o + l < hundred.size))
+            )
+            seen   <- Channel.init[Seq[Item]](16)
+            _      <- Fiber.init(src.rows.observe(v => seen.put(v)))
+            _      <- served(seen)
+            err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            scroll <- Signal.initRef(0.0)
+            ui = windowed.source(src).wired("t", Map.empty, err, _ => (), scroll = Present(scroll))
+            pad <- spacers(ui)
+        yield
+            // Six rows are drawn, at forty each, and the spacer holds the rest of the
+            // reach: eleven rows in all, which is what has been served plus one screen.
+            assert(pad == List(Present(0.px), Present(200.px)), "the five rows there are still to scroll into")
+    }
+
+    "a scroll height in no unit the window can read leaves every row rendered" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](hundred)
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .scrollHeight("40vh").scrollRows(40).render
+            text  <- cards(ui)
+            names <- bodyNames(ui)
+        yield
+            assert(text.contains("scrollRows") && text.contains("40vh"), "the length it could not read is named")
+            assert(names.size == 100, "and the table renders every row rather than a wrong window")
+    }
+
+    "rows of their own between the data rows leave every row rendered" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](hundred)
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .groupBy(uic.RowGroup((i: Item) => if i.price > 50 then "high" else "low"))
+                .scrollHeight("200px").scrollRows(40).render
+            text <- cards(ui)
+            trs  <- bodyTrs(ui)
+        yield
+            assert(text.contains("row grouping"), "the level that renders rows of its own is named")
+            val data = trs.count(t => t.attrs.cssClasses.contains("p-row-even") || t.attrs.cssClasses.contains("p-row-odd"))
+            assert(data == 100, "and the table renders every row")
+            assert(!trs.exists(_.attrs.cssClasses.contains("p-datatable-virtualscroller-spacer")), "with no window")
+    }
+
+    "a page size a windowed table will not read is reported" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](hundred)
+            page <- Signal.initRef(0)
+            text <- cards(uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .paginate(10)(page).scrollHeight("200px").scrollRows(40).render)
+        yield assert(text.contains("scrolls instead of paginating") && text.contains("10 rows"))
+    }
+
+    "a windowed table does not navigate, and says so" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](hundred)
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v))
+            ).scrollHeight("200px").scrollRows(40).render
+            text <- cards(ui)
+            all  <- elements(ui)
+        yield
+            assert(text.contains("navigation is off"))
+            assert(!all.exists(_.attrs.cssClasses.contains("p-uic-dt-nav")), "and the cursor's own class is gone")
     }
 
 end DataTableTest

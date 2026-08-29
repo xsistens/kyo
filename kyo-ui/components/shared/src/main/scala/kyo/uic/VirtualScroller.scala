@@ -73,29 +73,13 @@ final case class VirtualScroller[A] private (
     /** Sets the per-item template and completes the builder. */
     def apply(f: A => UI): VirtualScroller[A] = copy(template = Present(f))
 
+    /** The window arithmetic, which is [[RowSource.Viewport]]'s and shared with the
+      * windowed [[DataTable]]: what fits, what to ask for, and how far the list reaches.
+      */
+    private def viewport: RowSource.Viewport = RowSource.Viewport(itemSizeV, heightV, overscanV)
+
     private def totalHeight: Int               = items.length * itemSizeV
-    private def maxScroll: Double              = math.max(0.0, (totalHeight - heightV).toDouble)
-    private def clampScroll(v: Double): Double = math.max(0.0, math.min(maxScroll, v))
-
-    /** Rows that fit the viewport, which is the window before the overscan is added. */
-    private def visible: Int = math.ceil(heightV.toDouble / itemSizeV).toInt
-
-    /** The row range the arithmetic puts at `scrollTop`, overscan included and before any
-      * clamp at the end: the scroll handler has no row count to clamp against, and the
-      * render that does clamps it there.
-      */
-    private def span(scrollTop: Double): (Int, Int) =
-        val first = math.max(0, (math.max(0.0, scrollTop) / itemSizeV).toInt - overscanV)
-        (first, first + visible + 2 * overscanV + 1)
-
-    /** How many rows the spacer spans over a source. A known count says it outright; an
-      * unknown one spans what has loaded plus one screen while anything follows, so there
-      * is always somewhere left to scroll into and the next scroll asks for it.
-      */
-    private def extent(total: Total, loadedEnd: Int): Int = total match
-        case Total.Known(n)                => math.max(0, n)
-        case Total.Unknown(true, atLeast)  => math.max(loadedEnd, atLeast) + visible
-        case Total.Unknown(false, atLeast) => math.max(loadedEnd, atLeast)
+    private def clampScroll(v: Double): Double = viewport.clamp(v, items.length)
 
     private[uic] def render(using Frame): UI =
         // The scroll position lives in a signal allocated by this effectful mount. The VIEWPORT shell is stable — only
@@ -109,7 +93,7 @@ final case class VirtualScroller[A] private (
                 // The first range has to be asked for by someone, and no scroll has
                 // happened yet to ask for it.
                 _ <- (sourceV match
-                    case Present(src) => src.demand.set(RowSource.Demand(0, visible + 2 * overscanV + 1))
+                    case Present(src) => src.demand.set(viewport.demand(0.0))
                     case _            => ()
                 ): Unit < Async
             yield wired(scroll)
@@ -151,9 +135,8 @@ final case class VirtualScroller[A] private (
                         // range asked for is always the range being drawn.
                         (sourceV match
                             case Present(src) =>
-                                val top           = math.max(0.0, e.scrollTop)
-                                val (first, last) = span(top)
-                                r.set(top).andThen(src.demand.set(RowSource.Demand(first, last - first)))
+                                val top = math.max(0.0, e.scrollTop)
+                                r.set(top).andThen(src.demand.set(viewport.demand(top)))
                             case _ => r.set(clampScroll(e.scrollTop))
                         ): Unit < Async
                     }
@@ -168,7 +151,7 @@ final case class VirtualScroller[A] private (
         template match
             case Absent => div.cssClass("p-virtualscroller-content")
             case Present(tpl) =>
-                val (firstIdx, reach) = span(clampScroll(scrollTop))
+                val (firstIdx, reach) = viewport.span(clampScroll(scrollTop))
                 val lastIdx           = math.min(items.length, reach)
                 // Positional children (no keys): the window of row slots is reused across scrolls, the diff just updates each
                 // slot's content + `top` — keying by absolute index would churn add/remove on every scroll. Each row is
@@ -201,10 +184,10 @@ final case class VirtualScroller[A] private (
         template match
             case Absent => div.cssClass("p-virtualscroller-content")
             case Present(tpl) =>
+                val vp                = viewport
                 val loadedEnd         = w.offset + w.rows.size
-                val count             = extent(total, loadedEnd)
-                val room              = math.max(0.0, (count * itemSizeV - heightV).toDouble)
-                val (firstIdx, reach) = span(math.max(0.0, math.min(room, scrollTop)))
+                val count             = vp.extent(total, loadedEnd)
+                val (firstIdx, reach) = vp.span(vp.clamp(scrollTop, count))
                 val lastIdx           = math.min(count, reach)
                 val rows: List[UI] = (firstIdx until lastIdx).toList.map { i =>
                     val cell =
