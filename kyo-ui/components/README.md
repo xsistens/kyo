@@ -28,8 +28,9 @@ val categories: Seq[Category] = Seq(
     Category("fit", "Fitness", List(Category("yoga", "Yoga", Nil)))
 )
 
-def lookUp(spec: List[uic.SortKey], at: Int): (Seq[Product], Int) < Async =
-    (catalog.slice(at * 10, at * 10 + 10), catalog.size)
+def lookUp(text: String, spec: List[uic.SortKey], offset: Int, limit: Int): (Seq[Product], uic.Total) < Async =
+    val found = catalog.filter(_.name.contains(text))
+    (found.slice(offset, offset + limit), uic.Total.Known(found.size))
 ```
 -->
 
@@ -1010,25 +1011,20 @@ Rows the table did not filter, sort or page are `lazyRows(total)`. Binding the t
 
 Nothing else changes. The header still sorts, the filter row still takes queries, the paginator still steps, and every one of them still writes into the ref bound to it. That is why there is no load event to bind, and none was added: the refs already are one.
 
-What fills the two bound refs is a fiber watching the ones the reader writes, which is also where a debounce, a cancel, or a retry belongs rather than inside the table. `UI.fork` inside `UI.mounted` is where that fiber goes: the feed then runs on the node's own scope and stops with it, and a fetch that fails surfaces on the node instead of leaving stale rows standing.
+The total is a `Total`, not a number, because plenty of sources cannot answer with one. A `count(*)` beside the page gives `Total.Known(n)` and the paginator counts the pages out; a cursor API or a search index gives `Total.Unknown(hasMore)` and the paginator grows one page at a time. Modelling the second case is what keeps a caller from inventing a number, and a fabricated total is not the smaller wrong: it puts pages in the paginator that no query will ever fill.
+
+`RowSource` is the other half, and it is what a table binds in practice. It owns the fetching: a block cache keyed by the query, a prefetch of the neighbouring blocks, and the busy flag that stays down when a range was already there. `source(...)` binds its rows, its total, its busy flag and its paginator in one call.
 
 ```scala
 val lazyTable: UI =
     UI.mounted {
         for
-            rows  <- Signal.initRef(Seq.empty[Product])
-            total <- Signal.initRef(0)
-            sort  <- Signal.initRef(List.empty[uic.SortKey])
-            page  <- Signal.initRef(0)
-            _ <- UI.fork(sort.combineLatest(page).observe { (spec, at) =>
-                for
-                    found <- lookUp(spec, at)
-                    _     <- rows.set(found._1)
-                    _     <- total.set(found._2)
-                yield ()
-            })
+            text <- Signal.initRef("")
+            sort <- Signal.initRef(List.empty[uic.SortKey])
+            source <- uic.RowSource.init(text.combineLatest(sort), pageSize = 25) {
+                (key, offset, limit) => lookUp(key._1, key._2, offset, limit)
+            }
         yield uic.DataTable[Product]()
-            .rows(rows)
             .rowKey(_.id)
             .columns(
                 uic.column("Name")(_.name).sortable(true),
@@ -1036,10 +1032,17 @@ val lazyTable: UI =
                 uic.column("Price")(p => f"${p.price}%.2f").align(uic.ColumnAlign.End)
             )
             .sort(sort)
-            .paginate(10)(page)
-            .lazyRows(total): UI
+            .source(source): UI
     }
 ```
+
+The first argument is everything besides the range that decides which rows match: the search text, the sort spec, the filters. It is part of the cache key, so a sort click retires the old query's blocks without invalidating anything, and it is why the source needs no notion of what a sort even is.
+
+Rows are fetched in fixed-size BLOCKS rather than in pages, because a viewport asks for rows 37 to 52 and that lies across any page boundary; a page is then a range that happens to start on a block boundary. `Config(blockSize, buffer, maxBlocks, expireAfterWrite)` is the whole policy: the block size defaults to the page size, so one page is one request, and setting it larger serves several pages from one.
+
+One rule inside is worth knowing, because it is what makes the buffer safe rather than merely fast: a fetch is never interrupted, only the waiting for it. `Signal.observe` closes its per-value scope the moment the value changes, so a fetch forked into that scope would be killed exactly when the reader arrives on the page it was fetching. Every fetch is therefore forked unscoped and only awaited from inside that scope, where an interruption costs nothing.
+
+A source lives on the scope of the `UI.mounted` that made it, so its feed stops when the node does, and a fetch that fails surfaces on the node rather than leaving stale rows standing. For anything the source does not fit, `rows(ref)`, `lazyRows(signal)` and `loading(signal)` are still there to bind by hand.
 
 A column of such a table sorts once it SAYS it does, with `sortable(true)` or with a `sortBy` whose ordering then goes unread. The default cannot be yes, or every column would offer a sort nobody asked for, the Price column above among them. What the table holds is also all it can name, so a select-all covers the page it was given, a `Column.footer` aggregate sums that page, and a `groupBy` run stops at the page's edges. Two mistakes it can still see it reports: more rows than one page holds, and more rows than the total says exist. Neither of those shows in the table itself, which is why each is a card.
 
