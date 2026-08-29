@@ -584,6 +584,32 @@ def y(using Frame) =
         )
     }
 
+    "a windowed DataTable takes a row height beside its scroll height; Prime's virtualScrollerOptions stay absent" in {
+        typeCheck(
+            preamble +
+                """final case class W(id: String, name: String)
+def x(using Frame) =
+  uic.DataTable[W]()
+    .rows(Seq(W("1", "A")))
+    .rowKey(_.id)
+    .columns(uic.Column[W]("Name")(_.name))
+    .scrollHeight("400px")
+    .scrollRows(46)"""
+        )
+        // The overscan is the one knob, and it has a default rather than a setter of its own.
+        typeCheck(preamble + """def x = uic.DataTable[String]().scrollRows(46, overscan = 6)""")
+        // Over a source the same two setters are the whole of it: the demand is the scroll.
+        typeCheck(
+            preamble +
+                """final case class W(id: String, name: String)
+def x(s: uic.RowSource[String, W])(using Frame) =
+  uic.DataTable[W]().rowKey(_.id).columns(uic.Column[W]("Name")(_.name)).source(s).scrollHeight("400px").scrollRows(46)"""
+        )
+        typeCheckFailure(preamble + """def x = uic.DataTable[String]().virtualScrollerOptions(46)""")
+        typeCheckFailure(preamble + """def x = uic.DataTable[String]().scrollRows("46px")""")
+        typeCheckFailure(preamble + """def x = uic.DataTable[String]().itemSize(46)""")
+    }
+
     "grouping levels read the row type from the table, and a merged column is marked on itself" in {
         typeCheck(
             preamble +
