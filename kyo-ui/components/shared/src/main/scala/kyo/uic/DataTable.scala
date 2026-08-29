@@ -231,10 +231,16 @@ final case class RowChange[A](rowKey: String, before: A, after: A)
   *   - `lazyRows(total)`: the rows are a WINDOW onto `total` rows filtered, sorted and
   *     paged somewhere else. The table renders them verbatim and paginates over the
   *     total, while every affordance keeps writing to the ref bound to it, which is the
-  *     load event: a caller observing those refs fetches the page they describe. A column
-  *     there sorts once it says so, with `sortable(true)` or a `sortBy` whose ordering
-  *     goes unread. What the table holds is all it can name, so a select-all covers the
-  *     page it was given and a `Column.footer` aggregate sums that page.
+  *     load event: a caller observing those refs fetches the page they describe. The
+  *     total is a [[Total]], so a source that cannot count its rows says
+  *     `Unknown(hasMore)` and the paginator grows a page at a time instead of counting
+  *     them out. A column there sorts once it says so, with `sortable(true)` or a
+  *     `sortBy` whose ordering goes unread. What the table holds is all it can name, so a
+  *     select-all covers the page it was given and a `Column.footer` aggregate sums that
+  *     page.
+  *   - `source(rowSource)`: the same thing wired in one call from a [[RowSource]], which
+  *     owns the block cache and the prefetch behind it, so stepping to the next page is
+  *     served from the buffer and raises no busy mask at all.
   *   - `selectionMode` + `selected(ref)` — `Single`/`Multiple` select on row
   *     click; `Checkbox` renders Prime's checkbox column, whose header carries the
   *     binary select-all over every row that survived the global filter (`Radio`
@@ -303,7 +309,8 @@ final case class DataTable[A] private (
     footerV: Maybe[UI] = Absent,
     loadingV: Maybe[BoolValue] = Absent,
     scrollHeightV: Maybe[String] = Absent,
-    lazyTotalV: Maybe[ReactiveValue[Int]] = Absent,
+    lazyTotalV: Maybe[ReactiveValue[Total]] = Absent,
+    rowsSigV: Maybe[Signal[Seq[A]]] = Absent,
     editingRowsRef: Maybe[SignalRef[Set[String]]] = Absent,
     editingCellRef: Maybe[SignalRef[Maybe[CellPath]]] = Absent,
     rowsRefV: Maybe[SignalRef[Seq[A]]] = Absent,
@@ -459,11 +466,33 @@ final case class DataTable[A] private (
       * edges.
       */
     def lazyRows(total: Int): DataTable[A] =
-        copy(lazyTotalV = Present(ReactiveValue.Const(math.max(0, total))))
+        lazyRows(Total.Known(math.max(0, total)))
+
+    /** [[lazyRows]] where the size of the whole set is not a number: a cursor API or a
+      * search index answers `Total.Unknown(hasMore)`, and the paginator then grows one
+      * page at a time instead of counting them out.
+      */
+    def lazyRows(total: Total): DataTable[A] =
+        copy(lazyTotalV = Present(ReactiveValue.Const(total)))
 
     /** Reactive [[lazyRows]], for a total that arrives with the page it counts. */
-    def lazyRows(total: Signal[Int]): DataTable[A] =
+    def lazyRows(total: Signal[Total]): DataTable[A] =
         copy(lazyTotalV = Present(ReactiveValue.Dyn(total)))
+
+    /** Takes the rows, the total, the busy flag and the paginator from a [[RowSource]],
+      * which is the whole wiring of a lazily loaded table in one call.
+      *
+      * It sets what `rows`, `lazyRows`, `loading` and `paginate` set, so a later call to
+      * any of those overrides it: bind the source first, then override.
+      */
+    def source(src: RowSource[?, A]): DataTable[A] =
+        copy(
+            rowsSigV = Present(src.rows),
+            lazyTotalV = Present(ReactiveValue.Dyn(src.total)),
+            loadingV = Present(BoolValue.Dyn(src.loading)),
+            pageSizeV = Present(src.pageSize),
+            pageRef = Present(src.page)
+        )
 
     /** Selection semantics: `Single`/`Multiple` select on row click, `Checkbox`
       * via Prime's checkbox column; `None` (default) leaves rows inert.
@@ -1196,18 +1225,21 @@ final case class DataTable[A] private (
       * table stores the new row into it.
       */
     private def withRows(k: Seq[A] => UI)(using Frame): UI =
-        rowsRefV match
-            case Present(ref) => ref.render(k)
-            case Absent       => k(rowsV)
+        rowsSigV match
+            case Present(sig) => sig.render(k)
+            case Absent =>
+                rowsRefV match
+                    case Present(ref) => ref.render(k)
+                    case Absent       => k(rowsV)
 
     /** How many rows the page the table was given came out of, zero where it was given no
       * total and computes its own. It is resolved innermost, so a total that moves without
       * its rows repaints the paginator and nothing above it.
       */
-    private def withTotal(k: Int => UI)(using Frame): UI =
+    private def withTotal(k: Total => UI)(using Frame): UI =
         lazyTotalV.flatMap(_.dyn) match
             case Present(sig) => sig.render(k)
-            case _            => k(lazyTotalV.flatMap(_.const).getOrElse(0))
+            case _            => k(lazyTotalV.flatMap(_.const).getOrElse(Total.Unknown(false)))
 
     /** Resolves every reactive [[Column.sortable]] flag to a plain boolean before the table
       * builds, one nested subscription per signal-backed column.
@@ -1272,7 +1304,7 @@ final case class DataTable[A] private (
         sort: List[SortKey],
         query: String,
         page: Int,
-        total: Int,
+        total: Total,
         sel: Set[String],
         exp: Set[String],
         openGroups: Set[GroupPath],
@@ -1324,9 +1356,17 @@ final case class DataTable[A] private (
         //    about the pages it was not given.
         val (paged, paginatorUI) = pageSizeV match
             case Present(size) =>
-                val count      = if prepared then total else sorted.size
+                val at = math.max(page, 0)
+                // An unknown total counts what is on the screen and adds one page while
+                // anything follows, which is the only honest page list a cursor can give.
+                val count =
+                    if !prepared then sorted.size
+                    else
+                        total match
+                            case Total.Known(n)      => n
+                            case Total.Unknown(more) => at * size + sorted.size + (if more then 1 else 0)
                 val totalPages = math.max(1, (count + size - 1) / size)
-                val cur        = math.min(math.max(page, 0), totalPages - 1)
+                val cur        = math.min(at, totalPages - 1)
                 var pag = Paginator()
                     .totalRecords(count)
                     .rows(size)
@@ -1482,7 +1522,10 @@ final case class DataTable[A] private (
                 size
             ) ++ frozenCards(size) ++ orderCards(
                 order
-            ) ++ lazyCards(rows, total) ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
+            ) ++ rowsCards ++ lazyCards(
+                rows,
+                total
+            ) ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
         )
     end body
 
@@ -1754,13 +1797,35 @@ final case class DataTable[A] private (
       * not there, or a page runs past its own end, while the rows on the screen look right
       * in both cases.
       */
-    private def lazyCards(rows: List[A], total: Int)(using Frame): List[UI] =
+    /** Two places to read the rows from. Nothing about the table says which one it took,
+      * so a caller who bound a source and left an older `rows` behind would be looking at
+      * one of them with no way to tell which.
+      */
+    private def rowsCards(using Frame): List[UI] =
+        val bound = List(
+            if rowsSigV.isDefined then List("source") else Nil,
+            if rowsRefV.isDefined then List("rows(ref)") else Nil,
+            if rowsV.nonEmpty then List("rows(seq)") else Nil
+        ).flatten
+        if bound.size < 2 then Nil
+        else
+            List(KeyDiagnostics.card(
+                "DataTable",
+                "the rows are bound twice and only one binding is read; keep the one the table should show",
+                bound
+            ))
+        end if
+    end rowsCards
+
+    private def lazyCards(rows: List[A], total: Total)(using Frame): List[UI] =
         if !lazyOn then Nil
         else
             val over = pageSizeV.toList.collect {
                 case size if rows.size > size => s"${rows.size} rows over a page of $size"
             }
-            val past = if rows.size <= total then Nil else List(s"${rows.size} rows out of a total of $total")
+            val past = total match
+                case Total.Known(n) if rows.size > n => List(s"${rows.size} rows out of a total of $n")
+                case _                               => Nil
             val overCard =
                 if over.isEmpty then Nil
                 else
