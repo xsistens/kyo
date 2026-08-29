@@ -1309,6 +1309,39 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    // A lazily loaded table is the same anatomy with the three passes taken out: it renders
+    // the page it was handed and paginates over a total it could not have counted itself.
+    "DataTable renders a lazily loaded page verbatim and paginates over the total it was given" in {
+        final case class Row(id: String, name: String) derives CanEqual
+        val page = List(Row("3", "Carol"), Row("4", "Alice"))
+        for
+            sort  <- Signal.initRef(List(uic.SortKey("Name", uic.SortDirection.Ascending)))
+            query <- Signal.initRef("zzz")
+            at    <- Signal.initRef(1)
+            base = uic.DataTable[Row]()
+                .rows(page)
+                .rowKey(_.id)
+                .columns(
+                    uic.Column[Row]("Name")(_.name).sortable(true),
+                    uic.Column[Row]("Id")(_.id)
+                )
+                .sort(sort)
+                .globalFilter(query)
+                .paginate(2)(at)
+                .emptyContent("Nothing found")
+            lazily <- renderHtml(base.lazyRows(9).render)
+            owned  <- renderHtml(base.render)
+        yield
+            assert(lazily.indexOf("Carol") < lazily.indexOf("Alice"), "the page renders in the order it arrived")
+            assert(lazily.contains("""aria-label="Page 5""""), "nine rows of two make five pages")
+            assert(lazily.contains("""aria-current="page""""), "and the bound page is the current one")
+            assert(lazily.contains("p-datatable-sortable-column"), "a column that says it sorts still offers it")
+            assert(lazily.contains("""data-uic-icon="sort-amount-up-alt""""), "and shows the direction the spec asks for")
+            assert(owned.contains("p-datatable-empty-message"), "the same table reading the query itself empties instead")
+            assert(!owned.contains("""aria-label="Page 5""""), "and counts the pages off what it kept")
+        end for
+    }
+
     "DataTable ranks multi-sort columns with a badge and gives the checkbox column a select-all header" in {
         final case class Row(id: String, a: String, b: String)
         val rows = List(Row("r1", "x", "p"), Row("r2", "y", "q"))

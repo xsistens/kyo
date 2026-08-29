@@ -849,4 +849,184 @@ class DataTableTest extends UicTest:
         assert(DataTable.holdsPinned(List(true, true, false), 0, 1, 2), "here the pinned one keeps index 2")
     }
 
+    // ---- lazily loaded rows ----
+
+    /** Two rows in an order no sort would put them in, so a table that sorted them would
+      * say so by moving them.
+      */
+    private val unsorted = List(Item("2", "B", 20), Item("1", "A", 10))
+
+    /** The page numbers the paginator offers, and which of them is the current one. */
+    private def pages(node: UI)(using Frame): (List[String], List[String]) < Sync =
+        elements(node).map { all =>
+            val buttons                  = all.filter(_.attrs.cssClasses.contains("p-paginator-page")).toList
+            def label(e: UI.Ast.Element) = e.children.collect { case t: UI.Ast.Text => t.value }.mkString
+            (buttons.map(label), buttons.filter(_.attrs.cssClasses.contains("p-paginator-page-selected")).map(label))
+        }
+
+    "a lazily loaded table renders the rows in the order it was given them" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](unsorted)
+            sort <- Signal.initRef(List(SortKey("Name", SortDirection.Ascending)))
+            base = uic.DataTable[Item]().rows(rows).rowKey(_.id).sort(sort).columns(
+                uic.column("Name")(_.name).sortBy(_.name)
+            )
+            here  <- bodyNames(base.render)
+            there <- bodyNames(base.lazyRows(2).render)
+        yield
+            assert(here == Chunk("A", "B"), "the same spec sorts a table that owns its rows")
+            assert(there == Chunk("B", "A"), "and moves nothing in one whose rows arrive sorted")
+    }
+
+    "a lazily loaded table filters nothing it was given" in {
+        for
+            rows  <- Signal.initRef[Seq[Item]](unsorted)
+            query <- Signal.initRef("A")
+            base = uic.DataTable[Item]().rows(rows).rowKey(_.id).globalFilter(query).columns(
+                uic.column("Name")(_.name)
+            )
+            here  <- bodyNames(base.render)
+            there <- bodyNames(base.lazyRows(2).render)
+        yield
+            assert(here == Chunk("A"), "a table that owns its rows answers the query itself")
+            assert(there == Chunk("B", "A"), "and one whose rows arrive filtered leaves the query to whoever read it")
+    }
+
+    // The query is the server's to read, so the input cannot be told it is unreadable: a
+    // number column asked for "abc" would mark itself in a table that reads its own.
+    "a column filter of a lazily loaded table narrows nothing and marks nothing" in {
+        for
+            rows    <- Signal.initRef[Seq[Item]](unsorted)
+            filters <- Signal.initRef(Map(List("Price") -> ColumnFilter("abc", MatchMode.Equals)))
+            err     <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            base = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name),
+                uic.column("Price")(_.price.toString).filterBy(_.price)
+            ).columnFilters(filters)
+            here  = base.wired("t", Map.empty, err, _ => ())
+            there = base.lazyRows(2).wired("t", Map.empty, err, _ => ())
+            hereRows  <- bodyNames(here)
+            hereMark  <- elements(here).map(_.exists(_.attrs.cssClasses.contains("p-invalid")))
+            thereRows <- bodyNames(there)
+            thereMark <- elements(there).map(_.exists(_.attrs.cssClasses.contains("p-invalid")))
+        yield
+            assert(hereRows == Chunk("B", "A"), "a query neither table can use empties neither of them")
+            assert(hereMark, "the table that reads its own says the query is not a price")
+            assert(thereRows == Chunk("B", "A"))
+            assert(!thereMark, "and the one that reads none of them says nothing about it")
+    }
+
+    "the paginator of a lazily loaded table counts the pages the total says exist" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](unsorted)
+            page <- Signal.initRef(0)
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name)
+            ).paginate(2)(page).lazyRows(7).render
+            (offered, current) <- pages(ui)
+            shown              <- bodyNames(ui)
+        yield
+            assert(offered == List("1", "2", "3", "4"), "seven rows of two make four pages")
+            assert(current == List("1"))
+            assert(shown == Chunk("B", "A"), "and the page it was given is the page it renders")
+    }
+
+    "a page past the end of a lazily loaded table clamps to the last one" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](unsorted)
+            page <- Signal.initRef(9)
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name)
+            ).paginate(2)(page).lazyRows(7).render
+            (_, current) <- pages(ui)
+        yield assert(current == List("4"), "the total is what says where the pages stop")
+    }
+
+    "a total that arrives with its page repaints the paginator" in {
+        for
+            rows  <- Signal.initRef[Seq[Item]](unsorted)
+            page  <- Signal.initRef(0)
+            total <- Signal.initRef(7)
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name)
+            ).paginate(2)(page).lazyRows(total).render
+            (before, _) <- pages(ui)
+            _           <- total.set(3)
+            (after, _)  <- pages(ui)
+        yield
+            assert(before == List("1", "2", "3", "4"))
+            assert(after == List("1", "2"), "a query that matched fewer rows offers fewer pages")
+    }
+
+    // The ordering is not what sorts a prepared table, so the column has to say it sorts;
+    // the default cannot be yes, or every column would offer a sort nobody asked for.
+    "a column of a lazily loaded table sorts once it says so" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](unsorted)
+            sort <- Signal.initRef(List.empty[SortKey])
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).sort(sort).lazyRows(2).columns(
+                uic.column("Name")(_.name),
+                uic.column("Price")(_.price.toString).sortable(true),
+                uic.column("Id")(_.id).sortBy(_.id)
+            ).render
+            heads <- elements(ui).map(_.filter(_.attrs.cssClasses.contains("p-datatable-header-cell")).toList)
+            _     <- heads(1).attrs.onClickEvt.getOrElse(throw new AssertionError("the header declares no click"))(mouseAt)
+            spec  <- sort.get
+        yield
+            val offers = heads.map(_.attrs.cssClasses.contains("p-datatable-sortable-column"))
+            assert(offers == List(false, true, true), "the flag says so, and so does an ordering nothing reads")
+            assert(spec == List(SortKey("Price", SortDirection.Ascending)), "and the click writes the spec")
+    }
+
+    "sortable with nothing to sort by is a mistake only where the table sorts" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](unsorted)
+            sort <- Signal.initRef(List(SortKey("Price", SortDirection.Ascending)))
+            base = uic.DataTable[Item]().rows(rows).rowKey(_.id).sort(sort).columns(
+                uic.column("Name")(_.name),
+                uic.column("Price")(_.price.toString).sortable(true)
+            )
+            here  <- cards(base.render)
+            there <- cards(base.lazyRows(2).render)
+        yield
+            assert(here.contains("nothing to sort by"), "a table that sorts needs the ordering")
+            assert(here.contains("cannot sort"), "and cannot sort by the spec entry either")
+            assert(there == "", "a table that sorts elsewhere needs neither")
+    }
+
+    "a sort spec of a lazily loaded table naming no column is still reported" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](unsorted)
+            sort <- Signal.initRef(List(SortKey("Nmae", SortDirection.Ascending)))
+            text <- cards(uic.DataTable[Item]().rows(rows).rowKey(_.id).sort(sort).lazyRows(2).columns(
+                uic.column("Name")(_.name).sortable(true)
+            ).render)
+        yield
+            assert(text.contains("Nmae"))
+            assert(text.contains("sortBy or sortable(true)"), "which is what marks a column of such a table")
+    }
+
+    "more rows than a page holds is reported" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](unsorted)
+            page <- Signal.initRef(0)
+            text <- cards(uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name)
+            ).paginate(1)(page).lazyRows(7).render)
+        yield
+            assert(text.contains("more rows than one page holds"))
+            assert(text.contains("2 rows over a page of 1"))
+    }
+
+    "more rows than the total says exist is reported" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](unsorted)
+            text <- cards(uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name)
+            ).lazyRows(1).render)
+        yield
+            assert(text.contains("more rows than the total it says exist"))
+            assert(text.contains("2 rows out of a total of 1"))
+    }
+
 end DataTableTest

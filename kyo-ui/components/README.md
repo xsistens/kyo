@@ -27,6 +27,9 @@ val categories: Seq[Category] = Seq(
     Category("acc", "Accessories", Nil),
     Category("fit", "Fitness", List(Category("yoga", "Yoga", Nil)))
 )
+
+def lookUp(spec: List[uic.SortKey], at: Int): (Seq[Product], Int) < Async =
+    (catalog.slice(at * 10, at * 10 + 10), catalog.size)
 ```
 -->
 
@@ -1002,6 +1005,43 @@ val reorderable: UI < Async =
 ```
 
 A column the order does not name keeps its authored place behind the ones it does, so the seeded `List(List("Price"))` above means "Price first" rather than "the rest is undefined". What a drag writes is the whole list, hidden columns included, so a column `Column.visible` is hiding keeps its place while the reader moves the others and comes back where it was. Where a cell may be dropped follows from the table rather than from a rule of its own: it moves among its own siblings, since the header is a tree and one cell cannot sit in two groups at once, and a drop that would leave a frozen column adrift or carry a pinned one along is not offered at all. A header group drags as one, which Prime does not do: with a ColumnGroup its reordering is off entirely. The line showing where the column would land is a border on the cell beside it, where Prime positions two floating arrows in JavaScript, and the state is written only when the answer changes, so a drag across a wide table re-renders once per boundary crossed rather than once per frame.
+
+Rows the table did not filter, sort or page are `lazyRows(total)`. Binding the total is what says so, since locally the total IS the row count: a table handed one has been handed something it could not have worked out, so it renders what it was given verbatim and paginates over the total rather than over what it holds.
+
+Nothing else changes. The header still sorts, the filter row still takes queries, the paginator still steps, and every one of them still writes into the ref bound to it. That is why there is no load event to bind, and none was added: the refs already are one.
+
+What fills the two bound refs is a fiber watching the ones the reader writes, which is also where a debounce, a cancel, or a retry belongs rather than inside the table. `UI.fork` inside `UI.mounted` is where that fiber goes: the feed then runs on the node's own scope and stops with it, and a fetch that fails surfaces on the node instead of leaving stale rows standing.
+
+```scala
+val lazyTable: UI =
+    UI.mounted {
+        for
+            rows  <- Signal.initRef(Seq.empty[Product])
+            total <- Signal.initRef(0)
+            sort  <- Signal.initRef(List.empty[uic.SortKey])
+            page  <- Signal.initRef(0)
+            _ <- UI.fork(sort.combineLatest(page).observe { (spec, at) =>
+                for
+                    found <- lookUp(spec, at)
+                    _     <- rows.set(found._1)
+                    _     <- total.set(found._2)
+                yield ()
+            })
+        yield uic.DataTable[Product]()
+            .rows(rows)
+            .rowKey(_.id)
+            .columns(
+                uic.column("Name")(_.name).sortable(true),
+                uic.column("Category")(_.category).sortable(true),
+                uic.column("Price")(p => f"${p.price}%.2f").align(uic.ColumnAlign.End)
+            )
+            .sort(sort)
+            .paginate(10)(page)
+            .lazyRows(total): UI
+    }
+```
+
+A column of such a table sorts once it SAYS it does, with `sortable(true)` or with a `sortBy` whose ordering then goes unread. The default cannot be yes, or every column would offer a sort nobody asked for, the Price column above among them. What the table holds is also all it can name, so a select-all covers the page it was given, a `Column.footer` aggregate sums that page, and a `groupBy` run stops at the page's edges. Two mistakes it can still see it reports: more rows than one page holds, and more rows than the total says exist. Neither of those shows in the table itself, which is why each is a card.
 
 Around the rows sit four pieces of chrome. `header(ui)` and `footer(ui)` are free slots, above the table and below the paginator, which is where a filter box or a record count goes. `Column.footer` is a different thing: it renders a real `tfoot` row aligned to the column grid, and its computed form `footer(rows => ...)` receives the rows that survived the global filter, across every page rather than the visible one. That distinction is load-bearing, because the table owns filtering: a column total computed by the caller from its own list would disagree with what the reader is looking at. `loading(flag)` covers the table with a spinner mask, and `scrollHeight("240px")` caps the container and pins the header row group to its top edge while the body scrolls under it.
 

@@ -228,6 +228,13 @@ final case class RowChange[A](rowKey: String, before: A, after: A)
   *     text projections.
   *   - `paginate(size)(pageRef)` — slices the (filtered, sorted) rows and renders
   *     the embedded Prime paginator; the page ref is 0-based and clamped.
+  *   - `lazyRows(total)`: the rows are a WINDOW onto `total` rows filtered, sorted and
+  *     paged somewhere else. The table renders them verbatim and paginates over the
+  *     total, while every affordance keeps writing to the ref bound to it, which is the
+  *     load event: a caller observing those refs fetches the page they describe. A column
+  *     there sorts once it says so, with `sortable(true)` or a `sortBy` whose ordering
+  *     goes unread. What the table holds is all it can name, so a select-all covers the
+  *     page it was given and a `Column.footer` aggregate sums that page.
   *   - `selectionMode` + `selected(ref)` — `Single`/`Multiple` select on row
   *     click; `Checkbox` renders Prime's checkbox column, whose header carries the
   *     binary select-all over every row that survived the global filter (`Radio`
@@ -296,6 +303,7 @@ final case class DataTable[A] private (
     footerV: Maybe[UI] = Absent,
     loadingV: Maybe[BoolValue] = Absent,
     scrollHeightV: Maybe[String] = Absent,
+    lazyTotalV: Maybe[ReactiveValue[Int]] = Absent,
     editingRowsRef: Maybe[SignalRef[Set[String]]] = Absent,
     editingCellRef: Maybe[SignalRef[Maybe[CellPath]]] = Absent,
     rowsRefV: Maybe[SignalRef[Seq[A]]] = Absent,
@@ -429,6 +437,33 @@ final case class DataTable[A] private (
       */
     def paginate(size: Int)(ref: SignalRef[Int]): DataTable[A] =
         copy(pageSizeV = Present(math.max(1, size)), pageRef = Present(ref))
+
+    /** The rows are a WINDOW onto `total` rows filtered, sorted and paged somewhere else:
+      * the table renders them verbatim and paginates over the total, instead of computing
+      * any of the three itself.
+      *
+      * Binding the total is what says so, since locally the total IS the row count and a
+      * table that is handed one has been handed something it could not have worked out.
+      * Nothing else changes: the header still sorts, the filter row still takes queries,
+      * the paginator still steps, and every one of them still writes to the ref bound to
+      * it. There is no load event to bind because the refs already are one, a caller
+      * observing them (`Signal.observe` over the spec they make up) fetches the page they
+      * describe and stores it back.
+      *
+      * A column of such a table sorts once it SAYS it does, with `sortable(true)` or with
+      * a `sortBy` whose ordering then goes unread, since the ordering is not what sorts it
+      * and every column would otherwise offer a sort nobody asked for.
+      *
+      * What the table holds is also all it can name: a select-all covers the page it was
+      * given, a `Column.footer` aggregate sums that page, and a `groupBy` run stops at its
+      * edges.
+      */
+    def lazyRows(total: Int): DataTable[A] =
+        copy(lazyTotalV = Present(ReactiveValue.Const(math.max(0, total))))
+
+    /** Reactive [[lazyRows]], for a total that arrives with the page it counts. */
+    def lazyRows(total: Signal[Int]): DataTable[A] =
+        copy(lazyTotalV = Present(ReactiveValue.Dyn(total)))
 
     /** Selection semantics: `Single`/`Multiple` select on row click, `Checkbox`
       * via Prime's checkbox column; `None` (default) leaves rows inert.
@@ -636,6 +671,9 @@ final case class DataTable[A] private (
     private def editorColumn: Boolean = editingRowsRef.isDefined
 
     private def rowInteractive: Boolean = rowClickSelects || onRowClickF.isDefined
+
+    /** Whether the rows are a window onto a larger set prepared elsewhere ([[lazyRows]]). */
+    private def lazyOn: Boolean = lazyTotalV.isDefined
 
     /** Renders through whichever ui-state refs are bound (nested reactive nodes
       * render through in SSR).
@@ -1124,21 +1162,24 @@ final case class DataTable[A] private (
                                     withRef(selectedRef, Set.empty[String]) { sel =>
                                         withRef(expandedRef, Set.empty[String]) { exp =>
                                             withRef(expandedGroupsRef, Set.empty[GroupPath]) { groups =>
-                                                body(
-                                                    rows,
-                                                    sort,
-                                                    query,
-                                                    page,
-                                                    sel,
-                                                    exp,
-                                                    groups,
-                                                    flags,
-                                                    edit,
-                                                    nav,
-                                                    filter.copy(specs = specs),
-                                                    size.copy(widths = widths),
-                                                    order
-                                                )
+                                                withTotal { total =>
+                                                    body(
+                                                        rows,
+                                                        sort,
+                                                        query,
+                                                        page,
+                                                        total,
+                                                        sel,
+                                                        exp,
+                                                        groups,
+                                                        flags,
+                                                        edit,
+                                                        nav,
+                                                        filter.copy(specs = specs),
+                                                        size.copy(widths = widths),
+                                                        order
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -1158,6 +1199,15 @@ final case class DataTable[A] private (
         rowsRefV match
             case Present(ref) => ref.render(k)
             case Absent       => k(rowsV)
+
+    /** How many rows the page the table was given came out of, zero where it was given no
+      * total and computes its own. It is resolved innermost, so a total that moves without
+      * its rows repaints the paginator and nothing above it.
+      */
+    private def withTotal(k: Int => UI)(using Frame): UI =
+        lazyTotalV.flatMap(_.dyn) match
+            case Present(sig) => sig.render(k)
+            case _            => k(lazyTotalV.flatMap(_.const).getOrElse(0))
 
     /** Resolves every reactive [[Column.sortable]] flag to a plain boolean before the table
       * builds, one nested subscription per signal-backed column.
@@ -1201,11 +1251,28 @@ final case class DataTable[A] private (
     private def sortableFlag(c: Column[A, FlatOnly], path: List[String], flags: Map[List[String], Boolean]): Boolean =
         flags.getOrElse(path, c.sortableConst)
 
+    /** Whether a sort spec may name this column. Locally that is an ordering, since an
+      * ordering is what a sort acts on; a [[lazyRows]] table sorts elsewhere and its
+      * columns need carry none, so there a column counts once it DECLARES itself sortable,
+      * with `sortable(true)` or with a `sortBy` whose projection then goes unread. The
+      * default stays no either way, or every column of such a table would offer a sort
+      * nobody asked for.
+      */
+    private def canSortBy(c: Column[A, FlatOnly]): Boolean =
+        if lazyOn then c.sortableV.isDefined || c.orderingV.isDefined else c.orderingV.isDefined
+
+    /** Whether the READER may re-sort this column: one the spec can name, and one the flag
+      * leaves free. A locked column still sorts by the spec, it only takes no clicks.
+      */
+    private def sortsHere(c: Column[A, FlatOnly], path: List[String], flags: Map[List[String], Boolean]): Boolean =
+        canSortBy(c) && sortableFlag(c, path, flags)
+
     private def body(
         rowsIn: Seq[A],
         sort: List[SortKey],
         query: String,
         page: Int,
+        total: Int,
         sel: Set[String],
         exp: Set[String],
         openGroups: Set[GroupPath],
@@ -1216,51 +1283,64 @@ final case class DataTable[A] private (
         size: SizeState,
         order: OrderState
     )(using Frame): UI =
+        // A lazily loaded table is handed a window onto rows prepared elsewhere, so the
+        // three passes below would filter a page, sort a page and slice a slice. It skips
+        // all three and renders what it was given, in the order it was given.
+        val prepared = lazyOn
+
         // 1. Global filter: contains-match over the columns' text projections.
         val rows = rowsIn.toList
         val global =
-            if query.isEmpty then rows
+            if prepared || query.isEmpty then rows
             else
                 val q = query.toLowerCase
                 rows.filter(a => leafCols.exists(c => c.textF.exists(f => f(a).toLowerCase.contains(q))))
 
         // 1b. Column filters: every bound one has to pass. A query this table cannot read
         //     as a value of its column's type filters nothing and says so on its own
-        //     input, rather than emptying the table behind a typo.
-        val reads    = filterReads(filterIn.specs)
+        //     input, rather than emptying the table behind a typo. A prepared table reads
+        //     no query at all, and so marks none of them: the reading is the server's.
+        val reads    = if prepared then Nil else filterReads(filterIn.specs)
         val filter   = filterIn.copy(unusable = reads.collect { case (p, Absent) => p }.toSet)
         val filtered = reads.foldLeft(global)((rs, r) => r._2.fold(rs)(p => rs.filter(p)))
 
         // 2. Sort: apply the SORTING entries back-to-front through stable sorts, so the
         //    first one ends up the primary key. Unsorted entries hold a slot in the
         //    priority order and contribute nothing here.
-        val sorted = SortKey.sorting(sort).reverse.foldLeft(filtered) { (rs, k) =>
-            allPaths.find(_._1 == k.path).flatMap(_._2.orderingV.toOption) match
-                case Some(ord) => rs.sorted(using if k.direction == SortDirection.Ascending then ord else ord.reverse)
-                case None      => rs
-        }
+        val sorted =
+            if prepared then filtered
+            else
+                SortKey.sorting(sort).reverse.foldLeft(filtered) { (rs, k) =>
+                    allPaths.find(_._1 == k.path).flatMap(_._2.orderingV.toOption) match
+                        case Some(ord) =>
+                            rs.sorted(using if k.direction == SortDirection.Ascending then ord else ord.reverse)
+                        case None => rs
+                }
 
-        // 3. Paginate: clamp the 0-based page, slice, and embed the standalone
-        //    Paginator (resolved page passed directly — the table already renders
-        //    inside its own page-ref subscription).
+        // 3. Paginate: clamp the 0-based page, slice, and embed the standalone Paginator
+        //    (resolved page passed directly, since the table already renders inside its own
+        //    page-ref subscription). A prepared table slices nothing, the rows ARE the page,
+        //    and paginates over the total it was given, which is the one thing it knows
+        //    about the pages it was not given.
         val (paged, paginatorUI) = pageSizeV match
             case Present(size) =>
-                val totalPages = math.max(1, (sorted.size + size - 1) / size)
+                val count      = if prepared then total else sorted.size
+                val totalPages = math.max(1, (count + size - 1) / size)
                 val cur        = math.min(math.max(page, 0), totalPages - 1)
                 var pag = Paginator()
-                    .totalRecords(sorted.size)
+                    .totalRecords(count)
                     .rows(size)
                     .currentPage(cur)
                     .hostClass("p-datatable-paginator-bottom")
                 pageRef.foreach(ref => pag = pag.page(ref))
-                (sorted.slice(cur * size, cur * size + size), List(pag.render))
+                (if prepared then sorted else sorted.slice(cur * size, cur * size + size), List(pag.render))
             case Absent => (sorted, Nil)
 
         // The paths whose headers the reader can actually click, which is what both click
         // transitions may clear. Everything else in the spec is the caller's to keep.
         val interactive: Set[List[String]] =
             if sortRef.isEmpty then Set.empty
-            else leafPaths.collect { case (p, c) if c.isSortable(sortableFlag(c, p, flags)) => p }.toSet
+            else leafPaths.collect { case (p, c) if sortsHere(c, p, flags) => p }.toSet
 
         val colCount =
             leafCols.length + (if checkboxColumn then 1 else 0) + (if expanderColumn then 1 else 0) +
@@ -1402,7 +1482,7 @@ final case class DataTable[A] private (
                 size
             ) ++ frozenCards(size) ++ orderCards(
                 order
-            ) ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
+            ) ++ lazyCards(rows, total) ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
         )
     end body
 
@@ -1480,15 +1560,20 @@ final case class DataTable[A] private (
     private def headerCards(sort: List[SortKey], flags: Map[List[String], Boolean])(using Frame): List[UI] =
         def show(path: List[String]): String = path.mkString(" / ")
         val empties                          = ColumnTree.emptyGroups(cols)
-        val sortable                         = allPaths.filter(_._2.orderingV.isDefined).map(_._1)
+        val sortable                         = allPaths.collect { case (p, c) if canSortBy(c) => p }
         val unknown                          = if sortRef.isEmpty then Nil else sort.map(_.path).filterNot(sortable.contains).map(show)
         val ambiguous =
             if sortRef.isEmpty then Nil else KeyDiagnostics.duplicates(sortable.map(show))
         // A column asked to be sortable with nothing to sort by: the flag decides whether the
         // reader may change the spec, and an ordering is what a change would act on.
-        val noOrdering = leafPaths.collect {
-            case (p, c) if c.orderingV.isEmpty && c.sortableV.isDefined && sortableFlag(c, p, flags) => show(p)
-        }
+        // Not in a prepared table: there the flag is the whole declaration, and the
+        // ordering it would be asking for is one nothing would read.
+        val noOrdering =
+            if lazyOn then Nil
+            else
+                leafPaths.collect {
+                    case (p, c) if c.orderingV.isEmpty && c.sortableV.isDefined && sortableFlag(c, p, flags) => show(p)
+                }
         val emptyCard =
             if empties.isEmpty then Nil
             else
@@ -1503,7 +1588,9 @@ final case class DataTable[A] private (
                 List(KeyDiagnostics.card(
                     "DataTable",
                     "the sort spec names a column this table cannot sort; a path is the group labels around " +
-                        "the column followed by its header, and the column needs a sortBy",
+                        "the column followed by its header, and the column needs " +
+                        (if lazyOn then "a sortBy or sortable(true), since a lazily loaded table sorts elsewhere"
+                         else "a sortBy"),
                     unknown
                 ))
         val ambiguousCard =
@@ -1661,6 +1748,41 @@ final case class DataTable[A] private (
         end if
     end orderCards
 
+    /** What stops a window from being a window onto the set it names. Both are the same
+      * mistake seen from either side, a total left behind by its rows or rows left behind
+      * by their total, and neither shows in the table: the paginator offers pages that are
+      * not there, or a page runs past its own end, while the rows on the screen look right
+      * in both cases.
+      */
+    private def lazyCards(rows: List[A], total: Int)(using Frame): List[UI] =
+        if !lazyOn then Nil
+        else
+            val over = pageSizeV.toList.collect {
+                case size if rows.size > size => s"${rows.size} rows over a page of $size"
+            }
+            val past = if rows.size <= total then Nil else List(s"${rows.size} rows out of a total of $total")
+            val overCard =
+                if over.isEmpty then Nil
+                else
+                    List(KeyDiagnostics.card(
+                        "DataTable",
+                        "a lazily loaded table was given more rows than one page holds, so the paginator and the " +
+                            "rows disagree about where the page ends; hand it the page paginate was told the size of",
+                        over
+                    ))
+            val pastCard =
+                if past.isEmpty then Nil
+                else
+                    List(KeyDiagnostics.card(
+                        "DataTable",
+                        "a lazily loaded table was given more rows than the total it says exist; the total counts " +
+                            "every row the query matched, not the ones on this page",
+                        past
+                    ))
+            overCard ++ pastCard
+        end if
+    end lazyCards
+
     /** What stops a table from freezing at all. Each one is an arrangement whose offsets
       * cannot be worked out, and a table that renders them anyway parks a column over the
       * middle of itself; naming the column instead is the same trade the filter row makes
@@ -1779,7 +1901,7 @@ final case class DataTable[A] private (
         val at = sp.at
         sp.node.asColumn match
             case Present(c) =>
-                headerCell(c, sp.path, sort, sp.rowspan, sortableFlag(c, sp.path, flags), interactive, at, size, frozen, order)
+                headerCell(c, sp.path, sort, sp.rowspan, sortsHere(c, sp.path, flags), interactive, at, size, frozen, order)
             case Absent =>
                 var cell = th.cssClass("p-datatable-header-cell")
                 if sp.colspan > 1 then cell = cell.colspan(sp.colspan)
@@ -2000,14 +2122,14 @@ final case class DataTable[A] private (
         path: List[String],
         sort: List[SortKey],
         rows: Int,
-        flag: Boolean,
+        sorts: Boolean,
         interactive: Set[List[String]],
         index: Int,
         size: SizeState,
         frozen: FrozenPlan,
         order: OrderState
     )(using Frame): UI =
-        val sortable  = c.isSortable(flag) && sortRef.isDefined
+        val sortable  = sorts && sortRef.isDefined
         val sortingKs = SortKey.sorting(sort)
         val rank      = sortingKs.indexWhere(_.path == path)
         val direction = sort.find(_.path == path).map(_.direction).getOrElse(SortDirection.Unsorted)
