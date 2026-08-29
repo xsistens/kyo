@@ -1357,14 +1357,16 @@ final case class DataTable[A] private (
         val (paged, paginatorUI) = pageSizeV match
             case Present(size) =>
                 val at = math.max(page, 0)
-                // An unknown total counts what is on the screen and adds one page while
-                // anything follows, which is the only honest page list a cursor can give.
+                // An unknown total counts the furthest the source has reached, never less
+                // than what is on the screen, and adds one page while anything follows.
+                // Counting the screen alone would shrink the page list on the way back.
                 val count =
                     if !prepared then sorted.size
                     else
                         total match
-                            case Total.Known(n)      => n
-                            case Total.Unknown(more) => at * size + sorted.size + (if more then 1 else 0)
+                            case Total.Known(n) => n
+                            case Total.Unknown(more, atLeast) =>
+                                math.max(at * size + sorted.size, atLeast) + (if more then 1 else 0)
                 val totalPages = math.max(1, (count + size - 1) / size)
                 val cur        = math.min(at, totalPages - 1)
                 var pag = Paginator()

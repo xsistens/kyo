@@ -5448,6 +5448,23 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    // The same anatomy over a RowSource, where no sequence is held: what arrived is drawn
+    // at the offset the source published, and what has not is a slot of the row's height.
+    "VirtualScroller over a source draws what arrived and leaves a Skeleton slot for what has not" in {
+        val vs = uic.VirtualScroller(Seq.empty[Int]).itemSize(40).height(200).overscan(0)(i => uic.Text()(s"row $i"))
+        for
+            out <- renderHtml(vs.sourceWindow(0.0, uic.RowSource.Window(1, Seq(7, 8)), uic.Total.Known(50)))
+        yield
+            assert(out.contains("p-virtualscroller-spacer"), "Prime's scroll-extent spacer")
+            assert(out.contains("2000px"), "fifty rows of forty, whether or not they are loaded")
+            assert(out.contains(">row 7<") && out.contains(">row 8<"), "the rows that arrived")
+            assert(out.contains("p-skeleton"), "and a slot where the source has not reached")
+            assert(("p-uic-vs-item".r.findAllIn(out).size == 6), "five rows fit the viewport, plus the reach")
+            assert(out.contains("""data-uic-vs-first="0""""), "window start attr")
+            assert(out.contains("""data-uic-vs-count="6""""), "window size attr")
+        end for
+    }
+
     "enter/leave transitions: Dialog/Toast/Overlay/Message carry both, driven by Prime's keyframe classes" in {
         for
             dialog <-
