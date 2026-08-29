@@ -1044,9 +1044,35 @@ One rule inside is worth knowing, because it is what makes the buffer safe rathe
 
 A source lives on the scope of the `UI.mounted` that made it, so its feed stops when the node does, and a fetch that fails surfaces on the node rather than leaving stale rows standing. For anything the source does not fit, `rows(ref)`, `lazyRows(signal)` and `loading(signal)` are still there to bind by hand.
 
+A table can also scroll instead of paginating. `scrollRows(itemSize)`, beside the `scrollHeight` that gives it a viewport, renders only the rows in view plus a few on either side; over a source it is the scroll that writes the demand, so nothing is held and the list costs the blocks the reader actually looked at.
+
+```scala
+val infiniteTable: UI =
+    UI.mounted {
+        for
+            text <- Signal.initRef("")
+            source <- uic.RowSource.init(text, pageSize = 40) {
+                (t, offset, limit) => lookUp(t, Nil, offset, limit)
+            }
+        yield uic.DataTable[Product]()
+            .rowKey(_.id)
+            .columns(
+                uic.column("Name")(_.name),
+                uic.column("Price")(p => f"${p.price}%.2f").align(uic.ColumnAlign.End)
+            )
+            .source(source)
+            .scrollHeight("400px")
+            .scrollRows(46): UI
+    }
+```
+
+`itemSize` reaches the row as a height, which the browser reads as a floor: pick it at least as tall as the row renders on its own and every row is exactly it. How far it reaches comes from the `Total`: a known count spans the whole list, and an unknown one spans what has loaded plus one screen while anything follows, which is infinite scrolling without a mode for it. A row of the window that has not arrived yet is a row of `Skeleton` cells the same height, so the geometry never moves under the reader and the waiting is shown per row rather than behind a mask over the whole table.
+
+Two things follow from placing rows by counting them. The rows really have to be `itemSize` tall, and three features render rows that are not: `groupBy` and a level's summary row, `rowExpansionTemplate`, and `Column.rowSpan`. Each is named in a card and leaves the table rendering every row, which is slower and right. And the keyboard cursor is off while the rows are windowed, since it addresses cells by their position among the rendered ones.
+
 A column of such a table sorts once it SAYS it does, with `sortable(true)` or with a `sortBy` whose ordering then goes unread. The default cannot be yes, or every column would offer a sort nobody asked for, the Price column above among them. What the table holds is also all it can name, so a select-all covers the page it was given, a `Column.footer` aggregate sums that page, and a `groupBy` run stops at the page's edges. Two mistakes it can still see it reports: more rows than one page holds, and more rows than the total says exist. Neither of those shows in the table itself, which is why each is a card.
 
-Around the rows sit four pieces of chrome. `header(ui)` and `footer(ui)` are free slots, above the table and below the paginator, which is where a filter box or a record count goes. `Column.footer` is a different thing: it renders a real `tfoot` row aligned to the column grid, and its computed form `footer(rows => ...)` receives the rows that survived the global filter, across every page rather than the visible one. That distinction is load-bearing, because the table owns filtering: a column total computed by the caller from its own list would disagree with what the reader is looking at. `loading(flag)` covers the table with a spinner mask, and `scrollHeight("240px")` caps the container and pins the header row group to its top edge while the body scrolls under it.
+Around the rows sit four pieces of chrome. `header(ui)` and `footer(ui)` are free slots, above the table and below the paginator, which is where a filter box or a record count goes. `Column.footer` is a different thing: it renders a real `tfoot` row aligned to the column grid, and its computed form `footer(rows => ...)` receives the rows that survived the global filter, across every page rather than the visible one. That distinction is load-bearing, because the table owns filtering: a column total computed by the caller from its own list would disagree with what the reader is looking at. `loading(flag)` covers the table with a spinner mask, and `scrollHeight("240px")` caps the container and pins the header row group to its top edge while the body scrolls under it. Adding `scrollRows` moves that height onto Prime's own scroller inside the container, which is then the one element that scrolls.
 
 A header of more than one row is a `headerGroup`: a label written *around* the columns it spans, nested as deep as it needs to be. Prime writes the header cells beside the column list and has the caller put `colSpan` and `rowSpan` on each of them; here the leaves ARE the columns, so a group is as wide as what it holds, a column beside a group reaches down to the bottom of the header, and there is no second list to fall out of step with the first. Everything else stays on the leaves: a group carries a label and nothing more, so sorting, footers, filtering and merging keep working exactly as they do without one.
 
@@ -1302,6 +1328,8 @@ val shell: UI < Async =
 ```
 
 > **Caution:** `VirtualScroller` is the second component with an explicit latency cost. Every scroll round-trips to the server to recompute the visible window. It is the right tool for a list too long to render whole, and the wrong one over a link where a round-trip is perceptible.
+
+`DataTable.scrollRows` is the same windowing inside a table, over the same kind of source. Reach for `VirtualScroller` where the rows are not a grid: a feed, a log, a picker.
 
 Handed a `RowSource` instead of a sequence, it holds no list at all: it writes the visible range into the source on every scroll and draws what the source published, so a list of any length costs the blocks the reader actually looked at. Rows inside the window that have not arrived are drawn as `Skeleton` slots of the same height, which is what keeps the geometry from jumping while they load.
 
