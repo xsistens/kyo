@@ -469,6 +469,10 @@ final case class Column[A, +K <: FlatOnly] private (
       * badge, because a spec that names the column still sorts it and hiding that would
       * misreport the rows the reader is looking at. That pair is the point: a column the
       * table sorts by and the reader may not re-sort.
+      *
+      * In a `DataTable.lazyRows` table it is also the whole declaration: the rows arrive
+      * sorted, so there is no ordering for the flag to sit beside, and `sortable(true)` is
+      * what marks a column the server sorts by.
       */
     def sortable(v: Boolean): Column[A, K] = copy(sortableV = Present(BoolValue.Const(v)))
 
