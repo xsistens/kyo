@@ -1011,7 +1011,7 @@ Rows the table did not filter, sort or page are `lazyRows(total)`. Binding the t
 
 Nothing else changes. The header still sorts, the filter row still takes queries, the paginator still steps, and every one of them still writes into the ref bound to it. That is why there is no load event to bind, and none was added: the refs already are one.
 
-The total is a `Total`, not a number, because plenty of sources cannot answer with one. A `count(*)` beside the page gives `Total.Known(n)` and the paginator counts the pages out; a cursor API or a search index gives `Total.Unknown(hasMore)` and the paginator grows one page at a time. Modelling the second case is what keeps a caller from inventing a number, and a fabricated total is not the smaller wrong: it puts pages in the paginator that no query will ever fill.
+The total is a `Total`, not a number, because plenty of sources cannot answer with one. A `count(*)` beside the page gives `Total.Known(n)` and the paginator counts the pages out; a cursor API or a search index gives `Total.Unknown(hasMore)` and the paginator grows one page at a time. A source fills in `Unknown`'s second field, the floor under the length, from how far it has served, and never lets it fall: without that, paging back would shrink the page list, and a scrollbar sized off it would jump. Modelling the second case is what keeps a caller from inventing a number, and a fabricated total is not the smaller wrong: it puts pages in the paginator that no query will ever fill.
 
 `RowSource` is the other half, and it is what a table binds in practice. It owns the fetching: a block cache keyed by the query, a prefetch of the neighbouring blocks, and the busy flag that stays down when a range was already there. `source(...)` binds its rows, its total, its busy flag and its paginator in one call.
 
@@ -1302,6 +1302,22 @@ val shell: UI < Async =
 ```
 
 > **Caution:** `VirtualScroller` is the second component with an explicit latency cost. Every scroll round-trips to the server to recompute the visible window. It is the right tool for a list too long to render whole, and the wrong one over a link where a round-trip is perceptible.
+
+Handed a `RowSource` instead of a sequence, it holds no list at all: it writes the visible range into the source on every scroll and draws what the source published, so a list of any length costs the blocks the reader actually looked at. Rows inside the window that have not arrived are drawn as `Skeleton` slots of the same height, which is what keeps the geometry from jumping while they load.
+
+```scala
+val lazyList: UI =
+    UI.mounted {
+        for
+            query <- Signal.initRef("")
+            source <- uic.RowSource.init(query, pageSize = 40) { (q, offset, limit) =>
+                lookUp(q, Nil, offset, limit)
+            }
+        yield uic.VirtualScroller(source).itemSize(48).height(400)(p => div(span(p.name))): UI
+    }
+```
+
+The rows are placed at the offset the source PUBLISHED, not at the range the viewport asked for, and those two differ for exactly as long as a fetch is in flight. How far the scrollbar reaches comes from the `Total`: a known count spans the whole list, and an unknown one spans the furthest the source has served plus one screen while anything follows, which is infinite scrolling without a mode of its own. A block that reports nothing after it makes the length exact, so the scrollbar settles the moment the reader reaches the end.
 
 ## Layout and containers
 

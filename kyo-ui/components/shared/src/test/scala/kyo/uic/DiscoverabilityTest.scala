@@ -1615,12 +1615,20 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheckFailure(preamble + """def x = uic.InputMask("999").autoClear(true)""")
     }
 
-    "VirtualScroller is items-typed with a fixed itemSize/height window; lazy-load props are absent (deferred)" in {
+    "VirtualScroller takes either a sequence or a RowSource; Prime's lazy-load props stay absent" in {
         typeCheck(
             preamble + """def x(using Frame): uic.VirtualScroller[Int] = uic.VirtualScroller((0 until 10000).toList).itemSize(40).height(200).overscan(4)(i => span(s"row $i"))"""
         )
+        // Loading on demand is the source, not a flag: there is nothing to switch on.
+        typeCheck(
+            preamble + """def x(s: uic.RowSource[String, Int])(using Frame): uic.VirtualScroller[Int] = uic.VirtualScroller(s).itemSize(40).height(200)(i => span(s"row $i"))"""
+        )
         typeCheckFailure(preamble + """def x = uic.VirtualScroller(List(1)).lazyLoad(true)""")
         typeCheckFailure(preamble + """def x = uic.VirtualScroller(List(1)).scrollHeight("14rem")""")
+        // A source of the wrong row type is not a source for this scroller.
+        typeCheckFailure(
+            preamble + """def x(s: uic.RowSource[String, String])(using Frame): uic.VirtualScroller[Int] = uic.VirtualScroller(s)(i => span(s"row $i"))"""
+        )
     }
 
     "the flip/shift, drag and auto-advance setters are discoverable; deferred-only props stay absent" in {
