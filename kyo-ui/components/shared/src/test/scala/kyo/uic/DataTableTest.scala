@@ -946,12 +946,12 @@ class DataTableTest extends UicTest:
         for
             rows  <- Signal.initRef[Seq[Item]](unsorted)
             page  <- Signal.initRef(0)
-            total <- Signal.initRef(7)
+            total <- Signal.initRef(Total.Known(7): Total)
             ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
                 uic.column("Name")(_.name)
             ).paginate(2)(page).lazyRows(total).render
             (before, _) <- pages(ui)
-            _           <- total.set(3)
+            _           <- total.set(Total.Known(3))
             (after, _)  <- pages(ui)
         yield
             assert(before == List("1", "2", "3", "4"))
@@ -1027,6 +1027,67 @@ class DataTableTest extends UicTest:
         yield
             assert(text.contains("more rows than the total it says exist"))
             assert(text.contains("2 rows out of a total of 1"))
+    }
+
+    // ---- rows from a RowSource ----
+
+    /** The first non-empty window a source published, which is the barrier a test needs
+      * before it renders: taking twice would race a fetch that finished first.
+      */
+    private def served[A](ch: Channel[Seq[A]])(using Frame): Seq[A] < (Async & Abort[Closed]) =
+        ch.take.map(v => if v.nonEmpty then v else served(ch))
+
+    private val five = (1 to 5).toList.map(i => Item(i.toString, ('A' + i - 1).toChar.toString, i * 10))
+
+    "a bound source fills the rows, the total and the paginator in one call" in {
+        for
+            query <- Signal.initRef("a")
+            src <- RowSource.init(query, pageSize = 2) { (_, offset, limit) =>
+                (five.slice(offset, offset + limit), Total.Known(five.size))
+            }
+            seen <- Channel.init[Seq[Item]](16)
+            _    <- Fiber.init(src.rows.observe(v => seen.put(v)))
+            _    <- served(seen)
+            ui = uic.DataTable[Item]().rowKey(_.id).columns(
+                uic.column("Name")(_.name)
+            ).source(src).render
+            names              <- bodyNames(ui)
+            (offered, current) <- pages(ui)
+        yield
+            assert(names == Chunk("A", "B"), "the first page of the source")
+            assert(offered == List("1", "2", "3"), "five rows of two, counted off the source's total")
+            assert(current == List("1"))
+    }
+
+    // A cursor knows what follows, not how much. The paginator then grows a page at a
+    // time rather than counting out pages nothing will ever fill.
+    "an unknown total offers one page more while anything follows" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](unsorted)
+            page <- Signal.initRef(1)
+            base = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name)
+            ).paginate(2)(page)
+            (more, _) <- pages(base.lazyRows(Total.Unknown(true)).render)
+            (last, _) <- pages(base.lazyRows(Total.Unknown(false)).render)
+        yield
+            assert(more == List("1", "2", "3"), "two rows on page 2 and something after them")
+            assert(last == List("1", "2"), "and nothing after them makes page 2 the last")
+    }
+
+    "rows bound twice are reported, since only one binding is read" in {
+        for
+            rows  <- Signal.initRef[Seq[Item]](items)
+            query <- Signal.initRef("a")
+            src <- RowSource.init(query, pageSize = 2) { (_, offset, limit) =>
+                (five.slice(offset, offset + limit), Total.Known(five.size))
+            }
+            text <- cards(uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name)
+            ).source(src).render)
+        yield
+            assert(text.contains("bound twice"))
+            assert(text.contains("source") && text.contains("rows(ref)"), "and both bindings are named")
     }
 
 end DataTableTest
