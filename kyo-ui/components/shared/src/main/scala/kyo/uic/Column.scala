@@ -23,6 +23,17 @@ enum ColumnAlign derives CanEqual:
 enum FrozenEdge derives CanEqual:
     case Start, End
 
+/** What a resize drag moves, Prime's `columnResizeMode`.
+  *
+  * `Fit` moves a BOUNDARY: the pair it sits between trades width and the total is
+  * preserved, so the table never outgrows the space it was given and the last column,
+  * having no boundary to its right, cannot be dragged. `Expand` moves one COLUMN: only
+  * the grabbed one changes and the table grows or shrinks by the same amount, so every
+  * resizable column can be dragged and the table scrolls sideways in its container.
+  */
+enum ColumnResizeMode derives CanEqual:
+    case Fit, Expand
+
 /** Which tables accept a [[Column]], carried as the column's second, phantom type
   * argument so a table can refuse one it could not honor.
   *
