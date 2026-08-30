@@ -2444,6 +2444,80 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "the filter menu renders Prime's popover anatomy: the operator, the rules, the bar" in {
+        final case class Row(id: String, name: String, price: Int) derives CanEqual
+        val rows                                           = List(Row("1", "Bamboo", 65))
+        def occurrences(html: String, needle: String): Int = java.util.regex.Pattern.quote(needle).r.findAllIn(html).size
+        def table(using Frame) = uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
+            uic.column("Name")(_.name).filterBy,
+            uic.column("Price")(_.price.toString)
+        )
+        for
+            closed <-
+                for
+                    filters <- Signal.initRef(Map.empty[List[String], uic.ColumnFilter])
+                    err     <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    open    <- Signal.initRef(false)
+                    draft   <- Signal.initRef(uic.ColumnFilter("", uic.MatchMode.Contains))
+                    out <- UI.runRender(
+                        table.columnFilters(filters).filterDisplay(uic.FilterDisplay.Menu)
+                            .wired(
+                                "t",
+                                Map.empty,
+                                err,
+                                _ => (),
+                                Map(List("Name") -> open),
+                                filterDrafts = Map(List("Name") -> draft)
+                            )
+                    ).take(1).run
+                yield out.mkString
+            opened <-
+                for
+                    filters <- Signal.initRef(Map.empty[List[String], uic.ColumnFilter])
+                    err     <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    open    <- Signal.initRef(true)
+                    draft <- Signal.initRef(uic.ColumnFilter(
+                        List(uic.FilterRule("a", uic.MatchMode.Contains), uic.FilterRule("b", uic.MatchMode.EndsWith)),
+                        uic.FilterOperator.Or
+                    ))
+                    out <- UI.runRender(
+                        table.columnFilters(filters).filterDisplay(uic.FilterDisplay.Menu)
+                            .wired(
+                                "t",
+                                Map.empty,
+                                err,
+                                _ => (),
+                                Map(List("Name") -> open),
+                                filterDrafts = Map(List("Name") -> draft)
+                            )
+                    ).take(1).run
+                yield out.mkString
+            row <-
+                for
+                    filters <- Signal.initRef(Map.empty[List[String], uic.ColumnFilter])
+                    err     <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    out     <- UI.runRender(table.columnFilters(filters).wired("t", Map.empty, err, _ => ())).take(1).run
+                yield out.mkString
+        yield
+            // Closed: the funnel sits in the header cell, pushed to the trailing edge, and
+            // only the filterable column has one.
+            assert(occurrences(closed, "p-datatable-popover-filter") == 1)
+            assert(closed.contains("p-datatable-column-filter-button"))
+            assert(!closed.contains("p-datatable-filter-overlay-popover"), "the panel is not rendered while it is shut")
+            assert(!closed.contains("p-datatable-inline-filter"), "and there is no filter row")
+            // Open: Prime's popover, the operator over two rules, and the bar.
+            assert(opened.contains("p-datatable-filter-overlay-popover"))
+            assert(opened.contains("p-datatable-filter-operator-dropdown"))
+            assert(occurrences(opened, "p-datatable-filter-rule") >= 2, "the list and one rule per condition")
+            assert(occurrences(opened, "p-datatable-filter-remove-rule-button") == 2, "one per rule, since there are two")
+            assert(opened.contains("p-datatable-filter-add-rule-button"))
+            assert(opened.contains("p-datatable-filter-buttonbar"))
+            assert(opened.contains("Match Any"), "the operator shows which join is running")
+            // The row display is the other shape, and it is what a table renders by default.
+            assert(row.contains("p-datatable-inline-filter") && !row.contains("p-datatable-popover-filter"))
+        end for
+    }
+
     "editing renders the column's own editor over the table's draft, and reports what it refuses" in {
         final case class Item(id: String, name: String, price: Int) derives CanEqual
         val items                                          = List(Item("1", "A", 10), Item("2", "B", 20))

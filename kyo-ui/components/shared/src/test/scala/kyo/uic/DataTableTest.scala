@@ -1911,4 +1911,159 @@ class DataTableTest extends UicTest:
             assert(modeless.contains("Single or Multiple") && modeless.contains("Checkbox"))
     }
 
+    // ---- several conditions on one column ----
+
+    /** A menu-display table over the three items, with the panel's open state and its
+      * draft owned here so a test can open it and read what it holds.
+      */
+    private def filterMenu(using Frame) =
+        for
+            filters <- Signal.initRef(Map.empty[List[String], ColumnFilter])
+            err     <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            open    <- Signal.initRef(false)
+            draft   <- Signal.initRef(ColumnFilter.empty(MatchMode.Contains))
+        yield
+            val table = uic.DataTable[Item]().rows(trio).rowKey(_.id).columns(
+                uic.column("Name")(_.name).filterBy
+            ).columnFilters(filters).filterDisplay(uic.FilterDisplay.Menu)
+            def ui = table.wired(
+                "t",
+                Map.empty,
+                err,
+                _ => (),
+                Map(List("Name") -> open),
+                filterDrafts = Map(List("Name") -> draft)
+            )
+            (ui, filters, open, draft)
+        end for
+    end filterMenu
+
+    private def buttonWith(node: UI, cls: String)(using Frame): UI.Ast.Element < Sync =
+        elementWithClass(node, cls)
+
+    /** All the text an element holds, however deeply, which is how a button is found by
+      * its label rather than by a class the sheet does not give it.
+      */
+    private def textOf(e: UI.Ast.Element)(using Frame): String =
+        def walk(u: UI): String = u match
+            case t: UI.Ast.Text     => t.value
+            case el: UI.Ast.Element => el.children.map(walk).mkString
+            case _                  => ""
+        e.children.map(walk).mkString
+    end textOf
+
+    "the funnel is in the header cell and there is no filter row" in {
+        for
+            (ui, _, _, _) <- filterMenu
+            all           <- elements(ui)
+        yield
+            assert(all.exists(_.attrs.cssClasses.contains("p-datatable-popover-filter")))
+            assert(!all.exists(_.attrs.cssClasses.contains("p-datatable-inline-filter")), "one display or the other")
+    }
+
+    "opening the menu seeds the draft from the filter the table is running" in {
+        for
+            (ui, filters, open, draft) <- filterMenu
+            _                          <- filters.set(Map(List("Name") -> ColumnFilter("B", MatchMode.StartsWith)))
+            funnel                     <- buttonWith(ui, "p-datatable-column-filter-button")
+            _                          <- click(funnel)
+            seeded                     <- draft.get
+            isOpen                     <- open.get
+        yield
+            assert(isOpen, "the click opens it")
+            assert(seeded == ColumnFilter("B", MatchMode.StartsWith), "on what is applied, not on what was abandoned")
+    }
+
+    "typing in the menu narrows nothing until Apply, and then narrows by every rule" in {
+        for
+            (ui, filters, open, draft) <- filterMenu
+            _                          <- open.set(true)
+            _ <- draft.set(ColumnFilter(
+                List(FilterRule("A", MatchMode.Contains), FilterRule("B", MatchMode.Contains)),
+                uic.FilterOperator.Or
+            ))
+            beforeApply <- filters.get
+            shown       <- bodyNames(ui)
+            apply       <- elements(ui).map(_.filter(_.attrs.cssClasses.contains("p-button")))
+            _           <- click(apply.find(b => textOf(b).contains("Apply")).getOrElse(throw new AssertionError("no Apply")))
+            after       <- filters.get
+            closed      <- open.get
+            names       <- bodyNames(ui)
+        yield
+            assert(beforeApply.isEmpty, "the draft is not the filter")
+            assert(shown.toList == List("A", "B", "C"), "and the table is still showing everything")
+            assert(after(List("Name")).rules.sizeIs == 2 && after(List("Name")).operator == uic.FilterOperator.Or)
+            assert(!closed, "applying closes the panel")
+            assert(names.toList == List("A", "B"), "Match Any keeps a row either rule keeps")
+    }
+
+    "Match All keeps only the rows every rule keeps" in {
+        for
+            (ui, filters, _, _) <- filterMenu
+            _ <- filters.set(Map(List("Name") -> ColumnFilter(
+                List(FilterRule("A", MatchMode.Contains), FilterRule("B", MatchMode.Contains)),
+                uic.FilterOperator.And
+            )))
+            trs <- bodyTrs(ui)
+        yield assert(trs.sizeIs == 1 && trs.head.attrs.cssClasses.contains("p-datatable-empty-message"))
+    }
+
+    "Add Rule and Remove Rule move the draft, not the filter" in {
+        for
+            (ui, filters, open, draft) <- filterMenu
+            _                          <- open.set(true)
+            add                        <- buttonWith(ui, "p-datatable-filter-add-rule-button")
+            _                          <- click(add)
+            two                        <- draft.get
+            remove                     <- buttonWith(ui, "p-datatable-filter-remove-rule-button")
+            _                          <- click(remove)
+            one                        <- draft.get
+            untouched                  <- filters.get
+        yield
+            assert(two.rules.sizeIs == 2 && two.rules.forall(_.query.isEmpty))
+            assert(one.rules.sizeIs == 1)
+            assert(untouched.isEmpty, "neither button applies anything")
+    }
+
+    "Clear takes the column out of the filters and empties the draft" in {
+        for
+            (ui, filters, open, draft) <- filterMenu
+            _                          <- filters.set(Map(List("Name") -> ColumnFilter("A", MatchMode.Contains)))
+            _                          <- draft.set(ColumnFilter("A", MatchMode.Contains))
+            _                          <- open.set(true)
+            buttons                    <- elements(ui).map(_.filter(_.attrs.cssClasses.contains("p-button")))
+            _      <- click(buttons.find(b => textOf(b).contains("Clear")).getOrElse(throw new AssertionError("no Clear")))
+            after  <- filters.get
+            left   <- draft.get
+            closed <- open.get
+        yield
+            assert(after.isEmpty && left == ColumnFilter("", MatchMode.Contains))
+            assert(!closed)
+    }
+
+    "an applied draft that asks for nothing takes the column out rather than leaving an empty entry" in {
+        for
+            (ui, filters, open, draft) <- filterMenu
+            _                          <- filters.set(Map(List("Name") -> ColumnFilter("A", MatchMode.Contains)))
+            _                          <- open.set(true)
+            _                          <- draft.set(ColumnFilter("   ", MatchMode.Contains))
+            buttons                    <- elements(ui).map(_.filter(_.attrs.cssClasses.contains("p-button")))
+            _     <- click(buttons.find(b => textOf(b).contains("Apply")).getOrElse(throw new AssertionError("no Apply")))
+            after <- filters.get
+        yield assert(after.isEmpty)
+    }
+
+    "a filter row given several conditions shows the first and says so" in {
+        for
+            filters <- Signal.initRef(Map(List("Name") -> ColumnFilter(
+                List(FilterRule("A", MatchMode.Contains), FilterRule("B", MatchMode.Contains))
+            )))
+            err <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            ui = uic.DataTable[Item]().rows(trio).rowKey(_.id)
+                .columns(uic.column("Name")(_.name).filterBy).columnFilters(filters)
+                .wired("t", Map.empty, err, _ => ())
+            reported <- cards(ui)
+        yield assert(reported.contains("several conditions") && reported.contains("FilterDisplay.Menu"))
+    }
+
 end DataTableTest

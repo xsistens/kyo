@@ -72,9 +72,14 @@ final private[uic] case class FilterState(
     open: Map[List[String], SignalRef[Boolean]] = Map.empty,
     live: Boolean = false,
     specs: Map[List[String], ColumnFilter] = Map.empty,
-    unusable: Set[List[String]] = Set.empty
+    unusable: Set[List[String]] = Set.empty,
+    // A menu edits a DRAFT and applies it, so a table of a hundred thousand rows is not
+    // re-filtered on the way to the second rule. A row display has no draft: one input is
+    // the whole filter, and the keystroke that changes it is the apply.
+    drafts: Map[List[String], SignalRef[ColumnFilter]] = Map.empty
 ):
-    private[uic] def openOf(path: List[String]): Maybe[SignalRef[Boolean]] = Maybe.fromOption(open.get(path))
+    private[uic] def openOf(path: List[String]): Maybe[SignalRef[Boolean]]       = Maybe.fromOption(open.get(path))
+    private[uic] def draftOf(path: List[String]): Maybe[SignalRef[ColumnFilter]] = Maybe.fromOption(drafts.get(path))
 end FilterState
 
 /** What one grab of a column boundary holds on to: where the pointer started, and the
@@ -407,6 +412,7 @@ final case class DataTable[A] private (
     translatorV: ErrorTranslator = ErrorTranslator.default,
     hiddenPaths: List[(List[String], Column[A, FlatOnly])] = Nil,
     columnFiltersRef: Maybe[SignalRef[Map[List[String], ColumnFilter]]] = Absent,
+    filterDisplayV: FilterDisplay = FilterDisplay.Row,
     columnWidthsRef: Maybe[SignalRef[Map[List[String], Double]]] = Absent,
     resizeModeV: ColumnResizeMode = ColumnResizeMode.Fit,
     columnOrderRef: Maybe[SignalRef[List[List[String]]]] = Absent,
@@ -491,6 +497,21 @@ final case class DataTable[A] private (
       *
       * Every bound filter has to pass, and the global filter with them.
       */
+    /** Where a column's filter is edited (Prime's `filterDisplay`), and a row by default.
+      *
+      * `Row` is a second header row with one input per filterable column, which is the
+      * shorter reach for one condition. `Menu` puts a funnel in each header cell instead,
+      * opening Prime's filter popover: several conditions on one column, joined by Match
+      * All or Match Any, with the buttons to add one, remove one, clear them and apply
+      * them.
+      *
+      * The menu edits a DRAFT and applies it on the button, which is the one behavioural
+      * difference and the reason Prime has the button at all: a table is not re-filtered
+      * on the way to the second condition. Closing the panel without applying leaves the
+      * table as it was.
+      */
+    def filterDisplay(v: FilterDisplay): DataTable[A] = copy(filterDisplayV = v)
+
     def columnFilters(ref: SignalRef[Map[List[String], ColumnFilter]]): DataTable[A] =
         copy(columnFiltersRef = Present(ref))
 
@@ -1177,12 +1198,18 @@ final case class DataTable[A] private (
       * and the menu-open state of a filter row.
       */
     private def ownsState: Boolean =
-        editingBound || navOn || filterRowOn || resizeOn || reorderOn || windowOn || frozenRowsOn || handleColumn
+        editingBound || navOn || filterBound || resizeOn || reorderOn || windowOn || frozenRowsOn || handleColumn
 
     /** Whether the filter row is rendered: the filters have to be bound somewhere, and
       * some column has to carry a pipeline for the row to hold anything.
       */
-    private def filterRowOn: Boolean = columnFiltersRef.isDefined && leafCols.exists(_.isFilterable)
+    private def filterBound: Boolean = columnFiltersRef.isDefined && leafCols.exists(_.isFilterable)
+
+    /** Whether the filters are edited in a second header row. */
+    private def filterRowOn: Boolean = filterBound && filterDisplayV == FilterDisplay.Row
+
+    /** Whether the filters are edited in a popover behind a funnel in each header cell. */
+    private def filterMenuOn: Boolean = filterBound && filterDisplayV == FilterDisplay.Menu
 
     /** Whether any boundary is draggable: the widths have to be bound somewhere, and a
       * boundary needs a resizable column on both sides of it, so a single column has none
@@ -1658,6 +1685,12 @@ final case class DataTable[A] private (
                     drafts <- Kyo.foreach(editableLeaves)((path, _) => Signal.initRef("").map(path -> _))
                     err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
                     menus  <- Kyo.foreach(filterableLeaves)((path, _) => Signal.initRef(false).map(path -> _))
+                    // One draft per filterable column, seeded when the menu opens. A row
+                    // display never reads them, since one input is the whole filter.
+                    drafts0 <- Kyo.foreach(filterableLeaves)((path, c) =>
+                        Signal.initRef(ColumnFilter.empty(c.filterV.map(_.default).getOrElse(MatchMode.Contains)))
+                            .map(path -> _)
+                    )
                     held   <- Signal.initRef(Absent: Maybe[ColumnGrab])
                     moving <- Signal.initRef(Absent: Maybe[ColumnDrag])
                     rowsIn <- Signal.initRef(Absent: Maybe[RowDrag])
@@ -1686,7 +1719,8 @@ final case class DataTable[A] private (
                         Present(moving),
                         if windowOn then Present(scroll) else Absent,
                         if frozenRowsOn then Present(headTop) else Absent,
-                        if handleColumn then Present(rowsIn) else Absent
+                        if handleColumn then Present(rowsIn) else Absent,
+                        drafts0.toMap
                     )
                     if !frozenRowsOn then tree
                     else UI.fragment(headProbe(cmds, headId(prefix), headTop), tree)
@@ -1728,7 +1762,8 @@ final case class DataTable[A] private (
         moving: Maybe[SignalRef[Maybe[ColumnDrag]]] = Absent,
         scroll: Maybe[SignalRef[Double]] = Absent,
         headTop: Maybe[Signal[Maybe[Int]]] = Absent,
-        rowDrag: Maybe[SignalRef[Maybe[RowDrag]]] = Absent
+        rowDrag: Maybe[SignalRef[Maybe[RowDrag]]] = Absent,
+        filterDrafts: Map[List[String], SignalRef[ColumnFilter]] = Map.empty
     )(using Frame): UI =
         errRef.render(e =>
             withRef(editingRowsRef, Set.empty[String]) { editRows =>
@@ -1738,7 +1773,7 @@ final case class DataTable[A] private (
                             renderWith(
                                 EditState(editRows, editCell, drafts, Present(errRef), e, live = true),
                                 NavState[A](on = navOn, idPrefix = idPrefix, focus = focus),
-                                FilterState(open = menus, live = true),
+                                FilterState(open = menus, live = true, drafts = filterDrafts),
                                 SizeState(idPrefix = idPrefix, live = true, measure = measure, grab = held),
                                 OrderState(drag = moving, held = drag),
                                 ScrollState(scroll, headTop),
@@ -1993,8 +2028,8 @@ final case class DataTable[A] private (
         else
             leafPaths.flatMap { (path, c) =>
                 (Maybe.fromOption(specs.get(path)), c.filterV) match
-                    case (Present(f), Present(cf)) if f.query.trim.nonEmpty => List((path, cf.predicate(f)))
-                    case _                                                  => Nil
+                    case (Present(f), Present(cf)) if f.active.nonEmpty => List((path, cf.predicate(f)))
+                    case _                                              => Nil
             }
 
     /** This column's resolved sortable flag: the reactive ones are in `flags`, the rest
@@ -2136,7 +2171,7 @@ final case class DataTable[A] private (
                     if depth > 1 then cell = cell.rowspan(depth)
                     List(freeze(cell, frozen.trailAt(0)))
             rows.zipWithIndex.map { (cells, i) =>
-                val ths = cells.map(sp => headerSpanCell(sp, sort, flags, interactive, size, frozen, order))
+                val ths = cells.map(sp => headerSpanCell(sp, sort, flags, interactive, size, frozen, order, filter))
                 tr((if i == 0 then leading ++ ths ++ trailing else ths).map(toChild)*)
             }
         end headRows
@@ -2603,7 +2638,22 @@ final case class DataTable[A] private (
                         "the column followed by its header, and the column needs a filterBy",
                     unknown
                 ))
-        nothing ++ nowhere ++ unknownCard
+        // A row display holds ONE condition per column, since it is one input. A seeded
+        // filter carrying more is not narrowing the table the way it reads: the row shows
+        // the first rule and typing into it replaces the lot.
+        val crowded =
+            if !filterRowOn then Nil
+            else filter.specs.collect { case (p, f) if f.rules.sizeIs > 1 => p.mkString(" / ") }.toList.sorted
+        val crowdedCard =
+            if crowded.isEmpty then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "a filter row is one input per column and these filters carry several conditions, of which it " +
+                        "shows the first; use filterDisplay(FilterDisplay.Menu), which is where several belong",
+                    crowded
+                ))
+        nothing ++ nowhere ++ unknownCard ++ crowdedCard
     end filterCards
 
     /** The loud cards for an editing binding that cannot do anything.
@@ -3042,12 +3092,13 @@ final case class DataTable[A] private (
         interactive: Set[List[String]],
         size: SizeState,
         frozen: FrozenPlan,
-        order: OrderState
+        order: OrderState,
+        filter: FilterState
     )(using Frame): UI =
         val at = sp.at
         sp.node.asColumn match
             case Present(c) =>
-                headerCell(c, sp.path, sort, sp.rowspan, sortsHere(c, sp.path, flags), interactive, at, size, frozen, order)
+                headerCell(c, sp.path, sort, sp.rowspan, sortsHere(c, sp.path, flags), interactive, at, size, frozen, order, filter)
             case Absent =>
                 var cell = th.cssClass("p-datatable-header-cell")
                 if sp.colspan > 1 then cell = cell.colspan(sp.colspan)
@@ -3154,6 +3205,201 @@ final case class DataTable[A] private (
             }.map(toChild)*
         )
 
+    /** Prime's menu display: the funnel that sits at the end of a header cell, and the
+      * popover it opens.
+      *
+      * `.p-datatable-popover-filter` is what pushes it to the trailing edge, which is the
+      * one rule the extracted sheet has for it, and the panel carries Prime's popover
+      * class rather than the select one the row display's constraint list uses: they are
+      * two different boxes in the sheet, one a list and one a form.
+      */
+    private def filterFunnel(path: List[String], c: Column[A, FlatOnly], filter: FilterState)(using Frame): List[UI] =
+        if !filterMenuOn then Nil
+        else
+            c.filterV match
+                case Absent => Nil
+                case Present(cf) =>
+                    val cur = filter.specs.getOrElse(path, ColumnFilter.empty(cf.default))
+                    // Filled while the column is filtering, hollow while it is not: which
+                    // columns are narrowing the table has to be readable without opening
+                    // anything.
+                    val glyph = if cur.active.isEmpty then Icons.filter else Icons.filterFill
+                    def trigger(open: Maybe[SignalRef[ColumnFilter]], openRef: Maybe[SignalRef[Boolean]]): UI =
+                        var b = Button()
+                            .icon(glyph)
+                            .variant(ButtonVariant.Text)
+                            .severity(Severity.Secondary)
+                            .rounded(true)
+                            .size(Size.Small)
+                            .accessibleName(s"Filter by ${c.headerV}")
+                            .extraClass("p-datatable-column-filter-button")
+                        if cur.active.nonEmpty then b = b.extraClass("p-datatable-column-filter-button-active")
+                        (open, openRef) match
+                            case (Present(draft), Present(o)) => b = b.onClick(openFilterMenu(cur, draft, o))
+                            case _                            => ()
+                        b.render
+                    end trigger
+                    (filter.openOf(path), filter.draftOf(path)) match
+                        case (Present(openRef), Present(draft)) if filter.live =>
+                            List(
+                                span.cssClass("p-datatable-popover-filter")(
+                                    toChild(
+                                        Overlay(openRef)
+                                            .matchWidth(false)
+                                            .panelClass("p-datatable-filter-overlay-popover")
+                                            .panelClass("p-component")
+                                            .trigger(trigger(Present(draft), Present(openRef)))(
+                                                draft.render(d => filterMenu(path, c, cf, d, draft, openRef))
+                                            )
+                                            .render
+                                    )
+                                )
+                            )
+                        case _ => List(span.cssClass("p-datatable-popover-filter")(toChild(trigger(Absent, Absent))))
+                    end match
+            end match
+        end if
+    end filterFunnel
+
+    /** Prime's filter popover, over the DRAFT: the operator, one row per rule, the buttons
+      * that add and remove them, and the bar that clears or applies the lot.
+      */
+    private def filterMenu(
+        path: List[String],
+        c: Column[A, FlatOnly],
+        cf: CellFilter[A],
+        d: ColumnFilter,
+        draft: SignalRef[ColumnFilter],
+        openRef: SignalRef[Boolean]
+    )(using Frame): UI =
+        // One rule joins with nothing, so the operator has nothing to say until there are two.
+        val operator: List[UI] =
+            if d.rules.sizeIs < 2 then Nil
+            else
+                List(
+                    Select[FilterOperator]()
+                        .options(List(FilterOperator.And, FilterOperator.Or))(_.label)
+                        .current(d.operator.label)
+                        .accessibleName(s"Match mode for ${c.headerV}")
+                        .extraClass("p-datatable-filter-operator-dropdown")
+                        .onChange(v =>
+                            draft.set(d.copy(operator =
+                                if v == FilterOperator.Or.label then FilterOperator.Or
+                                else FilterOperator.And
+                            ))
+                        )
+                        .render
+                )
+
+        val rules: List[UI] = d.rules.zipWithIndex.map { (rule, i) =>
+            val modes =
+                Select[MatchMode]()
+                    .options(cf.modes)(_.label)
+                    .current(rule.mode.label)
+                    .accessibleName(s"Condition ${i + 1} for ${c.headerV}")
+                    .onChange(v => draft.set(setRule(d, i, r => r.copy(mode = cf.modes.find(_.label == v).getOrElse(r.mode)))))
+                    .render
+            val input =
+                div.cssClass("p-datatable-filter-element-container")(
+                    toChild(
+                        Input()
+                            .value(rule.query)
+                            .fluid(true)
+                            .accessibleName(s"Filter ${c.headerV} by condition ${i + 1}")
+                            .onInput(t => draft.set(setRule(d, i, _.copy(query = t))))
+                            .render
+                    )
+                )
+            val remove: List[UI] =
+                if d.rules.sizeIs < 2 then Nil
+                else
+                    List(
+                        Button("Remove Rule")
+                            .icon(Icons.trash)
+                            .variant(ButtonVariant.Outlined)
+                            .severity(Severity.Danger)
+                            .size(Size.Small)
+                            .extraClass("p-datatable-filter-remove-rule-button")
+                            .onClick(draft.set(d.copy(rules = d.rules.patch(i, Nil, 1))))
+                            .render
+                    )
+            div.cssClass("p-datatable-filter-rule")(((modes :: input :: Nil) ++ remove).map(toChild)*)
+        }
+
+        val add: UI =
+            Button("Add Rule")
+                .icon(Icons.plus)
+                .variant(ButtonVariant.Text)
+                .size(Size.Small)
+                .extraClass("p-datatable-filter-add-rule-button")
+                .onClick(draft.set(d.copy(rules = d.rules :+ FilterRule("", cf.default))))
+                .render
+
+        val bar: UI =
+            div.cssClass("p-datatable-filter-buttonbar")(
+                toChild(
+                    Button("Clear")
+                        .variant(ButtonVariant.Outlined)
+                        .size(Size.Small)
+                        .onClick(clearFilter(path, cf, draft, openRef))
+                        .render
+                ),
+                toChild(Button("Apply").size(Size.Small).onClick(applyFilter(path, d, draft, openRef)).render)
+            )
+
+        UI.fragment(
+            (operator ++ List(div.cssClass("p-datatable-filter-rule-list")(rules.map(toChild)*), add, bar))*
+        )
+    end filterMenu
+
+    /** One rule of a draft, rewritten in place. */
+    private def setRule(d: ColumnFilter, at: Int, f: FilterRule => FilterRule): ColumnFilter =
+        d.copy(rules = d.rules.zipWithIndex.map((r, i) => if i == at then f(r) else r))
+
+    /** Opening the menu seeds the draft from what is applied, so the panel shows the
+      * filter the table is running and not whatever was last abandoned in it.
+      */
+    private def openFilterMenu(cur: ColumnFilter, draft: SignalRef[ColumnFilter], openRef: SignalRef[Boolean])(using
+        Frame
+    ): Any < Async =
+        openRef.get.map(was =>
+            if was then openRef.set(false)
+            else
+                draft.set(if cur.rules.isEmpty then ColumnFilter(List(FilterRule("", cur.mode))) else cur)
+                    .andThen(openRef.set(true))
+        )
+
+    /** Apply: the draft becomes the filter. A draft asking for nothing takes the column
+      * out of the map rather than leaving an empty entry, so what is in the map is what
+      * is narrowing the table.
+      */
+    private def applyFilter(
+        path: List[String],
+        d: ColumnFilter,
+        draft: SignalRef[ColumnFilter],
+        openRef: SignalRef[Boolean]
+    )(using Frame): Any < Async =
+        val write: Any < Async = columnFiltersRef match
+            case Present(ref) => ref.getAndUpdate(m => if d.active.isEmpty then m - path else m + (path -> d))
+            case Absent       => ()
+        write.andThen(openRef.set(false))
+    end applyFilter
+
+    /** Clear: the column stops filtering AND the draft goes back to one empty rule, since
+      * a Clear that left the rules standing would be an apply away from coming back.
+      */
+    private def clearFilter(
+        path: List[String],
+        cf: CellFilter[A],
+        draft: SignalRef[ColumnFilter],
+        openRef: SignalRef[Boolean]
+    )(using Frame): Any < Async =
+        val write: Any < Async = columnFiltersRef match
+            case Present(ref) => ref.getAndUpdate(_ - path)
+            case Absent       => ()
+        write.andThen(draft.set(ColumnFilter.empty(cf.default))).andThen(openRef.set(false))
+    end clearFilter
+
     /** Writes what the reader typed, keeping the mode they picked: an emptied input is no
       * filter, but it is still the column's own mode, so clearing the text and typing
       * again does not silently go back to "contains".
@@ -3170,7 +3416,7 @@ final case class DataTable[A] private (
         openRef: SignalRef[Boolean]
     )(using Frame): Any < Async =
         val write: Any < Async = columnFiltersRef match
-            case Present(ref) => ref.getAndUpdate(_ + (path -> cur.copy(mode = mode)))
+            case Present(ref) => ref.getAndUpdate(_ + (path -> ColumnFilter(cur.query, mode)))
             case Absent       => ()
         write.andThen(openRef.set(false))
     end pickMode
@@ -3287,7 +3533,8 @@ final case class DataTable[A] private (
         index: Int,
         size: SizeState,
         frozen: FrozenPlan,
-        order: OrderState
+        order: OrderState,
+        filter: FilterState
     )(using Frame): UI =
         val sortable  = sorts && sortRef.isDefined
         val sortingKs = SortKey.sorting(sort)
@@ -3342,7 +3589,8 @@ final case class DataTable[A] private (
 
         val content: UI =
             div.cssClass("p-datatable-column-header-content")(
-                ((span.cssClass("p-datatable-column-title")(c.headerV): UI) :: (sortIcon ++ sortBadge)).map(toChild)*
+                ((span.cssClass("p-datatable-column-title")(c.headerV): UI) ::
+                    (sortIcon ++ sortBadge ++ filterFunnel(path, c, filter))).map(toChild)*
             )
         val built = cell((content :: (if index >= 0 then resizer(index, size) else Nil)).map(toChild)*)
         freeze(
