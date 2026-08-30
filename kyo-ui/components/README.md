@@ -1036,6 +1036,31 @@ val expanding: UI < Async =
         .columnResizeMode(uic.ColumnResizeMode.Expand): UI
 ```
 
+`csv` is the table as data. `csv(rows)` is pure and takes the rows to write, which is what makes an export of the selection one line; `csv` on its own reads the bound sort and filters and gives back the rows the reader is looking at, in the order they are looking at them, across every page rather than the one on the screen, which is what Prime's `exportCSV()` exports too. The heading of a column is `Column.exportHeader` or its header, the field is `Column.exportAs` or its text projection, and `Column.exportable(false)` leaves it out entirely. `exportAs` is Prime's table-wide `exportFunction` put on the column the way the rest of this class is, and it is what a column rendering only a `body` needs: what a cell shows is a `UI`, and there is no honest way to read a string out of one. Fields are quoted the way RFC 4180 asks, and `csvSeparator` changes what counts.
+
+```scala
+val exportable: UI < Async =
+    for
+        query <- Signal.initRef("")
+        table = uic.DataTable[Product]()
+            .rows(catalog)
+            .rowKey(_.id)
+            .columns(
+                uic.column("Name")(_.name),
+                uic.column("Price")(p => f"${p.price}%.2f").exportAs(_.price.toString),
+                uic.column("Stock").body(p => uic.Tag(if p.inStock then "yes" else "no")).exportable(false)
+            )
+            .globalFilter(query)
+        text <- table.csv
+    yield div(
+        a.href(UI.Href.External("data", s"text/csv;charset=utf-8,${java.net.URLEncoder.encode(text, "UTF-8")}"))
+            .download("catalog.csv")("Download CSV"),
+        table
+    )
+```
+
+Getting the string to the reader is the app's, not the table's. `a.download(name)` over a `data:` URL is the shortest way and is what the example does; an endpoint that serves the bytes is the better one once the table is large, since a `data:` URL carries the whole file in the markup and is rebuilt on every render that changes it.
+
 `contextMenuRow(ref)` says which row a right-click landed on, Prime's `contextMenuSelection`. The row is marked with Prime's own `.p-datatable-contextmenu-row-selected`, which is a second and separate mark from the selection: the reader is acting ON one row without changing what is selected. Declaring it also suppresses the browser's menu over the rows, which is what a context menu of one's own has to do. The menu itself is `ContextMenu`, which wraps the table, and the ref is the caller's to clear when it closes, since the table cannot see a panel it does not render. `onRowContextMenu` is the notification beside it.
 
 ```scala

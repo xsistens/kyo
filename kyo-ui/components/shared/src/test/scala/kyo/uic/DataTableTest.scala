@@ -1738,4 +1738,61 @@ class DataTableTest extends UicTest:
         yield assert(trs.forall(_.attrs.onContextMenu.isEmpty))
     }
 
+    // ---- the table as data ----
+
+    "csv writes a heading row and one line per row, from the columns that export" in {
+        val table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+            uic.column("Name")(_.name),
+            uic.column("Price")(_.price.toString).exportHeader("Price (EUR)"),
+            uic.column("Id")(_.id).exportable(false)
+        )
+        assert(table.csv(items) == "Name,Price (EUR)\nA,10\nB,20")
+    }
+
+    "a column with no text of its own exports what exportAs gives it" in {
+        val table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+            uic.column("Name")(_.name).exportAs(i => i.name.toLowerCase),
+            uic.column("Tag").body(i => UI.span(i.name)).exportAs(_.price.toString),
+            uic.column("Blank").body(i => UI.span(i.name))
+        )
+        assert(table.csv(items.take(1)) == "Name,Tag,Blank\na,10,")
+    }
+
+    "a field that holds the separator, a quote or a line break is quoted" in {
+        assert(uic.DataTable.csvField("plain", ",") == "plain")
+        assert(uic.DataTable.csvField("a,b", ",") == "\"a,b\"")
+        assert(uic.DataTable.csvField("say \"hi\"", ",") == "\"say \"\"hi\"\"\"")
+        assert(uic.DataTable.csvField("two\nlines", ",") == "\"two\nlines\"")
+        assert(uic.DataTable.csvField("a,b", ";") == "a,b", "the separator is what matters, not the comma")
+    }
+
+    "the effectful csv exports what the reader is looking at, across every page" in {
+        for
+            sort  <- Signal.initRef(List(uic.SortKey("Price", uic.SortDirection.Descending)))
+            query <- Signal.initRef("")
+            page  <- Signal.initRef(0)
+            table = uic.DataTable[Item]().rows(trio).rowKey(_.id).columns(
+                uic.column("Name")(_.name),
+                uic.column("Price")(_.price.toString).sortBy(_.price)
+            ).sort(sort).globalFilter(query).paginate(1)(page)
+            all <- table.csv
+            _   <- query.set("B")
+            one <- table.csv
+        yield
+            assert(all == "Name,Price\nC,30\nB,20\nA,10", "sorted as rendered, and not sliced to the page")
+            assert(one == "Name,Price\nB,20", "and the global filter narrows it the same way")
+    }
+
+    "a separator of its own joins the fields, and is what decides the quoting" in {
+        def table(sep: String) = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+            uic.column("Name")(_.name).exportAs(i => s"${i.name},x"),
+            uic.column("Price")(_.price.toString)
+        ).csvSeparator(sep)
+        assert(table(",").csv(items.take(1)) == "Name,Price\n\"A,x\",10")
+        assert(
+            table(";").csv(items.take(1)) == "Name;Price\nA,x;10",
+            "a comma is just a character once the separator is a semicolon"
+        )
+    }
+
 end DataTableTest

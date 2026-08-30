@@ -340,7 +340,10 @@ final case class Column[A, +K <: FlatOnly] private (
     widthV: Maybe[Double] = Absent,
     resizableFlag: Boolean = true,
     frozenV: Maybe[FrozenEdge] = Absent,
-    reorderableFlag: Boolean = true
+    reorderableFlag: Boolean = true,
+    exportableFlag: Boolean = true,
+    exportHeaderV: Maybe[String] = Absent,
+    exportF: Maybe[A => String] = Absent
 ) extends ColumnTree[A]:
     private[uic] def label: String                        = headerV
     private[uic] def leaves: List[Column[A, FlatOnly]]    = List(this)
@@ -353,6 +356,26 @@ final case class Column[A, +K <: FlatOnly] private (
 
     /** Custom cell content, replacing (or standing in for) the text projection. */
     def body(f: A => UI): Column[A, K] = copy(bodyF = Present(f))
+
+    /** Whether this column is part of an export (Prime's `exportable`, and `true` by
+      * default). A column left out contributes neither a heading nor a field.
+      */
+    def exportable(v: Boolean): Column[A, K] = copy(exportableFlag = v)
+
+    /** The heading this column writes into an export, where it differs from the one it
+      * shows (Prime's `exportHeader`).
+      */
+    def exportHeader(v: String): Column[A, K] = copy(exportHeaderV = Present(v))
+
+    /** What this column writes into an export, where the text on the screen is not it
+      * (Prime's table-wide `exportFunction`, put on the column the way the rest of this
+      * class is).
+      *
+      * Without it a column exports its text projection, and a column that has none, one
+      * rendering only a [[body]], exports an empty field: what a cell shows is a `UI`,
+      * and there is no honest way to read a string out of one.
+      */
+    def exportAs(f: A => String): Column[A, K] = copy(exportF = Present(f))
 
     /** Makes this column editable: `read` projects the cell's value out of the row, `write`
       * puts an edited one back, and the [[CellType]] in scope supplies the editor, the
@@ -608,6 +631,13 @@ final case class Column[A, +K <: FlatOnly] private (
 
     /** Whether the keyboard cursor may land here. See [[navigable]]. */
     private[uic] def isNavigable: Boolean = navigableFlag
+
+    /** The heading this column writes into an export. */
+    private[uic] def exportTitle: String = exportHeaderV.getOrElse(headerV)
+
+    /** The field this column writes for one row. */
+    private[uic] def exportCell(a: A): String =
+        exportF.orElse(textF).map(_(a)).getOrElse("")
 
     /** Whether this column carries an edit pipeline at all. */
     private[uic] def isEditable: Boolean = editV.isDefined

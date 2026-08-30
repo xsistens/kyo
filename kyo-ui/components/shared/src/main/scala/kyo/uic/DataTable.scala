@@ -348,6 +348,7 @@ final case class DataTable[A] private (
     selectableF: Maybe[A => Boolean] = Absent,
     contextRowRef: Maybe[SignalRef[Maybe[String]]] = Absent,
     onRowContextF: Maybe[String => Any < Async] = Absent,
+    csvSeparatorV: String = ",",
     rowClassF: Maybe[A => Seq[String]] = Absent,
     expandedRef: Maybe[SignalRef[Set[String]]] = Absent,
     expansionF: Maybe[A => UI] = Absent,
@@ -632,6 +633,61 @@ final case class DataTable[A] private (
       * [[contextMenuRow]] is written.
       */
     def onRowContextMenu(f: String => Any < Async): DataTable[A] = copy(onRowContextF = Present(f))
+
+    /** The field separator [[csv]] writes (Prime's `csvSeparator`, and a comma by default). */
+    def csvSeparator(v: String): DataTable[A] = copy(csvSeparatorV = v)
+
+    /** `rows` as CSV, using this table's columns: one heading row from each exportable
+      * column's [[Column.exportHeader]] or header, then one line per row from each
+      * column's [[Column.exportAs]] or text projection.
+      *
+      * RFC 4180 quoting: a field is wrapped in quotes when it holds a quote, the
+      * separator, or a line break, and its own quotes are doubled. Nothing else is
+      * escaped, so a value survives the round trip through a spreadsheet.
+      *
+      * It takes the rows rather than reading them, which is what makes an export of the
+      * selection one line: pass the rows the keys in the selection point at. [[csv(using
+      * Frame)*]] is the other form, the rows as the reader is looking at them.
+      */
+    def csv(rows: Seq[A]): String =
+        val cols  = leafPaths.map(_._2).filter(_.exportableFlag)
+        val head  = cols.map(c => DataTable.csvField(c.exportTitle, csvSeparatorV))
+        val lines = rows.toList.map(a => cols.map(c => DataTable.csvField(c.exportCell(a), csvSeparatorV)))
+        (head :: lines).map(_.mkString(csvSeparatorV)).mkString("\n")
+    end csv
+
+    /** The rows the reader is looking at, as CSV: filtered and sorted the way the table
+      * renders them, across every page rather than the one on the screen, which is what
+      * Prime's `exportCSV()` exports too.
+      *
+      * It reads the bound sort and filter refs, so it is an effect rather than a value.
+      * A prepared table ([[lazyRows]], [[source]]) exports the window it was handed, since
+      * that is all it holds: the rest was never here to export.
+      */
+    def csv(using Frame): String < Async =
+        for
+            sort  <- currentOf(sortRef, List.empty[SortKey])
+            query <- currentOf(filterRef, "")
+            specs <- currentOf(columnFiltersRef, Map.empty[List[String], ColumnFilter])
+            rows  <- currentRows
+        yield csv(arranged(rows.toList, sort, query, if lazyOn then Nil else filterReads(specs)))
+
+    /** One bound ref's current value, or the fallback where nothing is bound. */
+    private def currentOf[T](ref: Maybe[SignalRef[T]], fallback: T)(using Frame): T < Async =
+        ref match
+            case Present(r) => r.get
+            case Absent     => fallback
+
+    /** The rows the table holds, whichever way it was given them. */
+    private def currentRows(using Frame): Seq[A] < Async =
+        if windowedSource then sourceV.get.window.current.map(_.rows)
+        else
+            rowsSigV match
+                case Present(sig) => sig.current
+                case Absent =>
+                    rowsRefV match
+                        case Present(ref) => ref.get
+                        case Absent       => Kyo.lift(rowsV)
 
     /** Classes each data row carries beyond the ones the table gives it (Prime's
       * `rowClassName`).
@@ -1728,6 +1784,47 @@ final case class DataTable[A] private (
             }
         }
 
+    /** The rows a query, a filter spec and a sort leave, in the order they leave them in:
+      * steps 1, 1b and 2 of what the body renders, without the paging step 3.
+      *
+      * It is one method rather than three lines inside the render because an export is the
+      * same question asked away from the screen: the rows a reader is looking at, across
+      * every page. Two implementations of that would be two answers.
+      *
+      * A prepared table ([[lazyRows]], [[source]]) skips all three: it was handed a window
+      * that is already filtered, sorted and paged, so filtering a page, sorting a page and
+      * slicing a slice would each be wrong.
+      */
+    private def arranged(
+        rows: List[A],
+        sort: List[SortKey],
+        query: String,
+        reads: List[(List[String], Maybe[A => Boolean])]
+    ): List[A] =
+        if lazyOn then rows
+        else
+            // 1. Global filter: contains-match over the columns' text projections.
+            val global =
+                if query.isEmpty then rows
+                else
+                    val q = query.toLowerCase
+                    rows.filter(a => leafCols.exists(c => c.textF.exists(f => f(a).toLowerCase.contains(q))))
+            // 1b. Column filters: every bound one has to pass. A query this table cannot
+            //     read as a value of its column's type filters nothing and says so on its
+            //     own input, rather than emptying the table behind a typo.
+            val filtered = reads.foldLeft(global)((rs, r) => r._2.fold(rs)(p => rs.filter(p)))
+            // 2. Sort: apply the SORTING entries back-to-front through stable sorts, so the
+            //    first one ends up the primary key. Unsorted entries hold a slot in the
+            //    priority order and contribute nothing here.
+            SortKey.sorting(sort).reverse.foldLeft(filtered) { (rs, k) =>
+                allPaths.find(_._1 == k.path).flatMap(_._2.orderingV.toOption) match
+                    case Some(ord) =>
+                        rs.sorted(using if k.direction == SortDirection.Ascending then ord else ord.reverse)
+                    case None => rs
+            }
+        end if
+    end arranged
+
     /** The rows that hold under the header, resolved before the table builds: the card that
       * catches a row held and scrolling at once needs them beside the body's, and the group
       * that renders them needs them anyway.
@@ -1852,34 +1949,10 @@ final case class DataTable[A] private (
         // all three and renders what it was given, in the order it was given.
         val prepared = lazyOn
 
-        // 1. Global filter: contains-match over the columns' text projections.
-        val rows = rowsIn.toList
-        val global =
-            if prepared || query.isEmpty then rows
-            else
-                val q = query.toLowerCase
-                rows.filter(a => leafCols.exists(c => c.textF.exists(f => f(a).toLowerCase.contains(q))))
-
-        // 1b. Column filters: every bound one has to pass. A query this table cannot read
-        //     as a value of its column's type filters nothing and says so on its own
-        //     input, rather than emptying the table behind a typo. A prepared table reads
-        //     no query at all, and so marks none of them: the reading is the server's.
-        val reads    = if prepared then Nil else filterReads(filterIn.specs)
-        val filter   = filterIn.copy(unusable = reads.collect { case (p, Absent) => p }.toSet)
-        val filtered = reads.foldLeft(global)((rs, r) => r._2.fold(rs)(p => rs.filter(p)))
-
-        // 2. Sort: apply the SORTING entries back-to-front through stable sorts, so the
-        //    first one ends up the primary key. Unsorted entries hold a slot in the
-        //    priority order and contribute nothing here.
-        val sorted =
-            if prepared then filtered
-            else
-                SortKey.sorting(sort).reverse.foldLeft(filtered) { (rs, k) =>
-                    allPaths.find(_._1 == k.path).flatMap(_._2.orderingV.toOption) match
-                        case Some(ord) =>
-                            rs.sorted(using if k.direction == SortDirection.Ascending then ord else ord.reverse)
-                        case None => rs
-                }
+        val rows   = rowsIn.toList
+        val reads  = if prepared then Nil else filterReads(filterIn.specs)
+        val filter = filterIn.copy(unusable = reads.collect { case (p, Absent) => p }.toSet)
+        val sorted = arranged(rows, sort, query, reads)
 
         // 3. Paginate: clamp the 0-based page, slice, and embed the standalone Paginator
         //    (resolved page passed directly, since the table already renders inside its own
@@ -3996,6 +4069,17 @@ object DataTable:
       * list rather than in the page, which is the index a drop is written in.
       */
     private[uic] def rowId(prefix: String, at: Int): String = s"$prefix-rw$at"
+
+    /** One CSV field, quoted where RFC 4180 says it has to be: it holds a quote, the
+      * separator, or a line break. Quotes inside are doubled, and nothing else is touched.
+      */
+    private[uic] def csvField(value: String, separator: String): String =
+        val needsQuotes =
+            value.contains('"') || value.contains('\n') || value.contains('\r') ||
+                (separator.nonEmpty && value.contains(separator))
+        if !needsQuotes then value
+        else "\"" + value.replace("\"", "\"\"") + "\""
+    end csvField
 
     /** The place a pointer at `y` is asking a held row to go: the nearest row edge, which
       * is a boundary between two rows, or the bottom of the last one.
