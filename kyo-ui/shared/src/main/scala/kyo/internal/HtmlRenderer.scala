@@ -876,6 +876,7 @@ private[kyo] object HtmlRenderer:
                 boolAttr(sb, "selected", opt.selected)
             case a: Anchor =>
                 if !owned("href") then a.href.foreach(href => w(sb, s""" href="${esc(Href.attrValue(href))}""""))
+                a.download.foreach(name => w(sb, s""" download="${esc(name)}""""))
                 a.target.foreach { t =>
                     val tv = t match
                         case Target.Self   => "_self"

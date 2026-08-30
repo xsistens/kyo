@@ -726,6 +726,22 @@ class HtmlRendererTest extends UITest:
         }
     }
 
+    "download names the file an anchor saves instead of navigating to" in {
+        withUI(UI.div(
+            UI.a.href(Href.External("data", "text/csv;charset=utf-8,a%2Cb")).download("rows.csv").id("dl")("Save"),
+            UI.a.href(Href.Path("/path")).id("plain")("Open")
+        )) {
+            for
+                _ <- Browser.assertAttribute(Selector.id("dl"), "download", "rows.csv")
+                // The property is what a click reads, and it resolves against the document.
+                name <- Browser.evalJson[String]("document.getElementById('dl').download")
+                bare <- Browser.evalJson[String]("document.getElementById('plain').download")
+            yield
+                assert(name == "rows.csv")
+                assert(bare.isEmpty, "an anchor nobody asked to download still navigates")
+        }
+    }
+
     "Href.Path relative renders relative" in {
         withUI(UI.div(UI.a.href(Href.Path("relative")).id("a")("link"))) {
             Browser.assertAttributeSatisfies(Selector.id("a"), "href", "ignore")(_.contains("relative")).unit
