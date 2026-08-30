@@ -313,15 +313,32 @@ final private[uic] case class CellEdit[A](
   *
   * `modes` is what the reader may pick from and `default` what an untouched column starts
   * on, both decided by the [[CellType]]: a type that compares gets the comparison modes,
-  * everything else the text ones. `predicate` reads one filter into a row test, or answers
-  * `Absent` when this column cannot apply it, which is a query that is not a value of its
-  * type, or a mode it never offered.
+  * everything else the text ones. `rulePredicate` reads one RULE into a row test, or
+  * answers `Absent` when this column cannot apply it, which is a query that is not a value
+  * of its type, or a mode it never offered.
   */
 final private[uic] case class CellFilter[A](
     modes: List[MatchMode],
     default: MatchMode,
-    predicate: ColumnFilter => Maybe[A => Boolean]
-)
+    rulePredicate: FilterRule => Maybe[A => Boolean]
+):
+
+    /** The whole filter as one row test, its rules joined by its operator.
+      *
+      * One rule this column cannot apply makes the WHOLE filter unusable rather than
+      * being dropped from the join: a rule silently ignored under `Or` would widen the
+      * result and under `And` narrow it, and either way the table would be answering a
+      * question nobody asked. The caller sees it as a marked input instead.
+      */
+    def predicate(f: ColumnFilter): Maybe[A => Boolean] =
+        val parts = f.active.map(rulePredicate)
+        if parts.isEmpty || parts.exists(_.isEmpty) then Absent
+        else
+            val tests = parts.flatMap(_.toList)
+            Present(a => if f.operator == FilterOperator.And then tests.forall(_(a)) else tests.exists(_(a)))
+        end if
+    end predicate
+end CellFilter
 
 final case class Column[A, +K <: FlatOnly] private (
     headerV: String,

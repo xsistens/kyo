@@ -995,6 +995,32 @@ val perColumn: UI < Async =
 
 That is what the type buys: `filterBy(_.price)` answers "less than 50" over the number, where a text match would put 100 before 50 and match 5 against 15. Every bound filter has to pass, and the global query with them. A query the column cannot read as a value of its type filters nothing and marks its own input instead of emptying the table behind a typo, and a mode a column never offered is refused the same way, which only a hand-seeded map can reach. A hidden column does not filter, for the same reason the global query does not search it: an input the reader cannot see is one they cannot clear. That is the opposite of the sort spec, which keeps sorting by a hidden column, and for the reason that tells them apart, a filter takes rows away and a sort only moves them.
 
+`filterDisplay(FilterDisplay.Menu)` moves that editing off the row and into Prime's filter popover: a funnel in each filterable header cell, and behind it several conditions on that one column, joined by Match All or Match Any, with the buttons to add one, remove one, clear them and apply them. A `ColumnFilter` is a list of `FilterRule` and an operator for that reason; `ColumnFilter(query, mode)` builds the single rule a row display holds, and a seeded filter carrying more under a row display shows the first and says so in a card.
+
+The menu edits a DRAFT and applies it on the button. That is the one behavioural difference between the two displays, and it is the reason Prime has the button at all: a table is not re-filtered on the way to the second condition. Opening the funnel seeds the draft from what is applied, so the panel shows the filter the table is running rather than whatever was last abandoned in it; closing without applying leaves the table as it was; Clear takes the column out of the map and empties the draft, since a Clear that left the conditions standing would be one Apply away from coming back. One condition this column cannot read makes the whole filter unusable rather than being dropped from the join: a condition silently ignored would widen the result under Match Any and narrow it under Match All, and either way the table would be answering a question nobody asked.
+
+```scala
+val menuFiltered: UI < Async =
+    for filters <- Signal.initRef(Map(
+            List("Price") -> uic.ColumnFilter(
+                List(
+                    uic.FilterRule("10", uic.MatchMode.Greater),
+                    uic.FilterRule("100", uic.MatchMode.Less)
+                ),
+                uic.FilterOperator.And
+            )
+        ))
+    yield uic.DataTable[Product]()
+        .rows(catalog)
+        .rowKey(_.id)
+        .columns(
+            uic.column("Name")(_.name).filterBy,
+            uic.column("Price")(p => f"${p.price}%.2f").filterBy(_.price)
+        )
+        .columnFilters(filters)
+        .filterDisplay(uic.FilterDisplay.Menu): UI
+```
+
 Which columns a table has is its shape; which of them the reader sees is each column's own business, so `Column.visible` carries it, as a constant or as a signal a toggle writes. A hidden column contributes no header cell, no body cells and no footer cell, so the table is exactly as wide as what is on the screen, every colspan follows, and a `headerGroup` whose columns are all hidden goes with them.
 
 ```scala
