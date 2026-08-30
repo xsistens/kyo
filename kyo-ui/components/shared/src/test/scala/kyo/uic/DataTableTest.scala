@@ -1840,4 +1840,75 @@ class DataTableTest extends UicTest:
             assert(after.sort == List(uic.SortKey.ascending("Name")), "the one ref that is bound survives")
     }
 
+    // ---- picking cells instead of rows ----
+
+    private def cellsIn(node: UI)(using Frame): List[UI.Ast.Element] < Sync =
+        bodyTrs(node).flatMap(trs => Kyo.foreach(trs)(rowsUnder).map(_.flatten.toList))
+
+    "a click picks the cell it landed on, and Multiple keeps the ones before it" in {
+        for
+            picked <- Signal.initRef(Set.empty[CellPath])
+            table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+                uic.column("Name")(_.name),
+                uic.column("Price")(_.price.toString)
+            ).selectionMode(SelectionMode.Multiple).selectedCells(picked)
+            tds   <- cellsIn(table.render)
+            _     <- click(tds.head)
+            _     <- click(tds(3))
+            both  <- picked.get
+            _     <- click(tds.head)
+            one   <- picked.get
+            after <- cellsIn(table.render)
+        yield
+            assert(both == Set(CellPath("1", List("Name")), CellPath("2", List("Price"))))
+            assert(one == Set(CellPath("2", List("Price"))), "a second click on a picked cell takes it back")
+            assert(after(3).attrs.cssClasses.contains("p-uic-dt-cell-selected"))
+            assert(!after.head.attrs.cssClasses.contains("p-uic-dt-cell-selected"))
+            assert(after.head.attrs.ariaAttrs.get("selected").contains("false"))
+    }
+
+    "Single replaces the set rather than adding to it" in {
+        for
+            picked <- Signal.initRef(Set.empty[CellPath])
+            table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+                uic.column("Name")(_.name),
+                uic.column("Price")(_.price.toString)
+            ).selectionMode(SelectionMode.Single).selectedCells(picked)
+            tds  <- cellsIn(table.render)
+            _    <- click(tds.head)
+            _    <- click(tds(3))
+            only <- picked.get
+        yield assert(only == Set(CellPath("2", List("Price"))))
+    }
+
+    "a cell of a row the predicate rejects cannot be picked" in {
+        for
+            picked <- Signal.initRef(Set.empty[CellPath])
+            table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple).selectedCells(picked).selectableWhen(_.id != "2")
+            tds <- cellsIn(table.render)
+        yield
+            assert(tds.head.attrs.onClick.isDefined)
+            assert(tds(1).attrs.onClick.isEmpty, "no handler to reach, not a handler that refuses")
+    }
+
+    "a click that two bindings both claim is reported, and editing keeps it" in {
+        for
+            picked  <- Signal.initRef(Set.empty[CellPath])
+            editing <- Signal.initRef(Absent: Maybe[CellPath])
+            rows    <- Signal.initRef(Set.empty[String])
+            clash <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id)
+                .columns(uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v)))
+                .selectionMode(SelectionMode.Multiple).selectedCells(picked).editingCell(editing)
+                .onCellValueChanged(_ => ()).render)
+            withRows <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple).selectedCells(picked).selected(rows).render)
+            modeless <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Checkbox).selectedCells(picked).render)
+        yield
+            assert(clash.contains("editingCell") && clash.contains("selectedCells"))
+            assert(withRows.contains("selected, which picks rows"))
+            assert(modeless.contains("Single or Multiple") && modeless.contains("Checkbox"))
+    }
+
 end DataTableTest
