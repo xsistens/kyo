@@ -2285,6 +2285,56 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "a row the selection predicate rejects renders as a row nothing can pick" in {
+        final case class Row(id: String, name: String) derives CanEqual
+        val rows                                           = List(Row("1", "Bamboo"), Row("2", "Black"))
+        def occurrences(html: String, needle: String): Int = java.util.regex.Pattern.quote(needle).r.findAllIn(html).size
+        for
+            ref <- Signal.initRef(Set.empty[String])
+            open <- UI.runRender(
+                uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
+                    .selectionMode(uic.SelectionMode.Checkbox).selected(ref).render
+            ).take(1).run.map(_.mkString)
+            limited <- UI.runRender(
+                uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
+                    .selectionMode(uic.SelectionMode.Checkbox).selected(ref)
+                    .selectableWhen(_.id != "2").render
+            ).take(1).run.map(_.mkString)
+        yield
+            assert(
+                occurrences(open, "p-checkbox p-component") == 3,
+                "the select-all box and one per row"
+            )
+            assert(!open.contains("p-checkbox p-component p-disabled"))
+            assert(
+                occurrences(limited, "p-checkbox p-component p-disabled") == 1,
+                "and with a predicate exactly the rejected one wears Prime's disabled class"
+            )
+        end for
+    }
+
+    "a rejected row keeps the pointer that says it cannot be picked off it" in {
+        final case class Row(id: String, name: String) derives CanEqual
+        val rows                                           = List(Row("1", "Bamboo"), Row("2", "Black"))
+        def occurrences(html: String, needle: String): Int = java.util.regex.Pattern.quote(needle).r.findAllIn(html).size
+        for
+            ref <- Signal.initRef(Set.empty[String])
+            all <- UI.runRender(
+                uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
+                    .selectionMode(uic.SelectionMode.Multiple).selected(ref).render
+            ).take(1).run.map(_.mkString)
+            some <- UI.runRender(
+                uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
+                    .selectionMode(uic.SelectionMode.Multiple).selected(ref)
+                    .selectableWhen(_.id != "2").render
+            ).take(1).run.map(_.mkString)
+        yield
+            assert(occurrences(all, "p-datatable-selectable-row") == 2)
+            assert(occurrences(some, "p-datatable-selectable-row") == 1)
+            assert(some.contains("aria-selected"), "the rejected row still says where it stands")
+        end for
+    }
+
     "editing renders the column's own editor over the table's draft, and reports what it refuses" in {
         final case class Item(id: String, name: String, price: Int) derives CanEqual
         val items                                          = List(Item("1", "A", 10), Item("2", "B", 20))

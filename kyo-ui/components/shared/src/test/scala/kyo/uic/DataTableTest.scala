@@ -1376,4 +1376,68 @@ class DataTableTest extends UicTest:
         yield assert(text.contains("scroll container") && text.contains("scrollHeight"))
     }
 
+    // ---- rows the caller keeps out of the selection ----
+
+    private def checkboxIn(row: UI.Ast.Element)(using Frame): UI.Ast.Element < Sync =
+        elements(row).map(_.find(_.attrs.cssClasses.contains("p-checkbox")).getOrElse(
+            throw new AssertionError("the row renders no checkbox")
+        ))
+
+    "a row the predicate rejects stays out of the selection when it is clicked" in {
+        for
+            sel <- Signal.initRef(Set.empty[String])
+            ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple).selected(sel)
+                .selectableWhen(_.id != "2").render
+            trs <- bodyTrs(ui)
+            _   <- click(trs(1))
+            no  <- sel.get
+            _   <- click(trs.head)
+            yes <- sel.get
+        yield
+            assert(no == Set.empty, "the rejected row writes nothing")
+            assert(yes == Set("1"), "and the accepted one still selects")
+            assert(
+                !trs(1).attrs.cssClasses.contains("p-datatable-selectable-row"),
+                "a row that cannot be picked does not offer the pointer that says it can"
+            )
+            assert(trs.head.attrs.cssClasses.contains("p-datatable-selectable-row"))
+    }
+
+    "select-all passes over the rows the predicate rejects" in {
+        for
+            sel <- Signal.initRef(Set.empty[String])
+            ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Checkbox).selected(sel)
+                .selectableWhen(_.id != "2").render
+            box <- elements(ui).map(_.collect { case c: UI.Ast.Checkbox => c }.head)
+            _ <- box.onChange match
+                case Present(f) => f(true)
+                case Absent     => throw new AssertionError("the header box declares no change handler")
+            all <- sel.get
+        yield assert(all == Set("1"), "the header box selects what may be selected and nothing else")
+    }
+
+    "the checkbox of a rejected row is disabled and inert" in {
+        for
+            sel <- Signal.initRef(Set.empty[String])
+            ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Checkbox).selected(sel)
+                .selectableWhen(_.id != "2").render
+            trs <- bodyTrs(ui)
+            ok  <- checkboxIn(trs.head)
+            no  <- checkboxIn(trs(1))
+        yield
+            assert(ok.attrs.onClick.isDefined && !ok.attrs.cssClasses.contains("p-disabled"))
+            assert(no.attrs.onClick.isEmpty, "there is no handler to reach, not a handler that refuses")
+            assert(no.attrs.cssClasses.contains("p-disabled"), "and it says so")
+    }
+
+    "a selection restriction over a table with no selection is reported" in {
+        for
+            text <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id)
+                .columns(uic.column("Name")(_.name)).selectableWhen(_.id != "2").render)
+        yield assert(text.contains("selectableWhen") && text.contains("selectionMode"))
+    }
+
 end DataTableTest

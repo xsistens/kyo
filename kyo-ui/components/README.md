@@ -916,6 +916,23 @@ The advance happens *in place*, which is the part that matters. `SortDirection` 
 
 In `SelectionMode.Checkbox` the checkbox column's header is the select-all. It is binary, matching Prime: a partial selection reads unchecked. It covers every row that survived the global filter rather than the page in view, and it adds or removes those keys instead of replacing the selection, so narrowing the filter, selecting all, and widening it again does not quietly drop what was selected before.
 
+`selectableWhen(p)` keeps rows out of the selection without keeping them out of the table. A rejected row renders as it always did and still takes an `onRowClick`, but every path into the selection set is closed to it: the click writes nothing, the row loses the pointer cursor that says it can be picked, its checkbox carries Prime's disabled class and no handler at all, and the select-all steps over it. The predicate is consulted where the selection is written rather than once at render, so a row the caller starts rejecting cannot stay selected on the strength of having been selectable a moment ago.
+
+```scala
+val onlyInStock: UI < Async =
+    for picked <- Signal.initRef(Set.empty[String])
+    yield uic.DataTable[Product]()
+        .rows(catalog)
+        .rowKey(_.id)
+        .columns(
+            uic.column("Name")(_.name),
+            uic.column("Stock")(p => if p.inStock then "yes" else "no")
+        )
+        .selectionMode(uic.SelectionMode.Checkbox)
+        .selected(picked)
+        .selectableWhen(_.inStock): UI
+```
+
 Filtering has a second form beside the global query, and it is per column. `Column.filterBy` gives a column its own filter over the value it names, and the `CellType` in scope decides how that filter reads: a type that compares (every provided number, anything through `CellType.ordered`) gets `=`, `<`, `>` and their negations and reads the query as a VALUE, everything else is matched as text, with contains, starts-with and the rest over what the type formats the value as. `filterBy` on its own filters by the column's text projection, which is the projection nine times in ten. `columnFilters(ref)` binds the filters, keyed by the same path the sort spec names a column by, and gives the table Prime's filter row: one input per filterable column, with the mode menu behind the funnel beside it.
 
 ```scala
