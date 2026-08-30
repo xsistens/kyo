@@ -1872,7 +1872,12 @@ private[kyo] object HtmlRenderer:
            |      }
            |      return;
            |    }
-           |    var mid=e.target&&e.target.id?e.target.id:null;if(el.tagName&&el.tagName.toLowerCase()==='a')e.preventDefault();post({Click:{path:p,mouse:mkMouse({ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},mid)}});window._kyoClickSubmit=true;setTimeout(function(){window._kyoClickSubmit=false},0);
+           |    // Prevent the browser's default navigation only where the anchor carries a kyo click handler,
+           |    // so the handler rather than the href drives the action. A plain href keeps native behavior:
+           |    // an in-page `#anchor` scrolls and a cross-document route is a real navigation. Preventing
+           |    // every anchor kills both, which is what a navigation built from plain links runs into. Twin
+           |    // of the same guard in DomBackend's click branch.
+           |    var mid=e.target&&e.target.id?e.target.id:null;if(el.tagName&&el.tagName.toLowerCase()==='a'&&he(el,"click"))e.preventDefault();post({Click:{path:p,mouse:mkMouse({ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},mid)}});window._kyoClickSubmit=true;setTimeout(function(){window._kyoClickSubmit=false},0);
            |  }
            |  // Right-click: preventDefault suppresses the native menu only when a handler was declared.
            |  else if(t==="contextmenu"&&he(el,"contextmenu")){e.preventDefault();var cmid=e.target&&e.target.id?e.target.id:null;post({ContextMenu:{path:p,mouse:mkMouse({ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},cmid)}});}
