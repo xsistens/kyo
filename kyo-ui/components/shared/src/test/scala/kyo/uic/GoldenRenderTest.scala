@@ -3363,6 +3363,45 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "a paginator template picks the elements and the order they render in" in {
+        def rendered(f: uic.Paginator => uic.Paginator): String < Async =
+            for
+                ref <- Signal.initRef(1)
+                out <- UI.runRender(f(uic.Paginator().totalRecords(25).rows(10).page(ref))).take(1).run
+            yield out.mkString
+        for
+            plain <- rendered(identity)
+            reversed <- rendered(
+                _.template(
+                    uic.PaginatorElement.CurrentPageReport,
+                    uic.PaginatorElement.PageLinks,
+                    uic.PaginatorElement.PrevPageLink,
+                    uic.PaginatorElement.NextPageLink
+                ).currentPageReport("{currentPage} of {totalPages}")
+            )
+            bare    <- rendered(_.template(uic.PaginatorElement.CurrentPageReport))
+            dropped <- rendered(_.template(uic.PaginatorElement.PageLinks).jumpToPageInput(true))
+            jump    <- rendered(_.template(uic.PaginatorElement.JumpToPageDropdown))
+        yield
+            assert(plain.contains("p-paginator-first") && plain.contains("p-paginator-last"))
+            assert(!plain.contains("p-paginator-current"), "an element nothing configured stays out")
+            // Named, so rendered, and in the order named rather than Prime's.
+            assert(reversed.contains("p-paginator-current"))
+            assert(reversed.indexOf("p-paginator-current") < reversed.indexOf("p-paginator-pages"))
+            assert(reversed.indexOf("p-paginator-pages") < reversed.indexOf("p-paginator-prev"))
+            assert(!reversed.contains("p-paginator-first"), "an element the template does not name does not render")
+            assert(!reversed.contains("p-paginator-last"))
+            // Named with nothing behind it, and the flag the template overrules.
+            assert(bare.contains("p-uic-key-error") && bare.contains("currentPageReport"))
+            assert(!dropped.contains("p-paginator-jtp-input"), "the template is the layout")
+            assert(dropped.contains("p-uic-key-error") && dropped.contains("JumpToPageInput"))
+            assert(
+                jump.contains("p-paginator-jtp-dropdown") && jump.contains(">2<"),
+                "a Select over the pages, showing the one the reader is on"
+            )
+        end for
+    }
+
     "DataView renders layout class, header/content/footer, slices pages through the embedded Paginator" in {
         final case class P(name: String, price: Int)
         val items = List(P("Bamboo Watch", 65), P("Black Watch", 72), P("Blue Band", 79))

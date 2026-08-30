@@ -1214,6 +1214,12 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
             preamble + """def x(pg: SignalRef[Int], rows: SignalRef[Int]): uic.Paginator = uic.Paginator().totalRecords(120).rows(rows).page(pg).pageLinkSize(3).rowsPerPageOptions(Seq(5, 10)).currentPageReport("{currentPage} of {totalPages}").jumpToPageInput(true)"""
         )
         typeCheck(
+            preamble + """def x: uic.Paginator = uic.Paginator().totalRecords(120).rows(10).template(uic.PaginatorElement.PageLinks, uic.PaginatorElement.CurrentPageReport)"""
+        )
+        typeCheck(
+            preamble + """def x(pg: SignalRef[Int]): uic.DataTable[String] = uic.DataTable[String]().paginate(10)(pg).paginator(_.template(uic.PaginatorElement.PageLinks).pageLinkSize(3))"""
+        )
+        typeCheck(
             preamble + """def x(v: SignalRef[String])(using Frame): uic.Stepper = uic.Stepper().vertical(true).value(v).step("One", value = Present("one"))(p("c1")).step("Two", disabled = true)(p("c2"))"""
         )
         typeCheck(
@@ -1230,6 +1236,8 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheckFailure(preamble + """def x = uic.DatePicker().range("2026-01-01", "2026-01-05")""")
         typeCheckFailure(preamble + """def x = uic.DatePicker().hourFormat("12")""")
         typeCheckFailure(preamble + """def x = uic.Paginator().rowsPerPageOptions(Seq("10"))""")
+        // The template is a list of VALUES, so Prime's space-separated string is not one.
+        typeCheckFailure(preamble + """def x = uic.Paginator().template("PageLinks CurrentPageReport")""")
         typeCheckFailure(preamble + """def x(v: SignalRef[Int]) = uic.Stepper().value(v)""")
         typeCheckFailure(preamble + """def x = uic.MeterGroup().orientation("vertical")""")
         typeCheckFailure(preamble + """def x = uic.MeterGroup().labelPosition("start")""")
