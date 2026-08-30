@@ -304,6 +304,7 @@ final case class DataTable[A] private (
     pageRef: Maybe[SignalRef[Int]] = Absent,
     selectionModeV: SelectionMode = SelectionMode.None,
     selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
+    selectableF: Maybe[A => Boolean] = Absent,
     expandedRef: Maybe[SignalRef[Set[String]]] = Absent,
     expansionF: Maybe[A => UI] = Absent,
     groupsV: List[RowGroup[A]] = Nil,
@@ -517,6 +518,16 @@ final case class DataTable[A] private (
 
     /** Binds selection two-way to `ref` (a set of [[rowKey]] ids). */
     def selected(ref: SignalRef[Set[String]]): DataTable[A] = copy(selectedRef = Present(ref))
+
+    /** Restricts selection to the rows `p` accepts (Prime's `isDataSelectable`).
+      *
+      * A rejected row still renders, still takes a row click through [[onRowClick]] and
+      * still expands; what it loses is every path into the selection set: the click does
+      * not select it, its checkbox is disabled, and select-all passes over it. The
+      * predicate is read wherever the selection is written, so a row the caller starts
+      * rejecting mid-session cannot stay selected by having been selectable earlier.
+      */
+    def selectableWhen(p: A => Boolean): DataTable[A] = copy(selectableF = Present(p))
 
     /** Binds row expansion two-way to `ref` (a set of [[rowKey]] ids); pair with
       * [[rowExpansionTemplate]].
@@ -755,6 +766,9 @@ final case class DataTable[A] private (
             selectionModeV == SelectionMode.Radio
 
     private def checkboxColumn: Boolean = selectionModeV == SelectionMode.Checkbox
+
+    /** Whether this row may enter the selection at all ([[selectableWhen]]). */
+    private def selectableAt(a: A): Boolean = selectableF.forall(_(a))
 
     private def expanderColumn: Boolean = expansionF.isDefined
 
@@ -1867,7 +1881,7 @@ final case class DataTable[A] private (
                 size
             ) ++ frozenCards(size) ++ orderCards(
                 order
-            ) ++ rowsCards ++ windowCards ++ frozenRowCards(paged, held) ++ lazyCards(
+            ) ++ rowsCards ++ selectionCards ++ windowCards ++ frozenRowCards(paged, held) ++ lazyCards(
                 rows,
                 total
             ) ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
@@ -2167,6 +2181,19 @@ final case class DataTable[A] private (
         end if
     end rowsCards
 
+    /** A selection restriction over a table that has no selection restricts nothing, and
+      * reads at the call site as though it does.
+      */
+    private def selectionCards(using Frame): List[UI] =
+        if selectableF.isEmpty || selectionModeV != SelectionMode.None then Nil
+        else
+            List(KeyDiagnostics.card(
+                "DataTable",
+                "selectableWhen limits a selection this table does not have; set selectionMode to give it one",
+                Nil
+            ))
+    end selectionCards
+
     /** What stops a body from being windowed, and what a window costs the rest of the
       * table. The first two turn the windowing off and leave every row rendered, which is
       * slower and right rather than faster and wrong; the last two are the table dropping
@@ -2366,7 +2393,7 @@ final case class DataTable[A] private (
       * drop what was selected before.
       */
     private def selectAllCell(inFilter: List[A], sel: Set[String], rows: Int)(using Frame): Ast.Element =
-        val keys        = inFilter.map(keyOf)
+        val keys        = inFilter.filter(selectableAt).map(keyOf)
         val allSelected = keys.nonEmpty && keys.forall(sel.contains)
         val toggle: Any < Async = selectedRef match
             case Present(ref) => ref.getAndUpdate(cur => if allSelected then cur -- keys else cur ++ keys)
@@ -2857,11 +2884,12 @@ final case class DataTable[A] private (
         frozen: FrozenPlan,
         height: Maybe[Int] = Absent
     )(using Frame): List[UI] =
-        val id      = keyOf(a)
-        val isSel   = sel.contains(id)
-        val isExp   = exp.contains(id)
-        val rowEdit = edit.rows.contains(id)
-        val navRow  = nav.indexOf(id, keyOf).getOrElse(-1)
+        val id        = keyOf(a)
+        val isSel     = sel.contains(id)
+        val isExp     = exp.contains(id)
+        val rowEdit   = edit.rows.contains(id)
+        val navRow    = nav.indexOf(id, keyOf).getOrElse(-1)
+        val canSelect = selectableAt(a)
 
         val expanderTd: List[UI] =
             if !expanderColumn then Nil
@@ -2883,7 +2911,8 @@ final case class DataTable[A] private (
             else
                 var cb = div.cssClass("p-checkbox").cssClass("p-component").aria("hidden", "true")
                 if isSel then cb = cb.cssClass("p-checkbox-checked")
-                cb = cb.onClick(toggleSelect(id))
+                if canSelect then cb = cb.onClick(toggleSelect(id))
+                else cb = cb.cssClass("p-disabled")
                 val icon: List[UI] = if isSel then List(GlyphSvg(Icons.check, "p-checkbox-icon")) else Nil
                 val cell           = td(cb(toChild(div.cssClass("p-checkbox-box")(icon.map(toChild)*))))
                 List(freeze(cell, frozen.leadAt(if expanderColumn then 1 else 0)))
@@ -3003,10 +3032,10 @@ final case class DataTable[A] private (
         // content outgrows it still grows, which is the drift a scrollRows itemSize that
         // does not match the real row height shows up as.
         height.foreach(px => row = row.style(_.height(px.px)))
-        if rowClickSelects then row = row.cssClass("p-datatable-selectable-row")
+        if rowClickSelects && canSelect then row = row.cssClass("p-datatable-selectable-row")
         if isSel then row = row.cssClass("p-datatable-row-selected")
         if selectionModeV != SelectionMode.None then row = row.aria("selected", isSel.toString)
-        if rowInteractive then row = row.tabIndex(0).onClick(activate(id))
+        if rowInteractive then row = row.tabIndex(0).onClick(activate(id, canSelect))
         if rowEdit then
             // Enter and Escape reach here from whichever cell editor has focus, since a
             // keystroke bubbles the logical tree the way a click does.
@@ -3184,7 +3213,7 @@ final case class DataTable[A] private (
                     case Present(to)                   => if rowEdit then () else openAt(to, nav, edit)
                     case Absent                        => ()
                 val selectStep: Any < Async =
-                    if step.selectRow && rowInteractive then activate(cell.row) else ()
+                    if step.selectRow && rowInteractive then activate(cell.row, selectableAt(row)) else ()
                 for
                     _ <- editStep
                     _ <- focusStep
@@ -3368,8 +3397,9 @@ final case class DataTable[A] private (
         yield r
 
     /** Clicking a row updates the bound selection set (per the mode), then fires `onRowClick`. */
-    private def activate(id: String)(using Frame): Any < Async =
+    private def activate(id: String, canSelect: Boolean)(using Frame): Any < Async =
         val setSelection: Any < Async = (selectedRef, selectionModeV) match
+            case _ if !canSelect => ()
             case (Present(ref), SelectionMode.Single | SelectionMode.Radio) =>
                 ref.getAndUpdate(cur => if cur == Set(id) then Set.empty else Set(id))
             case (Present(ref), SelectionMode.Multiple) =>
