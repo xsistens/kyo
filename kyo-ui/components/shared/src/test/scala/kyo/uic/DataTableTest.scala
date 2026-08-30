@@ -1795,4 +1795,49 @@ class DataTableTest extends UicTest:
         )
     }
 
+    // ---- bringing a reader back where they were ----
+
+    "the table's state reads every bound ref, and restoring writes them back" in {
+        for
+            sort   <- Signal.initRef(List.empty[uic.SortKey])
+            query  <- Signal.initRef("")
+            page   <- Signal.initRef(0)
+            sel    <- Signal.initRef(Set.empty[String])
+            widths <- Signal.initRef(Map.empty[List[String], Double])
+            table = uic.DataTable[Item]().rows(trio).rowKey(_.id).columns(
+                uic.column("Name")(_.name).sortBy(_.name),
+                uic.column("Price")(_.price.toString)
+            ).sort(sort).globalFilter(query).paginate(2)(page)
+                .selectionMode(SelectionMode.Multiple).selected(sel).columnWidths(widths)
+            fresh <- table.state
+            _     <- sort.set(List(uic.SortKey.ascending("Name")))
+            _     <- query.set("b")
+            _     <- page.set(1)
+            _     <- sel.set(Set("2"))
+            _     <- widths.set(Map(List("Name") -> 240.0))
+            saved <- table.state
+            _     <- table.restore(fresh)
+            back  <- table.state
+        yield
+            assert(fresh == uic.TableState(), "an untouched table is the default state")
+            assert(saved.sort == List(uic.SortKey.ascending("Name")))
+            assert(saved.globalFilter == "b" && saved.page == 1 && saved.selected == Set("2"))
+            assert(saved.columnWidths == Map(List("Name") -> 240.0))
+            assert(back == fresh, "and restoring puts every one of them back")
+    }
+
+    "a state field whose ref is not bound reads as its default and is not restored" in {
+        for
+            sort <- Signal.initRef(List(uic.SortKey.ascending("Name")))
+            table = uic.DataTable[Item]().rows(items).rowKey(_.id)
+                .columns(uic.column("Name")(_.name).sortBy(_.name)).sort(sort)
+            saved <- table.state
+            _     <- table.restore(saved.copy(page = 7, selected = Set("1"), globalFilter = "x"))
+            after <- table.state
+        yield
+            assert(saved.page == 0 && saved.selected.isEmpty, "nothing bound, nothing read")
+            assert(after == saved, "and nothing written, since there is nowhere for it to go")
+            assert(after.sort == List(uic.SortKey.ascending("Name")), "the one ref that is bound survives")
+    }
+
 end DataTableTest

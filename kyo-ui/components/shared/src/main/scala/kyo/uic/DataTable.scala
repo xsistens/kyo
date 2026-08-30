@@ -227,6 +227,30 @@ final case class CellChange[A](rowKey: String, column: List[String], before: A, 
 /** The row before and after a committed row edit. */
 final case class RowChange[A](rowKey: String, before: A, after: A)
 
+/** Everything a reader changed about how a [[DataTable]] shows its rows, as one value.
+  *
+  * Prime persists the same set itself, under a `stateKey` in local or session storage,
+  * because in Prime the state lives INSIDE the component and a caller has no other way to
+  * reach it. Here every field is already a ref the caller bound, so this is a bundle
+  * rather than a store: [[DataTable.state]] reads them, [[DataTable.restore]] writes them,
+  * and where the value is kept between visits is the application's, which is the only
+  * place that knows whether it belongs in a cookie, a URL, a profile row or nowhere.
+  *
+  * A field whose ref is not bound reads as its default and is not restored, since there
+  * is nowhere for it to go.
+  */
+final case class TableState(
+    sort: List[SortKey] = Nil,
+    globalFilter: String = "",
+    columnFilters: Map[List[String], ColumnFilter] = Map.empty,
+    page: Int = 0,
+    selected: Set[String] = Set.empty,
+    expanded: Set[String] = Set.empty,
+    expandedGroups: Set[GroupPath] = Set.empty,
+    columnWidths: Map[List[String], Double] = Map.empty,
+    columnOrder: List[List[String]] = Nil
+) derives CanEqual
+
 /** A row moved to another place: where it came from, where it went, and the list that
   * came out, both indices counted in that list rather than in the page it was seen on.
   */
@@ -671,6 +695,51 @@ final case class DataTable[A] private (
             specs <- currentOf(columnFiltersRef, Map.empty[List[String], ColumnFilter])
             rows  <- currentRows
         yield csv(arranged(rows.toList, sort, query, if lazyOn then Nil else filterReads(specs)))
+
+    /** What the reader has changed about this table, read off the refs they changed it
+      * through (Prime's `stateKey`/`stateStorage`, minus the storage).
+      *
+      * Prime persists this set itself because in Prime it lives inside the component;
+      * here it is already the caller's, so this bundles it and where it is kept between
+      * visits stays the application's. A ref that is not bound reads as its default.
+      */
+    def state(using Frame): TableState < Async =
+        for
+            sort   <- currentOf(sortRef, List.empty[SortKey])
+            query  <- currentOf(filterRef, "")
+            specs  <- currentOf(columnFiltersRef, Map.empty[List[String], ColumnFilter])
+            page   <- currentOf(pageRef, 0)
+            sel    <- currentOf(selectedRef, Set.empty[String])
+            exp    <- currentOf(expandedRef, Set.empty[String])
+            groups <- currentOf(expandedGroupsRef, Set.empty[GroupPath])
+            widths <- currentOf(columnWidthsRef, Map.empty[List[String], Double])
+            order  <- currentOf(columnOrderRef, List.empty[List[String]])
+        yield TableState(sort, query, specs, page, sel, exp, groups, widths, order)
+
+    /** Puts a reader back where they were: writes each field of `s` into the ref it came
+      * from, and skips the ones that are not bound, since they have nowhere to go.
+      *
+      * Nothing is validated here, because nothing has to be: a restored spec naming a
+      * column this table no longer has, a width for one it never had, or a page past the
+      * end are each already something the table reports or clamps at render.
+      */
+    def restore(s: TableState)(using Frame): Unit < Async =
+        for
+            _ <- writeIf(sortRef, s.sort)
+            _ <- writeIf(filterRef, s.globalFilter)
+            _ <- writeIf(columnFiltersRef, s.columnFilters)
+            _ <- writeIf(pageRef, s.page)
+            _ <- writeIf(selectedRef, s.selected)
+            _ <- writeIf(expandedRef, s.expanded)
+            _ <- writeIf(expandedGroupsRef, s.expandedGroups)
+            _ <- writeIf(columnWidthsRef, s.columnWidths)
+            _ <- writeIf(columnOrderRef, s.columnOrder)
+        yield ()
+
+    private def writeIf[T](ref: Maybe[SignalRef[T]], v: T)(using Frame): Unit < Async =
+        ref match
+            case Present(r) => r.set(v)
+            case Absent     => ()
 
     /** One bound ref's current value, or the fallback where nothing is bound. */
     private def currentOf[T](ref: Maybe[SignalRef[T]], fallback: T)(using Frame): T < Async =

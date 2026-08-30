@@ -1036,6 +1036,24 @@ val expanding: UI < Async =
         .columnResizeMode(uic.ColumnResizeMode.Expand): UI
 ```
 
+`state` and `restore` bring a reader back where they were. Prime persists the same set itself, under a `stateKey` in local or session storage, because in Prime that state lives inside the component and a caller has no other way to reach it. Here every field is already a ref the caller bound, so `state` bundles them and `restore` writes them back, and where the value is kept between visits stays the application's: a cookie, a URL, a profile row, or nowhere. A field whose ref is not bound reads as its default and is not restored, since there is nowhere for it to go, and nothing is validated on the way in because a restored spec naming a column the table no longer has, a width for one it never had, or a page past the end are each already something the table reports or clamps at render.
+
+```scala
+val resumable: UI < Async =
+    for
+        sort <- Signal.initRef(List.empty[uic.SortKey])
+        page <- Signal.initRef(0)
+        table = uic.DataTable[Product]()
+            .rows(catalog)
+            .rowKey(_.id)
+            .columns(uic.column("Name")(_.name).sortBy(_.name))
+            .sort(sort)
+            .paginate(10)(page)
+        _ <- table.restore(uic.TableState(sort = List(uic.SortKey.ascending("Name")), page = 2))
+        _ <- table.state
+    yield table: UI
+```
+
 `csv` is the table as data. `csv(rows)` is pure and takes the rows to write, which is what makes an export of the selection one line; `csv` on its own reads the bound sort and filters and gives back the rows the reader is looking at, in the order they are looking at them, across every page rather than the one on the screen, which is what Prime's `exportCSV()` exports too. The heading of a column is `Column.exportHeader` or its header, the field is `Column.exportAs` or its text projection, and `Column.exportable(false)` leaves it out entirely. `exportAs` is Prime's table-wide `exportFunction` put on the column the way the rest of this class is, and it is what a column rendering only a `body` needs: what a cell shows is a `UI`, and there is no honest way to read a string out of one. Fields are quoted the way RFC 4180 asks, and `csvSeparator` changes what counts.
 
 ```scala
