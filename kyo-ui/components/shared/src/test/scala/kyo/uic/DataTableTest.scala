@@ -1783,6 +1783,17 @@ class DataTableTest extends UicTest:
             assert(one == "Name,Price\nB,20", "and the global filter narrows it the same way")
     }
 
+    "csv writes the columns in the order the reader put them in" in {
+        for
+            order <- Signal.initRef(List(List("Price"), List("Name")))
+            table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+                uic.column("Name")(_.name),
+                uic.column("Price")(_.price.toString)
+            ).columnOrder(order)
+            out <- table.csv
+        yield assert(out == "Price,Name\n10,A\n20,B")
+    }
+
     "a separator of its own joins the fields, and is what decides the quoting" in {
         def table(sep: String) = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
             uic.column("Name")(_.name).exportAs(i => s"${i.name},x"),
