@@ -999,6 +999,23 @@ val resizable: UI < Async =
 
 A drag moves one BOUNDARY rather than sizing one column: the two columns it sits between trade width and their total stays where it was, so the table never grows past the space it was given and no column the reader is not touching moves. That is also why a handle needs a resizable column on both sides of it, and why the last column never carries one: what is to its right is the edge of the table, which has no width to trade. The widths the reader is given to drag are MEASURED when they grab, not read out of the map, so a column the caller never sized is as draggable as one that was.
 
+`columnResizeMode(ColumnResizeMode.Expand)` changes what a drag moves: one COLUMN rather than the boundary beside it. Only the grabbed column changes, the table grows or shrinks by the same amount and scrolls sideways in its container, and the last column becomes draggable too, since it no longer needs a neighbour to trade with. It costs one thing the fit mode does not: an expanding table has to state its own width, or the browser hands what the columns leave over back to them and the drag lands where it started. That width is the sum of the columns, so every visible column needs one, from `Column.width` or from the bound map; a column without one is named in a card and the table resizes to fit instead.
+
+```scala
+val expanding: UI < Async =
+    for widths <- Signal.initRef(Map.empty[List[String], Double])
+    yield uic.DataTable[Product]()
+        .rows(catalog)
+        .rowKey(_.id)
+        .columns(
+            uic.column("Name")(_.name).width(260),
+            uic.column("Category")(_.category).width(160),
+            uic.column("Price")(p => f"${p.price}%.2f").width(120)
+        )
+        .columnWidths(widths)
+        .columnResizeMode(uic.ColumnResizeMode.Expand): UI
+```
+
 Rows the reader has to keep in sight are `frozenRows(rs)`, Prime's `frozenValue`: a running total, the record being compared against, the one they pinned. They render in a row group of their own above the scrolling one and hold under the header. They are a list of their OWN and not a subset of the body's, which is what lets them be a summary rather than a duplicate; a row that is in both is a card, since two rows with one key are two rows the table cannot tell apart.
 
 Where they hold is the height of the header, which is the one number here that nothing can be told and nothing can compute: it is whatever the header cells came out as. The table observes it and writes the offset, so a header that rewraps on a resize moves the frozen rows with it, where PrimeVue measures once in a lifecycle hook. Until the first measurement lands they sit at the top of the body in flow, which is where they belong at rest, so there is nothing to flash.

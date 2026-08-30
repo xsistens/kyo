@@ -339,6 +339,7 @@ final case class DataTable[A] private (
     hiddenPaths: List[(List[String], Column[A, FlatOnly])] = Nil,
     columnFiltersRef: Maybe[SignalRef[Map[List[String], ColumnFilter]]] = Absent,
     columnWidthsRef: Maybe[SignalRef[Map[List[String], Double]]] = Absent,
+    resizeModeV: ColumnResizeMode = ColumnResizeMode.Fit,
     columnOrderRef: Maybe[SignalRef[List[List[String]]]] = Absent,
     orderedPaths: List[List[String]] = Nil
 ) extends Node:
@@ -434,9 +435,28 @@ final case class DataTable[A] private (
       * total stays where it was, so the table never grows past the space it was given and
       * no column the reader is not touching moves. The last column has no boundary to its
       * right, and neither does one whose neighbour says [[Column.resizable]] is false.
+      * [[columnResizeMode]] is what changes that.
       */
     def columnWidths(ref: SignalRef[Map[List[String], Double]]): DataTable[A] =
         copy(columnWidthsRef = Present(ref))
+
+    /** What a resize drag moves, Prime's `columnResizeMode`, and `Fit` by default.
+      *
+      * Under `Expand` a drag moves one COLUMN rather than the boundary beside it: only
+      * the grabbed column changes, and the table grows or shrinks by the same amount and
+      * scrolls sideways in its container, which is what a table with more columns than
+      * fit needs. The last column becomes draggable too, since it no longer needs a
+      * neighbour to trade with, and Prime's `.p-datatable-resizable-table-fit` (which is
+      * what hides that last handle) is not rendered.
+      *
+      * It costs one thing the fit mode does not: the table has to state its own width,
+      * or the browser distributes what the columns leave over and the drag lands back
+      * where it started. That width is the sum of the columns, so `Expand` needs every
+      * visible column to have one, from [[Column.width]] or from the bound map. A column
+      * without one is named in a card and the table resizes to fit instead, which is the
+      * mode that needs no widths at all.
+      */
+    def columnResizeMode(v: ColumnResizeMode): DataTable[A] = copy(resizeModeV = v)
 
     /** Binds the order the columns render in, as their paths from left to right, and lets
       * the reader drag a header cell to another place.
@@ -888,7 +908,32 @@ final case class DataTable[A] private (
       * and neither does a table whose columns are all pinned.
       */
     private def resizeOn: Boolean =
-        columnWidthsRef.isDefined && leafCols.sliding(2).exists(p => p.size == 2 && p.forall(_.resizableFlag))
+        columnWidthsRef.isDefined && (resizeModeV match
+            case ColumnResizeMode.Fit    => leafCols.sliding(2).exists(p => p.size == 2 && p.forall(_.resizableFlag))
+            case ColumnResizeMode.Expand => leafCols.exists(_.resizableFlag))
+
+    /** The visible columns with no width, which is what `Expand` cannot work without:
+      * the table's own width is the sum of the columns, and a column with no width has
+      * nothing to add to it.
+      */
+    private def unsizedLeaves(size: SizeState): List[List[String]] =
+        leafPaths.collect { case (p, c) if widthOf(p, c, size).isEmpty => p }
+
+    /** The mode a drag actually runs in: `Expand` falls back to `Fit` while a column has
+      * no width, since the table would otherwise state a width it cannot compute.
+      */
+    private def resizeModeAt(size: SizeState): ColumnResizeMode =
+        if resizeModeV == ColumnResizeMode.Expand && unsizedLeaves(size).isEmpty then ColumnResizeMode.Expand
+        else ColumnResizeMode.Fit
+
+    /** How wide the table states it is under `Expand`: the columns it renders, added up,
+      * with the checkbox, expander and row-editor columns carried as the variables they
+      * are sized by.
+      */
+    private def statedWidth(size: SizeState): Length =
+        val px = leafPaths.flatMap((p, c) => widthOf(p, c, size).toList).sum
+        offset(px, leadTerms ++ trailTerms)
+    end statedWidth
 
     /** This column's width: the one the reader dragged if they have, the authored one
       * otherwise.
@@ -901,9 +946,10 @@ final case class DataTable[A] private (
       * none: what is to its right is the edge of the table, which a fit-mode drag has
       * nothing to trade against.
       */
-    private def resizableAt(i: Int): Boolean =
-        columnWidthsRef.isDefined && i + 1 < leafCols.length &&
-            leafCols(i).resizableFlag && leafCols(i + 1).resizableFlag
+    private def resizableAt(i: Int, size: SizeState): Boolean =
+        columnWidthsRef.isDefined && leafCols.lift(i).exists(_.resizableFlag) && (resizeModeAt(size) match
+            case ColumnResizeMode.Fit    => i + 1 < leafCols.length && leafCols(i + 1).resizableFlag
+            case ColumnResizeMode.Expand => true)
 
     /** The id one header cell carries so a grab can measure it. Every leaf header gets
       * one, the last included: it carries no handle itself, but it is the neighbour the
@@ -1825,14 +1871,25 @@ final case class DataTable[A] private (
                 List(tfoot.cssClass("p-datatable-tfoot")(toChild(footRow)))
 
         var tbl = table.cssClass("p-datatable-table")
-        if scrollingOn || frozenOn || frozenRowsOn then
+        if scrollingOn || frozenOn || frozenRowsOn || resizeModeAt(size) == ColumnResizeMode.Expand then
             tbl = tbl.cssClass("p-datatable-scrollable-table")
         // Prime's own classes carry the clipping a sized column needs (a value too long
         // for its column is cut rather than widening it); the layout mode they leave to
         // the host, which is what the `.p-uic-table-fixed` rule supplies.
         if hasWidths then tbl = tbl.cssClass("p-uic-table-fixed")
         if resizeOn then
-            tbl = tbl.cssClass("p-datatable-resizable-table").cssClass("p-datatable-resizable-table-fit")
+            tbl = tbl.cssClass("p-datatable-resizable-table")
+            // Prime's `-fit` is what hides the last column's handle, which is the one thing
+            // that is true of fitting and not of expanding: under `Expand` the last column
+            // needs no neighbour to trade with, so it keeps its handle.
+            if resizeModeAt(size) == ColumnResizeMode.Fit then
+                tbl = tbl.cssClass("p-datatable-resizable-table-fit")
+            else
+                // Under `Expand` the table states its own width, or the browser hands what
+                // the columns leave over back to them and a drag lands where it started.
+                tbl = tbl.style(_.width(statedWidth(size)))
+            end if
+        end if
         accNameV match
             case Present(TextValue.Const(v)) => tbl = tbl.aria("label", v)
             case Present(TextValue.Dyn(s))   => tbl = tbl.aria("label", s)
@@ -1898,7 +1955,10 @@ final case class DataTable[A] private (
         if gridlinesFlag then root = root.cssClass("p-datatable-gridlines")
         // Prime's frozen rules only apply inside a scrollable table, and rightly so: a
         // column held against an edge means nothing until something moves past it.
-        if scrollingOn || frozenOn || frozenRowsOn then root = root.cssClass("p-datatable-scrollable")
+        // An expanding table outgrows its container by design, which only means anything
+        // where the container scrolls.
+        if scrollingOn || frozenOn || frozenRowsOn || resizeModeAt(size) == ColumnResizeMode.Expand then
+            root = root.cssClass("p-datatable-scrollable")
         if flexOn then root = root.cssClass("p-datatable-flex-scrollable")
         // The cursor keys must not ALSO scroll the page under the table. A kyo handler is
         // async and cannot decline the browser default in time, so the suppression is
@@ -2141,7 +2201,17 @@ final case class DataTable[A] private (
                         "the column followed by its header",
                     unknown
                 ))
-        pinned ++ unknownCard
+        val unsized = if resizeModeV == ColumnResizeMode.Expand then unsizedLeaves(size) else Nil
+        val expandCard =
+            if unsized.isEmpty then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "an expanding table states its own width, which is the sum of its columns, so every column " +
+                        "needs one; these have none and the table resizes to fit instead",
+                    unsized.map(_.mkString(" / "))
+                ))
+        pinned ++ unknownCard ++ expandCard
     end sizeCards
 
     /** What a bound column order cannot do, which is the same three shapes the widths
@@ -2640,7 +2710,7 @@ final case class DataTable[A] private (
       * which is the trade the filter row's funnel already makes.
       */
     private def resizer(i: Int, size: SizeState)(using Frame): List[UI] =
-        if !resizableAt(i) then Nil
+        if !resizableAt(i, size) then Nil
         else
             var handle = span
                 .cssClass("p-datatable-column-resizer")
@@ -2649,7 +2719,7 @@ final case class DataTable[A] private (
                 .stopPropagation(true)
             if size.live then
                 val path = leafPaths(i)._1
-                val next = leafPaths(i + 1)._1
+                val next = Maybe.fromOption(leafPaths.lift(i + 1)).map(_._1)
                 handle = handle
                     .onPointerDown(e => beginResize(i, e, size))
                     .onPointerMove(e => dragResize(path, next, e, size))
@@ -2670,7 +2740,11 @@ final case class DataTable[A] private (
             case Present(ref) =>
                 for
                     a <- size.measure(headerId(i, size))
-                    b <- size.measure(headerId(i + 1, size))
+                    // Under `Expand` the drag moves one column, so there is no neighbour to
+                    // measure and none to trade with; the grab still carries a second width
+                    // so the two modes share one held value.
+                    b <- if resizeModeAt(size) == ColumnResizeMode.Expand then Kyo.lift(a)
+                    else size.measure(headerId(i + 1, size))
                     r <- ref.set(Present(ColumnGrab(e.rectX + e.x, a.width, b.width)))
                 yield r
             case Absent => ()
@@ -2679,15 +2753,21 @@ final case class DataTable[A] private (
       * from where the grab started rather than from the last frame, so a drag that
       * outruns the render does not drift.
       */
-    private def dragResize(path: List[String], next: List[String], e: PointerEvent, size: SizeState)(using
+    private def dragResize(path: List[String], next: Maybe[List[String]], e: PointerEvent, size: SizeState)(using
         Frame
     ): Any < Async =
         (size.grab, columnWidthsRef) match
             case (Present(g), Present(ref)) =>
                 g.get.map {
                     case Present(held) =>
-                        val (w, n) = DataTable.resizeTo(held.width, held.next, e.rectX + e.x - held.startX)
-                        ref.getAndUpdate(_ + (path -> w) + (next -> n))
+                        val delta = e.rectX + e.x - held.startX
+                        (resizeModeAt(size), next) match
+                            case (ColumnResizeMode.Fit, Present(n)) =>
+                                val (a, b) = DataTable.resizeTo(held.width, held.next, delta)
+                                ref.getAndUpdate(_ + (path -> a) + (n -> b))
+                            case _ =>
+                                ref.getAndUpdate(_ + (path -> DataTable.expandTo(held.width, delta)))
+                        end match
                     case Absent => ()
                 }
             case _ => ()
@@ -2714,7 +2794,7 @@ final case class DataTable[A] private (
         // Only once the mount has run: the id exists to be measured, and stamping it in the
         // static projection would put the same one on every table of a page.
         if size.live && (columnWidthsRef.isDefined || reorderOn) && index >= 0 then cell = cell.id(headerId(index, size))
-        if index >= 0 && resizableAt(index) then cell = cell.cssClass("p-datatable-resizable-column")
+        if index >= 0 && resizableAt(index, size) then cell = cell.cssClass("p-datatable-resizable-column")
         c.alignV match
             case ColumnAlign.Center => cell = cell.cssClass("p-uic-dt-center")
             case ColumnAlign.End    => cell = cell.cssClass("p-uic-dt-end")
@@ -3556,4 +3636,10 @@ object DataTable:
     private[uic] def resizeTo(width: Double, next: Double, delta: Double): (Double, Double) =
         val d = math.max(math.min(delta, next - MinColumnWidth), MinColumnWidth - width)
         (width + d, next - d)
+
+    /** The width one column takes under `Expand`. Nothing gives it back, so the only
+      * bound is the floor every column keeps.
+      */
+    private[uic] def expandTo(width: Double, delta: Double): Double =
+        math.max(MinColumnWidth, width + delta)
 end DataTable
