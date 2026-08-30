@@ -161,6 +161,64 @@ class DataTableTest extends UicTest:
             assert(refused.exists((_, e) => e.code == "min"), "with the rule's own error on it")
     }
 
+    // Moving the editor is a commit like any other. Opening the next cell without one drops
+    // whatever was typed into the last, silently, which is what a reader clicking from cell
+    // to cell does all day.
+    "clicking another cell commits the one that is open" in {
+        for
+            (ui, rows, editing, _, _, _, _) <- wire
+            cell                            <- cellWithId(ui, "t-c0-0")
+            _                               <- press(cell, UI.Keyboard.Enter)
+            open                            <- cellWithId(ui, "t-c0-0")
+            _                               <- typeInto(open, "Ada")
+            other                           <- cellWithId(ui, "t-c1-0")
+            _                               <- click(other)
+            stored                          <- rows.get
+            now                             <- editing.get
+        yield
+            assert(stored.head.name == "Ada", "what was typed reached the row")
+            assert(now == Present(CellPath("2", List("Name"))), "and the editor moved on")
+    }
+
+    "clicking another cell while the open one refuses leaves the editor where it is" in {
+        for
+            (ui, rows, editing, _, _, err, _) <- wire
+            cell                              <- cellWithId(ui, "t-c0-1")
+            _                                 <- press(cell, UI.Keyboard.Enter)
+            open                              <- cellWithId(ui, "t-c0-1")
+            _                                 <- typeInto(open, "0")
+            other                             <- cellWithId(ui, "t-c1-0")
+            _                                 <- click(other)
+            stored                            <- rows.get
+            now                               <- editing.get
+            refused                           <- err.get
+        yield
+            assert(stored.head.price == 10, "nothing was written")
+            assert(now == Present(CellPath("1", List("Price"))), "the refusing cell kept the editor")
+            assert(refused.exists((_, e) => e.code == "min"), "and shows why")
+    }
+
+    // Tab commits and moves on, which is right until the commit is refused: then moving on
+    // opens the next cell, and opening a cell clears the error, so the refusal was invisible
+    // and the edit was gone.
+    "Tab past a refused commit leaves the editor where it is, with the error showing" in {
+        for
+            (ui, rows, editing, _, _, err, _) <- wire
+            cell                              <- cellWithId(ui, "t-c0-1")
+            _                                 <- press(cell, UI.Keyboard.Enter)
+            open                              <- cellWithId(ui, "t-c0-1")
+            _                                 <- typeInto(open, "0")
+            reopened                          <- cellWithId(ui, "t-c0-1")
+            _                                 <- press(reopened, UI.Keyboard.Tab)
+            stored                            <- rows.get
+            now                               <- editing.get
+            refused                           <- err.get
+        yield
+            assert(stored.head.price == 10, "nothing was written")
+            assert(now == Present(CellPath("1", List("Price"))), "the editor stayed on the value being fixed")
+            assert(refused.exists((_, e) => e.code == "min"), "and the error survived")
+    }
+
     "Enter on a resting cell opens it, seeded from the row" in {
         for
             (ui, _, editing, name, _, _, _) <- wire
