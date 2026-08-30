@@ -2505,12 +2505,22 @@ object UI:
             attrs: Attrs = Attrs(),
             children: Chunk[UI] = Chunk.empty,
             href: Maybe[Href] = Absent,
-            target: Maybe[Target] = Absent
+            target: Maybe[Target] = Absent,
+            download: Maybe[String] = Absent
         )(using val frame: Frame) extends Inline with Interactive with Focusable with Activatable with Clickable:
             type Self = Anchor
             def withAttrs(a: Attrs): Anchor      = copy(attrs = a)
             def apply(cs: HtmlChildVal*): Anchor = copy(children = children ++ Chunk.from(cs.map(_.value)))
             def href(v: Href): Anchor            = copy(href = Present(v))
+
+            /** Saves what `href` points at under `filename` instead of navigating to it (the HTML `download`
+              * attribute). Same-origin hrefs and `data:`/`blob:` URLs only, which is the browser's rule and not this
+              * one: a cross-origin href ignores the attribute and navigates instead.
+              *
+              * This is how a kyo page hands the reader a file it GENERATED rather than fetched: a `data:` URL over the
+              * bytes, and a name to save them under. An empty `filename` leaves the name to the browser.
+              */
+            def download(filename: String): Anchor = copy(download = Present(filename))
 
             /** Reactive `href`: patched in place, so the link keeps its node (and any focus on it). */
             def href(v: Signal[Href]): Self =
