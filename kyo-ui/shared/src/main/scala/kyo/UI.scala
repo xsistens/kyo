@@ -540,6 +540,26 @@ object UI:
                     .andThen(p.get)
             }
 
+        /** Batched twin of [[requestMeasureById]]: measures several elements in ONE round trip, in the order of `ids`.
+          *
+          * The single-id form couples the request to the wait, so measuring n elements with it costs n round trips: each
+          * emit is followed by a suspension that only resumes on its own reply, and the next request is not sent until it
+          * does. Here every Promise is registered and every op emitted BEFORE anything is awaited, so the requests leave
+          * together and the replies come back together. That is what makes geometry over a list affordable: a drag that
+          * has to know where every rendered row sits pays one round trip rather than one per row.
+          *
+          * A repeated id is requested once and answered once, with every position in the result holding that same rect.
+          */
+        def requestMeasureByIds(ids: Seq[String])(using Frame): Chunk[Rect] < Async =
+            val wanted = ids.distinct
+            Kyo.foreach(wanted)(_ => Promise.init[Rect, Any]).map { promises =>
+                pendingById.getAndUpdate(_ ++ wanted.zip(promises))
+                    .andThen(Kyo.foreachDiscard(wanted)(id => emit(internal.HtmlOp.RequestMeasureById(id))))
+                    .andThen(Kyo.foreach(promises)(_.get))
+                    .map(rects => Chunk.from(ids.map(id => rects(wanted.indexOf(id)))))
+            }
+        end requestMeasureByIds
+
         /** Transport hook: deliver `rect` for `id`. Checks BOTH maps: a PERSISTENT [[observers]] SignalRef (viewport
           * observation) is updated and KEPT (the stream continues); otherwise the one-shot [[pendingById]] Promise is
           * completed and dropped. An id is only ever in one map, so the observer branch takes precedence and short-circuits.
