@@ -305,10 +305,16 @@ object RowSource:
                 parts <- Kyo.foreach(wanted)(_.get)
                 total <- settle(q, first, parts)
                 _     <- report(parts, first, total)
-                _     <- windowRef.set(Window(math.max(0, d.offset), slice(parts, first, d)))
-                _     <- totalRef.set(total)
-                _     <- loadingRef.set(false)
-                _     <- Kyo.foreach(neighbours(first, last, total))(warm(q, _))
+                // The total goes out BEFORE the rows, and the order is load-bearing: a
+                // consumer that positions rows by the total, a virtual viewport above all,
+                // would otherwise be handed rows at an offset the total does not reach yet
+                // and draw them as though they were not there. Ahead is the harmless side
+                // to be on: an extent that is already long enough costs a spacer that is
+                // briefly too tall, where the other way round costs the rows themselves.
+                _ <- totalRef.set(total)
+                _ <- windowRef.set(Window(math.max(0, d.offset), slice(parts, first, d)))
+                _ <- loadingRef.set(false)
+                _ <- Kyo.foreach(neighbours(first, last, total))(warm(q, _))
             yield ()
             end for
         end serve

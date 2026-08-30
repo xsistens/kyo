@@ -610,6 +610,28 @@ def x(s: uic.RowSource[String, W])(using Frame) =
         typeCheckFailure(preamble + """def x = uic.DataTable[String]().itemSize(46)""")
     }
 
+    "frozenRows takes a list of its own, constant or reactive; Prime's frozenValue name is absent" in {
+        typeCheck(
+            preamble +
+                """final case class F(id: String, name: String)
+def x(using Frame) =
+  uic.DataTable[F]()
+    .rows(Seq(F("1", "A")))
+    .rowKey(_.id)
+    .columns(uic.Column[F]("Name")(_.name))
+    .scrollHeight("240px")
+    .frozenRows(Seq(F("9", "Total")))"""
+        )
+        typeCheck(
+            preamble +
+                """final case class F(id: String, name: String)
+def x(s: Signal[Seq[F]])(using Frame) =
+  uic.DataTable[F]().rowKey(_.id).columns(uic.Column[F]("Name")(_.name)).scrollHeight("240px").frozenRows(s)"""
+        )
+        typeCheckFailure(preamble + """def x = uic.DataTable[String]().frozenValue(Seq("a"))""")
+        typeCheckFailure(preamble + """def x = uic.DataTable[String]().frozenRows(Seq(1))""")
+    }
+
     "grouping levels read the row type from the table, and a merged column is marked on itself" in {
         typeCheck(
             preamble +
