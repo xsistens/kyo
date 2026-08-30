@@ -112,6 +112,42 @@ class AnchorTest extends UITest:
         }
     }
 
+    "a plain anchor keeps its native navigation" in {
+        // The click transport prevents an anchor's default only where a click handler was declared, so the
+        // handler rather than the href decides what happens. An anchor WITHOUT one is an ordinary link and
+        // has to stay one: an in-page fragment scrolls, and a cross-document path is left to the browser
+        // (or, in a Scala.js app, to UILocation's interceptor). Prevent-defaulting every anchor kills both,
+        // which is what a navigation built from plain links runs into.
+        val app: UI < Async =
+            Kyo.lift(UI.div(
+                UI.a.href(Href.Fragment("mark")).id("a")("Link"),
+                UI.span("target").id("mark")
+            ))
+        withUI(app) {
+            for
+                _    <- Browser.click(Selector.id("a"))
+                hash <- Browser.eval("location.hash")
+            yield assert(hash == "#mark")
+        }
+    }
+
+    "an anchor that carries a click handler navigates nowhere" in {
+        val app: UI < Async =
+            for ref <- Signal.initRef(false)
+            yield UI.div(
+                UI.a.href(Href.Fragment("handled")).id("a").onClick(ref.set(true))("Link"),
+                UI.span("target").id("handled"),
+                ref.map(v => UI.span(v.toString).id("v"))
+            )
+        withUI(app) {
+            for
+                _    <- Browser.click(Selector.id("a"))
+                _    <- Browser.assertText(Selector.id("v"), "true")
+                hash <- Browser.eval("location.hash")
+            yield assert(hash != "#handled")
+        }
+    }
+
     "pressKey Enter on anchor fires onClick" in {
         val app: UI < Async =
             for ref <- Signal.initRef(false)
