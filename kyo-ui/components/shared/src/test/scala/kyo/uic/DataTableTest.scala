@@ -1707,4 +1707,35 @@ class DataTableTest extends UicTest:
         yield assert(reported.contains("rows(ref)") && reported.contains("onRowReorder"))
     }
 
+    // ---- the row a context menu was opened on ----
+
+    "a right-click marks the row it landed on and tells the caller, without selecting it" in {
+        for
+            sel  <- Signal.initRef(Set.empty[String])
+            ctx  <- Signal.initRef(Absent: Maybe[String])
+            seen <- Signal.initRef(List.empty[String])
+            table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple).selected(sel)
+                .contextMenuRow(ctx).onRowContextMenu(id => seen.getAndUpdate(_ :+ id))
+            trs <- bodyTrs(table.render)
+            _ <- trs(1).attrs.onContextMenu match
+                case Present(h) => h
+                case Absent     => throw new AssertionError("the row declares no context handler")
+            on     <- ctx.get
+            picked <- sel.get
+            told   <- seen.get
+            after  <- bodyTrs(table.render)
+        yield
+            assert(on == Present("2") && told == List("2"))
+            assert(picked.isEmpty, "acting on a row is not selecting it")
+            assert(after(1).attrs.cssClasses.contains("p-datatable-contextmenu-row-selected"))
+            assert(!after.head.attrs.cssClasses.contains("p-datatable-contextmenu-row-selected"))
+    }
+
+    "a table with no context binding leaves the browser's own menu alone" in {
+        for trs <- bodyTrs(uic.DataTable[Item]().rows(items).rowKey(_.id)
+                .columns(uic.column("Name")(_.name)).render)
+        yield assert(trs.forall(_.attrs.onContextMenu.isEmpty))
+    }
+
 end DataTableTest

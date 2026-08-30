@@ -1036,6 +1036,21 @@ val expanding: UI < Async =
         .columnResizeMode(uic.ColumnResizeMode.Expand): UI
 ```
 
+`contextMenuRow(ref)` says which row a right-click landed on, Prime's `contextMenuSelection`. The row is marked with Prime's own `.p-datatable-contextmenu-row-selected`, which is a second and separate mark from the selection: the reader is acting ON one row without changing what is selected. Declaring it also suppresses the browser's menu over the rows, which is what a context menu of one's own has to do. The menu itself is `ContextMenu`, which wraps the table, and the ref is the caller's to clear when it closes, since the table cannot see a panel it does not render. `onRowContextMenu` is the notification beside it.
+
+```scala
+val withMenu: UI < Async =
+    for
+        onRow <- Signal.initRef(Absent: Maybe[String])
+        table = uic.DataTable[Product]()
+            .rows(catalog)
+            .rowKey(_.id)
+            .columns(uic.column("Name")(_.name))
+            .contextMenuRow(onRow)
+    yield uic.ContextMenu()
+        .items(uic.MenuItem("Copy"), uic.MenuItem("Delete"))(table): UI
+```
+
 `reorderableRows(true)` lets the reader drag a row somewhere else. It adds Prime's grip column at the leading edge, where Prime has the caller place a `rowReorder` column of their own, and shows where a drop would land as a line on the row it would land beside, where Prime positions two floating arrows measured in JavaScript on every move. What a drop rewrites is the row LIST, so it needs somewhere to write: a bound `rows(ref)` the table stores the new list into, or `onRowReorder`, which hands it over with the indices counted in the list rather than in the page.
 
 It also needs the rows on the screen to be the rows in the list, in that order. While a sort spec, a global filter, a column filter or a row grouping is deciding the order, over a lazily loaded window where the order is the query's, or over a windowed body, the grips render but carry no drag, and a card names which of them it is. Paging is fine: a page is a contiguous slice, so the row on screen and the row in the list are the same row at a known offset.
