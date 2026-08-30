@@ -3900,7 +3900,7 @@ final case class DataTable[A] private (
                 end if
                 if editing && edit.errorAt(here).isDefined then cell = cell.cssClass("p-invalid")
                 val content: HtmlChildVal =
-                    if editing then toChild(editorCell(here, a, c, edit))
+                    if editing then toChild(editorCell(here, a, c, nav, edit))
                     else
                         c.bodyF match
                             case Present(f) => toChild(f(a))
@@ -4052,11 +4052,14 @@ final case class DataTable[A] private (
       * the bound row list, a sort) finds the text still in the ref rather than resetting
       * the field to the row's stored value.
       */
-    private def editorCell(cell: CellPath, row: A, c: Column[A, FlatOnly], edit: EditState)(using Frame): UI =
+    private def editorCell(cell: CellPath, row: A, c: Column[A, FlatOnly], nav: NavState[A], edit: EditState)(
+        using Frame
+    ): UI =
         (c.editV, edit.draftOf(cell.column)) match
             case (Present(ed), Present(draft)) =>
                 val params = EditorParams(
                     draft = draft,
+                    id = editorId(nav, cell).getOrElse(""),
                     commit = commitCell(cell, row, c, edit),
                     cancel = cancelCell(edit)
                 )
@@ -4136,6 +4139,25 @@ final case class DataTable[A] private (
       * the document and the next arrow key goes nowhere. The cell itself is never
       * replaced, only its content, so the command has a target the moment it arrives.
       */
+    /** The id an open cell's editor stamps on whatever takes focus.
+      *
+      * Positional like [[cellId]] and for the same reason: it addresses a place on the
+      * screen, so it stays put while the value in it changes. Absent for a cell that is not
+      * among the rendered rows, which is a table that changed under an open editor.
+      */
+    private def editorId(nav: NavState[A], cell: CellPath): Maybe[String] =
+        val col = leafPaths.indexWhere(_._1 == cell.column)
+        (nav.indexOf(cell.row, keyOf), col) match
+            case (Present(row), c) if c >= 0 => Present(s"${nav.idPrefix}-e$row-$c")
+            case _                           => Absent
+    end editorId
+
+    /** Puts focus back INTO an open editor, which is where a refused commit leaves it. */
+    private def focusEditor(nav: NavState[A], cell: CellPath)(using Frame): Any < Async =
+        editorId(nav, cell) match
+            case Present(id) => nav.focus(id)
+            case Absent      => ()
+
     private def focusCell(nav: NavState[A], cell: CellPath)(using Frame): Any < Async =
         if !nav.on then ()
         else
@@ -4171,13 +4193,17 @@ final case class DataTable[A] private (
                 // browser is moving focus itself and the cell it lands on opens instead.
                 //
                 // A REFUSED commit under Tab is the other way round: the browser has
-                // already taken focus off a cell that is still being edited, so it is
-                // brought back to the value being fixed. Under Enter focus never left the
-                // editor, and commanding it to the cell would take the reader out of it.
+                // already taken focus off a cell that is still being edited, so it goes
+                // back INTO the editor, by the id the editor stamped, which is where the
+                // reader was and where the value they have to fix is. The cell would not
+                // do: it is the editor's container, so landing there is landing outside
+                // the field. Under Enter focus never left the editor at all.
                 def closing(closed: Boolean < Async): Boolean < Async =
                     closed.map { ok =>
                         val focus: Any < Async =
-                            if ok == !isTab then focusCell(nav, cell) else ()
+                            if ok && !isTab then focusCell(nav, cell)
+                            else if !ok && isTab then focusEditor(nav, cell)
+                            else ()
                         focus.andThen(ok)
                     }
                 val editStep: Boolean < Async = step.edit match

@@ -203,20 +203,25 @@ class DataTableTest extends UicTest:
     // and the edit was gone.
     "Tab past a refused commit leaves the editor where it is, with the error showing" in {
         for
-            (ui, rows, editing, _, _, err, _) <- wire
-            cell                              <- cellWithId(ui, "t-c0-1")
-            _                                 <- press(cell, UI.Keyboard.Enter)
-            open                              <- cellWithId(ui, "t-c0-1")
-            _                                 <- typeInto(open, "0")
-            reopened                          <- cellWithId(ui, "t-c0-1")
-            _                                 <- press(reopened, UI.Keyboard.Tab)
-            stored                            <- rows.get
-            now                               <- editing.get
-            refused                           <- err.get
+            (ui, rows, editing, _, _, err, focused) <- wire
+            cell                                    <- cellWithId(ui, "t-c0-1")
+            _                                       <- press(cell, UI.Keyboard.Enter)
+            open                                    <- cellWithId(ui, "t-c0-1")
+            _                                       <- typeInto(open, "0")
+            reopened                                <- cellWithId(ui, "t-c0-1")
+            _                                       <- press(reopened, UI.Keyboard.Tab)
+            stored                                  <- rows.get
+            now                                     <- editing.get
+            refused                                 <- err.get
+            seen                                    <- focused.get
         yield
             assert(stored.head.price == 10, "nothing was written")
             assert(now == Present(CellPath("1", List("Price"))), "the editor stayed on the value being fixed")
             assert(refused.exists((_, e) => e.code == "min"), "and the error survived")
+            // The cell would be the editor's container, so landing there is landing outside
+            // the field: the reader would have to tab back IN to fix what they were told
+            // about. Focus goes to the id the editor stamped.
+            assert(seen == List("t-e0-1"), "and focus went back into the editor, not onto its cell")
     }
 
     "Enter on a resting cell opens it, seeded from the row" in {
