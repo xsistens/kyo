@@ -1217,6 +1217,12 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
             preamble + """def x: uic.Paginator = uic.Paginator().totalRecords(120).rows(10).template(uic.PaginatorElement.PageLinks, uic.PaginatorElement.CurrentPageReport)"""
         )
         typeCheck(
+            preamble + """def x(r: SignalRef[Map[List[String], uic.ColumnFilter]]): uic.DataTable[String] = uic.DataTable[String]().columns(uic.column[String]("Name")(identity).filterBy).columnFilters(r).filterDisplay(uic.FilterDisplay.Menu)"""
+        )
+        typeCheck(
+            preamble + """def x: uic.ColumnFilter = uic.ColumnFilter(List(uic.FilterRule("a", uic.MatchMode.Contains), uic.FilterRule("b", uic.MatchMode.EndsWith)), uic.FilterOperator.Or)"""
+        )
+        typeCheck(
             preamble + """def x(pg: SignalRef[Int]): uic.DataTable[String] = uic.DataTable[String]().paginate(10)(pg).paginator(_.template(uic.PaginatorElement.PageLinks).pageLinkSize(3))"""
         )
         typeCheck(
@@ -1238,6 +1244,9 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheckFailure(preamble + """def x = uic.Paginator().rowsPerPageOptions(Seq("10"))""")
         // The template is a list of VALUES, so Prime's space-separated string is not one.
         typeCheckFailure(preamble + """def x = uic.Paginator().template("PageLinks CurrentPageReport")""")
+        // The display and the operator are values, not Prime's strings.
+        typeCheckFailure(preamble + """def x = uic.DataTable[String]().filterDisplay("menu")""")
+        typeCheckFailure(preamble + """def x = uic.ColumnFilter(List(uic.FilterRule("a", uic.MatchMode.Contains)), "or")""")
         typeCheckFailure(preamble + """def x(v: SignalRef[Int]) = uic.Stepper().value(v)""")
         typeCheckFailure(preamble + """def x = uic.MeterGroup().orientation("vertical")""")
         typeCheckFailure(preamble + """def x = uic.MeterGroup().labelPosition("start")""")

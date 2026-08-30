@@ -28,15 +28,63 @@ enum MatchMode derives CanEqual:
         case GreaterOrEqual => "Greater than or equal to"
 end MatchMode
 
-/** One column's filter: what the reader typed, and how the column reads it.
+/** How the rules of one column's filter are joined (Prime's `operator`). */
+enum FilterOperator derives CanEqual:
+    case And, Or
+
+    /** The label the operator dropdown shows, in Prime's wording. */
+    private[uic] def label: String = this match
+        case And => "Match All"
+        case Or  => "Match Any"
+end FilterOperator
+
+/** Where a column's filter is edited (Prime's `filterDisplay`).
+  *
+  * `Row` is a second header row with one input per filterable column, which is the
+  * shorter reach for one condition. `Menu` puts a funnel in each header cell instead,
+  * opening a panel that holds several conditions joined by [[FilterOperator]], with the
+  * buttons to add, remove, clear and apply them.
+  */
+enum FilterDisplay derives CanEqual:
+    case Row, Menu
+
+/** One condition of a column's filter: what the reader typed, and how the column reads it. */
+final case class FilterRule(query: String, mode: MatchMode) derives CanEqual
+
+/** One column's filter: its conditions, and how they are joined.
   *
   * This is the unit of [[DataTable.columnFilters]], keyed by the same column path the
   * sort spec names a column by. Seed the map to open the table on a filter already
   * applied; the reader's typing writes it back.
+  *
+  * A filter under [[FilterDisplay.Row]] has exactly one rule, which is what one input
+  * can hold, and `ColumnFilter(query, mode)` builds that. Several rules are what
+  * [[FilterDisplay.Menu]] is for.
   */
-final case class ColumnFilter(query: String, mode: MatchMode) derives CanEqual
+final case class ColumnFilter(
+    rules: List[FilterRule],
+    operator: FilterOperator = FilterOperator.And
+) derives CanEqual:
+
+    /** The first rule's query, which is the whole filter under a row display. */
+    def query: String = rules.headOption.map(_.query).getOrElse("")
+
+    /** The first rule's mode, which is the whole filter under a row display. */
+    def mode: MatchMode = rules.headOption.map(_.mode).getOrElse(MatchMode.Contains)
+
+    /** The rules that ask for something. A rule with an empty query narrows nothing, which
+      * is what an untouched one in a menu is.
+      */
+    private[uic] def active: List[FilterRule] = rules.filter(_.query.trim.nonEmpty)
+end ColumnFilter
 
 object ColumnFilter:
+
+    /** One rule, which is what a row display holds. */
+    def apply(query: String, mode: MatchMode): ColumnFilter = ColumnFilter(List(FilterRule(query, mode)))
+
+    /** An untouched filter for a column: one empty rule on the mode it starts on. */
+    private[uic] def empty(mode: MatchMode): ColumnFilter = ColumnFilter(List(FilterRule("", mode)))
 
     /** The modes a column whose values are text can answer. */
     private[uic] val textModes: List[MatchMode] =
@@ -69,7 +117,7 @@ object ColumnFilter:
       * as the global filter is: a reader typing into a table is naming what they can see,
       * not writing a case-sensitive query.
       */
-    private[uic] def onText[A](show: A => String)(f: ColumnFilter): Maybe[A => Boolean] =
+    private[uic] def onText[A](show: A => String)(f: FilterRule): Maybe[A => Boolean] =
         val q                                                       = f.query.trim.toLowerCase
         def by(g: (String, String) => Boolean): Maybe[A => Boolean] = Present(a => g(show(a).toLowerCase, q))
         f.mode match
@@ -93,7 +141,7 @@ object ColumnFilter:
         read: A => V,
         parse: String => Result[FieldError, V],
         ord: Ordering[V]
-    )(f: ColumnFilter): Maybe[A => Boolean] =
+    )(f: FilterRule): Maybe[A => Boolean] =
         parse(f.query.trim) match
             case Result.Success(v) =>
                 def by(g: Int => Boolean): Maybe[A => Boolean] = Present(a => g(ord.compare(read(a), v)))
