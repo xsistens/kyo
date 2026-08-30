@@ -141,7 +141,10 @@ final private[uic] case class SizeState(
   * says which rows are drawn, and the browser is what writes it. A static projection has
   * none and draws the window at rest.
   */
-final private[uic] case class ScrollState(ref: Maybe[SignalRef[Double]] = Absent)
+final private[uic] case class ScrollState(
+    ref: Maybe[SignalRef[Double]] = Absent,
+    headTop: Maybe[Signal[Maybe[Int]]] = Absent
+)
 
 /** Where one frozen cell holds: which edge it holds against, and how far from it.
   *
@@ -320,6 +323,7 @@ final case class DataTable[A] private (
     rowHeightV: Maybe[Int] = Absent,
     scrollOverscanV: Int = 3,
     sourceV: Maybe[RowSource[?, A]] = Absent,
+    frozenRowsV: Maybe[ReactiveValue[Seq[A]]] = Absent,
     lazyTotalV: Maybe[ReactiveValue[Total]] = Absent,
     rowsSigV: Maybe[Signal[Seq[A]]] = Absent,
     editingRowsRef: Maybe[SignalRef[Set[String]]] = Absent,
@@ -712,6 +716,28 @@ final case class DataTable[A] private (
     def scrollRows(itemSize: Int, overscan: Int = 3): DataTable[A] =
         copy(rowHeightV = Present(math.max(1, itemSize)), scrollOverscanV = math.max(0, overscan))
 
+    /** Rows that hold under the header while the rest of the body scrolls past them
+      * (Prime's `frozenValue`): a running total, the record being compared against, the one
+      * the reader pinned.
+      *
+      * They are a list of their OWN and not a subset of the body's, which is what lets them
+      * be a summary rather than a duplicate: the table renders them in a second row group
+      * above the scrolling one, and a row that is in both is a card, since two rows with one
+      * key are two rows the table cannot tell apart.
+      *
+      * Where they hold is the height of the header, which is the one number in this
+      * component nothing can be told and nothing can compute: it is whatever the header
+      * cells came out as. The table observes it and writes the offset, so a header that
+      * rewraps on a resize moves the frozen rows with it. Until the first measurement lands
+      * they sit at the top of the body in flow, which is where they belong at rest.
+      *
+      * Needs a [[scrollHeight]], since a row can only hold against something that moves.
+      */
+    def frozenRows(rs: Seq[A]): DataTable[A] = copy(frozenRowsV = Present(ReactiveValue.Const(rs)))
+
+    /** Reactive [[frozenRows]], for a pinned set the reader changes. */
+    def frozenRows(sig: Signal[Seq[A]]): DataTable[A] = copy(frozenRowsV = Present(ReactiveValue.Dyn(sig)))
+
     // ---- render ----
 
     /** A row's identity. Without a [[rowKey]] it falls back to the row's position in the
@@ -778,6 +804,9 @@ final case class DataTable[A] private (
             leafPaths.collect { case (p, c) if c.rowSpanEq.isDefined => s"rowSpan on ${p.mkString(" / ")}" }
         ).flatten
 
+    /** Whether rows hold under the header while the body scrolls past them. */
+    private def frozenRowsOn: Boolean = frozenRowsV.isDefined
+
     /** Whether the body renders a window onto its rows rather than all of them. */
     private def windowOn: Boolean = rowHeightV.isDefined && viewportPx.isDefined && unevenRows.isEmpty
 
@@ -796,7 +825,8 @@ final case class DataTable[A] private (
       * renders through a mount: the drafts and the standing error of an editing table,
       * and the menu-open state of a filter row.
       */
-    private def ownsState: Boolean = editingBound || navOn || filterRowOn || resizeOn || reorderOn || windowOn
+    private def ownsState: Boolean =
+        editingBound || navOn || filterRowOn || resizeOn || reorderOn || windowOn || frozenRowsOn
 
     /** Whether the filter row is rendered: the filters have to be bound somewhere, and
       * some column has to carry a pipeline for the row to hold anything.
@@ -830,6 +860,11 @@ final case class DataTable[A] private (
       * one before it trades width with.
       */
     private def headerId(i: Int, size: SizeState): String = s"${size.idPrefix}-h$i"
+
+    /** The id the header row group carries so its height can be observed, which is what a
+      * frozen row holds at.
+      */
+    private def headId(prefix: String): String = s"$prefix-head"
 
     /** Whether the table sizes its columns itself, which is what puts a `colgroup` in
       * front of the header and makes the widths in it authoritative.
@@ -1166,20 +1201,49 @@ final case class DataTable[A] private (
                         case (Present(src), true) => src.demand.set(viewport.demand(0.0))
                         case _                    => ()
                     ): Unit < Async
-                yield wired(
-                    prefix,
-                    drafts.toMap,
-                    err,
-                    id => cmds.focusId(id),
-                    menus.toMap,
-                    id => cmds.requestMeasureById(id),
-                    Present(held),
-                    Present(moving),
-                    if windowOn then Present(scroll) else Absent
-                )
+                    // Where the frozen rows hold is the header's height, which is measured
+                    // rather than declared, since it is whatever the header cells came out
+                    // as. Writing it into a ref is what keeps a scroll, which re-measures
+                    // too, from repainting anything: the height is the same, and a ref set
+                    // to what it already holds tells nobody.
+                    headTop <- Signal.initRef(Absent: Maybe[Int])
+                yield
+                    val tree = wired(
+                        prefix,
+                        drafts.toMap,
+                        err,
+                        id => cmds.focusId(id),
+                        menus.toMap,
+                        id => cmds.requestMeasureById(id),
+                        Present(held),
+                        Present(moving),
+                        if windowOn then Present(scroll) else Absent,
+                        if frozenRowsOn then Present(headTop) else Absent
+                    )
+                    if !frozenRowsOn then tree
+                    else UI.fragment(headProbe(cmds, headId(prefix), headTop), tree)
             }.placeholder(static)
         end if
     end render
+
+    /** An invisible sibling that starts watching the header once the table is IN the DOM.
+      *
+      * A nested mount's effect runs after the enclosing content is published, which is the
+      * whole reason it exists: the observation measures its element immediately, and an id
+      * requested before the publish resolves to nothing, so a measure started in the outer
+      * mount would simply miss and the rows would sit unheld until something else moved.
+      * The Overlay reposition trigger is the same shape.
+      *
+      * The height goes into a ref the table RENDERS rather than into a style patched onto
+      * the group, because the group is inside the table's own subtree: a sort or a page
+      * turn replaces it, and a patched style would go with it.
+      */
+    private def headProbe(cmds: UI.Commands, id: String, into: SignalRef[Maybe[Int]])(using Frame): UI =
+        UI.mounted {
+            cmds.observeViewportById(id).map(sig =>
+                UI.fork(sig.observe(r => into.set(r.map(_.height.toInt))))
+            ).andThen(UI.empty)
+        }.placeholder(UI.empty)
 
     /** The subscription tree the mount publishes, and the seam golden tests render
       * directly: a top-down render shows a mounted region as its placeholder, so the
@@ -1194,7 +1258,8 @@ final case class DataTable[A] private (
         measure: String => Rect < Async = (_: String) => Rect(0, 0, 0, 0, 0, 0),
         held: Maybe[SignalRef[Maybe[ColumnGrab]]] = Absent,
         moving: Maybe[SignalRef[Maybe[ColumnDrag]]] = Absent,
-        scroll: Maybe[SignalRef[Double]] = Absent
+        scroll: Maybe[SignalRef[Double]] = Absent,
+        headTop: Maybe[Signal[Maybe[Int]]] = Absent
     )(using Frame): UI =
         errRef.render(e =>
             withRef(editingRowsRef, Set.empty[String]) { editRows =>
@@ -1206,7 +1271,7 @@ final case class DataTable[A] private (
                             FilterState(open = menus, live = true),
                             SizeState(idPrefix = idPrefix, live = true, measure = measure, grab = held),
                             OrderState(drag = moving, held = drag),
-                            ScrollState(scroll)
+                            ScrollState(scroll, headTop)
                         )
                     }
                 }
@@ -1285,34 +1350,37 @@ final case class DataTable[A] private (
         scroll: ScrollState
     )(using Frame): UI =
         withSortableFlags { flags =>
-            withRows { (rows, offset) =>
-                withRef(sortRef, List.empty[SortKey]) { sort =>
-                    withRef(filterRef, "") { query =>
-                        withRef(columnFiltersRef, Map.empty[List[String], ColumnFilter]) { specs =>
-                            withRef(columnWidthsRef, Map.empty[List[String], Double]) { widths =>
-                                withRef(pageRef, 0) { page =>
-                                    withRef(selectedRef, Set.empty[String]) { sel =>
-                                        withRef(expandedRef, Set.empty[String]) { exp =>
-                                            withRef(expandedGroupsRef, Set.empty[GroupPath]) { groups =>
-                                                withTotal { total =>
-                                                    body(
-                                                        rows,
-                                                        offset,
-                                                        sort,
-                                                        query,
-                                                        page,
-                                                        total,
-                                                        sel,
-                                                        exp,
-                                                        groups,
-                                                        flags,
-                                                        edit,
-                                                        nav,
-                                                        filter.copy(specs = specs),
-                                                        size.copy(widths = widths),
-                                                        order,
-                                                        scroll
-                                                    )
+            withFrozenRows { held =>
+                withRows { (rows, offset) =>
+                    withRef(sortRef, List.empty[SortKey]) { sort =>
+                        withRef(filterRef, "") { query =>
+                            withRef(columnFiltersRef, Map.empty[List[String], ColumnFilter]) { specs =>
+                                withRef(columnWidthsRef, Map.empty[List[String], Double]) { widths =>
+                                    withRef(pageRef, 0) { page =>
+                                        withRef(selectedRef, Set.empty[String]) { sel =>
+                                            withRef(expandedRef, Set.empty[String]) { exp =>
+                                                withRef(expandedGroupsRef, Set.empty[GroupPath]) { groups =>
+                                                    withTotal { total =>
+                                                        body(
+                                                            rows,
+                                                            offset,
+                                                            held,
+                                                            sort,
+                                                            query,
+                                                            page,
+                                                            total,
+                                                            sel,
+                                                            exp,
+                                                            groups,
+                                                            flags,
+                                                            edit,
+                                                            nav,
+                                                            filter.copy(specs = specs),
+                                                            size.copy(widths = widths),
+                                                            order,
+                                                            scroll
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }
@@ -1324,6 +1392,18 @@ final case class DataTable[A] private (
                 }
             }
         }
+
+    /** The rows that hold under the header, resolved before the table builds: the card that
+      * catches a row held and scrolling at once needs them beside the body's, and the group
+      * that renders them needs them anyway.
+      */
+    private def withFrozenRows(k: Seq[A] => UI)(using Frame): UI =
+        frozenRowsV match
+            case Absent => k(Nil)
+            case Present(rv) =>
+                rv.dyn match
+                    case Present(sig) => sig.render(k)
+                    case Absent       => k(rv.const.getOrElse(Nil))
 
     /** The rows the table renders, and the row index the first of them sits at: the bound
       * list when there is one, the appended list otherwise. A bound list is what lets a
@@ -1414,6 +1494,7 @@ final case class DataTable[A] private (
     private def body(
         rowsIn: Seq[A],
         rowOffset: Int,
+        held: Seq[A],
         sort: List[SortKey],
         query: String,
         page: Int,
@@ -1644,6 +1725,31 @@ final case class DataTable[A] private (
           * The group stays put, and it carries the height of the whole list, which the two
           * spacers add up to anyway.
           */
+        /** The row group that holds under the header, and the offset it holds at.
+          *
+          * The rows are drawn like any other, minus the keyboard grid: the cursor addresses
+          * cells by their position among the SCROLLING rows, and these are not among them.
+          * The offset is a measurement, so it is `Absent` on a first paint and in a static
+          * projection, and the group then sits in flow at the top of the body, which is
+          * where it belongs while nothing has scrolled.
+          */
+        def frozenGroup(rows: Seq[A], top: Maybe[Int])(using Frame): UI =
+            var group = tbody.cssClass("p-datatable-tbody").cssClass("p-datatable-frozen-tbody")
+            if size.idPrefix.nonEmpty then group = group.id(s"${size.idPrefix}-frozen")
+            top.foreach(px => group = group.style(_.top(px.px)))
+            val trs = rows.toList.zipWithIndex.flatMap((a, i) =>
+                dataRow(a, i, sel, exp, colCount, Map.empty, edit, navHere.copy(on = false), frozen)
+            )
+            group(trs.map(toChild)*)
+        end frozenGroup
+
+        val frozenBody: List[UI] =
+            if !frozenRowsOn then Nil
+            else
+                List(scroll.headTop match
+                    case Present(sig) => sig.render(top => frozenGroup(held, top))
+                    case Absent       => frozenGroup(held, Absent))
+
         val tbodyEl: UI =
             if !windowOn then tbody.cssClass("p-datatable-tbody")(bodyRows.map(toChild)*)
             else
@@ -1669,7 +1775,8 @@ final case class DataTable[A] private (
                 List(tfoot.cssClass("p-datatable-tfoot")(toChild(footRow)))
 
         var tbl = table.cssClass("p-datatable-table")
-        if scrollHeightV.isDefined || frozenOn then tbl = tbl.cssClass("p-datatable-scrollable-table")
+        if scrollHeightV.isDefined || frozenOn || frozenRowsOn then
+            tbl = tbl.cssClass("p-datatable-scrollable-table")
         // Prime's own classes carry the clipping a sized column needs (a value too long
         // for its column is cut rather than widening it); the layout mode they leave to
         // the host, which is what the `.p-uic-table-fixed` rule supplies.
@@ -1682,11 +1789,19 @@ final case class DataTable[A] private (
             case Absent                      => ()
         end match
         accNameRefV.foreach(v => tbl = tbl.aria("labelledby", v))
+        // The header carries an id only where a frozen row needs to hold at its height,
+        // which is the one thing about this table nothing can be told and nothing can work
+        // out on its own.
+        val headEl: UI =
+            var h = thead.cssClass("p-datatable-thead")
+            if frozenRowsOn && size.idPrefix.nonEmpty then h = h.id(headId(size.idPrefix))
+            h((headRows ++ filterRowUI).map(toChild)*)
+        end headEl
+
         val tableEl: UI = tbl(
             (colGroup(size) ++ List[UI](
-                thead.cssClass("p-datatable-thead")((headRows ++ filterRowUI).map(toChild)*),
-                tbodyEl
-            ) ++ footGroup).map(toChild)*
+                headEl
+            ) ++ frozenBody ++ List[UI](tbodyEl) ++ footGroup).map(toChild)*
         )
 
         var container = div.cssClass("p-datatable-table-container")
@@ -1733,7 +1848,7 @@ final case class DataTable[A] private (
         if gridlinesFlag then root = root.cssClass("p-datatable-gridlines")
         // Prime's frozen rules only apply inside a scrollable table, and rightly so: a
         // column held against an edge means nothing until something moves past it.
-        if scrollHeightV.isDefined || frozenOn then root = root.cssClass("p-datatable-scrollable")
+        if scrollHeightV.isDefined || frozenOn || frozenRowsOn then root = root.cssClass("p-datatable-scrollable")
         // The cursor keys must not ALSO scroll the page under the table. A kyo handler is
         // async and cannot decline the browser default in time, so the suppression is
         // declarative: the client reads the attribute before it posts the event. The class
@@ -1752,7 +1867,7 @@ final case class DataTable[A] private (
                 size
             ) ++ frozenCards(size) ++ orderCards(
                 order
-            ) ++ rowsCards ++ windowCards ++ lazyCards(
+            ) ++ rowsCards ++ windowCards ++ frozenRowCards(paged, held) ++ lazyCards(
                 rows,
                 total
             ) ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
@@ -2100,6 +2215,40 @@ final case class DataTable[A] private (
             geometry ++ uneven ++ paginated ++ navigable
         end if
     end windowCards
+
+    /** What stops a frozen row from holding, and what stops it from being one row.
+      *
+      * A row can only hold against something that moves, so without a scroll height there
+      * is nothing for it to hold against and it renders at the top of the body like any
+      * other. And a frozen row that is also in the body is TWO rows with one key: the
+      * table cannot tell them apart, so a selection, an expansion or a click lands on both.
+      */
+    private def frozenRowCards(rows: List[A], held: Seq[A])(using Frame): List[UI] =
+        if !frozenRowsOn then Nil
+        else
+            val loose =
+                if scrollHeightV.isDefined then Nil
+                else
+                    List(KeyDiagnostics.card(
+                        "DataTable",
+                        "frozen rows hold against the edge of a scroll container, and this table has none; " +
+                            "give it a scrollHeight or drop frozenRows",
+                        Nil
+                    ))
+            val body  = rows.map(keyOf).toSet
+            val twice = held.map(keyOf).filter(body.contains).distinct
+            val both =
+                if twice.isEmpty then Nil
+                else
+                    List(KeyDiagnostics.card(
+                        "DataTable",
+                        "a frozen row is in the body as well, so the table renders one record twice and cannot tell " +
+                            "the two apart; frozen rows are a list of their own",
+                        twice
+                    ))
+            loose ++ both
+        end if
+    end frozenRowCards
 
     private def lazyCards(rows: List[A], total: Total)(using Frame): List[UI] =
         if !lazyOn then Nil

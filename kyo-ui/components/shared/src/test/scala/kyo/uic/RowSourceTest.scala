@@ -218,6 +218,9 @@ class RowSourceTest extends UicTest:
 
     // A viewport sizes its scrollbar off the floor under the length, so the floor falling
     // would shrink the scrollbar the moment the reader scrolled back up.
+    //
+    // The rows are the barrier for the total here, which holds because the source publishes
+    // the total FIRST: a window that has arrived is a total that has already been written.
     "the floor under an unknown length never falls" in {
         for
             p    <- probe(total = Present(Total.Unknown(true)))
@@ -241,6 +244,11 @@ class RowSourceTest extends UicTest:
         yield assert(t == Total.Known(2), "nothing after row 1 is a total of two")
     }
 
+    // The barrier is the PREFETCH of the new query and not its first fetch, because a fetch
+    // records itself as it starts and the total is written when it lands. What the source
+    // reaches for afterwards is the first thing that happens once the total is out. The
+    // rows cannot be the barrier here: both queries answer with the same rows, so the
+    // window never changes and never publishes.
     "a new query starts the floor again" in {
         for
             p     <- probe(total = Present(Total.Unknown(true)))
@@ -249,10 +257,13 @@ class RowSourceTest extends UicTest:
             _     <- until(p.rows)(_ == all.slice(6, 8))
             _     <- p.source.demand.set(RowSource.Demand(0, 2))
             _     <- until(p.rows)(_ == all.take(2))
+            held  <- p.source.total.currentWith(t => t)
             _     <- p.query.set("b")
-            _     <- until(p.calls)(c => blocksOf(c, "b").nonEmpty)
+            _     <- until(p.calls)(c => blocksOf(c, "b").contains(1))
             fresh <- p.source.total.currentWith(t => t)
-        yield assert(fresh == Total.Unknown(true, 2), "the old query's length is not this one's")
+        yield
+            assert(held == Total.Unknown(true, 8), "the old query had been served eight rows")
+            assert(fresh == Total.Unknown(true, 2), "the old query's length is not this one's")
     }
 
     // ---- the viewport arithmetic ----

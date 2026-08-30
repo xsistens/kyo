@@ -971,6 +971,10 @@ val resizable: UI < Async =
 
 A drag moves one BOUNDARY rather than sizing one column: the two columns it sits between trade width and their total stays where it was, so the table never grows past the space it was given and no column the reader is not touching moves. That is also why a handle needs a resizable column on both sides of it, and why the last column never carries one: what is to its right is the edge of the table, which has no width to trade. The widths the reader is given to drag are MEASURED when they grab, not read out of the map, so a column the caller never sized is as draggable as one that was.
 
+Rows the reader has to keep in sight are `frozenRows(rs)`, Prime's `frozenValue`: a running total, the record being compared against, the one they pinned. They render in a row group of their own above the scrolling one and hold under the header. They are a list of their OWN and not a subset of the body's, which is what lets them be a summary rather than a duplicate; a row that is in both is a card, since two rows with one key are two rows the table cannot tell apart.
+
+Where they hold is the height of the header, which is the one number here that nothing can be told and nothing can compute: it is whatever the header cells came out as. The table observes it and writes the offset, so a header that rewraps on a resize moves the frozen rows with it, where PrimeVue measures once in a lifecycle hook. Until the first measurement lands they sit at the top of the body in flow, which is where they belong at rest, so there is nothing to flash.
+
 A column the reader has to keep in sight while the rest scrolls past is `Column.frozen(true)`, or `frozen(FrozenEdge.End)` against the trailing edge. Declaring one puts the table in a scroll container, since a column can only be frozen against something that moves; `scrollHeight` adds a cap on the height, and freezing on its own scrolls sideways, which is what a table wider than its page needs.
 
 ```scala
