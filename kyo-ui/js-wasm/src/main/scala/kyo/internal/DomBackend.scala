@@ -2075,6 +2075,32 @@ private[kyo] object DomBackend:
       * which is what makes marker-delimited regions parseable at all. Twin of `__kyoParseCtx` in
       * clientJs; keep in lockstep.
       */
+    /** The first element tag of `html`, lowercased, or `""` where it opens with none.
+      * Comments and text are skipped, since `<` alone does not start an element.
+      */
+    private def firstTag(html: String): String =
+        var i   = 0
+        var out = ""
+        while out.isEmpty && i < html.length do
+            if html.charAt(i) == '<' && i + 1 < html.length && Character.isLetter(html.charAt(i + 1)) then
+                var j = i + 1
+                while j < html.length && Character.isLetterOrDigit(html.charAt(j)) do j += 1
+                out = html.substring(i + 1, j).toLowerCase
+            end if
+            i += 1
+        end while
+        out
+    end firstTag
+
+    /** Whether a payload opens with one of a table's own row groups, which is the shape
+      * that has to be parsed INSIDE a table rather than inside one of its groups. An empty
+      * payload is not one, so the region-emptying patch keeps the wrapper it always had.
+      */
+    private def isRowGroup(html: String): Boolean =
+        firstTag(html) match
+            case "tbody" | "thead" | "tfoot" | "caption" | "colgroup" => true
+            case _                                                    => false
+
     private def parseToContainer(parent: dom.Element, html: String): dom.Node =
         noteMarkers(html)
         val tpl = document.createElement("template").asInstanceOf[dom.HTMLTemplateElement]
@@ -2083,6 +2109,14 @@ private[kyo] object DomBackend:
             if parent.namespaceURI == SvgNs && tag.toLowerCase != "foreignobject" then ("<svg>", "</svg>", 1)
             else
                 tag match
+                    // A <table> parent takes two payload shapes: a ROW GROUP, or the rows of
+                    // one, which the parser hoists into an implied group. Wrapping a row
+                    // group the way rows are wrapped nests a <tbody> inside a <tbody>, and
+                    // the parser is required to read that as the START of a second group:
+                    // the payload lands beside the one the descent then reads, so the region
+                    // renders empty. A table that loses its rows on its first patch is what
+                    // that looks like from the outside.
+                    case "TABLE" if isRowGroup(html) => ("<table>", "</table>", 1)
                     // Explicit <tbody> (not the parser's implied one) so the descent depth is fixed.
                     case "TABLE" | "THEAD" | "TBODY" | "TFOOT" => ("<table><tbody>", "</tbody></table>", 2)
                     case "TR"                                  => ("<table><tbody><tr>", "</tr></tbody></table>", 3)
