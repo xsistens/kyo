@@ -11,6 +11,12 @@ import kyo.UI.*
   * reader typed, and because the table never subscribes to it, so typing costs the
   * editor's own cell and nothing more.
   *
+  * `id` goes on whatever element takes focus, and is what lets the table hand focus BACK to
+  * it. A cell that refuses a commit keeps the reader in the value they are fixing, but Tab
+  * has already moved focus away by the time the refusal is known, so it has to be sent
+  * somewhere by name. An editor that does not stamp it is still an editor; a refused Tab out
+  * of one simply leaves focus where the browser put it.
+  *
   * `commit` and `cancel` end the edit the way Enter and Escape do, for an editor whose own
   * gesture already decides (a picked option, a toggled box).
   *
@@ -20,6 +26,7 @@ import kyo.UI.*
   */
 final case class EditorParams(
     draft: SignalRef[String],
+    id: String,
     commit: Any < Async,
     cancel: Any < Async
 )
@@ -48,7 +55,7 @@ object CellEditor:
     /** Prime's text field. Every keystroke is written; Enter and Escape leave the field
       * and reach the cell, which is what ends the edit.
       */
-    val text: CellEditor = p => Input().value(p.draft).focusAuto(true)
+    val text: CellEditor = p => Input().value(p.draft).id(p.id).focusAuto(true)
 
     /** Prime's number field, with the native stepper and range. `integer` turns on the
       * whole-number step, which is what keeps an `Int` column from ever seeing a decimal.
@@ -65,7 +72,7 @@ object CellEditor:
             // so the commit read the seed, found it unchanged and closed on a silently
             // dropped edit. A value binding writes on every keystroke, and the draft is
             // text anyway, since the column's CellType is what turns it back into a value.
-            var f = InputNumber().text(p.draft).focusAuto(true)
+            var f = InputNumber().text(p.draft).id(p.id).focusAuto(true)
             min.foreach(v => f = f.min(v))
             max.foreach(v => f = f.max(v))
             step.foreach(v => f = f.step(v))
@@ -85,6 +92,7 @@ object CellEditor:
             p.draft.render { cur =>
                 Select[String]()
                     .options(options)
+                    .id(p.id)
                     .current(cur)
                     .onChange(v => p.draft.set(v).andThen(p.commit))
                     .toUI
@@ -96,7 +104,8 @@ object CellEditor:
     val checkbox: CellEditor =
         p =>
             p.draft.render { cur =>
-                CheckBox().checked(cur == "true").onChange(b => p.draft.set(b.toString).andThen(p.commit)).toUI
+                CheckBox().checked(cur == "true").id(p.id)
+                    .onChange(b => p.draft.set(b.toString).andThen(p.commit)).toUI
             }
 
     /** How a number reaches the draft as text: a whole value prints without a decimal
