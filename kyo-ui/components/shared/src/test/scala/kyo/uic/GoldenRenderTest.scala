@@ -1342,6 +1342,31 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "DataTable pins frozen rows in a second row group that holds under the header" in {
+        final case class Row(id: String, name: String) derives CanEqual
+        for
+            err <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+            top <- Signal.initRef(Present(41): Maybe[Int])
+            table = uic.DataTable[Row]()
+                .rows(List(Row("1", "Alice"), Row("2", "Bob")))
+                .rowKey(_.id)
+                .columns(uic.Column[Row]("Name")(_.name))
+                .scrollHeight("240px")
+                .frozenRows(List(Row("9", "Total")))
+            out <- renderHtml(table.wired("t", Map.empty, err, _ => (), headTop = Present(top)))
+        yield
+            assert(out.contains("p-datatable-scrollable-table"), "the rule that makes a row group sticky is scoped to one")
+            assert(
+                out.contains("""class="p-datatable-tbody p-datatable-frozen-tbody""""),
+                "the frozen group carries the body class too, or its cells lose every rule keyed on it"
+            )
+            assert(out.indexOf("p-datatable-frozen-tbody") < out.indexOf(">Alice<"), "and it comes before the body")
+            assert(out.contains("top: 41px"), "holding at the height the header was measured at")
+            assert(out.contains("""id="t-head""""), "which is the element the observation names")
+            assert(out.contains(">Total<") && out.contains(">Alice<"), "both groups render their own rows")
+        end for
+    }
+
     "DataTable windows its rows inside Prime's scroller, between two spacer rows" in {
         final case class Row(id: String, name: String) derives CanEqual
         val rows = (1 to 40).toList.map(i => Row(i.toString, s"R$i"))

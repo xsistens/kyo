@@ -1301,4 +1301,79 @@ class DataTableTest extends UicTest:
             assert(!all.exists(_.attrs.cssClasses.contains("p-uic-dt-nav")), "and the cursor's own class is gone")
     }
 
+    // ---- rows that hold under the header ----
+
+    private def groups(node: UI)(using Frame): List[UI.Ast.Element] < Sync =
+        elements(node).map(_.filter(_.attrs.cssClasses.contains("p-datatable-tbody")).toList)
+
+    private def namesIn(e: UI.Ast.Element)(using Frame): List[String] < Sync =
+        rowsUnder(e).map(_.toList.flatMap(_.children.collect { case c: UI.Ast.Element => c }.headOption)
+            .flatMap(_.children.collect { case t: UI.Ast.Text => t.value }))
+
+    private val pinned = List(Item("9", "Total", 30))
+
+    "frozen rows render in their own group above the body, and hold at the header's height" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](items)
+            err  <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            top  <- Signal.initRef(Absent: Maybe[Int])
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .scrollHeight("200px").frozenRows(pinned)
+                .wired("t", Map.empty, err, _ => (), headTop = Present(top))
+            before <- groups(ui)
+            atRest <- namesIn(before.head)
+            _      <- top.set(Present(41))
+            after  <- groups(ui)
+        yield
+            assert(before.size == 2, "the pinned rows are a row group of their own")
+            assert(before.head.attrs.cssClasses.contains("p-datatable-frozen-tbody"), "and it comes first")
+            assert(
+                before.head.attrs.cssClasses.contains("p-datatable-tbody"),
+                "carrying the body class too, or the cells lose their styling"
+            )
+            assert(atRest == List("Total"), "holding the rows it was given")
+            assert(heightOf(before.head).isEmpty, "before the header is measured it sits in flow")
+            assert(
+                after.head.attrs.uiStyle.props.collect { case Style.Prop.Top(v) => v } == List(41.px),
+                "and once it is measured, it holds at that height"
+            )
+    }
+
+    "the body rows keep their own group, and the cursor does not step into the frozen one" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](items)
+            err  <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            top  <- Signal.initRef(Absent: Maybe[Int])
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v))
+            ).scrollHeight("200px").frozenRows(pinned)
+                .wired("t", Map.empty, err, _ => (), headTop = Present(top))
+            gs   <- groups(ui)
+            held <- namesIn(gs.head)
+            body <- namesIn(gs(1))
+            all  <- elements(ui)
+        yield
+            assert(held == List("Total") && body == List("A", "B"), "each group holds its own rows")
+            val stops = all.filter(_.attrs.tabIndex.contains(0)).flatMap(_.attrs.identifier)
+            assert(stops == Chunk("t-c0-0", "t-c1-0"), "only the scrolling rows are in the keyboard grid")
+    }
+
+    "a frozen row that is in the body as well is reported" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](items)
+            text <- cards(uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .scrollHeight("200px").frozenRows(List(items.head)).render)
+        yield
+            assert(text.contains("in the body as well"))
+            assert(text.contains("1"), "and the key that is in both is named")
+    }
+
+    "frozen rows with nothing to hold against are reported" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](items)
+            text <- cards(uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .frozenRows(pinned).render)
+        yield assert(text.contains("scroll container") && text.contains("scrollHeight"))
+    }
+
 end DataTableTest
