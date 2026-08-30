@@ -296,6 +296,7 @@ object Theme:
       |   are two numbers that can drift apart. The 2rem is the cell's own padding, which
       |   Prime carries as one shorthand token a stylesheet cannot take the sides out of. */
       |.p-datatable {
+      |  --p-uic-dt-handle-width: calc(1rem + 2rem);
       |  --p-uic-dt-toggle-width: calc(var(--p-datatable-row-toggle-button-size, 1.75rem) + 2rem);
       |  --p-uic-dt-select-width: calc(var(--p-checkbox-width, 1.25rem) + 2rem);
       |  --p-uic-dt-editor-width: 7rem;

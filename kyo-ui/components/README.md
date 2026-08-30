@@ -1016,6 +1016,22 @@ val expanding: UI < Async =
         .columnResizeMode(uic.ColumnResizeMode.Expand): UI
 ```
 
+`reorderableRows(true)` lets the reader drag a row somewhere else. It adds Prime's grip column at the leading edge, where Prime has the caller place a `rowReorder` column of their own, and shows where a drop would land as a line on the row it would land beside, where Prime positions two floating arrows measured in JavaScript on every move. What a drop rewrites is the row LIST, so it needs somewhere to write: a bound `rows(ref)` the table stores the new list into, or `onRowReorder`, which hands it over with the indices counted in the list rather than in the page.
+
+It also needs the rows on the screen to be the rows in the list, in that order. While a sort spec, a global filter, a column filter or a row grouping is deciding the order, over a lazily loaded window where the order is the query's, or over a windowed body, the grips render but carry no drag, and a card names which of them it is. Paging is fine: a page is a contiguous slice, so the row on screen and the row in the list are the same row at a known offset.
+
+```scala
+val ordering: UI < Async =
+    for shelf <- Signal.initRef[Seq[Product]](catalog)
+    yield uic.DataTable[Product]()
+        .rows(shelf)
+        .rowKey(_.id)
+        .columns(uic.column("Name")(_.name), uic.column("Category")(_.category))
+        .reorderableRows(true): UI
+```
+
+The geometry a drag needs is measured once, on the grab, in a single round trip for the whole page: moving a row changes no height, so the rows the reader picked up from are the rows they let go over.
+
 Rows the reader has to keep in sight are `frozenRows(rs)`, Prime's `frozenValue`: a running total, the record being compared against, the one they pinned. They render in a row group of their own above the scrolling one and hold under the header. They are a list of their OWN and not a subset of the body's, which is what lets them be a summary rather than a duplicate; a row that is in both is a card, since two rows with one key are two rows the table cannot tell apart.
 
 Where they hold is the height of the header, which is the one number here that nothing can be told and nothing can compute: it is whatever the header cells came out as. The table observes it and writes the offset, so a header that rewraps on a resize moves the frozen rows with it, where PrimeVue measures once in a lifecycle hook. Until the first measurement lands they sit at the top of the body in flow, which is where they belong at rest, so there is nothing to flash.

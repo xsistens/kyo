@@ -2183,7 +2183,7 @@ class GoldenRenderTest extends UicTest:
                         err,
                         _ => (),
                         Map.empty,
-                        (_: String) => UI.Rect(0, 0, 0, 0, 0, 0),
+                        (_: Seq[String]) => Chunk.empty[UI.Rect],
                         Absent,
                         Present(move)
                     )
@@ -2386,6 +2386,38 @@ class GoldenRenderTest extends UicTest:
             assert(fit.contains("p-datatable-resizable-table-fit"))
             assert(occurrences(fit, "p-datatable-column-resizer") == 1, "two columns are one boundary")
             assert(!fit.contains("p-datatable-scrollable"), "a fitting table never outgrows what it was given")
+        end for
+    }
+
+    "reorderable rows render Prime's grip column at the leading edge" in {
+        final case class Row(id: String, name: String) derives CanEqual
+        val rows                                           = List(Row("1", "Bamboo"), Row("2", "Black"))
+        def occurrences(html: String, needle: String): Int = java.util.regex.Pattern.quote(needle).r.findAllIn(html).size
+        for
+            plain <- renderHtml(
+                uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name).width(200)).render
+            )
+            grips <-
+                for
+                    bound <- Signal.initRef[Seq[Row]](rows)
+                    err   <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    out <- UI.runRender(
+                        uic.DataTable[Row]().rows(bound).rowKey(_.id)
+                            .columns(uic.column("Name")(_.name).width(200))
+                            .reorderableRows(true)
+                            .wired("t", Map.empty, err, _ => ())
+                    ).take(1).run
+                yield out.mkString
+        yield
+            assert(!plain.contains("p-datatable-reorderable-row-handle"))
+            assert(occurrences(grips, "p-datatable-reorderable-row-handle") == 2, "one grip per data row")
+            assert(grips.contains("""data-uic-icon="bars""""), "Prime's own grip glyph")
+            assert(
+                grips.contains("width: calc(var(--p-uic-dt-handle-width))"),
+                "the grip column is sized like the other leading ones, or it takes an equal share"
+            )
+            assert(occurrences(grips, "<col ") == 2, "the grip column gets a col of its own")
+            assert(occurrences(grips, "<th") == 2, "and a header cell, or the body would be one column wider")
         end for
     }
 
