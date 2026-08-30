@@ -219,15 +219,21 @@ object Theme:
       |   extracted sheet carries no rules for them. */
       |.p-datatable-tbody > tr.p-datatable-empty-message > td { text-align: center; color: var(--p-text-muted-color); }
       |.p-datatable-tbody > tr.p-datatable-row-expansion > td { background: var(--p-content-hover-background); }
-      |/* Group header and footer rows are template slots too. The header lays its cell
-      |   out as a row so the collapse toggle sits beside the content; the extracted
-      |   sheet's sticky rule for it carries no offset, since PrimeVue measures the
-      |   thead height in JS to place it. */
+      |/* Group header and footer rows are template slots too. The header's cell keeps the
+      |   table-cell display it is born with: a td laid out as a flexbox is no longer a
+      |   cell, so its colspan is void and the browser wraps it in an anonymous cell one
+      |   column wide, which is where the header row would then stop. Its children line
+      |   themselves up instead, which is what puts the collapse toggle beside the content.
+      |   The extracted sheet's sticky rule for the row carries no offset, since PrimeVue
+      |   measures the thead height in JS to place it. */
       |.p-datatable-tbody > tr.p-datatable-row-group-header > td {
-      |  display: flex; align-items: center; gap: 0.5rem;
       |  font-weight: var(--p-datatable-column-title-font-weight);
       |  background: var(--p-content-hover-background);
       |}
+      |.p-datatable-tbody > tr.p-datatable-row-group-header > td > * {
+      |  display: inline-flex; align-items: center; vertical-align: middle;
+      |}
+      |.p-datatable-tbody > tr.p-datatable-row-group-header > td > * + * { margin-inline-start: 0.5rem; }
       |.p-datatable-tbody > tr.p-datatable-row-group-footer > td {
       |  font-weight: var(--p-datatable-column-footer-font-weight);
       |  background: var(--p-datatable-footer-cell-background);
