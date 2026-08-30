@@ -87,6 +87,80 @@ class DataTableTest extends UicTest:
             )
             (ui, rows, editing, name, price, err, focused)
 
+    /** What the reader typed, delivered the way the client delivers it.
+      *
+      * The other edit tests write the draft ref by hand, which proves what the table does
+      * with a draft and nothing about how one gets there. This goes through the field's own
+      * input-time channel, which is the half that was broken: a field carrying neither
+      * writes nothing until it loses focus, so Enter's keydown commits a draft that still
+      * holds the seed.
+      *
+      * Both channels count, because both are input-time on the client: a declared
+      * `onInput`, and a `value` bound to a ref, which the renderer turns into the same
+      * event (`hasSignalRefValue`).
+      */
+    private def typeInto(cell: UI.Ast.Element, text: String)(using Frame): Any < Async =
+        elements(cell).map { els =>
+            els.collectFirst {
+                case t: UI.Ast.TextInput if t.onInput.isDefined         => t.onInput.get
+                case t: UI.Ast.TextInput if refBound(t.value).isDefined => refBound(t.value).get.set
+            }.getOrElse(throw new AssertionError("the open editor writes nothing as it is typed into"))
+        }.map(_(text))
+
+    private def refBound(v: Maybe[UI.Bound[String]]): Maybe[SignalRef[String]] =
+        v match
+            case Present(UI.Bound.Ref(ref)) => Present(ref)
+            case _                          => Absent
+
+    "a text editor writes into the draft as it is typed" in {
+        for
+            (ui, _, _, name, _, _, _) <- wire
+            cell                      <- cellWithId(ui, "t-c0-0")
+            _                         <- press(cell, UI.Keyboard.Enter)
+            open                      <- cellWithId(ui, "t-c0-0")
+            _                         <- typeInto(open, "Ada")
+            draft                     <- name.get
+        yield assert(draft == "Ada")
+    }
+
+    // The number editor reported only on `change`, which the browser fires on blur or on
+    // Enter's DEFAULT action, both of them after the keydown the table commits on. So the
+    // commit read the seed, found it unchanged, wrote nothing and closed: a valid edit was
+    // dropped and a refused one showed no message, since nothing was ever refused.
+    "a number editor writes into the draft as it is typed" in {
+        for
+            (ui, _, _, _, price, _, _) <- wire
+            cell                       <- cellWithId(ui, "t-c0-1")
+            _                          <- press(cell, UI.Keyboard.Enter)
+            open                       <- cellWithId(ui, "t-c0-1")
+            _                          <- typeInto(open, "42")
+            draft                      <- price.get
+        yield assert(draft == "42")
+    }
+
+    "a number cell commits what was typed into it, and refuses what a rule rejects" in {
+        for
+            (ui, rows, editing, _, _, err, _) <- wire
+            cell                              <- cellWithId(ui, "t-c0-1")
+            _                                 <- press(cell, UI.Keyboard.Enter)
+            open                              <- cellWithId(ui, "t-c0-1")
+            _                                 <- typeInto(open, "42")
+            reopened                          <- cellWithId(ui, "t-c0-1")
+            _                                 <- press(reopened, UI.Keyboard.Enter)
+            stored                            <- rows.get
+            _                                 <- press(cell, UI.Keyboard.Enter)
+            open2                             <- cellWithId(ui, "t-c0-1")
+            _                                 <- typeInto(open2, "0")
+            reopened2                         <- cellWithId(ui, "t-c0-1")
+            _                                 <- press(reopened2, UI.Keyboard.Enter)
+            stillOpen                         <- editing.get
+            refused                           <- err.get
+        yield
+            assert(stored.head.price == 42, "the typed value reached the row")
+            assert(stillOpen == Present(CellPath("1", List("Price"))), "the refused cell stayed open")
+            assert(refused.exists((_, e) => e.code == "min"), "with the rule's own error on it")
+    }
+
     "Enter on a resting cell opens it, seeded from the row" in {
         for
             (ui, _, editing, name, _, _, _) <- wire
