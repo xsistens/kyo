@@ -3862,7 +3862,7 @@ final case class DataTable[A] private (
                 val editing  = openable && (rowEdit || cellEdit)
                 val cellMode = editingCellRef.isDefined && openable && edit.live
                 if cellMode then
-                    cell = cell.cssClass("p-editable-column").onClick(beginCellEditing(here, a, c, edit))
+                    cell = cell.cssClass("p-editable-column").onClick(beginCellEditing(here, a, c, nav, edit))
                     // The click picks a cell, it does not also pick the row; and while the
                     // editor is open the keystrokes that leave it stop here rather than
                     // reaching the row's own handler.
@@ -4169,13 +4169,22 @@ final case class DataTable[A] private (
                 val isTab = !step.moveFocus
                 // An editor that closes hands focus back to its cell. Not on Tab, where the
                 // browser is moving focus itself and the cell it lands on opens instead.
-                def closing(closed: Boolean < Async): Any < Async =
-                    closed.map(c => if c && !isTab then focusCell(nav, cell) else ())
-                val editStep: Any < Async = step.edit match
-                    case GridNav.EditOp.Keep       => ()
-                    case GridNav.EditOp.Open(seed) => openCell(cell, row, c, seed, edit)
+                //
+                // A REFUSED commit under Tab is the other way round: the browser has
+                // already taken focus off a cell that is still being edited, so it is
+                // brought back to the value being fixed. Under Enter focus never left the
+                // editor, and commanding it to the cell would take the reader out of it.
+                def closing(closed: Boolean < Async): Boolean < Async =
+                    closed.map { ok =>
+                        val focus: Any < Async =
+                            if ok == !isTab then focusCell(nav, cell) else ()
+                        focus.andThen(ok)
+                    }
+                val editStep: Boolean < Async = step.edit match
+                    case GridNav.EditOp.Keep       => true
+                    case GridNav.EditOp.Open(seed) => openCell(cell, row, c, seed, edit).andThen(true)
                     case GridNav.EditOp.Commit =>
-                        if rowEdit then (if isTab then () else closing(commitRow(cell.row, row, edit)))
+                        if rowEdit then (if isTab then Kyo.lift(true) else closing(commitRow(cell.row, row, edit)))
                         else closing(commitCell(cell, row, c, edit))
                     case GridNav.EditOp.Cancel =>
                         if rowEdit then closing(cancelRow(cell.row, edit).andThen(true))
@@ -4187,9 +4196,12 @@ final case class DataTable[A] private (
                 val selectStep: Any < Async =
                     if step.selectRow && rowInteractive then activate(cell.row, selectableAt(row)) else ()
                 for
-                    _ <- editStep
-                    _ <- focusStep
-                    r <- selectStep
+                    // A refused commit stops the step that would move on: opening the next
+                    // cell clears the error, so moving anyway left the refusal invisible
+                    // and the edit gone.
+                    ok <- editStep
+                    _  <- (if ok then focusStep else ()): Any < Async
+                    r  <- selectStep
                 yield r
                 end for
     end onCellKey
@@ -4232,12 +4244,43 @@ final case class DataTable[A] private (
     /** Opens a cell: seed its draft from the row, drop any standing error, then move the
       * editor. Seeding first is what makes the editor's first paint the row's own value.
       */
-    private def beginCellEditing(cell: CellPath, row: A, c: Column[A, FlatOnly], edit: EditState)(using Frame): Any < Async =
-        for
-            _ <- seedDraft(row, cell.column, c, edit)
-            _ <- clearError(edit)
-            r <- setEditingCell(Present(cell))
-        yield r
+    private def beginCellEditing(
+        cell: CellPath,
+        row: A,
+        c: Column[A, FlatOnly],
+        nav: NavState[A],
+        edit: EditState
+    )(using Frame): Any < Async =
+        val move: Any < Async =
+            for
+                _ <- seedDraft(row, cell.column, c, edit)
+                _ <- clearError(edit)
+                r <- setEditingCell(Present(cell))
+            yield r
+        // Moving the editor is a way of leaving one, so it commits like every other: a
+        // click from cell to cell used to open the next and drop what was typed into the
+        // last, without asking anything and without saying so. A refusal keeps the reader
+        // in the value they are fixing, the same as Enter and Tab do.
+        edit.cell match
+            case Present(open) if open != cell =>
+                commitOpen(open, nav, edit).map { ok =>
+                    val next: Any < Async = if ok then move else ()
+                    next
+                }
+            case _ => move
+        end match
+    end beginCellEditing
+
+    /** Commits whatever cell is open, wherever the gesture that ends it came from.
+      *
+      * The open cell is a path, so its row is found among the rendered ones by key and its
+      * column among the leaves. A path naming neither is a table that has changed under an
+      * open editor, and there is nothing left to commit.
+      */
+    private def commitOpen(open: CellPath, nav: NavState[A], edit: EditState)(using Frame): Boolean < Async =
+        (nav.rows.find(r => keyOf(r) == open.row), leafPaths.find(_._1 == open.column)) match
+            case (Some(r), Some((_, c))) => commitCell(open, r, c, edit)
+            case _                       => true
 
     /** Opens a row: every editable column's draft is seeded before the row joins the set. */
     private def beginRowEditing(id: String, row: A, edit: EditState)(using Frame): Any < Async =
