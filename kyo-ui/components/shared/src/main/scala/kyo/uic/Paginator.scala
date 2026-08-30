@@ -3,6 +3,24 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
+/** One element of a [[Paginator]]'s layout, and the vocabulary [[Paginator.template]]
+  * orders them with.
+  *
+  * Prime names the same set in a space-separated string (`paginatorTemplate`), where a
+  * misspelt name renders nothing and says nothing. These are values, so a name that is
+  * not one of them does not compile, and the order is the order of the list.
+  */
+enum PaginatorElement derives CanEqual:
+    case FirstPageLink, PrevPageLink, PageLinks, NextPageLink, LastPageLink
+    case RowsPerPageDropdown, CurrentPageReport, JumpToPageInput, JumpToPageDropdown
+
+object PaginatorElement:
+
+    /** Prime's default layout: the five navigation elements, nothing else. */
+    val default: List[PaginatorElement] =
+        List(FirstPageLink, PrevPageLink, PageLinks, NextPageLink, LastPageLink)
+end PaginatorElement
+
 /** Paginator — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Paginator anatomy: `div.p-paginator.p-component[role=navigation]` >
   * `button.p-paginator-first`/`-prev` + `span.p-paginator-pages` of
@@ -32,6 +50,7 @@ final case class Paginator private (
     rppOptionsV: List[Int] = Nil,
     reportTemplateV: Maybe[String] = Absent,
     jtpInputFlag: Boolean = false,
+    templateV: Maybe[List[PaginatorElement]] = Absent,
     hostClassesV: List[String] = Nil,
     onPageF: Maybe[Int => Any < Async] = Absent
 ) extends Node:
@@ -77,6 +96,24 @@ final case class Paginator private (
       * page, clamped to the valid range.
       */
     def jumpToPageInput(v: Boolean): Paginator = copy(jtpInputFlag = v)
+
+    /** Which elements render, and in which order (Prime's `paginatorTemplate`).
+      *
+      * Prime names them in a space-separated string, where a misspelt name renders
+      * nothing and reports nothing; here they are values, so the compiler is what
+      * catches a name that is not one of them.
+      *
+      * The list REPLACES the layout rather than adding to it: an element it does not
+      * name does not render, [[jumpToPageInput]] included, and one it names twice
+      * renders twice, which is what a template is for. What an element still needs to
+      * have something to show stays where it was: `CurrentPageReport` reads
+      * [[currentPageReport]], and the two dropdowns read [[rowsPerPageOptions]]. An
+      * element named with nothing behind it renders a card.
+      *
+      * Without a template the layout is Prime's default order, with the optional
+      * elements appended in the order Prime appends them.
+      */
+    def template(elements: PaginatorElement*): Paginator = copy(templateV = Present(elements.toList))
 
     /** Fired with the target page index after the ref write-back. */
     def onPage(f: Int => Any < Async): Paginator = copy(onPageF = Present(f))
@@ -144,6 +181,19 @@ final case class Paginator private (
                     case Absent     => sel = sel.disabled(true)
                 List(sel.render)
 
+        // Prime's second way to reach a page directly: the same targets as the page links,
+        // as a list rather than a row of buttons, which is what a hundred pages need.
+        val jtpDropdown: List[UI] =
+            List(
+                Select[Int]()
+                    .options((0 until pages).toList)(p => (p + 1).toString)
+                    .extraClass("p-paginator-jtp-dropdown")
+                    .current((cur + 1).toString)
+                    .accessibleName("Jump to page")
+                    .onChange(v => activate(v.toIntOption.map(_ - 1).getOrElse(cur)))
+                    .render
+            )
+
         val report: List[UI] = reportTemplateV.toList.map { t =>
             val first = if totalRecordsV > 0 then cur * rows + 1 else 0
             val last  = math.min((cur + 1) * rows, totalRecordsV)
@@ -157,34 +207,81 @@ final case class Paginator private (
             span.cssClass("p-paginator-current")(text)
         }
 
-        val jtp: List[UI] =
-            if !jtpInputFlag then Nil
-            else
-                List(
-                    span.cssClass("p-paginator-jtp-input")(
-                        toChild(
-                            Input()
-                                .value((cur + 1).toString)
-                                .accessibleName("Jump to page")
-                                .onChange { s =>
-                                    val target = s.trim.toIntOption.map(_ - 1).getOrElse(cur)
-                                    activate(math.min(math.max(0, target), pages - 1))
-                                }
-                                .render
-                        )
+        val jtpField: List[UI] =
+            List(
+                span.cssClass("p-paginator-jtp-input")(
+                    toChild(
+                        Input()
+                            .value((cur + 1).toString)
+                            .accessibleName("Jump to page")
+                            .onChange { s =>
+                                val target = s.trim.toIntOption.map(_ - 1).getOrElse(cur)
+                                activate(math.min(math.max(0, target), pages - 1))
+                            }
+                            .render
                     )
                 )
+            )
+
+        def elementUI(e: PaginatorElement): List[UI] = e match
+            case PaginatorElement.FirstPageLink => List(navButton("first", Icons.angleDoubleLeft, 0, cur == 0, "First Page"))
+            case PaginatorElement.PrevPageLink  => List(navButton("prev", Icons.angleLeft, cur - 1, cur == 0, "Previous Page"))
+            case PaginatorElement.PageLinks     => List(span.cssClass("p-paginator-pages")(pageButtons.map(toChild)*))
+            case PaginatorElement.NextPageLink =>
+                List(navButton("next", Icons.angleRight, cur + 1, cur >= pages - 1, "Next Page"))
+            case PaginatorElement.LastPageLink =>
+                List(navButton("last", Icons.angleDoubleRight, pages - 1, cur >= pages - 1, "Last Page"))
+            case PaginatorElement.RowsPerPageDropdown => rpp
+            case PaginatorElement.CurrentPageReport   => report
+            case PaginatorElement.JumpToPageInput     => jtpField
+            case PaginatorElement.JumpToPageDropdown  => jtpDropdown
+
+        // Without a template the layout is Prime's default order with the optional
+        // elements appended where Prime appends them, which is what this rendered before
+        // the setter existed.
+        val layout = templateV.getOrElse(
+            PaginatorElement.default ++
+                (if rppOptionsV.isEmpty then Nil else List(PaginatorElement.RowsPerPageDropdown)) ++
+                (if reportTemplateV.isEmpty then Nil else List(PaginatorElement.CurrentPageReport)) ++
+                (if !jtpInputFlag then Nil else List(PaginatorElement.JumpToPageInput))
+        )
+
+        /** Elements a template names with nothing behind them, and the one switch a
+          * template overrules. Prime's string template says nothing about either.
+          */
+        def cards(layout: List[PaginatorElement])(using Frame): List[UI] =
+            if templateV.isEmpty then Nil
+            else
+                val empty = List(
+                    if !layout.contains(PaginatorElement.CurrentPageReport) || reportTemplateV.isDefined then Nil
+                    else List("CurrentPageReport, which reads currentPageReport"),
+                    if !layout.contains(PaginatorElement.RowsPerPageDropdown) || rppOptionsV.nonEmpty then Nil
+                    else List("RowsPerPageDropdown, which reads rowsPerPageOptions")
+                ).flatten
+                val overruled =
+                    if !jtpInputFlag || layout.contains(PaginatorElement.JumpToPageInput) then Nil
+                    else
+                        List(KeyDiagnostics.card(
+                            "Paginator",
+                            "the template is the layout and it does not name JumpToPageInput, so jumpToPageInput " +
+                                "is not read; name it in the template or drop the flag",
+                            Nil
+                        ))
+                val bare =
+                    if empty.isEmpty then Nil
+                    else
+                        List(KeyDiagnostics.card(
+                            "Paginator",
+                            "the template names an element with nothing behind it, so it renders nothing",
+                            empty
+                        ))
+                bare ++ overruled
+            end if
+        end cards
 
         var root = div.cssClass("p-paginator").cssClass("p-component")
         hostClassesV.foreach(c => root = root.cssClass(c))
-        val children: List[UI] =
-            List(
-                navButton("first", Icons.angleDoubleLeft, 0, cur == 0, "First Page"),
-                navButton("prev", Icons.angleLeft, cur - 1, cur == 0, "Previous Page"),
-                span.cssClass("p-paginator-pages")(pageButtons.map(toChild)*),
-                navButton("next", Icons.angleRight, cur + 1, cur >= pages - 1, "Next Page"),
-                navButton("last", Icons.angleDoubleRight, pages - 1, cur >= pages - 1, "Last Page")
-            ) ++ rpp ++ report ++ jtp
+        val children: List[UI] = cards(layout) ++ layout.flatMap(elementUI)
         root.role("navigation")(children.map(toChild)*)
     end body
 

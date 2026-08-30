@@ -342,6 +342,7 @@ final case class DataTable[A] private (
     filterRef: Maybe[SignalRef[String]] = Absent,
     pageSizeV: Maybe[Int] = Absent,
     pageRef: Maybe[SignalRef[Int]] = Absent,
+    paginatorF: Maybe[Paginator => Paginator] = Absent,
     selectionModeV: SelectionMode = SelectionMode.None,
     selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
     selectableF: Maybe[A => Boolean] = Absent,
@@ -524,6 +525,23 @@ final case class DataTable[A] private (
       */
     def paginate(size: Int)(ref: SignalRef[Int]): DataTable[A] =
         copy(pageSizeV = Present(math.max(1, size)), pageRef = Present(ref))
+
+    /** Configures the [[Paginator]] the table renders below its rows: which elements it
+      * shows and in which order ([[Paginator.template]]), the current-page report, the
+      * rows-per-page options, the size of the page-link window.
+      *
+      * Prime mirrors a handful of the paginator's own props onto the table
+      * (`paginatorTemplate`, `currentPageReportTemplate`, `rowsPerPageOptions`, ...) and
+      * a caller reaching for one it did not mirror has nowhere to go. Here the paginator
+      * is a value, so the table takes a function over it and every setter it has is
+      * reachable through one name.
+      *
+      * The four the table owns are applied AFTER `f` and cannot be overridden from here:
+      * how many records there are, how many fit a page, which page is showing, and the
+      * ref the page is written to. Those are the table's own state, and a paginator
+      * disagreeing with the rows above it would page a list nobody is looking at.
+      */
+    def paginator(f: Paginator => Paginator): DataTable[A] = copy(paginatorF = Present(f))
 
     /** The rows are a WINDOW onto `total` rows filtered, sorted and paged somewhere else:
       * the table renders them verbatim and paginates over the total, instead of computing
@@ -1859,7 +1877,7 @@ final case class DataTable[A] private (
                                     math.max(at * size + sorted.size, atLeast) + (if more then 1 else 0)
                     val totalPages = math.max(1, (count + size - 1) / size)
                     val cur        = math.min(at, totalPages - 1)
-                    var pag = Paginator()
+                    var pag = paginatorF.getOrElse(identity[Paginator])(Paginator())
                         .totalRecords(count)
                         .rows(size)
                         .currentPage(cur)

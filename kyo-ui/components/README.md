@@ -836,6 +836,26 @@ val navChrome: UI < Async =
     )
 ```
 
+`Paginator.template(...)` says which of its elements render and in which order. Prime names the same set in a space-separated string, where a misspelt name renders nothing and reports nothing; here they are `PaginatorElement` values, so the compiler catches a name that is not one of them and the order is the order of the list. The list REPLACES the layout rather than adding to it: an element it does not name does not render, `jumpToPageInput` included, and one it names twice renders twice. What an element needs in order to have something to show stays where it was, so `CurrentPageReport` still reads `currentPageReport` and the two dropdowns still read `rowsPerPageOptions`; an element named with nothing behind it renders a card.
+
+```scala
+val compact: UI < Async =
+    for page <- Signal.initRef(0)
+    yield uic.Paginator()
+        .totalRecords(120)
+        .rows(10)
+        .page(page)
+        .currentPageReport("{first} to {last} of {totalRecords}")
+        .template(
+            uic.PaginatorElement.CurrentPageReport,
+            uic.PaginatorElement.PrevPageLink,
+            uic.PaginatorElement.JumpToPageDropdown,
+            uic.PaginatorElement.NextPageLink
+        ): UI
+```
+
+A `DataTable` reaches the same setters through `paginator(f)`, a function over the paginator it renders below its rows. Prime mirrors a handful of the paginator's props onto the table and a caller reaching for one it did not mirror has nowhere to go; here the paginator is a value, so one name covers all of them. The four the table owns are applied after `f` and cannot be overridden from there: the record count, the page size, the current page and the ref it writes to, since a paginator disagreeing with the rows above it would page a list nobody is looking at.
+
 `Stepper` accepts two bindings. `active(SignalRef[Int])` is index-based and is the compatibility path; `value(SignalRef[String])` keys each step by an explicit id and survives steps being inserted or reordered.
 
 ```scala
