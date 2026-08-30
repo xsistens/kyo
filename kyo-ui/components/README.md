@@ -1110,13 +1110,15 @@ val exportable: UI < Async =
             .globalFilter(query)
         text <- table.csv
     yield div(
-        a.href(UI.Href.External("data", s"text/csv;charset=utf-8,${java.net.URLEncoder.encode(text, "UTF-8")}"))
-            .download("catalog.csv")("Download CSV"),
+        a.href(UI.Href.External(
+            "data",
+            s"text/csv;charset=utf-8;base64,${Base64.encode(Span.from(text.getBytes("UTF-8")))}"
+        )).download("catalog.csv")("Download CSV"),
         table
     )
 ```
 
-Getting the string to the reader is the app's, not the table's. `a.download(name)` over a `data:` URL is the shortest way and is what the example does; an endpoint that serves the bytes is the better one once the table is large, since a `data:` URL carries the whole file in the markup and is rebuilt on every render that changes it.
+Getting the string to the reader is the app's, not the table's. `a.download(name)` over a `data:` URL is the shortest way and is what the example does, base64 rather than percent-encoded so nothing in the data has to be escaped; an endpoint that serves the bytes is the better one once the table is large, since a `data:` URL carries the whole file in the markup and is rebuilt on every render that changes it.
 
 `contextMenuRow(ref)` says which row a right-click landed on, Prime's `contextMenuSelection`. The row is marked with Prime's own `.p-datatable-contextmenu-row-selected`, which is a second and separate mark from the selection: the reader is acting ON one row without changing what is selected. Declaring it also suppresses the browser's menu over the rows, which is what a context menu of one's own has to do. The menu itself is `ContextMenu`, which wraps the table, and the ref is the caller's to clear when it closes, since the table cannot see a panel it does not render. `onRowContextMenu` is the notification beside it.
 
