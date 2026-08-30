@@ -1440,4 +1440,30 @@ class DataTableTest extends UicTest:
         yield assert(text.contains("selectableWhen") && text.contains("selectionMode"))
     }
 
+    // ---- classes the caller puts on a row ----
+
+    "a row carries the caller's classes beside the ones the table gives it" in {
+        for
+            sel <- Signal.initRef(Set("1"))
+            ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(uic.SelectionMode.Multiple).selected(sel).stripedRows(true)
+                .rowClasses(i => if i.price > 15 then Seq("dear", "flag") else Nil).render
+            trs <- bodyTrs(ui)
+        yield
+            assert(!trs.head.attrs.cssClasses.contains("dear"), "the cheap row is given nothing")
+            assert(trs(1).attrs.cssClasses.containsSlice(Seq("dear", "flag")), "both classes, in order")
+            assert(
+                trs.head.attrs.cssClasses.contains("p-datatable-row-selected") &&
+                    trs.head.attrs.cssClasses.contains("p-row-even"),
+                "and the table's own classes still say what they said"
+            )
+    }
+
+    "an empty class name is not a class" in {
+        val ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+            .rowClasses(_ => Seq("")).render
+        for trs <- bodyTrs(ui)
+        yield assert(trs.forall(!_.attrs.cssClasses.contains("")))
+    }
+
 end DataTableTest
