@@ -1466,4 +1466,36 @@ class DataTableTest extends UicTest:
         yield assert(trs.forall(!_.attrs.cssClasses.contains("")))
     }
 
+    // ---- a viewport sized by its parent ----
+
+    "flex scroll makes a scroll container with no height of its own" in {
+        val flex  = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name)).flexScroll(true)
+        val sized = flex.scrollHeight("200px")
+        for
+            root    <- elements(flex.render).map(_.head)
+            capped  <- elements(sized.render).map(_.head)
+            body    <- elementWithClass(flex.render, "p-datatable-table-container")
+            reports <- cards(sized.render)
+        yield
+            assert(root.attrs.cssClasses.containsSlice(Seq("p-datatable-scrollable", "p-datatable-flex-scrollable")))
+            assert(body.attrs.uiStyle.props.isEmpty, "the height comes from the parent, not from a style here")
+            assert(
+                !capped.attrs.cssClasses.contains("p-datatable-flex-scrollable"),
+                "a stated length is the one the table can read, so it is the one that wins"
+            )
+            assert(reports.contains("flexScroll") && reports.contains("200px"), "and the other is reported")
+        end for
+    }
+
+    "frozen rows hold against a flex viewport, and a windowed body cannot be measured against one" in {
+        for
+            reports <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .flexScroll(true).frozenRows(pinned).render)
+            windowed <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .flexScroll(true).scrollRows(40).render)
+        yield
+            assert(reports.isEmpty, "a flex viewport is a scroll container, which is all a frozen row holds against")
+            assert(windowed.contains("at layout time"), "and a window needs a number, which layout has not produced yet")
+    }
+
 end DataTableTest

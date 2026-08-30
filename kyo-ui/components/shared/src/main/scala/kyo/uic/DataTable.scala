@@ -322,6 +322,7 @@ final case class DataTable[A] private (
     footerV: Maybe[UI] = Absent,
     loadingV: Maybe[BoolValue] = Absent,
     scrollHeightV: Maybe[String] = Absent,
+    flexScrollFlag: Boolean = false,
     rowHeightV: Maybe[Int] = Absent,
     scrollOverscanV: Int = 3,
     sourceV: Maybe[RowSource[?, A]] = Absent,
@@ -715,6 +716,18 @@ final case class DataTable[A] private (
       */
     def scrollHeight(v: String): DataTable[A] = copy(scrollHeightV = Present(v))
 
+    /** Scrolls the table against its PARENT's height instead of a length of its own
+      * (Prime's `scrollHeight="flex"`).
+      *
+      * Prime says it with a magic value in the same string a length goes into; here it
+      * is its own switch, because the two are different questions and only one of them
+      * has an answer the table can read. A flex viewport needs a sized parent to be a
+      * flex child of, so the height arrives at layout time and nothing in the render
+      * knows it: [[scrollRows]] cannot window against it, and [[frozenRows]] can hold
+      * against it, since holding needs a scroll container and not a number.
+      */
+    def flexScroll(v: Boolean): DataTable[A] = copy(flexScrollFlag = v)
+
     /** Renders only the rows the reader can see, plus `overscan` of them on either side,
       * inside the scroll container [[scrollHeight]] gives the table. `itemSize` is the row
       * height in px, and it is what turns a scroll position into a row index, so the rows
@@ -822,6 +835,14 @@ final case class DataTable[A] private (
       * and how many rows fit is the first thing the arithmetic needs.
       */
     private def viewportPx: Maybe[Int] = scrollHeightV.flatMap(DataTable.pixels)
+
+    /** Whether the table scrolls a viewport of its own, however that viewport is sized. */
+    private def scrollingOn: Boolean = scrollHeightV.isDefined || flexScrollFlag
+
+    /** A length and the parent's height cannot both say how tall the viewport is, and the
+      * length is the one the table can read, so it wins and the other is reported.
+      */
+    private def flexOn: Boolean = flexScrollFlag && scrollHeightV.isEmpty
 
     /** The ways a table renders rows that are not all one height, which is what a windowed
       * body cannot have: each one is named in a card and turns the windowing off.
@@ -1804,7 +1825,7 @@ final case class DataTable[A] private (
                 List(tfoot.cssClass("p-datatable-tfoot")(toChild(footRow)))
 
         var tbl = table.cssClass("p-datatable-table")
-        if scrollHeightV.isDefined || frozenOn || frozenRowsOn then
+        if scrollingOn || frozenOn || frozenRowsOn then
             tbl = tbl.cssClass("p-datatable-scrollable-table")
         // Prime's own classes carry the clipping a sized column needs (a value too long
         // for its column is cut rather than widening it); the layout mode they leave to
@@ -1877,7 +1898,8 @@ final case class DataTable[A] private (
         if gridlinesFlag then root = root.cssClass("p-datatable-gridlines")
         // Prime's frozen rules only apply inside a scrollable table, and rightly so: a
         // column held against an edge means nothing until something moves past it.
-        if scrollHeightV.isDefined || frozenOn || frozenRowsOn then root = root.cssClass("p-datatable-scrollable")
+        if scrollingOn || frozenOn || frozenRowsOn then root = root.cssClass("p-datatable-scrollable")
+        if flexOn then root = root.cssClass("p-datatable-flex-scrollable")
         // The cursor keys must not ALSO scroll the page under the table. A kyo handler is
         // async and cannot decline the browser default in time, so the suppression is
         // declarative: the client reads the attribute before it posts the event. The class
@@ -1896,7 +1918,7 @@ final case class DataTable[A] private (
                 size
             ) ++ frozenCards(size) ++ orderCards(
                 order
-            ) ++ rowsCards ++ selectionCards ++ windowCards ++ frozenRowCards(paged, held) ++ lazyCards(
+            ) ++ rowsCards ++ selectionCards ++ scrollCards ++ windowCards ++ frozenRowCards(paged, held) ++ lazyCards(
                 rows,
                 total
             ) ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
@@ -2209,6 +2231,18 @@ final case class DataTable[A] private (
             ))
     end selectionCards
 
+    /** Two answers to how tall the viewport is, where the table can read only one. */
+    private def scrollCards(using Frame): List[UI] =
+        if !flexScrollFlag || scrollHeightV.isEmpty then Nil
+        else
+            List(KeyDiagnostics.card(
+                "DataTable",
+                "flexScroll takes the viewport's height from the parent and scrollHeight states one; the stated " +
+                    "length is what the table scrolls, so drop one of the two",
+                scrollHeightV.toList
+            ))
+    end scrollCards
+
     /** What stops a body from being windowed, and what a window costs the rest of the
       * table. The first two turn the windowing off and leave every row rendered, which is
       * slower and right rather than faster and wrong; the last two are the table dropping
@@ -2225,7 +2259,8 @@ final case class DataTable[A] private (
                         "DataTable",
                         "scrollRows works out how many rows fit from the scroll height, so it needs one, in px; " +
                             "the table renders every row instead",
-                        scrollHeightV.toList.map(h => s"scrollHeight is $h")
+                        scrollHeightV.toList.map(h => s"scrollHeight is $h") ++
+                            (if flexOn then List("flexScroll takes its height from the parent, at layout time") else Nil)
                     ))
             val uneven =
                 if viewportPx.isEmpty || unevenRows.isEmpty then Nil
@@ -2269,7 +2304,7 @@ final case class DataTable[A] private (
         if !frozenRowsOn then Nil
         else
             val loose =
-                if scrollHeightV.isDefined then Nil
+                if scrollingOn then Nil
                 else
                     List(KeyDiagnostics.card(
                         "DataTable",
