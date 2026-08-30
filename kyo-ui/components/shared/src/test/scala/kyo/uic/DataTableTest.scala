@@ -1498,4 +1498,85 @@ class DataTableTest extends UicTest:
             assert(windowed.contains("at layout time"), "and a window needs a number, which layout has not produced yet")
     }
 
+    // ---- a drag that moves a column instead of a boundary ----
+
+    /** The same three columns, each with a width of its own, resizing in `Expand`. */
+    private def expanding(mode: uic.ColumnResizeMode, lastWidth: Maybe[Double] = Present(100.0))(using Frame) =
+        for
+            cols <- Signal.initRef(Map.empty[List[String], Double])
+            err  <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            grab <- Signal.initRef(Absent: Maybe[ColumnGrab])
+        yield
+            val base = uic.DataTable[Item]().rows(items).rowKey(_.id)
+            val withCols = lastWidth match
+                case Present(w) => base.columns(
+                        uic.column("Name")(_.name).width(100),
+                        uic.column("Price")(_.price.toString).width(100),
+                        uic.column("Id")(_.id).width(w)
+                    )
+                case Absent => base.columns(
+                        uic.column("Name")(_.name).width(100),
+                        uic.column("Price")(_.price.toString).width(100),
+                        uic.column("Id")(_.id)
+                    )
+            val table = withCols.columnWidths(cols).columnResizeMode(mode)
+            val measure = (id: String) =>
+                UI.Rect(0, 0, Map("t-h0" -> 100.0, "t-h1" -> 100.0, "t-h2" -> 100.0).getOrElse(id, 0.0), 30, 1000, 800): UI.Rect < Async
+            (table.wired("t", Map.empty, err, _ => (), Map.empty, measure, Present(grab)), cols)
+        end for
+    end expanding
+
+    "an expanding drag writes the column it grabbed and leaves the others alone" in {
+        for
+            (ui, cols) <- expanding(uic.ColumnResizeMode.Expand)
+            handles    <- resizers(ui)
+            _          <- drag(handles.head, 200, 240)
+            widths     <- cols.get
+        yield assert(widths == Map(List("Name") -> 140.0), "one column moved, and nothing gave the width back")
+    }
+
+    "an expanding drag stops at the same floor a fitting one does" in {
+        for
+            (ui, cols) <- expanding(uic.ColumnResizeMode.Expand)
+            handles    <- resizers(ui)
+            _          <- drag(handles.head, 200, 0)
+            widths     <- cols.get
+        yield assert(widths == Map(List("Name") -> 15.0))
+    }
+
+    "the last column keeps its handle where it has nothing to trade with" in {
+        for
+            (expand, _) <- expanding(uic.ColumnResizeMode.Expand)
+            (fit, _)    <- expanding(uic.ColumnResizeMode.Fit)
+            wide        <- resizers(expand)
+            paired      <- resizers(fit)
+            tbl         <- elementWithClass(expand, "p-datatable-resizable-table")
+            fitted      <- elementWithClass(fit, "p-datatable-resizable-table")
+            root        <- elements(expand).map(_.head)
+        yield
+            assert(wide.size == 3, "every resizable column, the last one included")
+            assert(paired.size == 2, "against the two boundaries fitting has")
+            assert(!tbl.attrs.cssClasses.contains("p-datatable-resizable-table-fit"))
+            assert(fitted.attrs.cssClasses.contains("p-datatable-resizable-table-fit"))
+            assert(
+                tbl.attrs.uiStyle.props.collect { case Style.Prop.Width(v) => v } == Seq(300.0.px),
+                "and the table states the width its columns add up to"
+            )
+            assert(fitted.attrs.uiStyle.props.collect { case Style.Prop.Width(v) => v }.isEmpty)
+            assert(root.attrs.cssClasses.contains("p-datatable-scrollable"), "a table that outgrows its container scrolls")
+    }
+
+    "a column with no width sends an expanding table back to fitting" in {
+        for
+            (ui, _)  <- expanding(uic.ColumnResizeMode.Expand, lastWidth = Absent)
+            handles  <- resizers(ui)
+            tbl      <- elementWithClass(ui, "p-datatable-resizable-table")
+            reported <- cards(ui)
+        yield
+            assert(handles.size == 2, "the boundaries fitting has, and no handle on the last column")
+            assert(tbl.attrs.cssClasses.contains("p-datatable-resizable-table-fit"))
+            assert(tbl.attrs.uiStyle.props.collect { case Style.Prop.Width(v) => v }.isEmpty, "no width it cannot add up")
+            assert(reported.contains("every column") && reported.contains("Id"), "and the column with none is named")
+    }
+
 end DataTableTest

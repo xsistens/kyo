@@ -2350,6 +2350,45 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "an expanding table states its own width and keeps the last column's handle" in {
+        final case class Row(id: String, name: String, price: Int) derives CanEqual
+        val rows                                           = List(Row("1", "Bamboo", 65))
+        def occurrences(html: String, needle: String): Int = java.util.regex.Pattern.quote(needle).r.findAllIn(html).size
+        def table(using Frame) = uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
+            uic.column("Name")(_.name).width(220),
+            uic.column("Price")(_.price.toString).width(120)
+        )
+        for
+            expand <-
+                for
+                    widths <- Signal.initRef(Map.empty[List[String], Double])
+                    err    <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    out <- UI.runRender(
+                        table.columnWidths(widths).columnResizeMode(uic.ColumnResizeMode.Expand)
+                            .wired("t", Map.empty, err, _ => ())
+                    ).take(1).run
+                yield out.mkString
+            fit <-
+                for
+                    widths <- Signal.initRef(Map.empty[List[String], Double])
+                    err    <- Signal.initRef(Absent: Maybe[(uic.CellPath, uic.form.FieldError)])
+                    out    <- UI.runRender(table.columnWidths(widths).wired("t", Map.empty, err, _ => ())).take(1).run
+                yield out.mkString
+        yield
+            assert(expand.contains("p-datatable-resizable-table"))
+            assert(!expand.contains("p-datatable-resizable-table-fit"), "Prime's -fit is what hides the last handle")
+            assert(occurrences(expand, "p-datatable-column-resizer") == 2, "a handle per column, not per boundary")
+            assert(expand.contains("width: 340px"), "the table is as wide as its columns add up to")
+            assert(
+                expand.contains("p-datatable-scrollable") && expand.contains("p-datatable-scrollable-table"),
+                "outgrowing the container only means anything where the container scrolls"
+            )
+            assert(fit.contains("p-datatable-resizable-table-fit"))
+            assert(occurrences(fit, "p-datatable-column-resizer") == 1, "two columns are one boundary")
+            assert(!fit.contains("p-datatable-scrollable"), "a fitting table never outgrows what it was given")
+        end for
+    }
+
     "editing renders the column's own editor over the table's draft, and reports what it refuses" in {
         final case class Item(id: String, name: String, price: Int) derives CanEqual
         val items                                          = List(Item("1", "A", 10), Item("2", "B", 20))
