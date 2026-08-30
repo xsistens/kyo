@@ -2335,6 +2335,21 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "the caller's row classes render after the table's own" in {
+        final case class Row(id: String, name: String, price: Int) derives CanEqual
+        val rows = List(Row("1", "Bamboo", 10), Row("2", "Black", 20))
+        for
+            out <- renderHtml(
+                uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
+                    .stripedRows(true)
+                    .rowClasses(r => if r.price > 15 then Seq("dear") else Nil).render
+            )
+        yield
+            assert(out.contains("""class="p-row-odd dear""""), "appended, with Prime's own left in place")
+            assert(!out.contains("""class="p-row-even dear""""), "and only on the row the caller named")
+        end for
+    }
+
     "editing renders the column's own editor over the table's draft, and reports what it refuses" in {
         final case class Item(id: String, name: String, price: Int) derives CanEqual
         val items                                          = List(Item("1", "A", 10), Item("2", "B", 20))

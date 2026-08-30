@@ -933,6 +933,17 @@ val onlyInStock: UI < Async =
         .selectableWhen(_.inStock): UI
 ```
 
+`rowClasses(f)` is the row half of conditional style, Prime's `rowClassName`. Prime takes a string or an object of class to condition; here it is the list a class attribute already is, so a condition is the caller's own `if` and an empty list is no class. They append after the table's own, which leaves striping, selection and the editing state saying what they say. A cell is styled through `Column.body`, which is any UI, so the two halves need no shared vocabulary. Frozen rows are data rows and carry them too.
+
+```scala
+val flagged: UI =
+    uic.DataTable[Product]()
+        .rows(catalog)
+        .rowKey(_.id)
+        .columns(uic.column("Name")(_.name), uic.column("Price")(p => f"${p.price}%.2f"))
+        .rowClasses(p => if p.price > 100 then Seq("expensive") else Nil)
+```
+
 Filtering has a second form beside the global query, and it is per column. `Column.filterBy` gives a column its own filter over the value it names, and the `CellType` in scope decides how that filter reads: a type that compares (every provided number, anything through `CellType.ordered`) gets `=`, `<`, `>` and their negations and reads the query as a VALUE, everything else is matched as text, with contains, starts-with and the rest over what the type formats the value as. `filterBy` on its own filters by the column's text projection, which is the projection nine times in ten. `columnFilters(ref)` binds the filters, keyed by the same path the sort spec names a column by, and gives the table Prime's filter row: one input per filterable column, with the mode menu behind the funnel beside it.
 
 ```scala

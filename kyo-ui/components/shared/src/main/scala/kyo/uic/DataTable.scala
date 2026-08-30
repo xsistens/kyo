@@ -305,6 +305,7 @@ final case class DataTable[A] private (
     selectionModeV: SelectionMode = SelectionMode.None,
     selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
     selectableF: Maybe[A => Boolean] = Absent,
+    rowClassF: Maybe[A => Seq[String]] = Absent,
     expandedRef: Maybe[SignalRef[Set[String]]] = Absent,
     expansionF: Maybe[A => UI] = Absent,
     groupsV: List[RowGroup[A]] = Nil,
@@ -528,6 +529,20 @@ final case class DataTable[A] private (
       * rejecting mid-session cannot stay selected by having been selectable earlier.
       */
     def selectableWhen(p: A => Boolean): DataTable[A] = copy(selectableF = Present(p))
+
+    /** Classes each data row carries beyond the ones the table gives it (Prime's
+      * `rowClassName`).
+      *
+      * Prime takes a string or an object of class to condition; here it is the list a
+      * class attribute is, so a condition is the caller's own `if` and an empty list is
+      * no class. They are appended after the table's own, which leaves striping,
+      * selection and the editing state saying what they say and lets a caller's rule
+      * win on its own specificity rather than on order.
+      *
+      * A cell is styled through [[Column.body]], which is any UI; this is the row half
+      * of the same question. Frozen rows are data rows and carry them too.
+      */
+    def rowClasses(f: A => Seq[String]): DataTable[A] = copy(rowClassF = Present(f))
 
     /** Binds row expansion two-way to `ref` (a set of [[rowKey]] ids); pair with
       * [[rowExpansionTemplate]].
@@ -3048,6 +3063,7 @@ final case class DataTable[A] private (
                         case _               => ()
                 )
         end if
+        rowClassF.foreach(f => f(a).foreach(cls => if cls.nonEmpty then row = row.cssClass(cls)))
         val rowEl: UI = row((expanderTd ++ checkboxTd ++ dataTds ++ editorTd).map(toChild)*)
 
         val expansionRow: List[UI] =
