@@ -111,6 +111,41 @@ final private[uic] case class ColumnDrag(
     done: Boolean = false
 ) derives CanEqual
 
+/** A row drag in flight: which row was picked up, where a drop would put it, and where
+  * the rendered rows sit, so a pointer position becomes one of those places.
+  *
+  * The edges are measured ONCE, on the grab, one per rendered row plus the bottom of the
+  * last: moving a row changes no height, so the rows the reader picked up from are the
+  * rows they let go over. They are measured in one round trip rather than one per row,
+  * which is what makes this affordable over a page of rows. `first` is the index the
+  * edges start at, counted in the whole list, which is what makes a drop on page three
+  * land in the list rather than in the page.
+  */
+final private[uic] case class RowDrag(
+    from: Int,
+    target: Int,
+    startY: Double,
+    edges: List[Double] = Nil,
+    first: Int = 0,
+    moved: Boolean = false,
+    done: Boolean = false
+) derives CanEqual
+
+/** What a reorderable row list needs once the mount has run: somewhere to park the drag,
+  * the drag itself resolved for the rows that render it, and the index the rendered rows
+  * start at, which is the page's offset into the list a drop rewrites.
+  */
+final private[uic] case class MoveState[A](
+    drag: Maybe[SignalRef[Maybe[RowDrag]]] = Absent,
+    held: Maybe[RowDrag] = Absent,
+    all: Seq[A] = Nil,
+    base: Int = 0,
+    count: Int = 0,
+    idPrefix: String = "",
+    live: Boolean = false,
+    measure: Seq[String] => Chunk[Rect] < Async = (_: Seq[String]) => Chunk.empty
+)
+
 /** What the column order needs once the mount has run: somewhere to park the drag that
   * is rewriting it, and the drag itself, resolved for the cells that render it.
   */
@@ -131,7 +166,7 @@ final private[uic] case class SizeState(
     widths: Map[List[String], Double] = Map.empty,
     idPrefix: String = "",
     live: Boolean = false,
-    measure: String => Rect < Async = (_: String) => Rect(0, 0, 0, 0, 0, 0),
+    measure: Seq[String] => Chunk[Rect] < Async = (_: Seq[String]) => Chunk.empty,
     grab: Maybe[SignalRef[Maybe[ColumnGrab]]] = Absent
 )
 
@@ -191,6 +226,11 @@ final case class CellChange[A](rowKey: String, column: List[String], before: A, 
 
 /** The row before and after a committed row edit. */
 final case class RowChange[A](rowKey: String, before: A, after: A)
+
+/** A row moved to another place: where it came from, where it went, and the list that
+  * came out, both indices counted in that list rather than in the page it was seen on.
+  */
+final case class RowMove[A](from: Int, to: Int, rows: Seq[A])
 
 /** DataTable — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * DataTable anatomy: `div.p-datatable.p-component[.p-datatable-hoverable]
@@ -341,6 +381,8 @@ final case class DataTable[A] private (
     columnWidthsRef: Maybe[SignalRef[Map[List[String], Double]]] = Absent,
     resizeModeV: ColumnResizeMode = ColumnResizeMode.Fit,
     columnOrderRef: Maybe[SignalRef[List[List[String]]]] = Absent,
+    reorderRowsFlag: Boolean = false,
+    onRowReorderF: Maybe[RowMove[A] => Any < Async] = Absent,
     orderedPaths: List[List[String]] = Nil
 ) extends Node:
     type Self = DataTable[A]
@@ -637,6 +679,30 @@ final case class DataTable[A] private (
       */
     def onRowValueChanged(f: RowChange[A] => Any < Async): DataTable[A] = copy(onRowChangedF = Present(f))
 
+    /** Lets the reader drag a row to another place, Prime's `reorderableRows`.
+      *
+      * It adds Prime's grip column at the leading edge, where Prime has the caller place
+      * a `rowReorder` column of their own, and shows where a drop would land as a line on
+      * the row it would land beside, where Prime positions two floating arrows measured
+      * in JavaScript on every move.
+      *
+      * What a drop rewrites is the ROW LIST, so it needs somewhere to write: a bound
+      * [[rows(ref:SignalRef[Seq[A]])*]] the table stores the new list into, or
+      * [[onRowReorder]], which hands it over. It also needs the rows on the screen to be
+      * the rows in the list, in that order, so while a sort spec, a filter or a row
+      * grouping is deciding the order, and over a lazily loaded window where the order is
+      * the query's, the grips are not offered and a card says which of them it is. Paging
+      * is fine: a page is a contiguous slice, and both indices are counted in the list.
+      */
+    def reorderableRows(v: Boolean): DataTable[A] = copy(reorderRowsFlag = v)
+
+    /** Runs after a completed row drag, with the list that came out of it.
+      *
+      * With [[rows(ref:SignalRef[Seq[A]])*]] bound this is a notification, the table has
+      * already stored the list; without it, it is the only exit.
+      */
+    def onRowReorder(f: RowMove[A] => Any < Async): DataTable[A] = copy(onRowReorderF = Present(f))
+
     /** Turns a refused commit's [[kyo.uic.form.FieldError]] into the message shown under
       * the open editor. Defaults to `ErrorTranslator.default`, which shows the error's own
       * fallback text, or its code when it has none; an app with i18n passes its own, the
@@ -820,6 +886,29 @@ final case class DataTable[A] private (
 
     private def expanderColumn: Boolean = expansionF.isDefined
 
+    /** Whether Prime's row-reorder grip column is rendered. Asking for it IS the switch,
+      * the way binding a state is for the expander and the row editor: the column is the
+      * affordance, and a table that renders it with nothing behind it is what the cards
+      * below are for.
+      */
+    private def handleColumn: Boolean = reorderRowsFlag
+
+    /** Where a completed row drag can write. */
+    private def rowMoveWritable: Boolean = rowsRefV.isDefined || onRowReorderF.isDefined
+
+    /** What decides the row order instead of the list, which is what a drag cannot move
+      * a row past. Empty means a drop lands where the reader let go.
+      */
+    private def rowOrderOwners(sort: List[SortKey], query: String, specs: Map[List[String], ColumnFilter]): List[String] =
+        List(
+            if SortKey.sorting(sort).isEmpty then Nil else List("a sort spec"),
+            if query.isEmpty then Nil else List("a global filter"),
+            if specs.values.forall(_.query.isEmpty) then Nil else List("a column filter"),
+            if groupsV.isEmpty then Nil else List("row grouping"),
+            if !lazyOn && sourceV.isEmpty then Nil else List("rows prepared elsewhere"),
+            if !windowOn then Nil else List("a windowed body")
+        ).flatten
+
     /** Row editing adds Prime's editor-button column, at the trailing edge. Binding the
       * state IS the switch, the way `expanded(ref)` is for the expander column: a second
       * flag would only be a way to bind one without the other.
@@ -896,7 +985,7 @@ final case class DataTable[A] private (
       * and the menu-open state of a filter row.
       */
     private def ownsState: Boolean =
-        editingBound || navOn || filterRowOn || resizeOn || reorderOn || windowOn || frozenRowsOn
+        editingBound || navOn || filterRowOn || resizeOn || reorderOn || windowOn || frozenRowsOn || handleColumn
 
     /** Whether the filter row is rendered: the filters have to be bound somewhere, and
       * some column has to carry a pipeline for the row to hold anything.
@@ -1018,8 +1107,16 @@ final case class DataTable[A] private (
       * as the CSS terms an offset reaching past them is written in.
       */
     private def leadTerms: List[String] =
-        (if expanderColumn then List(DataTable.ToggleWidth) else Nil) ++
+        (if handleColumn then List(DataTable.HandleWidth) else Nil) ++
+            (if expanderColumn then List(DataTable.ToggleWidth) else Nil) ++
             (if checkboxColumn then List(DataTable.SelectWidth) else Nil)
+
+    /** Which leading column each of the three sits in, so a cell holds against the edge
+      * at the distance the ones in front of it take up.
+      */
+    private def handleSlot: Int   = 0
+    private def expanderSlot: Int = if handleColumn then 1 else 0
+    private def checkboxSlot: Int = expanderSlot + (if expanderColumn then 1 else 0)
 
     private def trailTerms: List[String] = if editorColumn then List(DataTable.EditorWidth) else Nil
 
@@ -1155,7 +1252,7 @@ final case class DataTable[A] private (
         order.drag match
             case Present(ref) =>
                 for
-                    rects <- Kyo.foreach(leafPaths.indices.toList)(i => size.measure(headerId(i, size)))
+                    rects <- size.measure(leafPaths.indices.toList.map(i => headerId(i, size)))
                     edges = rects.map(_.x).toList :+ rects.lastOption.map(r => r.x + r.width).getOrElse(0.0)
                     r <- ref.set(Present(ColumnDrag(from, until, from, e.rectX + e.x, edges, stops)))
                 yield r
@@ -1232,6 +1329,86 @@ final case class DataTable[A] private (
       * that moved a column also ends in a click, and re-sorting on it would answer a
       * gesture the reader did not make.
       */
+    /** A pointer going down on a grip: measure the rendered rows once and remember where
+      * each of them sits.
+      *
+      * Measured here and not on every move for the reason the column drag gives: moving a
+      * row changes no height, so the rows the reader picked up from are the rows they let
+      * go over. It is one round trip for the whole page rather than one per row, which is
+      * what makes geometry over a list affordable at all.
+      */
+    private def beginRowMove(at: Int, e: PointerEvent, move: MoveState[A])(using Frame): Any < Async =
+        move.drag match
+            case Present(ref) =>
+                val ids = (move.base until move.base + move.count).toList.map(DataTable.rowId(move.idPrefix, _))
+                for
+                    rects <- move.measure(ids)
+                    edges = rects.map(_.y).toList :+ rects.lastOption.map(r => r.y + r.height).getOrElse(0.0)
+                    r <- ref.set(Present(RowDrag(at, at, e.rectY + e.y, edges, move.base)))
+                yield r
+                end for
+            case Absent => ()
+
+    /** The pointer moving with a row held: the drop lands beside the nearest row edge.
+      *
+      * As with a column, the state is written only when the answer CHANGES, so a drag
+      * re-renders the table once per row crossed rather than once per animation frame.
+      */
+    private def dragRowMove(e: PointerEvent, move: MoveState[A])(using Frame): Any < Async =
+        move.drag match
+            case Present(ref) =>
+                ref.get.map {
+                    case Present(d) if !d.done =>
+                        val y     = e.rectY + e.y
+                        val moved = d.moved || math.abs(y - d.startY) >= DataTable.DragThreshold
+                        val t     = if !moved then d.target else DataTable.nearestRow(d, y)
+                        if moved == d.moved && t == d.target then ()
+                        else ref.set(Present(d.copy(target = t, moved = moved)))
+                    case _ => ()
+                }
+            case Absent => ()
+
+    /** A pointer letting go: write the list the drop produced, or drop a press that never
+      * travelled. A completed drag is left parked rather than cleared, because the browser
+      * still owes a click, and a row that selects would take it.
+      */
+    private def endRowMove(move: MoveState[A])(using Frame): Any < Async =
+        move.drag match
+            case Present(ref) =>
+                ref.get.map {
+                    case Present(d) if d.moved =>
+                        writeRowMove(d, move).andThen(ref.set(Present(d.copy(done = true))))
+                    case _ => ref.set(Absent)
+                }
+            case Absent => ()
+
+    /** The list a completed drag produces, stored where it can be stored and handed on
+      * either way. A drop back where the row came from, or on the boundary just below it,
+      * moves nothing and is not a change.
+      */
+    private def writeRowMove(d: RowDrag, move: MoveState[A])(using Frame): Any < Async =
+        if d.target == d.from || d.target == d.from + 1 then ()
+        else
+            val next = DataTable.moveBlock(move.all.toList, d.from, d.from + 1, d.target)
+            val to   = if d.target > d.from then d.target - 1 else d.target
+            val store: Any < Async = rowsRefV match
+                case Present(ref) => ref.set(next)
+                case Absent       => ()
+            val notify: Any < Async = onRowReorderF match
+                case Present(f) => f(RowMove(d.from, to, next))
+                case Absent     => ()
+            store.andThen(notify)
+        end if
+    end writeRowMove
+
+    /** Takes the click a finished drag still owes and drops it, so the row the pointer
+      * ended over is not also selected.
+      */
+    private def clearRowMove(move: MoveState[A])(using Frame): Any < Async =
+        move.drag match
+            case Present(ref) => ref.set(Absent)
+            case Absent       => ()
+
     private def headerClick(path: List[String], e: MouseEvent, interactive: Set[List[String]], order: OrderState)(using
         Frame
     ): Any < Async =
@@ -1277,7 +1454,8 @@ final case class DataTable[A] private (
                 FilterState(),
                 SizeState(),
                 OrderState(),
-                ScrollState()
+                ScrollState(),
+                MoveState[A]()
             )
         if !ownsState then static
         else
@@ -1290,6 +1468,7 @@ final case class DataTable[A] private (
                     menus  <- Kyo.foreach(filterableLeaves)((path, _) => Signal.initRef(false).map(path -> _))
                     held   <- Signal.initRef(Absent: Maybe[ColumnGrab])
                     moving <- Signal.initRef(Absent: Maybe[ColumnDrag])
+                    rowsIn <- Signal.initRef(Absent: Maybe[RowDrag])
                     scroll <- Signal.initRef(0.0)
                     // The first range has to be asked for by someone, and no scroll has
                     // happened yet to ask for it.
@@ -1310,11 +1489,12 @@ final case class DataTable[A] private (
                         err,
                         id => cmds.focusId(id),
                         menus.toMap,
-                        id => cmds.requestMeasureById(id),
+                        ids => cmds.requestMeasureByIds(ids),
                         Present(held),
                         Present(moving),
                         if windowOn then Present(scroll) else Absent,
-                        if frozenRowsOn then Present(headTop) else Absent
+                        if frozenRowsOn then Present(headTop) else Absent,
+                        if handleColumn then Present(rowsIn) else Absent
                     )
                     if !frozenRowsOn then tree
                     else UI.fragment(headProbe(cmds, headId(prefix), headTop), tree)
@@ -1351,24 +1531,34 @@ final case class DataTable[A] private (
         errRef: SignalRef[Maybe[(CellPath, FieldError)]],
         focus: String => Any < Async,
         menus: Map[List[String], SignalRef[Boolean]] = Map.empty,
-        measure: String => Rect < Async = (_: String) => Rect(0, 0, 0, 0, 0, 0),
+        measure: Seq[String] => Chunk[Rect] < Async = (_: Seq[String]) => Chunk.empty,
         held: Maybe[SignalRef[Maybe[ColumnGrab]]] = Absent,
         moving: Maybe[SignalRef[Maybe[ColumnDrag]]] = Absent,
         scroll: Maybe[SignalRef[Double]] = Absent,
-        headTop: Maybe[Signal[Maybe[Int]]] = Absent
+        headTop: Maybe[Signal[Maybe[Int]]] = Absent,
+        rowDrag: Maybe[SignalRef[Maybe[RowDrag]]] = Absent
     )(using Frame): UI =
         errRef.render(e =>
             withRef(editingRowsRef, Set.empty[String]) { editRows =>
                 withRef(editingCellRef, Absent: Maybe[CellPath]) { editCell =>
                     withRef(moving, Absent: Maybe[ColumnDrag]) { drag =>
-                        renderWith(
-                            EditState(editRows, editCell, drafts, Present(errRef), e, live = true),
-                            NavState[A](on = navOn, idPrefix = idPrefix, focus = focus),
-                            FilterState(open = menus, live = true),
-                            SizeState(idPrefix = idPrefix, live = true, measure = measure, grab = held),
-                            OrderState(drag = moving, held = drag),
-                            ScrollState(scroll, headTop)
-                        )
+                        withRef(rowDrag, Absent: Maybe[RowDrag]) { rowHeld =>
+                            renderWith(
+                                EditState(editRows, editCell, drafts, Present(errRef), e, live = true),
+                                NavState[A](on = navOn, idPrefix = idPrefix, focus = focus),
+                                FilterState(open = menus, live = true),
+                                SizeState(idPrefix = idPrefix, live = true, measure = measure, grab = held),
+                                OrderState(drag = moving, held = drag),
+                                ScrollState(scroll, headTop),
+                                MoveState[A](
+                                    drag = rowDrag,
+                                    held = rowHeld,
+                                    idPrefix = idPrefix,
+                                    live = true,
+                                    measure = measure
+                                )
+                            )
+                        }
                     }
                 }
             }
@@ -1380,9 +1570,10 @@ final case class DataTable[A] private (
         filter: FilterState,
         size: SizeState,
         order: OrderState,
-        scroll: ScrollState
+        scroll: ScrollState,
+        move: MoveState[A]
     )(using Frame): UI =
-        withColumnOrder(order)((t, o) => t.withVisibleColumns(_.buildAll(edit, nav, filter, size, o, scroll)))
+        withColumnOrder(order)((t, o) => t.withVisibleColumns(_.buildAll(edit, nav, filter, size, o, scroll, move)))
 
     /** Resolves a bound [[columnOrder]] and hands on the table with its columns in that
       * order, so the header, the body, the footer, the widths and the keyboard grid all
@@ -1443,7 +1634,8 @@ final case class DataTable[A] private (
         filter: FilterState,
         size: SizeState,
         order: OrderState,
-        scroll: ScrollState
+        scroll: ScrollState,
+        move: MoveState[A]
     )(using Frame): UI =
         withSortableFlags { flags =>
             withFrozenRows { held =>
@@ -1474,7 +1666,8 @@ final case class DataTable[A] private (
                                                             filter.copy(specs = specs),
                                                             size.copy(widths = widths),
                                                             order,
-                                                            scroll
+                                                            scroll,
+                                                            move
                                                         )
                                                     }
                                                 }
@@ -1604,7 +1797,8 @@ final case class DataTable[A] private (
         filterIn: FilterState,
         size: SizeState,
         order: OrderState,
-        scroll: ScrollState
+        scroll: ScrollState,
+        moveIn: MoveState[A]
     )(using Frame): UI =
         // A lazily loaded table is handed a window onto rows prepared elsewhere, so the
         // three passes below would filter a page, sort a page and slice a slice. It skips
@@ -1648,7 +1842,7 @@ final case class DataTable[A] private (
         // A windowed table scrolls instead of paginating: the scrollbar answers the same
         // question the page list does, and only one of them can be right about which rows
         // are on the screen.
-        val (paged, paginatorUI) = if windowOn then (sorted, Nil)
+        val (paged, paginatorUI, pageBase) = if windowOn then (sorted, Nil, 0)
         else
             pageSizeV match
                 case Present(size) =>
@@ -1671,8 +1865,12 @@ final case class DataTable[A] private (
                         .currentPage(cur)
                         .hostClass("p-datatable-paginator-bottom")
                     pageRef.foreach(ref => pag = pag.page(ref))
-                    (if prepared then sorted else sorted.slice(cur * size, cur * size + size), List(pag.render))
-                case Absent => (sorted, Nil)
+                    (
+                        if prepared then sorted else sorted.slice(cur * size, cur * size + size),
+                        List(pag.render),
+                        if prepared then 0 else cur * size
+                    )
+                case Absent => (sorted, Nil, 0)
 
         // The paths whose headers the reader can actually click, which is what both click
         // transitions may clear. Everything else in the spec is the caller's to keep.
@@ -1682,9 +1880,18 @@ final case class DataTable[A] private (
 
         val colCount =
             leafCols.length + (if checkboxColumn then 1 else 0) + (if expanderColumn then 1 else 0) +
-                (if editorColumn then 1 else 0)
+                (if handleColumn then 1 else 0) + (if editorColumn then 1 else 0)
 
         val frozen = frozenPlan(size)
+
+        // A grip is only offered where a drop would land where the reader let go: the rows
+        // on the screen have to be the rows in the list, in that order, and the list has to
+        // be somewhere the table can write. Anything else and the column still renders,
+        // since it is part of the anatomy, with nothing behind it and a card saying which.
+        val move =
+            if handleColumn && rowMoveWritable && rowOrderOwners(sort, query, filterIn.specs).isEmpty then
+                moveIn.copy(all = rows, base = pageBase, count = paged.size)
+            else moveIn.copy(live = false, held = Absent)
 
         // One tr per header level. The leading expander and checkbox cells belong to the
         // top row and reach down through every other one, so they line up with a column
@@ -1748,7 +1955,7 @@ final case class DataTable[A] private (
 
         lazy val bodyRows: List[UI] =
             if paged.isEmpty then List(emptyRow)
-            else groupSegments(paged.zipWithIndex, groupsV, Nil, sel, exp, openGroups, colCount, edit, navHere, frozen)
+            else groupSegments(paged.zipWithIndex, groupsV, Nil, sel, exp, openGroups, colCount, edit, navHere, frozen, move)
 
         /** One spacer row, which is what holds the height of the rows that are not drawn.
           *
@@ -1801,7 +2008,7 @@ final case class DataTable[A] private (
                 val until         = math.min(count, reach)
                 val drawn = (from until until).toList.flatMap { i =>
                     if i >= rowOffset && i < loadedEnd then
-                        dataRow(held(i - rowOffset), i, sel, exp, colCount, Map.empty, edit, navHere, frozen, rowHeightV)
+                        dataRow(held(i - rowOffset), i, sel, exp, colCount, Map.empty, edit, navHere, frozen, move, rowHeightV)
                     else List(slotRow)
                 }
                 // Both spacers are always emitted, one of them at nothing at either end of
@@ -1834,7 +2041,7 @@ final case class DataTable[A] private (
             if size.idPrefix.nonEmpty then group = group.id(s"${size.idPrefix}-frozen")
             top.foreach(px => group = group.style(_.top(px.px)))
             val trs = rows.toList.zipWithIndex.flatMap((a, i) =>
-                dataRow(a, i, sel, exp, colCount, Map.empty, edit, navHere.copy(on = false), frozen)
+                dataRow(a, i, sel, exp, colCount, Map.empty, edit, navHere.copy(on = false), frozen, move.copy(live = false, held = Absent))
             )
             group(trs.map(toChild)*)
         end frozenGroup
@@ -1978,7 +2185,10 @@ final case class DataTable[A] private (
                 size
             ) ++ frozenCards(size) ++ orderCards(
                 order
-            ) ++ rowsCards ++ selectionCards ++ scrollCards ++ windowCards ++ frozenRowCards(paged, held) ++ lazyCards(
+            ) ++ rowsCards ++ selectionCards ++ scrollCards ++ moveCards(sort, query, filter.specs) ++ windowCards ++ frozenRowCards(
+                paged,
+                held
+            ) ++ lazyCards(
                 rows,
                 total
             ) ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
@@ -2312,6 +2522,36 @@ final case class DataTable[A] private (
                 scrollHeightV.toList
             ))
     end scrollCards
+
+    /** What stops a row grip from being offered: nowhere to write the list a drop
+      * produces, or something other than the list deciding what order the rows are in.
+      * Either way the column still renders, since it is part of the anatomy, and the drag
+      * is not wired rather than wired to nothing.
+      */
+    private def moveCards(sort: List[SortKey], query: String, specs: Map[List[String], ColumnFilter])(using
+        Frame
+    ): List[UI] =
+        if !handleColumn then Nil
+        else if !rowMoveWritable then
+            List(KeyDiagnostics.card(
+                "DataTable",
+                "a row drag rewrites the row list and this table has nowhere to put it; bind rows(ref) for the " +
+                    "table to store it, or onRowReorder to take it",
+                Nil
+            ))
+        else
+            val owners = rowOrderOwners(sort, query, specs)
+            if owners.isEmpty then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "the rows are on the screen in an order the list does not hold, so a drop cannot land where " +
+                        "the reader let go; the grips are not offered while that is true",
+                    owners
+                ))
+            end if
+        end if
+    end moveCards
 
     /** What stops a body from being windowed, and what a window costs the rest of the
       * table. The first two turn the windowing off and leave every row rendered, which is
@@ -2738,15 +2978,19 @@ final case class DataTable[A] private (
     private def beginResize(i: Int, e: PointerEvent, size: SizeState)(using Frame): Any < Async =
         size.grab match
             case Present(ref) =>
+                // Under `Expand` the drag moves one column, so there is no neighbour to
+                // measure and none to trade with; the grab still carries a second width so
+                // the two modes share one held value.
+                val ids =
+                    if resizeModeAt(size) == ColumnResizeMode.Expand then List(headerId(i, size))
+                    else List(headerId(i, size), headerId(i + 1, size))
                 for
-                    a <- size.measure(headerId(i, size))
-                    // Under `Expand` the drag moves one column, so there is no neighbour to
-                    // measure and none to trade with; the grab still carries a second width
-                    // so the two modes share one held value.
-                    b <- if resizeModeAt(size) == ColumnResizeMode.Expand then Kyo.lift(a)
-                    else size.measure(headerId(i + 1, size))
+                    rects <- size.measure(ids)
+                    a = rects.headOption.getOrElse(Rect(0, 0, 0, 0, 0, 0))
+                    b = rects.lastOption.getOrElse(a)
                     r <- ref.set(Present(ColumnGrab(e.rectX + e.x, a.width, b.width)))
                 yield r
+                end for
             case Absent => ()
 
     /** The pointer moving with a boundary held: write both columns of the pair, computed
@@ -2887,10 +3131,11 @@ final case class DataTable[A] private (
         colCount: Int,
         edit: EditState,
         nav: NavState[A],
-        frozen: FrozenPlan
+        frozen: FrozenPlan,
+        move: MoveState[A]
     )(using Frame): List[UI] =
         levels match
-            case Nil => leafRows(rows, sel, exp, colCount, edit, nav, frozen)
+            case Nil => leafRows(rows, sel, exp, colCount, edit, nav, frozen, move)
             case level :: rest =>
                 RowGroup.runs(rows)((a, _) => level.keyF(a)).flatMap { (key, run) =>
                     val groupPath = GroupPath(path :+ key)
@@ -2906,7 +3151,7 @@ final case class DataTable[A] private (
                         else List(groupHeaderRow(level, groupPath, groupRows, colCount, collapsible, open))
                     val innerRows: List[UI] =
                         if !open then Nil
-                        else groupSegments(run, rest, groupPath.keys, sel, exp, openGroups, colCount, edit, nav, frozen)
+                        else groupSegments(run, rest, groupPath.keys, sel, exp, openGroups, colCount, edit, nav, frozen, move)
                     val footerRow: List[UI] =
                         if !open then Nil
                         else
@@ -2929,10 +3174,11 @@ final case class DataTable[A] private (
         colCount: Int,
         edit: EditState,
         nav: NavState[A],
-        frozen: FrozenPlan
+        frozen: FrozenPlan,
+        move: MoveState[A]
     )(using Frame): List[UI] =
         val spans = spanCells(rows.map(_._1), exp)
-        rows.zip(spans).flatMap((row, cells) => dataRow(row._1, row._2, sel, exp, colCount, cells, edit, nav, frozen))
+        rows.zip(spans).flatMap((row, cells) => dataRow(row._1, row._2, sel, exp, colCount, cells, edit, nav, frozen, move))
     end leafRows
 
     /** Resolves the merged cells of one slice: for each row, which of the marked columns it
@@ -3012,6 +3258,7 @@ final case class DataTable[A] private (
         edit: EditState,
         nav: NavState[A],
         frozen: FrozenPlan,
+        move: MoveState[A],
         height: Maybe[Int] = Absent
     )(using Frame): List[UI] =
         val id        = keyOf(a)
@@ -3020,6 +3267,23 @@ final case class DataTable[A] private (
         val rowEdit   = edit.rows.contains(id)
         val navRow    = nav.indexOf(id, keyOf).getOrElse(-1)
         val canSelect = selectableAt(a)
+
+        // Prime's grip. The whole cell is the grab surface, which is what the `cursor: move`
+        // in the extracted sheet says, and it is where the pointer stream lives: a drag is
+        // captured by the element the press landed on, so the rows the pointer travels over
+        // never hear about it and the drop is worked out from geometry measured on the grab.
+        val handleTd: List[UI] =
+            if !handleColumn then Nil
+            else
+                var cell = td.cssClass("p-datatable-reorderable-row-handle").aria("hidden", "true")
+                if move.live then
+                    val at = move.base + index
+                    cell = cell
+                        .onPointerDown(e => beginRowMove(at, e, move))
+                        .onPointerMove(e => dragRowMove(e, move))
+                        .onPointerUp(_ => endRowMove(move))
+                end if
+                List(freeze(cell(toChild(GlyphSvg(Icons.bars))), frozen.leadAt(handleSlot)))
 
         val expanderTd: List[UI] =
             if !expanderColumn then Nil
@@ -3033,7 +3297,7 @@ final case class DataTable[A] private (
                         .aria("label", if isExp then "Row Collapse" else "Row Expand")
                         .onClick(toggleExpand(id))(toChild(GlyphSvg(glyph, "p-datatable-row-toggle-icon")))
                 )
-                List(freeze(cell, frozen.leadAt(0)))
+                List(freeze(cell, frozen.leadAt(expanderSlot)))
 
         // Checkbox selection reuses Prime's checkbox anatomy (as Tree does).
         val checkboxTd: List[UI] =
@@ -3045,7 +3309,7 @@ final case class DataTable[A] private (
                 else cb = cb.cssClass("p-disabled")
                 val icon: List[UI] = if isSel then List(GlyphSvg(Icons.check, "p-checkbox-icon")) else Nil
                 val cell           = td(cb(toChild(div.cssClass("p-checkbox-box")(icon.map(toChild)*))))
-                List(freeze(cell, frozen.leadAt(if expanderColumn then 1 else 0)))
+                List(freeze(cell, frozen.leadAt(checkboxSlot)))
 
         val dataTds: List[UI] = leafPaths.zipWithIndex.flatMap { (entry, i) =>
             val (path, c) = entry
@@ -3165,7 +3429,11 @@ final case class DataTable[A] private (
         if rowClickSelects && canSelect then row = row.cssClass("p-datatable-selectable-row")
         if isSel then row = row.cssClass("p-datatable-row-selected")
         if selectionModeV != SelectionMode.None then row = row.aria("selected", isSel.toString)
-        if rowInteractive then row = row.tabIndex(0).onClick(activate(id, canSelect))
+        // After a drop the browser still owes a click, and it does not land on the grip the
+        // press started on: the rows moved under the pointer. A row that would select takes
+        // it and drops it, so the press cannot reach the next row the reader clicks.
+        if rowInteractive then
+            row = row.tabIndex(0).onClick(if move.held.exists(_.done) then clearRowMove(move) else activate(id, canSelect))
         if rowEdit then
             // Enter and Escape reach here from whichever cell editor has focus, since a
             // keystroke bubbles the logical tree the way a click does.
@@ -3178,8 +3446,21 @@ final case class DataTable[A] private (
                         case _               => ()
                 )
         end if
+        // Where a drop would land, shown on the row it would land beside. Prime positions
+        // two floating arrows measured on every move; a border on the neighbour is the same
+        // information, needs no measurement, and moves with the row if anything re-renders.
+        move.held match
+            case Present(d) if d.moved && !d.done =>
+                val at = move.base + index
+                if d.from == at then row = row.cssClass("p-uic-dt-dragging")
+                if d.target == at then row = row.cssClass("p-datatable-dragpoint-top")
+                else if d.target == at + 1 && d.target == d.first + d.edges.length - 1 then
+                    row = row.cssClass("p-datatable-dragpoint-bottom")
+            case _ => ()
+        end match
+        if move.live && move.idPrefix.nonEmpty then row = row.id(DataTable.rowId(move.idPrefix, move.base + index))
         rowClassF.foreach(f => f(a).foreach(cls => if cls.nonEmpty then row = row.cssClass(cls)))
-        val rowEl: UI = row((expanderTd ++ checkboxTd ++ dataTds ++ editorTd).map(toChild)*)
+        val rowEl: UI = row((handleTd ++ expanderTd ++ checkboxTd ++ dataTds ++ editorTd).map(toChild)*)
 
         val expansionRow: List[UI] =
             if isExp then
@@ -3581,6 +3862,7 @@ object DataTable:
       * `colgroup` only for a scrollable table and lets the browser size those columns by
       * their content everywhere else.
       */
+    private[uic] val HandleWidth = "var(--p-uic-dt-handle-width)"
     private[uic] val ToggleWidth = "var(--p-uic-dt-toggle-width)"
     private[uic] val SelectWidth = "var(--p-uic-dt-select-width)"
     private[uic] val EditorWidth = "var(--p-uic-dt-editor-width)"
@@ -3632,6 +3914,17 @@ object DataTable:
         moveBlock(free.zipWithIndex, from, until, at).zipWithIndex.forall {
             case ((movable, was), now) => movable || was == now
         }
+
+    /** The id one rendered row carries so a grab can measure it, by its index in the whole
+      * list rather than in the page, which is the index a drop is written in.
+      */
+    private[uic] def rowId(prefix: String, at: Int): String = s"$prefix-rw$at"
+
+    /** The place a pointer at `y` is asking a held row to go: the nearest row edge, which
+      * is a boundary between two rows, or the bottom of the last one.
+      */
+    private[uic] def nearestRow(d: RowDrag, y: Double): Int =
+        d.edges.zipWithIndex.minByOption((at, _) => math.abs(at - y)).map((_, i) => d.first + i).getOrElse(d.from)
 
     private[uic] def resizeTo(width: Double, next: Double, delta: Double): (Double, Double) =
         val d = math.max(math.min(delta, next - MinColumnWidth), MinColumnWidth - width)

@@ -402,9 +402,10 @@ class DataTableTest extends UicTest:
                         uic.column("Price")(_.price.toString),
                         uic.column("Id")(_.id)
                     ).columnWidths(cols)
-            // The stub answers by header id: `t-h0` is the first leaf column's cell.
-            val measure = (id: String) =>
-                UI.Rect(0, 0, widths.getOrElse(id, 0.0), 30, 1000, 800): UI.Rect < Async
+            // The stub answers by header id: `t-h0` is the first leaf column's cell. A grab
+            // asks for every id it needs in one call, so the stub answers a list.
+            val measure = (ids: Seq[String]) =>
+                Chunk.from(ids.map(id => UI.Rect(0, 0, widths.getOrElse(id, 0.0), 30, 1000, 800))): Chunk[UI.Rect] < Async
             (table.wired("t", Map.empty, err, _ => (), Map.empty, measure, Present(grab)), cols, grab)
         end for
     end sized
@@ -711,9 +712,11 @@ class DataTableTest extends UicTest:
                         uic.column("Price")(_.price.toString).visible(shown),
                         uic.column("Id")(_.id)
                     )
-            val measure = (id: String) =>
-                val i = id.drop(id.indexOf("-h") + 2).toInt
-                UI.Rect(i * 100.0, 0, 100, 30, 1000, 800): UI.Rect < Async
+            val measure = (ids: Seq[String]) =>
+                Chunk.from(ids.map { id =>
+                    val i = id.drop(id.indexOf("-h") + 2).toInt
+                    UI.Rect(i * 100.0, 0, 100, 30, 1000, 800)
+                }): Chunk[UI.Rect] < Async
             (
                 table.columnOrder(order).wired("t", Map.empty, err, _ => (), Map.empty, measure, Absent, Present(move)),
                 order,
@@ -1520,8 +1523,10 @@ class DataTableTest extends UicTest:
                         uic.column("Id")(_.id)
                     )
             val table = withCols.columnWidths(cols).columnResizeMode(mode)
-            val measure = (id: String) =>
-                UI.Rect(0, 0, Map("t-h0" -> 100.0, "t-h1" -> 100.0, "t-h2" -> 100.0).getOrElse(id, 0.0), 30, 1000, 800): UI.Rect < Async
+            val measure = (ids: Seq[String]) =>
+                Chunk.from(ids.map(id =>
+                    UI.Rect(0, 0, Map("t-h0" -> 100.0, "t-h1" -> 100.0, "t-h2" -> 100.0).getOrElse(id, 0.0), 30, 1000, 800)
+                )): Chunk[UI.Rect] < Async
             (table.wired("t", Map.empty, err, _ => (), Map.empty, measure, Present(grab)), cols)
         end for
     end expanding
@@ -1577,6 +1582,129 @@ class DataTableTest extends UicTest:
             assert(tbl.attrs.cssClasses.contains("p-datatable-resizable-table-fit"))
             assert(tbl.attrs.uiStyle.props.collect { case Style.Prop.Width(v) => v }.isEmpty, "no width it cannot add up")
             assert(reported.contains("every column") && reported.contains("Id"), "and the column with none is named")
+    }
+
+    // ---- rows the reader drags to another place ----
+
+    private val trio = List(Item("1", "A", 10), Item("2", "B", 20), Item("3", "C", 30))
+
+    private def pointerAtY(y: Double): UI.PointerEvent = UI.PointerEvent(0, y, 0, 0, 200, 40, 1, Absent)
+
+    /** Three rows forty pixels tall, stacked from the top of the viewport, with a place to
+      * park the drag and a record of what a completed one handed over.
+      */
+    private def draggableRows(build: uic.DataTable[Item] => uic.DataTable[Item] = identity)(using Frame) =
+        for
+            rows  <- Signal.initRef[Seq[Item]](trio)
+            err   <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            drag  <- Signal.initRef(Absent: Maybe[uic.RowDrag])
+            moves <- Signal.initRef(List.empty[(Int, Int, List[String])])
+            table = build(
+                uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
+                    .reorderableRows(true)
+                    .onRowReorder(m => moves.getAndUpdate(_ :+ (m.from, m.to, m.rows.map(_.name).toList)))
+            )
+            measureAll = (ids: Seq[String]) =>
+                Chunk.from(ids.zipWithIndex.map((_, i) => UI.Rect(0, i * 40, 200, 40, 1000, 800))): Chunk[UI.Rect] < Async
+        yield
+            val ui = table.wired(
+                "t",
+                Map.empty,
+                err,
+                _ => (),
+                Map.empty,
+                measureAll,
+                Absent,
+                Absent,
+                Absent,
+                Absent,
+                Present(drag)
+            )
+            (ui, rows, moves, drag)
+        end for
+    end draggableRows
+
+    private def grips(node: UI)(using Frame): Chunk[UI.Ast.Element] < Sync =
+        elements(node).map(_.filter(_.attrs.cssClasses.contains("p-datatable-reorderable-row-handle")))
+
+    private def dragRow(grip: UI.Ast.Element, from: Double, to: Double)(using Frame): Any < Async =
+        (grip.attrs.onPointerDown, grip.attrs.onPointerMove, grip.attrs.onPointerUp) match
+            case (Present(down), Present(move), Present(up)) =>
+                down(pointerAtY(from)).andThen(move(pointerAtY(to))).andThen(up(pointerAtY(to)))
+            case _ => throw new AssertionError("the grip declares no drag")
+
+    "a completed row drag writes the list and hands it over, indexed in the list" in {
+        for
+            (ui, rows, moves, _) <- draggableRows()
+            handles              <- grips(ui)
+            _                    <- dragRow(handles.head, 10, 95)
+            after                <- rows.get
+            fired                <- moves.get
+        yield
+            assert(after.map(_.name) == Seq("B", "A", "C"), "the first row landed after the second")
+            assert(fired == List((0, 1, List("B", "A", "C"))), "and the event says where it came from and went")
+    }
+
+    "a drop where the row already was writes nothing" in {
+        for
+            (ui, rows, moves, _) <- draggableRows()
+            handles              <- grips(ui)
+            // The boundary just below the grabbed row is the row's own place.
+            _     <- dragRow(handles.head, 10, 44)
+            after <- rows.get
+            fired <- moves.get
+        yield
+            assert(after.map(_.name) == Seq("A", "B", "C"))
+            assert(fired.isEmpty, "and nothing is reported as a change")
+    }
+
+    "the line shows on the row a drop would land beside" in {
+        for
+            (ui, _, _, drag) <- draggableRows()
+            handles          <- grips(ui)
+            down = handles.head.attrs.onPointerDown.getOrElse(throw new AssertionError("no grab"))
+            move = handles.head.attrs.onPointerMove.getOrElse(throw new AssertionError("no drag"))
+            _    <- down(pointerAtY(10))
+            _    <- move(pointerAtY(78))
+            held <- drag.get
+            trs  <- bodyTrs(ui)
+        yield
+            assert(held.map(_.target) == Present(2), "the nearest boundary is the one below the second row")
+            assert(trs.head.attrs.cssClasses.contains("p-uic-dt-dragging"), "the grabbed row says it is travelling")
+            assert(trs(2).attrs.cssClasses.contains("p-datatable-dragpoint-top"), "and the line sits above the third")
+            assert(trs.forall(!_.attrs.cssClasses.contains("p-datatable-dragpoint-bottom")))
+    }
+
+    "a press that never travels moves nothing" in {
+        for
+            (ui, rows, moves, drag) <- draggableRows()
+            handles                 <- grips(ui)
+            _                       <- dragRow(handles.head, 10, 12)
+            after                   <- rows.get
+            fired                   <- moves.get
+            held                    <- drag.get
+        yield
+            assert(after.map(_.name) == Seq("A", "B", "C") && fired.isEmpty)
+            assert(held == Absent, "and the drag is cleared rather than parked")
+    }
+
+    "an order the list does not hold takes the grips away and says which" in {
+        for
+            sort          <- Signal.initRef(List(uic.SortKey.ascending("Name")))
+            (ui, _, _, _) <- draggableRows(_.sort(sort))
+            handles       <- grips(ui)
+            reported      <- cards(ui)
+        yield
+            assert(handles.forall(_.attrs.onPointerDown.isEmpty), "the column renders, the drag does not")
+            assert(handles.size == 3, "the anatomy is the same either way")
+            assert(reported.contains("a sort spec"))
+    }
+
+    "reorderable rows with nowhere to write are reported" in {
+        for
+            reported <- cards(uic.DataTable[Item]().rows(trio).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .reorderableRows(true).render)
+        yield assert(reported.contains("rows(ref)") && reported.contains("onRowReorder"))
     }
 
 end DataTableTest
