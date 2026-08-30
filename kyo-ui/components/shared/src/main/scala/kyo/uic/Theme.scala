@@ -257,6 +257,16 @@ object Theme:
       |  outline: var(--p-focus-ring-width, 1px) solid var(--p-datatable-row-focus-ring-color, var(--p-primary-color));
       |  outline-offset: calc(var(--p-focus-ring-offset, 0px) - 1px);
       |}
+      |/* A selected CELL. The extracted sheet carries a token for the border a selection
+      |   leaves behind (`--p-datatable-body-cell-selected-border-color`) and no rule that
+      |   reaches a cell at all: Prime's own selected-row rule stops at the `tr`, because
+      |   Prime's tables select rows. The class is kyo's for that reason, and the colors are
+      |   Prime's, so a theme that recolors a selected row recolors a selected cell with it. */
+      |.p-datatable-tbody > tr > td.p-uic-dt-cell-selected {
+      |  background: var(--p-datatable-row-selected-background);
+      |  color: var(--p-datatable-row-selected-color);
+      |  border-block-end-color: var(--p-datatable-body-cell-selected-border-color);
+      |}
       |.p-uic-dt-cell-error {
       |  color: var(--p-form-field-invalid-placeholder-color, #ef4444);
       |  font-size: 0.8125rem; padding-top: 0.125rem;
