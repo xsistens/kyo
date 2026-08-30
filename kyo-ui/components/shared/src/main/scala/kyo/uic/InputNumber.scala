@@ -74,6 +74,22 @@ final case class InputNumber private (
       */
     def value(ref: SignalRef[Double]): InputNumber = copy(valueBinding = Present(InputNumber.Value.Ref(ref)))
 
+    /** Binds the field's raw TEXT two-way, for a caller that needs what was typed rather
+      * than a number.
+      *
+      * A `number` field reads its value as the empty string while its content is not a
+      * valid number, so `-`, `4.` and `1e` are all states a `Double` cannot represent and
+      * [[value]] cannot report. They matter to anything that parses the text itself, a
+      * [[DataTable]] cell draft above all: bound this way the field writes on every
+      * keystroke through kyo's own two-way channel, so a commit reads what is on the screen
+      * instead of what was last valid.
+      *
+      * It is the binding OR [[value]], not both. With a text binding the field carries
+      * exactly what the reader typed: the numeric change is not normalised back into it,
+      * and the spin buttons step the text they find.
+      */
+    def text(ref: SignalRef[String]): InputNumber = copy(valueBinding = Present(InputNumber.Value.Text(ref)))
+
     /** Lower bound — native `min` plus the clamp floor for spins and commits. */
     def min(v: Double): InputNumber = copy(minV = Present(v))
 
@@ -194,7 +210,11 @@ final case class InputNumber private (
         valueBinding match
             case Present(InputNumber.Value.Ref(ref)) => ref.render(v => body(Present(v), Present(ref)))
             case Present(InputNumber.Value.Const(v)) => body(Present(v), Absent)
-            case Absent                              => body(Absent, Absent)
+            // No `render` here on purpose: a text binding is kyo's own two-way channel on
+            // the field, so the value travels without a subscription. Re-rendering the
+            // field on each keystroke would rewrite what is being typed into it.
+            case Present(InputNumber.Value.Text(ref)) => body(Absent, Absent, Present(ref))
+            case Absent                               => body(Absent, Absent)
 
     private def commit(next: Double, ref: Maybe[SignalRef[Double]])(using Frame): Any < Async =
         val write: Any < Async = ref match
@@ -210,7 +230,11 @@ final case class InputNumber private (
         end for
     end commit
 
-    private def body(value: Maybe[Double], ref: Maybe[SignalRef[Double]])(using Frame): UI =
+    private def body(
+        value: Maybe[Double],
+        ref: Maybe[SignalRef[Double]],
+        text: Maybe[SignalRef[String]] = Absent
+    )(using Frame): UI =
         // === the native number field ============================================
         var in = numberInput
             .cssClass("p-inputnumber-input")
@@ -234,7 +258,9 @@ final case class InputNumber private (
         // native mechanism — the spinner and validation both round to it. (The value model
         // stays Double; a whole one.)
         in = in.step(if integerFlag then stepV.max(1.0).round.toDouble else stepV)
-        value.foreach(v => in = in.value(InputNumber.format(v)))
+        text match
+            case Present(t) => in = in.value(t)
+            case Absent     => value.foreach(v => in = in.value(InputNumber.format(v)))
         placeholderText match
             case Present(TextValue.Const(v)) => in = in.placeholder(v)
             case Present(TextValue.Dyn(sig)) => in = in.placeholder(sig)
@@ -249,8 +275,10 @@ final case class InputNumber private (
             case Absent                      => ()
         end match
         // Typed commit: the number field delivers a Double, clamped into [min, max]
-        // before the write-back (the browser only ENFORCES min/max on form submit).
-        if interactive then in = in.onChangeNumeric(d => commit(clamp(d), ref))
+        // before the write-back (the browser only ENFORCES min/max on form submit). A
+        // text-bound field is left out of it: its content is what the reader typed, and
+        // normalising a Double back into it would rewrite `4.` to `4` under them.
+        if interactive && text.isEmpty then in = in.onChangeNumeric(d => commit(clamp(d), ref))
         // onBlur carries no payload, so the current number is read from the bound ref
         // (or the resolved current value when unbound) and handed to the native blur.
         if interactive then
@@ -263,8 +291,17 @@ final case class InputNumber private (
 
         // === spin buttons =======================================================
         def spin(dir: Int): Any < Async =
-            val cur = value.getOrElse(clamp(0.0))
-            commit(clamp(cur + dir * stepV), ref)
+            text match
+                // A text-bound field holds the current value only as text, so the step is
+                // taken from what is in it, and the result is written back as text.
+                case Present(t) =>
+                    t.get.map { cur =>
+                        val next = clamp(cur.toDoubleOption.getOrElse(0.0) + dir * stepV)
+                        t.set(InputNumber.format(next)).andThen(onChangeF match
+                            case Present(f) => f(next)
+                            case Absent     => ())
+                    }
+                case Absent => commit(clamp(value.getOrElse(clamp(0.0)) + dir * stepV), ref)
 
         def spinButton(dir: Int, cls: String, glyph: IconGlyph): UI =
             var b = button
@@ -322,4 +359,6 @@ object InputNumber:
     private[uic] enum Value:
         case Const(v: Double)
         case Ref(ref: SignalRef[Double])
+        case Text(ref: SignalRef[String])
+    end Value
 end InputNumber

@@ -60,20 +60,17 @@ object CellEditor:
         integer: Boolean = false
     ): CellEditor =
         p =>
-            // The draft is text and the field is numeric, so this one reads the draft
-            // through a subscription and writes it back formatted. The subscription is
-            // local to the cell: it is the editor's own value binding, not the table's.
-            p.draft.render { cur =>
-                var f = InputNumber()
-                    .value(Maybe.fromOption(cur.toDoubleOption).getOrElse(0.0))
-                    .focusAuto(true)
-                    .onChange(d => p.draft.set(numberText(d)))
-                min.foreach(v => f = f.min(v))
-                max.foreach(v => f = f.max(v))
-                step.foreach(v => f = f.step(v))
-                if integer then f = f.integer(true)
-                f.toUI
-            }
+            // Bound to the draft as TEXT, which is the whole of it: a field that reported
+            // only on `change` had written nothing when Enter's keydown reached the table,
+            // so the commit read the seed, found it unchanged and closed on a silently
+            // dropped edit. A value binding writes on every keystroke, and the draft is
+            // text anyway, since the column's CellType is what turns it back into a value.
+            var f = InputNumber().text(p.draft).focusAuto(true)
+            min.foreach(v => f = f.min(v))
+            max.foreach(v => f = f.max(v))
+            step.foreach(v => f = f.step(v))
+            if integer then f = f.integer(true)
+            f.toUI
 
     /** Prime's Select over a fixed option list. Picking writes and commits in one gesture,
       * because a pick is a decision, not a keystroke.
