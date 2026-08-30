@@ -173,6 +173,34 @@ class DomBackendTest extends UITest:
         }
     }
 
+    // A region's payload is parsed inside a wrapper chosen from its PARENT's tag, and a
+    // <table> parent takes two shapes: a row group (<tbody>, <thead>, <tfoot>) or the rows
+    // of one. Wrapping a row group the way rows are wrapped puts a <tbody> inside a
+    // <tbody>, which the HTML parser is required to treat as the start of a SECOND row
+    // group: the payload lands beside the wrapper the descent then reads, and the region
+    // is emptied. The table keeps its header and loses every row, on the first patch.
+    "a reactive row group inside a table survives its first patch" in {
+        val app: UI < Async =
+            for n <- Signal.initRef(1)
+            yield UI.div(
+                UI.button("bump").id("bump").onClick(n.set(2)),
+                UI.table(
+                    UI.thead(UI.tr(UI.th("H"))),
+                    n.map(v => UI.tbody(UI.tr(UI.td(s"row $v").id("cell")).id("row")))
+                )
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("cell"), "row 1")
+                _ <- Browser.click(Selector.id("bump"))
+                _ <- Browser.assertText(Selector.id("cell"), "row 2")
+                // The group itself has to survive, not just its text: an emptied region
+                // leaves the table with a header and nothing under it.
+                n <- Browser.evalJson[Int]("document.querySelectorAll('table > tbody').length")
+            yield assert(n == 1)
+        }
+    }
+
     "nested reactive directly inside a reactive patches independently (no path collision)" in {
         // Regression for the same-data-kyo-path collision (a reactive whose value is ITSELF a reactive, e.g.
         // `open.render(hi.render(...))`). The `: UI` ascription lifts the inner Signal into a Reactive so the outer value is itself reactive.

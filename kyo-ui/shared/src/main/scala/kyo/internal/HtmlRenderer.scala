@@ -1309,9 +1309,21 @@ private[kyo] object HtmlRenderer:
            |  if(f.data!==html)f.data=html;
            |  return true;
            |}
+           |// Whether a payload opens with one of a table's own row groups, which is the shape that has to be
+           |// parsed INSIDE a table rather than inside one of its groups. Twin of DomBackend.isRowGroup.
+           |function __kyoRowGroup(html){
+           |  var m=/<([a-zA-Z][a-zA-Z0-9]*)/.exec(html);
+           |  if(!m)return false;
+           |  var t=m[1].toLowerCase();
+           |  return t==="tbody"||t==="thead"||t==="tfoot"||t==="caption"||t==="colgroup";
+           |}
            |function __kyoParseCtx(parent,html){
            |  var t=document.createElement("template"),tag=parent.tagName,pre="",suf="",d=0;
            |  if(parent.namespaceURI==="http://www.w3.org/2000/svg"&&tag.toLowerCase()!=="foreignobject"){pre="<svg>";suf="</svg>";d=1;}
+           |  // A <table> parent takes two payload shapes: a row group, or the rows of one. Wrapping a row group
+           |  // the way rows are wrapped nests <tbody> in <tbody>, which the parser reads as a SECOND group: the
+           |  // payload lands beside the one the descent reads and the region renders empty.
+           |  else if(tag==="TABLE"&&__kyoRowGroup(html)){pre="<table>";suf="</table>";d=1;}
            |  else if(tag==="TABLE"||tag==="THEAD"||tag==="TBODY"||tag==="TFOOT"){pre="<table><tbody>";suf="</tbody></table>";d=2;}
            |  else if(tag==="TR"){pre="<table><tbody><tr>";suf="</tr></tbody></table>";d=3;}
            |  else if(tag==="SELECT"||tag==="OPTGROUP"){pre="<select>";suf="</select>";d=1;}
