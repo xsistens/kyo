@@ -710,6 +710,10 @@ final case class DataTable[A] private (
       * It takes the rows rather than reading them, which is what makes an export of the
       * selection one line: pass the rows the keys in the selection point at. [[csv(using
       * Frame)*]] is the other form, the rows as the reader is looking at them.
+      *
+      * A column [[Column.visible]] is hiding still exports. Visibility is about the
+      * screen and [[Column.exportable]] is about the export, and a reader who narrowed
+      * what they are looking at has not said anything about what a file should hold.
       */
     def csv(rows: Seq[A]): String =
         val cols  = leafPaths.map(_._2).filter(_.exportableFlag)
@@ -731,8 +735,13 @@ final case class DataTable[A] private (
             sort  <- currentOf(sortRef, List.empty[SortKey])
             query <- currentOf(filterRef, "")
             specs <- currentOf(columnFiltersRef, Map.empty[List[String], ColumnFilter])
+            order <- currentOf(columnOrderRef, List.empty[List[String]])
             rows  <- currentRows
-        yield csv(arranged(rows.toList, sort, query, if lazyOn then Nil else filterReads(specs)))
+        yield
+            // In the reader's column order too, since that is as much a part of what they
+            // are looking at as the sort is.
+            val shown = if order.isEmpty then this else copy(cols = ColumnTree.reorder(cols, order))
+            shown.csv(arranged(rows.toList, sort, query, if lazyOn then Nil else filterReads(specs)))
 
     /** What the reader has changed about this table, read off the refs they changed it
       * through (Prime's `stateKey`/`stateStorage`, minus the storage).
@@ -1116,7 +1125,7 @@ final case class DataTable[A] private (
         List(
             if SortKey.sorting(sort).isEmpty then Nil else List("a sort spec"),
             if query.isEmpty then Nil else List("a global filter"),
-            if specs.values.forall(_.query.isEmpty) then Nil else List("a column filter"),
+            if specs.values.forall(_.active.isEmpty) then Nil else List("a column filter"),
             if groupsV.isEmpty then Nil else List("row grouping"),
             if !lazyOn && sourceV.isEmpty then Nil else List("rows prepared elsewhere"),
             if !windowOn then Nil else List("a windowed body")
