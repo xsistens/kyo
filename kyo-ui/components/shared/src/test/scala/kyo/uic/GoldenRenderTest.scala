@@ -2421,6 +2421,29 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "a selected cell carries the kyo class and says so to a reader" in {
+        final case class Row(id: String, name: String, price: Int) derives CanEqual
+        val rows                                           = List(Row("1", "Bamboo", 65), Row("2", "Black", 72))
+        def occurrences(html: String, needle: String): Int = java.util.regex.Pattern.quote(needle).r.findAllIn(html).size
+        for
+            cells <- Signal.initRef(Set(uic.CellPath("2", List("Price"))))
+            out <- UI.runRender(
+                uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(
+                    uic.column("Name")(_.name),
+                    uic.column("Price")(_.price.toString)
+                ).selectionMode(uic.SelectionMode.Multiple).selectedCells(cells).render
+            ).take(1).run.map(_.mkString)
+            plain <- renderHtml(
+                uic.DataTable[Row]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name)).render
+            )
+        yield
+            assert(occurrences(out, "p-uic-dt-cell-selected") == 1, "exactly the cell the set names")
+            assert(occurrences(out, """aria-selected="false"""") == 3, "and the other three say they are not")
+            assert(!out.contains("p-datatable-row-selected"), "a cell selection is not a row selection")
+            assert(!plain.contains("aria-selected"), "a table that picks nothing says nothing")
+        end for
+    }
+
     "editing renders the column's own editor over the table's draft, and reports what it refuses" in {
         final case class Item(id: String, name: String, price: Int) derives CanEqual
         val items                                          = List(Item("1", "A", 10), Item("2", "B", 20))

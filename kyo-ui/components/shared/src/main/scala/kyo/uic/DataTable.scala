@@ -370,6 +370,7 @@ final case class DataTable[A] private (
     selectionModeV: SelectionMode = SelectionMode.None,
     selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
     selectableF: Maybe[A => Boolean] = Absent,
+    selectedCellsRef: Maybe[SignalRef[Set[CellPath]]] = Absent,
     contextRowRef: Maybe[SignalRef[Maybe[String]]] = Absent,
     onRowContextF: Maybe[String => Any < Async] = Absent,
     csvSeparatorV: String = ",",
@@ -627,6 +628,22 @@ final case class DataTable[A] private (
 
     /** Binds selection two-way to `ref` (a set of [[rowKey]] ids). */
     def selected(ref: SignalRef[Set[String]]): DataTable[A] = copy(selectedRef = Present(ref))
+
+    /** Selects CELLS rather than rows (Prime's `cellSelection`), bound as a set of
+      * [[CellPath]], which pairs a [[rowKey]] id with a column path.
+      *
+      * Binding it is the switch, and [[selectionMode]] says what a click means:
+      * `Single` replaces the set, `Multiple` toggles the cell in it. A cell has no
+      * identity until a row key and a column path are put together, which is why this is
+      * a second binding and not a mode over the row one; binding both is a card, since
+      * one click cannot mean two things.
+      *
+      * [[selectableWhen]] covers it too: a cell of a rejected row cannot be picked, which
+      * is what Prime's Cell Selection disabled section does with `isDataSelectable`. Cell
+      * EDITING claims the same click, so the two are a card as well, and editing keeps
+      * the click.
+      */
+    def selectedCells(ref: SignalRef[Set[CellPath]]): DataTable[A] = copy(selectedCellsRef = Present(ref))
 
     /** Restricts selection to the rows `p` accepts (Prime's `isDataSelectable`).
       *
@@ -1045,6 +1062,13 @@ final case class DataTable[A] private (
             selectionModeV == SelectionMode.Radio
 
     private def checkboxColumn: Boolean = selectionModeV == SelectionMode.Checkbox
+
+    /** Whether a click picks CELLS. Cell editing claims the same click, so it wins, and
+      * a mode that is about a checkbox column says nothing about a cell.
+      */
+    private def cellSelectOn: Boolean =
+        selectedCellsRef.isDefined && editingCellRef.isEmpty && selectedRef.isEmpty &&
+            (selectionModeV == SelectionMode.Single || selectionModeV == SelectionMode.Multiple)
 
     /** Whether a right-click over a row means anything here. */
     private def contextRowOn: Boolean = contextRowRef.isDefined || onRowContextF.isDefined
@@ -1815,30 +1839,33 @@ final case class DataTable[A] private (
                                     withRef(pageRef, 0) { page =>
                                         withRef(selectedRef, Set.empty[String]) { sel =>
                                             withRef(contextRowRef, Absent: Maybe[String]) { ctx =>
-                                                withRef(expandedRef, Set.empty[String]) { exp =>
-                                                    withRef(expandedGroupsRef, Set.empty[GroupPath]) { groups =>
-                                                        withTotal { total =>
-                                                            body(
-                                                                rows,
-                                                                offset,
-                                                                held,
-                                                                sort,
-                                                                query,
-                                                                page,
-                                                                total,
-                                                                sel,
-                                                                ctx,
-                                                                exp,
-                                                                groups,
-                                                                flags,
-                                                                edit,
-                                                                nav,
-                                                                filter.copy(specs = specs),
-                                                                size.copy(widths = widths),
-                                                                order,
-                                                                scroll,
-                                                                move
-                                                            )
+                                                withRef(selectedCellsRef, Set.empty[CellPath]) { cells =>
+                                                    withRef(expandedRef, Set.empty[String]) { exp =>
+                                                        withRef(expandedGroupsRef, Set.empty[GroupPath]) { groups =>
+                                                            withTotal { total =>
+                                                                body(
+                                                                    rows,
+                                                                    offset,
+                                                                    held,
+                                                                    sort,
+                                                                    query,
+                                                                    page,
+                                                                    total,
+                                                                    sel,
+                                                                    ctx,
+                                                                    cells,
+                                                                    exp,
+                                                                    groups,
+                                                                    flags,
+                                                                    edit,
+                                                                    nav,
+                                                                    filter.copy(specs = specs),
+                                                                    size.copy(widths = widths),
+                                                                    order,
+                                                                    scroll,
+                                                                    move
+                                                                )
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -2002,6 +2029,7 @@ final case class DataTable[A] private (
         total: Total,
         sel: Set[String],
         ctx: Maybe[String],
+        cells: Set[CellPath],
         exp: Set[String],
         openGroups: Set[GroupPath],
         flags: Map[List[String], Boolean],
@@ -2144,7 +2172,8 @@ final case class DataTable[A] private (
 
         lazy val bodyRows: List[UI] =
             if paged.isEmpty then List(emptyRow)
-            else groupSegments(paged.zipWithIndex, groupsV, Nil, sel, ctx, exp, openGroups, colCount, edit, navHere, frozen, move)
+            else
+                groupSegments(paged.zipWithIndex, groupsV, Nil, sel, ctx, cells, exp, openGroups, colCount, edit, navHere, frozen, move)
 
         /** One spacer row, which is what holds the height of the rows that are not drawn.
           *
@@ -2197,7 +2226,7 @@ final case class DataTable[A] private (
                 val until         = math.min(count, reach)
                 val drawn = (from until until).toList.flatMap { i =>
                     if i >= rowOffset && i < loadedEnd then
-                        dataRow(held(i - rowOffset), i, sel, ctx, exp, colCount, Map.empty, edit, navHere, frozen, move, rowHeightV)
+                        dataRow(held(i - rowOffset), i, sel, ctx, cells, exp, colCount, Map.empty, edit, navHere, frozen, move, rowHeightV)
                     else List(slotRow)
                 }
                 // Both spacers are always emitted, one of them at nothing at either end of
@@ -2235,6 +2264,7 @@ final case class DataTable[A] private (
                     i,
                     sel,
                     ctx,
+                    cells,
                     exp,
                     colCount,
                     Map.empty,
@@ -2703,13 +2733,43 @@ final case class DataTable[A] private (
       * reads at the call site as though it does.
       */
     private def selectionCards(using Frame): List[UI] =
-        if selectableF.isEmpty || selectionModeV != SelectionMode.None then Nil
-        else
-            List(KeyDiagnostics.card(
-                "DataTable",
-                "selectableWhen limits a selection this table does not have; set selectionMode to give it one",
-                Nil
-            ))
+        val limited =
+            if selectableF.isEmpty || selectionModeV != SelectionMode.None then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "selectableWhen limits a selection this table does not have; set selectionMode to give it one",
+                    Nil
+                ))
+        // One click cannot mean two things, so the three that claim it are named where
+        // more than one is bound. Cell editing keeps the click, since it is the one that
+        // does something a second click cannot undo.
+        val claimed = List(
+            if selectedRef.isEmpty then Nil else List("selected, which picks rows"),
+            if selectedCellsRef.isEmpty then Nil else List("selectedCells, which picks cells"),
+            if editingCellRef.isEmpty then Nil else List("editingCell, which opens an editor")
+        ).flatten
+        val clash =
+            if selectedCellsRef.isEmpty || claimed.sizeIs < 2 then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "a click on a cell can mean one thing, and this table binds more than one; cell editing keeps " +
+                        "the click, then row selection, and cell selection is off while either is bound",
+                    claimed
+                ))
+        val modeless =
+            if selectedCellsRef.isEmpty || selectionModeV == SelectionMode.Single ||
+                selectionModeV == SelectionMode.Multiple
+            then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "cell selection needs selectionMode Single or Multiple to say what a click means; Checkbox and " +
+                        "Radio are about a column of the table, which a cell is not in",
+                    List(selectionModeV.toString)
+                ))
+        limited ++ clash ++ modeless
     end selectionCards
 
     /** Two answers to how tall the viewport is, where the table can read only one. */
@@ -3328,6 +3388,7 @@ final case class DataTable[A] private (
         path: List[String],
         sel: Set[String],
         ctx: Maybe[String],
+        cells: Set[CellPath],
         exp: Set[String],
         openGroups: Set[GroupPath],
         colCount: Int,
@@ -3337,7 +3398,7 @@ final case class DataTable[A] private (
         move: MoveState[A]
     )(using Frame): List[UI] =
         levels match
-            case Nil => leafRows(rows, sel, ctx, exp, colCount, edit, nav, frozen, move)
+            case Nil => leafRows(rows, sel, ctx, cells, exp, colCount, edit, nav, frozen, move)
             case level :: rest =>
                 RowGroup.runs(rows)((a, _) => level.keyF(a)).flatMap { (key, run) =>
                     val groupPath = GroupPath(path :+ key)
@@ -3353,7 +3414,8 @@ final case class DataTable[A] private (
                         else List(groupHeaderRow(level, groupPath, groupRows, colCount, collapsible, open))
                     val innerRows: List[UI] =
                         if !open then Nil
-                        else groupSegments(run, rest, groupPath.keys, sel, ctx, exp, openGroups, colCount, edit, nav, frozen, move)
+                        else
+                            groupSegments(run, rest, groupPath.keys, sel, ctx, cells, exp, openGroups, colCount, edit, nav, frozen, move)
                     val footerRow: List[UI] =
                         if !open then Nil
                         else
@@ -3373,6 +3435,7 @@ final case class DataTable[A] private (
         rows: List[(A, Int)],
         sel: Set[String],
         ctx: Maybe[String],
+        cells: Set[CellPath],
         exp: Set[String],
         colCount: Int,
         edit: EditState,
@@ -3381,7 +3444,9 @@ final case class DataTable[A] private (
         move: MoveState[A]
     )(using Frame): List[UI] =
         val spans = spanCells(rows.map(_._1), exp)
-        rows.zip(spans).flatMap((row, cells) => dataRow(row._1, row._2, sel, ctx, exp, colCount, cells, edit, nav, frozen, move))
+        rows.zip(spans).flatMap((row, spanned) =>
+            dataRow(row._1, row._2, sel, ctx, cells, exp, colCount, spanned, edit, nav, frozen, move)
+        )
     end leafRows
 
     /** Resolves the merged cells of one slice: for each row, which of the marked columns it
@@ -3456,6 +3521,7 @@ final case class DataTable[A] private (
         index: Int,
         sel: Set[String],
         ctx: Maybe[String],
+        cells: Set[CellPath],
         exp: Set[String],
         colCount: Int,
         spans: Map[Int, SpanCell],
@@ -3546,6 +3612,14 @@ final case class DataTable[A] private (
                     cell = cell.stopPropagation(true)
                 end if
                 if cellEdit then cell = cell.cssClass("p-cell-editing")
+                // A selected CELL: the extracted sheet carries a token for its border and no
+                // rule that reaches a cell, so the class and the rule are both kyo's, over
+                // Prime's own selected-row tokens.
+                if cellSelectOn then
+                    cell = cell.aria("selected", cells.contains(here).toString)
+                    if cells.contains(here) then cell = cell.cssClass("p-uic-dt-cell-selected")
+                    if canSelect then cell = cell.onClick(toggleCell(here)).stopPropagation(true)
+                end if
                 // With navigation on, every cell is addressable and the editable ones are
                 // the tab stops: the DOM is row-major, so the browser's own tab order IS
                 // "the next editable cell, wrapping into the next row", and nothing has to
@@ -3630,9 +3704,11 @@ final case class DataTable[A] private (
         // content outgrows it still grows, which is the drift a scrollRows itemSize that
         // does not match the real row height shows up as.
         height.foreach(px => row = row.style(_.height(px.px)))
-        if rowClickSelects && canSelect then row = row.cssClass("p-datatable-selectable-row")
+        // With cells being picked the row is not what a click selects, so it offers neither
+        // the pointer that says it is nor the state a reader would be told about.
+        if rowClickSelects && canSelect && !cellSelectOn then row = row.cssClass("p-datatable-selectable-row")
         if isSel then row = row.cssClass("p-datatable-row-selected")
-        if selectionModeV != SelectionMode.None then row = row.aria("selected", isSel.toString)
+        if selectionModeV != SelectionMode.None && !cellSelectOn then row = row.aria("selected", isSel.toString)
         // A second, separate mark: the reader is acting ON this row without changing what
         // is selected, which is why Prime gives it a class of its own.
         if ctx.contains(id) then row = row.cssClass("p-datatable-contextmenu-row-selected")
@@ -3685,6 +3761,14 @@ final case class DataTable[A] private (
     private def toggleExpand(id: String)(using Frame): Any < Async =
         expandedRef match
             case Present(ref) => ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
+            case Absent       => ()
+
+    /** A click on a cell: replace the set with it, or toggle it in, by the mode. */
+    private def toggleCell(cell: CellPath)(using Frame): Any < Async =
+        selectedCellsRef match
+            case Present(ref) if selectionModeV == SelectionMode.Single =>
+                ref.getAndUpdate(cur => if cur == Set(cell) then Set.empty else Set(cell))
+            case Present(ref) => ref.getAndUpdate(cur => if cur.contains(cell) then cur - cell else cur + cell)
             case Absent       => ()
 
     /** A right-click over a row: remember which one, then tell the caller. */

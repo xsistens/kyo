@@ -936,6 +936,19 @@ The advance happens *in place*, which is the part that matters. `SortDirection` 
 
 In `SelectionMode.Checkbox` the checkbox column's header is the select-all. It is binary, matching Prime: a partial selection reads unchecked. It covers every row that survived the global filter rather than the page in view, and it adds or removes those keys instead of replacing the selection, so narrowing the filter, selecting all, and widening it again does not quietly drop what was selected before.
 
+`selectedCells(ref)` picks CELLS instead of rows, Prime's `cellSelection`, bound as a set of `CellPath`, which is a row key paired with a column path. Binding it is the switch, and `selectionMode` says what a click means: `Single` replaces the set, `Multiple` toggles the cell in it. A cell has no identity until a row key and a column path are put together, which is why this is a second binding rather than a mode over the row one. One click can mean one thing, so binding more than one of cell editing, row selection and cell selection is a card: editing keeps the click, then row selection, and cell selection is off while either is bound. `selectableWhen` covers cells too, which is what Prime's Cell Selection disabled section does with `isDataSelectable`.
+
+```scala
+val picking: UI < Async =
+    for cells <- Signal.initRef(Set.empty[uic.CellPath])
+    yield uic.DataTable[Product]()
+        .rows(catalog)
+        .rowKey(_.id)
+        .columns(uic.column("Name")(_.name), uic.column("Category")(_.category))
+        .selectionMode(uic.SelectionMode.Multiple)
+        .selectedCells(cells): UI
+```
+
 `selectableWhen(p)` keeps rows out of the selection without keeping them out of the table. A rejected row renders as it always did and still takes an `onRowClick`, but every path into the selection set is closed to it: the click writes nothing, the row loses the pointer cursor that says it can be picked, its checkbox carries Prime's disabled class and no handler at all, and the select-all steps over it. The predicate is consulted where the selection is written rather than once at render, so a row the caller starts rejecting cannot stay selected on the strength of having been selectable a moment ago.
 
 ```scala
