@@ -194,7 +194,9 @@ final case class CascadeSelect[A] private (
                     case Absent     => Signal.initRef(false)
                 refs  <- Kyo.foreach(groupPaths)(p => Signal.initRef(false).map(p -> _))
                 focus <- Signal.initRef(List.empty[Int])
-            yield wired(open, refs.toList, focus)
+                cmds  <- UI.commands
+                base  <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
+            yield wired(open, refs.toList, focus, Present(base))
         }.placeholder(stat)
     end render
 
@@ -204,12 +206,15 @@ final case class CascadeSelect[A] private (
     private[uic] def wired(
         open: SignalRef[Boolean],
         refs: List[(List[Int], SignalRef[Boolean])],
-        focus: SignalRef[List[Int]]
+        focus: SignalRef[List[Int]],
+        base: Maybe[String] = Absent
     )(using Frame): UI =
         open.render { o =>
             MenuRender.renderAll(refs) { openMap =>
                 focus.render { f =>
-                    withValue(cur => body(cur, o, openMap.withDefaultValue(false), Present(CascadeSelect.State(open, refs, focus, f))))
+                    withValue(cur =>
+                        body(cur, o, openMap.withDefaultValue(false), Present(CascadeSelect.State(open, refs, focus, f, base)))
+                    )
                 }
             }
         }
@@ -393,6 +398,8 @@ final case class CascadeSelect[A] private (
         )
     end bodyStatic
 
+    private def activeId(base: String): String = s"$base-active"
+
     /** One panel level: `ul.p-cascadeselect-list` (role `tree` at the root,
       * `group` nested) of leaf and group rows; an OPEN group row anchors its
       * side-nested Overlay sub-panel (host-gated single-subscription form — the
@@ -412,7 +419,9 @@ final case class CascadeSelect[A] private (
                 val isSel = key(a) == current
                 var row   = li.cssClass("p-cascadeselect-option").role("treeitem").aria("selected", isSel.toString)
                 if isSel then row = row.cssClass("p-cascadeselect-option-selected")
-                if st.exists(_.focus == (path :+ i)) then row = row.cssClass("p-focus")
+                if st.exists(_.focus == (path :+ i)) then
+                    row = row.cssClass("p-focus")
+                    st.flatMap(_.idBase).foreach(b => row = row.id(activeId(b)))
                 var content = div.cssClass("p-cascadeselect-option-content")
                 if st.isDefined then content = content.onClick(pick(a))
                 row(toChild(content(toChild(span.cssClass("p-cascadeselect-option-text")(labelF(a))))))
@@ -437,7 +446,9 @@ final case class CascadeSelect[A] private (
                     .aria("expanded", groupOpen.toString)
                     .aria("level", (p.size).toString)
                 if groupOpen then row = row.cssClass("p-cascadeselect-option-active")
-                if st.exists(_.focus == p) then row = row.cssClass("p-focus")
+                if st.exists(_.focus == p) then
+                    row = row.cssClass("p-focus")
+                    st.flatMap(_.idBase).foreach(b => row = row.id(activeId(b)))
                 var content = div.cssClass("p-cascadeselect-option-content")
                 if st.isDefined then content = content.onClick(toggleGroup)
                 val contentUI: UI = content(
@@ -477,7 +488,16 @@ final case class CascadeSelect[A] private (
                     case _ => Nil
                 row((contentUI :: panel).map(toChild)*)
         }
-        ul.cssClass("p-cascadeselect-list").role(if path.isEmpty then "tree" else "group")(rows.map(toChild)*)
+        var listEl = ul.cssClass("p-cascadeselect-list").role(if path.isEmpty then "tree" else "group")
+        // The ROOT list carries the announcement, wherever in the nested panels the highlight has
+        // travelled to: focus stays on the trigger and the panel, so the root is the element a
+        // screen reader is reading the descendant of.
+        if path.isEmpty then
+            st.foreach(state =>
+                if state.focus.nonEmpty then state.idBase.foreach(b => listEl = listEl.aria("activedescendant", activeId(b)))
+            )
+        end if
+        listEl(rows.map(toChild)*)
     end list
 end CascadeSelect
 
@@ -495,6 +515,12 @@ object CascadeSelect:
         open: SignalRef[Boolean],
         refs: List[(List[Int], SignalRef[Boolean])],
         focusRef: SignalRef[List[Int]],
-        focus: List[Int]
+        focus: List[Int],
+        /** The id the highlight is announced through. ONE id that travels with the highlight,
+          * which is how the menu family carries it: the rows live across nested panels, so a
+          * per-row id would be an id scheme spanning a tree, and `aria-activedescendant` only ever
+          * names one of them.
+          */
+        idBase: Maybe[String] = Absent
     )
 end CascadeSelect

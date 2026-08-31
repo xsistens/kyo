@@ -218,8 +218,42 @@ final case class AutoComplete[A] private (
         hi: SignalRef[Int],
         hiV: Int,
         all: SignalRef[Boolean],
-        allV: Boolean
+        allV: Boolean,
+        /** The id the highlight is announced through, as the rest of the combobox family carries
+          * it: a caller's own `id` wins, and a minted one stands in where there is none.
+          */
+        idBase: Maybe[String]
     )
+
+    private def optionId(base: String, index: Int): String = s"$base-option-$index"
+
+    /** One key over the FIELD, which is where this combobox's keyboard lives: the panel never
+      * takes focus, so every key arrives here.
+      *
+      * That is also what limits it. The field is a text box, so Home, End, Space and every
+      * printable key belong to the caret, and [[ListNav]] is read for the two vertical arrows
+      * alone. There is no typeahead for the same reason: the reader is already typing, and what
+      * they type filters.
+      *
+      * ArrowDown on a closed panel opens it rather than moving, which is the combobox pattern and
+      * the one case ListNav cannot express, since a closed panel has no highlight to move.
+      */
+    private def fieldKey(visible: List[A], panelShown: Boolean, s: State, pick: A => State => Any < Async)(
+        e: KeyboardEvent
+    )(using Frame): Any < Async =
+        val navigable = visible.indices.toList
+        val hiEff     = if visible.isEmpty then -1 else math.min(s.hiV, visible.size - 1)
+        e.key match
+            case Keyboard.ArrowDown if !s.isOpen => s.open.set(true)
+            case Keyboard.ArrowUp | Keyboard.ArrowDown if panelShown =>
+                ListNav.onKey(navigable, hiEff, e.key, wrap = false) match
+                    case Present(step) => s.hi.set(step.focus)
+                    case Absent        => ()
+            case Keyboard.Enter if panelShown && hiEff >= 0 && visible.isDefinedAt(hiEff) => pick(visible(hiEff))(s)
+            case Keyboard.Escape if s.isOpen                                              => s.open.set(false)
+            case _                                                                        => ()
+        end match
+    end fieldKey
 
     private[uic] def render(using Frame): UI =
         // The interaction state (open/highlight/show-all) lives in signals allocated
@@ -231,10 +265,12 @@ final case class AutoComplete[A] private (
         else
             UI.mounted {
                 for
+                    cmds <- UI.commands
+                    base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
                     open <- Signal.initRef(false)
                     hi   <- Signal.initRef(-1)
                     all  <- Signal.initRef(false)
-                yield wired(open, hi, all)
+                yield wired(open, hi, all, Present(base))
             }.placeholder(stat)
         end if
     end render
@@ -243,11 +279,13 @@ final case class AutoComplete[A] private (
       * directly (a full top-down re-render shows mounted regions as placeholders,
       * so the wired anatomy is only reachable here).
       */
-    private[uic] def wired(open: SignalRef[Boolean], hi: SignalRef[Int], all: SignalRef[Boolean])(using Frame): UI =
+    private[uic] def wired(open: SignalRef[Boolean], hi: SignalRef[Int], all: SignalRef[Boolean], base: Maybe[String] = Absent)(
+        using Frame
+    ): UI =
         open.render { o =>
             hi.render { h =>
                 all.render { a =>
-                    withText(cur => body(cur, Present(State(open, o, hi, h, all, a))))
+                    withText(cur => body(cur, Present(State(open, o, hi, h, all, a, base))))
                 }
             }
         }
@@ -366,18 +404,7 @@ final case class AutoComplete[A] private (
             // The keyboard stays on the FIELD (the panel never takes focus):
             // ArrowDown opens / moves the highlight down, ArrowUp up (no wrap),
             // Enter picks the highlighted suggestion, Escape closes.
-            f = f.preventScrollKeys.onKeyDown { e =>
-                e.key match
-                    case Keyboard.ArrowDown if !s.isOpen => s.open.set(true)
-                    case Keyboard.ArrowDown if panelShown =>
-                        s.hi.set(math.min(s.hiV + 1, visible.size - 1))
-                    case Keyboard.ArrowUp if panelShown =>
-                        s.hi.set(math.max(s.hiV - 1, 0))
-                    case Keyboard.Enter if panelShown && s.hiV >= 0 && s.hiV < visible.size =>
-                        pick(visible(s.hiV))(s)
-                    case Keyboard.Escape if s.isOpen => s.open.set(false)
-                    case _                           => ()
-            }
+            f = f.preventScrollKeys.onKeyDown(fieldKey(visible, panelShown, s, pick))
             // Native onBlur carries no payload → read the current text from the bound ref
             // (constant/unbound fall back to the fixed/empty value).
             onBlurF.foreach { g =>
@@ -463,6 +490,7 @@ final case class AutoComplete[A] private (
                 .role("option")
                 .data("uic-option-key", keyF.getOrElse(labelF)(a))
             if i == hiEff then row = row.cssClass("p-focus")
+            s.idBase.foreach(b => row = row.id(optionId(b, i)))
             row.onClick(pick(a)(s))(content)
         }
         val emptyRow: List[UI] =
@@ -473,7 +501,11 @@ final case class AutoComplete[A] private (
             else Nil
         val listUI: UI =
             div.cssClass("p-autocomplete-list-container")(
-                toChild(ul.cssClass("p-autocomplete-list").role("listbox")((rows ++ emptyRow).map(toChild)*))
+                toChild {
+                    var list = ul.cssClass("p-autocomplete-list").role("listbox")
+                    if hiEff >= 0 then s.idBase.foreach(b => list = list.aria("activedescendant", optionId(b, hiEff)))
+                    list((rows ++ emptyRow).map(toChild)*)
+                }
             )
         Overlay(s.open)
             .panelClass("p-autocomplete-overlay")

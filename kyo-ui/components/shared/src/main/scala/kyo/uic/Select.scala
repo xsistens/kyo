@@ -250,7 +250,13 @@ final case class Select[A] private (
         hi: SignalRef[Int],
         hiV: Int,
         q: SignalRef[String],
-        qV: String
+        qV: String,
+        /** The id the highlight is announced through. A caller's own `id` wins, and where there is
+          * none a minted one stands in, so `aria-activedescendant` is not something a reader has to
+          * opt into to be told which option is highlighted. Absent only in the placeholder, which
+          * has no highlight to announce.
+          */
+        idBase: Maybe[String]
     )
 
     private[uic] def render(using Frame): UI =
@@ -261,6 +267,8 @@ final case class Select[A] private (
         val stat: UI = withValue(cur => body(cur, Absent))
         UI.mounted {
             for
+                cmds <- UI.commands
+                base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
                 open <- openRefV match
                     case Present(r) => Kyo.lift(r)
                     case Absent     => Signal.initRef(false)
@@ -270,7 +278,7 @@ final case class Select[A] private (
                 q <- filterQueryRefV match
                     case Present(r) => Kyo.lift(r)
                     case Absent     => Signal.initRef("")
-            yield wired(open, hi, q)
+            yield wired(open, hi, q, Present(base))
         }.placeholder(stat)
     end render
 
@@ -278,11 +286,13 @@ final case class Select[A] private (
       * directly (a full top-down re-render shows mounted regions as placeholders,
       * so the wired anatomy is only reachable here).
       */
-    private[uic] def wired(open: SignalRef[Boolean], hi: SignalRef[Int], q: SignalRef[String])(using Frame): UI =
+    private[uic] def wired(open: SignalRef[Boolean], hi: SignalRef[Int], q: SignalRef[String], base: Maybe[String] = Absent)(
+        using Frame
+    ): UI =
         open.render { o =>
             hi.render { h =>
                 q.render { qq =>
-                    withValue(cur => body(cur, Present(State(open, o, hi, h, q, qq))))
+                    withValue(cur => body(cur, Present(State(open, o, hi, h, q, qq, base))))
                 }
             }
         }
@@ -452,6 +462,46 @@ final case class Select[A] private (
         )
     end bodyStatic
 
+    private def optionId(base: String, index: Int): String = s"$base-option-$index"
+
+    /** One key over the open panel.
+      *
+      * [[ListNav]] carries the movement, which is where Home and End come from and why a
+      * disabled option is stepped over rather than landed on. Two keys are held back when the
+      * panel has a FILTER HEADER, because then the panel holds a text field and the ARIA combobox
+      * pattern gives it the caret's keys: Space types a space rather than picking, and a printable
+      * key types rather than jumping. Without a header both belong to the list, and the printable
+      * one jumps to the option it starts, which is what [[Typeahead]] answers.
+      *
+      * Escape is not read here. [[Overlay]] dismisses on it before this runs, and closing twice is
+      * how a nested panel loses a level it should have kept.
+      */
+    private def panelKey(
+        shown: Seq[A],
+        navigable: List[Int],
+        hiEff: Int,
+        s: State,
+        pick: A => State => Any < Async
+    )(e: KeyboardEvent)(using Frame): Any < Async =
+        val caretOwns = filtering && (e.key == Keyboard.Space || e.key.charValue.isDefined)
+        if caretOwns then ()
+        else
+            ListNav.onKey(navigable, hiEff, e.key, wrap = false) match
+                case Present(step) if step.dismiss => ()
+                case Present(step) =>
+                    val picked: Any < Async =
+                        if step.activate && shown.isDefinedAt(step.focus) then pick(shown(step.focus))(s) else ()
+                    s.hi.set(step.focus).andThen(picked)
+                case Absent =>
+                    e.key match
+                        case Keyboard.Char(c) =>
+                            Typeahead.jump(shown.map(labelF), navigable, hiEff, c) match
+                                case Present(to) => s.hi.set(to)
+                                case Absent      => ()
+                        case _ => ()
+        end if
+    end panelKey
+
     /** The floating option panel: Prime's `.p-select-overlay` skin on the
       * [[Overlay]] primitive, holding the optional filter header and the option
       * list.
@@ -464,12 +514,9 @@ final case class Select[A] private (
         val shown = OptionItem.flatten(shownGroups)
         val hiEff = if shown.isEmpty then -1 else math.min(s.hiV, shown.size - 1)
 
-        /** Next enabled index from `from` in direction `step` (no wrap — Prime). */
-        def move(from: Int, step: Int): Int =
-            var i = from + step
-            while i >= 0 && i < shown.size && isOptionDisabled(shown(i)) do i += step
-            if i >= 0 && i < shown.size then i else from
-        end move
+        // The positions the highlight may land on. Prime's select stops at the ends rather than
+        // cycling, so `wrap` is false wherever this list is read.
+        val navigable: List[Int] = shown.indices.toList.filterNot(i => isOptionDisabled(shown(i)))
 
         val rows: List[UI] = OptionItem.rows(shownGroups, "p-select-option-group") { (a, i) =>
             val isSel = key(a) == current
@@ -483,6 +530,10 @@ final case class Select[A] private (
             if isSel then row = row.cssClass("p-select-option-selected")
             if isDis then row = row.cssClass("p-disabled").aria("disabled", "true")
             if i == hiEff then row = row.cssClass("p-focus")
+            // The id the list points `aria-activedescendant` at. Stamped on every option rather
+            // than on the highlighted one alone, so the attribute names a target that is already
+            // in the document whichever row the highlight is on.
+            s.idBase.foreach(b => row = row.id(optionId(b, i)))
             if !isDis then row = row.onClick(pick(a)(s))
             row((checkSlot :+ (span.cssClass("p-select-option-label")(labelF(a)): UI)).map(toChild)*)
         }
@@ -495,7 +546,13 @@ final case class Select[A] private (
 
         val listUI: UI =
             div.cssClass("p-select-list-container")(
-                toChild(ul.cssClass("p-select-list").role("listbox")((rows ++ emptyRow).map(toChild)*))
+                toChild {
+                    var list = ul.cssClass("p-select-list").role("listbox")
+                    // Without this the highlight was visible and unannounced: `.p-focus` paints a
+                    // row, and a reader who cannot see the paint learns nothing from it.
+                    if hiEff >= 0 then s.idBase.foreach(b => list = list.aria("activedescendant", optionId(b, hiEff)))
+                    list((rows ++ emptyRow).map(toChild)*)
+                }
             )
 
         // Prime wraps the filter in an IconField with a trailing search icon; the
@@ -538,14 +595,7 @@ final case class Select[A] private (
             .scroll(scrollV)
             .panelClass("p-select-overlay")
             .panelClass("p-component")
-            .onPanelKeyDown { e =>
-                e.key match
-                    case Keyboard.ArrowDown => s.hi.set(move(hiEff, 1))
-                    case Keyboard.ArrowUp   => s.hi.set(move(hiEff, -1))
-                    case Keyboard.Enter if hiEff >= 0 && hiEff < shown.size && !isOptionDisabled(shown(hiEff)) =>
-                        pick(shown(hiEff))(s)
-                    case _ => ()
-            }((header ++ keyCollisionCard ++ List(listUI))*)
+            .onPanelKeyDown(panelKey(shown, navigable, hiEff, s, pick))((header ++ keyCollisionCard ++ List(listUI))*)
             .render
     end overlayPanel
 
