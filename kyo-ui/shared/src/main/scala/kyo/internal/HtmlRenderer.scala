@@ -1754,6 +1754,21 @@ private[kyo] object HtmlRenderer:
            |      var __hk=(e.key==="ArrowLeft"||e.key==="ArrowRight"||e.key==="Home"||e.key==="End");
            |      if((__vk&&!__vc)||(__hk&&!__ed))e.preventDefault();
            |    }
+           |    // A non-submitting button with a click handler is activated TWICE by Enter or Space
+           |    // once a keydown is posted at all: once by the browser, once by the dispatcher, which
+           |    // emulates that activation where no browser does it. Suppress the browser's, so the
+           |    // button acts once and its own onKeyDown still sees the key.
+           |    if((e.key==="Enter"||e.key===" ")&&e.target&&e.target.tagName==="BUTTON"){
+           |      // The type is read from the prop channel first: this render writes type="submit" on
+           |      // every button and carries the intended one in data-kyo-prop-type, so the attribute
+           |      // alone answers differently here than in the client-rendered tree. Submitting a form
+           |      // is the one thing the dispatcher's emulation does not carry, so leave that case be.
+           |      var __pt=e.target.getAttribute("data-kyo-prop-type"),__at=e.target.getAttribute("type");
+           |      var __et=__pt?__pt:(__at?__at:"submit");
+           |      var __sub=(__et==="submit"&&e.target.closest&&e.target.closest("form"));
+           |      var __own=e.target.getAttribute("data-kyo-ev");
+           |      if(!__sub&&__own&&__own.split(",").indexOf("click")>=0&&he(e.target,"keydown"))e.preventDefault();
+           |    }
            |    // Focus-trap: when Tab is pressed inside a [data-kyo-focus-trap="1"] container,
            |    // wrap focus within the trap's focusable children instead of escaping to the page.
            |    // Escape falls through so the element's onKeyDown handler can close the modal.

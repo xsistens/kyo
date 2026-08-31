@@ -948,6 +948,7 @@ private[kyo] object DomBackend:
                 val tgt = e.target.asInstanceOf[dom.Element]
                 if tgt != null && scrollKeyPrevented(ke.key, tgt) && tgt.closest("[data-kyo-scroll-keys]") != null then
                     e.preventDefault()
+                if tgt != null && doubleActivation(ke.key, tgt) then e.preventDefault()
             end if
             findPathElement(e.target.asInstanceOf[dom.Element]).foreach { target =>
                 val path    = parsePath(target.getAttribute("data-kyo-path"))
@@ -1474,6 +1475,42 @@ private[kyo] object DomBackend:
       * vertical keys on purpose: that is the combobox case where `ArrowDown` drives the listbox highlight.
       * Horizontal/edge keys are exempt for any text-editable target, so a filter input keeps caret movement.
       */
+    /** Whether Enter or Space on `target` would activate it TWICE.
+      *
+      * A button with a click handler is activated by the browser itself, and the dispatcher
+      * emulates that same activation from the keydown, for the transports and the tests where
+      * no browser does it. Both happen as soon as a keydown is posted at all, which is the
+      * moment anything in the chain declares one: an accordion that navigates its headers with
+      * the arrows opened a panel and closed it again on one press of Space.
+      *
+      * The browser's is the one to suppress, since the dispatcher's runs after the element's
+      * own `onKeyDown` and keeps the two in a defined order. Only an explicitly non-submitting
+      * button qualifies: the browser's Enter on a submit button also submits the form around
+      * it, which the emulation does not carry, and an anchor's Enter also navigates.
+      */
+    private def doubleActivation(key: String, target: dom.Element): Boolean =
+        (key == "Enter" || key == " ") &&
+            target.tagName == "BUTTON" &&
+            !submits(target) && {
+                val declared = target.getAttribute("data-kyo-ev")
+                declared != null && declared.split(",").contains("click")
+            } && declaredInChain(target, "keydown")
+
+    /** Whether this button's native activation would submit a form, which is the one thing the
+      * dispatcher's emulation does not carry and so the one case to leave alone.
+      *
+      * The type is read from the prop channel first: the server render writes `type="submit"`
+      * on every button and carries the intended one in `data-kyo-prop-type` for the client to
+      * apply, so the attribute alone answers differently on the two transports for the same
+      * component. A button outside a form submits nothing whatever its type says.
+      */
+    private def submits(target: dom.Element): Boolean =
+        val declaredType = target.getAttribute("data-kyo-prop-type")
+        val attrType     = target.getAttribute("type")
+        val effective    = if declaredType != null then declaredType else if attrType != null then attrType else "submit"
+        effective == "submit" && target.closest("form") != null
+    end submits
+
     private def scrollKeyPrevented(key: String, target: dom.Element): Boolean =
         val tag = target.tagName
         // `isContentEditable` is an HTMLElement member: an SVG target does not carry it, and jsdom implements
