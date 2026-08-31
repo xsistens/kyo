@@ -14,14 +14,25 @@ import kyo.UI.Keyboard
   * builds that list once while it lays its rows out, and a focus of `-1` means nothing is
   * highlighted yet, which is the state a list renders in before the reader has touched it.
   *
-  * `wrap` is the one thing the three hosts disagree about, and it is not a preference: the
+  * `wrap` is one of the two things the hosts disagree about, and it is not a preference: the
   * ARIA menu pattern wraps and Prime's menus wrap with it, while Prime's listbox stops at the
-  * ends. A host passes what its own pattern says.
+  * ends. The other is `orientation`, for the hosts whose rows sit in a row rather than a
+  * column. A host passes what its own pattern says.
   *
   * `Absent` means the key is not ours, so the host leaves it to the browser. That is what
   * keeps Tab, typing into a filter header, and a screen reader's own keys working.
   */
 private[uic] object ListNav:
+
+    /** Which pair of arrows moves the highlight.
+      *
+      * The other pair is left to the browser rather than aliased onto the same movement: in a
+      * horizontal tablist ArrowDown belongs to the page, and a tablist that swallowed it would
+      * take scrolling away from a reader who is already looking past it. Home and End reach the
+      * ends either way, since neither has an axis.
+      */
+    enum Orientation derives CanEqual:
+        case Vertical, Horizontal
 
     /** The outcome of one key press. `focus` is the new highlight position (`-1` for none),
       * `activate` asks the host to run the focused row's action, and `dismiss` asks it to
@@ -51,13 +62,21 @@ private[uic] object ListNav:
                     else focus
     end move
 
-    def onKey(navigable: List[Int], focus: Int, key: Keyboard, wrap: Boolean): Maybe[Step] =
+    def onKey(
+        navigable: List[Int],
+        focus: Int,
+        key: Keyboard,
+        wrap: Boolean,
+        orientation: Orientation = Orientation.Vertical
+    ): Maybe[Step] =
         import Keyboard.*
+        val forward = if orientation == Orientation.Vertical then ArrowDown else ArrowRight
+        val back    = if orientation == Orientation.Vertical then ArrowUp else ArrowLeft
         key match
-            case ArrowDown => Present(Step(move(navigable, focus, +1, wrap)))
-            case ArrowUp   => Present(Step(move(navigable, focus, -1, wrap)))
-            case Home      => Maybe.fromOption(navigable.headOption).map(Step(_))
-            case End       => Maybe.fromOption(navigable.lastOption).map(Step(_))
+            case k if k == forward => Present(Step(move(navigable, focus, +1, wrap)))
+            case k if k == back    => Present(Step(move(navigable, focus, -1, wrap)))
+            case Home              => Maybe.fromOption(navigable.headOption).map(Step(_))
+            case End               => Maybe.fromOption(navigable.lastOption).map(Step(_))
             case Enter | Space =>
                 if navigable.contains(focus) then Present(Step(focus, activate = true)) else Absent
             case Escape => Present(Step(focus = -1, dismiss = true))

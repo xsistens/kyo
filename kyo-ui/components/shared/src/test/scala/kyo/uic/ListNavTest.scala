@@ -4,7 +4,7 @@ import kyo.*
 import kyo.UI.Keyboard
 import kyo.uic.ListNav.Step
 
-/** Pure-logic assertions for the [[ListNav]] roving-focus state machine — no DOM, no effects
+/** Pure-logic assertions for the [[ListNav]] roving-focus state machine: no DOM, no effects
   * (the semantics [[Menu]], [[Listbox]] and [[Accordion]] map onto their own focus state).
   */
 class ListNavTest extends UicTest:
@@ -82,6 +82,35 @@ class ListNavTest extends UicTest:
     "an empty list has nowhere to go" in assert(
         ListNav.onKey(Nil, -1, Keyboard.ArrowDown, wrap = true) == Present(Step(-1)) &&
             ListNav.onKey(Nil, -1, Keyboard.Home, wrap = true) == Absent
+    )
+
+    // ---- orientation ----
+
+    private def hkey(focus: Int, k: Keyboard) =
+        ListNav.onKey(navigable, focus, k, wrap = true, ListNav.Orientation.Horizontal)
+
+    "a horizontal list moves on the horizontal arrows" in assert(
+        hkey(-1, Keyboard.ArrowRight) == Present(Step(0)) &&
+            hkey(-1, Keyboard.ArrowLeft) == Present(Step(5)) &&
+            hkey(0, Keyboard.ArrowRight) == Present(Step(2))
+    )
+
+    "a horizontal list leaves the vertical arrows to the browser" in assert(
+        hkey(0, Keyboard.ArrowDown) == Absent && hkey(0, Keyboard.ArrowUp) == Absent
+    )
+
+    "a vertical list leaves the horizontal arrows to the browser" in assert(
+        key(0, Keyboard.ArrowLeft) == Absent && key(0, Keyboard.ArrowRight) == Absent
+    )
+
+    "Home and End have no axis, so both orientations reach the ends" in assert(
+        hkey(2, Keyboard.Home) == Present(Step(0)) && hkey(2, Keyboard.End) == Present(Step(5))
+    )
+
+    "activation and dismissal have no axis either" in assert(
+        hkey(2, Keyboard.Enter) == Present(Step(2, activate = true)) &&
+            hkey(2, Keyboard.Space) == Present(Step(2, activate = true)) &&
+            hkey(2, Keyboard.Escape) == Present(Step(-1, dismiss = true))
     )
 
 end ListNavTest

@@ -120,6 +120,11 @@ private[uic] object GridNav:
             // typing over a cell replace it. Backspace and Delete open it empty.
             case Keyboard.Backspace | Keyboard.Delete =>
                 if g.editable(at) then Present(Step(edit = EditOp.Open(Present("")))) else Absent
+            // Space is the one printable key that does not, because in a grid it is the
+            // selection key: that is what AG Grid does and what the ARIA grid pattern says,
+            // and it is the reason Enter and Space part ways here while they mean the same
+            // thing on every button-shaped row in the library. A reader who wants a leading
+            // space in a cell opens the editor with Enter or F2 first.
             case Keyboard.Space => Present(Step(selectRow = true))
             case k =>
                 k.charValue match
