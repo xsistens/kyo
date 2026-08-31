@@ -85,7 +85,7 @@ final case class Icon private (
                     case Present(TextValue.Const(n)) => btn.aria("label", n)
                     case Present(TextValue.Dyn(s))   => btn.aria("label", s)
                     case Absent                      => btn
-                onClickEff.map(e => withName.onClick(e)).getOrElse(withName)
+                onClickEff.map(e => operable(withName, e)).getOrElse(withName)
 
     /** Implicit default behaviour (no explicit `mode`): decorative, image when an
       * `accessibleName` is set, interactive when an `onClick` is set.
@@ -96,9 +96,21 @@ final case class Icon private (
             case Present(TextValue.Dyn(s))   => el.role("img").aria("label", s)
             case Absent                      => el.aria("hidden", "true")
         onClickEff match
-            case Present(e) => withA11y.role("button").tabIndex(0).onClick(e)
+            case Present(e) => operable(withA11y.role("button").tabIndex(0), e)
             case Absent     => withA11y
     end implicitMode
+
+    /** Runs `action` on a click and on the two keys a `role="button"` owes the reader.
+      *
+      * A span is not a button, so the browser gives it neither: without this the icon was a tab
+      * stop that answered nothing at all.
+      */
+    private def operable(el: Ast.SpanElement, action: Any < Async)(using Frame): Ast.SpanElement =
+        el.onClick(action).onKeyDown { evt =>
+            evt.key match
+                case Keyboard.Enter | Keyboard.Space => action
+                case _                               => ()
+        }
 end Icon
 
 object Icon:

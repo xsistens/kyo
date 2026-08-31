@@ -119,9 +119,18 @@ final case class OrganizationChart private (
                 List(
                     a
                         .cssClass("p-organizationchart-node-toggle-button")
+                        .role("button")
                         .tabIndex(0)
                         .aria("expanded", isExpanded.toString)
                         .onClick(toggleNode(node.id))
+                        // Prime's toggle is an anchor with no `href`, which the browser treats as
+                        // ordinary text: it neither focuses it nor turns Enter into a click. The
+                        // tab stop is this component's own, so the keys have to be too.
+                        .onKeyDown { evt =>
+                            evt.key match
+                                case Keyboard.Enter | Keyboard.Space => toggleNode(node.id)
+                                case _                               => ()
+                        }
                         .stopPropagation(true)(
                             toChild(
                                 GlyphSvg(

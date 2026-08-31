@@ -6093,4 +6093,78 @@ class GoldenRenderTest extends UicTest:
             assert(extra.contains(".p-uic-dialog-resize-handle"), "resize handle glue")
             assert(extra.contains(".p-uic-knob-dial { pointer-events: none; }"), "knob dial pointer-events glue")
     }
+    // ---- focusable means operable ----
+
+    /** Elements the browser activates from the keyboard on its own, so a kyo key handler on top
+      * would be the second activation rather than the first. An anchor qualifies only with an
+      * `href`: without one the browser gives it neither focus nor Enter.
+      */
+    private def nativelyOperable(tag: String, attrs: String): Boolean =
+        tag match
+            case "button" | "input" | "select" | "textarea" | "summary" => true
+            case "a"                                                    => attrs.contains("href=\"")
+            case _                                                      => false
+
+    private val openTag = """<([a-zA-Z][a-zA-Z0-9]*)\s([^>]*?)/?>""".r
+    private val evAttr  = """data-kyo-ev="([^"]*)"""".r
+
+    /** Every element in `html` that takes the Tab key and acts on a click, but answers no key.
+      *
+      * That combination is a tab stop a keyboard cannot operate: the reader arrives on it, presses
+      * the two keys that work everywhere else, and nothing happens. The list is returned whole
+      * rather than as a first hit, since the interesting question is which components have it.
+      */
+    private def deadTabStops(html: String): Seq[String] =
+        openTag.findAllMatchIn(html).flatMap { m =>
+            val tag   = m.group(1).toLowerCase
+            val attrs = m.group(2)
+            val ev    = evAttr.findFirstMatchIn(attrs).map(_.group(1)).getOrElse("").split(",").toSet
+            val dead  = attrs.contains("tabindex=\"0\"") && ev.contains("click") && !ev.contains("keydown")
+            if dead && !nativelyOperable(tag, attrs) then Some(s"<$tag> ${m.group(0).take(120)}") else None
+        }.toSeq
+
+    // The sample below grows with the campaign that introduced this leaf: a component joins it as
+    // its keyboard lands, so the invariant is always green and always covers what has been done.
+    "every focusable element that acts on a click also acts on a key" in {
+        final case class Row(id: String, name: String, note: String) derives CanEqual
+        val rows = List(Row("r1", "Ada", "first"), Row("r2", "Grace", "second"))
+        for
+            icon    <- renderHtml(uic.Icon(uic.Icons.check).accessibleName("Save").onClick(()))
+            inplace <- renderHtml(uic.Inplace().display(span("View")).content(p("Full")).closable(true))
+            org <- Signal.initRef(Set("ceo")).map { expanded =>
+                uic.OrganizationChart()
+                    .node(uic.OrgChartNode("CEO", "ceo", children = List(uic.OrgChartNode("CTO", "cto"))))
+                    .expanded(expanded)
+            }.flatMap(o => renderHtml(o.render))
+            table <- Signal.initRef(List.empty[uic.SortKey]).map { sort =>
+                uic.DataTable[Row]().rows(rows).rowKey(_.id)
+                    .columns(uic.column("Name")(_.name).sortBy(_.name))
+                    .selectionMode(uic.SelectionMode.Single)
+                    .sort(sort)
+            }.map(_.render).flatMap(renderHtml)
+            tree <- Signal.initRef(List.empty[uic.SortKey]).map { sort =>
+                uic.TreeTable[Row]().nodes(uic.TreeTableNode(rows.head))
+                    .columns(uic.column("Name")(_.name).sortBy(_.name))
+                    .selectionMode(uic.SelectionMode.Single)
+                    .sort(sort)
+            }.map(_.render).flatMap(renderHtml)
+            // The shapes that already get it right, so the invariant is proven to have teeth
+            // in both directions rather than only where it currently bites.
+            card   <- renderHtml(uic.Card().title("Info").onHeaderClick(())(p("Body")))
+            avatar <- renderHtml(uic.Avatar().initials("AL").onClick(()))
+        yield
+            val named = List(
+                "Icon" -> icon,
+                "Inplace" -> inplace,
+                "OrganizationChart" -> org,
+                "DataTable" -> table,
+                "TreeTable" -> tree,
+                "Card" -> card,
+                "Avatar" -> avatar
+            )
+            val offenders = named.flatMap((name, html) => deadTabStops(html).map(el => s"$name: $el"))
+            assert(offenders.isEmpty, s"these tab stops answer no key:\n${offenders.mkString("\n")}")
+            assert(card.nonEmpty && avatar.nonEmpty, "the two known-good shapes rendered at all")
+    }
+
 end GoldenRenderTest
