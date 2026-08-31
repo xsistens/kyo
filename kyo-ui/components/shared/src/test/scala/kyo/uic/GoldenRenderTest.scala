@@ -6142,12 +6142,14 @@ class GoldenRenderTest extends UicTest:
                     .selectionMode(uic.SelectionMode.Single)
                     .sort(sort)
             }.map(_.render).flatMap(renderHtml)
-            tree <- Signal.initRef(List.empty[uic.SortKey]).map { sort =>
+            treeSort <- Signal.initRef(List.empty[uic.SortKey])
+            tree <- renderHtml(
                 uic.TreeTable[Row]().nodes(uic.TreeTableNode(rows.head))
                     .columns(uic.column("Name")(_.name).sortBy(_.name))
                     .selectionMode(uic.SelectionMode.Single)
-                    .sort(sort)
-            }.map(_.render).flatMap(renderHtml)
+                    .sort(treeSort)
+                    .wired("tt", _ => ())
+            )
             // The shapes that already get it right, so the invariant is proven to have teeth
             // in both directions rather than only where it currently bites.
             // The roving-tabindex family, rendered through the `wired` seam: their key handlers

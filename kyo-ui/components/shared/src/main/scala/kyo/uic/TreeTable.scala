@@ -139,14 +139,22 @@ final case class TreeTable[A] private (
             case Absent     => k(fallback)
 
     private[uic] def render(using Frame): UI =
-        withVisibleColumns(_.buildAll)
+        UI.mounted {
+            UI.commands.map { cmds =>
+                cmds.freshId.map(base => withVisibleColumns(_.buildAll(base, id => cmds.focusId(id))))
+            }
+        }.placeholder(withVisibleColumns(_.buildAll("", _ => ())))
 
-    private def buildAll(using Frame): UI =
+    /** The seam the golden tests render, since a mount shows only its placeholder there. */
+    private[uic] def wired(base: String, focus: String => Any < Async)(using Frame): UI =
+        withVisibleColumns(_.buildAll(base, focus))
+
+    private def buildAll(base: String, focus: String => Any < Async)(using Frame): UI =
         withSortableFlags { flags =>
             withRef(expandedRef, Set.empty[String]) { exp =>
                 withRef(selectedRef, Set.empty[String]) { sel =>
                     withRef(sortRef, List.empty[SortKey]) { sort =>
-                        body(exp, sel, sort, flags)
+                        body(exp, sel, sort, flags, base, focus)
                     }
                 }
             }
@@ -187,7 +195,14 @@ final case class TreeTable[A] private (
         loop(reactive, Map.empty)
     end withSortableFlags
 
-    private def body(exp: Set[String], sel: Set[String], sort: List[SortKey], flags: Map[String, Boolean])(using
+    private def body(
+        exp: Set[String],
+        sel: Set[String],
+        sort: List[SortKey],
+        flags: Map[String, Boolean],
+        base: String,
+        focus: String => Any < Async
+    )(using
         Frame
     ): UI =
         // The paths whose headers the reader can actually click; the rest of the spec is
@@ -214,8 +229,11 @@ final case class TreeTable[A] private (
                     )
                 )
             else
-                sortSiblings(nodeList, sort).zipWithIndex.flatMap { (n, i) =>
-                    renderNode(n, depth = 0, path = i.toString, exp, sel, sort)
+                val seen = visibleRows(nodeList, depth = 0, prefix = "", exp, sort)
+                val navRows =
+                    seen.map((n, d, path) => TreeNav.Row(d, keyOf(n.data, path), n.children.nonEmpty, exp.contains(keyOf(n.data, path))))
+                seen.zipWithIndex.map { case ((n, d, path), i) =>
+                    renderRow(n, d, path, i, navRows, exp, sel, base, focus)
                 }
 
         // One `col` per column when any of them is sized, which is the only place a width
@@ -245,6 +263,12 @@ final case class TreeTable[A] private (
         )
 
         var root = div.cssClass("p-treetable").cssClass("p-component")
+        // The arrows drive the cursor, so they must not also scroll the page under it. Only once
+        // the mount has run: without a cursor there is nothing here that consumes them. No class
+        // goes with it, unlike DataTable's `.p-uic-dt-nav`: that one scopes a ring the extracted
+        // sheet does not have for a cell, and the sheet already rings a focused row itself, under
+        // `:focus-visible`, which is where a keyboard ring belongs.
+        if base.nonEmpty then root = root.preventScrollKeys
         if rowInteractive then root = root.cssClass("p-treetable-hoverable")
         if gridlinesFlag then root = root.cssClass("p-treetable-gridlines")
         sizeV match
@@ -348,15 +372,42 @@ final case class TreeTable[A] private (
                 )
             case Absent => ()
 
-    /** One row (plus, while expanded, its recursively rendered children). */
-    private def renderNode(
+    /** The rows as the reader sees them, flat and in order: a collapsed node contributes one
+      * row and its children none.
+      *
+      * The render and the keyboard both read THIS list, which is the point of having it. Two
+      * traversals that walked the tree separately would disagree the moment one of them
+      * changed, and disagreeing about which row is row 5 is a keyboard that moves the reader
+      * somewhere they did not aim at.
+      */
+    private def visibleRows(
+        nodes: List[TreeTableNode[A]],
+        depth: Int,
+        prefix: String,
+        exp: Set[String],
+        sort: List[SortKey]
+    ): List[(TreeTableNode[A], Int, String)] =
+        sortSiblings(nodes, sort).zipWithIndex.flatMap { (n, i) =>
+            val path = if prefix.isEmpty then i.toString else s"$prefix.$i"
+            val kids =
+                if n.children.nonEmpty && exp.contains(keyOf(n.data, path)) then
+                    visibleRows(n.children, depth + 1, path, exp, sort)
+                else Nil
+            (n, depth, path) :: kids
+        }
+
+    /** One row of the table. */
+    private def renderRow(
         node: TreeTableNode[A],
         depth: Int,
         path: String,
+        index: Int,
+        navRows: List[TreeNav.Row],
         exp: Set[String],
         sel: Set[String],
-        sort: List[SortKey]
-    )(using Frame): List[UI] =
+        base: String,
+        focus: String => Any < Async
+    )(using Frame): UI =
         val id          = keyOf(node.data, path)
         val hasChildren = node.children.nonEmpty
         val isExp       = exp.contains(id)
@@ -401,26 +452,75 @@ final case class TreeTable[A] private (
 
         var row = tr.role("row").aria("level", (depth + 1).toString)
         if hasChildren then row = row.aria("expanded", isExp.toString)
-        if rowInteractive then
+        if rowInteractive then row = row.cssClass("p-treetable-selectable-row").onClick(activate(id))
+        if base.isEmpty then
+            // The placeholder: no mount has run, so there is nothing to move focus with. Every
+            // selectable row stays its own tab stop and answers the two activation keys, which is
+            // what the table did before it grew a cursor.
+            if rowInteractive then
+                row = row.tabIndex(0).onKeyDown(e => if activationOf(e).isDefined then activate(id) else ())
+        else
+            // A treegrid is ONE tab stop. The first row takes it and the rest are reachable by
+            // the arrows, which is what the role has been claiming all along. Navigation does not
+            // wait for selection to be bound: a tree that cannot be selected can still be read.
             row = row
-                .cssClass("p-treetable-selectable-row")
-                .tabIndex(0)
-                .onClick(activate(id))
-                .onKeyDown(e => if activationOf(e).isDefined then activate(id) else ())
+                .id(rowId(base, index))
+                .tabIndex(if index == 0 then 0 else -1)
+                .onKeyDown(rowKey(base, navRows, index, focus))
         end if
         if isSel then row = row.cssClass("p-treetable-row-selected")
         if selectionModeV != SelectionMode.None then row = row.aria("selected", isSel.toString)
-        val rowEl: UI = row(tds.map(toChild)*)
+        row(tds.map(toChild)*)
+    end renderRow
 
-        val childRows: List[UI] =
-            if hasChildren && isExp then
-                sortSiblings(node.children, sort).zipWithIndex.flatMap { (c, i) =>
-                    renderNode(c, depth + 1, s"$path.$i", exp, sel, sort)
-                }
-            else Nil
+    private def rowId(base: String, index: Int): String = s"$base-r$index"
 
-        rowEl :: childRows
-    end renderNode
+    /** One key over one row, read against the tree as it stands on the screen.
+      *
+      * [[TreeNav]] is the whole semantics, unchanged from [[Tree]]: Down and Up walk the visible
+      * rows, Right opens a closed parent and then steps into it, Left closes an open one and
+      * otherwise climbs to the parent, Home and End reach the ends, and Enter or Space selects
+      * the row and toggles it when it has children.
+      *
+      * This is a ROW cursor rather than a cell cursor, which the ARIA treegrid pattern allows and
+      * which is what this table can actually do: it has no cell-level operation to move a cursor
+      * to. [[DataTable]] puts the cursor on cells because a cell there opens an editor;
+      * a cell here would be motion with nothing at the end of it.
+      *
+      * `Absent` means the key was never ours, so the browser keeps it.
+      */
+    private def rowKey(base: String, navRows: List[TreeNav.Row], index: Int, focus: String => Any < Async)(using
+        Frame
+    ): KeyboardEvent => Any < Async = e =>
+        TreeNav.onKey(navRows, index, e.key) match
+            case Absent => ()
+            case Present(step) =>
+                val opEff: Any < Async = step.op match
+                    case TreeNav.Op.Keep        => ()
+                    case TreeNav.Op.Expand(k)   => setExpanded(k, open = true)
+                    case TreeNav.Op.Collapse(k) => setExpanded(k, open = false)
+                val moveEff: Any < Async =
+                    if step.focus != index && navRows.isDefinedAt(step.focus) then focus(rowId(base, step.focus))
+                    else ()
+                val actEff: Any < Async =
+                    if step.activate && rowInteractive && navRows.isDefinedAt(index) then activate(navRows(index).key)
+                    else ()
+                opEff.andThen(moveEff).andThen(actEff)
+
+    /** Opens or closes one row by key, then fires `onNodeToggle` as a click would.
+      *
+      * [[TreeNav]] names the row it means rather than asking for a flip, so a key that says
+      * "open" cannot close a row that a re-render opened underneath it.
+      */
+    private def setExpanded(id: String, open: Boolean)(using Frame): Any < Async =
+        val write: Any < Async = expandedRef match
+            case Present(ref) => ref.getAndUpdate(cur => if open then cur + id else cur - id)
+            case Absent       => ()
+        val fire: Any < Async = onNodeToggleF match
+            case Present(f) => f(id)
+            case Absent     => ()
+        write.andThen(fire)
+    end setExpanded
 
     /** A toggler press flips the row in the bound `expanded` set, then fires
       * `onNodeToggle`.
