@@ -6,7 +6,7 @@ import kyo.*
   *
   * Every method runs JS via [[BrowserEval.evalJs]] (or composes around helpers that do). The probes return short ASCII sentinels (e.g.
   * `"visible"`, `"hidden"`, `"not_attached"`) which the caller in `Browser.scala` translates into typed assertions / Aborts. The keyboard
-  * shims (`runTabFocusAdvance`, `markActiveElementForTabAdvance`, `runSpaceClickSynthesis`) bridge gaps in CDP's synthetic-key handling.
+  * shims (`runTabFocusAdvance`, `markActiveElementForTabAdvance`) bridge gaps in CDP's synthetic-key handling.
   */
 private[kyo] object ProbesJs:
 
@@ -305,29 +305,6 @@ private[kyo] object ProbesJs:
             "(() => { const a = document.activeElement; if (a && a.setAttribute) a.setAttribute('data-kyo-tab-prev', '1'); return 'ok'; })()"
         ).unit
     end markActiveElementForTabAdvance
-
-    /** Click-synthesis shim for `Key.Space` on activatable controls. Real browsers fire a synthetic `click` on the focused element on Space
-      * `keyup` for `<button>`, `<input type="checkbox">`, and `<input type="radio">`; CDP's synthetic Space keystroke does not. The shim
-      * runs INSIDE `MutationSettlement.afterAction` (so subscribers observe state changes as settled mutations) AFTER the keyUp dispatch
-      * and only invokes `el.click()` if `document.activeElement` is one of those three activatable types.
-      *
-      * For all other elements (text inputs, links, body, etc.) the shim is a no-op so a literal Space character can still be inserted by
-      * Chromium directly via the keyDown's `text:" "` field. `HTMLElement.click()` is itself a no-op for disabled elements per the HTML
-      * spec.
-      */
-    private[kyo] def runSpaceClickSynthesis(using
-        Frame
-    ): Unit < (Browser & Abort[BrowserReadException]) =
-        BrowserEval.evalJs(
-            """(() => {
-              |  const el = document.activeElement;
-              |  if (!el) return 'noop';
-              |  if (el.tagName === 'BUTTON') { el.click(); return 'clicked'; }
-              |  if (el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) { el.click(); return 'clicked'; }
-              |  return 'noop';
-              |})()""".stripMargin
-        ).unit
-    end runSpaceClickSynthesis
 
     private[kyo] def focusElement(selector: Selector)(using
         Frame
