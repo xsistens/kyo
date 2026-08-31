@@ -33,7 +33,7 @@ final case class TextArea private (
     onBlurF: Maybe[String => Any < Async] = Absent,
     extraClassesV: List[String] = Nil,
     idV: Maybe[String] = Absent
-) extends Node, TextFormControl:
+) extends Node, TextFormControl, HasPlaceholder, HasAccessibleNameRef:
     type Self = TextArea
 
     /** Package-internal class hook: wrappers (FloatLabel/IconField) stamp Prime's
@@ -50,27 +50,20 @@ final case class TextArea private (
     /** Binds two-way to `ref`: edits write back into the ref, ref changes update the textarea. */
     def value(ref: SignalRef[String]): TextArea = copy(valueBinding = Present(Input.Value.Ref(ref)))
 
-    def placeholder(v: String): TextArea = copy(placeholderText = Present(TextValue.Const(v)))
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): TextArea = copy(placeholderText = v)
 
-    /** Reactive placeholder that tracks `sig` — patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render of the field) on each emission.
+    def rows(n: Int): TextArea = copy(rowsV = Present(math.max(1, n)))
+
+    /** Disables the field. A `Signal[Boolean]` toggles the native `disabled` attribute IN PLACE via kyo-
+      * ui's boolean attribute channel, so there is no re-render and caret/focus survive.
       */
-    def placeholder(sig: Signal[String]): TextArea = copy(placeholderText = Present(TextValue.Dyn(sig)))
-    def rows(n: Int): TextArea                     = copy(rowsV = Present(math.max(1, n)))
-    def disabled(v: Boolean): TextArea             = copy(disabledFlag = Present(BoolValue.Const(v)))
+    def disabled(v: Boolean | Signal[Boolean]): TextArea = copy(disabledFlag = Present(ReactiveValue(v)))
 
-    /** Reactive disabled — the native `disabled` attribute is toggled IN PLACE via kyo-ui's boolean
-      * attribute channel (no re-render, so caret/focus survive).
+    /** Native `readonly`, so the field is focusable but not editable. A `Signal[Boolean]` toggles the
+      * attribute IN PLACE via kyo-ui's boolean attribute channel, so there is no re-render and caret/focus
+      * survive.
       */
-    def disabled(sig: Signal[Boolean]): TextArea = copy(disabledFlag = Present(BoolValue.Dyn(sig)))
-
-    /** Native `readonly` — the field is focusable but not editable. */
-    def readonly(v: Boolean): TextArea = copy(readonlyFlag = Present(BoolValue.Const(v)))
-
-    /** Reactive readonly — the native `readonly` attribute is toggled IN PLACE via kyo-ui's boolean
-      * attribute channel (no re-render, so caret/focus survive).
-      */
-    def readonly(sig: Signal[Boolean]): TextArea = copy(readonlyFlag = Present(BoolValue.Dyn(sig)))
+    def readonly(v: Boolean | Signal[Boolean]): TextArea = copy(readonlyFlag = Present(ReactiveValue(v)))
 
     /** Marks the field required (native constraint + `aria-required`). */
     def required(v: Boolean): TextArea = copy(requiredFlag = Present(v))
@@ -96,34 +89,12 @@ final case class TextArea private (
     /** Spans the full width of its container (`.p-textarea-fluid`). */
     def fluid(v: Boolean): TextArea = copy(fluidFlag = v)
 
-    /** Marks the field invalid (`.p-invalid` + `aria-invalid`). */
-    def invalid(v: Boolean): TextArea = copy(invalidV = Present(BoolValue.Const(v)))
+    private[uic] def withInvalid(v: Maybe[BoolValue]): TextArea                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): TextArea                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): TextArea = copy(invalidMsgDynV = v)
 
-    /** Message rendered below the field while `invalid(true)` (kyo extension —
-      * `div.p-uic-invalid-message`).
-      */
-    def invalidMessage(v: String): TextArea = copy(invalidMsgV = Present(v))
-
-    /** Reactive validity: the bound signal toggles `.p-invalid` + `aria-invalid` in
-      * place. Explicit override of the message-derived red default.
-      */
-    def invalid(sig: Signal[Boolean]): TextArea = copy(invalidV = Present(BoolValue.Dyn(sig)))
-
-    /** Reactive invalid message — `Present` shows the row and (by default) turns the
-      * field red; `Absent` clears both. Re-renders in place on emission.
-      */
-    def invalidMessage(sig: Signal[Maybe[String]]): TextArea = copy(invalidMsgDynV = Present(sig))
-
-    /** Accessible name → `aria-label`. */
-    def accessibleName(v: String): TextArea = copy(accNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): TextArea = copy(accNameV = Present(TextValue.Dyn(sig)))
-
-    /** Accessible name reference → `aria-labelledby`. */
-    def accessibleNameRef(v: String): TextArea = copy(accNameRefV = Present(v))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): TextArea = copy(accNameV = v)
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): TextArea = copy(accNameRefV = v)
 
     def onInput(f: String => Any < Async): TextArea  = copy(onInputF = Present(f))
     def onChange(f: String => Any < Async): TextArea = copy(onChangeF = Present(f))

@@ -114,6 +114,15 @@ object Theme:
       |/* The selection click lives on the label (toggle clicks must not select);
       |   stretching it keeps the whole free row width clickable. */
       |.p-tree-node-label { flex: 1 1 auto; }
+      |/* The tree is ONE tab stop and roves an aria-activedescendant highlight inside it,
+      |   which is the second form the ARIA tree pattern allows and the one Menu and Listbox
+      |   already use here. Prime writes the same ring against :focus-visible, which only
+      |   fires for a roving tabindex, so the highlighted row wears it as a class. */
+      |.p-tree-node-content.p-focus {
+      |  box-shadow: var(--p-tree-node-focus-ring-shadow);
+      |  outline: var(--p-tree-node-focus-ring-width) var(--p-tree-node-focus-ring-style) var(--p-tree-node-focus-ring-color);
+      |  outline-offset: var(--p-tree-node-focus-ring-offset);
+      |}
       |/* Link (kyo extension — Prime has no Link component; skin mirrors Button's
       |   Link variant: primary color, underline on hover, disabled via .p-disabled). */
       |.p-uic-link { color: var(--p-primary-color); cursor: pointer; text-decoration: none; gap: 0.25rem; white-space: nowrap; }

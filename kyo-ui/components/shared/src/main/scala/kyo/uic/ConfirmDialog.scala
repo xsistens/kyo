@@ -42,40 +42,28 @@ final case class ConfirmDialog private (
     /** Binds visibility two-way to `ref` — the only way to open/close the dialog. */
     def open(ref: SignalRef[Boolean]): ConfirmDialog = copy(openRef = Present(ref))
 
-    /** The confirmation question (`span.p-confirmdialog-message`). */
-    def message(v: String): ConfirmDialog = copy(messageV = Present(TextValue.Const(v)))
-
-    /** Reactive `message` tracking `sig` — re-renders in place on emission, e.g. a
-      * locale-driven `I18n.t` leaf.
+    /** The confirmation question (`span.p-confirmdialog-message`). A `Signal[String]` re-renders it in
+      * place on emission, e.g. a locale-driven `I18n.t` leaf.
       */
-    def message(sig: Signal[String]): ConfirmDialog = copy(messageV = Present(TextValue.Dyn(sig)))
+    def message(v: String | Signal[String]): ConfirmDialog = copy(messageV = Present(ReactiveValue(v)))
 
-    /** Header title (Prime's `header` option). */
-    def header(v: String): ConfirmDialog = copy(headerV = Present(TextValue.Const(v)))
-
-    /** Reactive `header` tracking `sig` — re-renders in place on emission, e.g. a
-      * locale-driven `I18n.t` leaf.
+    /** Header title (Prime's `header` option). A `Signal[String]` re-renders it in place on emission, e.g.
+      * a locale-driven `I18n.t` leaf.
       */
-    def header(sig: Signal[String]): ConfirmDialog = copy(headerV = Present(TextValue.Dyn(sig)))
+    def header(v: String | Signal[String]): ConfirmDialog = copy(headerV = Present(ReactiveValue(v)))
 
     /** Leading icon beside the message (`span.p-confirmdialog-icon`). */
     def icon(glyph: IconGlyph): ConfirmDialog = copy(iconV = Present(glyph))
 
-    /** Accept button label (default "Yes"). */
-    def acceptLabel(v: String): ConfirmDialog = copy(acceptLabelV = TextValue.Const(v))
-
-    /** Reactive `acceptLabel` tracking `sig` — re-renders in place on emission, e.g. a
+    /** Accept button label (default "Yes"). A `Signal[String]` re-renders it in place on emission, e.g. a
       * locale-driven `I18n.t` leaf.
       */
-    def acceptLabel(sig: Signal[String]): ConfirmDialog = copy(acceptLabelV = TextValue.Dyn(sig))
+    def acceptLabel(v: String | Signal[String]): ConfirmDialog = copy(acceptLabelV = ReactiveValue(v))
 
-    /** Reject button label (default "No"). */
-    def rejectLabel(v: String): ConfirmDialog = copy(rejectLabelV = TextValue.Const(v))
-
-    /** Reactive `rejectLabel` tracking `sig` — re-renders in place on emission, e.g. a
+    /** Reject button label (default "No"). A `Signal[String]` re-renders it in place on emission, e.g. a
       * locale-driven `I18n.t` leaf.
       */
-    def rejectLabel(sig: Signal[String]): ConfirmDialog = copy(rejectLabelV = TextValue.Dyn(sig))
+    def rejectLabel(v: String | Signal[String]): ConfirmDialog = copy(rejectLabelV = ReactiveValue(v))
 
     /** Accept button severity (default primary — Prime's default; a destructive
       * confirmation typically passes [[Severity.Danger]]).

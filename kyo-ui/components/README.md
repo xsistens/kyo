@@ -2,7 +2,7 @@
 
 kyo-ui-components is a component library for kyo-ui: 83 components in package `kyo.uic`, wearing PrimeOne's own `.p-*` markup so Prime's real stylesheets apply to them verbatim. A component is a plain immutable builder value, not a `kyo.UI` node. You construct one (`uic.Button("Save")`), chain setters that each return the same concrete type, and drop it straight into a kyo-ui container; an implicit lift renders it at placement, the same way kyo-ui lifts a bare `String` into a text node. Because the setters are typed to the component, autocomplete after `.` shows exactly the options that component has and nothing else, and options it does not have fail to compile.
 
-Everything reactive is kyo-ui's own vocabulary, unchanged. A text, boolean, or severity slot takes a constant or a `Signal[A]`; a value slot takes a `SignalRef[A]` and binds two way; a panel's visibility is a `SignalRef[Boolean]` you own. Rendering stays server-honest: state lives in signals, behaviour is computed from those signals at render time, and the only client-side machinery is the contract kyo-ui already ships (focus seeding, in-place attribute and class patching, pointer and scroll reporting). Two things you supply yourself: `uic.Theme.css` on the page (nothing is injected for you), and `import scala.language.implicitConversions` for the placement lift.
+Everything reactive is kyo-ui's own vocabulary, unchanged. Every slot is one setter taking `A | Signal[A]`: a constant renders once, a `Signal[A]` patches in place, and on an editable slot a `SignalRef[A]` binds two way; a panel's visibility is a `SignalRef[Boolean]` you own. Rendering stays server-honest: state lives in signals, behaviour is computed from those signals at render time, and the only client-side machinery is the contract kyo-ui already ships (focus seeding, in-place attribute and class patching, pointer and scroll reporting). Two things you supply yourself: `uic.Theme.css` on the page (nothing is injected for you), and `import scala.language.implicitConversions` for the placement lift.
 
 The module cross-builds for every platform kyo-ui does: the JVM, Scala Native, and both of Scala.js' linker backends, JS and WebAssembly. There is no per-platform component API, because there is no per-platform source: every component lives in shared source and renders identically on all four, and the test suite runs on all four to keep it that way. Off the JVM the build pulls `scala-java-time` so `DateCodec` has a `java.time` to work against, along with the timezone, locale, and currency databases: those types exist without them but carry no data, so resolving one throws at run time, invisible to both compile and link.
 
@@ -115,9 +115,9 @@ The idiomatic style is to import the package and qualify every use. `uic.Button`
 
 ## Binding state
 
-There is no new reactive primitive in this module. kyo-ui's `Signal[A]` (read-only, re-renders on change) and `SignalRef[A]` (read-write, two-way) are the whole state story, and each slot declares which of the two it takes. Reading a setter's signature tells you what it can do: a slot that takes a `Signal` can display change, a slot that takes a `SignalRef` can also be written by the user.
+There is no new reactive primitive in this module. kyo-ui's `Signal[A]` (read-only, re-renders on change) and `SignalRef[A]` (read-write, two-way) are the whole state story.
 
-Text, boolean, and severity slots each come in two overloads, a constant and a `Signal`. Passing the signal form patches the rendered attribute or text node in place rather than rebuilding the component.
+Every slot is ONE setter taking `A | Signal[A]`, and what you pass decides what it does. A constant renders once. A `Signal[A]` patches the rendered attribute or text node in place rather than rebuilding the component. On a slot the user can edit, a `SignalRef[A]` binds two way: the component writes back into the ref as the user interacts.
 
 ```scala
 val stockBadge: UI < Async =
@@ -129,7 +129,7 @@ val stockBadge: UI < Async =
     )
 ```
 
-Interactive state binds only through a `SignalRef`, never through a bare value. `value`, `checked`, `selected`, `expanded`, `page`, `active`, and `open` all take a ref, and the component writes into it as the user interacts. There is no `onChange`-only path where the component holds private state you cannot read.
+Interactive state binds through a `SignalRef`. `value`, `checked`, `selected`, `expanded`, `page`, `active`, and `open` all accept one, and the component writes into it as the user interacts. There is no `onChange`-only path where the component holds private state you cannot read.
 
 ```scala
 val filters: UI < Async =
@@ -144,7 +144,9 @@ val filters: UI < Async =
     )
 ```
 
-Constant, `Signal`, and `SignalRef` are three different intents and it is worth being deliberate about which you reach for. Use the constant overload when the value is fixed at build time, which keeps the component out of any reactive boundary. Use the `Signal` overload when the value is computed from state the component does not own (a `disabled` derived from a form's validity). Use the `SignalRef` overload for anything the user edits, because that is the only form that gives the component write access.
+Constant, `Signal`, and `SignalRef` are three different intents behind one setter, and it is worth being deliberate about which you reach for. Pass a constant when the value is fixed at build time, which keeps the component out of any reactive boundary. Pass a `Signal` when the value is computed from state the component does not own (a `disabled` derived from a form's validity). Pass a `SignalRef` for anything the user edits, because that is the only form that gives the component write access.
+
+The distinction is drawn on what you actually hand over, not on how it is typed at the call site. A `SignalRef` is a `Signal`, so ascribing one as `Signal[A]` still binds two way; `ref.readOnly` is how you hand a control the values of a ref while keeping the writes to yourself.
 
 Event handlers are typed `Any < Async`, the same shape kyo-ui uses. The return value is discarded, so any effectful expression goes in directly, and a handler can suspend, call kyo-http, or write another ref.
 
@@ -200,7 +202,7 @@ A page is mostly not controls. It is the small marks that say what state a thing
 
 ### Marks on a value
 
-`Tag` labels a value, `Badge` counts it, and `Chip` stands for something the user picked and can drop again. All three take a constant or a `Signal[String]` for their text, so a status that changes patches in place rather than rebuilding.
+`Tag` labels a value, `Badge` counts it, and `Chip` stands for something the user picked and can drop again. All three take a `String | Signal[String]` for their text, so a status that changes patches in place rather than rebuilding.
 
 ```scala
 val marks: UI =
@@ -257,7 +259,7 @@ val importing: UI < Async =
     )
 ```
 
-`ProgressBar.value` has three overloads and the third is the one most work wants. `value(Int)` is a constant, `value(SignalRef[Int])` binds a ref you also write from elsewhere, and `value(Signal[Int])` tracks a derived signal (`loaded.combineLatest(total).map(pct)`), which is what progress usually is: computed from other state, never edited.
+`ProgressBar.value` takes `Int | Signal[Int]`, and the signal form is the one most work wants: progress is computed from other state and never edited, so a derived signal (`loaded.zip(total).map(pct)`) is the natural binding.
 
 `Skeleton` covers the moment before there is any content to report on, holding the shape the content will take.
 
@@ -370,7 +372,7 @@ val handAnchored: UI < Async =
 
 ## Entering values
 
-Every form control in the library follows one shape: a two-way `value` (or `checked`) binding, and an `invalid` plus `invalidMessage` pair for validity, each in a constant and a reactive form. That set is not a convention to remember but the `FormControl` trait, so a control that holds a user-supplied value carries all of it or is not one. `size` and `variant` ride along wherever the design system defines them, which is the field-shaped controls. This section is the controls alone; the separate validation layer that computes `invalid` for you is [Validated forms](#validated-forms) below.
+Every form control in the library follows one shape: a `value` (or `checked`) binding that accepts a ref for two-way editing, plus `invalid` and `invalidMessage` for validity. That set is not a convention to remember but the `FormControl` trait, which now DEFINES those setters rather than declaring them, so a control that holds a user-supplied value carries all of it, spelled the same way, or is not one. `size` and `variant` ride along wherever the design system defines them, which is the field-shaped controls. This section is the controls alone; the separate validation layer that computes `invalid` for you is [Validated forms](#validated-forms) below.
 
 ### Text entry
 
@@ -514,7 +516,7 @@ val decorated: UI < Async =
 
 ### Validity before the validation layer
 
-Every control carries `invalid` and `invalidMessage`, both with a constant and a `Signal` overload. That pair is Prime's `.p-invalid` model: `invalid` stamps the red state and `invalidMessage` renders the message row beneath the field. You can drive them by hand from any signal you already have, which is the whole story for a form too small to want a validation layer.
+Every control carries `invalid` and `invalidMessage`. `invalid` takes `Boolean | Signal[Boolean]`; `invalidMessage` keeps two setters, because a constant message is always shown while the reactive one is a `Signal[Maybe[String]]` that can also clear the row. That pair is Prime's `.p-invalid` model: `invalid` stamps the red state and `invalidMessage` renders the message row beneath the field. You can drive them by hand from any signal you already have, which is the whole story for a form too small to want a validation layer.
 
 ```scala
 val handRolled: UI < Async =

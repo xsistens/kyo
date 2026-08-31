@@ -1232,7 +1232,7 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
             preamble + """def x: uic.MeterGroup = uic.MeterGroup().orientation(uic.Orientation.Vertical).labelOrientation(uic.Orientation.Vertical).labelPosition(uic.LabelPosition.Start).meter("A", 10, uic.Icons.check).meter("B", 10, "var(--p-cyan-500)", uic.Icons.user)"""
         )
         typeCheck(
-            preamble + """def x(using Frame): uic.MeterGroup = uic.MeterGroup().meter("A", 10).startTemplate(span("s")).endTemplate(span("e")).meterTemplate((m, pc) => span(m.label)).labelTemplate((m, pc) => span(s"${m.label} ${math.round(pc)}%"))"""
+            preamble + """def x(using Frame): uic.MeterGroup = uic.MeterGroup().meter("A", 10).startTemplate(span("s")).endTemplate(span("e")).meterTemplate((m, pc) => span(m.labelText)).labelTemplate((m, pc) => span(s"${m.labelText} ${math.round(pc)}%"))"""
         )
     }
 

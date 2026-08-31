@@ -44,15 +44,11 @@ final case class MegaMenuItem private (
 end MegaMenuItem
 
 object MegaMenuItem:
-    /** A root item labelled `label` — add panel columns via
-      * [[MegaMenuItem.column]].
+    /** A root item labelled `label`. A `Signal[String]` re-renders the label in place on emission (e.g. a
+      * locale-driven `I18n.t` leaf).
       */
-    def apply(label: String): MegaMenuItem = new MegaMenuItem(TextValue.Const(label))
+    def apply(label: String | Signal[String]): MegaMenuItem = new MegaMenuItem(ReactiveValue(label))
 
-    /** A root item whose label tracks `label` — re-renders in place on emission
-      * (e.g. a locale-driven `I18n.t` leaf).
-      */
-    def apply(label: Signal[String]): MegaMenuItem = new MegaMenuItem(TextValue.Dyn(label))
 end MegaMenuItem
 
 /** MegaMenu — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's

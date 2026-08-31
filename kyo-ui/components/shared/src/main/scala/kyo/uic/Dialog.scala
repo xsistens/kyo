@@ -72,18 +72,16 @@ final case class Dialog private (
     onCloseEff: Maybe[Any < Async] = Absent,
     boxClassesV: List[String] = Nil,
     kids: List[UI] = Nil
-) extends Node:
+) extends Node, HasAccessibleNameRef, HasAccessibleDescription:
     type Self = Dialog
 
     /** Binds visibility two-way to `ref` — the only way to open/close the dialog. */
     def open(ref: SignalRef[Boolean]): Dialog = copy(openRef = Present(ref))
 
-    def header(v: String): Dialog = copy(headerText = Present(TextValue.Const(v)))
-
-    /** Reactive `header` tracking `sig` — re-renders in place on emission, e.g. a
+    /** Header title. A `Signal[String]` re-renders it in place on emission, e.g. a
       * locale-driven `I18n.t` leaf.
       */
-    def header(sig: Signal[String]): Dialog = copy(headerText = Present(TextValue.Dyn(sig)))
+    def header(v: String | Signal[String]): Dialog = copy(headerText = Present(ReactiveValue(v)))
 
     /** Arbitrary header content replacing the default title span (the severity icon
       * and the close button are still composed around it).
@@ -136,24 +134,10 @@ final case class Dialog private (
       */
     def preventFocusRestore(v: Boolean): Dialog = copy(preventFocusRestoreFlag = v)
 
-    /** Accessible name, emitted as `aria-label`. */
-    def accessibleName(v: String): Dialog = copy(accessibleNameV = Present(TextValue.Const(v)))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Dialog = copy(accessibleNameV = v)
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): Dialog = copy(accessibleNameRefV = v)
 
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): Dialog = copy(accessibleNameV = Present(TextValue.Dyn(sig)))
-
-    /** Id(s) of labelling element(s), emitted as `aria-labelledby`. */
-    def accessibleNameRef(v: String): Dialog = copy(accessibleNameRefV = Present(v))
-
-    /** Accessible description, emitted as `aria-description`. */
-    def accessibleDescription(v: String): Dialog = copy(accessibleDescriptionV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible description — `aria-description` patched IN PLACE via kyo-ui's
-      * attribute channel (`setAttribute`, no re-render).
-      */
-    def accessibleDescription(sig: Signal[String]): Dialog = copy(accessibleDescriptionV = Present(TextValue.Dyn(sig)))
+    private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Dialog = copy(accessibleDescriptionV = v)
 
     /** Id(s) of describing element(s), emitted as `aria-describedby`. */
     def accessibleDescriptionRef(v: String): Dialog = copy(accessibleDescriptionRefV = Present(v))

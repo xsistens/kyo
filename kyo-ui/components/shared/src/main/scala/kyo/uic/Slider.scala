@@ -2,6 +2,7 @@ package kyo.uic
 
 import kyo.*
 import kyo.UI.*
+import scala.annotation.targetName
 
 /** Slider — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Slider anatomy: `div.p-slider.p-component.p-slider-horizontal|-vertical` >
@@ -43,7 +44,7 @@ final case class Slider private (
     onChangeF: Maybe[Double => Any < Async] = Absent,
     onBlurF: Maybe[Double => Any < Async] = Absent,
     idV: Maybe[String] = Absent
-) extends Node, NumberFormControl:
+) extends Node, NumberFormControl, HasAccessibleName:
     type Self = Slider
 
     /** Native `id` on the range input — pair with `Label.forId`; the form layer stamps
@@ -51,19 +52,17 @@ final case class Slider private (
       */
     def id(v: String): Slider = copy(idV = Present(v))
 
-    /** Sets a constant value (renders the fill/handle statically). */
-    def value(v: Double): Slider = copy(valueBinding = Present(ReactiveValue.Const(v)))
-
-    /** Binds two-way to `ref`: drags/keys write the committed value back, ref
-      * changes move the fill and handle.
+    /** The slider's value, in any of the three bindings a value slot holds. A constant renders the
+      * fill/handle statically. A writable `SignalRef[Double]` binds TWO-WAY: drags and keys write the
+      * committed value back, and ref changes move the fill and handle. Any other `Signal[Double]` binds
+      * one-way, so the fill and handle track it and drags write nowhere.
+      *
+      * The two-way choice is made on the runtime class, so ascribing a ref as `Signal[Double]` does not
+      * opt out of write-back; pass `ref.readOnly` for that. A derived signal is already one-way and is
+      * the better answer when the value is computed rather than user-edited.
       */
-    def value(ref: SignalRef[Double]): Slider = copy(valueBinding = Present(ReactiveVariable(ref)))
-
-    /** Binds to a one-way DERIVED signal: the fill/handle track it read-only (drags
-      * write nowhere). Prefer this over an artificial `SignalRef` when the value is
-      * computed, not user-edited.
-      */
-    def value(sig: Signal[Double]): Slider = copy(valueBinding = Present(ReactiveValue.Dyn(sig)))
+    @targetName("valueNumber")
+    def value(v: Double | Signal[Double]): Slider = copy(valueBinding = Present(ReactiveValue(v)))
 
     /** Lower bound (Prime default 0). */
     def min(v: Double): Slider = copy(minV = v)
@@ -89,29 +88,11 @@ final case class Slider private (
       */
     def disabled(v: Boolean | Signal[Boolean]): Slider = copy(disabledFlag = Present(ReactiveValue(v)))
 
-    /** Accessible name → `aria-label` on the native range input. */
-    def accessibleName(v: String): Slider = copy(accNameV = Present(TextValue.Const(v)))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Slider = copy(accNameV = v)
 
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): Slider = copy(accNameV = Present(TextValue.Dyn(sig)))
-
-    /** Marks the slider invalid (`.p-invalid` + `aria-invalid`). */
-    def invalid(v: Boolean): Slider = copy(invalidV = Present(BoolValue.Const(v)))
-
-    /** Reactive validity: the bound signal toggles the invalid state on emission. */
-    def invalid(sig: Signal[Boolean]): Slider = copy(invalidV = Present(BoolValue.Dyn(sig)))
-
-    /** Message rendered below the track while the slider is invalid (kyo extension —
-      * `div.p-uic-invalid-message`).
-      */
-    def invalidMessage(v: String): Slider = copy(invalidMsgV = Present(v))
-
-    /** Reactive invalid message — `Present` shows the row and (by default) marks the
-      * slider invalid; `Absent` clears both.
-      */
-    def invalidMessage(sig: Signal[Maybe[String]]): Slider = copy(invalidMsgDynV = Present(sig))
+    private[uic] def withInvalid(v: Maybe[BoolValue]): Slider                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): Slider                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Slider = copy(invalidMsgDynV = v)
 
     /** Fired with the NEW (clamped) value after the ref write-back. */
     def onChange(f: Double => Any < Async): Slider = copy(onChangeF = Present(f))

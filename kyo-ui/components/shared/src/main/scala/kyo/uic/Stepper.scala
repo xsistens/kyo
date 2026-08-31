@@ -40,19 +40,17 @@ final case class Stepper private (
 
     /** Appends one step: its header `title`, an optional stable `value` (defaults
       * to the 1-based position, Prime's convention), an optional unconditional
-      * `disabled`, plus the panel content.
+      * `disabled`, plus the panel content. A `Signal[String]` title re-renders the step header
+      * in place on emission (e.g. a locale-driven `I18n.t` leaf).
+      *
+      * `value` and `disabled` keep their defaults for BOTH title shapes. As two overloads they
+      * could not: the synthesized default-arg getters of same-named methods clash, so the
+      * reactive variant had to spell both out at every call site.
       */
-    def step(title: String, value: Maybe[String] = Absent, disabled: Boolean = false)(content: UI*): Stepper =
-        copy(steps = steps :+ new Stepper.StepDef(TextValue.Const(title), value, disabled, content.toList))
-
-    /** Reactive-title variant: the step's header title tracks `title` — re-renders in
-      * place on emission (e.g. a locale-driven `I18n.t` leaf). The `value` key and
-      * `disabled` flag stay in their fixed positions; they carry no defaults here so
-      * this overload's synthesized default-arg getters do not clash with the plain
-      * `String` overload's.
-      */
-    def step(title: Signal[String], value: Maybe[String], disabled: Boolean)(content: UI*): Stepper =
-        copy(steps = steps :+ new Stepper.StepDef(TextValue.Dyn(title), value, disabled, content.toList))
+    def step(title: String | Signal[String], value: Maybe[String] = Absent, disabled: Boolean = false)(
+        content: UI*
+    ): Stepper =
+        copy(steps = steps :+ new Stepper.StepDef(ReactiveValue(title), value, disabled, content.toList))
 
     /** Binds the 0-based active step index two-way to `ref` (clamped at render). */
     def active(ref: SignalRef[Int]): Stepper = copy(activeRef = Present(ref))

@@ -40,7 +40,7 @@ final case class InputOtp private (
     onChangeF: Maybe[String => Any < Async] = Absent,
     onBlurF: Maybe[String => Any < Async] = Absent,
     idV: Maybe[String] = Absent
-) extends Node, TextFormControl:
+) extends Node, TextFormControl, HasAccessibleName:
     type Self = InputOtp
 
     /** Native `id` on the FIRST OTP cell input — pair with `Label.forId`; the form layer
@@ -84,29 +84,11 @@ final case class InputOtp private (
     /** Fill variant — `Filled` renders `.p-variant-filled` cells. */
     def variant(v: FieldVariant): InputOtp = copy(variantV = v)
 
-    /** Marks the cells invalid (`.p-invalid` + `aria-invalid`). */
-    def invalid(v: Boolean): InputOtp = copy(invalidV = Present(BoolValue.Const(v)))
+    private[uic] def withInvalid(v: Maybe[BoolValue]): InputOtp                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): InputOtp                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): InputOtp = copy(invalidMsgDynV = v)
 
-    /** Message rendered below the cells while `invalid(true)`. */
-    def invalidMessage(v: String): InputOtp = copy(invalidMsgV = Present(v))
-
-    /** Reactive validity: the bound signal toggles `.p-invalid` + `aria-invalid` on
-      * the cells in place. Explicit override of the message-derived red default.
-      */
-    def invalid(sig: Signal[Boolean]): InputOtp = copy(invalidV = Present(BoolValue.Dyn(sig)))
-
-    /** Reactive invalid message — `Present` shows the row and (by default) turns the
-      * cells red; `Absent` clears both. Re-renders in place on emission.
-      */
-    def invalidMessage(sig: Signal[Maybe[String]]): InputOtp = copy(invalidMsgDynV = Present(sig))
-
-    /** Accessible name → `aria-label` on the root; cells carry per-position labels. */
-    def accessibleName(v: String): InputOtp = copy(accNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): InputOtp = copy(accNameV = Present(TextValue.Dyn(sig)))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): InputOtp = copy(accNameV = v)
 
     /** Fired with the FULL code after a cell write-back. */
     def onChange(f: String => Any < Async): InputOtp = copy(onChangeF = Present(f))

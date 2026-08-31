@@ -42,14 +42,13 @@ final case class Terminal private (
     commandsRef: Maybe[SignalRef[Seq[TerminalCommand]]] = Absent,
     handlerF: Maybe[String => String < Async] = Absent,
     accessibleNameV: Maybe[TextValue] = Absent
-) extends Node:
+) extends Node, HasAccessibleName:
     type Self = Terminal
 
-    /** Text of the `div.p-terminal-welcome-message` above the history. */
-    def welcomeMessage(v: String): Terminal = copy(welcomeMessageV = Present(TextValue.Const(v)))
-
-    /** Reactive welcome message tracking `sig` — re-renders in place on emission. */
-    def welcomeMessage(sig: Signal[String]): Terminal = copy(welcomeMessageV = Present(TextValue.Dyn(sig)))
+    /** Text of the `div.p-terminal-welcome-message` above the history. A `Signal[String]` re-renders it in
+      * place on emission.
+      */
+    def welcomeMessage(v: String | Signal[String]): Terminal = copy(welcomeMessageV = Present(ReactiveValue(v)))
 
     /** The prompt label (default `$`), shown before the input and each history row. */
     def prompt(v: String): Terminal = copy(promptV = v)
@@ -64,13 +63,7 @@ final case class Terminal private (
       */
     def commandHandler(f: String => String < Async): Terminal = copy(handlerF = Present(f))
 
-    /** `aria-label` for the terminal region. */
-    def accessibleName(v: String): Terminal = copy(accessibleNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): Terminal = copy(accessibleNameV = Present(TextValue.Dyn(sig)))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Terminal = copy(accessibleNameV = v)
 
     private[uic] def render(using Frame): UI =
         (commandsRef, handlerF) match

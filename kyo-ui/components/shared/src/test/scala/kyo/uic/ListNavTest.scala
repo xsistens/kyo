@@ -1,0 +1,87 @@
+package kyo.uic
+
+import kyo.*
+import kyo.UI.Keyboard
+import kyo.uic.ListNav.Step
+
+/** Pure-logic assertions for the [[ListNav]] roving-focus state machine — no DOM, no effects
+  * (the semantics [[Menu]], [[Listbox]] and [[Accordion]] map onto their own focus state).
+  */
+class ListNavTest extends UicTest:
+
+    // Rows 0..5 where 1 is a heading and 4 is disabled: the highlight lands on 0, 2, 3, 5.
+    private val navigable = List(0, 2, 3, 5)
+
+    private def key(focus: Int, k: Keyboard, wrap: Boolean = true) =
+        ListNav.onKey(navigable, focus, k, wrap)
+
+    "ArrowDown from nothing lands on the first navigable row" in assert(
+        key(-1, Keyboard.ArrowDown) == Present(Step(0))
+    )
+
+    "ArrowUp from nothing lands on the last navigable row" in assert(
+        key(-1, Keyboard.ArrowUp) == Present(Step(5))
+    )
+
+    "ArrowDown skips the rows the keyboard cannot land on" in assert(
+        key(0, Keyboard.ArrowDown) == Present(Step(2))
+    )
+
+    "ArrowUp skips them the other way" in assert(
+        key(5, Keyboard.ArrowUp) == Present(Step(3))
+    )
+
+    "ArrowDown wraps at the end when the host wraps" in assert(
+        key(5, Keyboard.ArrowDown) == Present(Step(0))
+    )
+
+    "ArrowUp wraps at the start when the host wraps" in assert(
+        key(0, Keyboard.ArrowUp) == Present(Step(5))
+    )
+
+    "ArrowDown holds at the end when the host does not wrap" in assert(
+        key(5, Keyboard.ArrowDown, wrap = false) == Present(Step(5))
+    )
+
+    "ArrowUp holds at the start when the host does not wrap" in assert(
+        key(0, Keyboard.ArrowUp, wrap = false) == Present(Step(0))
+    )
+
+    "Home and End reach the ends from anywhere" in assert(
+        key(3, Keyboard.Home) == Present(Step(0)) && key(3, Keyboard.End) == Present(Step(5))
+    )
+
+    "Enter activates the highlighted row" in assert(
+        key(3, Keyboard.Enter) == Present(Step(3, activate = true))
+    )
+
+    "Space activates it too" in assert(
+        key(3, Keyboard.Space) == Present(Step(3, activate = true))
+    )
+
+    "Enter on nothing is not ours, so the browser keeps it" in assert(
+        key(-1, Keyboard.Enter) == Absent
+    )
+
+    "Enter on a row the keyboard skips is not ours either" in assert(
+        key(4, Keyboard.Enter) == Absent
+    )
+
+    "Escape clears the highlight and asks the host to close" in assert(
+        key(3, Keyboard.Escape) == Present(Step(-1, dismiss = true))
+    )
+
+    "a key the list does not use stays with the browser" in assert(
+        key(3, Keyboard.Tab) == Absent
+    )
+
+    "a focus that stopped being navigable moves to a real row" in assert(
+        key(4, Keyboard.ArrowDown) == Present(Step(0)) && key(4, Keyboard.ArrowUp) == Present(Step(5))
+    )
+
+    "an empty list has nowhere to go" in assert(
+        ListNav.onKey(Nil, -1, Keyboard.ArrowDown, wrap = true) == Present(Step(-1)) &&
+            ListNav.onKey(Nil, -1, Keyboard.Home, wrap = true) == Absent
+    )
+
+end ListNavTest

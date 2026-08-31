@@ -36,7 +36,7 @@ final case class CheckBox private (
     onChangeF: Maybe[Boolean => Any < Async] = Absent,
     onBlurF: Maybe[Boolean => Any < Async] = Absent,
     idV: Maybe[String] = Absent
-) extends Node, BooleanFormControl:
+) extends Node, BooleanFormControl, HasAccessibleNameRef:
     type Self = CheckBox
 
     /** Native `id` on the checkbox input — pair with `Label.forId`; the form layer
@@ -52,12 +52,10 @@ final case class CheckBox private (
     /** Binds two-way to `ref`: toggles write back into the ref, ref changes update the box. */
     def checked(ref: SignalRef[Boolean]): CheckBox = copy(checkedBinding = Present(CheckBox.Checked.Ref(ref)))
 
-    def disabled(v: Boolean): CheckBox = copy(disabledFlag = Present(BoolValue.Const(v)))
-
-    /** Reactive disabled — the native input's `disabled` attribute and the root's `.p-disabled` class
-      * both toggle IN PLACE via the boolean-attribute and class channels (no re-render).
+    /** Disables the box. A `Signal[Boolean]` toggles the native input's `disabled` attribute and the root's
+      * `.p-disabled` class IN PLACE via the boolean-attribute and class channels (no re-render).
       */
-    def disabled(sig: Signal[Boolean]): CheckBox = copy(disabledFlag = Present(BoolValue.Dyn(sig)))
+    def disabled(v: Boolean | Signal[Boolean]): CheckBox = copy(disabledFlag = Present(ReactiveValue(v)))
 
     /** `readonly` — interaction is blocked (`aria-readonly`), but unlike
       * `disabled` the box keeps its normal look.
@@ -89,34 +87,12 @@ final case class CheckBox private (
     /** Fill variant — `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
     def variant(v: FieldVariant): CheckBox = copy(variantV = v)
 
-    /** Marks the box invalid (`.p-invalid` + `aria-invalid`). */
-    def invalid(v: Boolean): CheckBox = copy(invalidV = Present(BoolValue.Const(v)))
+    private[uic] def withInvalid(v: Maybe[BoolValue]): CheckBox                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): CheckBox                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): CheckBox = copy(invalidMsgDynV = v)
 
-    /** Message rendered below the control while `invalid(true)` (kyo extension —
-      * `div.p-uic-invalid-message`).
-      */
-    def invalidMessage(v: String): CheckBox = copy(invalidMsgV = Present(v))
-
-    /** Reactive validity: the bound signal toggles `.p-invalid` + `aria-invalid` in
-      * place. Explicit override of the message-derived red default.
-      */
-    def invalid(sig: Signal[Boolean]): CheckBox = copy(invalidV = Present(BoolValue.Dyn(sig)))
-
-    /** Reactive invalid message — `Present` shows the row and (by default) turns the
-      * box red; `Absent` clears both. Re-renders in place on emission.
-      */
-    def invalidMessage(sig: Signal[Maybe[String]]): CheckBox = copy(invalidMsgDynV = Present(sig))
-
-    /** Accessible name → `aria-label`. */
-    def accessibleName(v: String): CheckBox = copy(accNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): CheckBox = copy(accNameV = Present(TextValue.Dyn(sig)))
-
-    /** Accessible name reference → `aria-labelledby`. */
-    def accessibleNameRef(v: String): CheckBox = copy(accNameRefV = Present(v))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): CheckBox = copy(accNameV = v)
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): CheckBox = copy(accNameRefV = v)
 
     def onChange(f: Boolean => Any < Async): CheckBox = copy(onChangeF = Present(f))
 

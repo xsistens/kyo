@@ -37,7 +37,7 @@ final case class ToggleButton private (
     onBlurF: Maybe[Boolean => Any < Async] = Absent,
     idV: Maybe[String] = Absent,
     contentV: Maybe[UI] = Absent
-) extends Node, BooleanFormControl:
+) extends Node, BooleanFormControl, HasAccessibleNameRef:
     type Self = ToggleButton
 
     /** Native `id` on the button — pair with `Label.forId`; the form layer stamps the
@@ -57,17 +57,13 @@ final case class ToggleButton private (
     /** Binds two-way to `ref`: clicks write the toggled value back, ref changes re-render. */
     def checked(ref: SignalRef[Boolean]): ToggleButton = copy(checkedBinding = Present(ToggleButton.Checked.Ref(ref)))
 
-    /** Label while checked (Prime default "Yes"). */
-    def onLabel(v: String): ToggleButton = copy(onLabelV = Present(TextValue.Const(v)))
+    /** Label while checked (Prime default "Yes"). A `Signal[String]` re-renders it in place on emission.
+      */
+    def onLabel(v: String | Signal[String]): ToggleButton = copy(onLabelV = Present(ReactiveValue(v)))
 
-    /** Reactive checked-state label tracking `sig` — re-renders in place on emission. */
-    def onLabel(sig: Signal[String]): ToggleButton = copy(onLabelV = Present(TextValue.Dyn(sig)))
-
-    /** Label while unchecked (Prime default "No"). */
-    def offLabel(v: String): ToggleButton = copy(offLabelV = Present(TextValue.Const(v)))
-
-    /** Reactive unchecked-state label tracking `sig` — re-renders in place on emission. */
-    def offLabel(sig: Signal[String]): ToggleButton = copy(offLabelV = Present(TextValue.Dyn(sig)))
+    /** Label while unchecked (Prime default "No"). A `Signal[String]` re-renders it in place on emission.
+      */
+    def offLabel(v: String | Signal[String]): ToggleButton = copy(offLabelV = Present(ReactiveValue(v)))
 
     /** Drops both labels — the label span renders a non-breaking space (icon-only look). */
     def noLabels: ToggleButton = copy(onLabelV = Absent, offLabelV = Absent)
@@ -91,34 +87,12 @@ final case class ToggleButton private (
       */
     def readonly(v: Boolean): ToggleButton = copy(readonlyFlag = v)
 
-    /** Marks the button invalid (`.p-invalid` + `aria-invalid`). */
-    def invalid(v: Boolean): ToggleButton = copy(invalidV = Present(BoolValue.Const(v)))
+    private[uic] def withInvalid(v: Maybe[BoolValue]): ToggleButton                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): ToggleButton                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): ToggleButton = copy(invalidMsgDynV = v)
 
-    /** Reactive validity: the bound signal toggles `.p-invalid` + `aria-invalid` in
-      * place. Explicit override of the message-derived red default.
-      */
-    def invalid(sig: Signal[Boolean]): ToggleButton = copy(invalidV = Present(BoolValue.Dyn(sig)))
-
-    /** Message rendered below the button while it is invalid (kyo extension —
-      * `div.p-uic-invalid-message`).
-      */
-    def invalidMessage(v: String): ToggleButton = copy(invalidMsgV = Present(v))
-
-    /** Reactive invalid message — `Present` shows the row and (by default) turns the
-      * button red; `Absent` clears both. Re-renders in place on emission.
-      */
-    def invalidMessage(sig: Signal[Maybe[String]]): ToggleButton = copy(invalidMsgDynV = Present(sig))
-
-    /** Accessible name → `aria-label`. */
-    def accessibleName(v: String): ToggleButton = copy(accNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): ToggleButton = copy(accNameV = Present(TextValue.Dyn(sig)))
-
-    /** Accessible name reference → `aria-labelledby`. */
-    def accessibleNameRef(v: String): ToggleButton = copy(accNameRefV = Present(v))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): ToggleButton = copy(accNameV = v)
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): ToggleButton = copy(accNameRefV = v)
 
     /** Fired with the NEW checked value after a toggle (and after the ref write-back). */
     def onChange(f: Boolean => Any < Async): ToggleButton = copy(onChangeF = Present(f))

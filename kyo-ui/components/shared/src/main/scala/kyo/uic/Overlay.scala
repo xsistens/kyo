@@ -272,6 +272,7 @@ final case class Overlay private (
       * when the mount's Scope closes on overlay close. Captures `cmds` so the inner
       * effect needs no `Env[Commands]`.
       */
+
     /** An invisible inset-0 child of the anchor element: the overlay cannot address its host anchor
       * (it only renders INTO it), but an absolutely positioned probe filling it shares its box
       * (padding-box — the anchor's border widths are the documented deviation), so observing the
@@ -464,6 +465,7 @@ object Overlay:
       * geometry is the shift ALONE — emitting top/bottom would fight their class
       * placement.
       */
+
     /** The fixed-position geometry for a PORTALED panel: viewport coordinates computed from the
       * measured anchor box and panel size — a body-re-homed panel has no CSS relationship to its
       * anchor anymore. Flips the vertical side when the declared one cannot fit the panel (and the

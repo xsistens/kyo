@@ -51,6 +51,15 @@ end ListItem
   * rendering each group under a labelled header. Grouping is a list concern
   * only: selection stays keyed by `id` across the whole listbox.
   *
+  * Keyboard (WAI-ARIA listbox, the shared [[ListNav]] machine): the list is ONE tab stop and
+  * roves Prime's `.p-focus` highlight inside it, rather than making every option its own tab
+  * stop. ArrowDown/ArrowUp move the highlight and stop at the ends (Prime's listbox does not
+  * cycle), Home/End reach them directly, and Enter or Space picks the highlighted option
+  * through the same write a click makes. `id(...)` wires `aria-activedescendant` to the
+  * highlighted row, and a listbox with no `id` of its own mints one for that hook alone.
+  * The embedded render [[OrderList]] and [[PickList]] drive keeps the per-option tab stops,
+  * since the highlight would have to live in a signal those hosts own.
+  *
   * Filtering has the two shapes shared by every picker in this module:
   * `filterable(true)` renders Prime's header filter over a query the listbox
   * allocates itself (the same word and the same meaning as
@@ -76,7 +85,7 @@ final case class Listbox private (
     accessibleNameRefV: Maybe[String] = Absent,
     onBlurF: Maybe[Set[String] => Any < Async] = Absent,
     idV: Maybe[String] = Absent
-) extends Node, MultiSelectFormControl:
+) extends Node, MultiSelectFormControl, HasEmptyContent, HasAccessibleNameRef:
     type Self = Listbox
 
     /** Native `id` on the option list — pair with `Label.forId`; the form layer stamps
@@ -87,15 +96,12 @@ final case class Listbox private (
     /** Appends the given options. */
     def items(is: ListItem*): Listbox = copy(optionsV = optionsV ++ is.map(OptionItem.Item(_)))
 
-    /** Appends a single option (ergonomic builder — no need to construct [[ListItem]]). */
-    def item(text: String, id: String, icon: Maybe[IconGlyph] = Absent): Listbox =
-        copy(optionsV = optionsV :+ OptionItem.Item(ListItem(TextValue.Const(text), id, icon)))
-
-    /** Reactive variant of [[item]] — the option label re-renders in place on signal
-      * emission; `id` stays the stable selection key.
+    /** Appends a single option (ergonomic builder — no need to construct [[ListItem]]). A
+      * `Signal[String]` label re-renders the option in place on emission; `id` stays the stable
+      * selection key either way, and `icon` keeps its default for both label shapes.
       */
-    def item(text: Signal[String], id: String, icon: Maybe[IconGlyph]): Listbox =
-        copy(optionsV = optionsV :+ OptionItem.Item(ListItem(TextValue.Dyn(text), id, icon)))
+    def item(text: String | Signal[String], id: String, icon: Maybe[IconGlyph] = Absent): Listbox =
+        copy(optionsV = optionsV :+ OptionItem.Item(ListItem(ReactiveValue(text), id, icon)))
 
     /** Appends grouped options: [[OptionItem.group]] rows render their items
       * under a labelled header, [[OptionItem.item]] rows beside them.
@@ -150,21 +156,9 @@ final case class Listbox private (
       */
     def disabled(v: Boolean): Listbox = copy(disabledFlag = v)
 
-    /** Marks the listbox invalid (`.p-invalid` + `aria-invalid`). */
-    def invalid(v: Boolean): Listbox = copy(invalidV = Present(BoolValue.Const(v)))
-
-    /** Reactive validity: the bound signal toggles the invalid state on emission. */
-    def invalid(sig: Signal[Boolean]): Listbox = copy(invalidV = Present(BoolValue.Dyn(sig)))
-
-    /** Message rendered below the list while it is invalid (kyo extension —
-      * `div.p-uic-invalid-message`).
-      */
-    def invalidMessage(v: String): Listbox = copy(invalidMsgV = Present(v))
-
-    /** Reactive invalid message — `Present` shows the row and (by default) marks the list
-      * invalid; `Absent` clears both.
-      */
-    def invalidMessage(sig: Signal[Maybe[String]]): Listbox = copy(invalidMsgDynV = Present(sig))
+    private[uic] def withInvalid(v: Maybe[BoolValue]): Listbox                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): Listbox                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Listbox = copy(invalidMsgDynV = v)
 
     /** Fires on focus loss with the current selection — the validation layer's Blur
       * trigger.
@@ -172,28 +166,10 @@ final case class Listbox private (
     @targetName("onBlurKeys")
     def onBlur(f: Set[String] => Any < Async): Listbox = copy(onBlurF = Present(f))
 
-    /** Text shown as the `li.p-listbox-empty-message` row when no options render. */
-    def emptyContent(v: String): Listbox = copy(emptyContentV = Present(EmptyContent.const(v)))
+    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): Listbox = copy(emptyContentV = v)
 
-    /** Reactive text: re-renders the empty slot in place on signal emission. */
-    def emptyContent(sig: Signal[String]): Listbox = copy(emptyContentV = Present(EmptyContent.dyn(sig)))
-
-    /** Arbitrary UI for the empty state: an icon over a line of explanation and the
-      * button that creates the first record, rendered in the same slot the text would
-      * occupy.
-      */
-    def emptyContent(ui: UI): Listbox = copy(emptyContentV = Present(EmptyContent.ui(ui)))
-
-    /** `aria-label` for the listbox. */
-    def accessibleName(v: String): Listbox = copy(accessibleNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): Listbox = copy(accessibleNameV = Present(TextValue.Dyn(sig)))
-
-    /** `aria-labelledby` id reference for the listbox. */
-    def accessibleNameRef(v: String): Listbox = copy(accessibleNameRefV = Present(v))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Listbox = copy(accessibleNameV = v)
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): Listbox = copy(accessibleNameRefV = v)
 
     /** Whether rows respond to clicks at all (selecting or an explicit item handler). */
     private def interactive: Boolean =
@@ -205,8 +181,8 @@ final case class Listbox private (
       * against the outer replace (the Overlay renderOpen lesson). The click
       * handlers still write through the BOUND refs.
       */
-    private[uic] def resolved(sel: Set[String], query: String)(using Frame): UI =
-        body(sel, query, Absent)
+    private[uic] def resolved(sel: Set[String], query: String, hi: Maybe[SignalRef[Int]] = Absent)(using Frame): UI =
+        body(sel, query, Absent, hi, idV)
 
     private[uic] def render(using Frame): UI =
         // The validity boundary sits OUTSIDE the query subscriptions but resolves before
@@ -217,26 +193,54 @@ final case class Listbox private (
                     copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderQuery
                 )
 
+    /** One mount for the two signals this listbox owns: the keyboard highlight, and the
+      * filter query when `filterable` asked for a header without handing over a ref.
+      *
+      * Both are allocated OUTSIDE the selection and query subscriptions, since a mount
+      * inside a subscribed region re-runs on every emission and would allocate a new
+      * highlight on each keystroke. The static projection renders through the placeholder,
+      * which is byte-identical to what this listbox rendered before it had a keyboard.
+      */
     private def renderQuery(using Frame): UI =
-        filterQueryRef match
-            case Present(_)               => subscribed(filterQueryRef)
-            case Absent if filterableFlag =>
-                // No app-owned query, but the header is asked for: the query lives in a
-                // signal this mount allocates (Select's pattern). The static projection
-                // renders the same header, inert, until the transport attaches.
-                UI.mounted(Signal.initRef("").map(q => subscribed(Present(q))))
-                    .placeholder(subscribed(Absent))
-            case Absent => subscribed(Absent)
+        val ownsQuery = filterQueryRef.isEmpty && filterableFlag
+        UI.mounted {
+            for
+                cmds <- UI.commands
+                // The id the highlight is announced through. A caller's own `id` wins, and where
+                // there is none a minted one stands in, so `aria-activedescendant` is not
+                // something a reader has to opt into to be told which option is highlighted.
+                base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
+                hi   <- Signal.initRef(-1)
+                q <-
+                    if ownsQuery then Signal.initRef("").map(r => Present(r): Maybe[SignalRef[String]])
+                    else filterQueryRef: Maybe[SignalRef[String]] < Sync
+            yield subscribed(q, Present(hi), Present(base))
+        }.placeholder(subscribed(filterQueryRef, Absent, Absent))
+    end renderQuery
 
     /** The selection/query subscriptions around one [[body]] render. */
-    private def subscribed(qRef: Maybe[SignalRef[String]])(using Frame): UI =
-        (selectedRef, qRef) match
-            case (Present(s), Present(f)) => s.render(sel => f.render(q => body(sel, q, qRef)))
-            case (Present(s), Absent)     => s.render(sel => body(sel, "", Absent))
-            case (Absent, Present(f))     => f.render(q => body(Set.empty, q, qRef))
-            case _                        => body(Set.empty, "", Absent)
+    private def subscribed(qRef: Maybe[SignalRef[String]], hiRef: Maybe[SignalRef[Int]], idBase: Maybe[String])(using
+        Frame
+    ): UI =
+        (selectedRef, qRef, hiRef) match
+            case (Present(s), Present(f), Present(h)) =>
+                s.render(sel => f.render(q => h.render(hi => body(sel, q, qRef, hiRef, idBase, hi))))
+            case (Present(s), Present(f), Absent) => s.render(sel => f.render(q => body(sel, q, qRef, Absent, idBase)))
+            case (Present(s), Absent, Present(h)) => s.render(sel => h.render(hi => body(sel, "", Absent, hiRef, idBase, hi)))
+            case (Present(s), Absent, Absent)     => s.render(sel => body(sel, "", Absent, Absent, idBase))
+            case (Absent, Present(f), Present(h)) => f.render(q => h.render(hi => body(Set.empty, q, qRef, hiRef, idBase, hi)))
+            case (Absent, Present(f), Absent)     => f.render(q => body(Set.empty, q, qRef, Absent, idBase))
+            case (Absent, Absent, Present(h))     => h.render(hi => body(Set.empty, "", Absent, hiRef, idBase, hi))
+            case _                                => body(Set.empty, "", Absent, Absent, idBase)
 
-    private def body(sel: Set[String], query: String, qRef: Maybe[SignalRef[String]])(using Frame): UI =
+    private def body(
+        sel: Set[String],
+        query: String,
+        qRef: Maybe[SignalRef[String]],
+        hiRef: Maybe[SignalRef[Int]],
+        idBase: Maybe[String],
+        hi: Int = -1
+    )(using Frame): UI =
         val shownGroups =
             if query.isEmpty then optionsV
             else
@@ -249,7 +253,28 @@ final case class Listbox private (
                 )
         val shown = OptionItem.flatten(shownGroups)
 
-        val rows: List[UI] = OptionItem.rows(shownGroups, "p-listbox-option-group")((it, _) => renderOption(it, sel))
+        // Every option on the screen can take the highlight: a ListItem carries no disabled
+        // flag, and the filter has already dropped the rows that are not there.
+        val navigable: List[Int] = shown.indices.toList
+        val focused: Int         = if navigable.contains(hi) then hi else -1
+
+        val keyHandler: KeyboardEvent => Any < Async = e =>
+            hiRef match
+                case Present(ref) =>
+                    // Prime's listbox stops at the ends rather than cycling, unlike the menu
+                    // family: a reader holding ArrowDown expects to arrive at the last option.
+                    ListNav.onKey(navigable, focused, e.key, wrap = false) match
+                        case Present(step) =>
+                            val pick: Any < Async =
+                                if step.activate && shown.isDefinedAt(step.focus) then activate(shown(step.focus).id)
+                                else ()
+                            ref.set(step.focus).andThen(pick)
+                        case Absent => ()
+                case Absent => ()
+
+        val rows: List[UI] = OptionItem.rows(shownGroups, "p-listbox-option-group")((it, i) =>
+            renderOption(it, sel, i, i == focused, hiRef.isDefined, idBase)
+        )
         val emptyRow: List[UI] =
             if shown.isEmpty then
                 EmptyContent.whenSet(emptyContentV)(c =>
@@ -260,6 +285,14 @@ final case class Listbox private (
         var list = ul.cssClass("p-listbox-list").role("listbox")
         if selectionModeV == SelectionMode.Multiple || selectionModeV == SelectionMode.Checkbox then
             list = list.aria("multiselectable", "true")
+        // The listbox is ONE tab stop and roves a highlight inside it, which is what the ARIA
+        // listbox pattern asks for and what Prime does: a reader tabbing through a form should
+        // not have to press Tab once per option to get past a list of forty. The rows keep
+        // their own tab stops only where there is no highlight to rove (the static projection,
+        // and the embedded render OrderList and PickList drive).
+        if hiRef.isDefined && interactive then
+            list = list.tabIndex(0).preventScrollKeys.onKeyDown(keyHandler)
+            if focused >= 0 then idBase.foreach(base => list = list.aria("activedescendant", optionId(base, focused)))
         accessibleNameV match
             case Present(TextValue.Const(v)) => list = list.aria("label", v)
             case Present(TextValue.Dyn(s))   => list = list.aria("label", s)
@@ -301,7 +334,17 @@ final case class Listbox private (
         )
     end body
 
-    private def renderOption(it: ListItem, sel: Set[String])(using Frame): UI =
+    /** The id the roving highlight addresses one option by, derived from the listbox's own. */
+    private def optionId(base: String, index: Int): String = s"$base-option-$index"
+
+    private def renderOption(
+        it: ListItem,
+        sel: Set[String],
+        index: Int,
+        focused: Boolean,
+        roving: Boolean,
+        idBase: Maybe[String]
+    )(using Frame): UI =
         val isSel = sel.contains(it.id)
 
         // Prime's checkmark column: the check glyph on selected rows, a blank
@@ -317,16 +360,24 @@ final case class Listbox private (
 
         var row = li.cssClass("p-listbox-option").role("option").aria("selected", isSel.toString)
         if isSel then row = row.cssClass("p-listbox-option-selected")
+        if focused then
+            row = row.cssClass("p-focus")
+            idBase.foreach(base => row = row.id(optionId(base, index)))
         it.tooltip.foreach(t => row = row.jsProp("title", t))
         if interactive then
-            row = row
-                .tabIndex(0)
-                .onClick(activate(it.id))
-                .onKeyDown { e =>
-                    e.key match
-                        case Keyboard.Enter | Keyboard.Space => activate(it.id)
-                        case _                               => ()
-                }
+            row = row.onClick(activate(it.id))
+            if roving then row = row.tabIndex(-1)
+            else
+                // No highlight to rove: the rows stay their own tab stops, which is what this
+                // listbox did before the list became one, and keeps the embedded render usable.
+                row = row
+                    .tabIndex(0)
+                    .onKeyDown { e =>
+                        e.key match
+                            case Keyboard.Enter | Keyboard.Space => activate(it.id)
+                            case _                               => ()
+                    }
+            end if
         end if
         val labelSlot: UI = templateF match
             case Present(f) => f(it)

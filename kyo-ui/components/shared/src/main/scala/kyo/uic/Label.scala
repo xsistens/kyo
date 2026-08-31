@@ -41,10 +41,8 @@ final case class Label private (
 end Label
 
 object Label:
-    def apply(text: String): Label = new Label(TextValue.Const(text))
-
-    /** A label whose text tracks `text` — re-renders in place on emission (e.g. a
-      * locale-driven `I18n.t` leaf).
+    /** A label showing `text`. A `Signal[String]` re-renders it in place on emission (e.g. a locale-driven
+      * `I18n.t` leaf).
       */
-    def apply(text: Signal[String]): Label = new Label(TextValue.Dyn(text))
+    def apply(v: String | Signal[String]): Label = new Label(ReactiveValue(v))
 end Label

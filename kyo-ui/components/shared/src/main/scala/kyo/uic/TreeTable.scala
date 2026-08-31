@@ -59,7 +59,7 @@ final case class TreeTable[A] private (
     onRowClickF: Maybe[String => Any < Async] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     hiddenCols: List[Column[A, AnyTable]] = Nil
-) extends Node:
+) extends Node, HasEmptyContent, HasAccessibleName:
     type Self = TreeTable[A]
 
     /** Appends root nodes. */
@@ -113,19 +113,7 @@ final case class TreeTable[A] private (
     /** Size: `.p-treetable-sm` / default / `.p-treetable-lg` cell paddings. */
     def size(v: Size): TreeTable[A] = copy(sizeV = v)
 
-    /** Content of the full-width `tr.p-treetable-empty-message` row when there are no
-      * rows.
-      */
-    def emptyContent(v: String): TreeTable[A] = copy(emptyContentV = Present(EmptyContent.const(v)))
-
-    /** Reactive text: re-renders the empty slot in place on signal emission. */
-    def emptyContent(sig: Signal[String]): TreeTable[A] = copy(emptyContentV = Present(EmptyContent.dyn(sig)))
-
-    /** Arbitrary UI for the empty state: an icon over a line of explanation and the
-      * button that creates the first record, rendered in the same slot the text would
-      * occupy.
-      */
-    def emptyContent(ui: UI): TreeTable[A] = copy(emptyContentV = Present(EmptyContent.ui(ui)))
+    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): TreeTable[A] = copy(emptyContentV = v)
 
     /** Fired with the row key after a toggler press (after the expansion write). */
     def onNodeToggle(f: String => Any < Async): TreeTable[A] = copy(onNodeToggleF = Present(f))
@@ -133,13 +121,7 @@ final case class TreeTable[A] private (
     /** Fired with the row key after a row click (after the selection write). */
     def onRowClick(f: String => Any < Async): TreeTable[A] = copy(onRowClickF = Present(f))
 
-    /** `aria-label` for the tree grid. */
-    def accessibleName(v: String): TreeTable[A] = copy(accNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): TreeTable[A] = copy(accNameV = Present(TextValue.Dyn(sig)))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): TreeTable[A] = copy(accNameV = v)
 
     // ---- render ----
 

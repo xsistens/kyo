@@ -3259,8 +3259,9 @@ class GoldenRenderTest extends UicTest:
                 vref <- Signal.initRef(Set.empty[String])
                 oref <- Signal.initRef(true)
                 eref <- Signal.initRef(Set.empty[String])
+                href <- Signal.initRef(-1)
                 ts = uic.TreeSelect().options(depts)(_.name)(_.subs).value(vref)
-                out <- UI.runRender(ts.open(oref).wired(oref, eref)).take(1).run
+                out <- UI.runRender(ts.open(oref).wired(oref, eref, href, "ts")).take(1).run
             yield out.mkString
         for
             // Two options, one label, no optionKey: the derived keys collide, so a pick
@@ -3918,10 +3919,10 @@ class GoldenRenderTest extends UicTest:
                     .meter("Storage", 40)
                     .startTemplate(span.cssClass("custom-start")("used"))
                     .endTemplate(span.cssClass("custom-end")("of 100 GB"))
-                    .labelTemplate((m, pc) => span.cssClass("custom-label")(s"${m.label}: ${math.round(pc)}%"))
+                    .labelTemplate((m, pc) => span.cssClass("custom-label")(s"${m.labelText}: ${math.round(pc)}%"))
             )
             meterTpl <- renderHtml(
-                uic.MeterGroup().meter("Zero", 0).meterTemplate((m, pc) => span.cssClass("custom-meter")(m.label))
+                uic.MeterGroup().meter("Zero", 0).meterTemplate((m, pc) => span.cssClass("custom-meter")(m.labelText))
             )
         yield
             assert(vertical.contains("p-metergroup-vertical"), "vertical orientation class")
@@ -4775,7 +4776,8 @@ class GoldenRenderTest extends UicTest:
                 vref <- Signal.initRef(current)
                 oref <- Signal.initRef(rootOpen)
                 refs <- Kyo.foreach(cs.value(vref).groupPaths)(p => Signal.initRef(openPaths.contains(p)).map(p -> _))
-                out  <- UI.runRender(cs.value(vref).open(oref).wired(oref, refs.toList)).take(1).run
+                fref <- Signal.initRef(List.empty[Int])
+                out  <- UI.runRender(cs.value(vref).open(oref).wired(oref, refs.toList, fref)).take(1).run
             yield out.mkString
         val base = uic.CascadeSelect[String]()
             .options(
@@ -4829,7 +4831,8 @@ class GoldenRenderTest extends UicTest:
                 vref <- Signal.initRef(sel)
                 oref <- Signal.initRef(open)
                 eref <- Signal.initRef(exp)
-                out  <- UI.runRender(ts.value(vref).open(oref).expanded(eref).wired(oref, eref)).take(1).run
+                href <- Signal.initRef(-1)
+                out  <- UI.runRender(ts.value(vref).open(oref).expanded(eref).wired(oref, eref, href, "ts")).take(1).run
             yield out.mkString
         val base = uic.TreeSelect().nodes(
             uic.TreeNode(

@@ -48,7 +48,7 @@ final case class Password private (
     onChangeSF: Maybe[String => Any < Async] = Absent,
     onInputSF: Maybe[String => Any < Async] = Absent,
     onBlurSF: Maybe[String => Any < Async] = Absent
-) extends Node, TextFormControl:
+) extends Node, TextFormControl, HasPlaceholder, HasAccessibleName:
     type Self = Password
 
     /** Sets a constant value. */
@@ -65,43 +65,33 @@ final case class Password private (
     /** Shows the strength meter below the field (inline — see the class doc). */
     def feedback(v: Boolean): Password = copy(feedbackFlag = v)
 
-    /** Meter label while the value is empty (Prime default "Enter a password"). */
-    def promptLabel(v: String): Password = copy(promptLabelV = TextValue.Const(v))
-
-    /** Reactive empty-value meter label tracking `sig` — re-renders in place on emission. */
-    def promptLabel(sig: Signal[String]): Password = copy(promptLabelV = TextValue.Dyn(sig))
-
-    /** Meter label for weak values (Prime default "Weak"). */
-    def weakLabel(v: String): Password = copy(weakLabelV = TextValue.Const(v))
-
-    /** Reactive weak-value meter label tracking `sig` — re-renders in place on emission. */
-    def weakLabel(sig: Signal[String]): Password = copy(weakLabelV = TextValue.Dyn(sig))
-
-    /** Meter label for medium values (Prime default "Medium"). */
-    def mediumLabel(v: String): Password = copy(mediumLabelV = TextValue.Const(v))
-
-    /** Reactive medium-value meter label tracking `sig` — re-renders in place on emission. */
-    def mediumLabel(sig: Signal[String]): Password = copy(mediumLabelV = TextValue.Dyn(sig))
-
-    /** Meter label for strong values (Prime default "Strong"). */
-    def strongLabel(v: String): Password = copy(strongLabelV = TextValue.Const(v))
-
-    /** Reactive strong-value meter label tracking `sig` — re-renders in place on emission. */
-    def strongLabel(sig: Signal[String]): Password = copy(strongLabelV = TextValue.Dyn(sig))
-
-    def placeholder(v: String): Password = copy(placeholderText = Present(TextValue.Const(v)))
-
-    /** Reactive placeholder that tracks `sig` — patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render of the field) on each emission.
+    /** Meter label while the value is empty (Prime default "Enter a password"). A `Signal[String]` re-
+      * renders it in place on emission.
       */
-    def placeholder(sig: Signal[String]): Password = copy(placeholderText = Present(TextValue.Dyn(sig)))
-    def disabled(v: Boolean): Password             = copy(disabledFlag = v)
+    def promptLabel(v: String | Signal[String]): Password = copy(promptLabelV = ReactiveValue(v))
 
-    /** Native `readonly` — focusable but not editable. */
-    def readonly(v: Boolean): Password = copy(readonlyFlag = Present(BoolValue.Const(v)))
+    /** Meter label for weak values (Prime default "Weak"). A `Signal[String]` re-renders it in place on
+      * emission.
+      */
+    def weakLabel(v: String | Signal[String]): Password = copy(weakLabelV = ReactiveValue(v))
 
-    /** Reactive readonly — toggled IN PLACE via kyo-ui's boolean attribute channel (no re-render). */
-    def readonly(sig: Signal[Boolean]): Password = copy(readonlyFlag = Present(BoolValue.Dyn(sig)))
+    /** Meter label for medium values (Prime default "Medium"). A `Signal[String]` re-renders it in place on
+      * emission.
+      */
+    def mediumLabel(v: String | Signal[String]): Password = copy(mediumLabelV = ReactiveValue(v))
+
+    /** Meter label for strong values (Prime default "Strong"). A `Signal[String]` re-renders it in place on
+      * emission.
+      */
+    def strongLabel(v: String | Signal[String]): Password           = copy(strongLabelV = ReactiveValue(v))
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): Password = copy(placeholderText = v)
+
+    def disabled(v: Boolean): Password = copy(disabledFlag = v)
+
+    /** Native `readonly`, so the field is focusable but not editable. A `Signal[Boolean]` toggles it IN
+      * PLACE via kyo-ui's boolean attribute channel (no re-render).
+      */
+    def readonly(v: Boolean | Signal[Boolean]): Password = copy(readonlyFlag = Present(ReactiveValue(v)))
 
     /** Marks the field required (native constraint + `aria-required`). */
     def required(v: Boolean): Password = copy(requiredFlag = v)
@@ -121,29 +111,11 @@ final case class Password private (
     /** Spans the full container width (`.p-password-fluid`). */
     def fluid(v: Boolean): Password = copy(fluidFlag = v)
 
-    /** Marks the field invalid (`.p-invalid` + `aria-invalid`). */
-    def invalid(v: Boolean): Password = copy(invalidV = Present(BoolValue.Const(v)))
+    private[uic] def withInvalid(v: Maybe[BoolValue]): Password                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): Password                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Password = copy(invalidMsgDynV = v)
 
-    /** Message rendered below the field while `invalid(true)`. */
-    def invalidMessage(v: String): Password = copy(invalidMsgV = Present(v))
-
-    /** Reactive validity: the bound signal toggles `.p-invalid` + `aria-invalid` in
-      * place. Explicit override of the message-derived red default.
-      */
-    def invalid(sig: Signal[Boolean]): Password = copy(invalidV = Present(BoolValue.Dyn(sig)))
-
-    /** Reactive invalid message — `Present` shows the row and (by default) turns the
-      * field red; `Absent` clears both. Re-renders in place on emission.
-      */
-    def invalidMessage(sig: Signal[Maybe[String]]): Password = copy(invalidMsgDynV = Present(sig))
-
-    /** Accessible name → `aria-label` on the input. */
-    def accessibleName(v: String): Password = copy(accNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): Password = copy(accNameV = Present(TextValue.Dyn(sig)))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Password = copy(accNameV = v)
 
     /** Native element `id` — pair with `Label.forId` / `FloatLabel.forId`. */
     def id(v: String): Password = copy(idV = Present(v))

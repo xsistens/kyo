@@ -226,6 +226,7 @@ object ColumnTree:
       * them, since a header cell over nothing would span nothing; a group authored with
       * no columns at all stays, so the diagnostic that names it still fires.
       */
+
     /** These nodes with every level's children put in the order `order` names them in,
       * where a node's place is the place of its FIRST leaf.
       *
@@ -288,6 +289,7 @@ end ColumnTree
   * Column[Product]("Price").body(p => span(fmt(p))).sortBy(_.price).align(ColumnAlign.End)
   * }}}
   */
+
 /** The value round trip of one editable column, with the cell type closed over.
   *
   * `Column[A, +K]` has no type parameter to hold a cell type in, exactly as it has none
@@ -510,45 +512,39 @@ final case class Column[A, +K <: FlatOnly] private (
     def sortBy[B](f: A => B)(using ord: Ordering[B]): Column[A, K] =
         copy(orderingV = Present(Ordering.by(f)))
 
-    /** Whether the reader may change this column's place in the sort spec, which is a
-      * separate question from whether the column HAS an ordering ([[sortBy]]) and from
-      * whether it currently sorts (the spec).
+    /** Whether the reader may change this column's place in the sort spec, which is a separate question
+      * from whether the column HAS an ordering ([[sortBy]]) and from whether it currently sorts (the spec).
       *
-      * Unset, a column with an ordering is interactive, which is what it always was. Set
-      * to false, the header goes inert: no click, no tab stop, no sort affordance. What it
-      * keeps is the STATE, the sorted class, `aria-sort`, the direction icon and the rank
-      * badge, because a spec that names the column still sorts it and hiding that would
-      * misreport the rows the reader is looking at. That pair is the point: a column the
-      * table sorts by and the reader may not re-sort.
+      * Unset, a column with an ordering is interactive, which is what it always was. Set to false, the
+      * header goes inert: no click, no tab stop, no sort affordance. What it keeps is the STATE, the sorted
+      * class, `aria-sort`, the direction icon and the rank badge, because a spec that names the column
+      * still sorts it and hiding that would misreport the rows the reader is looking at. That pair is the
+      * point: a column the table sorts by and the reader may not re-sort.
       *
-      * In a `DataTable.lazyRows` table it is also the whole declaration: the rows arrive
-      * sorted, so there is no ordering for the flag to sit beside, and `sortable(true)` is
-      * what marks a column the server sorts by.
+      * In a `DataTable.lazyRows` table it is also the whole declaration: the rows arrive sorted, so there
+      * is no ordering for the flag to sit beside, and `sortable(true)` is what marks a column the server
+      * sorts by.
+      *
+      * Bound to a `Signal[Boolean]`, the affordance follows the signal, which is what suspends re-sorting
+      * while a mutation is in flight.
       */
-    def sortable(v: Boolean): Column[A, K] = copy(sortableV = Present(BoolValue.Const(v)))
+    def sortable(v: Boolean | Signal[Boolean]): Column[A, K] = copy(sortableV = Present(ReactiveValue(v)))
 
-    /** Reactive [[sortable]]: the affordance follows the signal, which is what suspends
-      * re-sorting while a mutation is in flight.
-      */
-    def sortable(sig: Signal[Boolean]): Column[A, K] = copy(sortableV = Present(BoolValue.Dyn(sig)))
-
-    /** Whether this column is rendered at all. A hidden column contributes no header
-      * cell, no body cells and no footer cell, so the table is exactly as wide as the
-      * columns the reader can see and every colspan follows.
+    /** Whether this column is rendered at all. A hidden column contributes no header cell, no body cells
+      * and no footer cell, so the table is exactly as wide as the columns the reader can see and every
+      * colspan follows.
       *
-      * What it does NOT do is leave the table: the column is still authored, so the
-      * sort spec keeps sorting by it and hiding one never reshuffles the rows under the
-      * reader. The global filter is the other way round, and deliberately: a query
-      * matches what is on the screen, so a hidden column's text is not searched.
+      * What it does NOT do is leave the table: the column is still authored, so the sort spec keeps sorting
+      * by it and hiding one never reshuffles the rows under the reader. The global filter is the other way
+      * round, and deliberately: a query matches what is on the screen, so a hidden column's text is not
+      * searched.
       *
       * A [[headerGroup]] whose columns are all hidden disappears with them.
+      *
+      * Bound to a `Signal[Boolean]`, this is how a column becomes one the reader shows and hides: pass the
+      * signal a toggle writes.
       */
-    def visible(v: Boolean): Column[A, K] = copy(visibleV = Present(BoolValue.Const(v)))
-
-    /** Reactive [[visible]], which is how a column becomes one the reader shows and
-      * hides: bind the signal a toggle writes.
-      */
-    def visible(sig: Signal[Boolean]): Column[A, K] = copy(visibleV = Present(BoolValue.Dyn(sig)))
+    def visible(v: Boolean | Signal[Boolean]): Column[A, K] = copy(visibleV = Present(ReactiveValue(v)))
 
     /** How wide this column is, in CSS pixels.
       *

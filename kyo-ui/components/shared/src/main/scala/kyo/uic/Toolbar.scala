@@ -16,7 +16,7 @@ final case class Toolbar private (
     endKids: List[UI] = Nil,
     accessibleNameV: Maybe[TextValue] = Absent,
     accessibleNameRefV: Maybe[String] = Absent
-) extends Node:
+) extends Node, HasAccessibleNameRef:
     type Self = Toolbar
 
     /** Appends content to the leading section (`.p-toolbar-start`). */
@@ -28,16 +28,8 @@ final case class Toolbar private (
     /** Appends content to the trailing section (`.p-toolbar-end`). */
     def end(cs: UI*): Toolbar = copy(endKids = endKids ++ cs)
 
-    /** `aria-label` for the toolbar. */
-    def accessibleName(v: String): Toolbar = copy(accessibleNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): Toolbar = copy(accessibleNameV = Present(TextValue.Dyn(sig)))
-
-    /** `aria-labelledby` id reference for the toolbar. */
-    def accessibleNameRef(v: String): Toolbar = copy(accessibleNameRefV = Present(v))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Toolbar = copy(accessibleNameV = v)
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): Toolbar = copy(accessibleNameRefV = v)
 
     private[uic] def render(using Frame): UI =
         var bar = div.cssClass("p-toolbar").cssClass("p-component").role("toolbar")

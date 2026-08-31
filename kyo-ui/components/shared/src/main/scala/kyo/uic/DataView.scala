@@ -49,7 +49,7 @@ final case class DataView[A] private (
     pageRef: Maybe[SignalRef[Int]] = Absent,
     emptyContentV: Maybe[EmptyContent] = Absent,
     loadingV: Maybe[BoolValue] = Absent
-) extends Node:
+) extends Node, HasEmptyContent:
     type Self = DataView[A]
 
     /** Appends data items. */
@@ -76,29 +76,14 @@ final case class DataView[A] private (
     def paginate(size: Int)(ref: SignalRef[Int]): DataView[A] =
         copy(pageSizeV = Present(math.max(1, size)), pageRef = Present(ref))
 
-    /** Text shown in the content area when there are no items. */
-    def emptyContent(v: String): DataView[A] = copy(emptyContentV = Present(EmptyContent.const(v)))
+    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): DataView[A] = copy(emptyContentV = v)
 
-    /** Reactive text: re-renders the empty slot in place on signal emission. */
-    def emptyContent(sig: Signal[String]): DataView[A] = copy(emptyContentV = Present(EmptyContent.dyn(sig)))
-
-    /** Arbitrary UI for the empty state: an icon over a line of explanation and the
-      * button that creates the first record, rendered in the same slot the text would
-      * occupy.
+    /** Busy state: a spinner overlay (`.p-dataview-loading-overlay`) dims the content while data is being
+      * fetched (PrimeReact's `loading`). Bind a `Signal[Boolean]` to the data-fetch in-flight signal: the
+      * overlay toggles in its own sub-region and the `.p-dataview-loading` class swaps IN PLACE via the
+      * class channel, with no re-render of the data list.
       */
-    def emptyContent(ui: UI): DataView[A] = copy(emptyContentV = Present(EmptyContent.ui(ui)))
-
-    /** Busy state: a spinner overlay (`.p-dataview-loading-overlay`) dims the
-      * content while data is being fetched (PrimeReact's `loading`).
-      */
-    def loading(v: Boolean): DataView[A] = copy(loadingV = Present(BoolValue.Const(v)))
-
-    /** Reactive busy state — bind to the data-fetch in-flight signal; the dimming overlay toggles in
-      * its own sub-region and the `.p-dataview-loading` class swaps IN PLACE via the class channel
-      * (no re-render of the data list).
-      */
-    def loading(sig: Signal[Boolean]): DataView[A] = copy(loadingV = Present(BoolValue.Dyn(sig)))
-
+    def loading(v: Boolean | Signal[Boolean]): DataView[A] = copy(loadingV = Present(ReactiveValue(v)))
     private[uic] def render(using Frame): UI =
         pageRef match
             case Present(ref) => ref.render(body)

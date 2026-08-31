@@ -28,13 +28,11 @@ final case class Badge private (
       */
     private[uic] def hostClass(cls: String): Badge = copy(hostClassesV = hostClassesV :+ cls)
 
-    /** Semantic accent (`.p-badge-<token>`); unset keeps the primary base skin. */
-    def severity(v: Severity): Badge = copy(severityV = Present(SeverityValue.Const(v)))
-
-    /** Reactive accent — the `.p-badge-<token>` class is swapped IN PLACE via kyo-ui's class
-      * channel on emission (no re-render), e.g. a status badge going success→danger.
+    /** Semantic accent (`.p-badge-<token>`); unset keeps the primary base skin. A `Signal[Severity]` swaps
+      * the class IN PLACE via kyo-ui's class channel on emission (no re-render), e.g. a status badge going
+      * success to danger.
       */
-    def severity(sig: Signal[Severity]): Badge = copy(severityV = Present(SeverityValue.Dyn(sig)))
+    def severity(v: Severity | Signal[Severity]): Badge = copy(severityV = Present(ReactiveValue(v)))
 
     /** Size: `.p-badge-sm` / default / `.p-badge-lg` / `.p-badge-xl`. */
     def size(v: ExtendedSize): Badge = copy(sizeV = v)
@@ -81,14 +79,11 @@ final case class Badge private (
 end Badge
 
 object Badge:
-    /** A badge showing `value` (one character renders the `.p-badge-circle` disc). */
-    def apply(value: String): Badge = new Badge(valueV = Present(TextValue.Const(value)))
-
-    /** A badge whose value tracks `value` — re-renders in place on emission. The
-      * single-character `.p-badge-circle` disc is not applied to a reactive value
-      * (its length is unknown at render time).
+    /** A badge showing `value`. A `Signal[String]` re-renders it in place on emission; the single-character
+      * `.p-badge-circle` disc is not applied to a reactive value, since its length is unknown at render
+      * time.
       */
-    def apply(value: Signal[String]): Badge = new Badge(valueV = Present(TextValue.Dyn(value)))
+    def apply(value: String | Signal[String]): Badge = new Badge(valueV = Present(ReactiveValue(value)))
 
     /** A value-less badge — the `.p-badge-dot` status dot. */
     def apply(): Badge = new Badge()

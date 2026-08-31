@@ -2,6 +2,7 @@ package kyo.uic
 
 import kyo.*
 import kyo.UI.*
+import scala.annotation.targetName
 
 /** Knob — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's Knob
   * anatomy: `div.p-knob.p-component` > `svg[viewBox=0 0 100 100]` with the
@@ -52,7 +53,7 @@ final case class Knob private (
     onChangeF: Maybe[Double => Any < Async] = Absent,
     onBlurF: Maybe[Double => Any < Async] = Absent,
     idV: Maybe[String] = Absent
-) extends Node, NumberFormControl:
+) extends Node, NumberFormControl, HasAccessibleName:
     type Self = Knob
 
     /** Native `id` on the focusable dial — pair with `Label.forId`; the form layer stamps
@@ -60,18 +61,17 @@ final case class Knob private (
       */
     def id(v: String): Knob = copy(idV = Present(v))
 
-    /** Sets a constant value (renders the dial statically). */
-    def value(v: Double): Knob = copy(valueBinding = Present(ReactiveValue.Const(v)))
-
-    /** Binds two-way to `ref`: keyboard steps write the clamped value back, ref
-      * changes redraw the arc.
+    /** The knob's value, in any of the three bindings a value slot holds. A constant renders the
+      * dial statically. A writable `SignalRef[Double]` binds TWO-WAY: drags and keyboard steps
+      * write the clamped value back, and ref changes redraw the arc. Any other `Signal[Double]`
+      * binds one-way, so the arc tracks it and interaction writes nowhere.
+      *
+      * The two-way choice is made on the runtime class, so ascribing a ref as `Signal[Double]`
+      * does not opt out of write-back; pass `ref.readOnly` for that. A derived signal is already
+      * one-way and is the better answer when the value is computed rather than user-edited.
       */
-    def value(ref: SignalRef[Double]): Knob = copy(valueBinding = Present(ReactiveVariable(ref)))
-
-    /** Binds to a one-way DERIVED signal: the arc tracks it read-only (no drag/keyboard
-      * write-back). Prefer this over an artificial `SignalRef` when the value is computed.
-      */
-    def value(sig: Signal[Double]): Knob = copy(valueBinding = Present(ReactiveValue.Dyn(sig)))
+    @targetName("valueNumber")
+    def value(v: Double | Signal[Double]): Knob = copy(valueBinding = Present(ReactiveValue(v)))
 
     /** Lower bound (Prime default 0). */
     def min(v: Double): Knob = copy(minV = v)
@@ -117,29 +117,11 @@ final case class Knob private (
       */
     def disabled(v: Boolean | Signal[Boolean]): Knob = copy(disabledFlag = Present(ReactiveValue(v)))
 
-    /** Accessible name → `aria-label` on the svg dial. */
-    def accessibleName(v: String): Knob = copy(accNameV = Present(TextValue.Const(v)))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Knob = copy(accNameV = v)
 
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): Knob = copy(accNameV = Present(TextValue.Dyn(sig)))
-
-    /** Marks the knob invalid (`.p-invalid` + `aria-invalid`). */
-    def invalid(v: Boolean): Knob = copy(invalidV = Present(BoolValue.Const(v)))
-
-    /** Reactive validity: the bound signal toggles the invalid state on emission. */
-    def invalid(sig: Signal[Boolean]): Knob = copy(invalidV = Present(BoolValue.Dyn(sig)))
-
-    /** Message rendered below the dial while the knob is invalid (kyo extension —
-      * `div.p-uic-invalid-message`).
-      */
-    def invalidMessage(v: String): Knob = copy(invalidMsgV = Present(v))
-
-    /** Reactive invalid message — `Present` shows the row and (by default) marks the knob
-      * invalid; `Absent` clears both.
-      */
-    def invalidMessage(sig: Signal[Maybe[String]]): Knob = copy(invalidMsgDynV = Present(sig))
+    private[uic] def withInvalid(v: Maybe[BoolValue]): Knob                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): Knob                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Knob = copy(invalidMsgDynV = v)
 
     /** Fired with the NEW (clamped) value after the ref write-back. */
     def onChange(f: Double => Any < Async): Knob = copy(onChangeF = Present(f))

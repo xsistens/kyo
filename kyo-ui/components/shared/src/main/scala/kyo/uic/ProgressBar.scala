@@ -27,19 +27,17 @@ final case class ProgressBar private (
     showValueFlag: Boolean = true,
     valueTemplateV: Maybe[Int => String] = Absent,
     accessibleNameV: Maybe[TextValue] = Absent
-) extends Node:
+) extends Node, HasAccessibleName:
     type Self = ProgressBar
 
-    /** Sets a constant percentage (clamped to 0–100 at render). */
-    def value(v: Int): ProgressBar = copy(valueBinding = Present(ReactiveValue.Const(v)))
-
-    /** Binds reactively to `ref`: ref changes update the bar width and `aria-valuenow`. */
-    def value(ref: SignalRef[Int]): ProgressBar = copy(valueBinding = Present(ReactiveVariable(ref)))
-
-    /** Binds to a one-way DERIVED signal (e.g. `combineLatest(loaded, total).map(pct)`): the bar tracks it
-      * read-only. Prefer this over an artificial `SignalRef` when the progress is computed, not user-edited.
+    /** The percentage shown (clamped to 0–100 at render). A constant renders the bar statically; any
+      * `Signal[Int]` updates the bar width and `aria-valuenow` on emission.
+      *
+      * A progress bar is never edited by the reader, so the two-way case a writable `SignalRef` would
+      * carry has nothing to write: it reads exactly like a one-way signal here. A derived signal
+      * (`loaded.zip(total).map(pct)`) is the natural binding.
       */
-    def value(sig: Signal[Int]): ProgressBar = copy(valueBinding = Present(ReactiveValue.Dyn(sig)))
+    def value(v: Int | Signal[Int]): ProgressBar = copy(valueBinding = Present(ReactiveValue(v)))
 
     /** `Determinate` (default) or the endless `Indeterminate` slide. */
     def mode(v: ProgressBarMode): ProgressBar = copy(modeV = v)
@@ -50,13 +48,7 @@ final case class ProgressBar private (
     /** Formats the label from the current value (e.g. `v => s"$v/100"`). */
     def valueTemplate(f: Int => String): ProgressBar = copy(valueTemplateV = Present(f))
 
-    /** Accessible name, emitted as `aria-label`. */
-    def accessibleName(v: String): ProgressBar = copy(accessibleNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): ProgressBar = copy(accessibleNameV = Present(TextValue.Dyn(sig)))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): ProgressBar = copy(accessibleNameV = v)
 
     private[uic] def render(using Frame): UI =
         modeV match

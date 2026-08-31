@@ -19,16 +19,19 @@ private[uic] enum EmptyContent:
 
 private[uic] object EmptyContent:
 
-    def const(v: String): EmptyContent         = Text(TextValue.Const(v))
-    def dyn(sig: Signal[String]): EmptyContent = Text(TextValue.Dyn(sig))
-    def ui(v: UI): EmptyContent                = Ui(v)
+    /** The text case from the union a host's `emptyContent` setter takes: a constant builds once, a
+      * `Signal[String]` re-renders the slot in place on emission.
+      */
+    def text(v: String | Signal[String]): EmptyContent = Text(ReactiveValue(v))
+
+    def ui(v: UI): EmptyContent = Ui(v)
 
     /** Renders the slot inside `wrap`, falling back to `fallback` text when unset. For
       * the components that always show something (the tables, DataView, the pickers'
       * panels).
       */
     def render(c: Maybe[EmptyContent], fallback: String)(wrap: HtmlChildVal => UI)(using Frame): UI =
-        one(c.getOrElse(const(fallback)))(wrap)
+        one(c.getOrElse(text(fallback)))(wrap)
 
     /** Renders the slot only when it is set, for the components that leave the row out
       * entirely otherwise (Prime renders no empty row for an unset slot there).

@@ -214,6 +214,48 @@ class SignalTest extends kyo.test.Test[Any]:
             yield assert(v1 == 2 && v2 == 4)
         }
 
+        "readOnly" - {
+            "is not a SignalRef" in {
+                for
+                    ref <- Signal.initRef(1)
+                    view = ref.readOnly
+                yield assert(!view.isInstanceOf[Signal.SignalRef[?]] && ref.isInstanceOf[Signal.SignalRef[?]])
+            }
+
+            "reads the source's current value" in {
+                for
+                    ref <- Signal.initRef(1)
+                    view = ref.readOnly
+                    v1 <- view.current
+                    _  <- ref.set(2)
+                    v2 <- view.current
+                yield assert(v1 == 1 && v2 == 2)
+            }
+
+            "delivers changes through the source's own protocol" in {
+                for
+                    ref    <- Signal.initRef(0)
+                    f      <- Fiber.initUnscoped(ref.readOnly.streamChanges(Duration.Infinity).take(2).run)
+                    _      <- assertEventually(ref.waiters.map(_ == 1))
+                    _      <- ref.set(1)
+                    _      <- assertEventually(ref.waiters.map(_ == 1))
+                    _      <- ref.set(2)
+                    values <- f.get
+                yield assert(values == Chunk(1, 2))
+            }
+
+            "parks on the source, so the view costs no extra waiter" in {
+                for
+                    ref <- Signal.initRef(0)
+                    f   <- Fiber.initUnscoped(ref.readOnly.next)
+                    _   <- assertEventually(ref.waiters.map(_ == 1))
+                    _   <- ref.set(1)
+                    v   <- f.get
+                    w   <- ref.waiters
+                yield assert(v == 1 && w == 0)
+            }
+        }
+
         "streamCurrent" in {
             for
                 ref <- Signal.initRef(1)

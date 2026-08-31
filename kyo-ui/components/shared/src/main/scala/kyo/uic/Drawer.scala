@@ -80,7 +80,7 @@ final case class Drawer private (
     accessibleNameRefV: Maybe[String] = Absent,
     onCloseEff: Maybe[Any < Async] = Absent,
     kids: List[UI] = Nil
-) extends Node:
+) extends Node, HasAccessibleNameRef:
     type Self = Drawer
 
     /** Binds visibility two-way to `ref` — the only way to open/close the drawer. */
@@ -89,12 +89,10 @@ final case class Drawer private (
     /** Which edge the panel docks to (default [[DrawerPosition.Left]] — Prime). */
     def position(v: DrawerPosition): Drawer = copy(positionV = v)
 
-    def header(v: String): Drawer = copy(headerText = Present(TextValue.Const(v)))
-
-    /** Reactive `header` tracking `sig` — re-renders in place on emission, e.g. a
+    /** Header title. A `Signal[String]` re-renders it in place on emission, e.g. a
       * locale-driven `I18n.t` leaf.
       */
-    def header(sig: Signal[String]): Drawer = copy(headerText = Present(TextValue.Dyn(sig)))
+    def header(v: String | Signal[String]): Drawer = copy(headerText = Present(ReactiveValue(v)))
 
     /** Arbitrary header content replacing the default title (the close button is
       * still composed after it).
@@ -122,16 +120,8 @@ final case class Drawer private (
       */
     def preventFocusRestore(v: Boolean): Drawer = copy(preventFocusRestoreFlag = v)
 
-    /** Accessible name, emitted as `aria-label`. */
-    def accessibleName(v: String): Drawer = copy(accessibleNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): Drawer = copy(accessibleNameV = Present(TextValue.Dyn(sig)))
-
-    /** Id(s) of labelling element(s), emitted as `aria-labelledby`. */
-    def accessibleNameRef(v: String): Drawer = copy(accessibleNameRefV = Present(v))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Drawer = copy(accessibleNameV = v)
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): Drawer = copy(accessibleNameRefV = v)
 
     /** Runs `action` whenever the drawer closes itself (close button, Escape,
       * mask click) — after the `open` ref is written to `false`. External ref

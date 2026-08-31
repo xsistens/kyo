@@ -417,7 +417,7 @@ object ShowcaseCompile:
                 .meter("Messages", 16, "var(--p-cyan-500)", uic.Icons.inbox)
                 .startTemplate(span("used"))
                 .endTemplate(span("of 100 GB"))
-                .meterTemplate((m, pc) => span.cssClass("seg")(m.label))
+                .meterTemplate((m, pc) => span.cssClass("seg")(m.labelText))
                 .labelTemplate((m, pc) => span(s"${m.label} — ${math.round(pc)}%"))
         )
 

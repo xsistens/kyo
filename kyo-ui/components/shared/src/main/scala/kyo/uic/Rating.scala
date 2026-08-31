@@ -33,7 +33,7 @@ import scala.annotation.targetName
   */
 final case class Rating private (
     valueBinding: Maybe[ReactiveValue[Int]] = Absent,
-    doubleRef: Maybe[SignalRef[Double]] = Absent,
+    doubleBinding: Maybe[ReactiveValue[Double]] = Absent,
     starsV: Int = 5,
     readonlyFlag: Boolean = false,
     disabledFlag: Maybe[BoolValue] = Absent,
@@ -47,7 +47,7 @@ final case class Rating private (
     onChangeF: Maybe[Int => Any < Async] = Absent,
     onBlurDoubleF: Maybe[Double => Any < Async] = Absent,
     idV: Maybe[String] = Absent
-) extends Node, NumberFormControl:
+) extends Node, NumberFormControl, HasAccessibleName:
     type Self = Rating
 
     /** Native `id` on the option group — pair with `Label.forId`; the form layer stamps the
@@ -55,29 +55,25 @@ final case class Rating private (
       */
     def id(v: String): Rating = copy(idV = Present(v))
 
-    /** Sets a constant value (0 = nothing selected). */
-    def value(v: Int): Rating = copy(valueBinding = Present(ReactiveValue.Const(v)))
-
-    /** Binds two-way to `ref`: clicks write the new value back, ref changes re-render.
+    /** The star count, in any of the three bindings a value slot holds (0 = nothing selected). A
+      * constant renders the stars statically. A writable `SignalRef[Int]` binds TWO-WAY: clicks
+      * write the new value back, and ref changes re-render. Any other `Signal[Int]` binds one-way,
+      * so the stars track it and clicks write nowhere.
       *
-      * `@targetName` because the `Double` overload below is the [[NumberFormControl]]
-      * member and both erase to `value(SignalRef)`; the JVM name is the only thing that
-      * differs, the call site still reads `value(...)`.
+      * The two-way choice is made on the runtime class, so ascribing a ref as `Signal[Int]` does
+      * not opt out of write-back; pass `ref.readOnly` for that.
       */
-    @targetName("valueIntRef")
-    def value(ref: SignalRef[Int]): Rating = copy(valueBinding = Present(ReactiveVariable(ref)))
+    def value(v: Int | Signal[Int]): Rating = copy(valueBinding = Present(ReactiveValue(v)))
 
-    /** Binds to a one-way DERIVED signal: the stars track it read-only (clicks write
-      * nowhere). Prefer this over an artificial `SignalRef` when the value is computed.
+    /** The `Double`-shaped binding of [[NumberFormControl]], so a Rating can carry a
+      * `Form.numberField`. The stars remain whole: the value is read rounded and written back as a
+      * whole number, which is what [[integer]] asks of this family and what a star count is anyway.
+      *
+      * `@targetName` because this and the `Int` binding above both erase to `value(Object)`; the
+      * JVM name is the only thing that differs, and the call site still reads `value(...)`.
       */
-    def value(sig: Signal[Int]): Rating = copy(valueBinding = Present(ReactiveValue.Dyn(sig)))
-
-    /** Binds two-way to a `Double` ref — the [[NumberFormControl]] shape, so a Rating can
-      * carry a `Form.numberField`. The stars remain whole: the ref is read rounded and
-      * written as a whole number, which is what [[integer]] asks of this family and what a
-      * star count is anyway.
-      */
-    def value(ref: SignalRef[Double]): Rating = copy(doubleRef = Present(ref))
+    @targetName("valueNumber")
+    def value(v: Double | Signal[Double]): Rating = copy(doubleBinding = Present(ReactiveValue(v)))
 
     /** Number of stars (Prime default 5). */
     def stars(n: Int): Rating = copy(starsV = math.max(1, n))
@@ -101,29 +97,11 @@ final case class Rating private (
     /** Glyph for the options beyond the value (Prime default: the outline star). */
     def offIcon(glyph: IconGlyph): Rating = copy(offIconV = Present(glyph))
 
-    /** Accessible name → `aria-label` on the root. */
-    def accessibleName(v: String): Rating = copy(accNameV = Present(TextValue.Const(v)))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Rating = copy(accNameV = v)
 
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): Rating = copy(accNameV = Present(TextValue.Dyn(sig)))
-
-    /** Marks the rating invalid (`.p-invalid` + `aria-invalid`). */
-    def invalid(v: Boolean): Rating = copy(invalidV = Present(BoolValue.Const(v)))
-
-    /** Reactive validity: the bound signal toggles the invalid state on emission. */
-    def invalid(sig: Signal[Boolean]): Rating = copy(invalidV = Present(BoolValue.Dyn(sig)))
-
-    /** Message rendered below the stars while the rating is invalid (kyo extension —
-      * `div.p-uic-invalid-message`).
-      */
-    def invalidMessage(v: String): Rating = copy(invalidMsgV = Present(v))
-
-    /** Reactive invalid message — `Present` shows the row and (by default) marks the
-      * rating invalid; `Absent` clears both.
-      */
-    def invalidMessage(sig: Signal[Maybe[String]]): Rating = copy(invalidMsgDynV = Present(sig))
+    private[uic] def withInvalid(v: Maybe[BoolValue]): Rating                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): Rating                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Rating = copy(invalidMsgDynV = v)
 
     /** Accepted for the [[NumberFormControl]] contract and satisfied by construction: a
       * star count is always whole, so the constraint has nothing left to enforce here.
@@ -153,11 +131,19 @@ final case class Rating private (
         BoolValue.reactive(disabledFlag): d =>
             copy(disabledFlag = d).renderResolved
 
+    /** The `Double` ref to write back to, i.e. only when the form-layer binding is two-way. */
+    private def doubleWriteRef: Maybe[SignalRef[Double]] = doubleBinding match
+        case Present(ReactiveVariable(r)) => Present(r)
+        case _                            => Absent
+
     private def renderResolved(using Frame): UI =
-        doubleRef match
+        doubleBinding match
             // The Double binding wins when present: it is the form layer's, and a control
-            // bound to a field has no second source of truth.
-            case Present(dref) => dref.render(d => body(math.rint(d).toInt, Absent))
+            // bound to a field has no second source of truth. ReactiveVariable before Dyn,
+            // since a two-way binding IS a Dyn.
+            case Present(ReactiveVariable(dref)) => dref.render(d => body(math.rint(d).toInt, Absent))
+            case Present(ReactiveValue.Dyn(sig)) => sig.render(d => body(math.rint(d).toInt, Absent))
+            case Present(ReactiveValue.Const(d)) => body(math.rint(d).toInt, Absent)
             case Absent =>
                 valueBinding match
                     case Present(ReactiveVariable(ref))  => ref.render(v => body(v, Present(ref)))
@@ -202,7 +188,7 @@ final case class Rating private (
             case Absent                      => ()
         end match
         onBlurDoubleF.foreach { f =>
-            el = el.onBlur(doubleRef match
+            el = el.onBlur(doubleWriteRef match
                 case Present(r) => r.use(d => f(math.rint(d)))
                 case Absent     => f(value.toDouble))
         }
@@ -212,7 +198,7 @@ final case class Rating private (
     /** Prime's select semantics: picking the current value clears to 0. */
     private def activate(i: Int, current: Int, ref: Maybe[SignalRef[Int]])(using Frame): Any < Async =
         val next = if i == current then 0 else i
-        val write: Any < Async = (ref, doubleRef) match
+        val write: Any < Async = (ref, doubleWriteRef) match
             case (Present(r), _)       => r.set(next)
             case (Absent, Present(dr)) => dr.set(next.toDouble)
             case _                     => ()

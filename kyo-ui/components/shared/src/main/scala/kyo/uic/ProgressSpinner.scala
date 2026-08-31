@@ -18,19 +18,13 @@ import kyo.UI.*
 final case class ProgressSpinner private (
     sizeV: Size = Size.Normal,
     accessibleNameV: Maybe[TextValue] = Absent
-) extends Node:
+) extends Node, HasAccessibleName:
     type Self = ProgressSpinner
 
     /** Size preset: `Small` (2rem) / `Normal` (Prime's 100px default) / `Large` (8rem). */
     def size(v: Size): ProgressSpinner = copy(sizeV = v)
 
-    /** Accessible name, emitted as `aria-label`. */
-    def accessibleName(v: String): ProgressSpinner = copy(accessibleNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): ProgressSpinner = copy(accessibleNameV = Present(TextValue.Dyn(sig)))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): ProgressSpinner = copy(accessibleNameV = v)
 
     private[uic] def render(using Frame): UI =
         var el = div.cssClass("p-progressspinner").role("progressbar")

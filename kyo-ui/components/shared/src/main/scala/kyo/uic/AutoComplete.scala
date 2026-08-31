@@ -78,7 +78,7 @@ final case class AutoComplete[A] private (
     fieldExtraClassesV: List[String] = Nil,
     idV: Maybe[String] = Absent,
     onBlurF: Maybe[String => Any < Async] = Absent
-) extends Node, TextFormControl:
+) extends Node, TextFormControl, HasEmptyContent, HasPlaceholder, HasAccessibleNameRef:
     type Self = AutoComplete[A]
 
     /** Package-internal class hook: wrappers (FloatLabel) stamp Prime's state
@@ -139,36 +139,16 @@ final case class AutoComplete[A] private (
       */
     def minQueryLength(n: Int): AutoComplete[A] = copy(minQueryLengthV = math.max(0, n))
 
-    /** Text of the `li.p-autocomplete-empty-message` row when the query matches no
-      * option; without it the panel is suppressed instead.
-      */
-    def emptyContent(v: String): AutoComplete[A] = copy(emptyContentV = Present(EmptyContent.const(v)))
+    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): AutoComplete[A] = copy(emptyContentV = v)
 
-    /** Reactive text: re-renders the empty slot in place on signal emission. */
-    def emptyContent(sig: Signal[String]): AutoComplete[A] = copy(emptyContentV = Present(EmptyContent.dyn(sig)))
-
-    /** Arbitrary UI for the empty state: an icon over a line of explanation and the
-      * button that creates the first record, rendered in the same slot the text would
-      * occupy.
-      */
-    def emptyContent(ui: UI): AutoComplete[A] = copy(emptyContentV = Present(EmptyContent.ui(ui)))
-
-    def placeholder(v: String): AutoComplete[A] = copy(placeholderText = Present(TextValue.Const(v)))
-
-    /** Reactive placeholder that tracks `sig` — patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render/re-mount of the field) on each emission.
-      */
-    def placeholder(sig: Signal[String]): AutoComplete[A] = copy(placeholderText = Present(TextValue.Dyn(sig)))
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): AutoComplete[A] = copy(placeholderText = v)
 
     /** Busy state — renders Prime's spinning `span.p-autocomplete-loader` inside
-      * the field while suggestions are being fetched.
+      * the field while suggestions are being fetched. Bind a `Signal[Boolean]` to the
+      * suggestion-fetch in-flight signal; only the in-field loader spinner toggles in its
+      * own sub-region on emission (no re-render of the field).
       */
-    def loading(v: Boolean): AutoComplete[A] = copy(loadingV = Present(BoolValue.Const(v)))
-
-    /** Reactive busy state — bind to the suggestion-fetch in-flight signal; only the in-field loader
-      * spinner toggles in its own sub-region on emission (no re-render of the field).
-      */
-    def loading(sig: Signal[Boolean]): AutoComplete[A] = copy(loadingV = Present(BoolValue.Dyn(sig)))
+    def loading(v: Boolean | Signal[Boolean]): AutoComplete[A] = copy(loadingV = Present(ReactiveValue(v)))
 
     /** Renders Prime's `.p-autocomplete-clear-icon` button inside the field
       * (visible while the bound text is non-empty) that resets the ref to `""`.
@@ -203,34 +183,12 @@ final case class AutoComplete[A] private (
     /** Spans the full width of its container (`.p-autocomplete-fluid`). */
     def fluid(v: Boolean): AutoComplete[A] = copy(fluidFlag = v)
 
-    /** Marks the field invalid (`.p-invalid` + `aria-invalid`). */
-    def invalid(v: Boolean): AutoComplete[A] = copy(invalidV = Present(BoolValue.Const(v)))
+    private[uic] def withInvalid(v: Maybe[BoolValue]): AutoComplete[A]                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): AutoComplete[A]                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): AutoComplete[A] = copy(invalidMsgDynV = v)
 
-    /** Message rendered below the field while `invalid(true)` (kyo extension —
-      * `div.p-uic-invalid-message`).
-      */
-    def invalidMessage(v: String): AutoComplete[A] = copy(invalidMsgV = Present(v))
-
-    /** Reactive validity: the bound signal toggles `.p-invalid` + `aria-invalid` in
-      * place. Explicit override of the message-derived red default.
-      */
-    def invalid(sig: Signal[Boolean]): AutoComplete[A] = copy(invalidV = Present(BoolValue.Dyn(sig)))
-
-    /** Reactive invalid message — `Present` shows the row and (by default) turns the
-      * field red; `Absent` clears both. Re-renders in place on emission.
-      */
-    def invalidMessage(sig: Signal[Maybe[String]]): AutoComplete[A] = copy(invalidMsgDynV = Present(sig))
-
-    /** Accessible name → `aria-label`. */
-    def accessibleName(v: String): AutoComplete[A] = copy(accNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): AutoComplete[A] = copy(accNameV = Present(TextValue.Dyn(sig)))
-
-    /** Accessible name reference → `aria-labelledby`. */
-    def accessibleNameRef(v: String): AutoComplete[A] = copy(accNameRefV = Present(v))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): AutoComplete[A] = copy(accNameV = v)
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): AutoComplete[A] = copy(accNameRefV = v)
 
     /** Fired on every keystroke with the current text. */
     def onInput(f: String => Any < Async): AutoComplete[A] = copy(onInputF = Present(f))

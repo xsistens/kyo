@@ -83,7 +83,7 @@ final case class OrderList[A] private (
     selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
     disabledFlag: Boolean = false,
     accessibleNameV: Maybe[TextValue] = Absent
-) extends Node:
+) extends Node, HasAccessibleName:
     type Self = OrderList[A]
 
     /** Binds the ordered items two-way: the move buttons write the reordered Seq
@@ -108,13 +108,7 @@ final case class OrderList[A] private (
     /** Disables the whole control: the listbox dims and the buttons lock. */
     def disabled(v: Boolean): OrderList[A] = copy(disabledFlag = v)
 
-    /** `aria-label` for the embedded listbox. */
-    def accessibleName(v: String): OrderList[A] = copy(accessibleNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): OrderList[A] = copy(accessibleNameV = Present(TextValue.Dyn(sig)))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): OrderList[A] = copy(accessibleNameV = v)
 
     private def keyOf(a: A): String =
         keyF.orElse(labelF).map(_(a)).getOrElse(a.toString)

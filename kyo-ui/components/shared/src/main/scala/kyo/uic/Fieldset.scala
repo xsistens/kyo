@@ -35,13 +35,10 @@ final case class Fieldset private (
 ) extends Node:
     type Self = Fieldset
 
-    /** Legend text, rendered inside `.p-fieldset-legend`. */
-    def legend(v: String): Fieldset = copy(legendV = Present(TextValue.Const(v)))
-
-    /** Reactive `legend` tracking `sig` — re-renders in place on emission, e.g. a
-      * locale-driven `I18n.t` leaf.
+    /** Legend text, rendered inside `.p-fieldset-legend`. A `Signal[String]` re-renders it in place on
+      * emission, e.g. a locale-driven `I18n.t` leaf.
       */
-    def legend(sig: Signal[String]): Fieldset = copy(legendV = Present(TextValue.Dyn(sig)))
+    def legend(v: String | Signal[String]): Fieldset = copy(legendV = Present(ReactiveValue(v)))
 
     /** Renders the legend as the toggle button (`.p-fieldset-toggleable`); pair
       * with [[collapsed]] to bind the collapse state. Default false.

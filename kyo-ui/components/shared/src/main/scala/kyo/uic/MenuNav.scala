@@ -4,11 +4,16 @@ import kyo.*
 import kyo.UI.Keyboard
 
 /** Pure WAI-ARIA keyboard-navigation state machine shared by the menu family
-  * (Menu, Menubar, TieredMenu, ContextMenu, MegaMenu). It operates over the
-  * typed [[MenuItem]] tree and the current focus PATH (an index chain from the
-  * root; `Nil` = nothing focused) and returns the [[MenuNav.Step]] the host maps
-  * onto its focus + submenu-open signals. No DOM and no effects — the semantics
-  * are unit-tested directly (`MenuNavTest`).
+  * (Menu, Menubar, TieredMenu, ContextMenu, MegaMenu) and by [[CascadeSelect]], whose nested
+  * option panels are the same machine under a different skin. It operates over a tree of
+  * nodes and the current focus PATH (an index chain from the root; `Nil` = nothing focused)
+  * and returns the [[MenuNav.Step]] the host maps onto its focus + submenu-open signals. No
+  * DOM and no effects — the semantics are unit-tested directly (`MenuNavTest`).
+  *
+  * The tree is reached through [[Nodes]] rather than being a [[MenuItem]] list, because a
+  * cascade's options nest exactly the way a menu's items do and one navigation is better than
+  * two that drift. A type needs to answer two questions to navigate: what a node's children
+  * are, and whether the keyboard skips it.
   *
   * Root axis is parameterised: a [[Menubar]] navigates its roots horizontally
   * (Left/Right), every other menu navigates its top level vertically (Up/Down);
@@ -17,6 +22,17 @@ import kyo.UI.Keyboard
   * `OpenTo(p)` ⇒ `openExactly(Present(p))`).
   */
 private[uic] object MenuNav:
+
+    /** What this needs of a node to navigate a tree of them: its children, and whether the
+      * keyboard passes over it (a separator, a disabled row).
+      */
+    trait Nodes[N]:
+        def children(n: N): List[N]
+        def skip(n: N): Boolean
+
+    given Nodes[MenuItem] with
+        def children(n: MenuItem): List[MenuItem] = n.itemsV
+        def skip(n: MenuItem): Boolean            = n.separatorFlag || n.disabledFlag
 
     /** Root-level navigation axis. */
     enum Orientation derives CanEqual:
@@ -45,34 +61,34 @@ private[uic] object MenuNav:
     /** The item list at `parent` — the root list when empty, the addressed item's
       * children deeper (an out-of-range index yields an empty level).
       */
-    private def levelItems(items: List[MenuItem], parent: List[Int]): List[MenuItem] =
+    private def levelItems[N](items: List[N], parent: List[Int])(using nodes: Nodes[N]): List[N] =
         parent.foldLeft(items) { (its, i) =>
-            if i >= 0 && i < its.size then its(i).itemsV else Nil
+            if i >= 0 && i < its.size then nodes.children(its(i)) else Nil
         }
 
     /** Enabled, non-separator sibling indices at `parent` (the keyboard-reachable ones). */
-    private def navigable(items: List[MenuItem], parent: List[Int]): List[Int] =
+    private def navigable[N](items: List[N], parent: List[Int])(using nodes: Nodes[N]): List[Int] =
         levelItems(items, parent).zipWithIndex.collect {
-            case (it, i) if !it.separatorFlag && !it.disabledFlag => i
+            case (it, i) if !nodes.skip(it) => i
         }
 
     /** The item addressed by `path` (`Absent` for the root or an out-of-range
       * index) — hosts use it to resolve the focused leaf's action on activation.
       */
-    private[uic] def itemAt(items: List[MenuItem], path: List[Int]): Maybe[MenuItem] =
+    private[uic] def itemAt[N: Nodes](items: List[N], path: List[Int]): Maybe[N] =
         if path.isEmpty then Absent
         else
             val lvl = levelItems(items, path.init)
             val i   = path.last
             if i >= 0 && i < lvl.size then Present(lvl(i)) else Absent
 
-    private def hasChildren(items: List[MenuItem], path: List[Int]): Boolean =
-        itemAt(items, path).exists(_.itemsV.nonEmpty)
+    private def hasChildren[N](items: List[N], path: List[Int])(using nodes: Nodes[N]): Boolean =
+        itemAt(items, path).exists(n => nodes.children(n).nonEmpty)
 
-    private def firstChild(items: List[MenuItem], parent: List[Int]): Maybe[List[Int]] =
+    private def firstChild[N: Nodes](items: List[N], parent: List[Int]): Maybe[List[Int]] =
         Maybe.fromOption(navigable(items, parent).headOption).map(parent :+ _)
 
-    private def lastChild(items: List[MenuItem], parent: List[Int]): Maybe[List[Int]] =
+    private def lastChild[N: Nodes](items: List[N], parent: List[Int]): Maybe[List[Int]] =
         Maybe.fromOption(navigable(items, parent).lastOption).map(parent :+ _)
 
     private def parentOf(focus: List[Int]): List[Int] = if focus.isEmpty then Nil else focus.init
@@ -80,7 +96,7 @@ private[uic] object MenuNav:
     /** Move within the current level, wrapping; falls back to the first navigable
       * sibling when the current index is not itself navigable.
       */
-    private def move(items: List[MenuItem], focus: List[Int], dir: Int): List[Int] =
+    private def move[N: Nodes](items: List[N], focus: List[Int], dir: Int): List[Int] =
         val parent = parentOf(focus)
         val nav    = navigable(items, parent)
         if nav.isEmpty then focus
@@ -97,7 +113,7 @@ private[uic] object MenuNav:
     /** Open the focused item's submenu and land on its first child (`Absent` if the
       * item has no navigable children).
       */
-    private def enterSubmenu(items: List[MenuItem], focus: List[Int]): Maybe[Step] =
+    private def enterSubmenu[N: Nodes](items: List[N], focus: List[Int]): Maybe[Step] =
         firstChild(items, focus).map(fc => Step(focus = fc, open = OpenOp.OpenTo(fc)))
 
     /** Leave the current submenu: focus the parent row and close the parent's
@@ -115,7 +131,7 @@ private[uic] object MenuNav:
     /** Cross to a sibling root (menubar Left/Right from within/at the root),
       * opening its submenu when it has one.
       */
-    private def gotoRoot(items: List[MenuItem], focus: List[Int], dir: Int, openIt: Boolean): Step =
+    private def gotoRoot[N: Nodes](items: List[N], focus: List[Int], dir: Int, openIt: Boolean): Step =
         val root = move(items, focus.take(1), dir)
         if openIt then
             firstChild(items, root) match
@@ -127,8 +143,8 @@ private[uic] object MenuNav:
 
     // ---- the key handler ----
 
-    def onKey(
-        items: List[MenuItem],
+    def onKey[N: Nodes](
+        items: List[N],
         rootOrientation: Orientation,
         focus: List[Int],
         key: Keyboard

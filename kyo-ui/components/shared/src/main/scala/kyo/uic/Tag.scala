@@ -23,13 +23,10 @@ final case class Tag private (
 ) extends Node:
     type Self = Tag
 
-    /** Semantic accent (`.p-tag-<token>`); unset keeps the primary base skin. */
-    def severity(v: Severity): Tag = copy(severityV = Present(SeverityValue.Const(v)))
-
-    /** Reactive accent — the `.p-tag-<token>` class is swapped IN PLACE via kyo-ui's class
-      * channel on emission (no re-render).
+    /** Semantic accent (`.p-tag-<token>`); unset keeps the primary base skin. A `Signal[Severity]` swaps
+      * the class IN PLACE via kyo-ui's class channel on emission (no re-render).
       */
-    def severity(sig: Signal[Severity]): Tag = copy(severityV = Present(SeverityValue.Dyn(sig)))
+    def severity(v: Severity | Signal[Severity]): Tag = copy(severityV = Present(ReactiveValue(v)))
 
     /** Fully rounded pill corners (`.p-tag-rounded`). */
     def rounded(v: Boolean): Tag = copy(roundedFlag = v)
@@ -73,13 +70,10 @@ final case class Tag private (
 end Tag
 
 object Tag:
-    /** A tag labelled `label` (rendered as `span.p-tag-label`). */
-    def apply(label: String): Tag = new Tag(labelV = Present(TextValue.Const(label)))
-
-    /** A tag whose label tracks `label` — re-renders in place on emission (e.g. a
-      * locale-driven `I18n.t` leaf).
+    /** A tag labelled `label`. A `Signal[String]` re-renders the label in place on emission (e.g. a locale-
+      * driven `I18n.t` leaf).
       */
-    def apply(label: Signal[String]): Tag = new Tag(labelV = Present(TextValue.Dyn(label)))
+    def apply(label: String | Signal[String]): Tag = new Tag(labelV = Present(ReactiveValue(label)))
 
     /** An empty tag — fill the default slot via `apply(cs*)`. */
     def apply(): Tag = new Tag()

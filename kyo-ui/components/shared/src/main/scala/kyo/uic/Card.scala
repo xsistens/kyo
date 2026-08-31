@@ -28,27 +28,22 @@ final case class Card private (
     accessibleNameV: Maybe[TextValue] = Absent,
     accessibleNameRefV: Maybe[String] = Absent,
     kids: List[UI] = Nil
-) extends Node:
+) extends Node, HasAccessibleNameRef:
     type Self = Card
 
-    def title(v: String): Card    = copy(titleText = Present(TextValue.Const(v)))
-    def subtitle(v: String): Card = copy(subtitleText = Present(TextValue.Const(v)))
-
-    /** Reactive title that tracks `sig` — re-renders in place on emission (e.g. a
-      * locale-driven `I18n.t` leaf).
+    /** Card title. A `Signal[String]` re-renders it in place on emission (e.g. a locale-driven `I18n.t`
+      * leaf).
       */
-    def title(sig: Signal[String]): Card = copy(titleText = Present(TextValue.Dyn(sig)))
+    def title(v: String | Signal[String]): Card = copy(titleText = Present(ReactiveValue(v)))
 
-    /** Reactive subtitle that tracks `sig` — re-renders in place on emission. */
-    def subtitle(sig: Signal[String]): Card = copy(subtitleText = Present(TextValue.Dyn(sig)))
-
-    /** Right-aligned status text in the caption row (kyo extension — `p-uic-card-additional`). */
-    def additionalText(v: String): Card = copy(additionalTextV = Present(TextValue.Const(v)))
-
-    /** Reactive `additionalText` tracking `sig` — re-renders in place on emission (e.g. a
-      * locale-driven `I18n.t` leaf).
+    /** Subtitle under the title. A `Signal[String]` re-renders it in place on emission.
       */
-    def additionalText(sig: Signal[String]): Card = copy(additionalTextV = Present(TextValue.Dyn(sig)))
+    def subtitle(v: String | Signal[String]): Card = copy(subtitleText = Present(ReactiveValue(v)))
+
+    /** Right-aligned status text in the caption row (kyo extension, `p-uic-card-additional`). A
+      * `Signal[String]` re-renders it in place on emission (e.g. a locale-driven `I18n.t` leaf).
+      */
+    def additionalText(v: String | Signal[String]): Card = copy(additionalTextV = Present(ReactiveValue(v)))
 
     /** Avatar slot rendered before the caption (kyo extension — `p-uic-card-avatar`). */
     def headerAvatar(v: UI): Card = copy(headerAvatarV = Present(v))
@@ -71,16 +66,8 @@ final case class Card private (
     /** Footer slot rendered as `div.p-card-footer` at the body's end (Prime's footer slot). */
     def footer(v: UI): Card = copy(footerV = Present(v))
 
-    /** Accessible name announced for the card region (`aria-label`). */
-    def accessibleName(v: String): Card = copy(accessibleNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): Card = copy(accessibleNameV = Present(TextValue.Dyn(sig)))
-
-    /** ID reference(s) of the element(s) that label the card (`aria-labelledby`). */
-    def accessibleNameRef(v: String): Card = copy(accessibleNameRefV = Present(v))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Card = copy(accessibleNameV = v)
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): Card = copy(accessibleNameRefV = v)
 
     /** Adds content children (rendered inside `div.p-card-content`). */
     def apply(cs: UI*): Card = copy(kids = kids ++ cs)

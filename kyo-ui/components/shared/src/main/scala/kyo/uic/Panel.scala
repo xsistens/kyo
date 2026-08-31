@@ -43,15 +43,13 @@ final case class Panel private (
     accessibleRoleV: PanelAccessibleRole = PanelAccessibleRole.Region,
     footerV: Maybe[UI] = Absent,
     kids: List[UI] = Nil
-) extends Node:
+) extends Node, HasAccessibleName:
     type Self = Panel
 
-    def header(v: String): Panel = copy(headerText = Present(TextValue.Const(v)))
-
-    /** Reactive `header` tracking `sig` — re-renders in place on emission, e.g. a
+    /** Header title. A `Signal[String]` re-renders it in place on emission, e.g. a
       * locale-driven `I18n.t` leaf.
       */
-    def header(sig: Signal[String]): Panel = copy(headerText = Present(TextValue.Dyn(sig)))
+    def header(v: String | Signal[String]): Panel = copy(headerText = Present(ReactiveValue(v)))
 
     /** Custom header slot (wins over the `header(String)` title). */
     def header(u: UI): Panel = copy(headerUIV = Present(u))
@@ -69,13 +67,7 @@ final case class Panel private (
     /** Heading level of the header title (rendered as `aria-level`, default H2). */
     def headerLevel(v: TitleLevel): Panel = copy(headerLevelV = v)
 
-    /** `aria-label` for the panel region. */
-    def accessibleName(v: String): Panel = copy(accessibleNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): Panel = copy(accessibleNameV = Present(TextValue.Dyn(sig)))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Panel = copy(accessibleNameV = v)
 
     /** ARIA role of the panel (default [[PanelAccessibleRole.Region]]). */
     def accessibleRole(v: PanelAccessibleRole): Panel = copy(accessibleRoleV = v)

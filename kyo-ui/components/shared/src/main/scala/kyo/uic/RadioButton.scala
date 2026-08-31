@@ -29,7 +29,7 @@ final case class RadioButton private (
     onChangeF: Maybe[Boolean => Any < Async] = Absent,
     onBlurF: Maybe[Boolean => Any < Async] = Absent,
     idV: Maybe[String] = Absent
-) extends Node, BooleanFormControl:
+) extends Node, BooleanFormControl, HasAccessibleNameRef:
     type Self = RadioButton
 
     /** Native `id` on the radio input — pair with `Label.forId`; the form layer
@@ -48,12 +48,10 @@ final case class RadioButton private (
     /** Binds two-way to `ref`: selection writes back into the ref, ref changes update the button. */
     def checked(ref: SignalRef[Boolean]): RadioButton = copy(checkedBinding = Present(CheckBox.Checked.Ref(ref)))
 
-    def disabled(v: Boolean): RadioButton = copy(disabledFlag = Present(BoolValue.Const(v)))
-
-    /** Reactive disabled — the native input's `disabled` attribute and the root's `.p-disabled` class
-      * both toggle IN PLACE via the boolean-attribute and class channels (no re-render).
+    /** Disables the button. A `Signal[Boolean]` toggles the native input's `disabled` attribute and the
+      * root's `.p-disabled` class IN PLACE via the boolean-attribute and class channels (no re-render).
       */
-    def disabled(sig: Signal[Boolean]): RadioButton = copy(disabledFlag = Present(BoolValue.Dyn(sig)))
+    def disabled(v: Boolean | Signal[Boolean]): RadioButton = copy(disabledFlag = Present(ReactiveValue(v)))
 
     /** `readonly` — interaction is blocked (`aria-readonly`), but unlike
       * `disabled` the button keeps its normal look.
@@ -72,34 +70,12 @@ final case class RadioButton private (
     /** Fill variant — `Filled` renders `.p-variant-filled`; `Outlined` is the default. */
     def variant(v: FieldVariant): RadioButton = copy(variantV = v)
 
-    /** Marks the button invalid (`.p-invalid` + `aria-invalid`). */
-    def invalid(v: Boolean): RadioButton = copy(invalidV = Present(BoolValue.Const(v)))
+    private[uic] def withInvalid(v: Maybe[BoolValue]): RadioButton                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): RadioButton                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): RadioButton = copy(invalidMsgDynV = v)
 
-    /** Message rendered below the control while `invalid(true)` (kyo extension —
-      * `div.p-uic-invalid-message`).
-      */
-    def invalidMessage(v: String): RadioButton = copy(invalidMsgV = Present(v))
-
-    /** Reactive validity: the bound signal toggles `.p-invalid` + `aria-invalid` in
-      * place. Explicit override of the message-derived red default.
-      */
-    def invalid(sig: Signal[Boolean]): RadioButton = copy(invalidV = Present(BoolValue.Dyn(sig)))
-
-    /** Reactive invalid message — `Present` shows the row and (by default) turns the
-      * button red; `Absent` clears both. Re-renders in place on emission.
-      */
-    def invalidMessage(sig: Signal[Maybe[String]]): RadioButton = copy(invalidMsgDynV = Present(sig))
-
-    /** Accessible name → `aria-label`. */
-    def accessibleName(v: String): RadioButton = copy(accNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): RadioButton = copy(accNameV = Present(TextValue.Dyn(sig)))
-
-    /** Accessible name reference → `aria-labelledby`. */
-    def accessibleNameRef(v: String): RadioButton = copy(accNameRefV = Present(v))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): RadioButton = copy(accNameV = v)
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): RadioButton = copy(accNameRefV = v)
 
     def onChange(f: Boolean => Any < Async): RadioButton = copy(onChangeF = Present(f))
 

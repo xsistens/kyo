@@ -10,37 +10,51 @@ import scala.annotation.targetName
   * preserves the concrete `Self` type (Input, TextArea, Slider, ...) at the call site
   * — no opaque wrapper.
   *
-  * The trait carries the CONSTANT setters as well as the reactive ones on purpose.
-  * The vocabulary used to be unevenly distributed — some controls had the pair, some
-  * had `invalid(Boolean)` alone, some had neither — so a user who learned it on
-  * `Input` found half of it on the next control and none on the third, with no rule
-  * saying which. Declaring all four here makes half-presence unrepresentable: a
-  * control that cannot answer them cannot claim the trait, and a control that claims
-  * it cannot forget one.
+  * The trait carries the validation setters ITSELF rather than declaring them. The
+  * vocabulary used to be unevenly distributed — some controls had the pair, some had
+  * `invalid(Boolean)` alone, some had neither — so a user who learned it on `Input`
+  * found half of it on the next control and none on the third, with no rule saying
+  * which. Defining them here makes half-presence unrepresentable AND spells the
+  * behaviour once: a control cannot forget a member, and cannot describe one
+  * differently from its neighbour.
+  *
+  * A control supplies the three one-line WRITERS below instead of the setters; every
+  * control already stores the slots under the same three types, and `type Self = Input`
+  * fixes the return type, so a control opts in by adding the trait to its `extends`
+  * clause plus those writers.
   *
   * `size` and `variant` are deliberately NOT here. They are design-system facts, not
   * validation: the PrimeOne sheet defines `.p-*-sm`/`-lg` and `.p-variant-filled`
   * only for the field-shaped controls, so requiring them would mean inventing CSS for
   * a Slider or a Rating that Prime does not style that way.
-  *
-  * Every member is satisfied by the control's existing `copy`-based setters
-  * (`type Self = Input` fixes the return type), so a control opts in by adding the
-  * trait to its `extends` clause.
   */
 trait FormControl extends Node:
-    /** Marks the control invalid (`.p-invalid` + `aria-invalid`). */
-    def invalid(v: Boolean): Self
+    /** Stores the resolved invalid slot. Implemented as `copy(invalidV = v)`. */
+    private[uic] def withInvalid(v: Maybe[BoolValue]): Self
 
-    /** Reactive validity — the bound signal toggles the invalid state on emission. */
-    def invalid(sig: Signal[Boolean]): Self
+    /** Stores the constant invalid message. Implemented as `copy(invalidMsgV = v)`. */
+    private[uic] def withInvalidMessage(v: Maybe[String]): Self
+
+    /** Stores the reactive invalid message. Implemented as `copy(invalidMsgDynV = v)`. */
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Self
+
+    /** Marks the control invalid (`.p-invalid` + `aria-invalid`). A `Signal[Boolean]` toggles the
+      * invalid state on emission, and is the explicit override of the message-derived red default.
+      */
+    final def invalid(v: Boolean | Signal[Boolean]): Self = withInvalid(Present(ReactiveValue(v)))
 
     /** Message rendered below the control while it is invalid (`div.p-uic-invalid-message`). */
-    def invalidMessage(v: String): Self
+    final def invalidMessage(v: String): Self = withInvalidMessage(Present(v))
 
     /** Reactive message: `Present` shows the row and (by default) turns the control red,
       * `Absent` clears both. This is what `bind` wires to the field's gated message.
+      *
+      * Separate from the constant setter rather than folded into a union, because the two carry
+      * DIFFERENT element types: a constant message is always shown, while the reactive one is an
+      * optional message that can also clear the row. `String | Signal[Maybe[String]]` would be a
+      * heterogeneous union, not the `A | Signal[A]` shape the rest of the module uses.
       */
-    def invalidMessage(sig: Signal[Maybe[String]]): Self
+    final def invalidMessage(sig: Signal[Maybe[String]]): Self = withInvalidMessageDyn(Present(sig))
 
     /** Native element `id`. The form layer stamps each field's minted id here at
       * `bind` time so focus-first-invalid can address the control's focusable element
@@ -70,9 +84,16 @@ trait BooleanFormControl extends FormControl:
   * family can honour it: InputNumber masks decimal entry, Slider and Knob round the
   * committed value, and Rating already only produces whole stars, so the constraint is
   * satisfied by construction there.
+  *
+  * The value binding is the union every value slot in the module takes: a constant, a
+  * writable `SignalRef[Double]` (two-way, which is what `bind` passes), or any other
+  * `Signal[Double]` (one-way). The `@targetName` is for [[Rating]], whose own `Int` star
+  * binding erases to the same JVM signature as this `Double` one; the call site still reads
+  * `value(...)`.
   */
 trait NumberFormControl extends FormControl:
-    def value(ref: SignalRef[Double]): Self
+    @targetName("valueNumber")
+    def value(v: Double | Signal[Double]): Self
     def onBlur(f: Double => Any < Async): Self
     def integer(v: Boolean): Self
 end NumberFormControl

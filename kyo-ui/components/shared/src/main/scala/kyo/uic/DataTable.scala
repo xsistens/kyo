@@ -419,7 +419,7 @@ final case class DataTable[A] private (
     reorderRowsFlag: Boolean = false,
     onRowReorderF: Maybe[RowMove[A] => Any < Async] = Absent,
     orderedPaths: List[List[String]] = Nil
-) extends Node:
+) extends Node, HasEmptyContent, HasAccessibleNameRef:
     type Self = DataTable[A]
 
     /** Appends data rows. */
@@ -497,6 +497,7 @@ final case class DataTable[A] private (
       *
       * Every bound filter has to pass, and the global filter with them.
       */
+
     /** Where a column's filter is edited (Prime's `filterDisplay`), and a row by default.
       *
       * `Row` is a second header row with one input per filterable column, which is the
@@ -617,14 +618,11 @@ final case class DataTable[A] private (
 
     /** [[lazyRows]] where the size of the whole set is not a number: a cursor API or a
       * search index answers `Total.Unknown(hasMore)`, and the paginator then grows one
-      * page at a time instead of counting them out.
+      * page at a time instead of counting them out. A `Signal[Total]` carries a total that
+      * arrives with the page it counts.
       */
-    def lazyRows(total: Total): DataTable[A] =
-        copy(lazyTotalV = Present(ReactiveValue.Const(total)))
-
-    /** Reactive [[lazyRows]], for a total that arrives with the page it counts. */
-    def lazyRows(total: Signal[Total]): DataTable[A] =
-        copy(lazyTotalV = Present(ReactiveValue.Dyn(total)))
+    def lazyRows(total: Total | Signal[Total]): DataTable[A] =
+        copy(lazyTotalV = Present(ReactiveValue(total)))
 
     /** Takes the rows, the total, the busy flag and the paginator from a [[RowSource]],
       * which is the whole wiring of a lazily loaded table in one call.
@@ -961,33 +959,13 @@ final case class DataTable[A] private (
     /** Size: `.p-datatable-sm` / default / `.p-datatable-lg` cell paddings. */
     def size(v: Size): DataTable[A] = copy(sizeV = v)
 
-    /** Content of the full-width `tr.p-datatable-empty-message` row shown when no rows
-      * survive filtering.
-      */
-    def emptyContent(v: String): DataTable[A] = copy(emptyContentV = Present(EmptyContent.const(v)))
-
-    /** Reactive text: re-renders the empty slot in place on signal emission. */
-    def emptyContent(sig: Signal[String]): DataTable[A] = copy(emptyContentV = Present(EmptyContent.dyn(sig)))
-
-    /** Arbitrary UI for the empty state: an icon over a line of explanation and the
-      * button that creates the first record, rendered in the same slot the text would
-      * occupy.
-      */
-    def emptyContent(ui: UI): DataTable[A] = copy(emptyContentV = Present(EmptyContent.ui(ui)))
+    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): DataTable[A] = copy(emptyContentV = v)
 
     /** Fired with the row key after any selection write from a row click. */
     def onRowClick(f: String => Any < Async): DataTable[A] = copy(onRowClickF = Present(f))
 
-    /** `aria-label` for the table. */
-    def accessibleName(v: String): DataTable[A] = copy(accNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): DataTable[A] = copy(accNameV = Present(TextValue.Dyn(sig)))
-
-    /** `aria-labelledby` id reference for the table. */
-    def accessibleNameRef(v: String): DataTable[A] = copy(accNameRefV = Present(v))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): DataTable[A] = copy(accNameV = v)
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): DataTable[A] = copy(accNameRefV = v)
 
     /** Toolbar slot above the table (`div.p-datatable-header`), the place for a
       * global-filter input, a title, or action buttons.
@@ -999,15 +977,11 @@ final case class DataTable[A] private (
       */
     def footer(ui: UI): DataTable[A] = copy(footerV = Present(ui))
 
-    /** Busy state: a spinner over a dimming mask (`.p-datatable-mask`) covers the
-      * table while data is being fetched.
+    /** Busy state: a spinner over a dimming mask (`.p-datatable-mask`) covers the table while data is being
+      * fetched. Bind a `Signal[Boolean]` to the data-fetch in-flight signal and the mask toggles in its own
+      * sub-region without re-rendering the rows.
       */
-    def loading(v: Boolean): DataTable[A] = copy(loadingV = Present(BoolValue.Const(v)))
-
-    /** Reactive busy state, bound to the data-fetch in-flight signal; the mask toggles
-      * in its own sub-region without re-rendering the rows.
-      */
-    def loading(sig: Signal[Boolean]): DataTable[A] = copy(loadingV = Present(BoolValue.Dyn(sig)))
+    def loading(v: Boolean | Signal[Boolean]): DataTable[A] = copy(loadingV = Present(ReactiveValue(v)))
 
     /** Caps the table container at a CSS length and scrolls it, pinning the `thead`
       * (and the `tfoot`, when columns carry footers) to the container edges.
@@ -1053,28 +1027,23 @@ final case class DataTable[A] private (
     def scrollRows(itemSize: Int, overscan: Int = 3): DataTable[A] =
         copy(rowHeightV = Present(math.max(1, itemSize)), scrollOverscanV = math.max(0, overscan))
 
-    /** Rows that hold under the header while the rest of the body scrolls past them
-      * (Prime's `frozenValue`): a running total, the record being compared against, the one
-      * the reader pinned.
+    /** Rows that hold under the header while the rest of the body scrolls past them (Prime's
+      * `frozenValue`): a running total, the record being compared against, the one the reader pinned.
       *
-      * They are a list of their OWN and not a subset of the body's, which is what lets them
-      * be a summary rather than a duplicate: the table renders them in a second row group
-      * above the scrolling one, and a row that is in both is a card, since two rows with one
-      * key are two rows the table cannot tell apart.
+      * They are a list of their OWN and not a subset of the body's, which is what lets them be a summary
+      * rather than a duplicate: the table renders them in a second row group above the scrolling one, and a
+      * row that is in both is a card, since two rows with one key are two rows the table cannot tell apart.
       *
-      * Where they hold is the height of the header, which is the one number in this
-      * component nothing can be told and nothing can compute: it is whatever the header
-      * cells came out as. The table observes it and writes the offset, so a header that
-      * rewraps on a resize moves the frozen rows with it. Until the first measurement lands
-      * they sit at the top of the body in flow, which is where they belong at rest.
+      * Where they hold is the height of the header, which is the one number in this component nothing can
+      * be told and nothing can compute: it is whatever the header cells came out as. The table observes it
+      * and writes the offset, so a header that rewraps on a resize moves the frozen rows with it. Until the
+      * first measurement lands they sit at the top of the body in flow, which is where they belong at rest.
       *
       * Needs a [[scrollHeight]], since a row can only hold against something that moves.
+      *
+      * A `Signal[Seq[A]]` tracks a pinned set the reader changes.
       */
-    def frozenRows(rs: Seq[A]): DataTable[A] = copy(frozenRowsV = Present(ReactiveValue.Const(rs)))
-
-    /** Reactive [[frozenRows]], for a pinned set the reader changes. */
-    def frozenRows(sig: Signal[Seq[A]]): DataTable[A] = copy(frozenRowsV = Present(ReactiveValue.Dyn(sig)))
-
+    def frozenRows(v: Seq[A] | Signal[Seq[A]]): DataTable[A] = copy(frozenRowsV = Present(ReactiveValue(v)))
     // ---- render ----
 
     /** A row's identity. Without a [[rowKey]] it falls back to the row's position in the
@@ -1557,6 +1526,7 @@ final case class DataTable[A] private (
       * that moved a column also ends in a click, and re-sorting on it would answer a
       * gesture the reader did not make.
       */
+
     /** A pointer going down on a grip: measure the rendered rows once and remember where
       * each of them sits.
       *
@@ -2290,6 +2260,7 @@ final case class DataTable[A] private (
           * The group stays put, and it carries the height of the whole list, which the two
           * spacers add up to anyway.
           */
+
         /** The row group that holds under the header, and the offset it holds at.
           *
           * The rows are drawn like any other, minus the keyboard grid: the cursor addresses
@@ -2673,6 +2644,7 @@ final case class DataTable[A] private (
       * cell, so binding both leaves a cell inside an edited row showing its editor for two
       * reasons at once, with two ways out that do not agree.
       */
+
     /** The two width mistakes no type catches: a bound ref no boundary can ever write
       * into, and an entry naming a column this table does not have.
       */
@@ -2768,6 +2740,7 @@ final case class DataTable[A] private (
       * not there, or a page runs past its own end, while the rows on the screen look right
       * in both cases.
       */
+
     /** Two places to read the rows from. Nothing about the table says which one it took,
       * so a caller who bound a source and left an older `rows` behind would be looking at
       * one of them with no way to tell which.
@@ -3433,6 +3406,7 @@ final case class DataTable[A] private (
     /** One sortable/plain header cell with Prime's header-content anatomy, reaching down
       * `rows` header rows so an ungrouped column lines up with a grouped one.
       */
+
     /** The `colgroup` in front of the header: one `col` per rendered column, carrying the
       * width of the ones that have one.
       *
@@ -4139,6 +4113,7 @@ final case class DataTable[A] private (
       * the document and the next arrow key goes nowhere. The cell itself is never
       * replaced, only its content, so the command has a target the moment it arrives.
       */
+
     /** The id an open cell's editor stamps on whatever takes focus.
       *
       * Positional like [[cellId]] and for the same reason: it addresses a place on the
@@ -4503,6 +4478,7 @@ object DataTable:
       * clamped before it is applied rather than each width after, so a drag past the end
       * of one column stops the boundary instead of quietly pushing width into the other.
       */
+
     /** How far a pointer travels before a press on a header becomes a drag rather than the
       * click that sorts it, in CSS pixels.
       */

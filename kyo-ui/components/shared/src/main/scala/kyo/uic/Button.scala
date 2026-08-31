@@ -53,7 +53,7 @@ final case class Button private (
     extraChildren: List[UI] = Nil,
     extraClassesV: List[String] = Nil,
     extraAriasV: List[(String, String)] = Nil
-) extends Node:
+) extends Node, HasTooltip, HasAccessibleNameRef, HasAccessibleDescription:
     type Self = Button
 
     /** Package-internal class hook: hosts (SplitButton, SpeedDial) stamp Prime's
@@ -68,13 +68,11 @@ final case class Button private (
     private[uic] def ariaRaw(name: String, value: String): Button =
         copy(extraAriasV = extraAriasV :+ (name -> value))
 
-    /** Semantic accent (`.p-button-<severity>`); `Primary` is the unsuffixed default. */
-    def severity(v: Severity): Button = copy(severityV = SeverityValue.Const(v))
-
-    /** Reactive accent — the `.p-button-<token>` class is swapped IN PLACE via kyo-ui's class
-      * channel on emission (no re-render), e.g. a save button going neutral→success.
+    /** Semantic accent (`.p-button-<severity>`); `Primary` is the unsuffixed default. A
+      * `Signal[Severity]` swaps the `.p-button-<token>` class IN PLACE via kyo-ui's class channel on
+      * emission (no re-render), e.g. a save button going neutral to success.
       */
-    def severity(sig: Signal[Severity]): Button = copy(severityV = SeverityValue.Dyn(sig))
+    def severity(v: Severity | Signal[Severity]): Button = copy(severityV = ReactiveValue(v))
 
     /** Rendering variant: `Filled` (default), `Outlined`, `Text`, or `Link`. */
     def variant(v: ButtonVariant): Button = copy(variantV = v)
@@ -99,12 +97,10 @@ final case class Button private (
     /** Native element `id` — for e2e/selector hooks and label associations. */
     def id(v: String): Button = copy(idV = Present(v))
 
-    def disabled(v: Boolean): Button = copy(disabledV = Present(BoolValue.Const(v)))
-
-    /** Reactive disabled that tracks `sig` — the button enables/disables in place on
-      * emission (e.g. a mutation-in-flight `Signal[Boolean]`).
+    /** Disables the button. A `Signal[Boolean]` enables/disables it in place on emission (e.g. a
+      * mutation-in-flight signal).
       */
-    def disabled(sig: Signal[Boolean]): Button = copy(disabledV = Present(BoolValue.Dyn(sig)))
+    def disabled(v: Boolean | Signal[Boolean]): Button = copy(disabledV = Present(ReactiveValue(v)))
 
     /** Accessible-disabled: unlike the native `disabled` attribute (which removes the button
       * from the tab order and drops its click), this keeps the button focusable and IN the tab
@@ -115,10 +111,7 @@ final case class Button private (
       * Tab keypress, so focus jumps PAST the button to the next control. With `aria-disabled` the
       * button never leaves the tab order, so the race disappears.
       */
-    def ariaDisabled(v: Boolean): Button = copy(ariaDisabledV = Present(BoolValue.Const(v)))
-
-    /** Reactive [[ariaDisabled]] tracking `sig`. */
-    def ariaDisabled(sig: Signal[Boolean]): Button = copy(ariaDisabledV = Present(BoolValue.Dyn(sig)))
+    def ariaDisabled(v: Boolean | Signal[Boolean]): Button = copy(ariaDisabledV = Present(ReactiveValue(v)))
 
     /** Binds a form's submit gate. [[SubmitGate]] is a distinct type from `Signal[Boolean]`
       * precisely so it fits HERE and not on [[disabled]]: a natively disabled submit button
@@ -128,14 +121,12 @@ final case class Button private (
       */
     def ariaDisabled(gate: SubmitGate): Button = ariaDisabled(gate.signal)
 
-    /** Busy state: shows a spinning glyph and blocks clicks (like disabled). */
-    def loading(v: Boolean): Button = copy(loadingV = Present(BoolValue.Const(v)))
-
-    /** Reactive busy state — bind to an in-flight signal; the button re-renders its own boundary on
-      * emission (loading is fused with the spinner, aria-busy, icon-only layout and the effective
-      * disabled state, so it resolves like disabled rather than patching a single attribute).
+    /** Busy state: shows a spinning glyph and blocks clicks (like disabled). Bind a `Signal[Boolean]`
+      * to an in-flight request; the button re-renders its own boundary on emission, because loading is
+      * fused with the spinner, aria-busy, icon-only layout and the effective disabled state rather than
+      * patching a single attribute.
       */
-    def loading(sig: Signal[Boolean]): Button = copy(loadingV = Present(BoolValue.Dyn(sig)))
+    def loading(v: Boolean | Signal[Boolean]): Button = copy(loadingV = Present(ReactiveValue(v)))
 
     /** Form behaviour (native `type` attribute): `Button` (default, non-submitting),
       * `Submit`, or `Reset`.
@@ -145,24 +136,10 @@ final case class Button private (
     /** ARIA role override — `Link` renders `role="link"` on the native button. */
     def accessibleRole(v: ButtonAccessibleRole): Button = copy(accessibleRoleV = v)
 
-    /** Accessible name announced instead of the visible text (`aria-label`). */
-    def accessibleName(v: String): Button = copy(accessibleNameV = Present(TextValue.Const(v)))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Button = copy(accessibleNameV = v)
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): Button = copy(accessibleNameRefV = v)
 
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): Button = copy(accessibleNameV = Present(TextValue.Dyn(sig)))
-
-    /** ID reference(s) of the element(s) that label the button (`aria-labelledby`). */
-    def accessibleNameRef(v: String): Button = copy(accessibleNameRefV = Present(v))
-
-    /** Additional accessible description (`aria-description`). */
-    def accessibleDescription(v: String): Button = copy(accessibleDescriptionV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible description — `aria-description` patched IN PLACE via kyo-ui's
-      * attribute channel (`setAttribute`, no re-render).
-      */
-    def accessibleDescription(sig: Signal[String]): Button = copy(accessibleDescriptionV = Present(TextValue.Dyn(sig)))
+    private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Button = copy(accessibleDescriptionV = v)
 
     /** Renders the button as a client-routed navigation anchor (`<a>` with kyo-ui's
       * SPA `Href.Path`) that keeps the full button skin — Prime's Button link mode.
@@ -171,13 +148,7 @@ final case class Button private (
       */
     def href(v: String): Button = copy(hrefV = Present(v))
 
-    /** Native tooltip (the `title` attribute). */
-    def tooltip(v: String): Button = copy(tooltipV = Present(TextValue.Const(v)))
-
-    /** Reactive tooltip — native `title` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def tooltip(sig: Signal[String]): Button = copy(tooltipV = Present(TextValue.Dyn(sig)))
+    private[uic] def withTooltip(v: Maybe[TextValue]): Button = copy(tooltipV = v)
 
     /** ID of the `<form>` to associate with. kyo-ui 1.0.0-RC5 exposes no `form`
       * attribute setter and the DOM `form` property is read-only, so this is
@@ -341,13 +312,10 @@ final case class Button private (
 end Button
 
 object Button:
-    /** A button labelled `label`. */
-    def apply(label: String): Button = new Button(label = Present(TextValue.Const(label)))
-
-    /** A button whose label tracks `label` — re-renders in place on emission (e.g. a
+    /** A button labelled `label`. A `Signal[String]` re-renders the label in place on emission (e.g. a
       * locale-driven `I18n.t` leaf).
       */
-    def apply(label: Signal[String]): Button = new Button(label = Present(TextValue.Dyn(label)))
+    def apply(label: String | Signal[String]): Button = new Button(label = Present(ReactiveValue(label)))
 
     /** An empty button — add an icon and/or children via the setters. */
     def apply(): Button = new Button()

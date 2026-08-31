@@ -18,8 +18,8 @@ final case class AccordionPanel private[uic] (
 )
 
 object AccordionPanel:
-    /** Construct a panel with a constant `header` title. The header slot also accepts
-      * a reactive `Signal[String]` through the `Accordion.panel` builder overload.
+    /** Construct a panel with a constant `header` title. The `Accordion.panel` builder takes
+      * the same slot as a `String | Signal[String]` union, for a reactive title.
       */
     def apply(
         header: String,
@@ -45,6 +45,13 @@ end AccordionPanel
   * mode, no separate flag. Header clicks write the ref before firing `onToggle`.
   * Without a bound ref the accordion renders fully collapsed and inert
   * (server-honest: no internal state).
+  *
+  * Keyboard (WAI-ARIA accordion): the headers are buttons, so each is its own tab stop and
+  * Enter or Space toggles the focused one natively. ArrowDown/ArrowUp move focus to the next
+  * and previous enabled header, cycling at the ends, and Home/End reach the first and last;
+  * focus moves for real, by id, since a header that looked focused without being focused would
+  * take Enter nowhere. The arrows work in the bound-ref render only, the same place the clicks
+  * do: an accordion with no ref is inert by design.
   *
   * Collapse ANIMATION: with a bound ref the whole body is built ONCE
   * inside a `UI.mounted`, so each panel's content container stays STABLE across
@@ -76,16 +83,11 @@ final case class Accordion private (
     def panels(ps: AccordionPanel*): Accordion = copy(panelList = panelList ++ ps.toList)
 
     /** Appends a single panel (ergonomic builder — no need to construct
-      * [[AccordionPanel]]).
+      * [[AccordionPanel]]). A `Signal[String]` header re-renders the panel title in place on
+      * emission (e.g. a locale-driven `I18n.t` leaf).
       */
-    def panel(header: String, id: String)(content: UI): Accordion =
-        copy(panelList = panelList :+ new AccordionPanel(TextValue.Const(header), content, id, false, Absent))
-
-    /** Reactive-title variant: the panel header tracks `header` — re-renders in
-      * place on emission (e.g. a locale-driven `I18n.t` leaf).
-      */
-    def panel(header: Signal[String], id: String)(content: UI): Accordion =
-        copy(panelList = panelList :+ new AccordionPanel(TextValue.Dyn(header), content, id, false, Absent))
+    def panel(header: String | Signal[String], id: String)(content: UI): Accordion =
+        copy(panelList = panelList :+ new AccordionPanel(ReactiveValue(header), content, id, false, Absent))
 
     /** Binds the open panel two-way — SINGLE mode (Prime's default): at most one
       * panel open, the ref holds its id (`""` = all closed); clicking the open
@@ -130,11 +132,23 @@ final case class Accordion private (
                 open <- currentOpen
             yield
                 val pairs = panelList.zip(ids)
+                // The header ids in panel order, and the positions the keyboard may land on:
+                // a disabled header is not focusable, so ArrowDown steps over it.
+                val headerIds = pairs.map { case (_, (_, _, headerId)) => headerId }
+                val navigable = panelList.zipWithIndex.collect { case (p, i) if !p.disabled => i }
                 fragment(
                     activeBinder(cmds, pairs, activeOf),
                     div.cssClass("p-accordion").cssClass("p-component")(
-                        pairs.map { case (p, (shellId, contentId, headerId)) =>
-                            toChild(renderAnimatedPanel(p, shellId, contentId, headerId, open.contains(p.id), activeOf(p.id)))
+                        pairs.zipWithIndex.map { case ((p, (shellId, contentId, headerId)), i) =>
+                            toChild(renderAnimatedPanel(
+                                p,
+                                shellId,
+                                contentId,
+                                headerId,
+                                open.contains(p.id),
+                                activeOf(p.id),
+                                Present(headerMove(cmds, headerIds, navigable, i))
+                            ))
                         }*
                     )
                 )
@@ -171,13 +185,32 @@ final case class Accordion private (
             }.andThen(UI.empty)
         }.placeholder(UI.empty)
 
+    /** ArrowDown/ArrowUp/Home/End move focus between the headers, which is the ARIA accordion
+      * pattern and what Prime does: the headers are buttons and each is its own tab stop, so
+      * the arrows are the fast way past a long accordion rather than the only way in.
+      *
+      * Focus moves for real, by id, rather than through a highlight the way a listbox roves
+      * one: the thing being focused is a button, and a button that looks focused without being
+      * focused would take Enter nowhere. Enter and Space are left alone for exactly that
+      * reason, since the browser already presses the focused header with them.
+      */
+    private def headerMove(cmds: UI.Commands, headerIds: List[String], navigable: List[Int], self: Int)(using
+        Frame
+    ): KeyboardEvent => Any < Async = e =>
+        // Prime's accordion cycles, so ArrowDown on the last header comes back to the first.
+        ListNav.onKey(navigable, self, e.key, wrap = true) match
+            case Present(step) if step.focus != self && headerIds.isDefinedAt(step.focus) =>
+                cmds.focusId(headerIds(step.focus))
+            case _ => ()
+
     private def renderAnimatedPanel(
         p: AccordionPanel,
         shellId: String,
         contentId: String,
         headerId: String,
         active0: Boolean,
-        active: Signal[Boolean]
+        active: Signal[Boolean],
+        onHeaderKey: Maybe[KeyboardEvent => Any < Async] = Absent
     )(using Frame): UI =
         var shell = div.cssClass("p-accordionpanel").id(shellId)
         if active0 then shell = shell.cssClass("p-accordionpanel-active")
@@ -204,7 +237,10 @@ final case class Accordion private (
             .jsProp("type", "button")
             .aria("expanded", active0.toString)
         if p.disabled then header = header.jsProp("disabled", "true")
-        else if interactive then header = header.onClick(toggle(p.id))
+        else
+            if interactive then header = header.onClick(toggle(p.id))
+            onHeaderKey.foreach(f => header = header.preventScrollKeys.onKeyDown(f))
+        end if
         val headerEl: UI = header(
             toChild(headerSlot),
             toChild(active.render(a => GlyphSvg(if a then Icons.chevronUp else Icons.chevronDown, "p-accordionheader-toggle-icon")))

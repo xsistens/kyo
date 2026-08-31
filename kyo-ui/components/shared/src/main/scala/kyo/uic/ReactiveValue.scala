@@ -52,14 +52,25 @@ private[uic] object ReactiveValue:
         final private case class OneWay[A](v: Signal[A]) extends Dyn[A]
     end Dyn
 
-    /** Smart constructor from a union: a `Signal[A]` becomes `Dyn`, any other value `Const`. Lets a
-      * single union setter (`x: A | Signal[A]`) store the correct case with one call — the value-level
-      * analogue of kyo-ui's union in-place setters. Sound where `A` is never itself a `Signal` (all UI
-      * value slots: Boolean/String/enum/Int).
+    /** Smart constructor from a union: a writable `SignalRef[A]` becomes the two-way
+      * [[ReactiveVariable]], any other `Signal[A]` a one-way `Dyn`, any other value `Const`. Lets a
+      * single union setter (`x: A | Signal[A]`) carry all three bindings a value slot can hold — the
+      * value-level analogue of kyo-ui's union in-place setters. Sound where `A` is never itself a
+      * `Signal` (all UI value slots: Boolean/String/enum/Int/Double).
+      *
+      * The `SignalRef` case comes FIRST and is what makes one setter enough for the editable slots
+      * (Slider, Knob, Rating, ProgressBar): handing a component something writable means "write back
+      * to me". `Signal` is sealed and `SignalRef` is its only named subclass, so the two reactive cases
+      * are exact and total, not a heuristic.
+      *
+      * The choice is made on the RUNTIME class, so ascribing `ref: Signal[A]` does NOT opt out of
+      * two-way binding. `ref.readOnly` is the opt-out, and read-only hosts need no change either way:
+      * `ReactiveVariable` IS-A `Dyn`, so every `case Dyn(sig)` still matches.
       */
     def apply[A](v: A | Signal[A]): ReactiveValue[A] = v match
-        case s: Signal[A] @unchecked => Dyn(s)
-        case a: A @unchecked         => Const(a)
+        case r: SignalRef[A] @unchecked => ReactiveVariable(r)
+        case s: Signal[A] @unchecked    => Dyn(s)
+        case a: A @unchecked            => Const(a)
 end ReactiveValue
 
 /** A two-way reactive binding: a writable `SignalRef`. IS-A [[ReactiveValue.Dyn]] (and hence a

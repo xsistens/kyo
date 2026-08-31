@@ -19,8 +19,8 @@ final case class Tab private[uic] (
 )
 
 object Tab:
-    /** Construct a tab with a constant `text` label. The label slot also accepts a
-      * reactive `Signal[String]` through the `Tabs.tab` builder overload.
+    /** Construct a tab with a constant `text` label. The `Tabs.tab` builder takes the same
+      * slot as a `String | Signal[String]` union, for a reactive label.
       */
     def apply(
         text: String,
@@ -59,14 +59,8 @@ final case class Tabs private (
     def tabs(ts: Tab*): Tabs = copy(tabList = tabList ++ ts.toList)
 
     /** Appends a single tab from bare content children (ergonomic builder). */
-    def tab(text: String, id: String)(content: UI*)(using Frame): Tabs =
-        copy(tabList = tabList :+ new Tab(TextValue.Const(text), fragment(content*), id, Absent, Absent, false))
-
-    /** Reactive-label variant: the tab label tracks `text` — re-renders in place on
-      * emission (e.g. a locale-driven `I18n.t` leaf).
-      */
-    def tab(text: Signal[String], id: String)(content: UI*)(using Frame): Tabs =
-        copy(tabList = tabList :+ new Tab(TextValue.Dyn(text), fragment(content*), id, Absent, Absent, false))
+    def tab(text: String | Signal[String], id: String)(content: UI*)(using Frame): Tabs =
+        copy(tabList = tabList :+ new Tab(ReactiveValue(text), fragment(content*), id, Absent, Absent, false))
 
     /** Binds the active tab two-way to `ref` (holds the active tab id). */
     def selected(ref: SignalRef[String]): Tabs = copy(selectedRef = Present(ref))

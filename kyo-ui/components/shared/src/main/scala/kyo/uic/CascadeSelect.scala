@@ -19,6 +19,17 @@ object CascadeItem:
     /** A group labelled `label` opening a nested sub-panel of `children`. */
     def group[A](label: String)(children: CascadeItem[A]*): CascadeItem[A] =
         CascadeItem.Group(label, children.toList)
+
+    /** A cascade's options nest the way a menu's items do, so [[MenuNav]] navigates them: a
+      * group's children are its own, a leaf has none, and nothing is skipped, since a cascade
+      * carries neither separators nor disabled rows.
+      */
+    private[uic] given navNodes[A]: MenuNav.Nodes[CascadeItem[A]] with
+        def children(n: CascadeItem[A]): List[CascadeItem[A]] = n match
+            case CascadeItem.Leaf(_)      => Nil
+            case CascadeItem.Group(_, cs) => cs
+        def skip(n: CascadeItem[A]): Boolean = false
+    end navNodes
 end CascadeItem
 
 /** CascadeSelect — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
@@ -32,6 +43,14 @@ end CascadeItem
   * open SIDE-NESTED sub-panels stamped `.p-cascadeselect-overlay
   * .p-cascadeselect-option-list`), so the extracted `@primeuix` cascadeselect
   * CSS applies verbatim.
+  *
+  * Keyboard: a cascade IS a vertical menu, so the menu family's [[MenuNav]] state machine
+  * runs it over [[CascadeItem]] through that type's own [[MenuNav.Nodes]]. ArrowDown/ArrowUp
+  * move Prime's `.p-focus` highlight within a panel and cycle at its ends, ArrowRight opens
+  * the focused group and steps into it, ArrowLeft closes back out to the parent row, Enter or
+  * Space picks a leaf or opens a group, Home/End reach the ends of the current panel, and
+  * Escape leaves one level or closes the field. The handler rides on the ROOT panel, which is
+  * what holds focus on open and what every nested panel's keydown bubbles up to.
   *
   * Options are a TYPED tree of [[CascadeItem]]s: `options(items)(label)`
   * projects leaf values to text, groups carry their own label; `optionKey`
@@ -75,7 +94,7 @@ final case class CascadeSelect[A] private (
     onChangeF: Maybe[String => Any < Async] = Absent,
     idV: Maybe[String] = Absent,
     onBlurF: Maybe[String => Any < Async] = Absent
-) extends Node, TextFormControl:
+) extends Node, TextFormControl, HasTooltip, HasPlaceholder, HasAccessibleNameRef:
     type Self = CascadeSelect[A]
 
     /** Native `id` on the trigger label — pair with `Label.forId`. */
@@ -100,13 +119,7 @@ final case class CascadeSelect[A] private (
       */
     def open(ref: SignalRef[Boolean]): CascadeSelect[A] = copy(openRefV = Present(ref))
 
-    /** Text shown on the closed trigger while the bound value is empty. */
-    def placeholder(v: String): CascadeSelect[A] = copy(placeholderV = Present(TextValue.Const(v)))
-
-    /** Reactive placeholder — re-renders the label in place on signal emission (resolved INSIDE the
-      * mount subscription, so the open panel chain survives). For locale-driven text.
-      */
-    def placeholder(sig: Signal[String]): CascadeSelect[A] = copy(placeholderV = Present(TextValue.Dyn(sig)))
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): CascadeSelect[A] = copy(placeholderV = v)
 
     def disabled(v: Boolean): CascadeSelect[A] = copy(disabledFlag = v)
 
@@ -115,13 +128,7 @@ final case class CascadeSelect[A] private (
       */
     def name(v: String): CascadeSelect[A] = copy(nameV = Present(v))
 
-    /** Native tooltip (`title`). */
-    def tooltip(v: String): CascadeSelect[A] = copy(tooltipV = Present(TextValue.Const(v)))
-
-    /** Reactive tooltip — native `title` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def tooltip(sig: Signal[String]): CascadeSelect[A] = copy(tooltipV = Present(TextValue.Dyn(sig)))
+    private[uic] def withTooltip(v: Maybe[TextValue]): CascadeSelect[A] = copy(tooltipV = v)
 
     /** Size: `.p-cascadeselect-sm` / default / `.p-cascadeselect-lg`. */
     def size(v: Size): CascadeSelect[A] = copy(sizeV = v)
@@ -132,32 +139,12 @@ final case class CascadeSelect[A] private (
     /** Spans the full width of its container (`.p-cascadeselect-fluid`). */
     def fluid(v: Boolean): CascadeSelect[A] = copy(fluidFlag = v)
 
-    /** Marks the field invalid (`.p-invalid` + `aria-invalid`). */
-    def invalid(v: Boolean): CascadeSelect[A] = copy(invalidV = Present(BoolValue.Const(v)))
+    private[uic] def withInvalid(v: Maybe[BoolValue]): CascadeSelect[A]                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): CascadeSelect[A]                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): CascadeSelect[A] = copy(invalidMsgDynV = v)
 
-    /** Message rendered below the field while `invalid(true)` (kyo extension). */
-    def invalidMessage(v: String): CascadeSelect[A] = copy(invalidMsgV = Present(v))
-
-    /** Reactive validity: the bound signal toggles `.p-invalid` + `aria-invalid` in
-      * place. Explicit override of the message-derived red default.
-      */
-    def invalid(sig: Signal[Boolean]): CascadeSelect[A] = copy(invalidV = Present(BoolValue.Dyn(sig)))
-
-    /** Reactive invalid message — `Present` shows the row and (by default) turns the
-      * field red; `Absent` clears both. Re-renders in place on emission.
-      */
-    def invalidMessage(sig: Signal[Maybe[String]]): CascadeSelect[A] = copy(invalidMsgDynV = Present(sig))
-
-    /** Accessible name → `aria-label`. */
-    def accessibleName(v: String): CascadeSelect[A] = copy(accNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): CascadeSelect[A] = copy(accNameV = Present(TextValue.Dyn(sig)))
-
-    /** Accessible name reference → `aria-labelledby`. */
-    def accessibleNameRef(v: String): CascadeSelect[A] = copy(accNameRefV = Present(v))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): CascadeSelect[A] = copy(accNameV = v)
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): CascadeSelect[A] = copy(accNameRefV = v)
 
     /** Fired with the newly picked leaf key. */
     def onChange(f: String => Any < Async): CascadeSelect[A] = copy(onChangeF = Present(f))
@@ -205,18 +192,25 @@ final case class CascadeSelect[A] private (
                 open <- openRefV match
                     case Present(r) => Kyo.lift(r)
                     case Absent     => Signal.initRef(false)
-                refs <- Kyo.foreach(groupPaths)(p => Signal.initRef(false).map(p -> _))
-            yield wired(open, refs.toList)
+                refs  <- Kyo.foreach(groupPaths)(p => Signal.initRef(false).map(p -> _))
+                focus <- Signal.initRef(List.empty[Int])
+            yield wired(open, refs.toList, focus)
         }.placeholder(stat)
     end render
 
     /** The subscription tree the mount publishes (golden-test seam): ONE reactive
       * chain over the root ref plus every group ref (MenuRender precedent).
       */
-    private[uic] def wired(open: SignalRef[Boolean], refs: List[(List[Int], SignalRef[Boolean])])(using Frame): UI =
+    private[uic] def wired(
+        open: SignalRef[Boolean],
+        refs: List[(List[Int], SignalRef[Boolean])],
+        focus: SignalRef[List[Int]]
+    )(using Frame): UI =
         open.render { o =>
             MenuRender.renderAll(refs) { openMap =>
-                withValue(cur => body(cur, o, openMap.withDefaultValue(false), Present((open, refs))))
+                focus.render { f =>
+                    withValue(cur => body(cur, o, openMap.withDefaultValue(false), Present(CascadeSelect.State(open, refs, focus, f))))
+                }
             }
         }
 
@@ -229,7 +223,7 @@ final case class CascadeSelect[A] private (
         current: String,
         isOpen: Boolean,
         openMap: Map[List[Int], Boolean],
-        st: Maybe[(SignalRef[Boolean], List[(List[Int], SignalRef[Boolean])])]
+        st: Maybe[CascadeSelect.State]
     )(using Frame): UI =
         // Reactive-placeholder + -invalid gates (INSIDE the mount subscription — never around the
         // UI.mounted node): with a reactive slot set, re-render the field + message through the shared
@@ -246,26 +240,28 @@ final case class CascadeSelect[A] private (
         current: String,
         isOpen: Boolean,
         openMap: Map[List[Int], Boolean],
-        st: Maybe[(SignalRef[Boolean], List[(List[Int], SignalRef[Boolean])])],
+        st: Maybe[CascadeSelect.State],
         placeholder: Maybe[String]
     )(using Frame): UI =
 
         def closeAll: Any < Async =
             st match
-                case Present((open, refs)) =>
+                case Present(state) =>
                     for
-                        _ <- MenuRender.openExactly(refs, Absent)
-                        _ <- open.set(false)
+                        _ <- MenuRender.openExactly(state.refs, Absent)
+                        _ <- state.focusRef.set(Nil)
+                        _ <- state.open.set(false)
                     yield ()
                 case Absent => ()
 
-        // Opens with every group closed (fresh chain).
+        // Opens with every group closed and nothing highlighted (fresh chain).
         def openPanel: Any < Async =
             st match
-                case Present((open, refs)) =>
+                case Present(state) =>
                     for
-                        _ <- MenuRender.openExactly(refs, Absent)
-                        _ <- open.set(true)
+                        _ <- MenuRender.openExactly(state.refs, Absent)
+                        _ <- state.focusRef.set(Nil)
+                        _ <- state.open.set(true)
                     yield ()
                 case Absent => ()
 
@@ -306,15 +302,42 @@ final case class CascadeSelect[A] private (
         val hiddenCarrier: List[UI] =
             nameV.toList.map(n => hiddenInput.jsProp("name", n).value(current))
 
+        /** The whole chain's keyboard, one [[MenuNav]] walk over the option tree.
+          *
+          * A cascade IS a vertical menu: Down and Up move within a panel, Right opens the
+          * focused group and steps into it, Left closes back out, Enter picks a leaf or opens a
+          * group, and Escape leaves one level or closes the field. So the menu family's state
+          * machine runs it, over [[CascadeItem]] through its own [[MenuNav.Nodes]].
+          */
+        def panelKey(state: CascadeSelect.State): KeyboardEvent => Any < Async = e =>
+            MenuNav.onKey(items, MenuNav.Orientation.Vertical, state.focus, e.key) match
+                case Present(step) =>
+                    val reopen: Any < Async = step.open match
+                        case MenuNav.OpenOp.Keep      => ()
+                        case MenuNav.OpenOp.Close     => MenuRender.openExactly(state.refs, Absent)
+                        case MenuNav.OpenOp.OpenTo(p) => MenuRender.openExactly(state.refs, Present(p))
+                    val chosen: Any < Async =
+                        if step.activate then
+                            MenuNav.itemAt(items, step.focus) match
+                                case Present(CascadeItem.Leaf(a)) => pick(a)
+                                case _                            => ()
+                        else ()
+                    val shut: Any < Async = if step.dismiss then state.open.set(false) else ()
+                    state.focusRef.set(step.focus).andThen(reopen).andThen(chosen).andThen(shut)
+                case Absent => ()
+
         // === floating panel chain ================================================
         val panelUI: List[UI] = st.toList.collect {
-            case (open, refs) if isOpen =>
-                Overlay(open)
+            case state if isOpen =>
+                Overlay(state.open)
                     .animate(false)
                     .panelClass("p-cascadeselect-overlay")
-                    .panelClass("p-component")(
+                    .panelClass("p-component")
+                    // The panel is what holds focus once it opens, and a keydown there never
+                    // reaches a handler on a list inside it, so the keyboard rides on the panels.
+                    .onPanelKeyDown(panelKey(state))(
                         div.cssClass("p-cascadeselect-list-container")(
-                            toChild(list(items, Nil, current, openMap, Present((open, refs)), pick))
+                            toChild(list(items, Nil, current, openMap, Present(state), pick, panelKey(state)))
                         )
                     )
                     .renderOpen
@@ -380,14 +403,16 @@ final case class CascadeSelect[A] private (
         path: List[Int],
         current: String,
         openMap: Map[List[Int], Boolean],
-        st: Maybe[(SignalRef[Boolean], List[(List[Int], SignalRef[Boolean])])],
-        pick: A => Any < Async
+        st: Maybe[CascadeSelect.State],
+        pick: A => Any < Async,
+        onKey: KeyboardEvent => Any < Async
     )(using Frame): UI =
         val rows: List[UI] = its.zipWithIndex.map {
-            case (CascadeItem.Leaf(a), _) =>
+            case (CascadeItem.Leaf(a), i) =>
                 val isSel = key(a) == current
                 var row   = li.cssClass("p-cascadeselect-option").role("treeitem").aria("selected", isSel.toString)
                 if isSel then row = row.cssClass("p-cascadeselect-option-selected")
+                if st.exists(_.focus == (path :+ i)) then row = row.cssClass("p-focus")
                 var content = div.cssClass("p-cascadeselect-option-content")
                 if st.isDefined then content = content.onClick(pick(a))
                 row(toChild(content(toChild(span.cssClass("p-cascadeselect-option-text")(labelF(a))))))
@@ -397,7 +422,8 @@ final case class CascadeSelect[A] private (
                 val groupOpen = openMap(p)
                 def toggleGroup: Any < Async =
                     st match
-                        case Present((_, refs)) =>
+                        case Present(state) =>
+                            val refs = state.refs
                             val target: Maybe[List[Int]] =
                                 if groupOpen then (if p.size > 1 then Present(p.init) else Absent)
                                 else Present(p)
@@ -411,6 +437,7 @@ final case class CascadeSelect[A] private (
                     .aria("expanded", groupOpen.toString)
                     .aria("level", (p.size).toString)
                 if groupOpen then row = row.cssClass("p-cascadeselect-option-active")
+                if st.exists(_.focus == p) then row = row.cssClass("p-focus")
                 var content = div.cssClass("p-cascadeselect-option-content")
                 if st.isDefined then content = content.onClick(toggleGroup)
                 val contentUI: UI = content(
@@ -424,7 +451,8 @@ final case class CascadeSelect[A] private (
                 // The side sub-panel: Prime's nested list skin on the Overlay primitive
                 // (RightStart = the sheet's `inset-inline-start: 100%; inset-block-start: 0`).
                 val panel: List[UI] = st match
-                    case Present((_, refs)) if groupOpen =>
+                    case Present(state) if groupOpen =>
+                        val refs = state.refs
                         refs.collectFirst { case (`p`, ref) => ref } match
                             case Some(ref) =>
                                 List(
@@ -433,12 +461,19 @@ final case class CascadeSelect[A] private (
                                         .matchWidth(false)
                                         .animate(false)
                                         .panelClass("p-cascadeselect-overlay")
-                                        .panelClass("p-cascadeselect-option-list")(
-                                            list(children, p, current, openMap, st, pick)
+                                        .panelClass("p-cascadeselect-option-list")
+                                        // Every panel in the chain carries the SAME handler,
+                                        // because every panel seeds focus when it opens and a
+                                        // keydown fires where the focus is. Attaching it only to
+                                        // the root would leave the arrows dead the moment the
+                                        // reader steps into a group.
+                                        .onPanelKeyDown(onKey)(
+                                            list(children, p, current, openMap, st, pick, onKey)
                                         )
                                         .renderOpen
                                 )
                             case None => Nil
+                        end match
                     case _ => Nil
                 row((contentUI :: panel).map(toChild)*)
         }
@@ -448,3 +483,18 @@ end CascadeSelect
 
 object CascadeSelect:
     def apply[A](): CascadeSelect[A] = new CascadeSelect[A](Nil, _.toString)
+
+    /** The wired interaction state, allocated per mount: the root panel's open flag, the
+      * per-group open refs the nested panels ride on, and the keyboard focus path.
+      *
+      * On the companion rather than inside the class, because the validity path renders through
+      * a `copy` of the field and a state typed against the original instance does not fit the
+      * copy's own path-dependent one.
+      */
+    final private[uic] case class State(
+        open: SignalRef[Boolean],
+        refs: List[(List[Int], SignalRef[Boolean])],
+        focusRef: SignalRef[List[Int]],
+        focus: List[Int]
+    )
+end CascadeSelect
