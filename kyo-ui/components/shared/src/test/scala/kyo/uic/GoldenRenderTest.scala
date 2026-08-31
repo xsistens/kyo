@@ -4843,6 +4843,40 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "CascadeSelect announces the option the highlight is on, wherever the nesting has taken it" in {
+        // The fourth component in the family that moves a `.p-focus` highlight and, until now, said
+        // nothing about it. One id travels with the highlight rather than one id per option: the
+        // rows live across nested panels, and `aria-activedescendant` names exactly one of them.
+        def html(focusAt: List[Int], openPaths: List[List[Int]]): String < Async =
+            val cs = uic.CascadeSelect[String]()
+                .options(
+                    Seq(
+                        uic.CascadeItem.group("Germany")(uic.CascadeItem.leaf("Berlin")),
+                        uic.CascadeItem.leaf("Zurich")
+                    )
+                )(identity)
+                .id("cs")
+            for
+                vref <- Signal.initRef("")
+                oref <- Signal.initRef(true)
+                refs <- Kyo.foreach(cs.value(vref).groupPaths)(p => Signal.initRef(openPaths.contains(p)).map(p -> _))
+                fref <- Signal.initRef(focusAt)
+                out  <- UI.runRender(cs.value(vref).open(oref).wired(oref, refs.toList, fref, Present("cs"))).take(1).run
+            yield out.mkString
+            end for
+        end html
+        for
+            root   <- html(List(1), Nil)
+            nested <- html(List(0, 0), List(List(0)))
+            none   <- html(Nil, Nil)
+        yield
+            assert(root.contains("""aria-activedescendant="cs-active""""), "the root list carries the announcement")
+            assert(root.contains("""id="cs-active""""), "and the highlighted row answers to that id")
+            assert(nested.contains("""aria-activedescendant="cs-active""""), "still the root list, one level down")
+            assert(!none.contains("activedescendant"), "nothing highlighted announces nothing")
+        end for
+    }
+
     "CascadeSelect (wired) renders the trigger + nested group panel chain" in {
         def html(cs: uic.CascadeSelect[String], current: String, rootOpen: Boolean, openPaths: List[List[Int]]): String < Async =
             for

@@ -236,7 +236,11 @@ final case class MultiSelect[A] private (
         hi: SignalRef[Int],
         hiV: Int,
         q: SignalRef[String],
-        qV: String
+        qV: String,
+        /** The id the highlight is announced through, as [[Select]] and [[Listbox]] carry it: a
+          * caller's own `id` wins, and a minted one stands in where there is none.
+          */
+        idBase: Maybe[String]
     )
 
     private[uic] def render(using Frame): UI =
@@ -246,6 +250,8 @@ final case class MultiSelect[A] private (
         val stat: UI = withValue(cur => body(cur, Absent))
         UI.mounted {
             for
+                cmds <- UI.commands
+                base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
                 open <- openRefV match
                     case Present(r) => Kyo.lift(r)
                     case Absent     => Signal.initRef(false)
@@ -255,16 +261,18 @@ final case class MultiSelect[A] private (
                 q <- filterQueryRefV match
                     case Present(r) => Kyo.lift(r)
                     case Absent     => Signal.initRef("")
-            yield wired(open, hi, q)
+            yield wired(open, hi, q, Present(base))
         }.placeholder(stat)
     end render
 
     /** The subscription tree the mount publishes (golden-test seam). */
-    private[uic] def wired(open: SignalRef[Boolean], hi: SignalRef[Int], q: SignalRef[String])(using Frame): UI =
+    private[uic] def wired(open: SignalRef[Boolean], hi: SignalRef[Int], q: SignalRef[String], base: Maybe[String] = Absent)(
+        using Frame
+    ): UI =
         open.render { o =>
             hi.render { h =>
                 q.render { qq =>
-                    withValue(cur => body(cur, Present(State(open, o, hi, h, q, qq))))
+                    withValue(cur => body(cur, Present(State(open, o, hi, h, q, qq, base))))
                 }
             }
         }
@@ -465,12 +473,9 @@ final case class MultiSelect[A] private (
         val shown = OptionItem.flatten(shownGroups)
         val hiEff = if shown.isEmpty then -1 else math.min(s.hiV, shown.size - 1)
 
-        /** Next enabled index from `from` in direction `step` (no wrap — Prime). */
-        def move(from: Int, step: Int): Int =
-            var i = from + step
-            while i >= 0 && i < shown.size && isOptionDisabled(shown(i)) do i += step
-            if i >= 0 && i < shown.size then i else from
-        end move
+        // The positions the highlight may land on. Prime's multiselect stops at the ends rather
+        // than cycling, as its select does.
+        val navigable: List[Int] = shown.indices.toList.filterNot(i => isOptionDisabled(shown(i)))
 
         // Prime's select-all semantics: checked while every visible enabled option
         // is selected; checking replaces the WHOLE value with the visible enabled
@@ -499,6 +504,7 @@ final case class MultiSelect[A] private (
             if isSel && highlightOnSelectFlag then row = row.cssClass("p-multiselect-option-selected")
             if isDis then row = row.cssClass("p-disabled").aria("disabled", "true")
             if i == hiEff then row = row.cssClass("p-focus")
+            s.idBase.foreach(b => row = row.id(optionId(b, i)))
             if !isDis then row = row.onClick(toggleOption(a))
             row(List[UI](rowCheckbox(isSel), span(labelF(a))).map(toChild)*)
         }
@@ -512,9 +518,12 @@ final case class MultiSelect[A] private (
         val listUI: UI =
             div.cssClass("p-multiselect-list-container")(
                 toChild(
-                    ul.cssClass("p-multiselect-list").role("listbox").aria("multiselectable", "true")(
-                        (rows ++ emptyRow).map(toChild)*
-                    )
+                    {
+                        var list = ul.cssClass("p-multiselect-list").role("listbox").aria("multiselectable", "true")
+                        if hiEff >= 0 then
+                            s.idBase.foreach(b => list = list.aria("activedescendant", optionId(b, hiEff)))
+                        list((rows ++ emptyRow).map(toChild)*)
+                    }
                 )
             )
 
@@ -560,17 +569,42 @@ final case class MultiSelect[A] private (
         Overlay(s.open)
             .panelClass("p-multiselect-overlay")
             .panelClass("p-component")
-            .onPanelKeyDown { e =>
-                e.key match
-                    case Keyboard.ArrowDown                                                                    => s.hi.set(move(hiEff, 1))
-                    case Keyboard.ArrowUp                                                                      => s.hi.set(move(hiEff, -1))
-                    case Keyboard.Enter if hiEff >= 0 && hiEff < shown.size && !isOptionDisabled(shown(hiEff)) =>
-                        // Toggles the highlighted option; the panel STAYS OPEN (Prime).
-                        toggleOption(shown(hiEff))
-                    case _ => ()
-            }((header ++ keyCollisionCard ++ List(listUI))*)
+            .onPanelKeyDown(panelKey(shown, navigable, hiEff, s, toggleOption))((header ++ keyCollisionCard ++ List(listUI))*)
             .render
     end overlayPanel
+
+    private def optionId(base: String, index: Int): String = s"$base-option-$index"
+
+    /** One key over the open panel.
+      *
+      * The same shape [[Select]] carries, with one difference the pattern asks for: an activation
+      * TOGGLES the highlighted option and leaves the panel open, since a reader picking several
+      * things should not have to reopen the list between them. Prime does the same.
+      *
+      * A filter header holds a text field, so Space and a printable key belong to the caret there
+      * and to the list otherwise. Escape is [[Overlay]]'s.
+      */
+    private def panelKey(shown: Seq[A], navigable: List[Int], hiEff: Int, s: State, toggleOption: A => Any < Async)(
+        e: KeyboardEvent
+    )(using Frame): Any < Async =
+        val caretOwns = filtering && (e.key == Keyboard.Space || e.key.charValue.isDefined)
+        if caretOwns then ()
+        else
+            ListNav.onKey(navigable, hiEff, e.key, wrap = false) match
+                case Present(step) if step.dismiss => ()
+                case Present(step) =>
+                    val toggled: Any < Async =
+                        if step.activate && shown.isDefinedAt(step.focus) then toggleOption(shown(step.focus)) else ()
+                    s.hi.set(step.focus).andThen(toggled)
+                case Absent =>
+                    e.key match
+                        case Keyboard.Char(c) =>
+                            Typeahead.jump(shown.map(labelF), navigable, hiEff, c) match
+                                case Present(to) => s.hi.set(to)
+                                case Absent      => ()
+                        case _ => ()
+        end if
+    end panelKey
 
     /** The loud card shown at the top of the panel when the option keys collide (see
       * [[KeyDiagnostics]]). A `Set[String]` value makes the failure worse here than
