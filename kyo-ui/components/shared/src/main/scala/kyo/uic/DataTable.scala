@@ -1607,6 +1607,17 @@ final case class DataTable[A] private (
             case Present(ref) => ref.set(Absent)
             case Absent       => ()
 
+    /** The keyboard's stand-in for a click, or `Absent` when the key was not an activation.
+      *
+      * A `th` or a `tr` carries this table's own tab stop rather than a native control's, so
+      * Enter and Space have to reach the same handler a click does. Carrying the modifiers over
+      * is what keeps Ctrl+Enter meaning what Ctrl+click means.
+      */
+    private def activationOf(e: KeyboardEvent): Maybe[MouseEvent] =
+        e.key match
+            case Keyboard.Enter | Keyboard.Space => Present(MouseEvent(e.targetId, e.modifiers))
+            case _                               => Absent
+
     private def headerClick(path: List[String], e: MouseEvent, interactive: Set[List[String]], order: OrderState)(using
         Frame
     ): Any < Async =
@@ -3183,7 +3194,10 @@ final case class DataTable[A] private (
             cf.modes.map { m =>
                 var item = li.cssClass("p-datatable-filter-constraint").tabIndex(0)
                 if m == cur.mode then item = item.cssClass("p-datatable-filter-constraint-selected")
-                item.onClick(pickMode(path, cur, m, openRef))(m.label)
+                val pick: Any < Async = pickMode(path, cur, m, openRef)
+                // An `li` is not a control either: the constraint list is a row of tab stops, and
+                // without this a reader could reach every one of them and pick none.
+                item.onClick(pick).onKeyDown(e => if activationOf(e).isDefined then pick else ())(m.label)
             }.map(toChild)*
         )
 
@@ -3540,6 +3554,10 @@ final case class DataTable[A] private (
                 .cssClass("p-datatable-sortable-column")
                 .tabIndex(0)
                 .onClick(e => headerClick(path, e, interactive, order))
+                // A `th` is not a button: the tab stop above is this table's own, so the two keys
+                // that operate it are too. The modifiers ride along, which is what keeps
+                // Ctrl+Enter adding a column to the sort exactly as Ctrl+click does.
+                .onKeyDown(e => activationOf(e).map(m => headerClick(path, m, interactive, order)).getOrElse(()))
         end if
         if direction.isSorting then
             cell = cell
@@ -3948,7 +3966,12 @@ final case class DataTable[A] private (
         // press started on: the rows moved under the pointer. A row that would select takes
         // it and drops it, so the press cannot reach the next row the reader clicks.
         if rowInteractive then
-            row = row.tabIndex(0).onClick(if move.held.exists(_.done) then clearRowMove(move) else activate(id, canSelect))
+            val act: Any < Async = if move.held.exists(_.done) then clearRowMove(move) else activate(id, canSelect)
+            // The row's tab stop is this table's, not a control's, so Enter and Space are too.
+            // A row being edited overwrites this handler below, which is the order that belongs:
+            // while an editor is open Enter commits the row rather than re-selecting it.
+            row = row.tabIndex(0).onClick(act).onKeyDown(e => if activationOf(e).isDefined then act else ())
+        end if
         if rowEdit then
             // Enter and Escape reach here from whichever cell editor has focus, since a
             // keystroke bubbles the logical tree the way a click does.

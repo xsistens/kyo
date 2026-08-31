@@ -286,7 +286,14 @@ final case class TreeTable[A] private (
             case ColumnAlign.Start  => ()
         end match
         if sortable then
-            cell = cell.cssClass("p-treetable-sortable-column").tabIndex(0).onClick(e => toggleSort(path, e, interactive))
+            cell = cell
+                .cssClass("p-treetable-sortable-column")
+                .tabIndex(0)
+                .onClick(e => toggleSort(path, e, interactive))
+                // A `th` is not a button: the tab stop above is this table's own, so the two keys
+                // that operate it are too, modifiers and all.
+                .onKeyDown(e => activationOf(e).map(m => toggleSort(path, m, interactive)).getOrElse(()))
+        end if
         if direction.isSorting then
             cell = cell
                 .cssClass("p-treetable-column-sorted")
@@ -318,6 +325,17 @@ final case class TreeTable[A] private (
     /** Header click, the DataTable contract: plain sorts by this column alone, Ctrl or
       * Cmd adds it or advances it in place.
       */
+    /** The keyboard's stand-in for a click, or `Absent` when the key was not an activation.
+      *
+      * The same shape [[DataTable]] uses, for the same reason: a `th` or a `tr` carries this
+      * table's own tab stop rather than a native control's, so Enter and Space have to reach the
+      * handler a click reaches, with the Ctrl or Cmd that adds a column to the sort intact.
+      */
+    private def activationOf(e: KeyboardEvent): Maybe[MouseEvent] =
+        e.key match
+            case Keyboard.Enter | Keyboard.Space => Present(MouseEvent(e.targetId, e.modifiers))
+            case _                               => Absent
+
     private def toggleSort(path: List[String], e: MouseEvent, interactive: Set[List[String]])(using
         Frame
     ): Any < Async =
@@ -383,7 +401,13 @@ final case class TreeTable[A] private (
 
         var row = tr.role("row").aria("level", (depth + 1).toString)
         if hasChildren then row = row.aria("expanded", isExp.toString)
-        if rowInteractive then row = row.cssClass("p-treetable-selectable-row").tabIndex(0).onClick(activate(id))
+        if rowInteractive then
+            row = row
+                .cssClass("p-treetable-selectable-row")
+                .tabIndex(0)
+                .onClick(activate(id))
+                .onKeyDown(e => if activationOf(e).isDefined then activate(id) else ())
+        end if
         if isSel then row = row.cssClass("p-treetable-row-selected")
         if selectionModeV != SelectionMode.None then row = row.aria("selected", isSel.toString)
         val rowEl: UI = row(tds.map(toChild)*)

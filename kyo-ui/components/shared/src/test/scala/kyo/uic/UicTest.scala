@@ -1,9 +1,73 @@
 package kyo.uic
 
+import kyo.*
+
 /** Base class for the kyo-ui-components suites, the component-library counterpart of kyo-ui's `UITest`.
   *
   * These suites are pure: they assert on rendered HTML strings, on the menu state machines, and on what does or does
   * not type-check. Nothing drives a browser, so none of `UITest`'s Chrome accommodations apply and the kyo-test
   * defaults are exactly right.
+  *
+  * The helpers below take a handler off the rendered tree and call it with a synthesized event, which is how a suite
+  * asserts BEHAVIOUR without a DOM: the golden renders pin what the markup says, the `*Nav` suites pin what a key
+  * means, and these pin the wiring between the two. They are `private[uic]`, which reaches the `kyo.uic.test`
+  * subpackage as well.
   */
-abstract class UicTest extends kyo.test.Test[Any]
+abstract class UicTest extends kyo.test.Test[Any]:
+
+    /** Every element of a rendered tree, with the reactive nodes resolved to their current content.
+      *
+      * Reactive is a subscription boundary, not a node the client sees, so a walk that stopped there would miss
+      * everything a component renders inside its own refs. A mount is shown as its placeholder, which is what the
+      * golden renderer does.
+      */
+    private[uic] def elements(node: UI)(using Frame): Chunk[UI.Ast.Element] < Sync =
+        node match
+            case e: UI.Ast.Element =>
+                Kyo.foreach(e.children)(elements).map(cs => Chunk(e) ++ cs.flatten)
+            case r: UI.Ast.Reactive[?] =>
+                r.signal.current(using r.frame).map(elements)
+            case f: UI.Ast.Fragment[?] =>
+                Kyo.foreach(f.children)(elements).map(_.flatten)
+            case k: UI.Ast.KeyedChild[?] => elements(k.child)
+            case m: UI.Ast.Mounted =>
+                m.placeholderUI match
+                    case Present(ui) => elements(ui)
+                    case Absent      => Chunk.empty
+            case _ => Chunk.empty
+
+    private[uic] def elementWithId(node: UI, id: String)(using Frame): UI.Ast.Element < Sync =
+        elements(node).map(_.find(_.attrs.identifier.contains(id)).getOrElse(
+            throw new AssertionError(s"no element with id $id")
+        ))
+
+    private[uic] def elementWithClass(node: UI, cls: String)(using Frame): UI.Ast.Element < Sync =
+        elements(node).map(_.find(_.attrs.cssClasses.contains(cls)).getOrElse(
+            throw new AssertionError(s"no element with class $cls")
+        ))
+
+    private[uic] def elementsWithClass(node: UI, cls: String)(using Frame): Chunk[UI.Ast.Element] < Sync =
+        elements(node).map(_.filter(_.attrs.cssClasses.contains(cls)))
+
+    /** Sends one key to `el`'s own handler, as the dispatcher would. */
+    private[uic] def press(el: UI.Ast.Element, key: UI.Keyboard, mods: UI.Modifiers = UI.Modifiers.none)(
+        using Frame
+    ): Any < Async =
+        el.attrs.onKeyDown match
+            case Present(f) => f(UI.KeyboardEvent(key, mods, el.attrs.identifier))
+            case Absent     => throw new AssertionError("the element declares no key handler")
+
+    /** Runs `el`'s click handler, as the dispatcher would.
+      *
+      * The handler is an EFFECT stored in a `Maybe`, so it is taken out by hand: a match over it infers `Any` and
+      * lands inert, which is the trap the module documents.
+      */
+    private[uic] def click(el: UI.Ast.Element)(using Frame): Any < Async =
+        el.attrs.onClick match
+            case Present(eff) => eff
+            case Absent =>
+                el.attrs.onClickEvt match
+                    case Present(f) => f(UI.MouseEvent(el.attrs.identifier, UI.Modifiers.none))
+                    case Absent     => throw new AssertionError("the element declares no click handler")
+
+end UicTest

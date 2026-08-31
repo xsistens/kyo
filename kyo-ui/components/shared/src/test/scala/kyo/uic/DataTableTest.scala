@@ -17,51 +17,6 @@ class DataTableTest extends UicTest:
 
     private val items = List(Item("1", "A", 10), Item("2", "B", 20))
 
-    /** Every element of a rendered tree, with the reactive nodes resolved to their current
-      * content. Reactive is a subscription boundary, not a node the client sees, so a walk
-      * that stopped there would miss everything a table renders inside its own refs.
-      */
-    private def elements(node: UI)(using Frame): Chunk[UI.Ast.Element] < Sync =
-        node match
-            case e: UI.Ast.Element =>
-                Kyo.foreach(e.children)(elements).map(cs => Chunk(e) ++ cs.flatten)
-            case r: UI.Ast.Reactive[?] =>
-                r.signal.current(using r.frame).map(elements)
-            case f: UI.Ast.Fragment[?] =>
-                Kyo.foreach(f.children)(elements).map(_.flatten)
-            case k: UI.Ast.KeyedChild[?] => elements(k.child)
-            // A mount is shown as its placeholder, which is what the golden renderer does
-            // and what an overlay's own reposition mount wraps its panel in.
-            case m: UI.Ast.Mounted =>
-                m.placeholderUI match
-                    case Present(ui) => elements(ui)
-                    case Absent      => Chunk.empty
-            case _ => Chunk.empty
-
-    private def cellWithId(node: UI, id: String)(using Frame): UI.Ast.Element < Sync =
-        elements(node).map(_.find(_.attrs.identifier.contains(id)).getOrElse(
-            throw new AssertionError(s"no element with id $id")
-        ))
-
-    private def press(cell: UI.Ast.Element, key: UI.Keyboard, mods: UI.Modifiers = UI.Modifiers.none)(
-        using Frame
-    ): Any < Async =
-        cell.attrs.onKeyDown match
-            case Present(f) => f(UI.KeyboardEvent(key, mods, cell.attrs.identifier))
-            case Absent     => throw new AssertionError("the cell declares no key handler")
-
-    private def elementWithClass(node: UI, cls: String)(using Frame): UI.Ast.Element < Sync =
-        elements(node).map(_.find(_.attrs.cssClasses.contains(cls)).getOrElse(
-            throw new AssertionError(s"no element with class $cls")
-        ))
-
-    /** The click handler is an EFFECT stored in a `Maybe`, so it is taken out by hand: a
-      * match over it infers `Any` and lands inert, which is the trap the module documents.
-      */
-    private def click(el: UI.Ast.Element)(using Frame): Any < Async =
-        if el.attrs.onClick.isEmpty then throw new AssertionError("the element declares no click handler")
-        else el.attrs.onClick.get
-
     /** A table whose two editable columns are Name and Price, wired to refs the test owns
       * so it can read back what a keystroke did. `focus` records instead of commanding.
       */
@@ -115,9 +70,9 @@ class DataTableTest extends UicTest:
     "a text editor writes into the draft as it is typed" in {
         for
             (ui, _, _, name, _, _, _) <- wire
-            cell                      <- cellWithId(ui, "t-c0-0")
+            cell                      <- elementWithId(ui, "t-c0-0")
             _                         <- press(cell, UI.Keyboard.Enter)
-            open                      <- cellWithId(ui, "t-c0-0")
+            open                      <- elementWithId(ui, "t-c0-0")
             _                         <- typeInto(open, "Ada")
             draft                     <- name.get
         yield assert(draft == "Ada")
@@ -130,9 +85,9 @@ class DataTableTest extends UicTest:
     "a number editor writes into the draft as it is typed" in {
         for
             (ui, _, _, _, price, _, _) <- wire
-            cell                       <- cellWithId(ui, "t-c0-1")
+            cell                       <- elementWithId(ui, "t-c0-1")
             _                          <- press(cell, UI.Keyboard.Enter)
-            open                       <- cellWithId(ui, "t-c0-1")
+            open                       <- elementWithId(ui, "t-c0-1")
             _                          <- typeInto(open, "42")
             draft                      <- price.get
         yield assert(draft == "42")
@@ -141,17 +96,17 @@ class DataTableTest extends UicTest:
     "a number cell commits what was typed into it, and refuses what a rule rejects" in {
         for
             (ui, rows, editing, _, _, err, _) <- wire
-            cell                              <- cellWithId(ui, "t-c0-1")
+            cell                              <- elementWithId(ui, "t-c0-1")
             _                                 <- press(cell, UI.Keyboard.Enter)
-            open                              <- cellWithId(ui, "t-c0-1")
+            open                              <- elementWithId(ui, "t-c0-1")
             _                                 <- typeInto(open, "42")
-            reopened                          <- cellWithId(ui, "t-c0-1")
+            reopened                          <- elementWithId(ui, "t-c0-1")
             _                                 <- press(reopened, UI.Keyboard.Enter)
             stored                            <- rows.get
             _                                 <- press(cell, UI.Keyboard.Enter)
-            open2                             <- cellWithId(ui, "t-c0-1")
+            open2                             <- elementWithId(ui, "t-c0-1")
             _                                 <- typeInto(open2, "0")
-            reopened2                         <- cellWithId(ui, "t-c0-1")
+            reopened2                         <- elementWithId(ui, "t-c0-1")
             _                                 <- press(reopened2, UI.Keyboard.Enter)
             stillOpen                         <- editing.get
             refused                           <- err.get
@@ -167,11 +122,11 @@ class DataTableTest extends UicTest:
     "clicking another cell commits the one that is open" in {
         for
             (ui, rows, editing, _, _, _, _) <- wire
-            cell                            <- cellWithId(ui, "t-c0-0")
+            cell                            <- elementWithId(ui, "t-c0-0")
             _                               <- press(cell, UI.Keyboard.Enter)
-            open                            <- cellWithId(ui, "t-c0-0")
+            open                            <- elementWithId(ui, "t-c0-0")
             _                               <- typeInto(open, "Ada")
-            other                           <- cellWithId(ui, "t-c1-0")
+            other                           <- elementWithId(ui, "t-c1-0")
             _                               <- click(other)
             stored                          <- rows.get
             now                             <- editing.get
@@ -183,11 +138,11 @@ class DataTableTest extends UicTest:
     "clicking another cell while the open one refuses leaves the editor where it is" in {
         for
             (ui, rows, editing, _, _, err, _) <- wire
-            cell                              <- cellWithId(ui, "t-c0-1")
+            cell                              <- elementWithId(ui, "t-c0-1")
             _                                 <- press(cell, UI.Keyboard.Enter)
-            open                              <- cellWithId(ui, "t-c0-1")
+            open                              <- elementWithId(ui, "t-c0-1")
             _                                 <- typeInto(open, "0")
-            other                             <- cellWithId(ui, "t-c1-0")
+            other                             <- elementWithId(ui, "t-c1-0")
             _                                 <- click(other)
             stored                            <- rows.get
             now                               <- editing.get
@@ -204,11 +159,11 @@ class DataTableTest extends UicTest:
     "Tab past a refused commit leaves the editor where it is, with the error showing" in {
         for
             (ui, rows, editing, _, _, err, focused) <- wire
-            cell                                    <- cellWithId(ui, "t-c0-1")
+            cell                                    <- elementWithId(ui, "t-c0-1")
             _                                       <- press(cell, UI.Keyboard.Enter)
-            open                                    <- cellWithId(ui, "t-c0-1")
+            open                                    <- elementWithId(ui, "t-c0-1")
             _                                       <- typeInto(open, "0")
-            reopened                                <- cellWithId(ui, "t-c0-1")
+            reopened                                <- elementWithId(ui, "t-c0-1")
             _                                       <- press(reopened, UI.Keyboard.Tab)
             stored                                  <- rows.get
             now                                     <- editing.get
@@ -227,7 +182,7 @@ class DataTableTest extends UicTest:
     "Enter on a resting cell opens it, seeded from the row" in {
         for
             (ui, _, editing, name, _, _, _) <- wire
-            cell                            <- cellWithId(ui, "t-c0-0")
+            cell                            <- elementWithId(ui, "t-c0-0")
             _                               <- press(cell, UI.Keyboard.Enter)
             open                            <- editing.get
             draft                           <- name.get
@@ -239,7 +194,7 @@ class DataTableTest extends UicTest:
     "a printable key opens the cell ON that character" in {
         for
             (ui, _, editing, name, _, _, _) <- wire
-            cell                            <- cellWithId(ui, "t-c1-0")
+            cell                            <- elementWithId(ui, "t-c1-0")
             _                               <- press(cell, UI.Keyboard.Char('z'))
             open                            <- editing.get
             draft                           <- name.get
@@ -254,10 +209,10 @@ class DataTableTest extends UicTest:
     "Enter commits and hands focus back to the cell" in {
         for
             (ui, rows, editing, name, _, _, focused) <- wire
-            cell                                     <- cellWithId(ui, "t-c0-0")
+            cell                                     <- elementWithId(ui, "t-c0-0")
             _                                        <- press(cell, UI.Keyboard.Enter)
             _                                        <- name.set("Ada")
-            reopened                                 <- cellWithId(ui, "t-c0-0")
+            reopened                                 <- elementWithId(ui, "t-c0-0")
             _                                        <- press(reopened, UI.Keyboard.Enter)
             open                                     <- editing.get
             stored                                   <- rows.get
@@ -271,10 +226,10 @@ class DataTableTest extends UicTest:
     "Escape discards and hands focus back too" in {
         for
             (ui, rows, editing, name, _, _, focused) <- wire
-            cell                                     <- cellWithId(ui, "t-c0-0")
+            cell                                     <- elementWithId(ui, "t-c0-0")
             _                                        <- press(cell, UI.Keyboard.Enter)
             _                                        <- name.set("Ada")
-            reopened                                 <- cellWithId(ui, "t-c0-0")
+            reopened                                 <- elementWithId(ui, "t-c0-0")
             _                                        <- press(reopened, UI.Keyboard.Escape)
             open                                     <- editing.get
             stored                                   <- rows.get
@@ -290,10 +245,10 @@ class DataTableTest extends UicTest:
     "a refused commit keeps the cell open and does NOT move focus" in {
         for
             (ui, rows, editing, _, price, err, focused) <- wire
-            cell                                        <- cellWithId(ui, "t-c0-1")
+            cell                                        <- elementWithId(ui, "t-c0-1")
             _                                           <- press(cell, UI.Keyboard.Enter)
             _                                           <- price.set("0")
-            reopened                                    <- cellWithId(ui, "t-c0-1")
+            reopened                                    <- elementWithId(ui, "t-c0-1")
             _                                           <- press(reopened, UI.Keyboard.Enter)
             open                                        <- editing.get
             standing                                    <- err.get
@@ -309,7 +264,7 @@ class DataTableTest extends UicTest:
     "an arrow moves the cursor by asking the client to focus the next cell" in {
         for
             (ui, _, editing, _, _, _, focused) <- wire
-            cell                               <- cellWithId(ui, "t-c0-0")
+            cell                               <- elementWithId(ui, "t-c0-0")
             _                                  <- press(cell, UI.Keyboard.ArrowDown)
             _                                  <- press(cell, UI.Keyboard.ArrowRight)
             open                               <- editing.get
@@ -322,10 +277,10 @@ class DataTableTest extends UicTest:
     "Tab commits and carries the edit into the next editable cell, leaving focus to the browser" in {
         for
             (ui, rows, editing, name, price, _, focused) <- wire
-            cell                                         <- cellWithId(ui, "t-c0-0")
+            cell                                         <- elementWithId(ui, "t-c0-0")
             _                                            <- press(cell, UI.Keyboard.Enter)
             _                                            <- name.set("Ada")
-            reopened                                     <- cellWithId(ui, "t-c0-0")
+            reopened                                     <- elementWithId(ui, "t-c0-0")
             _                                            <- press(reopened, UI.Keyboard.Tab)
             open                                         <- editing.get
             stored                                       <- rows.get
@@ -449,6 +404,22 @@ class DataTableTest extends UicTest:
             assert(!still, "and picking one closes the menu")
     }
 
+    "and a mode can be picked with the keyboard, since the list is a row of tab stops" in {
+        for
+            (ui, filters, menus) <- filtered
+            fields               <- inputs(ui)
+            _                    <- type_(fields.head, "A")
+            _                    <- menus(List("Name")).set(true)
+            open                 <- elements(ui)
+            starts = open.find(e =>
+                e.attrs.cssClasses.contains("p-datatable-filter-constraint") &&
+                    e.children.collect { case t: UI.Ast.Text => t.value }.contains("Starts with")
+            ).getOrElse(throw new AssertionError("the menu shows no modes"))
+            _    <- press(starts, UI.Keyboard.Space)
+            spec <- filters.get
+        yield assert(spec == Map(List("Name") -> ColumnFilter("A", MatchMode.StartsWith)))
+    }
+
     private def hasCell(node: UI, id: String)(using Frame): Boolean < Sync =
         elements(node).map(_.exists(_.attrs.identifier.contains(id)))
 
@@ -467,12 +438,12 @@ class DataTableTest extends UicTest:
                 uic.column("Note")(_ => "note").visible(shown),
                 uic.column("Price")(_.price.toString).editable(_.price)((i, v) => i.copy(price = v))
             ).editingCell(editing).wired("t", Map(List("Name") -> name, List("Price") -> price), err, _ => ())
-            wide      <- cellWithId(ui, "t-c0-1")
+            wide      <- elementWithId(ui, "t-c0-1")
             _         <- press(wide, UI.Keyboard.Enter)
             overNote  <- editing.get
             third     <- hasCell(ui, "t-c0-2")
             _         <- shown.set(false)
-            narrow    <- cellWithId(ui, "t-c0-1")
+            narrow    <- elementWithId(ui, "t-c0-1")
             _         <- press(narrow, UI.Keyboard.Enter)
             overPrice <- editing.get
             gone      <- hasCell(ui, "t-c0-2")
@@ -867,7 +838,7 @@ class DataTableTest extends UicTest:
       */
     private def dragHeader(node: UI, id: String, from: Double, to: Double)(using Frame): Any < Async =
         for
-            cell <- cellWithId(node, id)
+            cell <- elementWithId(node, id)
             down = cell.attrs.onPointerDown.getOrElse(throw new AssertionError("the header declares no grab"))
             move = cell.attrs.onPointerMove.getOrElse(throw new AssertionError("the header declares no drag"))
             up   = cell.attrs.onPointerUp.getOrElse(throw new AssertionError("the header declares no release"))
@@ -889,7 +860,7 @@ class DataTableTest extends UicTest:
     "a press that does not travel leaves the order alone and still sorts" in {
         for
             (ui, order, sort) <- movable()
-            cell              <- cellWithId(ui, "t-h0")
+            cell              <- elementWithId(ui, "t-h0")
             down = cell.attrs.onPointerDown.getOrElse(throw new AssertionError("no grab"))
             up   = cell.attrs.onPointerUp.getOrElse(throw new AssertionError("no release"))
             _     <- down(pointerAt(50))
@@ -910,13 +881,13 @@ class DataTableTest extends UicTest:
             _             <- dragHeader(ui, "t-h0", 50, 210)
             // Name is the second column now, which is the whole point: the columns moved
             // under the pointer that was still holding them.
-            cell <- cellWithId(ui, "t-h1")
+            cell <- elementWithId(ui, "t-h1")
             clickIt = cell.attrs.onClickEvt.getOrElse(throw new AssertionError("the header declares no click"))
             _     <- clickIt(mouseAt)
             after <- sort.get
             // Freshly off the tree, as the browser has it: swallowing the click cleared the
             // state, and the re-render that followed handed the cell a handler that sorts.
-            again <- cellWithId(ui, "t-h1")
+            again <- elementWithId(ui, "t-h1")
             _     <- again.attrs.onClickEvt.getOrElse(throw new AssertionError("no click"))(mouseAt)
             later <- sort.get
         yield
@@ -929,8 +900,8 @@ class DataTableTest extends UicTest:
     "a column that refuses to be reordered takes away the drops that would move it" in {
         for
             (pinned, _, _) <- movable(pin = true)
-            first          <- cellWithId(pinned, "t-h0")
-            last           <- cellWithId(pinned, "t-h2")
+            first          <- elementWithId(pinned, "t-h0")
+            last           <- elementWithId(pinned, "t-h2")
         yield
             assert(!first.attrs.cssClasses.contains("p-datatable-reorderable-column"), "nowhere to go past the pin")
             assert(!last.attrs.cssClasses.contains("p-datatable-reorderable-column"))
@@ -2212,6 +2183,59 @@ class DataTableTest extends UicTest:
                 .wired("t", Map.empty, err, _ => ())
             reported <- cards(ui)
         yield assert(reported.contains("several conditions") && reported.contains("FilterDisplay.Menu"))
+    }
+
+    // ---- the tab stops a table makes itself ----
+    //
+    // A `th` and a `tr` are not controls, so a table that gives them a tab stop owes them the
+    // keys too. Without these the reader could reach every sortable header and every selectable
+    // row and operate none of them.
+
+    "a sortable header sorts on Enter and on Space, and carries the modifiers over" in {
+        for
+            sort <- Signal.initRef(List.empty[uic.SortKey])
+            ui = uic.DataTable[Item]().rows(items).rowKey(_.id)
+                .columns(uic.column("Name")(_.name).sortBy(_.name), uic.column("Price")(_.price.toString).sortBy(_.price))
+                .sort(sort).render
+            headers    <- elementsWithClass(ui, "p-datatable-sortable-column")
+            _          <- press(headers(0), UI.Keyboard.Enter)
+            afterEnter <- sort.get
+            _          <- press(headers(0), UI.Keyboard.Space)
+            afterSpace <- sort.get
+            _          <- press(headers(1), UI.Keyboard.Enter, UI.Modifiers(ctrl = true))
+            afterMulti <- sort.get
+        yield
+            assert(afterEnter.map(_.column) == List("Name"), "Enter sorts by that column")
+            assert(afterSpace.head.direction != afterEnter.head.direction, "Space cycles it, as a second click would")
+            assert(afterMulti.map(_.column) == List("Name", "Price"), "Ctrl+Enter adds one, as Ctrl+click does")
+    }
+
+    "a selectable row selects on Enter and on Space" in {
+        for
+            sel <- Signal.initRef(Set.empty[String])
+            ui = uic.DataTable[Item]().rows(items).rowKey(_.id)
+                .columns(uic.column("Name")(_.name))
+                .selectionMode(uic.SelectionMode.Multiple).selected(sel).render
+            rows       <- elementsWithClass(ui, "p-datatable-selectable-row")
+            _          <- press(rows(0), UI.Keyboard.Enter)
+            afterEnter <- sel.get
+            _          <- press(rows(1), UI.Keyboard.Space)
+            afterSpace <- sel.get
+        yield
+            assert(afterEnter == Set("1"), "Enter picks the row it was pressed on")
+            assert(afterSpace == Set("1", "2"), "and Space picks the next one")
+    }
+
+    "a key that is not an activation leaves the selection alone" in {
+        for
+            sel <- Signal.initRef(Set.empty[String])
+            ui = uic.DataTable[Item]().rows(items).rowKey(_.id)
+                .columns(uic.column("Name")(_.name))
+                .selectionMode(uic.SelectionMode.Multiple).selected(sel).render
+            rows  <- elementsWithClass(ui, "p-datatable-selectable-row")
+            _     <- press(rows(0), UI.Keyboard.ArrowDown)
+            after <- sel.get
+        yield assert(after.isEmpty)
     }
 
 end DataTableTest

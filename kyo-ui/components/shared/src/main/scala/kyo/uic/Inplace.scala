@@ -71,10 +71,12 @@ final case class Inplace private (
                                 x <- e
                             yield x
                         case Absent => r.set(true)
+                // A `role="button"` owes the reader both keys, and a div is not a button, so the
+                // browser supplies neither. Enter alone was half of the contract.
                 d = d.onClick(open).onKeyDown { evt =>
                     evt.key match
-                        case Keyboard.Enter => open
-                        case _              => ()
+                        case Keyboard.Enter | Keyboard.Space => open
+                        case _                               => ()
                 }
             }
         end if
