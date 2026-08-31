@@ -50,13 +50,10 @@ final case class MenuItem private (
 end MenuItem
 
 object MenuItem:
-    /** An item labelled `label`. */
-    def apply(label: String): MenuItem = new MenuItem(TextValue.Const(label))
-
-    /** An item whose label tracks `label` — re-renders in place on emission (e.g. a
+    /** An item labelled `label`. A `Signal[String]` re-renders the label in place on emission (e.g. a
       * locale-driven `I18n.t` leaf).
       */
-    def apply(label: Signal[String]): MenuItem = new MenuItem(TextValue.Dyn(label))
+    def apply(label: String | Signal[String]): MenuItem = new MenuItem(ReactiveValue(label))
 
     /** Package-internal: build an item from an already-carried label carrier
       * (hosts such as [[MegaMenuItem.asMenuItem]] forward their own `TextValue`).
@@ -79,13 +76,11 @@ final case class MenuGroup private (
 end MenuGroup
 
 object MenuGroup:
-    /** A group headed `label` — add rows via [[MenuGroup.items]]. */
-    def apply(label: String): MenuGroup = new MenuGroup(TextValue.Const(label))
-
-    /** A group whose heading tracks `label` — re-renders in place on emission (e.g.
-      * a locale-driven `I18n.t` leaf).
+    /** A group headed by `label`. A `Signal[String]` re-renders the heading in place on emission (e.g. a
+      * locale-driven `I18n.t` leaf).
       */
-    def apply(label: Signal[String]): MenuGroup = new MenuGroup(TextValue.Dyn(label))
+    def apply(label: String | Signal[String]): MenuGroup = new MenuGroup(ReactiveValue(label))
+
 end MenuGroup
 
 /** Package-internal machinery shared by the menu family. */

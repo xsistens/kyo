@@ -9,13 +9,24 @@ import kyo.UI.*
   * anchor's `target` attribute when it is one of the standard `_self` /
   * `_blank` / `_parent` / `_top` values.
   */
-final case class BreadcrumbItem(
-    text: String,
-    href: Maybe[String] = Absent,
-    target: Maybe[String] = Absent,
-    icon: Maybe[IconGlyph] = Absent,
-    textDyn: Maybe[Signal[String]] = Absent
+final case class BreadcrumbItem private[uic] (
+    text: TextValue,
+    href: Maybe[String],
+    target: Maybe[String],
+    icon: Maybe[IconGlyph]
 )
+
+object BreadcrumbItem:
+    /** Construct a crumb. A `Signal[String]` label re-renders in place on emission; the rest of
+      * the crumb (href, target, icon) is static either way.
+      */
+    def apply(
+        text: String | Signal[String],
+        href: Maybe[String] = Absent,
+        target: Maybe[String] = Absent,
+        icon: Maybe[IconGlyph] = Absent
+    ): BreadcrumbItem = new BreadcrumbItem(ReactiveValue(text), href, target, icon)
+end BreadcrumbItem
 
 /** Breadcrumb — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * Breadcrumb anatomy: `nav.p-breadcrumb.p-component` > `ol.p-breadcrumb-list`
@@ -35,25 +46,20 @@ final case class Breadcrumb private (
     separatorV: Maybe[IconGlyph] = Absent,
     accessibleNameV: Maybe[TextValue] = Absent,
     onItemClickF: Maybe[String => Any < Async] = Absent
-) extends Node:
+) extends Node, HasAccessibleName:
     type Self = Breadcrumb
 
     /** Appends the given crumbs to the trail. */
     def items(is: BreadcrumbItem*): Breadcrumb = copy(itemsV = itemsV ++ is.toList)
 
-    /** Appends a linked crumb. */
-    def item(text: String, href: String): Breadcrumb = copy(itemsV = itemsV :+ BreadcrumbItem(text, Present(href)))
+    /** Appends a linked crumb. A `Signal[String]` label re-renders in place on emission. */
+    def item(text: String | Signal[String], href: String): Breadcrumb =
+        copy(itemsV = itemsV :+ BreadcrumbItem(text, Present(href)))
 
-    /** Appends a linked crumb whose label tracks `text` reactively (re-renders in place). */
-    def item(text: Signal[String], href: String): Breadcrumb =
-        copy(itemsV = itemsV :+ BreadcrumbItem("", Present(href), textDyn = Present(text)))
-
-    /** Appends a non-linked crumb (typically the current page). */
-    def item(text: String): Breadcrumb = copy(itemsV = itemsV :+ BreadcrumbItem(text))
-
-    /** Appends a non-linked crumb whose label tracks `text` reactively (re-renders in place). */
-    def item(text: Signal[String]): Breadcrumb =
-        copy(itemsV = itemsV :+ BreadcrumbItem("", textDyn = Present(text)))
+    /** Appends a non-linked crumb (typically the current page). A `Signal[String]` label
+      * re-renders in place on emission.
+      */
+    def item(text: String | Signal[String]): Breadcrumb = copy(itemsV = itemsV :+ BreadcrumbItem(text))
 
     /** Prime's home item: an icon-only crumb rendered first (`li.p-breadcrumb-home-item`). */
     def home(icon: IconGlyph, href: String): Breadcrumb =
@@ -62,13 +68,7 @@ final case class Breadcrumb private (
     /** Overrides the separator glyph (default the Prime chevron, [[Icons.chevronRight]]). */
     def separator(v: IconGlyph): Breadcrumb = copy(separatorV = Present(v))
 
-    /** Overrides the nav landmark's `aria-label` (default `"Breadcrumb"`). */
-    def accessibleName(v: String): Breadcrumb = copy(accessibleNameV = Present(TextValue.Const(v)))
-
-    /** Reactive nav `aria-label` — patched IN PLACE via kyo-ui's attribute channel
-      * (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): Breadcrumb = copy(accessibleNameV = Present(TextValue.Dyn(sig)))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Breadcrumb = copy(accessibleNameV = v)
 
     /** Fired with the item's href (or its text when hrefless) on click, in addition
       * to the anchor's native navigation.
@@ -107,7 +107,7 @@ final case class Breadcrumb private (
       * render the same anchor without an href and marked `aria-current="page"`.
       */
     private def renderLink(it: BreadcrumbItem)(using Frame): UI =
-        val payload = it.href.getOrElse(it.text)
+        val payload = it.href.getOrElse(it.text.constOrEmpty)
         var anchor  = a.cssClass("p-breadcrumb-item-link")
         it.href match
             case Present(h) =>
@@ -117,10 +117,9 @@ final case class Breadcrumb private (
                 anchor = anchor.aria("current", "page")
         end match
         val iconSlot: List[UI] = it.icon.toList.map(g => GlyphSvg(g, "p-breadcrumb-item-icon"))
-        val labelSlot: List[UI] = it.textDyn match
-            case Present(s) => List(s.render(t => span.cssClass("p-breadcrumb-item-label")(t)))
-            case Absent =>
-                if it.text.isEmpty then Nil else List(span.cssClass("p-breadcrumb-item-label")(it.text))
+        val labelSlot: List[UI] = it.text match
+            case TextValue.Dyn(s)   => List(s.render(t => span.cssClass("p-breadcrumb-item-label")(t)))
+            case TextValue.Const(t) => if t.isEmpty then Nil else List(span.cssClass("p-breadcrumb-item-label")(t))
         val linked = anchor((iconSlot ++ labelSlot).map(toChild)*)
         // The click handler sits on a display-contents wrapper so kyo does not
         // suppress the anchor's native navigation; the handler fires in addition.

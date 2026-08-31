@@ -79,7 +79,7 @@ final case class MultiSelect[A] private (
     onChangeF: Maybe[Set[String] => Any < Async] = Absent,
     idV: Maybe[String] = Absent,
     onBlurF: Maybe[Set[String] => Any < Async] = Absent
-) extends Node, MultiSelectFormControl:
+) extends Node, MultiSelectFormControl, HasEmptyContent, HasTooltip, HasPlaceholder, HasAccessibleNameRef:
     type Self = MultiSelect[A]
 
     /** Native `id` on the trigger — pair with `Label.forId` / `FloatLabel.forId`. */
@@ -126,15 +126,7 @@ final case class MultiSelect[A] private (
       */
     def open(ref: SignalRef[Boolean]): MultiSelect[A] = copy(openRefV = Present(ref))
 
-    /** Text shown on the closed trigger while the bound set is empty (Prime's
-      * `p-placeholder` label skin).
-      */
-    def placeholder(v: String): MultiSelect[A] = copy(placeholderV = Present(TextValue.Const(v)))
-
-    /** Reactive placeholder — re-renders the label in place on signal emission (resolved INSIDE the
-      * mount subscription, so open/highlight/filter state survives). For locale-driven text.
-      */
-    def placeholder(sig: Signal[String]): MultiSelect[A] = copy(placeholderV = Present(TextValue.Dyn(sig)))
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): MultiSelect[A] = copy(placeholderV = v)
 
     /** Trigger selection rendering: comma-joined text (default) or removable
       * chips (`.p-multiselect-display-chip`).
@@ -146,15 +138,11 @@ final case class MultiSelect[A] private (
       */
     def maxSelectedLabels(n: Int): MultiSelect[A] = copy(maxSelectedLabelsV = Present(n))
 
-    /** Summary template used beyond [[maxSelectedLabels]] — `{0}` is replaced by
-      * the selection count (default "{0} items selected", Prime's locale default).
+    /** Summary template used beyond [[maxSelectedLabels]]: `{0}` is replaced by the selection count
+      * (default "{0} items selected", Prime's locale default). A `Signal[String]` re-renders the summary in
+      * place on emission, and the emitted string is still a `{0}` template interpolated with the count.
       */
-    def selectedItemsLabel(v: String): MultiSelect[A] = copy(selectedItemsLabelV = Present(TextValue.Const(v)))
-
-    /** Reactive variant — re-renders the summary in place on signal emission (the
-      * emitted string is still a `{0}` template interpolated with the count).
-      */
-    def selectedItemsLabel(sig: Signal[String]): MultiSelect[A] = copy(selectedItemsLabelV = Present(TextValue.Dyn(sig)))
+    def selectedItemsLabel(v: String | Signal[String]): MultiSelect[A] = copy(selectedItemsLabelV = Present(ReactiveValue(v)))
 
     /** Renders Prime's header filter (an IconField `.p-multiselect-filter-container`
       * with the `input.p-multiselect-filter`) over a query the control allocates
@@ -186,19 +174,7 @@ final case class MultiSelect[A] private (
       */
     def showClear(v: Boolean): MultiSelect[A] = copy(showClearFlag = v)
 
-    /** Text of the `li.p-multiselect-empty-message` row when no options render
-      * (default "No results found" — Prime's default).
-      */
-    def emptyContent(v: String): MultiSelect[A] = copy(emptyContentV = Present(EmptyContent.const(v)))
-
-    /** Reactive text: re-renders the empty slot in place on signal emission. */
-    def emptyContent(sig: Signal[String]): MultiSelect[A] = copy(emptyContentV = Present(EmptyContent.dyn(sig)))
-
-    /** Arbitrary UI for the empty state: an icon over a line of explanation and the
-      * button that creates the first record, rendered in the same slot the text would
-      * occupy.
-      */
-    def emptyContent(ui: UI): MultiSelect[A] = copy(emptyContentV = Present(EmptyContent.ui(ui)))
+    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): MultiSelect[A] = copy(emptyContentV = v)
 
     def disabled(v: Boolean): MultiSelect[A] = copy(disabledFlag = v)
 
@@ -207,13 +183,7 @@ final case class MultiSelect[A] private (
       */
     def name(v: String): MultiSelect[A] = copy(nameV = Present(v))
 
-    /** Native tooltip (`title`). */
-    def tooltip(v: String): MultiSelect[A] = copy(tooltipV = Present(TextValue.Const(v)))
-
-    /** Reactive tooltip — native `title` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def tooltip(sig: Signal[String]): MultiSelect[A] = copy(tooltipV = Present(TextValue.Dyn(sig)))
+    private[uic] def withTooltip(v: Maybe[TextValue]): MultiSelect[A] = copy(tooltipV = v)
 
     /** Size: `.p-multiselect-sm` / default / `.p-multiselect-lg`. */
     def size(v: Size): MultiSelect[A] = copy(sizeV = v)
@@ -224,34 +194,12 @@ final case class MultiSelect[A] private (
     /** Spans the full width of its container (`.p-multiselect-fluid`). */
     def fluid(v: Boolean): MultiSelect[A] = copy(fluidFlag = v)
 
-    /** Marks the field invalid (`.p-invalid` + `aria-invalid`). */
-    def invalid(v: Boolean): MultiSelect[A] = copy(invalidV = Present(BoolValue.Const(v)))
+    private[uic] def withInvalid(v: Maybe[BoolValue]): MultiSelect[A]                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): MultiSelect[A]                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): MultiSelect[A] = copy(invalidMsgDynV = v)
 
-    /** Message rendered below the field while `invalid(true)` (kyo extension —
-      * `div.p-uic-invalid-message`).
-      */
-    def invalidMessage(v: String): MultiSelect[A] = copy(invalidMsgV = Present(v))
-
-    /** Reactive validity: the bound signal toggles `.p-invalid` + `aria-invalid` in
-      * place. Explicit override of the message-derived red default.
-      */
-    def invalid(sig: Signal[Boolean]): MultiSelect[A] = copy(invalidV = Present(BoolValue.Dyn(sig)))
-
-    /** Reactive invalid message — `Present` shows the row and (by default) turns the
-      * field red; `Absent` clears both. Re-renders in place on emission.
-      */
-    def invalidMessage(sig: Signal[Maybe[String]]): MultiSelect[A] = copy(invalidMsgDynV = Present(sig))
-
-    /** Accessible name → `aria-label`. */
-    def accessibleName(v: String): MultiSelect[A] = copy(accNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): MultiSelect[A] = copy(accNameV = Present(TextValue.Dyn(sig)))
-
-    /** Accessible name reference → `aria-labelledby`. */
-    def accessibleNameRef(v: String): MultiSelect[A] = copy(accNameRefV = Present(v))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): MultiSelect[A] = copy(accNameV = v)
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): MultiSelect[A] = copy(accNameRefV = v)
 
     /** Fired with the FULL updated key set after every selection change (toggle,
       * select-all, chip remove, clear).

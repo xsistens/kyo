@@ -92,8 +92,10 @@ end Total
 final class RowSource[Q, A] private[uic] (
     /** How many rows one page holds, which is also what a paginator steps by. */
     val pageSize: Int,
+
     /** The 0-based page, for a paginator to drive. Writing it rewrites [[demand]]. */
     val page: SignalRef[Int],
+
     /** The row range currently asked for. A viewport writes this directly; a paginated
       * table gets it written from [[page]].
       */

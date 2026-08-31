@@ -75,7 +75,7 @@ final case class Select[A] private (
     inputwrapperFlag: Boolean = false,
     portalFlag: Boolean = false,
     scrollV: Overlay.Scroll = Overlay.Scroll.Close
-) extends Node, TextFormControl:
+) extends Node, TextFormControl, HasEmptyContent, HasTooltip, HasPlaceholder, HasAccessibleNameRef:
     type Self = Select[A]
 
     /** Package-internal class hook: hosts (Paginator) stamp Prime's contextual
@@ -145,15 +145,7 @@ final case class Select[A] private (
       */
     def open(ref: SignalRef[Boolean]): Select[A] = copy(openRefV = Present(ref))
 
-    /** Text shown on the closed trigger while the bound value is empty (Prime's
-      * `p-placeholder` label skin).
-      */
-    def placeholder(v: String): Select[A] = copy(placeholderV = Present(TextValue.Const(v)))
-
-    /** Reactive placeholder — re-renders the label in place on signal emission (resolved INSIDE the
-      * mount subscription, so open/highlight/filter state survives). For locale-driven text.
-      */
-    def placeholder(sig: Signal[String]): Select[A] = copy(placeholderV = Present(TextValue.Dyn(sig)))
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): Select[A] = copy(placeholderV = v)
 
     /** Renders Prime's header filter (`div.p-select-header` >
       * `input.p-select-filter`) over a query the select allocates itself,
@@ -191,19 +183,7 @@ final case class Select[A] private (
       */
     def checkmark(v: Boolean): Select[A] = copy(checkmarkFlag = v)
 
-    /** Text of the `li.p-select-empty-message` row when no options render
-      * (default "No results found" — Prime's default).
-      */
-    def emptyContent(v: String): Select[A] = copy(emptyContentV = Present(EmptyContent.const(v)))
-
-    /** Reactive text: re-renders the empty slot in place on signal emission. */
-    def emptyContent(sig: Signal[String]): Select[A] = copy(emptyContentV = Present(EmptyContent.dyn(sig)))
-
-    /** Arbitrary UI for the empty state: an icon over a line of explanation and the
-      * button that creates the first record, rendered in the same slot the text would
-      * occupy.
-      */
-    def emptyContent(ui: UI): Select[A] = copy(emptyContentV = Present(EmptyContent.ui(ui)))
+    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): Select[A] = copy(emptyContentV = v)
 
     def disabled(v: Boolean): Select[A] = copy(disabledFlag = v)
 
@@ -220,13 +200,7 @@ final case class Select[A] private (
       */
     def name(v: String): Select[A] = copy(nameV = Present(v))
 
-    /** Native tooltip (`title`). */
-    def tooltip(v: String): Select[A] = copy(tooltipV = Present(TextValue.Const(v)))
-
-    /** Reactive tooltip — native `title` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def tooltip(sig: Signal[String]): Select[A] = copy(tooltipV = Present(TextValue.Dyn(sig)))
+    private[uic] def withTooltip(v: Maybe[TextValue]): Select[A] = copy(tooltipV = v)
 
     /** Size: `.p-select-sm` / default / `.p-select-lg`. */
     def size(v: Size): Select[A] = copy(sizeV = v)
@@ -237,34 +211,12 @@ final case class Select[A] private (
     /** Spans the full width of its container (`.p-select-fluid`). */
     def fluid(v: Boolean): Select[A] = copy(fluidFlag = v)
 
-    /** Marks the field invalid (`.p-invalid` + `aria-invalid`). */
-    def invalid(v: Boolean): Select[A] = copy(invalidV = Present(BoolValue.Const(v)))
+    private[uic] def withInvalid(v: Maybe[BoolValue]): Select[A]                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): Select[A]                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Select[A] = copy(invalidMsgDynV = v)
 
-    /** Message rendered below the field while `invalid(true)` (kyo extension —
-      * `div.p-uic-invalid-message`).
-      */
-    def invalidMessage(v: String): Select[A] = copy(invalidMsgV = Present(v))
-
-    /** Reactive validity: the bound signal toggles `.p-invalid` + `aria-invalid` in
-      * place. Explicit override of the message-derived red default.
-      */
-    def invalid(sig: Signal[Boolean]): Select[A] = copy(invalidV = Present(BoolValue.Dyn(sig)))
-
-    /** Reactive invalid message — `Present` shows the row and (by default) turns the
-      * field red; `Absent` clears both. Re-renders in place on emission.
-      */
-    def invalidMessage(sig: Signal[Maybe[String]]): Select[A] = copy(invalidMsgDynV = Present(sig))
-
-    /** Accessible name → `aria-label`. */
-    def accessibleName(v: String): Select[A] = copy(accNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): Select[A] = copy(accNameV = Present(TextValue.Dyn(sig)))
-
-    /** Accessible name reference → `aria-labelledby`. */
-    def accessibleNameRef(v: String): Select[A] = copy(accNameRefV = Present(v))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Select[A] = copy(accNameV = v)
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): Select[A] = copy(accNameRefV = v)
 
     /** Fired with the newly selected option key (also with `""` on clear). */
     def onChange(f: String => Any < Async): Select[A] = copy(onChangeF = Present(f))

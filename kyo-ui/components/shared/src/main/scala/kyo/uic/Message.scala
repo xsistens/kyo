@@ -38,15 +38,11 @@ final case class Message private (
     type Self = Message
 
     /** Semantic accent (`.p-message-<token>`; Prime's message vocabulary is
-      * info/success/warn/error/secondary/contrast — `Danger` maps to `error`,
-      * `Primary`/`Help` fall back to the `info` skin).
+      * info/success/warn/error/secondary/contrast, so `Danger` maps to `error` and `Primary`/`Help` fall
+      * back to the `info` skin). A `Signal[Severity]` swaps the class IN PLACE via the class channel and
+      * re-renders the default leading icon in its own small sub-region, with no whole re-render.
       */
-    def severity(v: Severity): Message = copy(severityV = SeverityValue.Const(v))
-
-    /** Reactive accent — the `.p-message-<token>` class swaps IN PLACE via the class channel and the
-      * default leading icon re-renders in its own small sub-region on emission (no whole re-render).
-      */
-    def severity(sig: Signal[Severity]): Message = copy(severityV = SeverityValue.Dyn(sig))
+    def severity(v: Severity | Signal[Severity]): Message = copy(severityV = ReactiveValue(v))
 
     /** Rendering variant: `Outlined` (transparent body, colored border) or
       * `Simple` (borderless text-only); unset renders Prime's filled default.

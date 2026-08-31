@@ -97,13 +97,10 @@ final case class Chip private (
 end Chip
 
 object Chip:
-    /** A chip labelled `label` (rendered as `div.p-chip-label`). */
-    def apply(label: String): Chip = new Chip(labelV = Present(TextValue.Const(label)))
-
-    /** A chip whose label tracks `label` — re-renders in place on emission (e.g. a
+    /** A chip labelled `label`. A `Signal[String]` re-renders the label in place on emission (e.g. a
       * locale-driven `I18n.t` leaf).
       */
-    def apply(label: Signal[String]): Chip = new Chip(labelV = Present(TextValue.Dyn(label)))
+    def apply(label: String | Signal[String]): Chip = new Chip(labelV = Present(ReactiveValue(label)))
 
     /** An empty chip — fill the default slot via `apply(cs*)`. */
     def apply(): Chip = new Chip()

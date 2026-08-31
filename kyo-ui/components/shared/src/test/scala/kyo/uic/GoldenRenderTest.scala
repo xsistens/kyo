@@ -165,6 +165,26 @@ class GoldenRenderTest extends UicTest:
             "tablist/breadcrumb row restorers (remainder)"
         )
         assert(uic.Theme.primeExtraCss.contains("li.p-tree-node { flex-direction: column"), "tree node column restorer (remainder)")
+        // One ring per focused component, and never two at once: the listbox rings itself
+        // because Prime rings nothing, the tree rings its focused node and so must not also
+        // let the browser ring the whole list. Both against :focus-visible, so a mouse click
+        // moves the highlight without drawing a keyboard indicator.
+        assert(
+            uic.Theme.primeExtraCss.contains(".p-listbox:not(.p-disabled):has(.p-listbox-list:focus-visible)"),
+            "listbox focus ring (remainder — Prime clears the list outline and stamps no ring)"
+        )
+        assert(
+            uic.Theme.primeExtraCss.contains(".p-tree-root-children:focus-visible .p-tree-node-content.p-focus"),
+            "tree node ring only while the element holding focus is keyboard-focused (remainder)"
+        )
+        assert(
+            uic.Theme.primeExtraCss.contains(".p-uic-overlay-panel:focus-visible .p-tree-node-content.p-focus"),
+            "and the same inside a TreeSelect panel, which is the focus holder there (remainder)"
+        )
+        assert(
+            uic.Theme.primeExtraCss.contains(".p-tree-root-children:focus { outline: none; }"),
+            "tree list draws no ring of its own (remainder — the node ring is the indicator)"
+        )
         assert(uic.Theme.primeExtraCss.contains("p-icon-spin"), "loading spinner keyframes (remainder)")
         assert(uic.Theme.primeExtraCss.contains(".p-uic-invalid-message"), "invalidMessage row CSS (remainder)")
         assert(uic.Theme.primeExtraCss.contains(".p-uic-label"), "label CSS (remainder)")
@@ -1209,6 +1229,45 @@ class GoldenRenderTest extends UicTest:
             assert(filtered.contains("Apple"), "filter: the matching option stays")
             assert(!filtered.contains("Vegetable"), "filter: a group the query emptied loses its header with it")
             assert(!filtered.contains("Carrot"), "filter: the emptied group's options are gone")
+        end for
+    }
+
+    "Listbox roving: the list is the only tab stop and the only focus target" in {
+        def occurrences(html: String, needle: String): Int = java.util.regex.Pattern.quote(needle).r.findAllIn(html).size
+        def listbox(using Frame) = uic.Listbox()
+            .selectionMode(uic.SelectionMode.Single)
+            .item("Apple", "a")
+            .item("Banana", "b")
+        for
+            hi    <- Signal.initRef(-1)
+            roved <- renderHtml(listbox.resolved(Set("a"), "", Present(hi)))
+            rows  <- renderHtml(listbox.resolved(Set("a"), ""))
+        yield
+            assert(occurrences(roved, """tabindex="0"""") == 1, "roving: one tab stop, the list")
+            // A row with tabindex="-1" stays click-focusable: the click parked the real focus on
+            // it, the next key press promoted it to :focus-visible, and the browser's own ring
+            // then sat on that row while the highlight moved away from it.
+            assert(occurrences(roved, """tabindex="-1"""") == 0, "roving: no row is a focus target")
+            assert(roved.contains("focus") && roved.contains("blur"), "roving: the list registers focus and blur")
+            assert(occurrences(rows, """tabindex="0"""") == 2, "no highlight to rove: the rows are the tab stops")
+            assert(!rows.contains("""tabindex="-1""""), "no highlight to rove: and none of them is roved")
+        end for
+    }
+
+    "Tree roving: the list owns focus alone, and hands it to a host that says so" in {
+        def tree(using Frame) = uic.Tree()
+            .nodes(uic.TreeNode("src", "src", children = List(uic.TreeNode("main", "main"))))
+            .selectionMode(uic.SelectionMode.Single)
+        for
+            hi   <- Signal.initRef(0)
+            own  <- renderHtml(tree.resolved(Set("src"), Set.empty, Present(uic.Roving(hi, 0, "t"))))
+            host <- renderHtml(tree.resolved(Set("src"), Set.empty, Present(uic.Roving(hi, 0, "t", ownsFocus = false))))
+        yield
+            assert(own.contains("""tabindex="0""""), "the tree list is the tab stop")
+            assert(own.contains("p-focus"), "and the focused row wears the ring Prime draws")
+            assert(own.contains("focus") && own.contains("blur"), "it registers focus and blur to keep that row honest")
+            assert(host.contains("""tabindex="0""""), "hosted: still the tab stop, TreeSelect tabs into the panel")
+            assert(!host.contains("blur"), "hosted: focus and blur belong to the host that holds them")
         end for
     }
 
@@ -3259,8 +3318,9 @@ class GoldenRenderTest extends UicTest:
                 vref <- Signal.initRef(Set.empty[String])
                 oref <- Signal.initRef(true)
                 eref <- Signal.initRef(Set.empty[String])
+                href <- Signal.initRef(-1)
                 ts = uic.TreeSelect().options(depts)(_.name)(_.subs).value(vref)
-                out <- UI.runRender(ts.open(oref).wired(oref, eref)).take(1).run
+                out <- UI.runRender(ts.open(oref).wired(oref, eref, href, "ts")).take(1).run
             yield out.mkString
         for
             // Two options, one label, no optionKey: the derived keys collide, so a pick
@@ -3918,10 +3978,10 @@ class GoldenRenderTest extends UicTest:
                     .meter("Storage", 40)
                     .startTemplate(span.cssClass("custom-start")("used"))
                     .endTemplate(span.cssClass("custom-end")("of 100 GB"))
-                    .labelTemplate((m, pc) => span.cssClass("custom-label")(s"${m.label}: ${math.round(pc)}%"))
+                    .labelTemplate((m, pc) => span.cssClass("custom-label")(s"${m.labelText}: ${math.round(pc)}%"))
             )
             meterTpl <- renderHtml(
-                uic.MeterGroup().meter("Zero", 0).meterTemplate((m, pc) => span.cssClass("custom-meter")(m.label))
+                uic.MeterGroup().meter("Zero", 0).meterTemplate((m, pc) => span.cssClass("custom-meter")(m.labelText))
             )
         yield
             assert(vertical.contains("p-metergroup-vertical"), "vertical orientation class")
@@ -4775,7 +4835,8 @@ class GoldenRenderTest extends UicTest:
                 vref <- Signal.initRef(current)
                 oref <- Signal.initRef(rootOpen)
                 refs <- Kyo.foreach(cs.value(vref).groupPaths)(p => Signal.initRef(openPaths.contains(p)).map(p -> _))
-                out  <- UI.runRender(cs.value(vref).open(oref).wired(oref, refs.toList)).take(1).run
+                fref <- Signal.initRef(List.empty[Int])
+                out  <- UI.runRender(cs.value(vref).open(oref).wired(oref, refs.toList, fref)).take(1).run
             yield out.mkString
         val base = uic.CascadeSelect[String]()
             .options(
@@ -4829,7 +4890,8 @@ class GoldenRenderTest extends UicTest:
                 vref <- Signal.initRef(sel)
                 oref <- Signal.initRef(open)
                 eref <- Signal.initRef(exp)
-                out  <- UI.runRender(ts.value(vref).open(oref).expanded(eref).wired(oref, eref)).take(1).run
+                href <- Signal.initRef(-1)
+                out  <- UI.runRender(ts.value(vref).open(oref).expanded(eref).wired(oref, eref, href, "ts")).take(1).run
             yield out.mkString
         val base = uic.TreeSelect().nodes(
             uic.TreeNode(

@@ -22,9 +22,12 @@ import kyo.UI.*
   * click or Enter and the popup closes; `url` rows render real anchors;
   * top-level items carrying `items(...)` render as flat labelled sections
   * (Prime's grouped Menu — for nested floating submenus use TieredMenu).
-  * Keyboard (WAI-ARIA menu): the list is the single tab stop; ArrowDown/ArrowUp
-  * move Prime's `.p-focus` row over the enabled items (disabled and separators
-  * skipped), Home/End jump to the first/last, Enter or Space activates it. The
+  * Keyboard (WAI-ARIA menu, the shared [[ListNav]] machine): the list is the
+  * single tab stop; ArrowDown/ArrowUp move Prime's `.p-focus` row over the
+  * enabled items (disabled and separators skipped) and cycle at the ends, so
+  * ArrowUp with nothing highlighted lands on the last row; Home/End jump to the
+  * first/last, Enter or Space activates it. An inline menu highlights its first
+  * enabled row when it takes focus and drops the highlight when it loses it. The
   * item links carry `tabindex="-1"` (out of the Tab order — the list roves the
   * highlight), and `id(...)` wires `aria-activedescendant` to the focused row.
   *
@@ -91,7 +94,9 @@ final case class Menu private (
         val navigable: List[Int] = rows.zipWithIndex.collect {
             case (MenuRow.Item(it), i) if !it.disabledFlag => i
         }
-        val hiRow: Int = if h >= 0 && h < navigable.size then navigable(h) else -1
+        // `h` is a ROW position, the same coordinate [[ListNav]] navigates in, so a row that
+        // went disabled under a live update simply stops being the highlighted one.
+        val hiRow: Int = if navigable.contains(h) then h else -1
 
         def activate(it: MenuItem): Any < Async =
             hiRef match
@@ -107,29 +112,23 @@ final case class Menu private (
                     yield ()
                 case Absent => ()
 
-        def move(step: Int): Any < Async =
-            hiRef match
-                case Present(hi) if navigable.nonEmpty =>
-                    val next = math.max(0, math.min(navigable.size - 1, h + step))
-                    hi.set(next)
-                case _ => ()
-
-        def jump(to: Int): Any < Async =
-            hiRef match
-                case Present(hi) if navigable.nonEmpty => hi.set(to)
-                case _                                 => ()
-
         val keyHandler: KeyboardEvent => Any < Async = e =>
-            e.key match
-                case Keyboard.ArrowDown => move(1)
-                case Keyboard.ArrowUp   => move(-1)
-                case Keyboard.Home      => jump(0)
-                case Keyboard.End       => jump(navigable.size - 1)
-                case Keyboard.Enter | Keyboard.Space if hiRow >= 0 =>
-                    rows(hiRow) match
-                        case MenuRow.Item(it) => activate(it)
-                        case _                => ()
-                case _ => ()
+            hiRef match
+                case Present(hi) =>
+                    // The menu family cycles (the ARIA menu pattern, and what the nested menus
+                    // driven by MenuNav already do), so ArrowDown on the last row comes back to
+                    // the first and ArrowUp from nothing lands on the last.
+                    ListNav.onKey(navigable, hiRow, e.key, wrap = true) match
+                        case Present(step) =>
+                            val chosen: Any < Async =
+                                if step.activate then
+                                    rows(step.focus) match
+                                        case MenuRow.Item(it) => activate(it)
+                                        case _                => ()
+                                else ()
+                            hi.set(step.focus).andThen(chosen)
+                        case Absent => ()
+                case Absent => ()
 
         val rowUIs: List[UI] = rows.zipWithIndex.map {
             case (MenuRow.Sep, _) =>
@@ -163,7 +162,16 @@ final case class Menu private (
                     .onPanelKeyDown(keyHandler)(list(rowUIs.map(toChild)*))
                     .render
             case Absent =>
-                if hiRef.isDefined then list = list.tabIndex(0).preventScrollKeys.onKeyDown(keyHandler)
+                // Arriving on the list highlights the first enabled row, and leaving drops the
+                // highlight again. Prime's sheet clears the list's outline and puts the only
+                // focus mark on the row, so an inline menu with focus and no highlighted row
+                // looks exactly like one nobody has touched.
+                val seedFocus: Any < Async = hiRef match
+                    case Present(hi) if hiRow < 0 && navigable.nonEmpty => hi.set(navigable.head)
+                    case _                                              => ()
+                if hiRef.isDefined then
+                    list = list.tabIndex(0).preventScrollKeys.onKeyDown(keyHandler).onFocus(seedFocus)
+                    hiRef.foreach(hi => list = list.onBlur(hi.set(-1)))
                 div.cssClass("p-menu").cssClass("p-component")(
                     toChild(list(rowUIs.map(toChild)*))
                 )

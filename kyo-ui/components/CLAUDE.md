@@ -34,6 +34,47 @@ module's `README.md`.
   and `UI.tbody` made the real row groups available, and every rule it hand-copied
   was already in the extracted sheet, scoped to the anatomy it was avoiding.
 
+## One setter per slot: the `A | Signal[A]` union
+
+Every value-bearing slot is ONE setter taking `A | Signal[A]`, never a constant/`Signal` overload
+pair. `ReactiveValue(v)` is the smart constructor that stores the right case, and it dispatches on
+the argument's RUNTIME class: `SignalRef` first (two-way `ReactiveVariable`), then `Signal`
+(one-way `Dyn`), then the plain value (`Const`). `Signal` is sealed and `SignalRef` is its only
+named subclass, so the two reactive cases are exact rather than a heuristic.
+
+- **Do not reintroduce the pair.** A `def x(v: A)` beside a `def x(sig: Signal[A])` is the shape
+  this module removed; the union covers both plus `if c then a else sig`, which the overloads
+  could not type at all.
+- **Two-way is decided at runtime, so a type ascription cannot opt out.** `slider.value(ref:
+  Signal[Double])` still binds two way. `ref.readOnly` (kyo-core `SignalRef.readOnly`) is the
+  opt-out, and it returns a `Signal` that is deliberately not a `SignalRef`.
+- **Read-only hosts need no branch for it.** `ReactiveVariable` IS-A `ReactiveValue.Dyn`, so an
+  existing `case Dyn(sig)` keeps matching. Match `ReactiveVariable` BEFORE `Dyn` wherever the
+  write-back ref is actually wanted, or the two-way case is silently swallowed.
+- **`invalidMessage` is the one deliberate exception.** Its two forms carry different element
+  types (`String` always shown vs `Signal[Maybe[String]]` that can clear the row), so
+  `String | Signal[Maybe[String]]` would be a heterogeneous union, not this pattern.
+
+## Shared slots live in traits, not in every component
+
+A slot several components carry is defined ONCE, in `FormControl.scala` (validity: `invalid`,
+`invalidMessage`) or `Capabilities.scala` (`HasAccessibleName`, `HasAccessibleNameRef`,
+`HasAccessibleDescription`, `HasPlaceholder`, `HasTooltip`, `HasEmptyContent`). The trait carries
+the setter and its scaladoc; a component supplies only the one-line `withX` writer, because the
+field names differ (`accNameV` in the field-shaped controls, `accessibleNameV` in the containers).
+
+- **Adding a slot to a component that already has a trait for it means mixing the trait in**, not
+  writing another setter. A second spelling of an existing slot is the drift these traits exist to
+  stop.
+- **A trait requires the storage to be genuinely uniform.** `disabled` is NOT one of these: 14
+  components store `Maybe[BoolValue]` and honour a reactive value, 19 store a plain `Boolean` with
+  no reactive path in their render. `severity` is not either: its storage disagrees on whether the
+  slot is optional. Check the storage before lifting; forcing a trait onto the second group is a
+  behaviour change per component, not a refactor.
+- **A slot only some implementors have gets its own trait** (`HasAccessibleNameRef` extends
+  `HasAccessibleName` for the 21 of 38 that carry the reference), never an abstract member the
+  others cannot answer.
+
 ## Typed builders: where inference dies
 
 A setter that takes a projection of the component's own element type (`Column`'s
