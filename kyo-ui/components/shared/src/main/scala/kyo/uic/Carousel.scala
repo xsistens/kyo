@@ -142,7 +142,7 @@ final case class Carousel[A] private (
                         _        <- autoplayLoop(r)
                     yield fragment(
                         slideTrigger(cmds, stripId, itemIds, r),
-                        interactive(r, stripId, itemIds, startPos)
+                        interactive(r, stripId, itemIds, startPos, id => cmds.focusId(id))
                     )
                 }.placeholder(r.render(p => body(p)))
             case Absent => body(0)
@@ -203,14 +203,25 @@ final case class Carousel[A] private (
       * publishes — the golden seam. The transform/active-class patches (Commands)
       * are applied separately by [[slideTrigger]], so this stays a pure render.
       */
-    private[uic] def wired(ref: SignalRef[Int], stripId: String, startPos: SignalRef[Double])(using Frame): UI =
-        interactive(ref, stripId, itemList.indices.map(i => s"$stripId-i$i"), startPos)
+    private[uic] def wired(
+        ref: SignalRef[Int],
+        stripId: String,
+        startPos: SignalRef[Double],
+        focus: String => Any < Async = _ => ()
+    )(using Frame): UI =
+        interactive(ref, stripId, itemList.indices.map(i => s"$stripId-i$i"), startPos, focus)
 
     /** The runtime render: reactive nav/indicator siblings around the STABLE strip
       * of ALL items. Only the siblings re-render on a page turn; the strip is built
       * once so `bindStyleById` can slide it in place.
       */
-    private def interactive(r: SignalRef[Int], stripId: String, itemIds: Seq[String], startPos: SignalRef[Double])(using Frame): UI =
+    private def interactive(
+        r: SignalRef[Int],
+        stripId: String,
+        itemIds: Seq[String],
+        startPos: SignalRef[Double],
+        focus: String => Any < Async
+    )(using Frame): UI =
         val pages     = totalPages
         val prevGlyph = if verticalFlag then Icons.chevronUp else Icons.chevronLeft
         val nextGlyph = if verticalFlag then Icons.chevronDown else Icons.chevronRight
@@ -280,7 +291,8 @@ final case class Carousel[A] private (
         val content: UI = div.cssClass("p-carousel-content")((prev ++ (viewportEl :: next)).map(toChild)*)
 
         val indicators: List[UI] =
-            if showIndicatorsFlag && pages > 0 then List(r.render(p => indicatorList(Carousel.clampPage(p, pages), pages)))
+            if showIndicatorsFlag && pages > 0 then
+                List(r.render(p => indicatorList(Carousel.clampPage(p, pages), pages, dotIds(stripId, pages), focus)))
             else Nil
 
         shell(content, indicators)
@@ -332,7 +344,7 @@ final case class Carousel[A] private (
         val content: UI = div.cssClass("p-carousel-content")((prev ++ (viewportEl :: next)).map(toChild)*)
 
         val indicators: List[UI] =
-            if showIndicatorsFlag && pages > 0 then List(indicatorList(page, pages))
+            if showIndicatorsFlag && pages > 0 then List(indicatorList(page, pages, Nil, _ => ()))
             else Nil
 
         shell(content, indicators)
@@ -358,8 +370,18 @@ final case class Carousel[A] private (
             .extraClass(cls)
             .render
 
-    /** The indicator dot list for a (clamped) page. */
-    private def indicatorList(page: Int, pages: Int)(using Frame): UI =
+    /** One id per indicator dot, derived from the strip's own minted id. */
+    private def dotIds(stripId: String, pages: Int): Seq[String] = (0 until pages).map(i => s"$stripId-d$i")
+
+    /** The indicator dot list for a (clamped) page.
+      *
+      * The dots rove their tabindex, so every inactive one is OUT of the Tab order and the arrows
+      * are the only way to reach it. `dotIds` empty is the placeholder render, which has no mount
+      * to move focus from and so keeps the dots as they were.
+      */
+    private def indicatorList(page: Int, pages: Int, ids: Seq[String], focus: String => Any < Async)(using Frame): UI =
+        val navigable = (0 until pages).toList
+        val axis      = if verticalFlag then ListNav.Orientation.Vertical else ListNav.Orientation.Horizontal
         ul.cssClass("p-carousel-indicator-list")(
             (0 until pages).toList.map { i =>
                 var item = li.cssClass("p-carousel-indicator")
@@ -371,9 +393,21 @@ final case class Carousel[A] private (
                     .tabIndex(if i == page then 0 else -1)
                 if i == page then btn = btn.aria("current", "page")
                 btn = btn.onClick(setPage(i, pages))
+                if ids.isDefinedAt(i) then
+                    btn = btn.id(ids(i)).onKeyDown { e =>
+                        // A dot IS a button, so Enter and Space are the browser's; this moves
+                        // focus and nothing else, the way Tabs and Accordion do. The wrap follows
+                        // the carousel's own: on a carousel that does not come round, the last
+                        // dot has no next page, so the arrow has nowhere to take the reader.
+                        ListNav.onKey(navigable, i, e.key, wrap = circularFlag, axis) match
+                            case Present(step) if step.focus != i && ids.isDefinedAt(step.focus) => focus(ids(step.focus))
+                            case _                                                               => ()
+                    }
+                end if
                 toChild(item(toChild(btn)))
             }*
         )
+    end indicatorList
 
     /** The strip's main-size span (the strip is `itemCount/numVisible` viewports). */
     private def stripSpan: Length = (math.max(itemList.size, 1) * 100.0 / numVisibleV).pct

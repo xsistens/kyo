@@ -46,7 +46,10 @@ end Tab
   * panel re-renders reactively so it always shows the selected tab, and clicking
   * a tab writes its id back before firing `onTabSelect`. With no ref bound, the
   * first tab is shown. Tabs are real `<button>`s, so keyboard activation
-  * (Enter/Space) is native.
+  * (Enter/Space) is native; the tablist is ONE tab stop and the arrows move between
+  * headers inside it, which is the ARIA tablist pattern and the only thing that makes
+  * an inactive header reachable at all once the roving tabindex has taken it out of the
+  * Tab order.
   */
 final case class Tabs private (
     tabList: List[Tab] = Nil,
@@ -68,12 +71,52 @@ final case class Tabs private (
     def onTabSelect(f: String => Any < Async): Tabs = copy(onTabSelectF = Present(f))
 
     private[uic] def render(using Frame): UI =
-        selectedRef match
-            case Present(ref) => ref.render(active => body(active))
-            case Absent       => body(tabList.headOption.map(_.id).getOrElse(""))
+        UI.mounted {
+            UI.commands.map { cmds =>
+                Kyo.foreach(tabList)(_ => cmds.freshId).map(ids => renderTabs(Present((cmds, ids.toList))))
+            }
+        }.placeholder(renderTabs(Absent))
 
-    private def body(active: String)(using Frame): UI =
-        val headers: List[UI] = tabList.map { t =>
+    /** The rendered tabs, with the roving-focus wiring when there is a mount to mint ids in.
+      *
+      * `Absent` is the placeholder: a golden render and an SSG page both show it, and it is what
+      * the component did before the arrows, which is a usable tab strip whose inactive headers are
+      * reachable by clicking. The wiring arrives with the mount.
+      */
+    private def renderTabs(nav: Maybe[(UI.Commands, List[String])])(using Frame): UI =
+        selectedRef match
+            case Present(ref) => ref.render(active => body(active, nav))
+            case Absent       => body(tabList.headOption.map(_.id).getOrElse(""), nav)
+
+    /** The seam the golden tests render, since a mount shows only its placeholder there. */
+    private[uic] def wired(ids: List[String], focus: String => Any < Async)(using Frame): UI =
+        selectedRef match
+            case Present(ref) => ref.render(active => bodyWith(active, ids, focus))
+            case Absent       => bodyWith(tabList.headOption.map(_.id).getOrElse(""), ids, focus)
+
+    private def body(active: String, nav: Maybe[(UI.Commands, List[String])])(using Frame): UI =
+        nav match
+            case Present((cmds, ids)) => bodyWith(active, ids, id => cmds.focusId(id))
+            case Absent               => bodyWith(active, Nil, _ => ())
+
+    /** Moves focus to the header `step` lands on, and to nothing else.
+      *
+      * Activation is deliberately not read from [[ListNav]] here: a tab IS a `<button>`, so the
+      * browser and the dispatcher already agree on one activation per Enter or Space, and a third
+      * from this handler would be one too many. Accordion declines it for the same reason.
+      */
+    private def headerMove(ids: List[String], focus: String => Any < Async, navigable: List[Int], self: Int)(using
+        Frame
+    ): KeyboardEvent => Any < Async = e =>
+        ListNav.onKey(navigable, self, e.key, wrap = true, ListNav.Orientation.Horizontal) match
+            case Present(step) if step.focus != self && ids.isDefinedAt(step.focus) => focus(ids(step.focus))
+            case _                                                                  => ()
+
+    private def bodyWith(active: String, ids: List[String], focus: String => Any < Async)(using Frame): UI =
+        // The positions the keyboard may land on: a disabled tab is out of the tab order, so an
+        // arrow steps over it.
+        val navigable = tabList.zipWithIndex.collect { case (t, i) if !t.disabled => i }
+        val headers: List[UI] = tabList.zipWithIndex.map { (t, i) =>
             val isActive            = t.id == active
             val iconSlot: List[UI]  = t.icon.toList.map(g => GlyphSvg(g, "p-uic-tab-icon"))
             val countSlot: List[UI] = t.additionalText.toList.map(c => span.cssClass("p-uic-tab-count")(c))
@@ -96,6 +139,11 @@ final case class Tabs private (
                 tabEl = tabEl
                     .tabIndex(if isActive then 0 else -1)
                     .onClick(select(t.id))
+                // The roving tabindex above takes every inactive tab OUT of the Tab order, which
+                // is what the ARIA tablist pattern asks for and what leaves the arrows as the only
+                // way back to them. Without this handler they were simply unreachable.
+                if ids.isDefinedAt(i) then
+                    tabEl = tabEl.id(ids(i)).onKeyDown(headerMove(ids, focus, navigable, i))
             end if
             tabEl(content.map(toChild)*)
         }
@@ -118,7 +166,7 @@ final case class Tabs private (
             )
 
         div.cssClass("p-tabs").cssClass("p-component")(toChild(tablist), toChild(panels))
-    end body
+    end bodyWith
 
     /** Selecting a tab writes its id into the bound ref (if any), then fires `onTabSelect`. */
     private def select(id: String)(using Frame): Any < Async =
