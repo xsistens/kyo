@@ -613,7 +613,6 @@ object Browser:
                         )
                     ).andThen {
                         if info.keyName == "Tab" then ProbesJs.runTabFocusAdvance(modifiers.shift)
-                        else if info.keyName == "Space" then ProbesJs.runSpaceClickSynthesis
                         else ()
                     }
                 )
@@ -711,7 +710,6 @@ object Browser:
                                     )
                                 ).andThen {
                                     if info.keyName == "Tab" then ProbesJs.runTabFocusAdvance(modifiers.shift)
-                                    else if info.keyName == "Space" then ProbesJs.runSpaceClickSynthesis
                                     else ()
                                 }
                             )

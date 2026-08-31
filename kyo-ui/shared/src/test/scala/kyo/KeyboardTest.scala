@@ -382,6 +382,24 @@ class KeyboardTest extends UITest:
         }
     }
 
+    "the space bar arrives as Keyboard.Space" in {
+        // The DOM calls the space bar `" "`, and `Keyboard.fromString` maps that one string. A key
+        // that reaches a handler as `Unknown("Space")` matches no `case Keyboard.Space` anywhere in
+        // the library, so every Space behaviour has to be pinned on the value that actually arrives.
+        val app: UI < Async =
+            for ref <- Signal.initRef("")
+            yield UI.div(
+                UI.input.id("i").onKeyDown(ke => ref.set(ke.key.toString)),
+                ref.map(v => UI.span(v).id("v"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.press(Selector.id("i"), Key.Space)
+                _ <- Browser.assertText(Selector.id("v"), "Space")
+            yield ()
+        }
+    }
+
     "onKeyUp fires (Enter)" in {
         val app: UI < Async =
             for ref <- Signal.initRef("")
