@@ -849,14 +849,24 @@ private[kyo] object ReactiveUI:
                         targetId = e.keyboard.targetId
                     )
                     val keyHandler = invokeWith(attrs.onKeyDown, kbEvent)
-                    // Enter/Space on button/anchor triggers onClick (browser behavior)
-                    val activateClick = if isTarget && (e.keyboard.key == "Enter" || e.keyboard.key == " ") then
+                    // Keyboard activation, emulated here so a component behaves the same where no browser
+                    // runs it (the TUI, the pure tests). The browser's own activation is suppressed by
+                    // KeyPolicy.doubleActivates, so exactly one of the two reaches the handler.
+                    //
+                    // A button takes Enter and Space; an anchor takes Enter alone. That is not a
+                    // simplification of the browser but the browser: Space with a link focused scrolls
+                    // the page, it does not follow the link, and the ARIA link pattern says the same.
+                    val activateClick = if isTarget && KeyPolicy.activatesButton(e.keyboard.key) then
                         elem match
-                            case _: Button => invoke(attrs.onClick)
-                            case _: Anchor => invoke(attrs.onClick)
-                            case _         => Kyo.lift(())
+                            case _: Button                                            => invoke(attrs.onClick)
+                            case _: Anchor if KeyPolicy.activatesLink(e.keyboard.key) => invoke(attrs.onClick)
+                            case _                                                    => Kyo.lift(())
                     else Kyo.lift(())
-                    // Enter/Space on checkbox/radio triggers onChange (browser behavior)
+                    // Enter/Space on checkbox/radio triggers onChange. Space is the browser's; Enter is
+                    // kyo's own, kept deliberately so a checkbox answers the same key in the TUI, where
+                    // Enter is the one activation key a terminal reliably delivers. The client shim
+                    // synthesizes the same Enter click for browser parity (see HtmlRenderer's keydown
+                    // branch), so both transports agree.
                     val activateToggle = if isTarget && (e.keyboard.key == "Enter" || e.keyboard.key == " ") then
                         elem match
                             case cb: Checkbox =>

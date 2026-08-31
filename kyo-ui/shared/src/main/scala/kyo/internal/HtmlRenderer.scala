@@ -1257,7 +1257,16 @@ private[kyo] object HtmlRenderer:
           |window.addEventListener("pagehide",function(){if(__kyoRanges){__kyoRanges.clear();__kyoRanges=null;}});
           |function kyoClientError(error){if(window.console&&console.error)console.error(error);}""".stripMargin
 
-    private def clientJs(basePath: String): String =
+    /** The keys that activate a button, and the keys that follow a link, as JavaScript conditions.
+      * Named here so the client script's line stays readable; the values are [[KeyPolicy]]'s.
+      */
+    private val jsButtonActivation = KeyPolicy.jsKeyTest(KeyPolicy.buttonActivationKeys)
+    private val jsLinkActivation   = KeyPolicy.jsKeyTest(KeyPolicy.linkActivationKeys)
+
+    /** The server-push client script. `private[kyo]` so KeyPolicyTest can hold the two copies of the
+      * keyboard rules against each other; nothing outside this module builds it.
+      */
+    private[kyo] def clientJs(basePath: String): String =
         s"""(function(){
            |var base="$basePath";
            |var __q=[];
@@ -1747,27 +1756,36 @@ private[kyo] object HtmlRenderer:
            |  }else if(t==="submit"){e.preventDefault();if(!window._kyoClickSubmit&&he(el,"submit")){var smid=e.target&&e.target.id?e.target.id:null;post({Submit:{path:p,mouse:mkMouse({ctrl:false,alt:false,shift:false,meta:false},smid)}});}}
            |  else if(t==="keydown"){
            |    // preventScrollKeys: suppress native page-scroll for nav keys in a data-kyo-scroll-keys region; keydown still posts below.
+           |    // Every key and tag list below is interpolated from KeyPolicy, which the SPA client calls directly,
+           |    // so the two transports cannot answer this differently; KeyPolicyTest holds this text against it.
            |    if(e.target&&e.target.closest&&e.target.closest('[data-kyo-scroll-keys]')){
-           |      var __sk=e.target,__ed=(/^(INPUT|TEXTAREA|SELECT)$$/.test(__sk.tagName)||__sk.isContentEditable);
-           |      var __vc=(/^(TEXTAREA|SELECT)$$/.test(__sk.tagName)||__sk.isContentEditable);
-           |      var __vk=(e.key==="ArrowUp"||e.key==="ArrowDown"||e.key==="PageUp"||e.key==="PageDown");
-           |      var __hk=(e.key==="ArrowLeft"||e.key==="ArrowRight"||e.key==="Home"||e.key==="End");
-           |      if((__vk&&!__vc)||(__hk&&!__ed))e.preventDefault();
+           |      var __sk=e.target,__ed=(/^(${KeyPolicy.jsTagTest(KeyPolicy.editableTags)})$$/.test(__sk.tagName)||__sk.isContentEditable);
+           |      var __vc=(/^(${KeyPolicy.jsTagTest(KeyPolicy.verticalConsumerTags)})$$/.test(__sk.tagName)||__sk.isContentEditable);
+           |      var __sa=(/^(${KeyPolicy.jsTagTest(KeyPolicy.spaceActivatedTags)})$$/.test(__sk.tagName));
+           |      var __vk=(${KeyPolicy.jsKeyTest(KeyPolicy.verticalScrollKeys)});
+           |      var __hk=(${KeyPolicy.jsKeyTest(KeyPolicy.edgeScrollKeys)});
+           |      // Space is here for the same reason the arrows are: a list that is ONE tab stop has no
+           |      // native control to consume it, so a Space that picks the highlighted row also scrolled
+           |      // the page a screenful. It stays with whatever would type it or activate on it.
+           |      var __spk=(e.key===" "&&!__ed&&!__sa);
+           |      if((__vk&&!__vc)||(__hk&&!__ed)||__spk)e.preventDefault();
            |    }
-           |    // A non-submitting button with a click handler is activated TWICE by Enter or Space
-           |    // once a keydown is posted at all: once by the browser, once by the dispatcher, which
-           |    // emulates that activation where no browser does it. Suppress the browser's, so the
-           |    // button acts once and its own onKeyDown still sees the key.
-           |    if((e.key==="Enter"||e.key===" ")&&e.target&&e.target.tagName==="BUTTON"){
+           |    // An element with a click handler is activated TWICE once a keydown is posted at all: once
+           |    // by the browser, once by the dispatcher, which emulates that activation where no browser
+           |    // does it. Suppress the browser's, so it acts once and its own onKeyDown still sees the key.
+           |    // A button takes Enter and Space, an anchor Enter alone (Space scrolls with a link focused).
+           |    if(e.target&&(e.target.tagName==="BUTTON"||e.target.tagName==="A")){
            |      // The type is read from the prop channel first: this render writes type="submit" on
            |      // every button and carries the intended one in data-kyo-prop-type, so the attribute
            |      // alone answers differently here than in the client-rendered tree. Submitting a form
            |      // is the one thing the dispatcher's emulation does not carry, so leave that case be.
            |      var __pt=e.target.getAttribute("data-kyo-prop-type"),__at=e.target.getAttribute("type");
            |      var __et=__pt?__pt:(__at?__at:"submit");
-           |      var __sub=(__et==="submit"&&e.target.closest&&e.target.closest("form"));
+           |      var __sub=!!(__et==="submit"&&e.target.closest&&e.target.closest("form"));
            |      var __own=e.target.getAttribute("data-kyo-ev");
-           |      if(!__sub&&__own&&__own.split(",").indexOf("click")>=0&&he(e.target,"keydown"))e.preventDefault();
+           |      var __ck=!!(__own&&__own.split(",").indexOf("click")>=0);
+           |      var __act=(e.target.tagName==="BUTTON")?(($jsButtonActivation)&&!__sub):($jsLinkActivation);
+           |      if(__act&&__ck&&he(e.target,"keydown"))e.preventDefault();
            |    }
            |    // Focus-trap: when Tab is pressed inside a [data-kyo-focus-trap="1"] container,
            |    // wrap focus within the trap's focusable children instead of escaping to the page.

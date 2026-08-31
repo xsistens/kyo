@@ -382,6 +382,72 @@ class KeyboardTest extends UITest:
         }
     }
 
+    // ---- keyboard activation happens exactly once ----
+    //
+    // The dispatcher emulates the browser's Enter/Space activation, so where a browser also runs it
+    // the handler fires twice. Both paths only fire once a keydown is posted at all, which is the
+    // moment anything in the chain declares one; each app below declares one on the wrapper for
+    // exactly that reason. `KeyPolicy` suppresses the browser's half.
+
+    private def activationApp(target: SignalRef[Int] => UI)(using Frame): UI < Async =
+        for hits <- Signal.initRef(0)
+        yield UI.div.onKeyDown((_: UI.KeyboardEvent) => ())(
+            target(hits),
+            hits.map(n => UI.span(n.toString).id("n"))
+        )
+
+    "Enter on a button with a click handler activates it once" in {
+        activationApp(hits => UI.button("go").id("t").onClick(hits.getAndUpdate(_ + 1).unit)).flatMap { ui =>
+            withUI(ui) {
+                for
+                    _ <- Browser.focus(Selector.id("t"))
+                    _ <- Browser.press(Selector.id("t"), Key.Enter)
+                    _ <- Browser.assertText(Selector.id("n"), "1")
+                yield ()
+            }
+        }
+    }
+
+    "Space on a button with a click handler activates it once" in {
+        activationApp(hits => UI.button("go").id("t").onClick(hits.getAndUpdate(_ + 1).unit)).flatMap { ui =>
+            withUI(ui) {
+                for
+                    _ <- Browser.focus(Selector.id("t"))
+                    _ <- Browser.press(Selector.id("t"), Key.Space)
+                    _ <- Browser.assertText(Selector.id("n"), "1")
+                yield ()
+            }
+        }
+    }
+
+    "Enter on an anchor with a click handler activates it once" in {
+        activationApp(hits => UI.a.href(UI.Href.Fragment("x")).id("t").onClick(hits.getAndUpdate(_ + 1).unit)("link"))
+            .flatMap { ui =>
+                withUI(ui) {
+                    for
+                        _ <- Browser.focus(Selector.id("t"))
+                        _ <- Browser.press(Selector.id("t"), Key.Enter)
+                        _ <- Browser.assertText(Selector.id("n"), "1")
+                    yield ()
+                }
+            }
+    }
+
+    "Space on an anchor does not activate it" in {
+        // Space scrolls the page with a link focused; it does not follow the link. Neither half may
+        // pretend otherwise, so the count stays at zero.
+        activationApp(hits => UI.a.href(UI.Href.Fragment("x")).id("t").onClick(hits.getAndUpdate(_ + 1).unit)("link"))
+            .flatMap { ui =>
+                withUI(ui) {
+                    for
+                        _ <- Browser.focus(Selector.id("t"))
+                        _ <- Browser.press(Selector.id("t"), Key.Space)
+                        _ <- Browser.assertText(Selector.id("n"), "0")
+                    yield ()
+                }
+            }
+    }
+
     "the space bar arrives as Keyboard.Space" in {
         // The DOM calls the space bar `" "`, and `Keyboard.fromString` maps that one string. A key
         // that reaches a handler as `Unknown("Space")` matches no `case Keyboard.Space` anywhere in
