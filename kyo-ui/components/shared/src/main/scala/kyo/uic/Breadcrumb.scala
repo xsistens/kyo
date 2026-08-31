@@ -4,10 +4,11 @@ import kyo.*
 import kyo.UI.*
 
 /** A single entry in a [[Breadcrumb]] trail — a `text` label plus an optional
-  * `href` and an optional leading `icon`. A missing href marks the current
-  * (non-linked) page, conventionally the last item. `target` maps onto the
-  * anchor's `target` attribute when it is one of the standard `_self` /
-  * `_blank` / `_parent` / `_top` values.
+  * `href` and an optional leading `icon`. A missing href renders the crumb as
+  * plain text rather than a link, which the last crumb (the current page)
+  * conventionally is, and which an intermediate step with no page behind it may
+  * also be. `target` maps onto the anchor's `target` attribute when it is one of
+  * the standard `_self` / `_blank` / `_parent` / `_top` values.
   */
 final case class BreadcrumbItem private[uic] (
     text: TextValue,
@@ -56,8 +57,9 @@ final case class Breadcrumb private (
     def item(text: String | Signal[String], href: String): Breadcrumb =
         copy(itemsV = itemsV :+ BreadcrumbItem(text, Present(href)))
 
-    /** Appends a non-linked crumb (typically the current page). A `Signal[String]` label
-      * re-renders in place on emission.
+    /** Appends a crumb with nothing to open (the current page, or a step in the trail that has
+      * no page of its own). A `Signal[String]` label re-renders in place on emission. Only the
+      * last crumb of the trail carries `aria-current="page"`.
       */
     def item(text: String | Signal[String]): Breadcrumb = copy(itemsV = itemsV :+ BreadcrumbItem(text))
 
@@ -82,7 +84,7 @@ final case class Breadcrumb private (
         val lastIdx = allItems.length - 1
         val entries: List[UI] = allItems.zipWithIndex.flatMap { case ((it, isHome), i) =>
             val itemCls = if isHome then "p-breadcrumb-home-item" else "p-breadcrumb-item"
-            val row: UI = li.cssClass(itemCls)(toChild(renderLink(it)))
+            val row: UI = li.cssClass(itemCls)(toChild(renderLink(it, i == lastIdx)))
             val sep: List[UI] =
                 if i < lastIdx then
                     List(
@@ -104,9 +106,15 @@ final case class Breadcrumb private (
     end render
 
     /** One crumb's `a.p-breadcrumb-item-link` (icon + label); hrefless crumbs
-      * render the same anchor without an href and marked `aria-current="page"`.
+      * render the same anchor without an href, and the LAST crumb is the one
+      * marked `aria-current="page"`.
+      *
+      * Last rather than every hrefless crumb: a trail can pass through something
+      * that is not a page of its own, a section heading with no index behind it,
+      * and such a crumb is neither a link nor where the reader is. Marking it
+      * current told a screen reader the trail ends in two places at once.
       */
-    private def renderLink(it: BreadcrumbItem)(using Frame): UI =
+    private def renderLink(it: BreadcrumbItem, isCurrent: Boolean)(using Frame): UI =
         val payload = it.href.getOrElse(it.text.constOrEmpty)
         var anchor  = a.cssClass("p-breadcrumb-item-link")
         it.href match
@@ -114,7 +122,7 @@ final case class Breadcrumb private (
                 anchor = anchor.href(Href.Path(h))
                 Breadcrumb.parseTarget(it.target).foreach(t => anchor = anchor.target(t))
             case Absent =>
-                anchor = anchor.aria("current", "page")
+                if isCurrent then anchor = anchor.aria("current", "page")
         end match
         val iconSlot: List[UI] = it.icon.toList.map(g => GlyphSvg(g, "p-breadcrumb-item-icon"))
         val labelSlot: List[UI] = it.text match

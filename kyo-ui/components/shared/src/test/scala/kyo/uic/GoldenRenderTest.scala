@@ -1108,6 +1108,20 @@ class GoldenRenderTest extends UicTest:
             assert(html.contains("Q2"), "current-page crumb text")
     }
 
+    "Breadcrumb marks only the last crumb current, however many carry no link" in {
+        for
+            html <- renderHtml(uic.Breadcrumb().home(uic.Icons.home, "/").item("Structure").item("DataTable"))
+        yield
+            // A trail can pass through something that is not a page: the demo's own group crumb
+            // names a shelf in its navigation and has nothing to open.
+            assert(html.split("""aria-current="page"""", -1).length - 1 == 1, "exactly one current crumb")
+            // The mark opens the crumb it belongs to, so between the two labels it can only be
+            // the last one's.
+            val between = html.substring(html.indexOf("Structure"), html.indexOf("DataTable"))
+            assert(between.contains("""aria-current="page""""), "and it is the last crumb that carries it")
+            assert(!html.contains("""href="Structure""""), "the intermediate crumb is not turned into a link either")
+    }
+
     "Toolbar renders Prime anatomy: role + start/center/end sections" in {
         for
             html <- renderHtml(
