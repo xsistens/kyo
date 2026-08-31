@@ -43,7 +43,7 @@ final case class SelectButton[A] private (
     onBlurF: Maybe[String => Any < Async] = Absent,
     onBlurSetF: Maybe[Set[String] => Any < Async] = Absent,
     idV: Maybe[String] = Absent
-) extends Node, TextFormControl, MultiSelectFormControl:
+) extends Node, TextFormControl, MultiSelectFormControl, HasAccessibleNameRef:
     type Self = SelectButton[A]
 
     /** Native `id` on the group — pair with `Label.forId`; the form layer stamps the bound
@@ -97,32 +97,12 @@ final case class SelectButton[A] private (
     /** Disables the whole group; a `Signal[Boolean]` toggles it reactively (re-render). */
     def disabled(v: Boolean | Signal[Boolean]): SelectButton[A] = copy(disabledFlag = Present(ReactiveValue(v)))
 
-    /** Marks the group invalid (`.p-invalid` outline). */
-    def invalid(v: Boolean): SelectButton[A] = copy(invalidV = Present(BoolValue.Const(v)))
+    private[uic] def withInvalid(v: Maybe[BoolValue]): SelectButton[A]                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): SelectButton[A]                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): SelectButton[A] = copy(invalidMsgDynV = v)
 
-    /** Reactive validity: the bound signal toggles the invalid state on emission. */
-    def invalid(sig: Signal[Boolean]): SelectButton[A] = copy(invalidV = Present(BoolValue.Dyn(sig)))
-
-    /** Message rendered below the group while it is invalid (kyo extension —
-      * `div.p-uic-invalid-message`).
-      */
-    def invalidMessage(v: String): SelectButton[A] = copy(invalidMsgV = Present(v))
-
-    /** Reactive invalid message — `Present` shows the row and (by default) marks the group
-      * invalid; `Absent` clears both.
-      */
-    def invalidMessage(sig: Signal[Maybe[String]]): SelectButton[A] = copy(invalidMsgDynV = Present(sig))
-
-    /** Accessible name → `aria-label` (a literal group label, e.g. "Language"). */
-    def accessibleName(v: String): SelectButton[A] = copy(accNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): SelectButton[A] = copy(accNameV = Present(TextValue.Dyn(sig)))
-
-    /** Accessible name reference → `aria-labelledby` (Prime's SelectButton a11y surface). */
-    def accessibleNameRef(v: String): SelectButton[A] = copy(accNameRefV = Present(v))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): SelectButton[A] = copy(accNameV = v)
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): SelectButton[A] = copy(accNameRefV = v)
 
     /** Fired with the clicked option's key after the selection write. */
     def onChange(f: String => Any < Async): SelectButton[A] = copy(onChangeF = Present(f))

@@ -26,20 +26,15 @@ end IconMode
 final case class Icon private (
     glyph: IconGlyph,
     sizePx: Int = 16,
-    accessibleName: Maybe[TextValue] = Absent,
+    accNameV: Maybe[TextValue] = Absent,
     showTooltipFlag: Boolean = false,
     modeV: Maybe[IconMode] = Absent,
     onClickEff: Maybe[Any < Async] = Absent
-) extends Node:
+) extends Node, HasAccessibleName:
     type Self = Icon
 
-    def size(px: Int): Icon             = copy(sizePx = px)
-    def accessibleName(v: String): Icon = copy(accessibleName = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): Icon = copy(accessibleName = Present(TextValue.Dyn(sig)))
+    def size(px: Int): Icon                                        = copy(sizePx = px)
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Icon = copy(accNameV = v)
 
     /** Shows the glyph name as a native tooltip (the `title` attribute). */
     def showTooltip(v: Boolean): Icon = copy(showTooltipFlag = v)
@@ -77,7 +72,7 @@ final case class Icon private (
         m match
             case IconMode.Image =>
                 val img = el.role("img")
-                accessibleName match
+                accNameV match
                     case Present(TextValue.Const(n)) => img.aria("label", n)
                     case Present(TextValue.Dyn(s))   => img.aria("label", s)
                     case Absent                      => img
@@ -86,7 +81,7 @@ final case class Icon private (
                 el.role("presentation").aria("hidden", "true")
             case IconMode.Interactive =>
                 val btn = el.role("button").tabIndex(0)
-                val withName = accessibleName match
+                val withName = accNameV match
                     case Present(TextValue.Const(n)) => btn.aria("label", n)
                     case Present(TextValue.Dyn(s))   => btn.aria("label", s)
                     case Absent                      => btn
@@ -96,7 +91,7 @@ final case class Icon private (
       * `accessibleName` is set, interactive when an `onClick` is set.
       */
     private def implicitMode(el: Ast.SpanElement)(using Frame): Ast.SpanElement =
-        val withA11y = accessibleName match
+        val withA11y = accNameV match
             case Present(TextValue.Const(n)) => el.role("img").aria("label", n)
             case Present(TextValue.Dyn(s))   => el.role("img").aria("label", s)
             case Absent                      => el.aria("hidden", "true")

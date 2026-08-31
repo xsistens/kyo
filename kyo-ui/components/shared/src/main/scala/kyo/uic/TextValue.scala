@@ -37,6 +37,7 @@ private[uic] object TextValue:
 end TextValue
 
 extension (tv: TextValue)
+
     /** The constant text, or `""` for a reactive slot — for the few consumers that must collapse
       * the slot to a plain `String` (a computed accessible-name/tooltip fallback that fuses the
       * text with other state, an image `alt`). A `Dyn` value is dropped; use the reactive

@@ -62,6 +62,7 @@ final class SubmitGate private[uic] (
   * use site instead of spelling out the `Const`/`Dyn`/`Absent` match each time.
   */
 extension (bv: Maybe[BoolValue])
+
     /** Statically-known truth — `Const(true)` ⇒ true; `Const(false)`/`Dyn`/`Absent` ⇒ false. The
       * plain-boolean read every non-reactive builder site needs (invalid class, aria-invalid, ...).
       */

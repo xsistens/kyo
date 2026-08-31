@@ -36,6 +36,17 @@ final case class TreeNode(
   * updates the `selected` set per the [[SelectionMode]] before firing
   * `onItemClick`. Recursion is pure and bounded by the provided node structure.
   *
+  * Keyboard (WAI-ARIA tree, the shared [[TreeNav]] machine): the tree is ONE tab stop and
+  * roves a `.p-focus` highlight over the rows that are on the screen, so a reader tabs into a
+  * folder structure once rather than once per node. ArrowDown/ArrowUp walk the visible rows
+  * and stop at the ends, ArrowRight opens a closed node and then steps into it, ArrowLeft
+  * closes an open one and otherwise climbs to the parent, Home/End reach the first and last
+  * row, and Enter or Space selects through the same write a click makes, opening or closing a
+  * parent as well. Expanding from the keyboard fires `onNodeToggle` exactly as a toggle click
+  * does. Arriving on the tree focuses the selected row, or the first one, and leaving unfocuses
+  * it: the ring Prime draws around the focused node is the whole focus indicator here, so there
+  * is always exactly one focused row while the tree holds the keyboard, and none once it does not.
+  *
   * The two multi-selection modes differ in how the checkbox behaves.
   * `SelectionMode.Multiple` is FLAT: clicking a node toggles only its own id in
   * the `selected` set, and each box is a plain check/unchecked. `SelectionMode.Checkbox`
@@ -57,7 +68,7 @@ final case class Tree private (
     selectionModeV: SelectionMode = SelectionMode.None,
     emptyContentV: Maybe[EmptyContent] = Absent,
     accessibleNameV: Maybe[TextValue] = Absent
-) extends Node:
+) extends Node, HasEmptyContent, HasAccessibleName:
     type Self = Tree
 
     /** Appends the given root nodes. */
@@ -84,25 +95,9 @@ final case class Tree private (
       */
     def selectionMode(v: SelectionMode): Tree = copy(selectionModeV = v)
 
-    /** Text shown as the `li.p-tree-empty-message` row when the tree has no nodes. */
-    def emptyContent(v: String): Tree = copy(emptyContentV = Present(EmptyContent.const(v)))
+    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): Tree = copy(emptyContentV = v)
 
-    /** Reactive text: re-renders the empty slot in place on signal emission. */
-    def emptyContent(sig: Signal[String]): Tree = copy(emptyContentV = Present(EmptyContent.dyn(sig)))
-
-    /** Arbitrary UI for the empty state: an icon over a line of explanation and the
-      * button that creates the first record, rendered in the same slot the text would
-      * occupy.
-      */
-    def emptyContent(ui: UI): Tree = copy(emptyContentV = Present(EmptyContent.ui(ui)))
-
-    /** `aria-label` for the tree. */
-    def accessibleName(v: String): Tree = copy(accessibleNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): Tree = copy(accessibleNameV = Present(TextValue.Dyn(sig)))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Tree = copy(accessibleNameV = v)
 
     /** Whether nodes respond to content clicks (selecting or an explicit handler). */
     private def selectable: Boolean =
@@ -120,19 +115,49 @@ final case class Tree private (
       * the outer replace (the Overlay renderOpen lesson). The toggle/selection
       * handlers still write through the BOUND refs.
       */
-    private[uic] def resolved(exp: Set[String], sel: Set[String])(using Frame): UI =
-        body(exp, sel)
+    private[uic] def resolved(exp: Set[String], sel: Set[String], roving: Maybe[Roving] = Absent)(using Frame): UI =
+        body(exp, sel, roving)
 
     private[uic] def render(using Frame): UI =
+        // One mount for the keyboard highlight and the id it addresses rows by, allocated
+        // OUTSIDE the expansion and selection subscriptions: a mount inside a subscribed
+        // region re-runs on every emission and would mint a new highlight per keystroke.
+        // The placeholder is what this tree rendered before it had a keyboard.
+        UI.mounted {
+            for
+                cmds <- UI.commands
+                base <- cmds.freshId
+                hi   <- Signal.initRef(-1)
+            yield hi.render(focus => subscribed(Present(Roving(hi, focus, base))))
+        }.placeholder(subscribed(Absent))
+
+    /** The expansion/selection subscriptions around one [[body]] render. */
+    private def subscribed(roving: Maybe[Roving])(using Frame): UI =
         // React to whichever refs are bound; nested reactive nodes render through in SSR.
         (expandedRef, selectedRef) match
-            case (Present(e), Present(s)) => e.render(exp => s.render(sel => body(exp, sel)))
-            case (Present(e), Absent)     => e.render(exp => body(exp, Set.empty))
-            case (Absent, Present(s))     => s.render(sel => body(Set.empty, sel))
-            case _                        => body(Set.empty, Set.empty)
+            case (Present(e), Present(s)) => e.render(exp => s.render(sel => body(exp, sel, roving)))
+            case (Present(e), Absent)     => e.render(exp => body(exp, Set.empty, roving))
+            case (Absent, Present(s))     => s.render(sel => body(Set.empty, sel, roving))
+            case _                        => body(Set.empty, Set.empty, roving)
 
-    private def body(exp: Set[String], sel: Set[String])(using Frame): UI =
-        val nodes = nodeList.map(n => renderNode(n, exp, sel))
+    /** The rows the reader can see, outermost first, in the order they render.
+      *
+      * A collapsed node contributes itself and none of its children, which is exactly what
+      * [[TreeNav]] navigates over: the hierarchy survives in each row's depth.
+      */
+    private def visibleRows(nodes: List[TreeNode], exp: Set[String], depth: Int): List[TreeNav.Row] =
+        nodes.flatMap { n =>
+            val open = exp.contains(n.id)
+            TreeNav.Row(depth, n.id, n.children.nonEmpty, open) ::
+                (if open then visibleRows(n.children, exp, depth + 1) else Nil)
+        }
+
+    private def body(exp: Set[String], sel: Set[String], roving: Maybe[Roving])(using Frame): UI =
+        val rows     = visibleRows(nodeList, exp, 0)
+        val rowIndex = rows.map(_.key).zipWithIndex.toMap
+        val focus    = roving.map(r => if r.focus >= 0 && r.focus < rows.size then r.focus else -1).getOrElse(-1)
+
+        val nodes = nodeList.map(n => renderNode(n, exp, sel, rowIndex, focus, roving))
         val emptyRow: List[UI] =
             if nodeList.isEmpty then
                 EmptyContent.whenSet(emptyContentV)(c =>
@@ -146,6 +171,23 @@ final case class Tree private (
             case Absent                      => ()
         end match
         if multiSelect then list = list.aria("multiselectable", "true")
+        // The tree is ONE tab stop: the reader arrives on the list and moves inside it with
+        // the arrows, rather than tabbing once per node through a folder structure.
+        //
+        // Arriving focuses a node, and leaving unfocuses it. The ring on the focused node is
+        // the only thing that says the keyboard is in the tree (the list itself draws none,
+        // which is Prime's look), so a tree with focus and no focused node would look
+        // untouched, and a highlighted node with the focus gone elsewhere would lie.
+        roving.foreach { r =>
+            val seedFocus: Any < Async =
+                if focus < 0 && rows.nonEmpty then
+                    val selectedRow = rows.indexWhere(row => sel.contains(row.key))
+                    r.ref.set(if selectedRow >= 0 then selectedRow else 0)
+                else ()
+            list = list.tabIndex(0).preventScrollKeys.onKeyDown(keyHandler(exp, r))
+            if r.ownsFocus then list = list.onFocus(seedFocus).onBlur(r.ref.set(-1))
+            if focus >= 0 then list = list.aria("activedescendant", nodeId(r.idBase, focus))
+        }
 
         var root = div.cssClass("p-tree").cssClass("p-component")
         if selectable then root = root.cssClass("p-tree-selectable")
@@ -161,7 +203,44 @@ final case class Tree private (
     /** Renders one node (and, when expanded, its children). Pure recursion bounded
       * by `node.children`.
       */
-    private def renderNode(node: TreeNode, exp: Set[String], sel: Set[String])(using Frame): UI =
+    /** The id the roving highlight addresses one visible row by. */
+    private def nodeId(base: String, index: Int): String = s"$base-node-$index"
+
+    /** The tree's keyboard, as a handler its host can also attach.
+      *
+      * A bare tree puts it on the list, which is its own tab stop. Inside [[TreeSelect]] the
+      * focused element on open is the PANEL, an ancestor of the list, and a keydown there never
+      * reaches a handler further down, so the panel wears the same handler through
+      * `Overlay.onPanelKeyDown`. One handler either way, so the two keyboards cannot drift.
+      */
+    private[uic] def keyHandler(exp: Set[String], roving: Roving)(using Frame): KeyboardEvent => Any < Async =
+        val rows  = visibleRows(nodeList, exp, 0)
+        val focus = if roving.focus >= 0 && roving.focus < rows.size then roving.focus else -1
+        e =>
+            TreeNav.onKey(rows, focus, e.key) match
+                case Present(step) =>
+                    // Expand is only produced for a closed row and Collapse for an open one, so
+                    // the toggle the mouse uses is the right write for both, and `onNodeToggle`
+                    // fires the same way it does for a click.
+                    val open: Any < Async = step.op match
+                        case TreeNav.Op.Expand(key)   => toggleNode(key)
+                        case TreeNav.Op.Collapse(key) => toggleNode(key)
+                        case TreeNav.Op.Keep          => ()
+                    val pick: Any < Async =
+                        if step.activate && rows.isDefinedAt(step.focus) then selectNode(rows(step.focus).key)
+                        else ()
+                    roving.ref.set(step.focus).andThen(open).andThen(pick)
+                case Absent => ()
+    end keyHandler
+
+    private def renderNode(
+        node: TreeNode,
+        exp: Set[String],
+        sel: Set[String],
+        rowIndex: Map[String, Int],
+        focus: Int,
+        roving: Maybe[Roving]
+    )(using Frame): UI =
         val hasChildren = node.children.nonEmpty
         val isExpanded  = exp.contains(node.id)
         // In Checkbox mode "selected" (the highlighted, fully-checked state) is DERIVED
@@ -213,9 +292,13 @@ final case class Tree private (
         if selectable then label = label.onClick(selectNode(node.id))
         val labelEl: UI = label(node.text)
 
+        val myRow     = rowIndex.getOrElse(node.id, -1)
+        val isFocused = focus >= 0 && myRow == focus
+
         var content = div.cssClass("p-tree-node-content")
         if isSelected then content = content.cssClass("p-tree-node-selected")
         if selectable then content = content.cssClass("p-tree-node-selectable")
+        if isFocused then content = content.cssClass("p-focus")
         node.tooltip.foreach(t => content = content.jsProp("title", t))
         val contentEl = content(((toggle :: checkboxSlot) ++ iconSlot :+ labelEl).map(toChild)*)
 
@@ -223,12 +306,13 @@ final case class Tree private (
             if hasChildren && isExpanded then
                 List(
                     ul.cssClass("p-tree-node-children").role("group")(
-                        node.children.map(c => toChild(renderNode(c, exp, sel)))*
+                        node.children.map(c => toChild(renderNode(c, exp, sel, rowIndex, focus, roving)))*
                     )
                 )
             else Nil
 
         var item = li.cssClass("p-tree-node").role("treeitem")
+        if isFocused then roving.foreach(r => item = item.id(nodeId(r.idBase, myRow)))
         if !hasChildren then item = item.cssClass("p-tree-node-leaf")
         if hasChildren then item = item.aria("expanded", isExpanded.toString)
         if isSelected then item = item.aria("selected", "true")
@@ -329,3 +413,18 @@ end Tree
 
 object Tree:
     def apply(): Tree = new Tree()
+
+/** The keyboard highlight of a [[Tree]], and the id it addresses rows by.
+  *
+  * Carried as one value because [[TreeSelect]] renders the same tree inside its panel and has
+  * to hand all three across: the ref to write, the row it is on now, and the id base whose
+  * `aria-activedescendant` the list points at.
+  */
+/** The tree's keyboard highlight: the ref it lives in, its current value, and the id rows are
+  * addressed by.
+  *
+  * `ownsFocus` is false when a host holds the focus instead (TreeSelect focuses its panel and
+  * wears the tree's key handler there). The tree then leaves focus and blur alone, since the
+  * events it would see are the host's to interpret.
+  */
+final private[uic] case class Roving(ref: SignalRef[Int], focus: Int, idBase: String, ownsFocus: Boolean = true)

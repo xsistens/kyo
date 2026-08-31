@@ -70,13 +70,10 @@ final case class Tooltip private (
 end Tooltip
 
 object Tooltip:
-    /** A tooltip with plain text content. */
-    def apply(text: String): Tooltip = new Tooltip(Present(TextValue.Const(text)), Absent)
-
-    /** A tooltip whose text tracks `text` — re-renders in place on emission (e.g. a
-      * locale-driven `I18n.t` leaf).
+    /** A tooltip showing `text`. A `Signal[String]` re-renders it in place on emission (e.g. a locale-
+      * driven `I18n.t` leaf).
       */
-    def apply(text: Signal[String]): Tooltip = new Tooltip(Present(TextValue.Dyn(text)), Absent)
+    def apply(text: String | Signal[String]): Tooltip = new Tooltip(Present(ReactiveValue(text)), Absent)
 
     /** A tooltip with arbitrary `UI` content. */
     def apply(content: UI): Tooltip = new Tooltip(Absent, Present(content))

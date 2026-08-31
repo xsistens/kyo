@@ -81,7 +81,7 @@ final case class DatePicker private (
     onCloseF: Maybe[() => Any < Async] = Absent,
     onBlurF: Maybe[String => Any < Async] = Absent,
     idV: Maybe[String] = Absent
-) extends Node, TextFormControl:
+) extends Node, TextFormControl, HasPlaceholder, HasAccessibleNameRef:
     type Self = DatePicker
 
     /** Native `id` on the picker's text input — pair with `Label.forId`; the form layer
@@ -172,13 +172,9 @@ final case class DatePicker private (
       */
     def today(iso: String): DatePicker = copy(todayV = Present(iso))
 
-    def placeholder(v: String): DatePicker = copy(placeholderText = Present(TextValue.Const(v)))
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): DatePicker = copy(placeholderText = v)
 
-    /** Reactive placeholder that tracks `sig` — patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render/re-mount of the field) on each emission.
-      */
-    def placeholder(sig: Signal[String]): DatePicker = copy(placeholderText = Present(TextValue.Dyn(sig)))
-    def disabled(v: Boolean): DatePicker             = copy(disabledFlag = v)
+    def disabled(v: Boolean): DatePicker = copy(disabledFlag = v)
 
     /** Native `readonly` on the field; the calendar cannot be opened via the
       * dropdown button either.
@@ -215,34 +211,12 @@ final case class DatePicker private (
     /** Spans the full width of its container (`.p-datepicker-fluid`). */
     def fluid(v: Boolean): DatePicker = copy(fluidFlag = v)
 
-    /** Marks the field invalid (`.p-invalid` + `aria-invalid`). */
-    def invalid(v: Boolean): DatePicker = copy(invalidV = Present(BoolValue.Const(v)))
+    private[uic] def withInvalid(v: Maybe[BoolValue]): DatePicker                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): DatePicker                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): DatePicker = copy(invalidMsgDynV = v)
 
-    /** Message rendered below the field while `invalid(true)` (kyo extension —
-      * `div.p-uic-invalid-message`).
-      */
-    def invalidMessage(v: String): DatePicker = copy(invalidMsgV = Present(v))
-
-    /** Reactive validity: the bound signal toggles `.p-invalid` + `aria-invalid` in
-      * place. Explicit override of the message-derived red default.
-      */
-    def invalid(sig: Signal[Boolean]): DatePicker = copy(invalidV = Present(BoolValue.Dyn(sig)))
-
-    /** Reactive invalid message — `Present` shows the row and (by default) turns the
-      * field red; `Absent` clears both. Re-renders in place on emission.
-      */
-    def invalidMessage(sig: Signal[Maybe[String]]): DatePicker = copy(invalidMsgDynV = Present(sig))
-
-    /** Accessible name → `aria-label`. */
-    def accessibleName(v: String): DatePicker = copy(accNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): DatePicker = copy(accNameV = Present(TextValue.Dyn(sig)))
-
-    /** Accessible name reference → `aria-labelledby`. */
-    def accessibleNameRef(v: String): DatePicker = copy(accNameRefV = Present(v))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): DatePicker = copy(accNameV = v)
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): DatePicker = copy(accNameRefV = v)
 
     /** Binds the calendar's visibility two-way to `ref` (as [[Dialog.open]] does). */
     def open(ref: SignalRef[Boolean]): DatePicker = copy(openRef = Present(ref))

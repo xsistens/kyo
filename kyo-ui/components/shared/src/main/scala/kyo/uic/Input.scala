@@ -48,7 +48,7 @@ final case class Input private (
     extraClassesV: List[String] = Nil,
     idV: Maybe[String] = Absent,
     focusAutoFlag: Boolean = false
-) extends Node, TextFormControl:
+) extends Node, TextFormControl, HasPlaceholder, HasAccessibleNameRef, HasAccessibleDescription:
     type Self = Input
 
     /** Package-internal class hook: wrappers (FloatLabel/IftaLabel) stamp Prime's
@@ -77,13 +77,7 @@ final case class Input private (
     /** Binds two-way to `ref`: edits write back into the ref, ref changes update the input. */
     def value(ref: SignalRef[String]): Input = copy(valueBinding = Present(Input.Value.Ref(ref)))
 
-    def placeholder(v: String): Input = copy(placeholderText = Present(TextValue.Const(v)))
-
-    /** Reactive placeholder that tracks `sig` — patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render/re-mount of the field) on each emission
-      * (e.g. a locale-driven `I18n.t` leaf).
-      */
-    def placeholder(sig: Signal[String]): Input = copy(placeholderText = Present(TextValue.Dyn(sig)))
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): Input = copy(placeholderText = v)
 
     /** Disabled, constant or reactive: a `Signal[Boolean]` toggles the native `disabled` attribute IN
       * PLACE via kyo-ui's boolean-attribute channel (no re-render, so caret/focus survive), e.g. disable
@@ -117,43 +111,14 @@ final case class Input private (
     /** Spans the full width of its container (`.p-inputtext-fluid`). */
     def fluid(v: Boolean): Input = copy(fluidFlag = v)
 
-    /** Marks the field invalid (`.p-invalid` + `aria-invalid`). */
-    def invalid(v: Boolean): Input = copy(invalidV = Present(BoolValue.Const(v)))
+    private[uic] def withInvalid(v: Maybe[BoolValue]): Input                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): Input                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Input = copy(invalidMsgDynV = v)
 
-    /** Message rendered below the field while `invalid(true)` (kyo extension —
-      * `div.p-uic-invalid-message`).
-      */
-    def invalidMessage(v: String): Input = copy(invalidMsgV = Present(v))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Input = copy(accNameV = v)
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): Input = copy(accNameRefV = v)
 
-    /** Reactive validity: the bound signal toggles `.p-invalid` + `aria-invalid` in
-      * place. Explicit override of the message-derived red default.
-      */
-    def invalid(sig: Signal[Boolean]): Input = copy(invalidV = Present(BoolValue.Dyn(sig)))
-
-    /** Reactive invalid message — `Present` shows the row and (by default) turns the
-      * field red; `Absent` clears both. Re-renders in place on emission (e.g. a
-      * locale-driven `I18n.t` leaf or a validation error signal).
-      */
-    def invalidMessage(sig: Signal[Maybe[String]]): Input = copy(invalidMsgDynV = Present(sig))
-
-    /** Accessible name → `aria-label`. */
-    def accessibleName(v: String): Input = copy(accNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render), e.g. a locale-driven `I18n.t` leaf.
-      */
-    def accessibleName(sig: Signal[String]): Input = copy(accNameV = Present(TextValue.Dyn(sig)))
-
-    /** Accessible name reference → `aria-labelledby`. */
-    def accessibleNameRef(v: String): Input = copy(accNameRefV = Present(v))
-
-    /** Accessible description → `aria-description`. */
-    def accessibleDescription(v: String): Input = copy(accDescV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible description — `aria-description` patched IN PLACE via kyo-ui's
-      * attribute channel (`setAttribute`, no re-render).
-      */
-    def accessibleDescription(sig: Signal[String]): Input = copy(accDescV = Present(TextValue.Dyn(sig)))
+    private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Input = copy(accDescV = v)
 
     def onInput(f: String => Any < Async): Input  = copy(onInputF = Present(f))
     def onChange(f: String => Any < Async): Input = copy(onChangeF = Present(f))

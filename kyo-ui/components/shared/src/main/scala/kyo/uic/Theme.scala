@@ -114,6 +114,23 @@ object Theme:
       |/* The selection click lives on the label (toggle clicks must not select);
       |   stretching it keeps the whole free row width clickable. */
       |.p-tree-node-label { flex: 1 1 auto; }
+      |/* The tree is ONE tab stop and roves an aria-activedescendant highlight inside it,
+      |   which is the second form the ARIA tree pattern allows and the one Menu and Listbox
+      |   already use here. Prime writes the same ring against :focus-visible on the node, which
+      |   only fires for a roving tabindex; here the class says WHICH node and :focus-visible on
+      |   the element that holds the focus says WHETHER to draw the ring, so a mouse click
+      |   highlights the row without ringing it, exactly as Prime's own :focus-visible would.
+      |   Two holders: a bare tree focuses its list, TreeSelect focuses its panel. */
+      |.p-tree-root-children:focus-visible .p-tree-node-content.p-focus,
+      |.p-uic-overlay-panel:focus-visible .p-tree-node-content.p-focus {
+      |  box-shadow: var(--p-tree-node-focus-ring-shadow);
+      |  outline: var(--p-tree-node-focus-ring-width) var(--p-tree-node-focus-ring-style) var(--p-tree-node-focus-ring-color);
+      |  outline-offset: var(--p-tree-node-focus-ring-offset);
+      |}
+      |/* The ring above IS the tree's focus indicator, so the element that actually holds
+      |   focus must not draw a second one. Prime's sheet leaves the list unstyled, and the
+      |   browser then rings the whole tree on the first key press, on top of the node ring. */
+      |.p-tree-root-children:focus { outline: none; }
       |/* Link (kyo extension — Prime has no Link component; skin mirrors Button's
       |   Link variant: primary color, underline on hover, disabled via .p-disabled). */
       |.p-uic-link { color: var(--p-primary-color); cursor: pointer; text-decoration: none; gap: 0.25rem; white-space: nowrap; }
@@ -526,6 +543,19 @@ object Theme:
       |  box-shadow: var(--p-select-focus-ring-shadow);
       |  outline: var(--p-select-focus-ring-width) var(--p-select-focus-ring-style) var(--p-select-focus-ring-color);
       |  outline-offset: var(--p-select-focus-ring-offset);
+      |}
+      |/* Listbox focus ring: the LIST is the tab stop, and Prime's own sheet clears its
+      |   outline (.p-listbox-list { outline: 0 none }) without putting a ring anywhere
+      |   else, so a focused listbox looked exactly like an unfocused one. The ring belongs
+      |   on the component, since the row highlight already says which row is current.
+      |   :has rather than :focus-within, so the header filter keeps its own field ring
+      |   instead of doubling it with this one; :focus-visible rather than :focus, so a
+      |   mouse click does not ring what the reader is already pointing at. */
+      |.p-listbox:not(.p-disabled):has(.p-listbox-list:focus-visible) {
+      |  border-color: var(--p-focus-ring-color);
+      |  box-shadow: var(--p-focus-ring-shadow);
+      |  outline: var(--p-focus-ring-width) var(--p-focus-ring-style) var(--p-focus-ring-color);
+      |  outline-offset: var(--p-focus-ring-offset);
       |}
       |/* Prime caps the option list via the scrollHeight prop (default 14rem) as
       |   an inline style on the list container; expressed as CSS here. */

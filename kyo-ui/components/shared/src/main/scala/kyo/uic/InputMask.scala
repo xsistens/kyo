@@ -39,7 +39,7 @@ final case class InputMask private (
     onChangeF: Maybe[String => Any < Async] = Absent,
     onBlurF: Maybe[String => Any < Async] = Absent,
     onCompleteF: Maybe[String => Any < Async] = Absent
-) extends Node, TextFormControl:
+) extends Node, TextFormControl, HasPlaceholder, HasAccessibleName:
     type Self = InputMask
 
     /** The mask template (`9` digit, `a` letter, `*` alphanumeric, else literal). */
@@ -51,26 +51,20 @@ final case class InputMask private (
     /** Binds two-way to `ref`: edits write the MASKED value back, ref writes update the field. */
     def value(ref: SignalRef[String]): InputMask = copy(valueBinding = Present(Input.Value.Ref(ref)))
 
-    def placeholder(v: String): InputMask = copy(placeholderText = Present(TextValue.Const(v)))
-
-    /** Reactive placeholder that tracks `sig` — patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render of the field) on each emission.
-      */
-    def placeholder(sig: Signal[String]): InputMask = copy(placeholderText = Present(TextValue.Dyn(sig)))
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): InputMask = copy(placeholderText = v)
 
     /** Native element `id` — pair with `Label.forId`. */
     def id(v: String): InputMask = copy(idV = Present(v))
 
-    def disabled(v: Boolean): InputMask = copy(disabledFlag = Present(BoolValue.Const(v)))
+    /** Disables the field. A `Signal[Boolean]` toggles it IN PLACE via kyo-ui's boolean attribute channel
+      * (no re-render).
+      */
+    def disabled(v: Boolean | Signal[Boolean]): InputMask = copy(disabledFlag = Present(ReactiveValue(v)))
 
-    /** Reactive disabled — toggled IN PLACE via kyo-ui's boolean attribute channel (no re-render). */
-    def disabled(sig: Signal[Boolean]): InputMask = copy(disabledFlag = Present(BoolValue.Dyn(sig)))
-
-    /** Native `readonly` — focusable but not editable. */
-    def readonly(v: Boolean): InputMask = copy(readonlyFlag = Present(BoolValue.Const(v)))
-
-    /** Reactive readonly — toggled IN PLACE via kyo-ui's boolean attribute channel (no re-render). */
-    def readonly(sig: Signal[Boolean]): InputMask = copy(readonlyFlag = Present(BoolValue.Dyn(sig)))
+    /** Native `readonly`, so the field is focusable but not editable. A `Signal[Boolean]` toggles it IN
+      * PLACE via kyo-ui's boolean attribute channel (no re-render).
+      */
+    def readonly(v: Boolean | Signal[Boolean]): InputMask = copy(readonlyFlag = Present(ReactiveValue(v)))
 
     /** Size: `.p-inputtext-sm` / default / `.p-inputtext-lg`. */
     def size(v: Size): InputMask = copy(sizeV = v)
@@ -81,29 +75,11 @@ final case class InputMask private (
     /** Spans the full width of its container (`.p-inputtext-fluid`). */
     def fluid(v: Boolean): InputMask = copy(fluidFlag = v)
 
-    /** Marks the field invalid (`.p-invalid` + `aria-invalid`). */
-    def invalid(v: Boolean): InputMask = copy(invalidV = Present(BoolValue.Const(v)))
+    private[uic] def withInvalid(v: Maybe[BoolValue]): InputMask                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): InputMask                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): InputMask = copy(invalidMsgDynV = v)
 
-    /** Message rendered below the field while `invalid(true)`. */
-    def invalidMessage(v: String): InputMask = copy(invalidMsgV = Present(v))
-
-    /** Reactive validity: the bound signal toggles `.p-invalid` + `aria-invalid` in
-      * place. Explicit override of the message-derived red default.
-      */
-    def invalid(sig: Signal[Boolean]): InputMask = copy(invalidV = Present(BoolValue.Dyn(sig)))
-
-    /** Reactive invalid message — `Present` shows the row and (by default) turns the
-      * field red; `Absent` clears both. Re-renders in place on emission.
-      */
-    def invalidMessage(sig: Signal[Maybe[String]]): InputMask = copy(invalidMsgDynV = Present(sig))
-
-    /** Accessible name → `aria-label`. */
-    def accessibleName(v: String): InputMask = copy(accNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): InputMask = copy(accNameV = Present(TextValue.Dyn(sig)))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): InputMask = copy(accNameV = v)
 
     /** Fired with the MASKED value on every change (native change commit). */
     def onChange(f: String => Any < Async): InputMask = copy(onChangeF = Present(f))

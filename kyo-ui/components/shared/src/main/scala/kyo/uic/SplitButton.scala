@@ -37,11 +37,10 @@ final case class SplitButton private (
 ) extends Node:
     type Self = SplitButton
 
-    /** Semantic accent — passed to both segments. */
-    def severity(v: Severity): SplitButton = copy(severityV = SeverityValue.Const(v))
-
-    /** Reactive accent — forwarded to the inner [[Button]], swapped IN PLACE via the class channel. */
-    def severity(sig: Signal[Severity]): SplitButton = copy(severityV = SeverityValue.Dyn(sig))
+    /** Semantic accent, passed to both segments. A `Signal[Severity]` is forwarded to the inner [[Button]]
+      * and swapped IN PLACE via the class channel.
+      */
+    def severity(v: Severity | Signal[Severity]): SplitButton = copy(severityV = ReactiveValue(v))
 
     /** Rendering variant (Filled/Outlined/Text/Link) — passed to both segments. */
     def variant(v: ButtonVariant): SplitButton = copy(variantV = v)
@@ -147,13 +146,10 @@ final case class SplitButton private (
 end SplitButton
 
 object SplitButton:
-    /** A split button whose primary segment is labelled `label`. */
-    def apply(label: String): SplitButton = new SplitButton(labelV = Present(TextValue.Const(label)))
-
-    /** A split button whose primary label tracks `label` — re-renders in place on
+    /** A split button with `label` as its primary label. A `Signal[String]` re-renders it in place on
       * emission (e.g. a locale-driven `I18n.t` leaf).
       */
-    def apply(label: Signal[String]): SplitButton = new SplitButton(labelV = Present(TextValue.Dyn(label)))
+    def apply(label: String | Signal[String]): SplitButton = new SplitButton(labelV = Present(ReactiveValue(label)))
 
     /** An empty split button — add an icon and items via the setters. */
     def apply(): SplitButton = new SplitButton()

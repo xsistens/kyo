@@ -54,7 +54,7 @@ final case class ColorPicker private (
     onChangeF: Maybe[String => Any < Async] = Absent,
     onBlurF: Maybe[String => Any < Async] = Absent,
     idV: Maybe[String] = Absent
-) extends Node, TextFormControl:
+) extends Node, TextFormControl, HasAccessibleName:
     type Self = ColorPicker
 
     /** Native `id` on the root — pair with `Label.forId`; the form layer stamps the bound
@@ -81,29 +81,11 @@ final case class ColorPicker private (
     /** Which corner the overlay panel opens from (overlay mode only; default below). */
     def anchor(v: OverlayAnchor): ColorPicker = copy(anchorV = v)
 
-    /** Accessible name → `aria-label` on the preview swatch / inline root. */
-    def accessibleName(v: String): ColorPicker = copy(accNameV = Present(TextValue.Const(v)))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): ColorPicker = copy(accNameV = v)
 
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): ColorPicker = copy(accNameV = Present(TextValue.Dyn(sig)))
-
-    /** Marks the picker invalid (`.p-invalid` + `aria-invalid`). */
-    def invalid(v: Boolean): ColorPicker = copy(invalidV = Present(BoolValue.Const(v)))
-
-    /** Reactive validity: the bound signal toggles the invalid state on emission. */
-    def invalid(sig: Signal[Boolean]): ColorPicker = copy(invalidV = Present(BoolValue.Dyn(sig)))
-
-    /** Message rendered below the picker while it is invalid (kyo extension —
-      * `div.p-uic-invalid-message`).
-      */
-    def invalidMessage(v: String): ColorPicker = copy(invalidMsgV = Present(v))
-
-    /** Reactive invalid message — `Present` shows the row and (by default) marks the
-      * picker invalid; `Absent` clears both.
-      */
-    def invalidMessage(sig: Signal[Maybe[String]]): ColorPicker = copy(invalidMsgDynV = Present(sig))
+    private[uic] def withInvalid(v: Maybe[BoolValue]): ColorPicker                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): ColorPicker                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): ColorPicker = copy(invalidMsgDynV = v)
 
     /** Fired with the NEW hex after the ref write-back. */
     def onChange(f: String => Any < Async): ColorPicker = copy(onChangeF = Present(f))

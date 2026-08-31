@@ -32,7 +32,7 @@ final case class Link private (
     accessibleDescriptionV: Maybe[TextValue] = Absent,
     onClickEff: Maybe[Any < Async] = Absent,
     kids: List[UI] = Nil
-) extends Node:
+) extends Node, HasTooltip, HasAccessibleNameRef, HasAccessibleDescription:
     type Self = Link
 
     def href(v: String): Link      = copy(hrefV = Present(v))
@@ -54,35 +54,15 @@ final case class Link private (
       */
     def target(v: String): Link = copy(targetV = Present(v))
 
-    /** Native tooltip (the `title` attribute). */
-    def tooltip(v: String): Link = copy(tooltipV = Present(TextValue.Const(v)))
-
-    /** Reactive tooltip — native `title` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def tooltip(sig: Signal[String]): Link = copy(tooltipV = Present(TextValue.Dyn(sig)))
+    private[uic] def withTooltip(v: Maybe[TextValue]): Link = copy(tooltipV = v)
 
     /** ARIA role override — `Button` renders `role="button"` on the anchor. */
     def accessibleRole(v: LinkAccessibleRole): Link = copy(accessibleRoleV = v)
 
-    /** Accessible name announced instead of the visible text (`aria-label`). */
-    def accessibleName(v: String): Link = copy(accessibleNameV = Present(TextValue.Const(v)))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): Link = copy(accessibleNameV = v)
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): Link = copy(accessibleNameRefV = v)
 
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): Link = copy(accessibleNameV = Present(TextValue.Dyn(sig)))
-
-    /** ID reference(s) of the element(s) that label the link (`aria-labelledby`). */
-    def accessibleNameRef(v: String): Link = copy(accessibleNameRefV = Present(v))
-
-    /** Additional accessible description (`aria-description`). */
-    def accessibleDescription(v: String): Link = copy(accessibleDescriptionV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible description — `aria-description` patched IN PLACE via kyo-ui's
-      * attribute channel (`setAttribute`, no re-render).
-      */
-    def accessibleDescription(sig: Signal[String]): Link = copy(accessibleDescriptionV = Present(TextValue.Dyn(sig)))
+    private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Link = copy(accessibleDescriptionV = v)
 
     /** Runs `action` when the link is activated. Ignored while disabled. */
     def onClick(action: => Any < Async)(using Frame): Link =

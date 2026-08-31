@@ -35,9 +35,14 @@ import scala.annotation.targetName
   * The trigger shows the selected nodes' labels (tree order, comma-joined) or
   * the placeholder while empty.
   *
-  * Honest deferrals: chip display mode, the header filter, showClear, and
-  * arrow-key tree navigation (nodes toggle/select by click; the panel seeds
-  * focus so Escape works without a prior click).
+  * Keyboard: the panel's tree is the hosted [[Tree]]'s own, so it navigates exactly as a bare
+  * tree does (ArrowDown/ArrowUp over the visible rows, ArrowRight and ArrowLeft to open and
+  * close, Home/End, Enter or Space to select). The handler rides on the PANEL rather than on
+  * the list, because the panel is what holds focus when it opens and a keydown there never
+  * reaches a handler further down; it is the tree's handler either way, so the two keyboards
+  * cannot drift. The trigger opens on ArrowDown, Enter or Space, and Escape closes.
+  *
+  * Honest deferrals: chip display mode, the header filter, and showClear.
   */
 final case class TreeSelect private (
     nodeList: List[TreeNode] = Nil,
@@ -61,7 +66,7 @@ final case class TreeSelect private (
     onChangeF: Maybe[Set[String] => Any < Async] = Absent,
     idV: Maybe[String] = Absent,
     onBlurF: Maybe[Set[String] => Any < Async] = Absent
-) extends Node, MultiSelectFormControl:
+) extends Node, MultiSelectFormControl, HasEmptyContent, HasTooltip, HasPlaceholder, HasAccessibleNameRef:
     type Self = TreeSelect
 
     /** Native `id` on the trigger — pair with `Label.forId`. */
@@ -114,27 +119,9 @@ final case class TreeSelect private (
       */
     def selectionMode(v: SelectionMode): TreeSelect = copy(selectionModeV = v)
 
-    /** Text shown on the closed trigger while the bound set is empty. */
-    def placeholder(v: String): TreeSelect = copy(placeholderV = Present(TextValue.Const(v)))
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): TreeSelect = copy(placeholderV = v)
 
-    /** Reactive placeholder — re-renders the label in place on signal emission (resolved INSIDE the
-      * mount subscription, so the open tree/expansion state survives). For locale-driven text.
-      */
-    def placeholder(sig: Signal[String]): TreeSelect = copy(placeholderV = Present(TextValue.Dyn(sig)))
-
-    /** Text of the `div.p-treeselect-empty-message` when the tree has no nodes
-      * (default "No results found" — Prime's default).
-      */
-    def emptyContent(v: String): TreeSelect = copy(emptyContentV = Present(EmptyContent.const(v)))
-
-    /** Reactive text: re-renders the empty slot in place on signal emission. */
-    def emptyContent(sig: Signal[String]): TreeSelect = copy(emptyContentV = Present(EmptyContent.dyn(sig)))
-
-    /** Arbitrary UI for the empty state: an icon over a line of explanation and the
-      * button that creates the first record, rendered in the same slot the text would
-      * occupy.
-      */
-    def emptyContent(ui: UI): TreeSelect = copy(emptyContentV = Present(EmptyContent.ui(ui)))
+    private[uic] def withEmptyContent(v: Maybe[EmptyContent]): TreeSelect = copy(emptyContentV = v)
 
     def disabled(v: Boolean): TreeSelect = copy(disabledFlag = v)
 
@@ -143,13 +130,7 @@ final case class TreeSelect private (
       */
     def name(v: String): TreeSelect = copy(nameV = Present(v))
 
-    /** Native tooltip (`title`). */
-    def tooltip(v: String): TreeSelect = copy(tooltipV = Present(TextValue.Const(v)))
-
-    /** Reactive tooltip — native `title` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def tooltip(sig: Signal[String]): TreeSelect = copy(tooltipV = Present(TextValue.Dyn(sig)))
+    private[uic] def withTooltip(v: Maybe[TextValue]): TreeSelect = copy(tooltipV = v)
 
     /** Size: `.p-treeselect-sm` / default / `.p-treeselect-lg`. */
     def size(v: Size): TreeSelect = copy(sizeV = v)
@@ -160,32 +141,12 @@ final case class TreeSelect private (
     /** Spans the full width of its container (`.p-treeselect-fluid`). */
     def fluid(v: Boolean): TreeSelect = copy(fluidFlag = v)
 
-    /** Marks the field invalid (`.p-invalid` + `aria-invalid`). */
-    def invalid(v: Boolean): TreeSelect = copy(invalidV = Present(BoolValue.Const(v)))
+    private[uic] def withInvalid(v: Maybe[BoolValue]): TreeSelect                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): TreeSelect                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): TreeSelect = copy(invalidMsgDynV = v)
 
-    /** Message rendered below the field while `invalid(true)` (kyo extension). */
-    def invalidMessage(v: String): TreeSelect = copy(invalidMsgV = Present(v))
-
-    /** Reactive validity: the bound signal toggles `.p-invalid` + `aria-invalid` in
-      * place. Explicit override of the message-derived red default.
-      */
-    def invalid(sig: Signal[Boolean]): TreeSelect = copy(invalidV = Present(BoolValue.Dyn(sig)))
-
-    /** Reactive invalid message — `Present` shows the row and (by default) turns the
-      * field red; `Absent` clears both. Re-renders in place on emission.
-      */
-    def invalidMessage(sig: Signal[Maybe[String]]): TreeSelect = copy(invalidMsgDynV = Present(sig))
-
-    /** Accessible name → `aria-label`. */
-    def accessibleName(v: String): TreeSelect = copy(accNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): TreeSelect = copy(accNameV = Present(TextValue.Dyn(sig)))
-
-    /** Accessible name reference → `aria-labelledby`. */
-    def accessibleNameRef(v: String): TreeSelect = copy(accNameRefV = Present(v))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): TreeSelect = copy(accNameV = v)
+    private[uic] def withAccessibleNameRef(v: Maybe[String]): TreeSelect = copy(accNameRefV = v)
 
     /** Fired with the FULL updated node id set after every selection change. */
     def onChange(f: Set[String] => Any < Async): TreeSelect = copy(onChangeF = Present(f))
@@ -229,21 +190,31 @@ final case class TreeSelect private (
         val stat: UI = withValue(sel => body(sel, Set.empty, false, Absent))
         UI.mounted {
             for
+                cmds <- UI.commands
+                base <- cmds.freshId
                 open <- openRefV match
                     case Present(r) => Kyo.lift(r)
                     case Absent     => Signal.initRef(false)
                 exp <- expandedRefV match
                     case Present(r) => Kyo.lift(r)
                     case Absent     => Signal.initRef(Set.empty[String])
-            yield wired(open, exp)
+                hi <- Signal.initRef(-1)
+            yield wired(open, exp, hi, base)
         }.placeholder(stat)
     end render
 
     /** The subscription tree the mount publishes (golden-test seam). */
-    private[uic] def wired(open: SignalRef[Boolean], exp: SignalRef[Set[String]])(using Frame): UI =
+    private[uic] def wired(
+        open: SignalRef[Boolean],
+        exp: SignalRef[Set[String]],
+        hi: SignalRef[Int],
+        idBase: String
+    )(using Frame): UI =
         open.render { o =>
             exp.render { e =>
-                withValue(sel => body(sel, e, o, Present((open, exp))))
+                hi.render { h =>
+                    withValue(sel => body(sel, e, o, Present(TreeSelect.State(open, exp, hi, h, idBase))))
+                }
             }
         }
 
@@ -256,7 +227,7 @@ final case class TreeSelect private (
         current: Set[String],
         exp: Set[String],
         isOpen: Boolean,
-        st: Maybe[(SignalRef[Boolean], SignalRef[Set[String]])]
+        st: Maybe[TreeSelect.State]
     )(using Frame): UI =
         // Reactive-placeholder + -invalid gates (INSIDE the mount subscription — never around the
         // UI.mounted node): with a reactive slot set, re-render the field + message through the shared
@@ -273,26 +244,26 @@ final case class TreeSelect private (
         current: Set[String],
         exp: Set[String],
         isOpen: Boolean,
-        st: Maybe[(SignalRef[Boolean], SignalRef[Set[String]])],
+        st: Maybe[TreeSelect.State],
         placeholder: Maybe[String]
     )(using Frame): UI =
         val selectedLabels = flatNodes.collect { case (id, text) if current.contains(id) => text }
 
         def openPanel: Any < Async =
             st match
-                case Present((open, _)) => open.set(true)
-                case Absent             => ()
+                case Present(s) => s.open.set(true)
+                case Absent     => ()
 
         def toggle: Any < Async =
             st match
-                case Present((open, _)) => open.set(!isOpen)
-                case Absent             => ()
+                case Present(s) => s.open.set(!isOpen)
+                case Absent     => ()
 
         // Fired by the hosted Tree AFTER its selection write: report the new set
         // via onChange; Single mode also closes the panel (Prime).
         def afterPick: Any < Async =
             st match
-                case Present((open, _)) =>
+                case Present(s) =>
                     for
                         _ <- onChangeF match
                             case Present(g) =>
@@ -301,7 +272,7 @@ final case class TreeSelect private (
                                     case Absent     => (): Any < Async
                             case Absent => (): Any < Async
                         _ <- selectionModeV match
-                            case SelectionMode.Single | SelectionMode.Radio => open.set(false)
+                            case SelectionMode.Single | SelectionMode.Radio => s.open.set(false)
                             case _                                          => (): Any < Async
                     yield ()
                 case Absent => ()
@@ -331,28 +302,39 @@ final case class TreeSelect private (
             }
 
         // === floating panel ======================================================
-        val panelUI: List[UI] = st.toList.map { (open, expRef) =>
-            val treeUI: UI =
-                if nodeList.isEmpty then
+        val panelUI: List[UI] = st.toList.map { state =>
+            val roving = Roving(state.hi, state.hiV, state.idBase, ownsFocus = false)
+            // The hosted tree, configured once: it renders the panel's rows AND supplies the
+            // keyboard the panel wears, so the two cannot disagree about what a key does.
+            val hosted: Maybe[Tree] =
+                if nodeList.isEmpty then Absent
+                else
+                    var t = Tree()
+                        .nodes(nodeList*)
+                        .expanded(state.expRef)
+                        .selectionMode(selectionModeV)
+                        .onItemClick(_ => afterPick)
+                    valueRef.foreach(r => t = t.selected(r))
+                    Present(t)
+            val treeUI: UI = hosted match
+                case Absent =>
                     EmptyContent.render(emptyContentV, "No results found")(c =>
                         div.cssClass("p-treeselect-empty-message")(c)
                     )
-                else
-                    var tree = Tree()
-                        .nodes(nodeList*)
-                        .expanded(expRef)
-                        .selectionMode(selectionModeV)
-                        .onItemClick(_ => afterPick)
-                    valueRef.foreach(r => tree = tree.selected(r))
-                    // The enclosing wired render already subscribes to the expansion and
-                    // value refs — the resolved seam renders the tree WITHOUT its own
-                    // nested subscriptions (handlers still write through the bound refs).
-                    tree.resolved(exp, current)
-            Overlay(open)
+                // The enclosing wired render already subscribes to the expansion, value and
+                // highlight refs — the resolved seam renders the tree WITHOUT its own nested
+                // subscriptions (handlers still write through the bound refs), and the highlight
+                // is handed across so the panel's keyboard is the tree's own.
+                case Present(t) => t.resolved(exp, current, Present(roving))
+            var panel = Overlay(state.open)
                 .panelClass("p-treeselect-overlay")
-                .panelClass("p-component")(
-                    (keyCollisionCard :+ (div.cssClass("p-treeselect-tree-container")(toChild(treeUI)): UI))*
-                )
+                .panelClass("p-component")
+            // The panel is what holds focus once it opens, and a keydown there never reaches a
+            // handler on the list inside it, so the tree's keyboard rides on the panel too.
+            hosted.foreach(t => panel = panel.onPanelKeyDown(t.keyHandler(exp, roving)))
+            panel(
+                (keyCollisionCard :+ (div.cssClass("p-treeselect-tree-container")(toChild(treeUI)): UI))*
+            )
                 .render
         }
 
@@ -408,6 +390,23 @@ final case class TreeSelect private (
 end TreeSelect
 
 object TreeSelect:
+
+    /** The wired interaction state, allocated per mount: the panel's open flag, the expansion
+      * the hosted [[Tree]] reads, and the keyboard highlight that tree roves, with the id it
+      * addresses its rows by.
+      *
+      * On the companion rather than inside the class, because the validity path renders through
+      * a `copy` of the field and a state typed against the original instance does not fit the
+      * copy's own path-dependent one.
+      */
+    final private[uic] case class State(
+        open: SignalRef[Boolean],
+        expRef: SignalRef[Set[String]],
+        hi: SignalRef[Int],
+        hiV: Int,
+        idBase: String
+    )
+
     def apply(): TreeSelect = new TreeSelect()
 
     /** Projects one typed option (and, recursively, its sub-options) into the

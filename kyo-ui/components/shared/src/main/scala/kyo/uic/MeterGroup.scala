@@ -46,39 +46,23 @@ final case class MeterGroup private (
 ) extends Node:
     type Self = MeterGroup
 
-    /** Appends one meter drawing its color from the default palette. */
-    def meter(label: String, value: Double): MeterGroup =
+    /** Appends one meter drawing its color from the default palette. A `Signal[String]` label
+      * re-renders in place on emission; the trailing `(NN%)` follows the value either way.
+      */
+    def meter(label: String | Signal[String], value: Double): MeterGroup =
         copy(metersV = metersV :+ MeterGroup.Meter(label, value))
 
-    /** Reactive-label variant of [[meter]] — the label text tracks `label` and
-      * re-renders in place on emission (the trailing `(NN%)` follows the value).
-      */
-    def meter(label: Signal[String], value: Double): MeterGroup =
-        copy(metersV = metersV :+ MeterGroup.Meter("", value, labelDyn = Present(label)))
-
     /** Appends one meter with an explicit CSS color (`#hex` or `var(--token)`). */
-    def meter(label: String, value: Double, color: String): MeterGroup =
+    def meter(label: String | Signal[String], value: Double, color: String): MeterGroup =
         copy(metersV = metersV :+ MeterGroup.Meter(label, value, Present(color)))
 
-    /** Reactive-label variant with an explicit CSS color. */
-    def meter(label: Signal[String], value: Double, color: String): MeterGroup =
-        copy(metersV = metersV :+ MeterGroup.Meter("", value, Present(color), labelDyn = Present(label)))
-
     /** Appends one meter whose label leads with `icon` instead of the color marker. */
-    def meter(label: String, value: Double, icon: IconGlyph): MeterGroup =
+    def meter(label: String | Signal[String], value: Double, icon: IconGlyph): MeterGroup =
         copy(metersV = metersV :+ MeterGroup.Meter(label, value, Absent, Present(icon)))
 
-    /** Reactive-label variant whose label leads with `icon`. */
-    def meter(label: Signal[String], value: Double, icon: IconGlyph): MeterGroup =
-        copy(metersV = metersV :+ MeterGroup.Meter("", value, Absent, Present(icon), Present(label)))
-
     /** Appends one meter with an explicit CSS color and a leading label icon. */
-    def meter(label: String, value: Double, color: String, icon: IconGlyph): MeterGroup =
+    def meter(label: String | Signal[String], value: Double, color: String, icon: IconGlyph): MeterGroup =
         copy(metersV = metersV :+ MeterGroup.Meter(label, value, Present(color), Present(icon)))
-
-    /** Reactive-label variant with an explicit CSS color and a leading label icon. */
-    def meter(label: Signal[String], value: Double, color: String, icon: IconGlyph): MeterGroup =
-        copy(metersV = metersV :+ MeterGroup.Meter("", value, Present(color), Present(icon), Present(label)))
 
     /** Appends the given meters. */
     def meters(ms: Seq[MeterGroup.Meter]): MeterGroup = copy(metersV = metersV ++ ms.toList)
@@ -163,11 +147,11 @@ final case class MeterGroup private (
                                     GlyphSvg.styled(g, _.color(colorOf(m, i)), "p-metergroup-label-icon")
                                 case Absent =>
                                     span.cssClass("p-metergroup-label-marker").style(_.bg(colorOf(m, i)))
-                            val labelText: UI = m.labelDyn match
-                                case Present(sig) =>
+                            val labelText: UI = m.label match
+                                case TextValue.Dyn(sig) =>
                                     sig.render(t => span.cssClass("p-metergroup-label-text")(s"$t (${math.round(pct(m.value))}%)"))
-                                case Absent =>
-                                    span.cssClass("p-metergroup-label-text")(s"${m.label} (${math.round(pct(m.value))}%)")
+                                case TextValue.Const(t) =>
+                                    span.cssClass("p-metergroup-label-text")(s"$t (${math.round(pct(m.value))}%)")
                             List(lead, labelText)
                     toChild(li.cssClass("p-metergroup-label")(content.map(toChild)*))
                 }*
@@ -191,17 +175,32 @@ object MeterGroup:
     /** One meter: `label` + `value` (scaled against the group's `max`), an
       * optional CSS color (`#hex` or `var(--token)`; unset draws from the
       * rotating default palette), and an optional label icon (replaces the color
-      * marker, tinted with the meter color — Prime semantics). When `labelDyn` is
-      * set (via the `Signal[String]` `meter` overloads) it drives the label text
-      * reactively and the constant `label` is unused (left empty).
+      * marker, tinted with the meter color — Prime semantics). A reactive label
+      * re-renders only its own text region; the `(NN%)` suffix follows the value.
       */
-    final case class Meter(
-        label: String,
+    final case class Meter private[uic] (
+        label: TextValue,
         value: Double,
-        color: Maybe[String] = Absent,
-        icon: Maybe[IconGlyph] = Absent,
-        labelDyn: Maybe[Signal[String]] = Absent
-    )
+        color: Maybe[String],
+        icon: Maybe[IconGlyph]
+    ):
+        /** The label as plain text, `""` for a reactive one. What a [[meterTemplate]] or
+          * [[labelTemplate]] reads when it composes its own label string: the carrier itself is
+          * package-private, and a template that wants the reactive text should take the signal it
+          * built the meter from rather than read it back out here.
+          */
+        def labelText: String = label.constOrEmpty
+    end Meter
+
+    object Meter:
+        /** Construct a meter. A `Signal[String]` label re-renders in place on emission. */
+        def apply(
+            label: String | Signal[String],
+            value: Double,
+            color: Maybe[String] = Absent,
+            icon: Maybe[IconGlyph] = Absent
+        ): Meter = new Meter(ReactiveValue(label), value, color, icon)
+    end Meter
 
     /** The rotating default segment palette (Prime theme tokens). */
     private val palette: Vector[Style.Color] = Vector(

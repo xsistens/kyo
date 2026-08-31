@@ -64,19 +64,16 @@ final case class FileUpload private (
       */
     def value(ref: SignalRef[Seq[UI.FilePayload]]): FileUpload = copy(filesRef = Present(ref))
 
-    /** Label of the choose button (default "Choose", Prime's locale default). */
-    def chooseLabel(v: String): FileUpload = copy(chooseLabelV = TextValue.Const(v))
-
-    /** Reactive choose-button label tracking `sig` — re-renders in place on emission. */
-    def chooseLabel(sig: Signal[String]): FileUpload = copy(chooseLabelV = TextValue.Dyn(sig))
-
-    /** Empty-state text of the `span.p-fileupload-filelabel` (default "No file
-      * chosen"). Once a file is picked, the label shows the chosen name(s).
+    /** Label of the choose button (default "Choose", Prime's locale default). A `Signal[String]` re-renders
+      * it in place on emission.
       */
-    def fileLabel(v: String): FileUpload = copy(fileLabelV = Present(TextValue.Const(v)))
+    def chooseLabel(v: String | Signal[String]): FileUpload = copy(chooseLabelV = ReactiveValue(v))
 
-    /** Reactive empty-state file label tracking `sig` — re-renders in place on emission. */
-    def fileLabel(sig: Signal[String]): FileUpload = copy(fileLabelV = Present(TextValue.Dyn(sig)))
+    /** Empty-state text of the `span.p-fileupload-filelabel` (default "No file chosen"). Once a file is
+      * picked, the label shows the chosen name(s). A `Signal[String]` re-renders the empty-state text in
+      * place on emission.
+      */
+    def fileLabel(v: String | Signal[String]): FileUpload = copy(fileLabelV = Present(ReactiveValue(v)))
 
     /** Native `accept` filter (kyo's typed [[kyo.UI.FileAccept]] vocabulary). */
     def accept(vs: FileAccept*): FileUpload = copy(acceptV = acceptV ++ vs.toList)
@@ -87,21 +84,9 @@ final case class FileUpload private (
     /** Disables the control: the button dims and the input locks. */
     def disabled(v: Boolean): FileUpload = copy(disabledFlag = v)
 
-    /** Marks the control invalid (`.p-invalid` + `aria-invalid`). */
-    def invalid(v: Boolean): FileUpload = copy(invalidV = Present(BoolValue.Const(v)))
-
-    /** Reactive validity: the bound signal toggles the invalid state on emission. */
-    def invalid(sig: Signal[Boolean]): FileUpload = copy(invalidV = Present(BoolValue.Dyn(sig)))
-
-    /** Message rendered below the control while it is invalid (kyo extension —
-      * `div.p-uic-invalid-message`).
-      */
-    def invalidMessage(v: String): FileUpload = copy(invalidMsgV = Present(v))
-
-    /** Reactive invalid message — `Present` shows the row and (by default) marks the
-      * control invalid; `Absent` clears both.
-      */
-    def invalidMessage(sig: Signal[Maybe[String]]): FileUpload = copy(invalidMsgDynV = Present(sig))
+    private[uic] def withInvalid(v: Maybe[BoolValue]): FileUpload                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): FileUpload                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): FileUpload = copy(invalidMsgDynV = v)
 
     /** Fired with the picked files' [[kyo.UI.FilePayload]] metadata (name, size,
       * mimeType, content) once a file is chosen — after the [[value]] write-back.

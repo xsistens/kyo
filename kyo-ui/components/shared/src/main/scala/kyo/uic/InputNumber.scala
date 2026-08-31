@@ -2,6 +2,7 @@ package kyo.uic
 
 import kyo.*
 import kyo.UI.*
+import scala.annotation.targetName
 
 /** InputNumber button layout (Prime's `buttonLayout`): `Stacked` (default —
   * the up/down pair docked inside the field's end), `Horizontal` (decrement |
@@ -63,16 +64,20 @@ final case class InputNumber private (
     onBlurF: Maybe[Double => Any < Async] = Absent,
     integerFlag: Boolean = false,
     focusAutoFlag: Boolean = false
-) extends Node, NumberFormControl:
+) extends Node, NumberFormControl, HasPlaceholder, HasAccessibleName:
     type Self = InputNumber
 
-    /** Sets a constant value. */
-    def value(v: Double): InputNumber = copy(valueBinding = Present(InputNumber.Value.Const(v)))
-
-    /** Binds two-way to `ref`: edits and spin clicks write the clamped value back,
-      * ref changes re-render the field.
+    /** The field's value, in any of the three bindings a value slot holds. A constant renders it
+      * statically. A writable `SignalRef[Double]` binds TWO-WAY: edits and spin clicks write the
+      * clamped value back, and ref changes re-render the field. Any other `Signal[Double]` binds
+      * one-way, so the field tracks it and edits write nowhere.
+      *
+      * The two-way choice is made on the runtime class, so ascribing a ref as `Signal[Double]` does
+      * not opt out of write-back; pass `ref.readOnly` for that. See [[text]] for the binding that
+      * carries what was typed rather than what parses.
       */
-    def value(ref: SignalRef[Double]): InputNumber = copy(valueBinding = Present(InputNumber.Value.Ref(ref)))
+    @targetName("valueNumber")
+    def value(v: Double | Signal[Double]): InputNumber = copy(valueBinding = Present(InputNumber.Value(v)))
 
     /** Binds the field's raw TEXT two-way, for a caller that needs what was typed rather
       * than a number.
@@ -113,12 +118,7 @@ final case class InputNumber private (
     /** Static adornment AFTER the field (`.p-uic-inputnumber-suffix`). */
     def suffix(v: String): InputNumber = copy(suffixV = Present(v))
 
-    def placeholder(v: String): InputNumber = copy(placeholderText = Present(TextValue.Const(v)))
-
-    /** Reactive placeholder that tracks `sig` — patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render of the field) on each emission.
-      */
-    def placeholder(sig: Signal[String]): InputNumber = copy(placeholderText = Present(TextValue.Dyn(sig)))
+    private[uic] def withPlaceholder(v: Maybe[TextValue]): InputNumber = copy(placeholderText = v)
 
     /** Disables the field + spin buttons; a `Signal[Boolean]` toggles it reactively (re-render). */
     def disabled(v: Boolean | Signal[Boolean]): InputNumber = copy(disabledFlag = Present(ReactiveValue(v)))
@@ -138,29 +138,11 @@ final case class InputNumber private (
     /** Spans the full container width (`.p-inputnumber-fluid`). */
     def fluid(v: Boolean): InputNumber = copy(fluidFlag = v)
 
-    /** Marks the field invalid (`.p-invalid` + `aria-invalid`). */
-    def invalid(v: Boolean): InputNumber = copy(invalidV = Present(BoolValue.Const(v)))
+    private[uic] def withInvalid(v: Maybe[BoolValue]): InputNumber                       = copy(invalidV = v)
+    private[uic] def withInvalidMessage(v: Maybe[String]): InputNumber                   = copy(invalidMsgV = v)
+    private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): InputNumber = copy(invalidMsgDynV = v)
 
-    /** Message rendered below the field while `invalid(true)`. */
-    def invalidMessage(v: String): InputNumber = copy(invalidMsgV = Present(v))
-
-    /** Reactive validity: the bound signal toggles `.p-invalid` + `aria-invalid` in
-      * place. Explicit override of the message-derived red default.
-      */
-    def invalid(sig: Signal[Boolean]): InputNumber = copy(invalidV = Present(BoolValue.Dyn(sig)))
-
-    /** Reactive invalid message — `Present` shows the row and (by default) turns the
-      * field red; `Absent` clears both. Re-renders in place on emission.
-      */
-    def invalidMessage(sig: Signal[Maybe[String]]): InputNumber = copy(invalidMsgDynV = Present(sig))
-
-    /** Accessible name → `aria-label` on the input. */
-    def accessibleName(v: String): InputNumber = copy(accNameV = Present(TextValue.Const(v)))
-
-    /** Reactive accessible name — `aria-label` patched IN PLACE via kyo-ui's attribute
-      * channel (`setAttribute`, no re-render).
-      */
-    def accessibleName(sig: Signal[String]): InputNumber = copy(accNameV = Present(TextValue.Dyn(sig)))
+    private[uic] def withAccessibleName(v: Maybe[TextValue]): InputNumber = copy(accNameV = v)
 
     /** Native element `id` — pair with `Label.forId` / `FloatLabel.forId`. */
     def id(v: String): InputNumber = copy(idV = Present(v))
@@ -209,6 +191,7 @@ final case class InputNumber private (
     private def renderStatic(using Frame): UI =
         valueBinding match
             case Present(InputNumber.Value.Ref(ref)) => ref.render(v => body(Present(v), Present(ref)))
+            case Present(InputNumber.Value.Dyn(sig)) => sig.render(v => body(Present(v), Absent))
             case Present(InputNumber.Value.Const(v)) => body(Present(v), Absent)
             // No `render` here on purpose: a text binding is kyo's own two-way channel on
             // the field, so the value travels without a subscription. Re-rendering the
@@ -356,9 +339,24 @@ object InputNumber:
         if v.isWhole && math.abs(v) < 1e15 then v.toLong.toString else v.toString
 
     /** Const-or-ref carrier for the pending `value` (the Input pattern, Double-typed). */
+
+    /** How the field's number is bound. `Const`/`Ref`/`Dyn` mirror the three cases of
+      * [[ReactiveValue]]; `Text` is this control's own, and the reason the slot is a separate
+      * enum rather than a `ReactiveValue[Double]`: it binds the raw string instead.
+      */
     private[uic] enum Value:
         case Const(v: Double)
         case Ref(ref: SignalRef[Double])
+        case Dyn(sig: Signal[Double])
         case Text(ref: SignalRef[String])
     end Value
+
+    /** The `Const`/`Ref`/`Dyn` case matching the union a value setter takes. A writable
+      * `SignalRef` binds two-way, any other signal one-way; `SignalRef` is tested first because
+      * it IS a `Signal`.
+      */
+    private[uic] def Value(v: Double | Signal[Double]): Value = v match
+        case r: SignalRef[Double] @unchecked => Value.Ref(r)
+        case s: Signal[Double] @unchecked    => Value.Dyn(s)
+        case d: Double                       => Value.Const(d)
 end InputNumber

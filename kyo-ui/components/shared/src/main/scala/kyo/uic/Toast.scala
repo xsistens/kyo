@@ -54,19 +54,15 @@ final case class Toast private (
       */
     def severity(v: Severity): Toast = copy(severityV = v)
 
-    /** Bold first line (`span.p-toast-summary`). */
-    def summary(v: String): Toast = copy(summaryV = Present(TextValue.Const(v)))
-
-    /** Reactive summary that tracks `sig` — re-renders in place on emission (e.g. a
-      * locale-driven `I18n.t` leaf).
+    /** Bold first line (`span.p-toast-summary`). A `Signal[String]` re-renders it in place on emission
+      * (e.g. a locale-driven `I18n.t` leaf).
       */
-    def summary(sig: Signal[String]): Toast = copy(summaryV = Present(TextValue.Dyn(sig)))
+    def summary(v: String | Signal[String]): Toast = copy(summaryV = Present(ReactiveValue(v)))
 
-    /** Detail line below the summary (`div.p-toast-detail`). */
-    def detail(v: String): Toast = copy(detailV = Present(TextValue.Const(v)))
-
-    /** Reactive detail that tracks `sig` — re-renders in place on emission. */
-    def detail(sig: Signal[String]): Toast = copy(detailV = Present(TextValue.Dyn(sig)))
+    /** Detail line below the summary (`div.p-toast-detail`). A `Signal[String]` re-renders it in place on
+      * emission.
+      */
+    def detail(v: String | Signal[String]): Toast = copy(detailV = Present(ReactiveValue(v)))
 
     /** Renders Prime's close button; pressing it writes the bound ref to `false`. */
     def closable(v: Boolean): Toast = copy(closableFlag = v)
