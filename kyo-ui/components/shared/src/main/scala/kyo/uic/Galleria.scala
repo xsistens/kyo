@@ -103,11 +103,62 @@ final case class Galleria private (
     def onItemChange(f: Int => Any < Async): Galleria = copy(onItemChangeF = Present(f))
 
     private[uic] def render(using Frame): UI =
-        activeRef match
-            case Present(r) => r.render(body)
-            case Absent     => body(0)
+        UI.mounted {
+            UI.commands.map { cmds =>
+                cmds.freshId.map(base => shown(base, id => cmds.focusId(id)))
+            }
+        }.placeholder(shown("", _ => ()))
 
-    private def body(rawIndex: Int)(using Frame): UI =
+    /** The rendered gallery. An empty `base` is the placeholder a golden render and an SSG page
+      * show: no mount has run, so there is nothing to move focus with and the strips stay as they
+      * were, which is a gallery whose dots and thumbnails are reachable by clicking.
+      */
+    private def shown(base: String, focus: String => Any < Async)(using Frame): UI =
+        activeRef match
+            case Present(r) => r.render(i => body(i, base, focus))
+            case Absent     => body(0, base, focus)
+
+    /** The seam the golden tests render, since a mount shows only its placeholder there. */
+    private[uic] def wired(base: String, focus: String => Any < Async)(using Frame): UI = shown(base, focus)
+
+    /** One id per indicator dot and per thumbnail, derived from the one minted id. */
+    private def dotId(base: String, i: Int): String   = s"$base-d$i"
+    private def thumbId(base: String, i: Int): String = s"$base-t$i"
+
+    /** Stamps a strip button with its id and the arrows that reach its neighbours.
+      *
+      * An empty `base` is the placeholder render, which has no mount to move focus from, so the
+      * button is returned untouched and the strip stays what it was.
+      */
+    private def roving(
+        el: Ast.Button,
+        base: String,
+        idAt: (String, Int) => String,
+        i: Int,
+        focus: String => Any < Async
+    )(using Frame): Ast.Button =
+        if base.isEmpty then el
+        else el.id(idAt(base, i)).onKeyDown(stripMove(base, idAt, i, focus))
+
+    /** Moves focus along a strip of `itemList.size` buttons, and does nothing else.
+      *
+      * A dot and a thumbnail are both real `<button>`s, so Enter and Space are already the
+      * browser's and the dispatcher's; this handler only supplies what the roving tabindex took
+      * away, which is any way at all of reaching the other buttons. Both strips lie horizontally,
+      * so both take the horizontal arrows.
+      */
+    private def stripMove(base: String, idAt: (String, Int) => String, self: Int, focus: String => Any < Async)(using
+        Frame
+    ): KeyboardEvent => Any < Async = e =>
+        val navigable = itemList.indices.toList
+        ListNav.onKey(navigable, self, e.key, wrap = circularFlag, ListNav.Orientation.Horizontal) match
+            case Present(step) if step.focus != self && navigable.contains(step.focus) =>
+                focus(idAt(base, step.focus))
+            case _ => ()
+        end match
+    end stripMove
+
+    private def body(rawIndex: Int, base: String, focus: String => Any < Async)(using Frame): UI =
         if itemList.isEmpty then div.cssClass("p-galleria").cssClass("p-component")()
         else
             val active  = math.min(math.max(rawIndex, 0), itemList.size - 1)
@@ -183,11 +234,17 @@ final case class Galleria private (
                                 toChild(
                                     item(
                                         toChild(
-                                            button
-                                                .cssClass("p-galleria-indicator-button")
-                                                .jsProp("type", "button")
-                                                .aria("label", s"Item ${i + 1}")
-                                                .tabIndex(if i == active then 0 else -1)
+                                            roving(
+                                                button
+                                                    .cssClass("p-galleria-indicator-button")
+                                                    .jsProp("type", "button")
+                                                    .aria("label", s"Item ${i + 1}")
+                                                    .tabIndex(if i == active then 0 else -1),
+                                                base,
+                                                dotId,
+                                                i,
+                                                focus
+                                            )
                                         )
                                     )
                                 )
@@ -241,13 +298,19 @@ final case class Galleria private (
                                     .cssClass("p-uic-galleria-thumbnail-image")
                         itemEl(
                             toChild(
-                                button
-                                    .cssClass("p-galleria-thumbnail")
-                                    .jsProp("type", "button")
-                                    .tabIndex(if i == active then 0 else -1)
-                                    .aria("label", s"Item ${i + 1}")
-                                    .aria("current", if i == active then "page" else "false")
-                                    .onClick(setActive(i))(toChild(content))
+                                roving(
+                                    button
+                                        .cssClass("p-galleria-thumbnail")
+                                        .jsProp("type", "button")
+                                        .tabIndex(if i == active then 0 else -1)
+                                        .aria("label", s"Item ${i + 1}")
+                                        .aria("current", if i == active then "page" else "false")
+                                        .onClick(setActive(i)),
+                                    base,
+                                    thumbId,
+                                    i,
+                                    focus
+                                )(toChild(content))
                             )
                         )
                     }

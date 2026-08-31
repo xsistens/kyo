@@ -6150,21 +6150,52 @@ class GoldenRenderTest extends UicTest:
             }.map(_.render).flatMap(renderHtml)
             // The shapes that already get it right, so the invariant is proven to have teeth
             // in both directions rather than only where it currently bites.
-            card   <- renderHtml(uic.Card().title("Info").onHeaderClick(())(p("Body")))
-            avatar <- renderHtml(uic.Avatar().initials("AL").onClick(()))
+            // The roving-tabindex family, rendered through the `wired` seam: their key handlers
+            // live in a mount, and a golden render shows a mount only as its placeholder.
+            tabs <- renderHtml(
+                uic.Tabs().tabs(uic.Tab("One", p("1"), "one"), uic.Tab("Two", p("2"), "two"))
+                    .wired(List("k0", "k1"), _ => ())
+            )
+            carPage  <- Signal.initRef(0)
+            carStart <- Signal.initRef(0.0)
+            carousel <- renderHtml(
+                uic.Carousel[String]().items(Seq("a", "b"))(x => p(x)).wired(carPage, "car", carStart, _ => ())
+            )
+            galAt <- Signal.initRef(0)
+            galleria <- renderHtml(
+                uic.Galleria().items(uic.GalleriaItem("/a.png", "A"), uic.GalleriaItem("/b.png", "B"))
+                    .showIndicators(true).showThumbnails(true).activeIndex(galAt).wired("g", _ => ())
+            )
+            stepAt <- Signal.initRef(0)
+            stepper <- renderHtml(
+                uic.Stepper().step("One")(p("1")).step("Two")(p("2")).active(stepAt).wired(List("s0", "s1"), _ => ())
+            )
+            // A `role="group"` of toggle buttons is NOT a composite widget: it asks for no roving
+            // and no arrows, and Prime leaves every button its own tab stop. Rendered here so the
+            // invariant proves that shape stays reachable rather than being roved by mistake.
+            pick      <- Signal.initRef("a")
+            segmented <- renderHtml(uic.SelectButton[String]().options(Seq("a", "b")).value(pick).render)
+            card      <- renderHtml(uic.Card().title("Info").onHeaderClick(())(p("Body")))
+            avatar    <- renderHtml(uic.Avatar().initials("AL").onClick(()))
         yield
             val named = List(
-                "Icon" -> icon,
-                "Inplace" -> inplace,
+                "Icon"              -> icon,
+                "Inplace"           -> inplace,
                 "OrganizationChart" -> org,
-                "DataTable" -> table,
-                "TreeTable" -> tree,
-                "Card" -> card,
-                "Avatar" -> avatar
+                "DataTable"         -> table,
+                "TreeTable"         -> tree,
+                "Tabs"              -> tabs,
+                "Carousel"          -> carousel,
+                "Galleria"          -> galleria,
+                "Stepper"           -> stepper,
+                "SelectButton"      -> segmented,
+                "Card"              -> card,
+                "Avatar"            -> avatar
             )
             val offenders = named.flatMap((name, html) => deadTabStops(html).map(el => s"$name: $el"))
             assert(offenders.isEmpty, s"these tab stops answer no key:\n${offenders.mkString("\n")}")
             assert(card.nonEmpty && avatar.nonEmpty, "the two known-good shapes rendered at all")
+        end for
     }
 
 end GoldenRenderTest

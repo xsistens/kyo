@@ -78,20 +78,66 @@ final case class Stepper private (
     private def stepValue(i: Int): String = steps(i).value.getOrElse((i + 1).toString)
 
     private[uic] def render(using Frame): UI =
+        UI.mounted {
+            UI.commands.map { cmds =>
+                Kyo.foreach(steps.toList)(_ => cmds.freshId).map(ids => shown(ids.toList, id => cmds.focusId(id)))
+            }
+        }.placeholder(shown(Nil, _ => ()))
+
+    /** The rendered stepper. Empty `ids` is the placeholder a golden render and an SSG page show:
+      * no mount has run, so there is nothing to move focus with and every enabled header stays its
+      * own tab stop, which is what the component did before the arrows.
+      */
+    private def shown(ids: List[String], focus: String => Any < Async)(using Frame): UI =
         valueRef match
             case Present(ref) =>
-                ref.render(v => body(steps.indices.find(stepValue(_) == v).getOrElse(0)))
+                ref.render(v => body(steps.indices.find(stepValue(_) == v).getOrElse(0), ids, focus))
             case Absent =>
                 activeRef match
-                    case Present(ref) => ref.render(body)
-                    case Absent       => body(0)
+                    case Present(ref) => ref.render(a => body(a, ids, focus))
+                    case Absent       => body(0, ids, focus)
 
-    private def body(active: Int)(using Frame): UI =
+    /** The seam the golden tests render, since a mount shows only its placeholder there. */
+    private[uic] def wired(ids: List[String], focus: String => Any < Async)(using Frame): UI = shown(ids, focus)
+
+    /** The positions a header arrow may land on: a blocked step is not focusable, so it is stepped
+      * over. Linear mode blocks everything past the current step.
+      */
+    private def navigableSteps(cur: Int): List[Int] =
+        steps.indices.toList.filterNot(i => steps(i).disabled || (linearFlag && i > cur))
+
+    /** Moves focus between headers, and does nothing else: a header IS a `<button>`, so Enter and
+      * Space already reach it once, and a third activation from here would be one too many.
+      */
+    private def headerMove(ids: List[String], navigable: List[Int], self: Int, axis: ListNav.Orientation, focus: String => Any < Async)(
+        using Frame
+    ): KeyboardEvent => Any < Async = e =>
+        ListNav.onKey(navigable, self, e.key, wrap = true, axis) match
+            case Present(step) if step.focus != self && ids.isDefinedAt(step.focus) => focus(ids(step.focus))
+            case _                                                                  => ()
+
+    private def body(active: Int, ids: List[String], focus: String => Any < Async)(using Frame): UI =
         val cur = math.min(math.max(active, 0), math.max(steps.length - 1, 0))
-        if verticalFlag then verticalBody(cur) else horizontalBody(cur)
+        if verticalFlag then verticalBody(cur, ids, focus) else horizontalBody(cur, ids, focus)
 
-    /** The shared `div.p-step` header row (button + number + title). */
-    private def stepHeader(st: Stepper.StepDef, i: Int, cur: Int)(using Frame): UI =
+    /** The shared `div.p-step` header row (button + number + title).
+      *
+      * `tablist` says whether the headers sit together in one container. They do in the horizontal
+      * layout, which makes that layout a real ARIA tablist: `role="tab"` on the headers, ONE tab
+      * stop, and the arrows moving between them. They do not in the vertical layout, where each
+      * header sits inside its own `p-stepitem` beside its own panel; that is an accordion's shape,
+      * not a tablist's, so the headers carry no `role="tab"` there (a tab outside a tablist is a
+      * structure a screen reader cannot read) and each stays its own tab stop, with the arrows
+      * added on top exactly as [[Accordion]] has them.
+      */
+    private def stepHeader(
+        st: Stepper.StepDef,
+        i: Int,
+        cur: Int,
+        tablist: Boolean,
+        ids: List[String],
+        focus: String => Any < Async
+    )(using Frame): UI =
         val isActive = i == cur
         // Linear: only backward (and re-clicking the current step) is reachable
         // via the headers; forward jumps go through the bound ref (a Next button).
@@ -101,9 +147,16 @@ final case class Stepper private (
         var header = button
             .cssClass("p-step-header")
             .jsProp("type", "button")
-            .role("tab")
+        if tablist then header = header.role("tab").aria("selected", isActive.toString)
         if blocked then header = header.disabled(true).tabIndex(-1)
-        else if !isActive then header = header.onClick(activate(i))
+        else
+            if !isActive then header = header.onClick(activate(i))
+            if ids.isDefinedAt(i) then
+                val axis = if tablist then ListNav.Orientation.Horizontal else ListNav.Orientation.Vertical
+                if tablist then header = header.tabIndex(if isActive then 0 else -1)
+                header = header.id(ids(i)).onKeyDown(headerMove(ids, navigableSteps(cur), i, axis, focus))
+            end if
+        end if
         val titleSlot: UI = st.title match
             case TextValue.Const(t) => span.cssClass("p-step-title")(t): UI
             case TextValue.Dyn(s)   => s.render(t => span.cssClass("p-step-title")(t))
@@ -122,8 +175,8 @@ final case class Stepper private (
         stepEl((headerEl :: separatorSlot).map(toChild)*)
     end stepHeader
 
-    private def horizontalBody(cur: Int)(using Frame): UI =
-        val stepEls: List[UI] = steps.zipWithIndex.map((st, i) => stepHeader(st, i, cur))
+    private def horizontalBody(cur: Int, ids: List[String], focus: String => Any < Async)(using Frame): UI =
+        val stepEls: List[UI] = steps.zipWithIndex.map((st, i) => stepHeader(st, i, cur, tablist = true, ids, focus))
 
         val panel: List[UI] = steps.lift(cur).toList.map { st =>
             animatedPanel(cur, horizontalPanel(st, animated = false), horizontalPanel(st, animated = true))
@@ -132,7 +185,7 @@ final case class Stepper private (
         var root = div.cssClass("p-stepper").cssClass("p-component")
         if linearFlag then root = root.cssClass("p-stepper-readonly")
         root(
-            toChild(div.cssClass("p-steplist")(stepEls.map(toChild)*)),
+            toChild(div.cssClass("p-steplist").role("tablist")(stepEls.map(toChild)*)),
             toChild(div.cssClass("p-steppanels")(panel.map(toChild)*))
         )
     end horizontalBody
@@ -162,13 +215,16 @@ final case class Stepper private (
       * `animated` adds the crossfade transition hooks (only the live mount).
       */
     private def verticalPanel(wrapperChildren: List[UI], animated: Boolean)(using Frame): UI =
-        var p = div.cssClass("p-steppanel").cssClass("p-steppanel-active").role("tabpanel")
+        // No `role="tabpanel"` here: the vertical layout has no tablist, so its headers are not
+        // tabs and this is not their panel. A tabpanel with no tab is a dangling reference a
+        // screen reader reads as a broken relationship.
+        var p = div.cssClass("p-steppanel").cssClass("p-steppanel-active")
         if animated then
             p = p.cssClass("p-uic-steppanel-anim").enterTransition("p-uic-enter-fade").leaveTransition("p-uic-leave-fade")
         p(toChild(div.cssClass("p-steppanel-content-wrapper")(wrapperChildren.map(toChild)*)))
     end verticalPanel
 
-    private def verticalBody(cur: Int)(using Frame): UI =
+    private def verticalBody(cur: Int, ids: List[String], focus: String => Any < Async)(using Frame): UI =
         val items: List[UI] = steps.zipWithIndex.map { (st, i) =>
             val isActive = i == cur
 
@@ -190,7 +246,7 @@ final case class Stepper private (
 
             var item = div.cssClass("p-stepitem")
             if isActive then item = item.cssClass("p-stepitem-active")
-            item((stepHeader(st, i, cur) :: panel).map(toChild)*)
+            item((stepHeader(st, i, cur, tablist = false, ids, focus) :: panel).map(toChild)*)
         }
 
         var root = div.cssClass("p-stepper").cssClass("p-component")
