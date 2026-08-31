@@ -463,7 +463,7 @@ object UI:
         // PERSISTENT viewport-observer signals, keyed by id. Unlike `pendingById` (one-shot: the Promise is consumed on
         // the first MeasureById reply), an entry here is KEPT across replies: each reply pushes the new Rect into the
         // SignalRef so a scroll/resize stream keeps updating it. Removed only by observeViewportById's scope finalizer.
-        // An id lives in exactly one of the two maps.
+        // An id can sit in both maps at once (an observed element measured on demand); deliverMeasureById serves both.
         private[kyo] val observers: AtomicRef[Map[String, Signal.SignalRef[Maybe[Rect]]]],
         private[kyo] val idCounter: AtomicInt
     ):
@@ -560,20 +560,27 @@ object UI:
             }
         end requestMeasureByIds
 
-        /** Transport hook: deliver `rect` for `id`. Checks BOTH maps: a PERSISTENT [[observers]] SignalRef (viewport
-          * observation) is updated and KEPT (the stream continues); otherwise the one-shot [[pendingById]] Promise is
-          * completed and dropped. An id is only ever in one map, so the observer branch takes precedence and short-circuits.
+        /** Transport hook: deliver `rect` for `id`. Serves BOTH maps: a PERSISTENT [[observers]] SignalRef (viewport
+          * observation) is updated and KEPT (the stream continues), and a one-shot [[pendingById]] Promise is completed
+          * and dropped.
+          *
+          * Both, not whichever comes first: an id can legitimately sit in both maps, since observing an element does not
+          * stop a caller from asking what it measures right now, and the two are registered by different call sites that
+          * cannot see each other. Serving only the observer left such a request unanswered, and an unanswered request
+          * never returns.
           */
         private[kyo] def deliverMeasureById(id: String, rect: Rect)(using Frame): Unit < Async =
             observers.get.map { obs =>
-                obs.get(id) match
+                val observed: Unit < Sync = obs.get(id) match
                     case Some(ref) => ref.set(Present(rect))
-                    case None =>
-                        pendingById.getAndUpdate(_.removed(id)).map { m =>
-                            m.get(id) match
-                                case Some(p) => p.completeDiscard(Result.succeed(rect))
-                                case None    => ()
-                        }
+                    case None      => ()
+                observed.andThen(
+                    pendingById.getAndUpdate(_.removed(id)).map { m =>
+                        m.get(id) match
+                            case Some(p) => p.completeDiscard(Result.succeed(rect))
+                            case None    => ()
+                    }
+                )
             }
 
         // ---- in-place reactive attribute patching + viewport observation ----
