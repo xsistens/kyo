@@ -4,7 +4,9 @@ import kyo.Browser.*
 import kyo.internal.HtmlOp
 import kyo.internal.KeyboardEventData
 import kyo.internal.MouseEventData
+import kyo.internal.ReactiveUI
 import kyo.internal.UIEvent
+import kyo.internal.UIExchange
 
 class ReactiveUITest extends UITest:
 
@@ -202,6 +204,58 @@ class ReactiveUITest extends UITest:
                 _ <- Browser.assertText(Selector.id("cnt"), "5")
             yield ()
         }
+    }
+
+    // ---- keyboard activation the dispatcher emulates ----
+    //
+    // No browser runs these: the tree is normalized, subscribed, and handed a `UIEvent.KeyDown`
+    // directly, which is what both transports post once the client shim has had its say. The shim's
+    // own half (which browser default to suppress) is `KeyPolicy`'s, pinned in `KeyPolicyTest`.
+
+    private class NoopExchange extends UIExchange:
+        def onChange(path: Seq[String], ui: UI, mount: Boolean)(using Frame): Unit < Async = ()
+
+    /** Runs one key against a single element carrying a counting click handler. */
+    private def activations(target: AtomicInt => UI, key: String)(using Frame): Int < Async =
+        for
+            hits <- AtomicInt.init(0)
+            dispatch <- Scope.run {
+                for
+                    root         <- ReactiveUI.normalize(target(hits), Seq.empty)
+                    subscription <- ReactiveUI.subscribe(root, new NoopExchange)
+                yield subscription.handle
+            }
+            _     <- dispatch(Seq.empty, UIEvent.KeyDown(Seq.empty, KeyboardEventData(key, UI.Modifiers.none, Absent)))
+            count <- hits.get
+        yield count
+
+    private def anchor(hits: AtomicInt): UI =
+        UI.a.href(UI.Href.Path("/somewhere")).onClick(hits.incrementAndGet.unit)
+
+    private def button(hits: AtomicInt): UI =
+        UI.button("go").onClick(hits.incrementAndGet.unit)
+
+    "Enter activates an anchor" in {
+        activations(anchor, "Enter").map(n => assert(n == 1))
+    }
+
+    "Space does not activate an anchor" in {
+        // The ARIA link pattern is Enter-only, and the browser agrees: with a link focused Space
+        // scrolls the page, it does not follow the link. Emulating a Space activation here made
+        // every kyo link behave unlike every other link on the web.
+        activations(anchor, " ").map(n => assert(n == 0))
+    }
+
+    "Enter activates a button" in {
+        activations(button, "Enter").map(n => assert(n == 1))
+    }
+
+    "Space activates a button" in {
+        activations(button, " ").map(n => assert(n == 1))
+    }
+
+    "a key that activates nothing leaves the click handler alone" in {
+        activations(anchor, "ArrowDown").map(n => assert(n == 0))
     }
 
 end ReactiveUITest

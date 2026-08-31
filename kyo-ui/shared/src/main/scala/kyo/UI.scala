@@ -1366,7 +1366,12 @@ object UI:
               * movement or an option change, not a page scroll). A single-line input stays suppressed for vertical keys:
               * that is the combobox case where `ArrowDown` drives the listbox highlight. Horizontal/edge keys
               * (`ArrowLeft`/`ArrowRight`/`Home`/`End`) are suppressed only when the focused target is NOT a text-editable
-              * field, so caret movement inside a filter input keeps working.
+              * field, so caret movement inside a filter input keeps working. Space is suppressed for the same reason the
+              * arrows are, since a list that is ONE tab stop has no native control to consume it, and left alone wherever
+              * it would type or activate (a text field, a `button`, a `summary`); a link does not consume it either, so
+              * Space on an anchor inside the region is suppressed too.
+              *
+              * The rule itself is `kyo.internal.KeyPolicy`, which both clients answer from.
               *
               * Declarative by necessity: a kyo-ui handler runs asynchronously (and remotely on the server-push
               * transport), so it cannot decline the browser default in time. Both transports therefore read the emitted

@@ -1540,32 +1540,21 @@ private[kyo] object DomBackend:
             end if
         end if
 
-    /** True when `key` is a page-scrolling navigation key a `preventScrollKeys` region should suppress on `target`.
-      * Vertical keys are exempt when `target` consumes them itself (caret line movement, option change) — there the
-      * browser default is not a page scroll, so there is nothing to suppress. A single-line input stays suppressed for
-      * vertical keys on purpose: that is the combobox case where `ArrowDown` drives the listbox highlight.
-      * Horizontal/edge keys are exempt for any text-editable target, so a filter input keeps caret movement.
-      */
-    /** Whether Enter or Space on `target` would activate it TWICE.
+    /** Whether the browser's own activation of `target` would run a handler the dispatcher runs again.
       *
-      * A button with a click handler is activated by the browser itself, and the dispatcher
-      * emulates that same activation from the keydown, for the transports and the tests where
-      * no browser does it. Both happen as soon as a keydown is posted at all, which is the
-      * moment anything in the chain declares one: an accordion that navigates its headers with
-      * the arrows opened a panel and closed it again on one press of Space.
-      *
-      * The browser's is the one to suppress, since the dispatcher's runs after the element's
-      * own `onKeyDown` and keeps the two in a defined order. Only an explicitly non-submitting
-      * button qualifies: the browser's Enter on a submit button also submits the form around
-      * it, which the emulation does not carry, and an anchor's Enter also navigates.
+      * The rule itself is [[KeyPolicy.doubleActivates]], shared with the server-push client; this
+      * reads the three facts it needs off the DOM.
       */
     private def doubleActivation(key: String, target: dom.Element): Boolean =
-        (key == "Enter" || key == " ") &&
-            target.tagName == "BUTTON" &&
-            !submits(target) && {
-                val declared = target.getAttribute("data-kyo-ev")
-                declared != null && declared.split(",").contains("click")
-            } && declaredInChain(target, "keydown")
+        val declared = target.getAttribute("data-kyo-ev")
+        KeyPolicy.doubleActivates(
+            key = key,
+            tag = target.tagName,
+            submits = submits(target),
+            declaresClick = declared != null && declared.split(",").contains("click"),
+            declaresKeyDown = declaredInChain(target, "keydown")
+        )
+    end doubleActivation
 
     /** Whether this button's native activation would submit a form, which is the one thing the
       * dispatcher's emulation does not carry and so the one case to leave alone.
@@ -1582,17 +1571,17 @@ private[kyo] object DomBackend:
         effective == "submit" && target.closest("form") != null
     end submits
 
+    /** Whether a `preventScrollKeys` region should suppress the browser's page scroll for `key` on
+      * `target`. The rule itself is [[KeyPolicy.preventsPageScroll]], shared with the server-push
+      * client; this reads the two facts it needs off the DOM.
+      */
     private def scrollKeyPrevented(key: String, target: dom.Element): Boolean =
-        val tag              = target.tagName
-        def contentEditable  = target.asInstanceOf[scalajs.js.Dynamic].isContentEditable.asInstanceOf[Boolean]
-        def editable         = tag == "INPUT" || tag == "TEXTAREA" || tag == "SELECT" || contentEditable
-        def verticalConsumer = tag == "TEXTAREA" || tag == "SELECT" || contentEditable
-        key match
-            case "ArrowUp" | "ArrowDown" | "PageUp" | "PageDown" => !verticalConsumer
-            case "ArrowLeft" | "ArrowRight" | "Home" | "End"     => !editable
-            case _                                               => false
-        end match
-    end scrollKeyPrevented
+        KeyPolicy.preventsPageScroll(
+            key = key,
+            tag = target.tagName,
+            contentEditable = target.asInstanceOf[scalajs.js.Dynamic].isContentEditable.asInstanceOf[Boolean]
+        )
+
     // ---- DOM morphing: patch a sibling range in place toward new HTML, preserving element identity ----
     // Replacing wholesale discards DOM-local state (focus, caret, scroll, in-flight transitions, pointer
     // capture) and node identity; morphing reuses nodes and patches only diffs. Reconciliation is

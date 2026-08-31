@@ -715,6 +715,40 @@ class FocusableTest extends UITest:
         }
     }
 
+    "preventScrollKeys suppresses the page scroll for Space on a list that is one tab stop" in {
+        // The list is the whole tab stop and nothing native is focused inside it, so the browser
+        // treated Space as page-down: picking the highlighted row also jumped a screenful.
+        val app: UI < Async =
+            for log <- Signal.initRef("")
+            yield UI.div(
+                UI.ul.id("list").tabIndex(0).preventScrollKeys
+                    .onKeyDown((_: KeyboardEvent) => log.set("picked"))(UI.li("one"), UI.li("two")),
+                UI.span(log).id("log"),
+                UI.div("spacer").style(Style.height(Length.Px(3000)))
+            )
+        withUI(app) {
+            for
+                _  <- Browser.focus(Selector.id("list"))
+                _  <- Browser.assertFocused(Selector.id("list"))
+                _  <- Browser.press(Selector.id("list"), Key.Space)
+                _  <- Browser.assertText(Selector.id("log"), "picked")
+                sp <- Browser.scrollPosition
+            yield assert(sp.y == 0)
+        }
+    }
+
+    "preventScrollKeys keeps Space typing in an input inside the region" in {
+        // The counterpart to the rule above: a filter header sits inside the same region, and a
+        // Space that stopped reaching it would be a worse bug than the scroll it prevents.
+        withUI(UI.div.preventScrollKeys(UI.input.id("filter"))) {
+            for
+                _   <- Browser.fill(Selector.id("filter"), "ab")
+                _   <- Browser.press(Selector.id("filter"), Key.Space)
+                txt <- Browser.eval("document.getElementById('filter').value")
+            yield assert(txt == "ab ", s"Space must still type into a field inside the region, got '$txt'")
+        }
+    }
+
     "preventScrollKeys keeps caret line movement in a textarea inside the region" in {
         // A textarea consumes vertical keys itself (caret line movement), so the region must not suppress them there.
         withUI(UI.div.preventScrollKeys(
