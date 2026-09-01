@@ -61,14 +61,14 @@ class AutoCompleteTest extends UicTest:
     "a printable key types rather than jumping, for the same reason" in
         after(1, UI.Keyboard.Char('c')).map(at => assert(at == 1))
 
-    "ArrowDown on a closed panel opens it rather than moving" in {
+    "ArrowDown on a closed panel opens it ON an option, so the next key can pick" in {
         for
             (hi, _, openRef, ui) <- state(-1, open = false)
             input                <- elementWithClass(ui, "p-autocomplete-input")
             _                    <- press(input, UI.Keyboard.ArrowDown)
             opened               <- openRef.get
             at                   <- hi.get
-        yield assert(opened && at == -1, "a closed panel has no highlight to move")
+        yield assert(opened && at == 0)
     }
 
     "Enter picks the highlighted suggestion" in {
@@ -106,6 +106,77 @@ class AutoCompleteTest extends UicTest:
             (_, _, _, ui) <- state(-1)
             input         <- elementWithClass(ui, "p-autocomplete-input")
         yield assert(!input.attrs.ariaAttrs.contains("activedescendant"))
+    }
+
+    /** The dropdown trigger is an affordance OF the combobox, not a widget beside it.
+      *
+      * It is its own tab stop and it opens the panel, but the keyboard of this component lives on
+      * the input. A reader who opened the list from the button was left standing on the button:
+      * no highlight to act on, no arrows, and no Escape, because none of those keys reach the
+      * input from there.
+      */
+    private def withDropdown(selected: String)(using
+        Frame
+    )
+        : (SignalRef[Int], SignalRef[Boolean], SignalRef[List[String]], UI) < Async =
+        for
+            openRef <- Signal.initRef(false)
+            hi      <- Signal.initRef(-1)
+            all     <- Signal.initRef(false)
+            text    <- Signal.initRef(selected)
+            moved   <- Signal.initRef(List.empty[String])
+            ui = uic.AutoComplete[String]().options(cities)(identity).optionKey(identity).id("ac")
+                .dropdown(true)
+                .value(text)
+                .wired(openRef, hi, all, Present("ac"), id => moved.updateAndGet(_ :+ id))
+        yield (hi, openRef, moved, ui)
+
+    "the dropdown trigger hands focus to the field, which is where the keyboard is" in {
+        for
+            (_, openRef, moved, ui) <- withDropdown("")
+            dd                      <- elementWithClass(ui, "p-autocomplete-dropdown")
+            _                       <- click(dd)
+            opened                  <- openRef.get
+            got                     <- moved.get
+        yield assert(opened && got == List("ac"), "the field answers to the base id")
+    }
+
+    "and it opens on the first option when nothing is selected" in {
+        for
+            (hi, _, _, ui) <- withDropdown("")
+            dd             <- elementWithClass(ui, "p-autocomplete-dropdown")
+            _              <- click(dd)
+            at             <- hi.get
+        yield assert(at == 0)
+    }
+
+    "or on the selected one when there is one" in {
+        for
+            (hi, _, _, ui) <- withDropdown("Cairo")
+            dd             <- elementWithClass(ui, "p-autocomplete-dropdown")
+            _              <- click(dd)
+            at             <- hi.get
+        yield assert(at == 2)
+    }
+
+    "and once focus is there, Escape closes what the trigger opened" in {
+        for
+            openRef <- Signal.initRef(true)
+            hi      <- Signal.initRef(1)
+            all     <- Signal.initRef(true)
+            text    <- Signal.initRef("")
+            ui = field.value(text).wired(openRef, hi, all, Present("ac"))
+            input <- elementWithClass(ui, "p-autocomplete-input")
+            _     <- press(input, UI.Keyboard.Escape)
+            still <- openRef.get
+        yield assert(!still)
+    }
+
+    "the field carries the base id, so the trigger has something to hand focus to" in {
+        for
+            (_, _, _, ui) <- withDropdown("")
+            input         <- elementWithClass(ui, "p-autocomplete-input")
+        yield assert(input.attrs.identifier.contains("ac"))
     }
 
 end AutoCompleteTest
