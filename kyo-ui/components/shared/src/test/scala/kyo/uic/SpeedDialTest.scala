@@ -53,15 +53,56 @@ class SpeedDialTest extends UicTest:
             assert(list.attrs.role.contains("menu"), "the empty list is still the menu the toggle names")
     }
 
-    "the open fan is ONE tab stop: the first action holds it, the rest answer the arrows" in {
+    "the dial is ONE tab stop, the toggle: an action is reached by opening, not by tabbing" in {
         for
             (_, _, ui) <- fan()
+            toggle     <- elementWithClass(ui, "p-speeddial-button")
             btns       <- elements(ui).map(_.filter(_.attrs.role.contains("menuitem")))
         yield
             assert(btns.size == 3, "every action is a menuitem, disabled ones included")
-            assert(btns(0).attrs.tabIndex.contains(0), "the first enabled action is the tab stop")
-            assert(btns(2).attrs.tabIndex.contains(-1), "the rest are reached by the arrows")
+            assert(!toggle.attrs.tabIndex.contains(-1), "the toggle is the tab stop, as a button is")
+            assert(btns(0).attrs.tabIndex.contains(-1), "no action holds a tab stop, not even the first")
+            assert(btns(2).attrs.tabIndex.contains(-1))
             assert(btns(1).attrs.tabIndex.isEmpty, "a disabled action is out of the tab order natively")
+    }
+
+    "Tab out of an open fan closes it, because the reader has left the menu" in {
+        for
+            (openRef, _, ui) <- fan()
+            items            <- elementsWithClass(ui, "p-speeddial-item")
+            btn              <- elements(items(0)).map(_.find(_.attrs.role.contains("menuitem")).get)
+            _                <- press(btn, UI.Keyboard.Tab)
+            still            <- openRef.get
+        yield assert(!still)
+    }
+
+    "and Shift+Tab does too, since that leaves it just the same" in {
+        for
+            (openRef, _, ui) <- fan()
+            items            <- elementsWithClass(ui, "p-speeddial-item")
+            btn              <- elements(items(2)).map(_.find(_.attrs.role.contains("menuitem")).get)
+            _                <- press(btn, UI.Keyboard.Tab, UI.Modifiers(shift = true))
+            still            <- openRef.get
+        yield assert(!still)
+    }
+
+    "Tab on the toggle of an open fan closes it too: the actions are not what it tabs into" in {
+        for
+            (openRef, _, ui) <- fan()
+            toggle           <- elementWithClass(ui, "p-speeddial-button")
+            _                <- press(toggle, UI.Keyboard.Tab)
+            still            <- openRef.get
+        yield assert(!still)
+    }
+
+    "Tab on a closed dial is the page's, and leaves the fan closed" in {
+        for
+            (openRef, moved, ui) <- fan(open = false)
+            toggle               <- elementWithClass(ui, "p-speeddial-button")
+            _                    <- press(toggle, UI.Keyboard.Tab)
+            still                <- openRef.get
+            went                 <- moved.get
+        yield assert(!still && went.isEmpty)
     }
 
     "opening seeds focus onto the first action and closing hands it back to the toggle" in {
