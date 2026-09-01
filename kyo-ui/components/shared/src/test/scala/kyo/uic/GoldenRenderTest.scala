@@ -5780,6 +5780,10 @@ class GoldenRenderTest extends UicTest:
             assert(expanded.contains("p-treetable-selectable-row"), "selectable rows")
             assert(expanded.contains("p-treetable-hoverable"), "hoverable with a selection mode")
             assert(expanded.contains("""aria-level="2""""), "child row aria-level")
+            assert(
+                !expanded.contains("aria-multiselectable"),
+                "one row at a time says nothing, since the default is the single one"
+            )
             assert(!collapsed.contains("Scala"), "collapsed children not rendered")
         end for
     }
@@ -6315,7 +6319,7 @@ class GoldenRenderTest extends UicTest:
                     .columns(uic.column("Name")(_.name).sortBy(_.name))
                     .selectionMode(uic.SelectionMode.Single)
                     .sort(treeSort)
-                    .wired("tt", _ => ())
+                    .wired("tt", Absent, _ => ())
             )
             // The shapes that already get it right, so the invariant is proven to have teeth
             // in both directions rather than only where it currently bites.

@@ -140,25 +140,45 @@ final case class TreeTable[A] private (
 
     private[uic] def render(using Frame): UI =
         UI.mounted {
-            UI.commands.map { cmds =>
-                cmds.freshId.map(base => withVisibleColumns(_.buildAll(base, id => cmds.focusId(id))))
-            }
-        }.placeholder(withVisibleColumns(_.buildAll("", _ => ())))
+            for
+                cmds   <- UI.commands
+                base   <- cmds.freshId
+                cursor <- Signal.initRef(Absent: Maybe[String])
+            yield withVisibleColumns(_.buildAll(base, Present(cursor), id => cmds.focusId(id)))
+        }.placeholder(withVisibleColumns(_.buildAll("", Absent, _ => ())))
 
-    /** The seam the golden tests render, since a mount shows only its placeholder there. */
-    private[uic] def wired(base: String, focus: String => Any < Async)(using Frame): UI =
-        withVisibleColumns(_.buildAll(base, focus))
+    /** The seam the golden tests render, since a mount shows only its placeholder there.
+      *
+      * The cursor is the mount's to mint, so the seam takes it rather than making one up: a
+      * caller that hands `Absent` gets the table a placeholder shows, which is the shape the
+      * golden renders assert.
+      */
+    private[uic] def wired(base: String, cursor: Maybe[SignalRef[Maybe[String]]], focus: String => Any < Async)(
+        using Frame
+    ): UI =
+        withVisibleColumns(_.buildAll(base, cursor, focus))
 
-    private def buildAll(base: String, focus: String => Any < Async)(using Frame): UI =
+    private def buildAll(base: String, cursorRef: Maybe[SignalRef[Maybe[String]]], focus: String => Any < Async)(
+        using Frame
+    ): UI =
+        // Where the reader last stood, which is what the tab stop follows. A key that moves the
+        // cursor writes it and so does a click, so the pointer and the keyboard leave the table in
+        // the same state.
+        val seed: String => Any < Async = cursorRef match
+            case Present(r) => (k: String) => r.set(Present(k))
+            case Absent     => (_: String) => ()
         withSortableFlags { flags =>
             withRef(expandedRef, Set.empty[String]) { exp =>
                 withRef(selectedRef, Set.empty[String]) { sel =>
                     withRef(sortRef, List.empty[SortKey]) { sort =>
-                        body(exp, sel, sort, flags, base, focus)
+                        withRef(cursorRef, Absent: Maybe[String]) { cursor =>
+                            body(exp, sel, sort, cursor, seed, flags, base, focus)
+                        }
                     }
                 }
             }
         }
+    end buildAll
 
     /** Resolves every [[Column.visible]] flag and hands on the table without the columns
       * they hide, as DataTable does. The hidden ones are kept rather than dropped, since
@@ -199,6 +219,8 @@ final case class TreeTable[A] private (
         exp: Set[String],
         sel: Set[String],
         sort: List[SortKey],
+        cursor: Maybe[String],
+        seed: String => Any < Async,
         flags: Map[String, Boolean],
         base: String,
         focus: String => Any < Async
@@ -232,8 +254,9 @@ final case class TreeTable[A] private (
                 val seen = visibleRows(nodeList, depth = 0, prefix = "", exp, sort)
                 val navRows =
                     seen.map((n, d, path) => TreeNav.Row(d, keyOf(n.data, path), n.children.nonEmpty, exp.contains(keyOf(n.data, path))))
+                val stop = tabStop(navRows, sel, cursor)
                 seen.zipWithIndex.map { case ((n, d, path), i) =>
-                    renderRow(n, d, path, i, navRows, exp, sel, base, focus)
+                    renderRow(n, d, path, i, navRows, stop, exp, sel, seed, base, focus)
                 }
 
         // One `col` per column when any of them is sized, which is the only place a width
@@ -249,6 +272,11 @@ final case class TreeTable[A] private (
                 List(colgroup(cs.map(toChild)*))
 
         var tbl = table.cssClass("p-treetable-table").role("treegrid")
+        // A grid that takes more than one row at a time has to say so: a reader who cannot see the
+        // rows has no other way to know whether picking a second one keeps the first.
+        selectionModeV match
+            case SelectionMode.Multiple | SelectionMode.Checkbox => tbl = tbl.aria("multiselectable", "true")
+            case _                                               => ()
         if colGroupUI.nonEmpty then tbl = tbl.cssClass("p-uic-table-fixed")
         accNameV match
             case Present(TextValue.Const(v)) => tbl = tbl.aria("label", v)
@@ -396,6 +424,23 @@ final case class TreeTable[A] private (
             (n, depth, path) :: kids
         }
 
+    /** Which row is in the Tab order: where the reader last stood, else the row they chose, else
+      * the first one.
+      *
+      * A roving tab stop that never moved would put a reader who tabs out of a long tree and back
+      * at the top of it again, with the way back to their place being every arrow press they had
+      * already made. The cursor outranks the selection because it is the more recent of the two,
+      * and a cursor on a row that a collapse has taken off the screen falls back the same way.
+      */
+    private def tabStop(navRows: List[TreeNav.Row], sel: Set[String], cursor: Maybe[String]): Int =
+        val at = cursor.map(k => navRows.indexWhere(_.key == k)).getOrElse(-1)
+        if at >= 0 then at
+        else
+            val chosen = navRows.indexWhere(r => sel.contains(r.key))
+            if chosen >= 0 then chosen else 0
+        end if
+    end tabStop
+
     /** One row of the table. */
     private def renderRow(
         node: TreeTableNode[A],
@@ -403,8 +448,10 @@ final case class TreeTable[A] private (
         path: String,
         index: Int,
         navRows: List[TreeNav.Row],
+        tabStop: Int,
         exp: Set[String],
         sel: Set[String],
+        seed: String => Any < Async,
         base: String,
         focus: String => Any < Async
     )(using Frame): UI =
@@ -452,21 +499,27 @@ final case class TreeTable[A] private (
 
         var row = tr.role("row").aria("level", (depth + 1).toString)
         if hasChildren then row = row.aria("expanded", isExp.toString)
-        if rowInteractive then row = row.cssClass("p-treetable-selectable-row").onClick(activate(id))
+        if rowInteractive then row = row.cssClass("p-treetable-selectable-row")
         if base.isEmpty then
             // The placeholder: no mount has run, so there is nothing to move focus with. Every
             // selectable row stays its own tab stop and answers the two activation keys, which is
             // what the table did before it grew a cursor.
             if rowInteractive then
-                row = row.tabIndex(0).onKeyDown(e => if activationOf(e).isDefined then activate(id) else ())
+                row = row.tabIndex(0).onClick(activate(id)).onKeyDown(e =>
+                    if activationOf(e).isDefined then activate(id) else ()
+                )
         else
-            // A treegrid is ONE tab stop. The first row takes it and the rest are reachable by
-            // the arrows, which is what the role has been claiming all along. Navigation does not
-            // wait for selection to be bound: a tree that cannot be selected can still be read.
+            // A treegrid is ONE tab stop, and it sits where the reader is: the cursor, else the
+            // chosen row, else the first. The rest are reachable by the arrows, which is what the
+            // role has been claiming all along. Navigation does not wait for selection to be
+            // bound: a tree that cannot be selected can still be read, and a click still leaves
+            // the cursor where the pointer put it.
+            val clicked: Any < Async = if rowInteractive then seed(id).andThen(activate(id)) else seed(id)
             row = row
                 .id(rowId(base, index))
-                .tabIndex(if index == 0 then 0 else -1)
-                .onKeyDown(rowKey(base, navRows, index, focus))
+                .tabIndex(if index == tabStop then 0 else -1)
+                .onClick(clicked)
+                .onKeyDown(rowKey(base, navRows, index, seed, focus))
         end if
         if isSel then row = row.cssClass("p-treetable-row-selected")
         if selectionModeV != SelectionMode.None then row = row.aria("selected", isSel.toString)
@@ -489,7 +542,13 @@ final case class TreeTable[A] private (
       *
       * `Absent` means the key was never ours, so the browser keeps it.
       */
-    private def rowKey(base: String, navRows: List[TreeNav.Row], index: Int, focus: String => Any < Async)(using
+    private def rowKey(
+        base: String,
+        navRows: List[TreeNav.Row],
+        index: Int,
+        seed: String => Any < Async,
+        focus: String => Any < Async
+    )(using
         Frame
     ): KeyboardEvent => Any < Async = e =>
         TreeNav.onKey(navRows, index, e.key) match
@@ -500,7 +559,8 @@ final case class TreeTable[A] private (
                     case TreeNav.Op.Expand(k)   => setExpanded(k, open = true)
                     case TreeNav.Op.Collapse(k) => setExpanded(k, open = false)
                 val moveEff: Any < Async =
-                    if step.focus != index && navRows.isDefinedAt(step.focus) then focus(rowId(base, step.focus))
+                    if step.focus != index && navRows.isDefinedAt(step.focus) then
+                        focus(rowId(base, step.focus)).andThen(seed(navRows(step.focus).key))
                     else ()
                 val actEff: Any < Async =
                     if step.activate && rowInteractive && navRows.isDefinedAt(index) then activate(navRows(index).key)

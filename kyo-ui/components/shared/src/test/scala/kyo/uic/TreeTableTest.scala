@@ -89,7 +89,7 @@ class TreeTableTest extends UicTest:
         for
             expanded <- Signal.initRef(open)
             moved    <- Signal.initRef(Absent: Maybe[String])
-            ui = tree.expanded(expanded).wired("tt", id => moved.set(Present(id)))
+            ui = tree.expanded(expanded).wired("tt", Absent, id => moved.set(Present(id)))
             rows  <- navRows(ui)
             _     <- press(rows(at), key)
             to    <- moved.get
@@ -99,10 +99,10 @@ class TreeTableTest extends UicTest:
     "a collapsed subtree contributes no rows, so the cursor walks what is on the screen" in {
         for
             expanded <- Signal.initRef(Set.empty[String])
-            shut = tree.expanded(expanded).wired("tt", _ => ())
+            shut = tree.expanded(expanded).wired("tt", Absent, _ => ())
             closedRows <- navRows(shut)
             _          <- expanded.set(Set("ada"))
-            openRows   <- navRows(tree.expanded(expanded).wired("tt", _ => ()))
+            openRows   <- navRows(tree.expanded(expanded).wired("tt", Absent, _ => ()))
         yield
             assert(closedRows.size == 2, "two roots while everything is shut")
             assert(openRows.size == 4, "and the two children join them when the first root opens")
@@ -143,7 +143,7 @@ class TreeTableTest extends UicTest:
             expanded <- Signal.initRef(Set.empty[String])
             sel      <- Signal.initRef(Set.empty[String])
             ui = tree.expanded(expanded).selectionMode(uic.SelectionMode.Multiple).selected(sel)
-                .wired("tt", _ => ())
+                .wired("tt", Absent, _ => ())
             rows   <- navRows(ui)
             _      <- press(rows(0), UI.Keyboard.Enter)
             picked <- sel.get
@@ -154,12 +154,63 @@ class TreeTableTest extends UicTest:
     "the treegrid is one tab stop, and the arrows are what reach the rest" in {
         for
             expanded <- Signal.initRef(Set("ada"))
-            ui       <- Kyo.lift(tree.expanded(expanded).wired("tt", _ => ()))
+            ui       <- Kyo.lift(tree.expanded(expanded).wired("tt", Absent, _ => ()))
             rows     <- navRows(ui)
         yield
             assert(rows.head.attrs.tabIndex.contains(0), "the first row takes the tab stop")
             assert(rows.tail.forall(_.attrs.tabIndex.contains(-1)), "and the rest are out of the Tab order")
             assert(rows.forall(_.attrs.onKeyDown.isDefined), "every row answers the arrows")
+    }
+
+    "the tab stop follows the cursor, so a Tab away and back returns where the reader stood" in {
+        for
+            expanded <- Signal.initRef(Set("ada"))
+            cursor   <- Signal.initRef(Absent: Maybe[String])
+            ui = tree.expanded(expanded).wired("tt", Present(cursor), _ => ())
+            rows  <- navRows(ui)
+            _     <- press(rows(0), UI.Keyboard.ArrowDown)
+            at    <- cursor.get
+            after <- navRows(ui)
+        yield
+            assert(at == Present("grace"), "the arrow leaves the cursor on the row it moved to")
+            assert(after(1).attrs.tabIndex.contains(0), "which is the row that now holds the tab stop")
+            assert(after(0).attrs.tabIndex.contains(-1), "and the first row has given it up")
+    }
+
+    "the tab stop starts on the chosen row, so a table opens where the choice is" in {
+        for
+            expanded <- Signal.initRef(Set("ada"))
+            chosen   <- Signal.initRef(Set("alan"))
+            cursor   <- Signal.initRef(Absent: Maybe[String])
+            ui = tree.expanded(expanded).selectionMode(uic.SelectionMode.Single).selected(chosen)
+                .wired("tt", Present(cursor), _ => ())
+            rows <- navRows(ui)
+        yield
+            assert(rows(2).attrs.tabIndex.contains(0), "the selected row is where the keyboard picks up")
+            assert(rows(0).attrs.tabIndex.contains(-1), "not the first row, which the reader did not choose")
+    }
+
+    "a click seeds the cursor, so the keyboard carries on from the row the pointer chose" in {
+        for
+            expanded <- Signal.initRef(Set("ada"))
+            cursor   <- Signal.initRef(Absent: Maybe[String])
+            ui = tree.expanded(expanded).wired("tt", Present(cursor), _ => ())
+            rows <- navRows(ui)
+            _    <- click(rows(2))
+            at   <- cursor.get
+        yield assert(at == Present("alan"), "a table with nothing to select still follows the pointer")
+    }
+
+    "a treegrid that takes several rows says so" in {
+        for
+            chosen <- Signal.initRef(Set.empty[String])
+            multi  = tree.selectionMode(uic.SelectionMode.Multiple).selected(chosen).wired("tt", Absent, _ => ())
+            single = tree.selectionMode(uic.SelectionMode.Single).selected(chosen).wired("tt", Absent, _ => ())
+            m <- elementWithClass(multi, "p-treetable-table")
+            s <- elementWithClass(single, "p-treetable-table")
+        yield
+            assert(m.attrs.ariaAttrs.get("multiselectable").contains("true"))
+            assert(s.attrs.ariaAttrs.get("multiselectable").isEmpty, "one row at a time is the default and says nothing")
     }
 
 end TreeTableTest
