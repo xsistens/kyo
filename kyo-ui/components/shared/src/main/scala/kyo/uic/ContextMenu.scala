@@ -21,7 +21,7 @@ import kyo.UI.*
   * TARGET REGION (an [[Overlay]] at `BottomStart` of the wrapped element), not
   * to the pointer position. Prime opens the panel at the click point.
   *
-  * Keyboard (WAI-ARIA menu): the open panel seeds focus and holds it, so the
+  * Keyboard (WAI-ARIA menu): the open LIST seeds focus and holds it, so the
   * full navigation works without a prior click — ArrowUp/Down rove Prime's
   * `.p-focus` over the enabled rows, ArrowRight opens the focused submenu
   * (landing on its first row), ArrowLeft climbs back out, Home/End jump, Enter
@@ -137,6 +137,16 @@ final case class ContextMenu private (
                     )
                     var listEl = ul.cssClass("p-contextmenu-root-list").role("menu")
                     if focus.nonEmpty then idV.foreach(b => listEl = listEl.aria("activedescendant", s"$b-active"))
+                    // The LIST is what focus goes to, not the panel around it: the list is the
+                    // `role="menu"` and the thing carrying `aria-activedescendant`, and that
+                    // attribute is read off the focused element or off nothing at all. Escape is
+                    // left to bubble to the Overlay, which decides what closing means.
+                    listEl = listEl
+                        .tabIndex(-1)
+                        .focusAuto(true)
+                        .focusRestore(true)
+                        .preventScrollKeys
+                        .onKeyDown(e => if e.key == Keyboard.Escape then () else keyHandler(e))
                     val listUI: UI = listEl(rows.map(toChild)*)
                     List(
                         // Host-gated (renderOpen): this component already subscribes to
@@ -148,7 +158,7 @@ final case class ContextMenu private (
                             .animate(false)
                             .panelClass("p-contextmenu")
                             .panelClass("p-component")
-                            .onPanelKeyDown(keyHandler)(listUI)
+                            .seedFocus(false)(listUI)
                             .renderOpen
                     )
                 case _ => Nil

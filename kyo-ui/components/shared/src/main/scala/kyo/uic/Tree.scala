@@ -184,10 +184,18 @@ final case class Tree private (
                     val selectedRow = rows.indexWhere(row => sel.contains(row.key))
                     r.ref.set(if selectedRow >= 0 then selectedRow else 0)
                 else ()
-            list = list.tabIndex(0).preventScrollKeys.onKeyDown(keyHandler(exp, r))
-            if r.ownsFocus then list = list.onFocus(seedFocus).onBlur(r.ref.set(-1))
             list = list.id(Tree.rootListId(r.idBase))
-            if focus >= 0 then list = list.aria("activedescendant", nodeId(r.idBase, focus))
+            // A HOSTED tree (TreeSelect) owns none of this: its host keeps focus and wears the
+            // key handler, so a tab stop here would be a second focus owner inside the host's
+            // panel and an `aria-activedescendant` here would sit on an element nothing focuses.
+            // One focus owner, one keyboard, one announcement.
+            if r.ownsFocus then
+                list = list.tabIndex(0).preventScrollKeys
+                    .onKeyDown(keyHandler(exp, r))
+                    .onFocus(seedFocus)
+                    .onBlur(r.ref.set(-1))
+                if focus >= 0 then list = list.aria("activedescendant", nodeId(r.idBase, focus))
+            end if
         }
 
         var root = div.cssClass("p-tree").cssClass("p-component")
@@ -205,7 +213,7 @@ final case class Tree private (
       * by `node.children`.
       */
     /** The id the roving highlight addresses one visible row by. */
-    private def nodeId(base: String, index: Int): String = s"$base-node-$index"
+    private def nodeId(base: String, index: Int): String = Tree.rowId(base, index)
 
     /** The tree's keyboard, as a handler its host can also attach.
       *
@@ -417,6 +425,11 @@ object Tree:
       * `aria-controls` at.
       */
     private[uic] def rootListId(base: String): String = s"$base-list"
+
+    /** The id of the row at `index` in the visible order, which is what a host that keeps focus
+      * ([[TreeSelect]]) points `aria-activedescendant` at.
+      */
+    private[uic] def rowId(base: String, index: Int): String = s"$base-node-$index"
 
     def apply(): Tree = new Tree()
 end Tree

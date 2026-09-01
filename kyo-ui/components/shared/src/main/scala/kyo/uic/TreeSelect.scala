@@ -15,7 +15,8 @@ import scala.annotation.targetName
   * `.p-treeselect-overlay .p-tree` rule reaches through the composition.
   *
   * Select's tree-shaped sibling: the same [[Overlay]]-based floating panel
-  * (outside click / Escape close it, the panel seeds focus on open), the value
+  * (outside click / Escape close it, and the panel takes no focus: the trigger
+  * keeps it and wears the hosted tree's own keyboard), the value
   * a `SignalRef[Set[String]]` of selected NODE ids. The panel hosts the real
   * `uic.Tree` — its [[TreeNode]] model, expansion refs, and [[SelectionMode]]
   * semantics are reused wholesale: `Single` replaces the selection and CLOSES
@@ -302,20 +303,23 @@ final case class TreeSelect private (
             }
 
         // === floating panel ======================================================
-        val panelUI: List[UI] = st.toList.map { state =>
-            val roving = Roving(state.hi, state.hiV, state.idBase, ownsFocus = false)
-            // The hosted tree, configured once: it renders the panel's rows AND supplies the
-            // keyboard the panel wears, so the two cannot disagree about what a key does.
-            val hosted: Maybe[Tree] =
-                if nodeList.isEmpty then Absent
-                else
+        // The hosted tree, configured once: it renders the panel's rows AND supplies the keyboard
+        // the TRIGGER wears, so the two cannot disagree about what a key does.
+        val hosted: Maybe[Tree] =
+            if nodeList.isEmpty then Absent
+            else
+                st.map { state =>
                     var t = Tree()
                         .nodes(nodeList*)
                         .expanded(state.expRef)
                         .selectionMode(selectionModeV)
                         .onItemClick(_ => afterPick)
                     valueRef.foreach(r => t = t.selected(r))
-                    Present(t)
+                    t
+                }
+
+        val panelUI: List[UI] = st.toList.map { state =>
+            val roving = Roving(state.hi, state.hiV, state.idBase, ownsFocus = false)
             val treeUI: UI = hosted match
                 case Absent =>
                     EmptyContent.render(emptyContentV, "No results found")(c =>
@@ -326,12 +330,14 @@ final case class TreeSelect private (
                 // subscriptions (handlers still write through the bound refs), and the highlight
                 // is handed across so the panel's keyboard is the tree's own.
                 case Present(t) => t.resolved(exp, current, Present(roving))
-            var panel = Overlay(state.open)
+            // Nothing in this panel takes focus: it stays on the trigger, which is where the
+            // tree's keyboard and the highlight announcement both live. A panel that seeded focus
+            // would take the announcement away from the one element reading it.
+            val panel = Overlay(state.open)
                 .panelClass("p-treeselect-overlay")
                 .panelClass("p-component")
-            // The panel is what holds focus once it opens, and a keydown there never reaches a
-            // handler on the list inside it, so the tree's keyboard rides on the panel too.
-            hosted.foreach(t => panel = panel.onPanelKeyDown(t.keyHandler(exp, roving)))
+                .seedFocus(false)
+                .dismissOnEscape(false)
             panel(
                 (keyCollisionCard :+ (div.cssClass("p-treeselect-tree-container")(toChild(treeUI)): UI))*
             )
@@ -363,16 +369,30 @@ final case class TreeSelect private (
         end match
         accNameRefV.foreach(v => el = el.aria("labelledby", v))
         el = el.role("combobox").aria("haspopup", "tree").aria("expanded", isOpen.toString)
-        st.foreach(s => el = el.aria("controls", Tree.rootListId(s.idBase)))
+        st.foreach { s =>
+            el = el.aria("controls", Tree.rootListId(s.idBase))
+            if isOpen && s.hiV >= 0 then el = el.aria("activedescendant", Tree.rowId(s.idBase, s.hiV))
+        }
         if !disabledFlag then
             el = el.tabIndex(0).preventScrollKeys
-            if st.isDefined then
+            // Focus stays on the trigger while the panel is open, so the tree's own keyboard runs
+            // from here: closed, the three opening keys; open, the tree's arrows and Escape. The
+            // tree supplies the handler rather than a second copy of it living here.
+            st.foreach { state =>
+                val roving  = Roving(state.hi, state.hiV, state.idBase, ownsFocus = false)
+                val treeKey = hosted.map(_.keyHandler(exp, roving))
                 el = el.onKeyDown { e =>
-                    e.key match
-                        case Keyboard.ArrowDown | Keyboard.Enter | Keyboard.Space if !isOpen => openPanel
-                        case _                                                               => ()
+                    if !isOpen then
+                        e.key match
+                            case Keyboard.ArrowDown | Keyboard.Enter | Keyboard.Space => openPanel
+                            case _                                                    => ()
+                    else if e.key == Keyboard.Escape then state.open.set(false)
+                    else
+                        treeKey match
+                            case Present(f) => f(e)
+                            case Absent     => ()
                 }
-            end if
+            }
             // Focus-loss on the trigger reports the currently bound selection (or the
             // resolved current set when unbound) — the validation layer's Blur trigger.
             onBlurF.foreach { f =>

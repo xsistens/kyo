@@ -234,11 +234,24 @@ ids, pointer handlers, focus wiring).
   because nesting a mount into an already-subscribed region would double-subscribe
   and duplicate the panel DOM (one subscription per ref chain; `renderOpen` is the
   single-subscription form).
-- `autoFlip` only flips DECISIVELY for `seedFocus(false)` overlays. kyo's
-  focus-seed calls `element.focus()` without `preventScroll`, so a seedFocus-on
-  panel (Select/MultiSelect/Menu) gets scrolled into view by the browser before
-  the measure lands: it stays on-screen but does not visibly flip. Verify flip on
-  a seedFocus(false) panel near the viewport bottom.
+- `autoFlip` only flips DECISIVELY where nothing inside the panel is focus-seeded.
+  kyo's focus-seed calls `element.focus()` without `preventScroll`, so a seeded
+  element gets scrolled into view by the browser before the measure lands: the
+  panel stays on-screen but does not visibly flip. That is now the menu family
+  (whose LIST is seeded) and a filterable Select/MultiSelect (whose filter input
+  is); the option panels themselves seed nothing. Verify flip on one of those
+  near the viewport bottom.
+
+- **Focus is a single-owner property, and `aria-activedescendant` follows it.** The
+  attribute is read off the element with DOM focus or off nothing at all, so it
+  belongs on the one element that holds focus while the popup is open: the trigger
+  for Select/MultiSelect/CascadeSelect/TreeSelect, the input for AutoComplete and
+  for a filterable Select/MultiSelect, the LIST for the popup menus. A panel that
+  seeds focus takes the announcement away from whatever was carrying it, which is
+  how the whole family ended up announcing nothing. `GoldenRenderTest`'s "a
+  highlight names an element that says what it is" holds both halves: the target
+  must have a real role, and the carrier must be a tab stop, focus-seeded, or a
+  text box.
 
 ## Enter vs leave animations
 

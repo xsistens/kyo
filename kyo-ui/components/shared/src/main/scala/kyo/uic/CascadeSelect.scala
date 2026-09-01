@@ -60,7 +60,9 @@ end CascadeItem
   * the key, fires `onChange`, and closes the whole chain. Every panel is a real
   * [[Overlay]]: an outside click closes ONE level (the topmost backdrop catches
   * it), Escape closes ONE level too (each panel consumes its own keydown —
-  * the Overlay per-level story), each panel seeds focus on open. Group opening is click-driven (a
+  * the Overlay per-level story), and no panel seeds focus: it stays on the trigger, which is the
+  * combobox, wears the whole cascade keyboard, and announces the highlight wherever in the chain it
+  * has walked to. Group opening is click-driven (a
   * deliberate deviation from Prime's hover-open — a server round-trip per hover
   * is heavy; the sheet's hover styling is untouched).
   *
@@ -338,11 +340,13 @@ final case class CascadeSelect[A] private (
                     .animate(false)
                     .panelClass("p-cascadeselect-overlay")
                     .panelClass("p-component")
-                    // The panel is what holds focus once it opens, and a keydown there never
-                    // reaches a handler on a list inside it, so the keyboard rides on the panels.
-                    .onPanelKeyDown(panelKey(state))(
+                    // No panel in the chain takes focus: it stays on the trigger, which is where
+                    // the keyboard is and where the highlight is announced. A panel that seeded
+                    // focus would take the announcement away from the one element reading it.
+                    .seedFocus(false)
+                    .dismissOnEscape(false)(
                         div.cssClass("p-cascadeselect-list-container")(
-                            toChild(list(items, Nil, current, openMap, Present(state), pick, panelKey(state)))
+                            toChild(list(items, Nil, current, openMap, Present(state), pick))
                         )
                     )
                     .renderOpen
@@ -373,16 +377,27 @@ final case class CascadeSelect[A] private (
         end match
         accNameRefV.foreach(v => el = el.aria("labelledby", v))
         el = el.role("combobox").aria("haspopup", "tree").aria("expanded", isOpen.toString)
-        st.flatMap(_.idBase).foreach(b => el = el.aria("controls", listId(b)))
+        st.flatMap(_.idBase).foreach { b =>
+            el = el.aria("controls", listId(b))
+            // One travelling id, wherever in the nested chain the highlight has walked to, because
+            // `aria-activedescendant` names exactly one element and the trigger is the one thing
+            // holding focus.
+            st.foreach(state => if state.focus.nonEmpty then el = el.aria("activedescendant", activeId(b)))
+        }
         if !disabledFlag then
             el = el.tabIndex(0).preventScrollKeys
-            if st.isDefined then
+            // Focus never leaves the trigger, however deep the chain of panels goes, so the whole
+            // cascade keyboard lives here: closed, the three opening keys; open, one [[MenuNav]]
+            // walk that steps into groups, back out of them, picks a leaf and closes on Escape.
+            st.foreach { state =>
                 el = el.onKeyDown { e =>
-                    e.key match
-                        case Keyboard.ArrowDown | Keyboard.Enter | Keyboard.Space if !isOpen => openPanel
-                        case _                                                               => ()
+                    if isOpen then panelKey(state)(e)
+                    else
+                        e.key match
+                            case Keyboard.ArrowDown | Keyboard.Enter | Keyboard.Space => openPanel
+                            case _                                                    => ()
                 }
-            end if
+            }
             // Focus-loss on the trigger reports the currently bound key (or the resolved
             // current value when unbound) — the validation layer's Blur trigger.
             onBlurF.foreach { f =>
@@ -415,8 +430,7 @@ final case class CascadeSelect[A] private (
         current: String,
         openMap: Map[List[Int], Boolean],
         st: Maybe[CascadeSelect.State],
-        pick: A => Any < Async,
-        onKey: KeyboardEvent => Any < Async
+        pick: A => Any < Async
     )(using Frame): UI =
         val rows: List[UI] = its.zipWithIndex.map {
             case (CascadeItem.Leaf(a), i) =>
@@ -477,13 +491,12 @@ final case class CascadeSelect[A] private (
                                         .animate(false)
                                         .panelClass("p-cascadeselect-overlay")
                                         .panelClass("p-cascadeselect-option-list")
-                                        // Every panel in the chain carries the SAME handler,
-                                        // because every panel seeds focus when it opens and a
-                                        // keydown fires where the focus is. Attaching it only to
-                                        // the root would leave the arrows dead the moment the
-                                        // reader steps into a group.
-                                        .onPanelKeyDown(onKey)(
-                                            list(children, p, current, openMap, st, pick, onKey)
+                                        // No panel in the chain seeds focus, so none of them ever
+                                        // receives a key: the trigger keeps focus and wears the
+                                        // whole cascade keyboard, however deep the chain goes.
+                                        .seedFocus(false)
+                                        .dismissOnEscape(false)(
+                                            list(children, p, current, openMap, st, pick)
                                         )
                                         .renderOpen
                                 )
@@ -492,16 +505,10 @@ final case class CascadeSelect[A] private (
                     case _ => Nil
                 row((contentUI :: panel).map(toChild)*)
         }
+        // Named by `aria-controls`; the announcement itself rides the trigger, which is the one
+        // element focus is ever on.
         var listEl = ul.cssClass("p-cascadeselect-list").role(if path.isEmpty then "tree" else "group")
         if path.isEmpty then st.foreach(state => state.idBase.foreach(b => listEl = listEl.id(listId(b))))
-        // The ROOT list carries the announcement, wherever in the nested panels the highlight has
-        // travelled to: focus stays on the trigger and the panel, so the root is the element a
-        // screen reader is reading the descendant of.
-        if path.isEmpty then
-            st.foreach(state =>
-                if state.focus.nonEmpty then state.idBase.foreach(b => listEl = listEl.aria("activedescendant", activeId(b)))
-            )
-        end if
         listEl(rows.map(toChild)*)
     end list
 end CascadeSelect

@@ -13,8 +13,10 @@ import kyo.UI.*
   * Two modes like Prime: inline (the default render) and `popup(openRef)` — the
   * popup wraps the same list in the [[Overlay]] primitive (Prime's
   * `.p-menu-overlay` skin): writes to the ref open and close it, an outside
-  * click or Escape closes, and the panel seeds focus on open so the keyboard
-  * works without a prior click. Place the popup inside a `position: relative`
+  * click or Escape closes, and the LIST seeds focus on open so the keyboard
+  * works without a prior click (the list, not the panel around it, because the
+  * list is the `role="menu"` carrying `aria-activedescendant` and that attribute
+  * is read off whatever holds focus). Place the popup inside a `position: relative`
   * anchor (stamp `p-uic-overlay-anchor` on your trigger's container — the
   * Select/Popover geometry story).
   *
@@ -158,13 +160,23 @@ final case class Menu private (
         if hiRow >= 0 then idV.foreach(base => list = list.aria("activedescendant", s"$base-active"))
         popupRefV match
             case Present(openRef) =>
+                // The LIST is what focus goes to, not the panel around it: the list is the
+                // `role="menu"` and the thing carrying `aria-activedescendant`, and that attribute
+                // is read off the focused element or off nothing at all. Escape is left to bubble
+                // to the Overlay, which is the one place that decides what closing means.
+                list = list
+                    .tabIndex(-1)
+                    .focusAuto(true)
+                    .focusRestore(true)
+                    .preventScrollKeys
+                    .onKeyDown(e => if e.key == Keyboard.Escape then () else keyHandler(e))
                 Overlay(openRef)
                     .matchWidth(false)
                     .animate(false)
                     .panelClass("p-menu")
                     .panelClass("p-component")
                     .panelClass("p-menu-overlay")
-                    .onPanelKeyDown(keyHandler)(list(rowUIs.map(toChild)*))
+                    .seedFocus(false)(list(rowUIs.map(toChild)*))
                     .render
             case Absent =>
                 // Arriving on the list highlights the first enabled row, and leaving drops the

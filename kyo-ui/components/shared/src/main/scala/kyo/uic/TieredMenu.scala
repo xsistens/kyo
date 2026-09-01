@@ -26,9 +26,9 @@ import kyo.UI.*
   * over the enabled siblings, ArrowRight opens the focused submenu (landing on
   * its first row), ArrowLeft climbs back out one level, Home/End jump, Enter or
   * Space activates a leaf (runs its action, then collapses the tree / closes the
-  * popup), and Escape closes one level (then the popup at the root). The nested
-  * submenu panels do NOT seed focus — the highlight rides `aria-activedescendant`
-  * from the host, wired by `id(...)`.
+  * popup), and Escape closes one level (then the popup at the root). Only the ROOT
+  * list ever holds focus — the nested submenu panels do not seed it, and the
+  * highlight rides `aria-activedescendant` from the root, wired by `id(...)`.
   *
   * Honest deferrals as Menubar: no mobile mode; typeahead is not implemented.
   */
@@ -106,6 +106,16 @@ final case class TieredMenu private (
         if focus.nonEmpty then idV.foreach(b => list = list.aria("activedescendant", s"$b-active"))
         popupRefV match
             case Present(openRef) =>
+                // The LIST is what focus goes to, not the panel around it: the list is the
+                // `role="menu"` and the thing carrying `aria-activedescendant`, and that attribute
+                // is read off the focused element or off nothing at all. Escape is left to bubble
+                // to the Overlay, which is the one place that decides what closing means.
+                list = list
+                    .tabIndex(-1)
+                    .focusAuto(true)
+                    .focusRestore(true)
+                    .preventScrollKeys
+                    .onKeyDown(e => if e.key == Keyboard.Escape then () else keyHandler(e))
                 val listUI: UI = list(rowsUI.map(toChild)*)
                 Overlay(openRef)
                     .matchWidth(false)
@@ -113,7 +123,7 @@ final case class TieredMenu private (
                     .panelClass("p-tieredmenu")
                     .panelClass("p-component")
                     .panelClass("p-tieredmenu-overlay")
-                    .onPanelKeyDown(keyHandler)
+                    .seedFocus(false)
                     .apply(listUI)
                     .render
             case Absent =>
