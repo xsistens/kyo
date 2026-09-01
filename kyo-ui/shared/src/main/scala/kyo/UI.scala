@@ -1380,6 +1380,25 @@ object UI:
               */
             def preventScrollKeys: Self = withAttrs(attrs.copy(dataAttrs = attrs.dataAttrs.updated("kyo-scroll-keys", "1")))
 
+            /** Marks this element (and its subtree) INERT to its own activation: the client declines the browser's
+              * default for a click and for the keys that change a native control's value, while leaving the element
+              * focusable and leaving every event still forwarded.
+              *
+              * This is what makes a READONLY control expressible. HTML's `readonly` attribute does not apply to a
+              * checkbox, a radio or a button, so a library that wants "focusable, reads its value, refuses to change
+              * it" has two options: mark it natively `disabled`, which takes it out of the tab order and makes
+              * readonly indistinguishable from disabled to a keyboard or a screen reader, or decline the default. A
+              * kyo handler cannot decline it: it runs asynchronously, and remotely on the server-push transport, so
+              * the browser has already toggled the box by the time it is asked. Declaring it here moves the decision
+              * to the client, which is the same reason [[preventScrollKeys]] is declarative.
+              *
+              * Space and the four arrows are suppressed (a checkbox toggles, a radio group walks, a range's thumb
+              * moves); Enter is not, because it changes no native value and submitting the form around a readonly
+              * field is still the reader's to do. The rule itself is `kyo.internal.KeyPolicy`, which both clients
+              * answer from.
+              */
+            def preventActivation: Self = withAttrs(attrs.copy(dataAttrs = attrs.dataAttrs.updated("kyo-inert", "1")))
+
             /** Runs `f` on pointer-down over this element, receiving the [[kyo.UI.PointerEvent]] payload (local x/y, target rect,
               * button mask). Declaring this starts a drag session: the client calls `setPointerCapture` on pointer-down, so the
               * subsequent [[onPointerMove]] stream keeps flowing even when the pointer leaves the element, until [[onPointerUp]]

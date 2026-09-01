@@ -92,6 +92,26 @@ private[kyo] object KeyPolicy:
     end doubleActivates
 
     /** `keys` as a JavaScript disjunction over `e.key`, for the server-push client. */
+    /** Keys whose browser default CHANGES a native control's own value: Space toggles a checkbox or
+      * a radio and presses a button, and the arrows walk a radio group and move a range's thumb.
+      *
+      * Enter is deliberately absent. It changes no native control's value (it submits the form
+      * around it), and taking it would cost a reader the key that submits.
+      */
+    val activationKeys: Seq[String] =
+        Seq(" ", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight")
+
+    /** Whether `key` would change the value of a native control inside a region that declared
+      * itself inert (`preventActivation`).
+      *
+      * A kyo handler runs asynchronously, and remotely on the server-push transport, so it cannot
+      * decline the browser default in time. A readonly checkbox therefore cannot say "do not
+      * toggle" from a handler: either it is natively `disabled`, which takes it out of the tab
+      * order and makes readonly indistinguishable from disabled, or the client declines the
+      * default on its behalf. This is the second.
+      */
+    def suppressesActivation(key: String): Boolean = activationKeys.contains(key)
+
     def jsKeyTest(keys: Seq[String]): String = keys.map(k => s"""e.key==="$k"""").mkString("||")
 
     /** `tags` as the body of a JavaScript regexp alternation, for the server-push client. */

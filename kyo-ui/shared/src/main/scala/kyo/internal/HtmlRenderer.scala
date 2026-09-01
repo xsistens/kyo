@@ -1854,6 +1854,10 @@ private[kyo] object HtmlRenderer:
            |  if(!el)return;
            |  var p=pa(el),t=e.type;
            |  if(t==="click"){
+           |    // preventActivation: an inert region declines the click's default too, so a readonly checkbox does
+           |    // not toggle under the pointer either. The click still posts, since the component has already
+           |    // dropped the handler that would have acted on it.
+           |    if(e.target&&e.target.closest&&e.target.closest('[data-kyo-inert]'))e.preventDefault();
            |    // Dropdown trigger click: open/close the option list.
            |    // Skip isTrusted=false synthetic clicks (e.g. from runSpaceClickSynthesis after Space keydown).
            |    if(e.isTrusted!==false&&e.target&&e.target.getAttribute('data-kyo-dropdown-trigger')){
@@ -1919,6 +1923,12 @@ private[kyo] object HtmlRenderer:
            |    else post({Change:{path:p,value:tgt.value}});
            |  }else if(t==="submit"){e.preventDefault();if(!window._kyoClickSubmit&&he(el,"submit")){var smid=e.target&&e.target.id?e.target.id:null;post({Submit:{path:p,mouse:mkMouse({ctrl:false,alt:false,shift:false,meta:false},smid)}});}}
            |  else if(t==="keydown"){
+           |    // preventActivation: a region that declared itself inert declines the browser default for the keys
+           |    // that change a native control's value, so a readonly checkbox stays focusable instead of being
+           |    // disabled. The keydown still posts below. KeyPolicy is the rule; KeyPolicyTest holds this against it.
+           |    if(e.target&&e.target.closest&&e.target.closest('[data-kyo-inert]')&&(${KeyPolicy.jsKeyTest(
+              KeyPolicy.activationKeys
+          )}))e.preventDefault();
            |    // preventScrollKeys: suppress native page-scroll for nav keys in a data-kyo-scroll-keys region; keydown still posts below.
            |    // Every key and tag list below is interpolated from KeyPolicy, which the SPA client calls directly,
            |    // so the two transports cannot answer this differently; KeyPolicyTest holds this text against it.
