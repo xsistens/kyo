@@ -22,6 +22,18 @@ import kyo.UI.*
   * preview swatch all follow from the bound hex, so a ref write from anywhere
   * moves the picker.
   *
+  * Keyboard: the plane and the hue bar are operated through real sliders. The
+  * plane carries TWO values and a `role="slider"` carries exactly one
+  * `aria-valuenow`, so it is a `role="group"` holding two of them — Saturation on
+  * the horizontal arrows, Brightness on the vertical, each with its own Home,
+  * End, PageUp and PageDown. The hue bar IS one axis, so it wears the role
+  * itself. All three are visually hidden (Prime's `.p-hidden-accessible`, as
+  * Rating's radios are) because the visible thing is the handle, and the ring is
+  * drawn on the surface through `:focus-within`. Opening the overlay seeds focus
+  * onto the saturation axis and closing hands it back to the swatch; Escape
+  * closes. The panel traps nothing: a colour picker is not a modal, and Tab out
+  * of it has somewhere to go.
+  *
   * Interaction is kyo-ui's pointer-drag: the 2D plane and the hue
   * bar each carry `onPointerDown` + `onPointerMove` (drag session with
   * setPointerCapture, rAF-coalesced). A press/drag on the plane maps
@@ -144,7 +156,71 @@ final case class ColorPicker private (
       * are `pointer-events: none` (glue) so the pointer lands on the stable
       * surface whose rect defines the coordinate space.
       */
-    private def content(ref: Maybe[SignalRef[String]], fallbackHex: String)(using Frame): UI =
+    /** One axis of the picker as a real slider.
+      *
+      * The two axes of the PLANE are two sliders and not one, because a `role="slider"` carries
+      * exactly one `aria-valuenow` and the plane carries two values: a single role over both
+      * would announce a number that is only half the truth. They are visually hidden (Prime's own
+      * `.p-hidden-accessible`, the same helper Rating's per-option radios use) because the visible
+      * thing is the handle, and the ring is drawn on the surface through `:focus-within` instead.
+      *
+      * The element is STABLE: `aria-valuenow` rides the value signal as an attribute rather than
+      * a re-render, and the handler reads the value live. A focusable element rebuilt on every
+      * arrow press would lose the focus that pressed it, which is the same reason the pointer
+      * handlers sit outside the reactive region.
+      */
+    private def axisSlider(
+        label: String,
+        r: SignalRef[String],
+        read: ((Double, Double, Double)) => Double,
+        write: ((Double, Double, Double), Double) => String,
+        max: Double,
+        unit: String,
+        step: Double,
+        decrease: Set[Keyboard],
+        increase: Set[Keyboard],
+        ref: Maybe[SignalRef[String]],
+        open: Maybe[SignalRef[Boolean]],
+        seed: Boolean
+    )(using Frame): UI =
+        def at(hex: String): Double = read(ColorPicker.hsvOf(hex))
+        var el = span
+            .cssClass("p-hidden-accessible")
+            .role("slider")
+            .aria("label", label)
+            .aria("valuemin", "0")
+            .aria("valuemax", ColorPicker.short(max))
+            .aria("valuenow", r.map(hex => ColorPicker.short(at(hex))))
+            .aria("valuetext", r.map(hex => ColorPicker.short(at(hex)) + unit))
+            .tabIndex(0)
+            .preventScrollKeys
+        if seed then el = el.focusAuto(true).focusRestore(true)
+        el = el.onKeyDown { e =>
+            def move(delta: Double): Any < Async =
+                r.get.map { cur =>
+                    val hsv = ColorPicker.hsvOf(cur)
+                    commit(write(hsv, math.max(0.0, math.min(max, read(hsv) + delta))), ref)
+                }
+            val eff: Any < Async = e.key match
+                case k if decrease.contains(k) => move(-step)
+                case k if increase.contains(k) => move(step)
+                case Keyboard.PageDown         => move(-step * 10)
+                case Keyboard.PageUp           => move(step * 10)
+                case Keyboard.Home             => r.get.map(cur => commit(write(ColorPicker.hsvOf(cur), 0.0), ref))
+                case Keyboard.End              => r.get.map(cur => commit(write(ColorPicker.hsvOf(cur), max), ref))
+                case Keyboard.Escape =>
+                    open match
+                        case Present(o) => o.set(false)
+                        case Absent     => ()
+                case _ => ()
+            eff
+        }
+        el
+    end axisSlider
+
+    private def content(ref: Maybe[SignalRef[String]], fallbackHex: String, open: Maybe[SignalRef[Boolean]] = Absent)(
+        using Frame
+    ): UI =
         def planeVisual(hex: String): UI =
             val (h, s, v)    = ColorPicker.hsvOf(hex)
             val (hr, hg, hb) = ColorPicker.hsvToRgb(h, 1.0, 1.0) // pure hue tint
@@ -185,9 +261,60 @@ final case class ColorPicker private (
                 selector = selector.onPointerDown(onPlane).onPointerMove(onPlane)
                 hue = hue.onPointerDown(onHue).onPointerMove(onHue)
         }
+        // The plane groups the two axes it controls; the hue bar IS one axis, so it wears the
+        // slider role itself rather than hiding one inside.
+        val axes: List[UI] = ref.toList.filter(_ => interactive).flatMap { r =>
+            List(
+                axisSlider(
+                    "Saturation",
+                    r,
+                    _._2 * 100.0,
+                    (hsv, x) => ColorPicker.hexOf(hsv._1, x / 100.0, hsv._3),
+                    100.0,
+                    "%",
+                    1.0,
+                    Set(Keyboard.ArrowLeft),
+                    Set(Keyboard.ArrowRight),
+                    ref,
+                    open,
+                    seed = open.isDefined
+                ),
+                axisSlider(
+                    "Brightness",
+                    r,
+                    _._3 * 100.0,
+                    (hsv, y) => ColorPicker.hexOf(hsv._1, hsv._2, y / 100.0),
+                    100.0,
+                    "%",
+                    1.0,
+                    Set(Keyboard.ArrowDown),
+                    Set(Keyboard.ArrowUp),
+                    ref,
+                    open,
+                    seed = false
+                )
+            )
+        }
+        if axes.nonEmpty then selector = selector.role("group").aria("label", "Saturation and brightness")
+        val hueAxis: List[UI] = ref.toList.filter(_ => interactive).map { r =>
+            axisSlider(
+                "Hue",
+                r,
+                _._1,
+                (hsv, h) => ColorPicker.hexOf(h, hsv._2, hsv._3),
+                359.0,
+                " degrees",
+                1.0,
+                Set(Keyboard.ArrowDown),
+                Set(Keyboard.ArrowUp),
+                ref,
+                open,
+                seed = false
+            )
+        }
         div.cssClass("p-colorpicker-content")(
-            toChild(selector(toChild(planeInner))),
-            toChild(hue(toChild(hueInner)))
+            toChild(selector((planeInner :: axes).map(toChild)*)),
+            toChild(hue((hueInner :: hueAxis).map(toChild)*))
         )
     end content
 
@@ -273,31 +400,47 @@ final case class ColorPicker private (
             }
         UI.mounted {
             for open <- Signal.initRef(false)
-            yield
-                val toggle: Any < Async = if interactive then open.set(true) else ()
-                // The Overlay primitive floats the panel; the .p-colorpicker-panel skin
-                // (sheet: position:absolute; top:0; left:0) rides INSIDE it as a static
-                // child (see [[Theme]]'s `position: static` glue) so it does not re-anchor
-                // to the panel origin.
-                val panel = Overlay(open)
-                    .anchor(anchorV)
-                    .matchWidth(false)(
-                        div.cssClass("p-colorpicker-panel")(toChild(content(ref, fallbackHex)))
-                    )
-                // The validity boundary sits INSIDE the mount: around it, an emission would
-                // re-mount and drop `open`, closing the panel mid-interaction.
-                withValidity { (red, msg) =>
-                    FieldInvalid.withMessage(
-                        shellRoot(red, "p-uic-overlay-anchor")(
-                            toChild(previewSwatchOf(hex => previewSwatch(hex, toggle), ref, fallbackHex)),
-                            toChild(panel)
-                        ),
-                        red,
-                        msg
-                    )
-                }
+            yield wired(open, ref, fallbackHex)
         }.placeholder(staticRoot)
     end overlayBody
+
+    /** The subscription tree the overlay mount publishes — the seam the tests drive, since a
+      * golden render shows a mount only as its placeholder.
+      */
+    private[uic] def wired(open: SignalRef[Boolean], ref: Maybe[SignalRef[String]], fallbackHex: String)(using
+        Frame
+    ): UI =
+        // Toggles rather than opens. A trigger that only ever opens is a trigger a reader cannot
+        // close from, and it is the one control of the component that is reachable when the panel
+        // is shut.
+        val toggle: Any < Async = if interactive then open.getAndUpdate(!_) else ()
+        // The Overlay primitive floats the panel; the .p-colorpicker-panel skin (sheet:
+        // position:absolute; top:0; left:0) rides INSIDE it as a static child (see [[Theme]]'s
+        // `position: static` glue) so it does not re-anchor to the panel origin.
+        //
+        // The panel seeds no focus of its own: the saturation slider does, which is what the
+        // reader is being taken to, and its `focusRestore` hands focus back to the swatch on
+        // close. A trap here would be worse than none — this panel is not modal, and Tab out of a
+        // colour picker has somewhere to go.
+        val panel = Overlay(open)
+            .anchor(anchorV)
+            .seedFocus(false)
+            .matchWidth(false)(
+                div.cssClass("p-colorpicker-panel")(toChild(content(ref, fallbackHex, Present(open))))
+            )
+        // The validity boundary sits INSIDE the mount: around it, an emission would re-mount and
+        // drop `open`, closing the panel mid-interaction.
+        withValidity { (red, msg) =>
+            FieldInvalid.withMessage(
+                shellRoot(red, "p-uic-overlay-anchor")(
+                    toChild(previewSwatchOf(hex => previewSwatch(hex, toggle), ref, fallbackHex)),
+                    toChild(panel)
+                ),
+                red,
+                msg
+            )
+        }
+    end wired
 end ColorPicker
 
 object ColorPicker:
@@ -310,6 +453,9 @@ object ColorPicker:
     private[uic] val DefaultHex = "#ff0000"
 
     private[uic] def clamp01(v: Double): Double = math.max(0.0, math.min(1.0, v))
+
+    /** A percentage or degree count as a whole number, for the ARIA value attributes. */
+    private[uic] def short(v: Double): String = math.round(v).toString
 
     /** Normalizes any accepted hex spelling to lowercase `#rrggbb`. */
     private[uic] def normalizeHex(raw: String): String =
