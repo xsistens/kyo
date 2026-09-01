@@ -86,8 +86,12 @@ final case class Rating private (
       */
     def disabled(v: Boolean | Signal[Boolean]): Rating = copy(disabledFlag = Present(ReactiveValue(v)))
 
-    /** Native `name` on the hidden per-option radios — groups them and makes the
-      * value participate in HTML form submission.
+    /** Native `name` on the hidden per-option radios, which makes the value participate in HTML
+      * form submission.
+      *
+      * Set it for the FORM, not for the keyboard: a mount mints one when you do not, because the
+      * name is also what groups the radios, and an ungrouped set of them is five tab stops with no
+      * arrows between them rather than the one tab stop this control is.
       */
     def name(v: String): Rating = copy(nameV = Present(v))
 
@@ -121,6 +125,23 @@ final case class Rating private (
     private def interactive: Boolean = !readonlyFlag && !disabledFlag.constTrue
 
     private[uic] def render(using Frame): UI =
+        // The radios' `name` is what the browser groups them by, and the grouping is what gives
+        // this control its single tab stop and its arrows. Without one every star was its own
+        // group: five tab stops, no arrows, and nothing stopping two of them from being checked.
+        // A caller's own name wins; otherwise the mount mints one, and the static projection
+        // keeps the shape it had (the Select precedent).
+        if nameV.isDefined then renderNamed
+        else
+            UI.mounted {
+                UI.commands.map(cmds => cmds.freshId.map(n => copy(nameV = Present(n)).renderNamed))
+            }.placeholder(renderNamed)
+
+    /** The tree the mount publishes once it has a name to group the radios by — the seam golden
+      * tests render directly, since a mount shows only its placeholder there.
+      */
+    private[uic] def wired(name: String)(using Frame): UI = copy(nameV = Present(name)).renderNamed
+
+    private def renderNamed(using Frame): UI =
         (invalidV.dynSig, invalidMsgDynV) match
             case (Absent, Absent) => renderDisabledResolved
             case _ => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
@@ -158,9 +179,11 @@ final case class Rating private (
             if active then opt = opt.cssClass("p-rating-option-active")
             if interactive then opt = opt.onClick(activate(i, value, ref))
 
-            // PrimeVue's hidden radio: real checked state, per-star aria-label, and
-            // native keyboard semantics (arrows move within the name group, Space
-            // selects — selecting the current value clears, Prime's cancel path).
+            // PrimeVue's hidden radio: real checked state, per-star aria-label, and native
+            // keyboard semantics — the arrows move within the name group and select as they go,
+            // which is the whole reason the group has a name. Prime's cancel path (picking the
+            // current value clears it) is a CLICK: a browser fires no change for a Space on a
+            // radio that is already checked, so the keyboard cannot reach it.
             var hidden = radio
                 .checked(i == value)
                 .jsProp("value", i.toString)
@@ -177,7 +200,9 @@ final case class Rating private (
             opt(toChild(hiddenSlot), toChild(icon))
         }
 
-        var el = div.cssClass("p-rating").cssClass("p-component")
+        // The radios inside form one group, so the box around them says so: an `aria-label` on a
+        // roleless div labels nothing in particular.
+        var el = div.cssClass("p-rating").cssClass("p-component").role("radiogroup")
         idV.foreach(v => el = el.id(v))
         if readonlyFlag then el = el.cssClass("p-readonly")
         if disabledFlag.constTrue then el = el.cssClass("p-disabled")

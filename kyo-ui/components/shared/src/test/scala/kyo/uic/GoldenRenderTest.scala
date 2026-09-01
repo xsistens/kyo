@@ -4129,6 +4129,7 @@ class GoldenRenderTest extends UicTest:
             hearts   <- renderHtml(uic.Rating().value(1).stars(2).onIcon(uic.Icons.heartFill).offIcon(uic.Icons.heart))
             readonly <- renderHtml(uic.Rating().value(2).readonly(true))
             unnamed  <- renderHtml(uic.Rating().value(1))
+            minted   <- renderHtml(uic.Rating().value(1).wired("kyo-uic-7"))
         yield
             assert((count(named, "p-hidden-accessible") == 5), "one hidden container per option")
             assert((count(named, """type="radio"""") == 5), "one native radio per option")
@@ -4137,7 +4138,13 @@ class GoldenRenderTest extends UicTest:
             assert(named.contains("checked"), "the current value's radio is checked")
             assert(named.contains("""aria-label="1 star""""), "first star aria-label")
             assert(named.contains("""aria-label="2 stars""""), "plural star aria-label")
-            assert(!unnamed.contains("name="), "no name attribute unless set (no uniqueness source server-side)")
+            // The name is what the browser groups the radios by, and the grouping is what makes
+            // this ONE tab stop with arrows between the stars. A caller's own name wins; the
+            // mount mints one otherwise, and only the static projection, which has no mount to
+            // mint in, is left without.
+            assert(!unnamed.contains("name="), "the static projection has no uniqueness source to mint from")
+            assert((count(minted, """name="kyo-uic-7"""") == 5), "the mount's minted name groups them all")
+            assert(named.contains("""role="radiogroup""""), "the box around the radios says what it is")
             assert(hearts.contains("""data-uic-icon="heart-fill""""), "onIcon overrides the filled glyph")
             assert(hearts.contains("""data-uic-icon="heart""""), "offIcon overrides the outline glyph")
             assert(!hearts.contains("""data-uic-icon="star"""), "no star glyphs once overridden")

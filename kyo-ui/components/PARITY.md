@@ -42,7 +42,7 @@ The interactive demo, one page per component and one section per feature, lives 
 | Tabs | scrollable prev and next buttons, closable tabs, the animated ink bar | JS measuring and transitions. |
 | Tree | filter hook parity, drag and drop, lazy-loading flags | The cascading tri-state checkbox is implemented: a click carries over the subtree, and a partially-checked ancestor renders indeterminate with `aria-checked="mixed"`. |
 | Listbox | striped rows | Groups carry the untyped `ListItem` through the same `OptionItem` rows the typed pickers take. |
-| Rating | a default radio `name` when none is set, `.p-focus-visible` option styling | A pure server render has no per-instance uniqueness source to mint a name from, and focus-visible tracking is JS. |
+| Rating | `.p-focus-visible` option styling | Focus-visible tracking is JS. The radio `name` is minted by the mount when the caller sets none, since the grouping it provides is what makes this one tab stop with arrows; only the static projection, which has nothing to mint from, is left without. |
 | SelectButton | object `dataKey` and `optionValue` models | A typed label and key projection takes their place. |
 | IconField | clickable InputIcons, which are inert in Prime too | The TextArea and Select padding are documented `.p-uic-*` extensions, because Prime's own sheet pads only `.p-inputtext`. |
 | Timeline | nothing | Pure layout; rich content composes through the templates. |
