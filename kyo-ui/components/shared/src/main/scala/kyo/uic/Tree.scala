@@ -186,6 +186,7 @@ final case class Tree private (
                 else ()
             list = list.tabIndex(0).preventScrollKeys.onKeyDown(keyHandler(exp, r))
             if r.ownsFocus then list = list.onFocus(seedFocus).onBlur(r.ref.set(-1))
+            list = list.id(Tree.rootListId(r.idBase))
             if focus >= 0 then list = list.aria("activedescendant", nodeId(r.idBase, focus))
         }
 
@@ -412,7 +413,13 @@ final case class Tree private (
 end Tree
 
 object Tree:
+    /** The id of the root row list, which is what a host combobox ([[TreeSelect]]) points
+      * `aria-controls` at.
+      */
+    private[uic] def rootListId(base: String): String = s"$base-list"
+
     def apply(): Tree = new Tree()
+end Tree
 
 /** The keyboard highlight of a [[Tree]], and the id it addresses rows by.
   *

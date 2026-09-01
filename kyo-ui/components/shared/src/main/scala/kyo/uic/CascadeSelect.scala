@@ -372,7 +372,8 @@ final case class CascadeSelect[A] private (
             case Absent                      => ()
         end match
         accNameRefV.foreach(v => el = el.aria("labelledby", v))
-        el = el.aria("haspopup", "tree").aria("expanded", isOpen.toString)
+        el = el.role("combobox").aria("haspopup", "tree").aria("expanded", isOpen.toString)
+        st.flatMap(_.idBase).foreach(b => el = el.aria("controls", listId(b)))
         if !disabledFlag then
             el = el.tabIndex(0).preventScrollKeys
             if st.isDefined then
@@ -399,6 +400,9 @@ final case class CascadeSelect[A] private (
     end bodyStatic
 
     private def activeId(base: String): String = s"$base-active"
+
+    /** The id of the ROOT option list, which is what the combobox points `aria-controls` at. */
+    private def listId(base: String): String = s"$base-list"
 
     /** One panel level: `ul.p-cascadeselect-list` (role `tree` at the root,
       * `group` nested) of leaf and group rows; an OPEN group row anchors its
@@ -489,6 +493,7 @@ final case class CascadeSelect[A] private (
                 row((contentUI :: panel).map(toChild)*)
         }
         var listEl = ul.cssClass("p-cascadeselect-list").role(if path.isEmpty then "tree" else "group")
+        if path.isEmpty then st.foreach(state => state.idBase.foreach(b => listEl = listEl.id(listId(b))))
         // The ROOT list carries the announcement, wherever in the nested panels the highlight has
         // travelled to: focus stays on the trigger and the panel, so the root is the element a
         // screen reader is reading the descendant of.

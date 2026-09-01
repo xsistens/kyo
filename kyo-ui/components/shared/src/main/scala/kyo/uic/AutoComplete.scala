@@ -227,6 +227,9 @@ final case class AutoComplete[A] private (
 
     private def optionId(base: String, index: Int): String = s"$base-option-$index"
 
+    /** The id of the suggestion list, which is what the combobox points `aria-controls` at. */
+    private def listId(base: String): String = s"$base-list"
+
     /** One key over the FIELD, which is where this combobox's keyboard lives: the panel never
       * takes focus, so every key arrives here.
       *
@@ -386,7 +389,19 @@ final case class AutoComplete[A] private (
             case Present(TextValue.Dyn(s))   => f.aria("label", s)
             case Absent                      => f
         f = accNameRefV.map(v => f.aria("labelledby", v)).getOrElse(f)
-        f = f.aria("haspopup", "listbox").aria("expanded", panelShown.toString)
+        // A text box that opens a list of suggestions IS a combobox. This one keeps DOM focus in
+        // the input the whole time (the panel is `seedFocus(false)`), so the input is also where
+        // `aria-activedescendant` belongs: on the suggestion list it named the right option but
+        // hung it off an element nothing was focused on, and a screen reader reads the attribute
+        // of the FOCUSED element or of none at all.
+        f = f.role("combobox").aria("haspopup", "listbox").aria("expanded", panelShown.toString)
+        st.foreach { s =>
+            s.idBase.foreach { b =>
+                f = f.aria("controls", listId(b))
+                val hiEff = if visible.isEmpty then -1 else math.min(s.hiV, visible.size - 1)
+                if panelShown && hiEff >= 0 then f = f.aria("activedescendant", optionId(b, hiEff))
+            }
+        }
         st.foreach { s =>
             // Typing opens the panel on the filtered list and resets the highlight.
             f = f.onInput { v =>
@@ -503,7 +518,7 @@ final case class AutoComplete[A] private (
             div.cssClass("p-autocomplete-list-container")(
                 toChild {
                     var list = ul.cssClass("p-autocomplete-list").role("listbox")
-                    if hiEff >= 0 then s.idBase.foreach(b => list = list.aria("activedescendant", optionId(b, hiEff)))
+                    s.idBase.foreach(b => list = list.id(listId(b)))
                     list((rows ++ emptyRow).map(toChild)*)
                 }
             )

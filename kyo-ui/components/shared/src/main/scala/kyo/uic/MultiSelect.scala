@@ -436,7 +436,8 @@ final case class MultiSelect[A] private (
             case Absent                      => ()
         end match
         accNameRefV.foreach(v => el = el.aria("labelledby", v))
-        el = el.aria("haspopup", "listbox").aria("expanded", isOpen.toString)
+        el = el.role("combobox").aria("haspopup", "listbox").aria("expanded", isOpen.toString)
+        st.flatMap(_.idBase).foreach(b => el = el.aria("controls", listId(b)))
         if !disabledFlag then
             el = el.tabIndex(0).preventScrollKeys
             st.foreach { s =>
@@ -520,6 +521,7 @@ final case class MultiSelect[A] private (
                 toChild(
                     {
                         var list = ul.cssClass("p-multiselect-list").role("listbox").aria("multiselectable", "true")
+                        s.idBase.foreach(b => list = list.id(listId(b)))
                         if hiEff >= 0 then
                             s.idBase.foreach(b => list = list.aria("activedescendant", optionId(b, hiEff)))
                         list((rows ++ emptyRow).map(toChild)*)
@@ -574,6 +576,9 @@ final case class MultiSelect[A] private (
     end overlayPanel
 
     private def optionId(base: String, index: Int): String = s"$base-option-$index"
+
+    /** The id of the option list, which is what the combobox points `aria-controls` at. */
+    private def listId(base: String): String = s"$base-list"
 
     /** One key over the open panel.
       *

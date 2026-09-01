@@ -434,7 +434,11 @@ final case class Select[A] private (
             case Absent                      => ()
         end match
         accNameRefV.foreach(v => el = el.aria("labelledby", v))
-        el = el.aria("haspopup", "listbox").aria("expanded", isOpen.toString)
+        // A field that opens a list of options IS a combobox, and saying so is what gives
+        // `aria-expanded` and `aria-controls` something to hang on: on a bare div they describe a
+        // widget the reader was never told about.
+        el = el.role("combobox").aria("haspopup", "listbox").aria("expanded", isOpen.toString)
+        st.flatMap(_.idBase).foreach(b => el = el.aria("controls", listId(b)))
         if interactive then
             el = el.tabIndex(0).preventScrollKeys
             // Trigger keys open the panel while CLOSED; while open the seeded panel
@@ -463,6 +467,9 @@ final case class Select[A] private (
     end bodyStatic
 
     private def optionId(base: String, index: Int): String = s"$base-option-$index"
+
+    /** The id of the option list, which is what the combobox points `aria-controls` at. */
+    private def listId(base: String): String = s"$base-list"
 
     /** One key over the open panel.
       *
@@ -548,6 +555,7 @@ final case class Select[A] private (
             div.cssClass("p-select-list-container")(
                 toChild {
                     var list = ul.cssClass("p-select-list").role("listbox")
+                    s.idBase.foreach(b => list = list.id(listId(b)))
                     // Without this the highlight was visible and unannounced: `.p-focus` paints a
                     // row, and a reader who cannot see the paint learns nothing from it.
                     if hiEff >= 0 then s.idBase.foreach(b => list = list.aria("activedescendant", optionId(b, hiEff)))

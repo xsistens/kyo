@@ -177,7 +177,10 @@ private[uic] object MenuTree:
                     var row = li
                         .cssClass(s"p-$prefix-item")
                         .cssClass("p-uic-overlay-anchor")
-                        .role("presentation")
+                        // `aria-haspopup` and `aria-expanded` below say this row opens a submenu,
+                        // and neither means anything on a row that also claims to be presentational.
+                        // The row IS the menu item; the link inside it stays roleless, as in Prime.
+                        .role("menuitem")
                         .aria("haspopup", "menu")
                         .aria("expanded", isOpen.toString)
                     if isOpen then row = row.cssClass(s"p-$prefix-item-active")
@@ -235,7 +238,7 @@ private[uic] object MenuTree:
                         case _ => Nil
                     row((content :: panel).map(toChild)*)
                 else
-                    var row = li.cssClass(s"p-$prefix-item").role("presentation")
+                    var row = li.cssClass(s"p-$prefix-item").role("menuitem")
                     if focused.exists(_ == p) then
                         row = row.cssClass("p-focus")
                         idBase.foreach(b => row = row.id(s"$b-active"))
