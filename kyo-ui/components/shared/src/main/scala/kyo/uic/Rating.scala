@@ -78,7 +78,10 @@ final case class Rating private (
     /** Number of stars (Prime default 5). */
     def stars(n: Int): Rating = copy(starsV = math.max(1, n))
 
-    /** `readonly` — the stars keep their look but stop reacting (`.p-readonly`). */
+    /** `readonly` — the stars keep their look, keep their place in the tab order, and stop
+      * reacting (`.p-readonly`, `aria-readonly` on the group). Only `disabled` takes them out of
+      * reach.
+      */
     def readonly(v: Boolean): Rating = copy(readonlyFlag = v)
 
     /** Disables the control (`.p-disabled` dimming + no interaction); a `Signal[Boolean]`
@@ -189,8 +192,10 @@ final case class Rating private (
                 .jsProp("value", i.toString)
                 .aria("label", if i == 1 then "1 star" else s"$i stars")
             nameV.foreach(n => hidden = hidden.name(n))
-            if !interactive then hidden = hidden.disabled(true)
-            if readonlyFlag then hidden = hidden.aria("readonly", "true")
+            // readonly keeps the stars FOCUSABLE and refuses to change: only `disabled` takes them
+            // out of the tab order. `aria-readonly` belongs on the GROUP, since a radio has no such
+            // state of its own; the group below carries it.
+            if disabledFlag.constTrue then hidden = hidden.disabled(true)
             if interactive then hidden = hidden.onChange(_ => activate(i, value, ref))
             val hiddenSlot: UI = span.cssClass("p-hidden-accessible")(toChild(hidden: UI))
 
@@ -204,7 +209,7 @@ final case class Rating private (
         // roleless div labels nothing in particular.
         var el = div.cssClass("p-rating").cssClass("p-component").role("radiogroup")
         idV.foreach(v => el = el.id(v))
-        if readonlyFlag then el = el.cssClass("p-readonly")
+        if readonlyFlag then el = el.cssClass("p-readonly").aria("readonly", "true").preventActivation
         if disabledFlag.constTrue then el = el.cssClass("p-disabled")
         if invalidV.constTrue then el = el.cssClass("p-invalid").aria("invalid", "true")
         accNameV match

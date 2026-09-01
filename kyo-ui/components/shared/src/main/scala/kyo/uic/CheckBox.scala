@@ -57,8 +57,10 @@ final case class CheckBox private (
       */
     def disabled(v: Boolean | Signal[Boolean]): CheckBox = copy(disabledFlag = Present(ReactiveValue(v)))
 
-    /** `readonly` — interaction is blocked (`aria-readonly`), but unlike
-      * `disabled` the box keeps its normal look.
+    /** `readonly` — the box reports `aria-readonly` and refuses to change, but
+      * unlike `disabled` it keeps its normal look AND its place in the tab order: a reader can
+      * land on it and read its value, and every key and click that would change it runs into
+      * nothing.
       */
     def readonly(v: Boolean): CheckBox = copy(readonlyFlag = Present(v))
 
@@ -129,8 +131,12 @@ final case class CheckBox private (
         val isReadonly    = readonlyFlag.getOrElse(false)
         val isDisplayOnly = displayOnlyFlag.getOrElse(false)
         val isMixed       = indeterminateFlag.getOrElse(false)
-        // readonly/displayOnly block interaction by disabling the native input; only
-        // `disabled` also gets the `.p-disabled` visual treatment.
+        // readonly and displayOnly keep the box FOCUSABLE and refuse to change: the client
+        // declines the browser's own toggle (`preventActivation`) and the handler is simply not
+        // wired. Disabling the native input instead took the box out of the tab order, which made
+        // readonly indistinguishable from disabled to a keyboard and to a screen reader, and left
+        // its `aria-readonly` on an element already reported as disabled. Only `disabled` is
+        // native, and only `disabled` gets the `.p-disabled` visual treatment.
         val blocked = isReadonly || isDisplayOnly
 
         var box = checkbox.cssClass("p-checkbox-input").checked(isChecked)
@@ -146,8 +152,8 @@ final case class CheckBox private (
             case Present(TextValue.Dyn(s))   => box.aria("label", s)
             case Absent                      => box
         box = accNameRefV.map(v => box.aria("labelledby", v)).getOrElse(box)
-        if blocked then box = box.disabled(true)
-        else box = disabledFlag.foldFlag(box)(box.disabled(_))
+        if blocked then box = box.preventActivation
+        box = disabledFlag.foldFlag(box)(box.disabled(_))
         if !blocked then box = onChg.map(box.onChange(_)).getOrElse(box)
         if !blocked then
             box = onBlurF match

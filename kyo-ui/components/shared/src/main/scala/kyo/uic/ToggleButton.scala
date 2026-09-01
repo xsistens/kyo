@@ -82,8 +82,11 @@ final case class ToggleButton private (
 
     def disabled(v: Boolean): ToggleButton = copy(disabledFlag = v)
 
-    /** `readonly` — interaction is blocked (no toggle on click), but unlike
-      * `disabled` the button keeps its normal look and stays focusable.
+    /** `readonly` — the button never toggles and reports `aria-disabled`, which is what
+      * `role="button"` has to say it with (there is no readonly state for that role), but
+      * unlike `disabled` it keeps its normal look AND its place in the tab order: a reader can
+      * land on it and read its value, and every key and click that would change it runs into
+      * nothing.
       */
     def readonly(v: Boolean): ToggleButton = copy(readonlyFlag = v)
 
@@ -145,8 +148,13 @@ final case class ToggleButton private (
         end match
         accNameRefV.foreach(v => el = el.aria("labelledby", v))
         if disabledFlag then el = el.disabled(true)
-        // readonly keeps the normal look and focusability, but never toggles.
-        else if !readonlyFlag then onChg.foreach(f => el = el.onClick(f(!isChecked)))
+        // readonly keeps the normal look and focusability, but never toggles. It says so as
+        // `aria-disabled`, not `aria-readonly`: this is a `role="button"`, and that role has no
+        // readonly state to report. Without a click handler the browser's own activation reaches
+        // nothing, so there is nothing to decline either.
+        else if readonlyFlag then el = el.aria("disabled", "true")
+        else onChg.foreach(f => el = el.onClick(f(!isChecked)))
+        end if
         // Blur fires even without a toggle — the validation layer's Blur trigger. Reads the
         // ref LIVE (the CheckBox shape), so it reports the state at blur time.
         onBlurF.foreach { f =>

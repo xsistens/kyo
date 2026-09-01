@@ -4150,8 +4150,13 @@ class GoldenRenderTest extends UicTest:
             assert(!hearts.contains("""data-uic-icon="star"""), "no star glyphs once overridden")
             assert(hearts.contains("p-rating-on-icon"), "override keeps the on-icon class")
             assert(hearts.contains("p-rating-off-icon"), "override keeps the off-icon class")
-            assert(readonly.contains("disabled"), "readonly disables the hidden radios")
-            assert(readonly.contains("""aria-readonly="true""""), "readonly radios expose aria-readonly")
+            // readonly keeps the stars reachable: only `disabled` takes a control out of the tab
+            // order. The client declines the browser's own toggle instead, and the GROUP carries
+            // `aria-readonly`, since a radio has no readonly state of its own to report.
+            assert(!readonly.contains(" disabled"), "readonly no longer disables the hidden radios")
+            assert(readonly.contains("data-kyo-inert"), "the browser's toggle is declined instead")
+            assert(tagWithClass(readonly, "p-rating").contains("""aria-readonly="true""""), "the GROUP reports it")
+            assert(!readonly.contains("""type="radio" aria-readonly"""), "not the radios, which have no such state")
         end for
     }
 
@@ -4166,7 +4171,10 @@ class GoldenRenderTest extends UicTest:
         yield
             assert(fluid.contains("p-togglebutton-fluid"), "fluid modifier class")
             assert(!readonly.contains("click"), "readonly registers no toggle click")
-            assert(!readonly.contains("disabled"), "readonly is not disabled (keeps the normal look)")
+            assert(!readonly.contains(" disabled"), "readonly is not natively disabled (it keeps the normal look)")
+            // `role="button"` has no readonly state to report, so the true thing it can say is
+            // that it cannot be operated — while staying focusable, which native disabled is not.
+            assert(readonly.contains("""aria-disabled="true""""), "readonly says it cannot be operated")
             assert(readonly.contains("p-togglebutton"), "readonly keeps the base anatomy")
     }
 

@@ -253,6 +253,25 @@ ids, pointer handlers, focus wiring).
   must have a real role, and the carrier must be a tab stop, focus-seeded, or a
   text box.
 
+## `readonly` is one thing
+
+A readonly control is one a reader can REACH and read the value of and cannot change:
+focusable, saying so in the vocabulary its own role has (`aria-readonly` where the role
+supports it, `aria-disabled` on a `role="button"`, which has no readonly state), and inert
+to every key and click that would change it. `disabled` is the different thing, and stays
+native. Select, CheckBox, ToggleSwitch, Rating and ToggleButton all answer this way;
+`ReadonlyTest` holds them to it.
+
+- **Do not implement readonly by disabling the native input.** It drops the tab stop, so a
+  keyboard reader cannot reach the value at all, and it makes readonly and disabled the same
+  thing to a screen reader (which reports the disabled state and ignores `aria-readonly`
+  beside it).
+- **A handler cannot decline the browser's default**, since it runs asynchronously and
+  remotely: by the time it is asked, the checkbox has already toggled. `UI.preventActivation`
+  is the kyo-ui primitive that declines it in the client, the same way `preventScrollKeys`
+  declines the page scroll. Both read from `kyo.internal.KeyPolicy`, and `KeyPolicyTest`
+  holds the two transports against it.
+
 ## Enter vs leave animations
 
 - **Enter = a transient FROM-STATE class plus a `transition` on the base element**

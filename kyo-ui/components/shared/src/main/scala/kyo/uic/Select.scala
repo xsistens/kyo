@@ -190,8 +190,11 @@ final case class Select[A] private (
 
     def disabled(v: Boolean): Select[A] = copy(disabledFlag = v)
 
-    /** `readonly` — interaction is blocked (the panel never opens), but unlike
-      * `disabled` the field keeps its normal look (`.p-uic-select-readonly`).
+    /** `readonly` — the field reports `aria-readonly`, answers no key and opens no
+      * panel (`.p-uic-select-readonly`), but
+      * unlike `disabled` it keeps its normal look AND its place in the tab order: a reader can
+      * land on it and read its value, and every key and click that would change it runs into
+      * nothing.
       */
     def readonly(v: Boolean): Select[A] = copy(readonlyFlag = v)
 
@@ -455,6 +458,9 @@ final case class Select[A] private (
                 }
             end if
         }
+        // readonly keeps the field FOCUSABLE and says `aria-readonly` above; it simply answers no
+        // key and opens nothing. `disabled` is what takes a control out of the tab order.
+        if readonlyFlag && !disabledFlag then el = el.tabIndex(0)
         if interactive then
             el = el.tabIndex(0).preventScrollKeys
             // The trigger keeps focus for as long as the panel is open, so it is where the panel's

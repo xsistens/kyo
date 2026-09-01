@@ -48,8 +48,10 @@ final case class ToggleSwitch private (
       */
     def disabled(v: Boolean | Signal[Boolean]): ToggleSwitch = copy(disabledFlag = Present(ReactiveValue(v)))
 
-    /** `readonly` — interaction is blocked (`aria-readonly`), but unlike
-      * `disabled` the switch keeps its normal look.
+    /** `readonly` — the switch reports `aria-readonly` and refuses to change, but
+      * unlike `disabled` it keeps its normal look AND its place in the tab order: a reader can
+      * land on it and read its value, and every key and click that would change it runs into
+      * nothing.
       */
     def readonly(v: Boolean): ToggleSwitch = copy(readonlyFlag = Present(v))
 
@@ -122,10 +124,12 @@ final case class ToggleSwitch private (
             case Present(TextValue.Dyn(s))   => box.aria("label", s)
             case Absent                      => box
         box = accNameRefV.map(v => box.aria("labelledby", v)).getOrElse(box)
-        // readonly blocks interaction by disabling the native input; only `disabled`
-        // also gets the `.p-disabled` visual treatment.
-        if isReadonly then box = box.disabled(true)
-        else box = disabledFlag.foldFlag(box)(box.disabled(_))
+        // readonly keeps the switch FOCUSABLE and refuses to change: the client declines the
+        // browser's own toggle (`preventActivation`) and the handler is not wired. Disabling the
+        // native input instead took it out of the tab order, which made readonly and disabled the
+        // same thing to a keyboard. Only `disabled` is native. See [[CheckBox]] for the reasoning.
+        if isReadonly then box = box.preventActivation
+        box = disabledFlag.foldFlag(box)(box.disabled(_))
         if !isReadonly then box = onChg.map(box.onChange(_)).getOrElse(box)
         if !isReadonly then
             box = onBlurF match
