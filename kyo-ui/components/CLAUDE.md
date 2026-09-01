@@ -306,6 +306,23 @@ unreachable in every picker that bound no `currentView`.
   keeps the tab stop and says so. Native `disabled` removes it from the keyboard entirely, which
   is also how OrderList's move button lost the focus mid-press.
 
+## A cancel remembers at the first write, not at the open
+
+Escape on a panel that can be cancelled has to put back what the reader started with, and the
+obvious place to record that is the open. It is the wrong place: the open ref is a caller's to
+write, so a panel opened from application code never passes through the component's open path and
+the memory is either stale or missing. Record at the FIRST write inside the panel instead, whoever
+opened it and however: before that moment there is nothing to undo, and after it the memory is
+exactly the state the reader is about to leave.
+
+- **A close that commits forgets.** Clear the memory wherever the panel closes on a pick, so the
+  next Escape after a reopen has nothing old to put back.
+- **The undo writes refs and stays silent on the change callback.** Over the whole open nothing
+  changed, so an `onChange` for the undo would report a change that did not happen; a ref-observing
+  page still sees the restored value, because that is where the value lives.
+- **An in-flow variant has nothing to cancel** (`DatePicker.inline`): it does not close, and what
+  is picked in the page is picked. Guard the cancel on the floating form, not just its close.
+
 ## `readonly` is one thing
 
 A readonly control is one a reader can REACH and read the value of and cannot change:
