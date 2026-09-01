@@ -14,10 +14,13 @@ import kyo.UI.*
   *
   * The option panel is the REAL floating panel, built on the [[Overlay]]
   * primitive: the trigger toggles it, an outside click or Escape closes it, and
-  * the panel seeds focus on open (kyo's `data-kyo-focus-*` client contract) so
-  * the keyboard works without any prior click — ArrowDown/ArrowUp move the
-  * `.p-focus` highlight (disabled options skipped), Enter picks the highlighted
-  * option, Escape closes and returns focus to the trigger. `filterable(true)`
+  * the panel takes NO focus — the trigger keeps it, which is what makes the
+  * trigger the combobox and lets its `aria-activedescendant` be read at all.
+  * ArrowDown/ArrowUp move the `.p-focus` highlight (disabled options skipped),
+  * Home/End reach the ends, a printable key jumps to the option it starts, Enter
+  * or Space picks the highlighted option, Escape closes. A filter header is the
+  * one exception: it holds a text box, so focus is seeded THERE and that box
+  * becomes the combobox, exactly as in [[AutoComplete]]. `filterable(true)`
   * renders Prime's header filter input (case-insensitive contains on the label
   * projection) over a query the select owns, `filterQuery(ref)` over one the app
   * owns; `showClear(true)` the clear affordance on the trigger while a value is
@@ -434,20 +437,39 @@ final case class Select[A] private (
             case Absent                      => ()
         end match
         accNameRefV.foreach(v => el = el.aria("labelledby", v))
-        // A field that opens a list of options IS a combobox, and saying so is what gives
-        // `aria-expanded` and `aria-controls` something to hang on: on a bare div they describe a
-        // widget the reader was never told about.
-        el = el.role("combobox").aria("haspopup", "listbox").aria("expanded", isOpen.toString)
-        st.flatMap(_.idBase).foreach(b => el = el.aria("controls", listId(b)))
+        // WHICH element is the combobox is decided by whether there is a filter header, and it is
+        // decided once: the combobox is whatever holds focus while the list is open, because
+        // `aria-activedescendant` is read off the focused element or off nothing at all. Without a
+        // header focus never leaves this trigger, so the trigger is the combobox. With one, focus
+        // goes into the header's text box and that box is the combobox, exactly as in
+        // [[AutoComplete]]; the trigger is then the button that reveals it.
+        el = el.role(if filtering then "button" else "combobox")
+            .aria("haspopup", "listbox")
+            .aria("expanded", isOpen.toString)
+        st.flatMap(_.idBase).foreach { b =>
+            el = el.aria("controls", listId(b))
+            if !filtering then
+                st.foreach { s =>
+                    val (_, _, _, hiEff) = shownState(s)
+                    if s.isOpen && hiEff >= 0 then el = el.aria("activedescendant", optionId(b, hiEff))
+                }
+            end if
+        }
         if interactive then
             el = el.tabIndex(0).preventScrollKeys
-            // Trigger keys open the panel while CLOSED; while open the seeded panel
-            // handles the keyboard and this bubble handler stands down.
+            // The trigger keeps focus for as long as the panel is open, so it is where the panel's
+            // keyboard lives: closed, the three opening keys; open, the whole option keyboard.
+            // The one exception is a filter header, which takes focus into the panel and the keys
+            // with it, because a reader typing into a text box is not steering a list from outside it.
             st.foreach { s =>
+                val (_, shown, navigable, hiEff) = shownState(s)
                 el = el.onKeyDown { e =>
-                    e.key match
-                        case Keyboard.ArrowDown | Keyboard.Enter | Keyboard.Space if !s.isOpen => openPanel(s)
-                        case _                                                                 => ()
+                    if !s.isOpen then
+                        e.key match
+                            case Keyboard.ArrowDown | Keyboard.Enter | Keyboard.Space => openPanel(s)
+                            case _                                                    => ()
+                    else if filtering then ()
+                    else panelKey(shown, navigable, hiEff, s, pick)(e)
                 }
             }
             // Focus-loss on the trigger reports the currently bound key (or the resolved
@@ -480,8 +502,9 @@ final case class Select[A] private (
       * key types rather than jumping. Without a header both belong to the list, and the printable
       * one jumps to the option it starts, which is what [[Typeahead]] answers.
       *
-      * Escape is not read here. [[Overlay]] dismisses on it before this runs, and closing twice is
-      * how a nested panel loses a level it should have kept.
+      * Escape closes the panel. It is read HERE rather than by [[Overlay]] because focus never
+      * enters the panel, so an Escape pressed by the reader is delivered to whatever holds focus
+      * (the trigger, or the filter header's input) and never reaches the panel at all.
       */
     private def panelKey(
         shown: Seq[A],
@@ -494,7 +517,7 @@ final case class Select[A] private (
         if caretOwns then ()
         else
             ListNav.onKey(navigable, hiEff, e.key, wrap = false) match
-                case Present(step) if step.dismiss => ()
+                case Present(step) if step.dismiss => s.open.set(false)
                 case Present(step) =>
                     val picked: Any < Async =
                         if step.activate && shown.isDefinedAt(step.focus) then pick(shown(step.focus))(s) else ()
@@ -513,17 +536,25 @@ final case class Select[A] private (
       * [[Overlay]] primitive, holding the optional filter header and the option
       * list.
       */
-    private def overlayPanel(current: String, s: State, pick: A => State => Any < Async)(using Frame): UI =
+    /** The options the panel is showing, the positions the highlight may land on, and where it
+      * is now. Derived in one place because the TRIGGER reads it too: the keyboard lives on
+      * whatever holds focus, and that is no longer the panel.
+      *
+      * Prime's select stops at the ends rather than cycling, so `wrap` is false wherever the
+      * navigable list is read.
+      */
+    private def shownState(s: State): (List[OptionItem[A]], Seq[A], List[Int], Int) =
         val shownGroups =
             if filtering && s.qV.nonEmpty then
                 OptionItem.filter(optionsV, a => labelF(a).toLowerCase.contains(s.qV.toLowerCase))
             else optionsV
         val shown = OptionItem.flatten(shownGroups)
         val hiEff = if shown.isEmpty then -1 else math.min(s.hiV, shown.size - 1)
+        (shownGroups, shown, shown.indices.toList.filterNot(i => isOptionDisabled(shown(i))), hiEff)
+    end shownState
 
-        // The positions the highlight may land on. Prime's select stops at the ends rather than
-        // cycling, so `wrap` is false wherever this list is read.
-        val navigable: List[Int] = shown.indices.toList.filterNot(i => isOptionDisabled(shown(i)))
+    private def overlayPanel(current: String, s: State, pick: A => State => Any < Async)(using Frame): UI =
+        val (shownGroups, shown, navigable, hiEff) = shownState(s)
 
         val rows: List[UI] = OptionItem.rows(shownGroups, "p-select-option-group") { (a, i) =>
             val isSel = key(a) == current
@@ -554,11 +585,11 @@ final case class Select[A] private (
         val listUI: UI =
             div.cssClass("p-select-list-container")(
                 toChild {
+                    // The list is named by `aria-controls` and holds the option ids; it does NOT
+                    // carry the announcement, because it never holds focus and the attribute is
+                    // read off the element that does.
                     var list = ul.cssClass("p-select-list").role("listbox")
                     s.idBase.foreach(b => list = list.id(listId(b)))
-                    // Without this the highlight was visible and unannounced: `.p-focus` paints a
-                    // row, and a reader who cannot see the paint learns nothing from it.
-                    if hiEff >= 0 then s.idBase.foreach(b => list = list.aria("activedescendant", optionId(b, hiEff)))
                     list((rows ++ emptyRow).map(toChild)*)
                 }
             )
@@ -567,26 +598,37 @@ final case class Select[A] private (
         // sibling :not(:last-child) sheet rule pads the input for the icon.
         val header: List[UI] =
             if filtering then
+                var filterEl = input
+                    .cssClass("p-select-filter")
+                    .cssClass("p-inputtext")
+                    .cssClass("p-component")
+                    // The bound input renders inside a reactive wrapper span, which resets sibling
+                    // positions — the sheet's :not(:last-child) padding cannot see the trailing
+                    // icon, so stamp the deterministic IconField padding class.
+                    .cssClass("p-uic-iconfield-end")
+                    .role("combobox")
+                    .aria("label", "Filter")
+                    .aria("haspopup", "listbox")
+                    .aria("expanded", "true")
+                    .value(s.q)
+                    // Typing re-filters; highlight the first match (Prime behavior).
+                    .onInput(_ => s.hi.set(0))
+                    // The header is where focus goes and therefore where the option keyboard lives:
+                    // the arrows move the highlight, the caret keeps Space and the printable keys,
+                    // Escape closes.
+                    .focusAuto(true)
+                    .focusRestore(true)
+                    .preventScrollKeys
+                    .onKeyDown(panelKey(shown, navigable, hiEff, s, pick))
+                s.idBase.foreach { b =>
+                    filterEl = filterEl.aria("controls", listId(b))
+                    if hiEff >= 0 then filterEl = filterEl.aria("activedescendant", optionId(b, hiEff))
+                }
                 List(
                     div.cssClass("p-select-header")(
                         toChild(
                             div.cssClass("p-iconfield")(
-                                toChild(
-                                    input
-                                        .cssClass("p-select-filter")
-                                        .cssClass("p-inputtext")
-                                        .cssClass("p-component")
-                                        // The bound input renders inside a reactive wrapper span,
-                                        // which resets sibling positions — the sheet's
-                                        // :not(:last-child) padding cannot see the trailing icon,
-                                        // so stamp the deterministic IconField padding class.
-                                        .cssClass("p-uic-iconfield-end")
-                                        .role("searchbox")
-                                        .aria("label", "Filter")
-                                        .value(s.q)
-                                        // Typing re-filters; highlight the first match (Prime behavior).
-                                        .onInput(_ => s.hi.set(0))
-                                ),
+                                toChild(filterEl),
                                 toChild(
                                     span.cssClass("p-inputicon")(
                                         toChild(GlyphSvg(Icons.search, "p-icon"))
@@ -603,7 +645,10 @@ final case class Select[A] private (
             .scroll(scrollV)
             .panelClass("p-select-overlay")
             .panelClass("p-component")
-            .onPanelKeyDown(panelKey(shown, navigable, hiEff, s, pick))((header ++ keyCollisionCard ++ List(listUI))*)
+            // Nothing in this panel takes focus (a filter header seeds its own input), so nothing
+            // in it receives a key either: no seed, no key handler, and no Escape of its own.
+            .seedFocus(false)
+            .dismissOnEscape(false)((header ++ keyCollisionCard ++ List(listUI))*)
             .render
     end overlayPanel
 

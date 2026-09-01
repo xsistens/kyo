@@ -24,7 +24,8 @@ enum MultiSelectDisplay derives CanEqual:
   * extracted `@primeuix` multiselect CSS applies verbatim.
   *
   * [[Select]]'s multi-value sibling: the same [[Overlay]]-based floating panel
-  * (outside click / Escape close it, the panel seeds focus on open), but the
+  * (outside click / Escape close it, and the panel takes no focus: the trigger
+  * keeps it, or a filter header's input does), but the
   * value binds to a `SignalRef[Set[String]]` of option keys and PICKING DOES NOT
   * CLOSE — clicking a row (or Enter on the `.p-focus` highlight) toggles the key
   * and the panel stays open, exactly Prime's multiselect semantics.
@@ -436,15 +437,35 @@ final case class MultiSelect[A] private (
             case Absent                      => ()
         end match
         accNameRefV.foreach(v => el = el.aria("labelledby", v))
-        el = el.role("combobox").aria("haspopup", "listbox").aria("expanded", isOpen.toString)
-        st.flatMap(_.idBase).foreach(b => el = el.aria("controls", listId(b)))
+        // WHICH element is the combobox follows the filter header, and follows it for the same
+        // reason [[Select]] does: the combobox is whatever holds focus while the list is open,
+        // because `aria-activedescendant` is read off the focused element or off nothing at all.
+        el = el.role(if filtering then "button" else "combobox")
+            .aria("haspopup", "listbox")
+            .aria("expanded", isOpen.toString)
+        st.flatMap(_.idBase).foreach { b =>
+            el = el.aria("controls", listId(b))
+            if !filtering then
+                st.foreach { s =>
+                    val (_, _, _, hiEff) = shownState(s)
+                    if s.isOpen && hiEff >= 0 then el = el.aria("activedescendant", optionId(b, hiEff))
+                }
+            end if
+        }
         if !disabledFlag then
             el = el.tabIndex(0).preventScrollKeys
+            // The trigger keeps focus for as long as the panel is open, so it is where the panel's
+            // keyboard lives: closed, the three opening keys; open, the whole option keyboard. A
+            // filter header is the exception, taking focus into the panel and the keys with it.
             st.foreach { s =>
+                val (_, shown, navigable, hiEff) = shownState(s)
                 el = el.onKeyDown { e =>
-                    e.key match
-                        case Keyboard.ArrowDown | Keyboard.Enter | Keyboard.Space if !s.isOpen => openPanel(s)
-                        case _                                                                 => ()
+                    if !s.isOpen then
+                        e.key match
+                            case Keyboard.ArrowDown | Keyboard.Enter | Keyboard.Space => openPanel(s)
+                            case _                                                    => ()
+                    else if filtering then ()
+                    else panelKey(shown, navigable, hiEff, s, toggleOption)(e)
                 }
             }
             // Focus-loss on the trigger reports the current selection — the validation layer's Blur trigger.
@@ -466,17 +487,25 @@ final case class MultiSelect[A] private (
       * [[Overlay]] primitive — header (select-all + filter), then the checkbox
       * option rows.
       */
-    private def overlayPanel(current: Set[String], s: State, toggleOption: A => Any < Async)(using Frame): UI =
+    /** The options the panel is showing, the positions the highlight may land on, and where it is
+      * now. Derived in one place because the TRIGGER reads it too: the keyboard lives on whatever
+      * holds focus, and that is no longer the panel.
+      *
+      * Prime's multiselect stops at the ends rather than cycling, as its select does, so `wrap` is
+      * false wherever the navigable list is read.
+      */
+    private def shownState(s: State): (List[OptionItem[A]], Seq[A], List[Int], Int) =
         val shownGroups =
             if filtering && s.qV.nonEmpty then
                 OptionItem.filter(optionsV, a => labelF(a).toLowerCase.contains(s.qV.toLowerCase))
             else optionsV
         val shown = OptionItem.flatten(shownGroups)
         val hiEff = if shown.isEmpty then -1 else math.min(s.hiV, shown.size - 1)
+        (shownGroups, shown, shown.indices.toList.filterNot(i => isOptionDisabled(shown(i))), hiEff)
+    end shownState
 
-        // The positions the highlight may land on. Prime's multiselect stops at the ends rather
-        // than cycling, as its select does.
-        val navigable: List[Int] = shown.indices.toList.filterNot(i => isOptionDisabled(shown(i)))
+    private def overlayPanel(current: Set[String], s: State, toggleOption: A => Any < Async)(using Frame): UI =
+        val (shownGroups, shown, navigable, hiEff) = shownState(s)
 
         // Prime's select-all semantics: checked while every visible enabled option
         // is selected; checking replaces the WHOLE value with the visible enabled
@@ -520,10 +549,10 @@ final case class MultiSelect[A] private (
             div.cssClass("p-multiselect-list-container")(
                 toChild(
                     {
+                        // Named by `aria-controls` and holding the option ids; the announcement
+                        // itself rides the focused element, which is never this list.
                         var list = ul.cssClass("p-multiselect-list").role("listbox").aria("multiselectable", "true")
                         s.idBase.foreach(b => list = list.id(listId(b)))
-                        if hiEff >= 0 then
-                            s.idBase.foreach(b => list = list.aria("activedescendant", optionId(b, hiEff)))
                         list((rows ++ emptyRow).map(toChild)*)
                     }
                 )
@@ -542,19 +571,31 @@ final case class MultiSelect[A] private (
                  )
              else Nil) ++
                 (if filtering then
+                     var filterEl = input
+                         .cssClass("p-multiselect-filter")
+                         .cssClass("p-inputtext")
+                         .cssClass("p-component")
+                         .cssClass("p-uic-iconfield-end")
+                         .role("combobox")
+                         .aria("label", "Filter")
+                         .aria("haspopup", "listbox")
+                         .aria("expanded", "true")
+                         .value(s.q)
+                         .onInput(_ => s.hi.set(0))
+                         // The header is where focus goes and therefore where the option keyboard
+                         // lives: the arrows move the highlight, the caret keeps Space and the
+                         // printable keys, Escape closes.
+                         .focusAuto(true)
+                         .focusRestore(true)
+                         .preventScrollKeys
+                         .onKeyDown(panelKey(shown, navigable, hiEff, s, toggleOption))
+                     s.idBase.foreach { b =>
+                         filterEl = filterEl.aria("controls", listId(b))
+                         if hiEff >= 0 then filterEl = filterEl.aria("activedescendant", optionId(b, hiEff))
+                     }
                      List(
                          div.cssClass("p-iconfield").cssClass("p-multiselect-filter-container")(
-                             toChild(
-                                 input
-                                     .cssClass("p-multiselect-filter")
-                                     .cssClass("p-inputtext")
-                                     .cssClass("p-component")
-                                     .cssClass("p-uic-iconfield-end")
-                                     .role("searchbox")
-                                     .aria("label", "Filter")
-                                     .value(s.q)
-                                     .onInput(_ => s.hi.set(0))
-                             ),
+                             toChild(filterEl),
                              toChild(
                                  span.cssClass("p-inputicon")(
                                      toChild(GlyphSvg(Icons.search, "p-icon"))
@@ -571,7 +612,10 @@ final case class MultiSelect[A] private (
         Overlay(s.open)
             .panelClass("p-multiselect-overlay")
             .panelClass("p-component")
-            .onPanelKeyDown(panelKey(shown, navigable, hiEff, s, toggleOption))((header ++ keyCollisionCard ++ List(listUI))*)
+            // Nothing in this panel takes focus (a filter header seeds its own input), so nothing
+            // in it receives a key either.
+            .seedFocus(false)
+            .dismissOnEscape(false)((header ++ keyCollisionCard ++ List(listUI))*)
             .render
     end overlayPanel
 
@@ -587,7 +631,8 @@ final case class MultiSelect[A] private (
       * things should not have to reopen the list between them. Prime does the same.
       *
       * A filter header holds a text field, so Space and a printable key belong to the caret there
-      * and to the list otherwise. Escape is [[Overlay]]'s.
+      * and to the list otherwise. Escape closes: focus never enters the panel, so the key is
+      * delivered to the trigger or to the filter header's input and never reaches the panel.
       */
     private def panelKey(shown: Seq[A], navigable: List[Int], hiEff: Int, s: State, toggleOption: A => Any < Async)(
         e: KeyboardEvent
@@ -596,7 +641,7 @@ final case class MultiSelect[A] private (
         if caretOwns then ()
         else
             ListNav.onKey(navigable, hiEff, e.key, wrap = false) match
-                case Present(step) if step.dismiss => ()
+                case Present(step) if step.dismiss => s.open.set(false)
                 case Present(step) =>
                     val toggled: Any < Async =
                         if step.activate && shown.isDefinedAt(step.focus) then toggleOption(shown(step.focus)) else ()

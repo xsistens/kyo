@@ -535,9 +535,10 @@ class GoldenRenderTest extends UicTest:
             assert(open.contains("p-uic-overlay-backdrop"), "open: outside-click backdrop (Overlay primitive)")
             assert(open.contains("p-uic-overlay-panel"), "open: overlay panel geometry class")
             assert(open.contains("p-select-overlay"), "open: Prime's panel skin class")
-            assert(open.contains("""data-kyo-focus-auto="1""""), "open: panel seeds focus (keyboard without prior click)")
-            assert(open.contains("""data-kyo-focus-restore="1""""), "open: focus returns to the trigger on close")
-            assert(open.contains("""data-kyo-focus-trap="1""""), "open: panel traps Tab")
+            // Focus stays on the trigger, which is what makes the trigger the combobox and lets
+            // its `aria-activedescendant` be read at all.
+            assert(!open.contains("""data-kyo-focus-auto="1""""), "open: the panel seeds no focus")
+            assert(!open.contains("""data-kyo-focus-trap="1""""), "open: and traps none either")
             assert(open.contains("p-select-list-container"), "open: scrollable list container")
             assert(open.contains("""class="p-select-list""""), "open: Prime's option list")
             assert(open.contains("""role="listbox""""), "open: listbox role")
@@ -551,7 +552,11 @@ class GoldenRenderTest extends UicTest:
             assert(highlight.contains("p-focus"), "highlight ref stamps Prime's .p-focus row")
             assert(featured.contains("p-select-header"), "filterable(true): Prime's header slot")
             assert(featured.contains("p-select-filter"), "filterable(true): the filter input")
-            assert(featured.contains("""role="searchbox""""), "filter input announces itself")
+            // A filter header takes focus into the panel, which makes IT the combobox: the
+            // announcement is read off the focused element, so it has to be the one that carries
+            // the role, the popup reference and the highlight.
+            assert(featured.contains("""role="combobox""""), "the filter input is the combobox once there is one")
+            assert(featured.contains("""data-kyo-focus-auto="1""""), "and it is what focus is seeded onto")
             assert(featured.contains("p-select-option-check-icon"), "checkmark(true): check glyph on the selected row")
             assert(featured.contains("p-select-option-blank-icon"), "checkmark(true): blank slot on unselected rows")
             assert(featured.contains("p-select-clear-icon"), "showClear(true): clear affordance while a value is set")
@@ -1280,8 +1285,12 @@ class GoldenRenderTest extends UicTest:
             assert(own.contains("""tabindex="0""""), "the tree list is the tab stop")
             assert(own.contains("p-focus"), "and the focused row wears the ring Prime draws")
             assert(own.contains("focus") && own.contains("blur"), "it registers focus and blur to keep that row honest")
-            assert(host.contains("""tabindex="0""""), "hosted: still the tab stop, TreeSelect tabs into the panel")
+            // A hosted tree owns no part of the focus story: TreeSelect keeps focus on its trigger,
+            // wears the tree's key handler there, and announces the highlight from there. A tab
+            // stop here would be a second focus owner inside the host's own panel.
+            assert(!host.contains("""tabindex="0""""), "hosted: not a tab stop")
             assert(!host.contains("blur"), "hosted: focus and blur belong to the host that holds them")
+            assert(!host.contains("activedescendant"), "hosted: and the announcement belongs there too")
         end for
     }
 
@@ -4785,8 +4794,10 @@ class GoldenRenderTest extends UicTest:
             assert(open.contains("""aria-expanded="true""""), "open: trigger reads expanded")
             assert(open.contains("p-uic-overlay-backdrop"), "open: outside-click backdrop")
             assert(open.contains("p-multiselect-overlay"), "open: Prime's panel skin class")
-            assert(open.contains("""data-kyo-focus-auto="1""""), "open: panel seeds focus")
-            assert(open.contains("""data-kyo-focus-trap="1""""), "open: panel traps Tab")
+            // Focus stays on the trigger, which is what makes the trigger the combobox.
+            assert(!open.contains("""data-kyo-focus-auto="1""""), "open: the panel seeds no focus")
+            assert(!open.contains("""data-kyo-focus-trap="1""""), "open: and traps none either")
+            assert(featured.contains("""data-kyo-focus-auto="1""""), "a filter header takes focus into the panel")
             assert(open.contains("p-multiselect-header"), "open: header with the select-all checkbox")
             assert(open.contains("p-checkbox-input"), "header select-all is the REAL Checkbox anatomy")
             assert(open.contains("change"), "header select-all registers its change handler")
@@ -4807,7 +4818,11 @@ class GoldenRenderTest extends UicTest:
             assert(("p-checkbox-checked".r.findAllIn(allPicked).size == 3), "all visible selected: select-all AND both rows checked")
             assert(featured.contains("p-multiselect-filter-container"), "filter(true): IconField filter container")
             assert(featured.contains("p-multiselect-filter"), "filter(true): the filter input")
-            assert(featured.contains("""role="searchbox""""), "filter input announces itself")
+            // A filter header takes focus into the panel, which makes IT the combobox: the
+            // announcement is read off the focused element, so it has to be the one that carries
+            // the role, the popup reference and the highlight.
+            assert(featured.contains("""role="combobox""""), "the filter input is the combobox once there is one")
+            assert(featured.contains("""data-kyo-focus-auto="1""""), "and it is what focus is seeded onto")
             assert(featured.contains("p-multiselect-clear-icon"), "showClear(true): clear affordance")
             assert(!noToggle.contains("p-checkbox-input"), "showToggleAll(false): no header checkbox (rows are inert anatomy)")
             assert(disabled.contains("p-disabled"), "optionDisabled rows carry .p-disabled")
@@ -4850,9 +4865,10 @@ class GoldenRenderTest extends UicTest:
     }
 
     "CascadeSelect announces the option the highlight is on, wherever the nesting has taken it" in {
-        // The fourth component in the family that moves a `.p-focus` highlight and, until now, said
-        // nothing about it. One id travels with the highlight rather than one id per option: the
-        // rows live across nested panels, and `aria-activedescendant` names exactly one of them.
+        // One id travels with the highlight rather than one id per option: the rows live across
+        // nested panels, and `aria-activedescendant` names exactly one of them. The TRIGGER carries
+        // it, however deep the chain goes, because the trigger is the one element that ever holds
+        // focus and the attribute is read off the focused element or off nothing at all.
         def html(focusAt: List[Int], openPaths: List[List[Int]]): String < Async =
             val cs = uic.CascadeSelect[String]()
                 .options(
@@ -4876,9 +4892,19 @@ class GoldenRenderTest extends UicTest:
             nested <- html(List(0, 0), List(List(0)))
             none   <- html(Nil, Nil)
         yield
-            assert(root.contains("""aria-activedescendant="cs-active""""), "the root list carries the announcement")
+            assert(
+                tagWithClass(root, "p-cascadeselect").contains("""aria-activedescendant="cs-active""""),
+                "the trigger, which is the combobox, carries the announcement"
+            )
+            assert(
+                !tagWithClass(root, "p-cascadeselect-list").contains("activedescendant"),
+                "and the list, which never holds focus, does not"
+            )
             assert(root.contains("""id="cs-active""""), "and the highlighted row answers to that id")
-            assert(nested.contains("""aria-activedescendant="cs-active""""), "still the root list, one level down")
+            assert(
+                tagWithClass(nested, "p-cascadeselect").contains("""aria-activedescendant="cs-active""""),
+                "still the trigger, one level down"
+            )
             assert(!none.contains("activedescendant"), "nothing highlighted announces nothing")
         end for
     }
@@ -4976,7 +5002,7 @@ class GoldenRenderTest extends UicTest:
             assert(open.contains("p-tree-node-content"), "open: tree node anatomy")
             assert(open.contains("p-tree-node-selected"), "open: bound id marks its node selected")
             assert(open.contains("""aria-expanded="true""""), "expanded set reaches the hosted tree")
-            assert(open.contains("""data-kyo-focus-auto="1""""), "open: panel seeds focus")
+            assert(!open.contains("""data-kyo-focus-auto="1""""), "open: the panel seeds no focus, the trigger keeps it")
             assert(checkbox.contains("p-tree-node-checkbox"), "Checkbox mode renders Tree's per-node checkbox column")
         end for
     }
@@ -6146,7 +6172,18 @@ class GoldenRenderTest extends UicTest:
             case _                                                      => false
 
     private val openTag = """<([a-zA-Z][a-zA-Z0-9]*)\s([^>]*?)/?>""".r
-    private val evAttr  = """data-kyo-ev="([^"]*)"""".r
+
+    /** The first opening tag in `html` whose class list contains exactly `cls`.
+      *
+      * A whole-document `contains` cannot tell which element carries an attribute, and for
+      * `aria-activedescendant` that is the entire question: the same string on the focused element
+      * and on an unfocused list one level down mean announced and not announced.
+      */
+    private def tagWithClass(html: String, cls: String): String =
+        openTag.findAllMatchIn(html).find { m =>
+            """\sclass="([^"]*)"""".r.findFirstMatchIn(m.group(2)).exists(_.group(1).split(" ").contains(cls))
+        }.map(_.group(0)).getOrElse(throw new AssertionError(s"no element with class $cls"))
+    private val evAttr = """data-kyo-ev="([^"]*)"""".r
 
     /** Every element in `html` that takes the Tab key and acts on a click, but answers no key.
       *
@@ -6276,6 +6313,27 @@ class GoldenRenderTest extends UicTest:
                         case None                                   => Some(s"$target: names an element with no role")
         }.toSeq
 
+    /** Every `aria-activedescendant` in `html` that sits on an element nothing can focus.
+      *
+      * The attribute is read off the element with DOM focus, or off nothing at all. So the half of
+      * the promise the target check cannot see is the CARRIER: on a list inside a panel that the
+      * reader never lands on, the id resolves, the role is right, and the announcement still never
+      * happens. A carrier qualifies by being a tab stop, by being seeded focus, or by being a text
+      * box, which the browser focuses on its own.
+      */
+    private def strandedAnnouncements(html: String): Seq[String] =
+        openTag.findAllMatchIn(html).flatMap { m =>
+            val attrs = m.group(2)
+            if !attrs.contains("aria-activedescendant=") then None
+            else
+                val focusable =
+                    attrs.contains("""tabindex="0"""") ||
+                        attrs.contains("""data-kyo-focus-auto="1"""") ||
+                        m.group(1).equalsIgnoreCase("input")
+                if focusable then None else Some(s"<${m.group(1)}> ${m.group(0).take(140)}")
+            end if
+        }.toSeq
+
     "a highlight names an element that says what it is" in {
         val bar = uic.Menubar().items(
             uic.MenuItem("File").items(uic.MenuItem("New").onSelect(()), uic.MenuItem("Recent").items(uic.MenuItem("a.txt"))),
@@ -6291,24 +6349,32 @@ class GoldenRenderTest extends UicTest:
         def paths(ps: List[List[Int]], open: List[List[Int]]) =
             Kyo.foreach(ps)(p => Signal.initRef(open.contains(p)).map(p -> _)).map(_.toList)
         for
-            menuHi     <- Signal.initRef(0)
-            menu       <- renderHtml(uic.Menu().id("m1").items(menuItems*).wired(menuHi))
-            barRefs    <- paths(bar.submenuPaths, List(List(0)))
-            barHi      <- Signal.initRef(List(0, 0))
-            menubar    <- renderHtml(bar.id("mb").wired(barRefs, barHi))
-            tieredRefs <- paths(tiered.submenuPaths, Nil)
-            tieredHi   <- Signal.initRef(List(0))
-            tieredHtml <- renderHtml(tiered.wired(tieredRefs, tieredHi))
-            megaRefs   <- paths(mega.panelPaths, List(List(0)))
-            megaHi     <- Signal.initRef(List(0))
-            megaHtml   <- renderHtml(mega.wired(megaRefs, megaHi))
-            ctxOpen    <- Signal.initRef(true)
-            ctxHi      <- Signal.initRef(List(0))
-            ctxRefs    <- paths(ctx.submenuPaths, Nil)
-            ctxHtml    <- renderHtml(ctx.wired(ctxOpen, ctxHi, ctxRefs))
-            tsOpen     <- Signal.initRef(true)
-            tsExp      <- Signal.initRef(Set.empty[String])
-            tsHi       <- Signal.initRef(0)
+            menuHi <- Signal.initRef(0)
+            menu   <- renderHtml(uic.Menu().id("m1").items(menuItems*).wired(menuHi))
+            // The POPUP forms too: they are where the panel used to take the focus the list needed.
+            menuPopOpen <- Signal.initRef(true)
+            menuPopHi   <- Signal.initRef(0)
+            menuPopup   <- renderHtml(uic.Menu().id("m2").popup(menuPopOpen).items(menuItems*).wired(menuPopHi))
+            barRefs     <- paths(bar.submenuPaths, List(List(0)))
+            barHi       <- Signal.initRef(List(0, 0))
+            menubar     <- renderHtml(bar.id("mb").wired(barRefs, barHi))
+            tieredRefs  <- paths(tiered.submenuPaths, Nil)
+            tieredHi    <- Signal.initRef(List(0))
+            tieredHtml  <- renderHtml(tiered.wired(tieredRefs, tieredHi))
+            tmPopOpen   <- Signal.initRef(true)
+            tmPopRefs   <- paths(tiered.submenuPaths, Nil)
+            tmPopHi     <- Signal.initRef(List(0))
+            tieredPop   <- renderHtml(tiered.id("tmp").popup(tmPopOpen).wired(tmPopRefs, tmPopHi))
+            megaRefs    <- paths(mega.panelPaths, List(List(0)))
+            megaHi      <- Signal.initRef(List(0))
+            megaHtml    <- renderHtml(mega.wired(megaRefs, megaHi))
+            ctxOpen     <- Signal.initRef(true)
+            ctxHi       <- Signal.initRef(List(0))
+            ctxRefs     <- paths(ctx.submenuPaths, Nil)
+            ctxHtml     <- renderHtml(ctx.wired(ctxOpen, ctxHi, ctxRefs))
+            tsOpen      <- Signal.initRef(true)
+            tsExp       <- Signal.initRef(Set.empty[String])
+            tsHi        <- Signal.initRef(0)
             treeSel <- renderHtml(
                 uic.TreeSelect().nodes(uic.TreeNode("Root", "r")).wired(tsOpen, tsExp, tsHi, "ts")
             )
@@ -6343,19 +6409,23 @@ class GoldenRenderTest extends UicTest:
             csHtml  <- renderHtml(cascade.value(csValue).open(csOpen).wired(csOpen, csRefs, csHi, Present("cs")))
         yield
             val named = List(
-                "Menu"          -> menu,
-                "Menubar"       -> menubar,
-                "TieredMenu"    -> tieredHtml,
-                "MegaMenu"      -> megaHtml,
-                "ContextMenu"   -> ctxHtml,
-                "TreeSelect"    -> treeSel,
-                "Select"        -> select,
-                "MultiSelect"   -> multi,
-                "AutoComplete"  -> auto,
-                "CascadeSelect" -> csHtml
+                "Menu"               -> menu,
+                "Menubar"            -> menubar,
+                "Menu (popup)"       -> menuPopup,
+                "TieredMenu"         -> tieredHtml,
+                "TieredMenu (popup)" -> tieredPop,
+                "MegaMenu"           -> megaHtml,
+                "ContextMenu"        -> ctxHtml,
+                "TreeSelect"         -> treeSel,
+                "Select"             -> select,
+                "MultiSelect"        -> multi,
+                "AutoComplete"       -> auto,
+                "CascadeSelect"      -> csHtml
             )
             val offenders = named.flatMap((n, h) => danglingActiveDescendants(h).map(d => s"$n: $d"))
             assert(offenders.isEmpty, s"these highlights announce nothing:\n${offenders.mkString("\n")}")
+            val stranded = named.flatMap((n, h) => strandedAnnouncements(h).map(d => s"$n: $d"))
+            assert(stranded.isEmpty, s"these highlights sit where no focus ever lands:\n${stranded.mkString("\n")}")
             // And the invariant has teeth: each sample really does carry a highlight to check.
             val missing = named.collect { case (n, h) if !h.contains("aria-activedescendant") => n }
             assert(missing.isEmpty, s"no highlight rendered at all in: ${missing.mkString(", ")}")
