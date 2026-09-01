@@ -295,6 +295,25 @@ tab stop as well makes the open widget two of them, and Tab then walks the reade
 trigger and its own popup instead of past the widget. Nothing is lost by it, because the way back
 into an open popup is the same key that opened it.
 
+## A roving tab stop is state, and needs somewhere to live
+
+A widget whose children hold real focus puts `tabIndex(0)` on the ACTIVE child, and active means
+where the reader is, not where they started. Pinning it to the first child compiles, renders and
+looks right in a screenshot, and costs the reader their place: they walk twenty rows down, Tab to
+another control, Shift+Tab back, and land at the top with every arrow press to make again.
+
+- **The DOM knows where focus is; a render does not.** So the cursor belongs in a ref the mount
+  mints, next to the ids it already mints, and the tab stop is derived from it. That is a
+  re-render of the region per arrow key, which is what the list family already pays for its
+  highlight and what `DataTable` deliberately does not: its cells are a grid where the tab order
+  IS the editable cells, so it has no cursor to keep.
+- **Key it by the row's own key, not by its index**, or an expand above the cursor moves it.
+- **A pointer seeds it too**, so a click leaves the widget in the state the next arrow reads. Where
+  the rows already carry a click handler, that is where it goes; where they do not, a seed-only
+  handler is still worth its markup.
+- **Fall back in the order the reader would expect**: the cursor, else the row they chose, else the
+  first. A cursor pointing at a row that a collapse took off the screen falls back the same way.
+
 ## An opening key has to land on a row
 
 `ArrowDown` on a closed combobox opens it AND puts the highlight on a row: the selected one, else
