@@ -253,6 +253,39 @@ ids, pointer handlers, focus wiring).
   must have a real role, and the carrier must be a tab stop, focus-seeded, or a
   text box.
 
+## One activation, one handler
+
+A key press on a native control is an ACTIVATION, and the browser reports it more than once: an
+arrow that selects a radio fires `change` on the input AND dispatches a `click` that bubbles out
+of it. Wire both and the second one runs against a tree the first one has already re-rendered,
+with the new value in hand. Rating did, and read the click as a second pick of the same star:
+cancel-on-same-value fired and every arrow press ended at zero.
+
+- **Put the handler where BOTH inputs arrive.** For a hidden native control inside a visible box,
+  that is the box's click: a pointer press reaches only the box (the input is clipped away), and a
+  key press reaches it through the input. `RatingTest` drives change-then-click, which is what the
+  browser does, and re-reads the tree between them, which is what makes the trap visible.
+- The framework-level twin of this is `doubleActivation` in the two clients, which suppresses the
+  emulated activation on elements the browser already activates. It covers `button` and `a[href]`,
+  not a handler pair a component wires itself.
+
+## A control that reads several refs is ONE region
+
+Nesting `ref.render` inside `ref.render` leaves the inner region subscribed against the value the
+outer one held when it created it. That is invisible until one effect writes both refs: the outer
+region re-renders, the inner one is still live against the older values, and its next emission
+repaints them over the finished write. PickList read four refs through four nested renders and a
+transfer writes three of them, so a plain click on a row put a transferred item back while the
+refs themselves held the correct result.
+
+- **Combine the signals instead**: `a.combineLatest(b).render { case (x, y) => ... }` reads every
+  value on every emission, so there is one region and nothing to be stale. `Signal.initConst`
+  stands in for an unbound slot, and is built for exactly this pairing.
+- `UicTest.regionsAbove` counts the subscriptions a control wraps its markup in, so the rule is
+  checked rather than remembered.
+- The roving highlight of an embedded list belongs in the same combined signal, not in a region of
+  its own: the columns and their cursors are one state.
+
 ## `readonly` is one thing
 
 A readonly control is one a reader can REACH and read the value of and cannot change:
