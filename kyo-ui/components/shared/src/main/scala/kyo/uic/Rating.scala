@@ -184,9 +184,17 @@ final case class Rating private (
 
             // PrimeVue's hidden radio: real checked state, per-star aria-label, and native
             // keyboard semantics — the arrows move within the name group and select as they go,
-            // which is the whole reason the group has a name. Prime's cancel path (picking the
-            // current value clears it) is a CLICK: a browser fires no change for a Space on a
-            // radio that is already checked, so the keyboard cannot reach it.
+            // which is the whole reason the group has a name.
+            //
+            // It carries NO handler of its own. Selecting a radio from the keyboard is an
+            // activation: the browser checks it, fires `change`, and dispatches a `click` that
+            // bubbles out of the input. A handler on each meant the change wrote the new star, the
+            // region re-rendered around it, and the click then reached an option rebuilt with that
+            // value in hand, read it as a second pick of the same star and cleared it — every
+            // arrow press ended at zero. The click is the one activation both inputs produce (a
+            // press on the visible star reaches only the option, since the radio is clipped away),
+            // so it is the one that acts, and Prime's cancel-on-same-value is now reachable from
+            // the keyboard too: Space on the current star clears it, exactly as clicking it does.
             var hidden = radio
                 .checked(i == value)
                 .jsProp("value", i.toString)
@@ -196,7 +204,6 @@ final case class Rating private (
             // out of the tab order. `aria-readonly` belongs on the GROUP, since a radio has no such
             // state of its own; the group below carries it.
             if disabledFlag.constTrue then hidden = hidden.disabled(true)
-            if interactive then hidden = hidden.onChange(_ => activate(i, value, ref))
             val hiddenSlot: UI = span.cssClass("p-hidden-accessible")(toChild(hidden: UI))
 
             val icon: UI =

@@ -74,7 +74,14 @@ object Theme:
       * CheckBox/RadioButton text, displayOnly, and the ToggleSwitch root
       * positioning PrimeVue applies as an inline style.
       */
-    val primeExtraCss: String =
+    lazy val primeExtraCss: String = primeExtraCssHead + primeExtraCssTail
+
+    /** The first half of [[primeExtraCss]], up to the overlay section.
+      *
+      * The sheet is one document; it is written as two literals only because a single one no
+      * longer fits the JVM's 64KB limit on a string constant.
+      */
+    private lazy val primeExtraCssHead: String =
         """@keyframes p-icon-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
       |.p-icon-spin { animation: p-icon-spin 2s linear infinite; }
       |.p-uic-invalid-message { color: var(--p-form-field-invalid-placeholder-color, #ef4444); font-size: 0.875rem; margin-top: 0.25rem; }
@@ -156,6 +163,16 @@ object Theme:
       |.p-colorpicker-hue:focus-within {
       |  outline: var(--p-focus-ring-width, 1px) var(--p-focus-ring-style, solid) var(--p-focus-ring-color, var(--p-primary-color));
       |  outline-offset: var(--p-focus-ring-offset, 2px);
+      |}
+      |/* A rating star is operated through a radio that is visually hidden, so the ring has to be
+      |   drawn on the star the reader can see. Prime writes exactly these declarations against a
+      |   .p-focus-visible CLASS its JS puts on the option; a server render has no such state, and
+      |   :has says the same thing in CSS. :focus-visible rather than :focus-within, so a click on a
+      |   star picks it without ringing it. */
+      |.p-rating-option:has(input:focus-visible) {
+      |  box-shadow: var(--p-rating-focus-ring-shadow);
+      |  outline: var(--p-rating-focus-ring-width) var(--p-rating-focus-ring-style) var(--p-rating-focus-ring-color);
+      |  outline-offset: var(--p-rating-focus-ring-offset);
       |}
       |/* Link (kyo extension — Prime has no Link component; skin mirrors Button's
       |   Link variant: primary color, underline on hover, disabled via .p-disabled). */
@@ -527,7 +544,13 @@ object Theme:
       |/* DataView loading: PrimeReact anchors the absolute overlay on the root via
       |   its root modifier — the extracted sheet ships only the overlay rule. */
       |.p-dataview-loading { position: relative; min-height: 4rem; }
-      |/* ==== Overlay primitive + Select floating panel ==== */
+      |""".stripMargin
+
+    /** The second half of [[primeExtraCss]], from the overlay section on — see
+      * [[primeExtraCssHead]] for why there are two.
+      */
+    private lazy val primeExtraCssTail: String =
+        """/* ==== Overlay primitive + Select floating panel ==== */
       |/* Overlay (kyo primitive): anchor glue + backdrop/panel geometry. The anchor
       |   element must be position:relative — stamp .p-uic-overlay-anchor on it.
       |   z-index: non-modal overlays sit at 1000/1001 (Prime's overlay layer),
