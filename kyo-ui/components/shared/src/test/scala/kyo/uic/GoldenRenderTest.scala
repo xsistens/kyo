@@ -6363,6 +6363,10 @@ class GoldenRenderTest extends UicTest:
             )
             card   <- renderHtml(uic.Card().title("Info").onHeaderClick(())(p("Body")))
             avatar <- renderHtml(uic.Avatar().initials("AL").onClick(()))
+            // A chip that acts on a click is a control: Prime's Tag is inert, and the kyo setter
+            // that makes it do something has to make it reachable too.
+            tag      <- renderHtml(uic.Tag("Filter").onClick(()))
+            plainTag <- renderHtml(uic.Tag("Filter"))
         yield
             val named = List(
                 "Icon"              -> icon,
@@ -6383,6 +6387,11 @@ class GoldenRenderTest extends UicTest:
             val offenders = named.flatMap((name, html) => deadTabStops(html).map(el => s"$name: $el"))
             assert(offenders.isEmpty, s"these tab stops answer no key:\n${offenders.mkString("\n")}")
             assert(card.nonEmpty && avatar.nonEmpty, "the two known-good shapes rendered at all")
+            assert(tag.contains("""role="button"""") && tag.contains("""tabindex="0""""), "a clickable tag is a control")
+            assert(
+                !plainTag.contains("tabindex") && !plainTag.contains("""role="button""""),
+                "and a plain one is still a label, with nothing in the tab order"
+            )
         end for
     }
 
