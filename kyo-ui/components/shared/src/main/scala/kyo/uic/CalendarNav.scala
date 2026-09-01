@@ -45,11 +45,23 @@ private[uic] object CalendarNav:
     /** Reads one key against a grid `perRow` cells wide.
       *
       * `Absent` means the key is not ours, so the browser keeps it. A `perRow` of zero or less
-      * is a grid with no rows to move along, so the vertical arrows are left alone too.
+      * is a grid with no rows to move along, so the plain vertical arrows are left alone too.
+      *
+      * Ctrl or Cmd turns an arrow into a page, the way it carries a row in [[ListReorder]]: the
+      * horizontal pair turns pages (a month in the day grid), the vertical pair turns the unit
+      * above them (a year), and Shift multiplies the step, by four sideways and by ten upward.
+      * Up is forward in time for the carried pair, where the plain ArrowUp walks back through the
+      * grid: the two are different gestures and the carried one reads as a dial rather than as a
+      * cursor. The page keys keep their own meaning beside them.
       */
     def onKey(key: Keyboard, mods: Modifiers, perRow: Int): Maybe[Step] =
         import Keyboard.*
+        val carry = mods.ctrl || mods.meta
         key match
+            case ArrowLeft if carry      => Present(Step.Page(if mods.shift then -4 else -1, large = false))
+            case ArrowRight if carry     => Present(Step.Page(if mods.shift then 4 else 1, large = false))
+            case ArrowUp if carry        => Present(Step.Page(if mods.shift then 10 else 1, large = true))
+            case ArrowDown if carry      => Present(Step.Page(if mods.shift then -10 else -1, large = true))
             case ArrowLeft               => Present(Step.Move(-1))
             case ArrowRight              => Present(Step.Move(1))
             case ArrowUp if perRow > 0   => Present(Step.Move(-perRow))

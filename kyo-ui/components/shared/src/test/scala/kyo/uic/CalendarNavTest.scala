@@ -42,6 +42,34 @@ class CalendarNavTest extends UicTest:
         assert(key(Keyboard.PageDown, Modifiers.none.copy(shift = true)) == Present(CalendarNav.Step.Page(1, large = true)))
     }
 
+    private val carry = Modifiers.none.copy(meta = true)
+    private val both  = Modifiers.none.copy(ctrl = true, shift = true)
+
+    "a carried horizontal arrow turns a page, which is a month in the day grid" in {
+        assert(key(Keyboard.ArrowLeft, carry) == Present(CalendarNav.Step.Page(-1, large = false)))
+        assert(key(Keyboard.ArrowRight, carry) == Present(CalendarNav.Step.Page(1, large = false)))
+        assert(
+            key(Keyboard.ArrowRight, Modifiers.none.copy(ctrl = true)) == Present(CalendarNav.Step.Page(1, large = false)),
+            "Ctrl carries where there is no Cmd key"
+        )
+    }
+
+    "a carried vertical arrow turns the unit above it, and up is forward" in {
+        assert(key(Keyboard.ArrowUp, carry) == Present(CalendarNav.Step.Page(1, large = true)))
+        assert(key(Keyboard.ArrowDown, carry) == Present(CalendarNav.Step.Page(-1, large = true)))
+    }
+
+    "Shift with the carry multiplies the step: four pages sideways, ten units up" in {
+        assert(key(Keyboard.ArrowLeft, both) == Present(CalendarNav.Step.Page(-4, large = false)))
+        assert(key(Keyboard.ArrowRight, both) == Present(CalendarNav.Step.Page(4, large = false)))
+        assert(key(Keyboard.ArrowUp, both) == Present(CalendarNav.Step.Page(10, large = true)))
+        assert(key(Keyboard.ArrowDown, both) == Present(CalendarNav.Step.Page(-10, large = true)))
+    }
+
+    "a carried vertical arrow does not need a width, since it does not walk the rows" in {
+        assert(key(Keyboard.ArrowUp, carry, perRow = 0) == Present(CalendarNav.Step.Page(1, large = true)))
+    }
+
     "Enter and Space both pick, unlike a table's grid where they part ways" in {
         assert(key(Keyboard.Enter) == Present(CalendarNav.Step.Activate))
         assert(key(Keyboard.Space) == Present(CalendarNav.Step.Activate))
