@@ -131,6 +131,23 @@ object Theme:
       |   focus must not draw a second one. Prime's sheet leaves the list unstyled, and the
       |   browser then rings the whole tree on the first key press, on top of the node ring. */
       |.p-tree-root-children:focus { outline: none; }
+      |/* The calendar is ONE tab stop with an aria-activedescendant highlight inside it, for the
+      |   same reason the tree is: a day is a <span>, not a control of its own. Prime writes its
+      |   ring against :focus-visible on the day, which only fires for a roving tabindex; here the
+      |   class says WHICH day and :focus-visible on the grid that holds the focus says WHETHER to
+      |   draw it, so a mouse click moves the highlight without ringing it. */
+      |.p-datepicker-day-view:focus-visible .p-datepicker-day.p-focus,
+      |.p-datepicker-month-view:focus-visible .p-datepicker-month.p-focus,
+      |.p-datepicker-year-view:focus-visible .p-datepicker-year.p-focus {
+      |  box-shadow: var(--p-datepicker-date-focus-ring-shadow);
+      |  outline: var(--p-datepicker-date-focus-ring-width) var(--p-datepicker-date-focus-ring-style) var(--p-datepicker-date-focus-ring-color);
+      |  outline-offset: var(--p-datepicker-date-focus-ring-offset);
+      |}
+      |/* The ring above IS the calendar's focus indicator, so the grid that holds the focus must
+      |   not draw a second one around the whole month. */
+      |.p-datepicker-day-view:focus,
+      |.p-datepicker-month-view:focus,
+      |.p-datepicker-year-view:focus { outline: none; }
       |/* Link (kyo extension — Prime has no Link component; skin mirrors Button's
       |   Link variant: primary color, underline on hover, disabled via .p-disabled). */
       |.p-uic-link { color: var(--p-primary-color); cursor: pointer; text-decoration: none; gap: 0.25rem; white-space: nowrap; }
