@@ -63,23 +63,34 @@ final case class ContextMenu private (
                 openRef <- Signal.initRef(false)
                 focus   <- Signal.initRef(List.empty[Int])
                 refs    <- Kyo.foreach(submenuPaths)(p => Signal.initRef(false).map(p -> _))
-            yield wired(openRef, focus, refs.toList)
+                cmds    <- UI.commands
+                base    <- cmds.freshId
+            yield wired(openRef, focus, refs.toList, base)
         }.placeholder(stat)
     end render
 
-    /** The subscription tree the mount publishes (golden-test seam). */
+    /** The subscription tree the mount publishes (golden-test seam).
+      *
+      * `base` is the id the announcement is built from, which the mount mints. A caller's own
+      * `id(...)` still wins, but the announcement no longer waits for one: `aria-activedescendant`
+      * and the row id it names are the whole of what a screen reader hears about the highlighted
+      * row.
+      */
     private[uic] def wired(
         openRef: SignalRef[Boolean],
         focus: SignalRef[List[Int]],
-        refs: List[(List[Int], SignalRef[Boolean])]
+        refs: List[(List[Int], SignalRef[Boolean])],
+        base: String
     )(using Frame): UI =
+        val self = if idV.isDefined then this else copy(idV = Present(base))
         openRef.render { isOpen =>
             focus.render { f =>
                 MenuRender.renderAll(refs) { open =>
-                    body(isOpen, Present(openRef), f, Present(focus), open.withDefaultValue(false), Present(refs))
+                    self.body(isOpen, Present(openRef), f, Present(focus), open.withDefaultValue(false), Present(refs))
                 }
             }
         }
+    end wired
 
     private def body(
         isOpen: Boolean,

@@ -66,7 +66,10 @@ private[uic] object MegaNav:
     ): Maybe[Step] =
         import Keyboard.*
 
-        if focus.isEmpty then
+        // Escape leaves one level (a panel returns to the bar); Tab leaves the widget, so it
+        // closes every level at once, wherever the reader had got to.
+        if key == Tab then Present(Step(Nil, OpenOp.Close, dismiss = true))
+        else if focus.isEmpty then
             key match
                 case ArrowRight | ArrowDown | Home => Present(Step(List(firstRoot(items))))
                 case ArrowLeft | ArrowUp           => Present(Step(List(firstRoot(items))))

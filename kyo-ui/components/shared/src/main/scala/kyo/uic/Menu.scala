@@ -78,17 +78,27 @@ final case class Menu private (
         // anatomy inert until the client transport attaches.
         val stat: UI = body(-1, Absent)
         UI.mounted {
-            for hi <- Signal.initRef(-1)
-            yield wired(hi)
+            for
+                cmds <- UI.commands
+                base <- cmds.freshId
+                hi   <- Signal.initRef(-1)
+            yield wired(hi, base)
         }.placeholder(stat)
     end render
 
     /** The subscription tree the mount publishes — the seam golden tests render
       * directly (a full top-down re-render shows mounted regions as
       * placeholders).
+      *
+      * `base` is the id the announcement is built from, which the mount mints. A caller's own
+      * `id(...)` still wins, but the announcement no longer waits for one: `aria-activedescendant`
+      * is the whole of what a screen reader hears about the highlighted row, and a menu that had
+      * to be given an id to say it said nothing in most of the pages that use one.
       */
-    private[uic] def wired(hi: SignalRef[Int])(using Frame): UI =
-        hi.render(h => body(h, Present(hi)))
+    private[uic] def wired(hi: SignalRef[Int], base: String)(using Frame): UI =
+        val self = if idV.isDefined then this else copy(idV = Present(base))
+        hi.render(h => self.body(h, Present(hi)))
+    end wired
 
     private def body(h: Int, hiRef: Maybe[SignalRef[Int]])(using Frame): UI =
         val rows = flatRows
@@ -164,12 +174,27 @@ final case class Menu private (
                 // `role="menu"` and the thing carrying `aria-activedescendant`, and that attribute
                 // is read off the focused element or off nothing at all. Escape is left to bubble
                 // to the Overlay, which is the one place that decides what closing means.
+                // Tab carries the reader out of the menu, so the menu goes with them: the keys live
+                // on this list, and a panel left standing behind them answers none of them.
+                val leave: Any < Async =
+                    for
+                        _ <- popupRefV match
+                            case Present(r) => r.set(false)
+                            case Absent     => (): Any < Async
+                        _ <- hiRef match
+                            case Present(hi) => hi.set(-1)
+                            case Absent      => (): Any < Async
+                    yield ()
                 list = list
                     .tabIndex(-1)
                     .focusAuto(true)
                     .focusRestore(true)
                     .preventScrollKeys
-                    .onKeyDown(e => if e.key == Keyboard.Escape then () else keyHandler(e))
+                    .onKeyDown(e =>
+                        if e.key == Keyboard.Escape then ()
+                        else if e.key == Keyboard.Tab then leave
+                        else keyHandler(e)
+                    )
                 Overlay(openRef)
                     .matchWidth(false)
                     .animate(false)

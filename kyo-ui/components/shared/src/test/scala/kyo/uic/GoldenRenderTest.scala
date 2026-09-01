@@ -4441,7 +4441,7 @@ class GoldenRenderTest extends UicTest:
         def wiredHtml(m: uic.Menu, hi: Int = -1): String < Async =
             for
                 href <- Signal.initRef(hi)
-                out  <- UI.runRender(m.wired(href)).take(1).run
+                out  <- UI.runRender(m.wired(href, "mint")).take(1).run
             yield out.mkString
         val base = uic.Menu().items(menuItems*)
         for
@@ -4486,7 +4486,7 @@ class GoldenRenderTest extends UicTest:
             for
                 oref <- Signal.initRef(open)
                 href <- Signal.initRef(-1)
-                out  <- UI.runRender(uic.Menu().items(menuItems*).popup(oref).wired(href)).take(1).run
+                out  <- UI.runRender(uic.Menu().items(menuItems*).popup(oref).wired(href, "mint")).take(1).run
             yield out.mkString
         for
             open   <- popupHtml(true)
@@ -4519,7 +4519,7 @@ class GoldenRenderTest extends UicTest:
             for
                 refs <- Kyo.foreach(mb.submenuPaths)(p => Signal.initRef(openPaths.contains(p)).map(p -> _))
                 fref <- Signal.initRef(focus)
-                out  <- UI.runRender((if setId then mb.id("mb1") else mb).wired(refs.toList, fref)).take(1).run
+                out  <- UI.runRender((if setId then mb.id("mb1") else mb).wired(refs.toList, fref, "mint")).take(1).run
             yield out.mkString
         for
             closed      <- wiredHtml(Nil)
@@ -4575,7 +4575,7 @@ class GoldenRenderTest extends UicTest:
                 m = if setId then m0.id("tm1") else m0
                 refs <- Kyo.foreach(m.submenuPaths)(p => Signal.initRef(openPaths.contains(p)).map(p -> _))
                 fref <- Signal.initRef(focus)
-                out  <- UI.runRender(m.wired(refs.toList, fref)).take(1).run
+                out  <- UI.runRender(m.wired(refs.toList, fref, "mint")).take(1).run
             yield out.mkString
         for
             closed      <- wiredHtml(Nil)
@@ -4627,7 +4627,7 @@ class GoldenRenderTest extends UicTest:
             for
                 refs <- Kyo.foreach(m.panelPaths)(p => Signal.initRef(openPaths.contains(p)).map(p -> _))
                 fref <- Signal.initRef(focus)
-                out  <- UI.runRender(m.wired(refs.toList, fref)).take(1).run
+                out  <- UI.runRender(m.wired(refs.toList, fref, "mint")).take(1).run
             yield out.mkString
             end for
         end wiredHtml
@@ -4669,7 +4669,7 @@ class GoldenRenderTest extends UicTest:
             for
                 oref <- Signal.initRef(open)
                 href <- Signal.initRef(-1)
-                out  <- UI.runRender(sb.wired(oref, href)).take(1).run
+                out  <- UI.runRender(sb.wired(oref, href, "mint")).take(1).run
             yield out.mkString
         val base = uic.SplitButton("Save").items(
             uic.MenuItem("Update").onSelect(()),
@@ -5126,7 +5126,7 @@ class GoldenRenderTest extends UicTest:
                 oref <- Signal.initRef(open)
                 fref <- Signal.initRef(focus)
                 refs <- Kyo.foreach(cm.submenuPaths)(p => Signal.initRef(openPaths.contains(p)).map(p -> _))
-                out  <- UI.runRender(cm.wired(oref, fref, refs.toList)).take(1).run
+                out  <- UI.runRender(cm.wired(oref, fref, refs.toList, "mint")).take(1).run
             yield out.mkString
         val base = uic.ContextMenu(
             Seq(
@@ -6435,6 +6435,40 @@ class GoldenRenderTest extends UicTest:
             end if
         }.toSeq
 
+    "a menu says which row it has highlighted, even where the page never named it" in {
+        // The announcement used to wait for the caller's own `id(...)`, so a menu written the way
+        // every one of the demo's is (no id, because nothing outside points at it) moved a
+        // highlight a screen reader was never told about. The mount mints the id now.
+        val tiered = uic.TieredMenu().items(menuItems*)
+        val mega = uic.MegaMenu().items(
+            uic.MegaMenuItem("Shop").column(uic.MenuGroup("Men").items(uic.MenuItem("Shirts").onSelect(())))
+        )
+        val ctx = uic.ContextMenu().items(menuItems*)
+        def paths(ps: List[List[Int]], open: List[List[Int]]) =
+            Kyo.foreach(ps)(p => Signal.initRef(open.contains(p)).map(p -> _)).map(_.toList)
+        for
+            menuHi     <- Signal.initRef(0)
+            menu       <- renderHtml(uic.Menu().items(menuItems*).wired(menuHi, "mint"))
+            tieredRefs <- paths(tiered.submenuPaths, Nil)
+            tieredHi   <- Signal.initRef(List(0))
+            tieredHtml <- renderHtml(tiered.wired(tieredRefs, tieredHi, "mint"))
+            megaRefs   <- paths(mega.panelPaths, List(List(0)))
+            megaHi     <- Signal.initRef(List(0))
+            megaHtml   <- renderHtml(mega.wired(megaRefs, megaHi, "mint"))
+            ctxOpen    <- Signal.initRef(true)
+            ctxHi      <- Signal.initRef(List(0))
+            ctxRefs    <- paths(ctx.submenuPaths, Nil)
+            ctxHtml    <- renderHtml(ctx.wired(ctxOpen, ctxHi, ctxRefs, "mint"))
+        yield
+            for (name, html) <- Seq("Menu" -> menu, "TieredMenu" -> tieredHtml, "MegaMenu" -> megaHtml, "ContextMenu" -> ctxHtml)
+            do
+                assert(html.contains("""aria-activedescendant="mint-active""""), s"$name announces its highlight")
+                assert(html.contains("""id="mint-active""""), s"$name stamps the row that announcement names")
+            end for
+            assert(true)
+        end for
+    }
+
     "a highlight names an element that says what it is" in {
         val bar = uic.Menubar().items(
             uic.MenuItem("File").items(uic.MenuItem("New").onSelect(()), uic.MenuItem("Recent").items(uic.MenuItem("a.txt"))),
@@ -6451,28 +6485,28 @@ class GoldenRenderTest extends UicTest:
             Kyo.foreach(ps)(p => Signal.initRef(open.contains(p)).map(p -> _)).map(_.toList)
         for
             menuHi <- Signal.initRef(0)
-            menu   <- renderHtml(uic.Menu().id("m1").items(menuItems*).wired(menuHi))
+            menu   <- renderHtml(uic.Menu().id("m1").items(menuItems*).wired(menuHi, "mint"))
             // The POPUP forms too: they are where the panel used to take the focus the list needed.
             menuPopOpen <- Signal.initRef(true)
             menuPopHi   <- Signal.initRef(0)
-            menuPopup   <- renderHtml(uic.Menu().id("m2").popup(menuPopOpen).items(menuItems*).wired(menuPopHi))
+            menuPopup   <- renderHtml(uic.Menu().id("m2").popup(menuPopOpen).items(menuItems*).wired(menuPopHi, "mint"))
             barRefs     <- paths(bar.submenuPaths, List(List(0)))
             barHi       <- Signal.initRef(List(0, 0))
-            menubar     <- renderHtml(bar.id("mb").wired(barRefs, barHi))
+            menubar     <- renderHtml(bar.id("mb").wired(barRefs, barHi, "mint"))
             tieredRefs  <- paths(tiered.submenuPaths, Nil)
             tieredHi    <- Signal.initRef(List(0))
-            tieredHtml  <- renderHtml(tiered.wired(tieredRefs, tieredHi))
+            tieredHtml  <- renderHtml(tiered.wired(tieredRefs, tieredHi, "mint"))
             tmPopOpen   <- Signal.initRef(true)
             tmPopRefs   <- paths(tiered.submenuPaths, Nil)
             tmPopHi     <- Signal.initRef(List(0))
-            tieredPop   <- renderHtml(tiered.id("tmp").popup(tmPopOpen).wired(tmPopRefs, tmPopHi))
+            tieredPop   <- renderHtml(tiered.id("tmp").popup(tmPopOpen).wired(tmPopRefs, tmPopHi, "mint"))
             megaRefs    <- paths(mega.panelPaths, List(List(0)))
             megaHi      <- Signal.initRef(List(0))
-            megaHtml    <- renderHtml(mega.wired(megaRefs, megaHi))
+            megaHtml    <- renderHtml(mega.wired(megaRefs, megaHi, "mint"))
             ctxOpen     <- Signal.initRef(true)
             ctxHi       <- Signal.initRef(List(0))
             ctxRefs     <- paths(ctx.submenuPaths, Nil)
-            ctxHtml     <- renderHtml(ctx.wired(ctxOpen, ctxHi, ctxRefs))
+            ctxHtml     <- renderHtml(ctx.wired(ctxOpen, ctxHi, ctxRefs, "mint"))
             tsOpen      <- Signal.initRef(true)
             tsExp       <- Signal.initRef(Set.empty[String])
             tsHi        <- Signal.initRef(0)

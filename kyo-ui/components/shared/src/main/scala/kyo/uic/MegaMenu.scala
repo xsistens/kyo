@@ -112,18 +112,29 @@ final case class MegaMenu private (
             for
                 refs  <- Kyo.foreach(panelPaths)(p => Signal.initRef(false).map(p -> _))
                 focus <- Signal.initRef(List.empty[Int])
-            yield wired(refs.toList, focus)
+                cmds  <- UI.commands
+                base  <- cmds.freshId
+            yield wired(refs.toList, focus, base)
         }.placeholder(stat)
     end render
 
-    /** The subscription tree the mount publishes (golden-test seam). */
+    /** The subscription tree the mount publishes (golden-test seam).
+      *
+      * `base` is the id the announcement is built from, which the mount mints. A caller's own
+      * `id(...)` still wins, but the announcement no longer waits for one: `aria-activedescendant`
+      * and the row id it names are the whole of what a screen reader hears about the highlighted
+      * row.
+      */
     private[uic] def wired(
         refs: List[(List[Int], SignalRef[Boolean])],
-        focus: SignalRef[List[Int]]
+        focus: SignalRef[List[Int]],
+        base: String
     )(using Frame): UI =
+        val self = if idV.isDefined then this else copy(idV = Present(base))
         focus.render { f =>
-            MenuRender.renderAll(refs)(open => body(open.withDefaultValue(false), Present(refs), f, Present(focus)))
+            MenuRender.renderAll(refs)(open => self.body(open.withDefaultValue(false), Present(refs), f, Present(focus)))
         }
+    end wired
 
     /** `.p-megamenu-col-N`: Prime divides the 12-column raster evenly. */
     private def colClass(count: Int): String =

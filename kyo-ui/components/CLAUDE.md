@@ -288,6 +288,13 @@ a place the reader must not be able to put focus, for two reasons that both bit 
   has already moved focus by the time it lands, which is exactly right when nothing inside the
   panel could have taken it.
 
+**An announcement that waits for a caller's id is silence.** `aria-activedescendant` is the whole
+of what a screen reader hears about a highlight, and every menu-family component used to render it
+only when the page had called `id(...)`. Almost no page does, because nothing outside points at a
+menu, so the highlight moved and nothing was said. The mount mints the base id the way it mints
+every other id it needs, the caller's own still wins, and the `wired` seam takes the base so the
+golden renders the shape the reader actually meets.
+
 The same Tab rule holds where the popup's rows ARE real controls and hold real focus
 (`SpeedDial`, whose actions are Buttons): the trigger is the widget's one tab stop, no row is in
 the tab sequence, focus enters by opening and leaves by Tab, which closes. Giving the active row a

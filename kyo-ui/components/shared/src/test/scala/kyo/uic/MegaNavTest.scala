@@ -84,4 +84,10 @@ class MegaNavTest extends UicTest:
     "bar: Escape dismisses" in assert(
         k(List(0), Keyboard.Escape) == Present(Step(Nil, OpenOp.Close, dismiss = true))
     )
+
+    "Tab dismisses from anywhere, since it carries the reader out of the bar" in assert(
+        (k(List(0, 0, 1), Keyboard.Tab) == Present(Step(Nil, OpenOp.Close, dismiss = true))) &&
+            (k(List(0), Keyboard.Tab) == Present(Step(Nil, OpenOp.Close, dismiss = true))),
+        "Escape in a panel returns to the bar; Tab leaves the widget, so it closes the panel too"
+    )
 end MegaNavTest
