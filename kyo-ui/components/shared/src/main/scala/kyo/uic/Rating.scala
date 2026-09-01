@@ -193,8 +193,7 @@ final case class Rating private (
             // value in hand, read it as a second pick of the same star and cleared it — every
             // arrow press ended at zero. The click is the one activation both inputs produce (a
             // press on the visible star reaches only the option, since the radio is clipped away),
-            // so it is the one that acts, and Prime's cancel-on-same-value is now reachable from
-            // the keyboard too: Space on the current star clears it, exactly as clicking it does.
+            // so it is the one that acts.
             var hidden = radio
                 .checked(i == value)
                 .jsProp("value", i.toString)
@@ -204,6 +203,16 @@ final case class Rating private (
             // out of the tab order. `aria-readonly` belongs on the GROUP, since a radio has no such
             // state of its own; the group below carries it.
             if disabledFlag.constTrue then hidden = hidden.disabled(true)
+            // The one exception to the rule above, and it is the browser's: a radio that is
+            // ALREADY checked has no activation behaviour, so Space on it dispatches no click and
+            // Prime's cancel-on-same-value would be a thing only a pointer could reach. Wired on
+            // that star alone, which is exactly the star no click can come from.
+            if interactive && i == value then
+                hidden = hidden.onKeyDown { e =>
+                    val eff: Any < Async = if e.key == Keyboard.Space then activate(i, value, ref) else ()
+                    eff
+                }
+            end if
             val hiddenSlot: UI = span.cssClass("p-hidden-accessible")(toChild(hidden: UI))
 
             val icon: UI =

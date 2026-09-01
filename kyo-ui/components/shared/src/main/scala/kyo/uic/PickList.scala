@@ -316,6 +316,7 @@ final case class PickList[A] private (
                     moved = after.indexWhere(a => keyOf(a) == id)
                     _ <- c.highlight.set(if moved >= 0 then moved else math.min(hi, after.size - 1))
                 yield ()
+                end for
             case _ => eff
 
     /** A reorder button writes the shuffled Seq through its column's ref, keyed on

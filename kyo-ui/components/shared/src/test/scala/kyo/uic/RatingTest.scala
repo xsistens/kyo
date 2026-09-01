@@ -72,14 +72,32 @@ class RatingTest extends UicTest:
             assert(os.forall(_.attrs.onClick.isDefined), "and the click is the handler both inputs produce")
     }
 
-    "picking the star the value already sits on clears it, from either input" in {
+    "picking the star the value already sits on clears it" in {
         for
             ref <- Signal.initRef(3)
             ui = uic.Rating().value(ref).wired("r")
             os  <- options(ui)
             _   <- click(os(2))
             got <- ref.get
-        yield assert(got == 0, "Prime's cancel-on-same-value, and now reachable from the keyboard too")
+        yield assert(got == 0, "Prime's cancel-on-same-value")
+    }
+
+    "Space reaches that clear, since it is the one press the browser dispatches no click for" in {
+        for
+            ref <- Signal.initRef(3)
+            ui = uic.Rating().value(ref).wired("r")
+            rs  <- radios(ui)
+            _   <- press(rs(2), UI.Keyboard.Space)
+            got <- ref.get
+        yield assert(got == 0)
+    }
+
+    "and no other star answers a key, or the click that follows it would fire twice" in {
+        for
+            ref <- Signal.initRef(3)
+            ui = uic.Rating().value(ref).wired("r")
+            rs <- radios(ui)
+        yield assert(rs.zipWithIndex.forall((r, i) => r.attrs.onKeyDown.isDefined == (i == 2)))
     }
 
     "the radios share the minted group name, which is what gives the stars one tab stop" in {
