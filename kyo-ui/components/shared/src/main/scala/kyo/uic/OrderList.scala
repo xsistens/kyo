@@ -195,6 +195,7 @@ final case class OrderList[A] private (
                     moved = after.indexWhere(a => keyOf(a) == id)
                     _ <- c.highlight.set(if moved >= 0 then moved else math.min(hi, after.size - 1))
                 yield ()
+                end for
             case _ => eff
 
     /** A move button writes the reordered Seq through the bound items ref, keyed on
