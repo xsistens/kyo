@@ -327,6 +327,50 @@ class DatePickerTest extends UicTest:
         yield assert(!still, "neither opens the panel: one types a space, the other belongs to the form")
     }
 
+    "the granular grids are grids: every cell sits in a row" in {
+        for
+            (_, _, _, ui) <- recording(uic.DatePicker().view(DatePickerView.Month), "2026-07")
+            grid          <- elementWithClass(ui, "p-datepicker-month-view")
+            all           <- elements(ui)
+            rows  = all.filter(_.attrs.role.contains("row"))
+            cells = all.filter(_.attrs.role.contains("gridcell"))
+        yield
+            assert(grid.attrs.role.contains("grid"))
+            assert(cells.size == 12, "twelve months")
+            assert(rows.size == 4, "three to a row, which is the width the vertical arrows step by")
+            assert(
+                rows.forall(r => r.children.count { case e: UI.Ast.Element => e.attrs.role.contains("gridcell"); case _ => false } == 3),
+                "a gridcell with no row over it is not in the grid as far as the ARIA tree is concerned"
+            )
+    }
+
+    "a view switch hands the focus to the grid it switched to" in {
+        for
+            (_, _, moved, ui) <- recording(uic.DatePicker(), july)
+            month <- elements(ui).map(_.collectFirst {
+                case b: UI.Ast.Button if b.attrs.cssClasses.contains("p-datepicker-select-month") => b
+            }.get)
+            _   <- click(month)
+            got <- moved.get
+        yield assert(got == List("dp-grid"), "the button it was pressed on is not in the header the switch draws")
+    }
+
+    "and a drill hands it to the day grid it drilled into" in {
+        for
+            vref  <- Signal.initRef(july)
+            view  <- Signal.initRef(DatePickerView.Month)
+            mref  <- Signal.initRef("2026-07")
+            cur   <- Signal.initRef("")
+            oref  <- Signal.initRef(true)
+            moved <- Signal.initRef(List.empty[String])
+            ui = uic.DatePicker().value(vref).wired(oref, mref, cur, view, "dp", id => moved.updateAndGet(_ :+ id))
+            months <- elementWithClass(ui, "p-datepicker-month-view")
+            _      <- press(months, UI.Keyboard.Enter)
+            landed <- view.get
+            got    <- moved.get
+        yield assert(landed == DatePickerView.Date && got == List("dp-grid"))
+    }
+
     "the title buttons switch the grid without a caller binding a view ref either" in {
         for
             (_, _, _, _, _, ui) <- wired(july)

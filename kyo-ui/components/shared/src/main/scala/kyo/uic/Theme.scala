@@ -174,6 +174,11 @@ object Theme:
       |  outline: var(--p-rating-focus-ring-width) var(--p-rating-focus-ring-style) var(--p-rating-focus-ring-color);
       |  outline-offset: var(--p-rating-focus-ring-offset);
       |}
+      |/* The month and year grids wrap their cells in rows, because a gridcell needs one to be
+      |   read as part of the grid. Prime lays the cells straight into the flex box, so the rows
+      |   carry structure only and hand their children back to it. */
+      |.p-datepicker-month-view > [role="row"],
+      |.p-datepicker-year-view > [role="row"] { display: contents; }
       |/* Link (kyo extension — Prime has no Link component; skin mirrors Button's
       |   Link variant: primary color, underline on hover, disabled via .p-disabled). */
       |.p-uic-link { color: var(--p-primary-color); cursor: pointer; text-decoration: none; gap: 0.25rem; white-space: nowrap; }
