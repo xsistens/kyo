@@ -244,8 +244,10 @@ object RowSource:
         // range that asked for it is read would fetch it a second time.
         val span = (size + block - 1) / block + 1
         val room = math.max(config.maxBlocks, span + 2 * ahead)
+        // The page the source opens on, and the baseline the observer below is seeded with.
+        val firstPage = 0
         for
-            pageRef    <- Signal.initRef(0)
+            pageRef    <- Signal.initRef(firstPage)
             demandRef  <- Signal.initRef(Demand(0, size))
             windowRef  <- Signal.initRef(Window(0, Seq.empty[A]))
             totalRef   <- Signal.initRef(Total.Unknown(false): Total)
@@ -258,7 +260,20 @@ object RowSource:
             feed = new Feed(query, fetch, cache, seen, block, ahead, windowRef, totalRef, loadingRef)
             // A page is a range that starts on a page boundary. Keeping the two refs
             // rather than folding them is what lets a viewport write the range directly.
-            _ <- UI.fork(pageRef.observe(p => demandRef.set(Demand(math.max(0, p) * size, size))))
+            //
+            // Seeded with the page the source opens on, so the observer writes only what a
+            // caller CHANGED. Unseeded it opens by delivering the current page, and that
+            // delivery lands whenever the fork gets to run: a viewport that wrote its range
+            // in between (a scroller reports its position on the first render after the
+            // source was built) had it overwritten with page 0's, putting the reader back at
+            // the top of a list they had already scrolled. Seeding at subscription time
+            // instead would trade the stale write for a lost one, since a page set before the
+            // fork ran would become the baseline and never be served.
+            _ <- UI.fork(
+                pageRef.observe(Present(firstPage), Signal.defaultRepairInterval)(p =>
+                    demandRef.set(Demand(math.max(0, p) * size, size))
+                )
+            )
             _ <- UI.fork(query.combineLatest(demandRef).observe((q, d) => feed.serve(q, d)))
         yield new RowSource(size, pageRef, demandRef, windowRef, totalRef, loadingRef)
         end for

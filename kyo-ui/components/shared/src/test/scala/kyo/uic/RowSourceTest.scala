@@ -216,6 +216,39 @@ class RowSourceTest extends UicTest:
         yield assert(rows == all.slice(1, 5), "rows 1 to 4, out of blocks 0, 1 and 2")
     }
 
+    // The page observer runs on a fork, so its first delivery lands some time AFTER `init`
+    // returned. Anything a viewport wrote in between is a range the observer would then
+    // overwrite with page 0's, putting the reader back at the top of a list they had already
+    // scrolled. A table writes exactly there: the scroller reports its position on the first
+    // render after the source was built.
+    "a range written before the page observer starts is not reset to the first page" in {
+        // Built here rather than through `probe`, because the write has to be the FIRST thing
+        // after `init`: every step in between is another chance for the observer to have
+        // delivered already, and then there is no race left to lose. Which of the two wins is
+        // down to the scheduler, so the scenario runs many times over: on the defect 49 of 50
+        // runs lost the range, and a single run passed often enough to look green.
+        def once(using Frame) =
+            Scope.run {
+                for
+                    q <- Signal.initRef("a")
+                    src <- RowSource.init(q, pageSize = 2) { (_, offset, limit) =>
+                        (all.slice(offset, offset + limit), Total.Known(all.size))
+                    }
+                    _    <- src.demand.set(RowSource.Demand(6, 2))
+                    rows <- watch(src.rows)
+                    // The source having served a window is the barrier: whatever the observer
+                    // was going to write has been written by then, and the range that survived
+                    // it is the range the reader is looking at.
+                    _ <- until(rows)(_.nonEmpty)
+                    d <- src.demand.get
+                yield d
+            }
+        Kyo.foreach(1 to 50)(_ => once).map { seen =>
+            val lost = seen.count(_ != RowSource.Demand(6, 2))
+            assert(lost == 0, s"$lost of ${seen.size} runs put the reader back on the first page")
+        }
+    }
+
     // A viewport sizes its scrollbar off the floor under the length, so the floor falling
     // would shrink the scrollbar the moment the reader scrolled back up.
     //
