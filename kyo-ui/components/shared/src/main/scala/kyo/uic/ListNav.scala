@@ -30,9 +30,14 @@ private[uic] object ListNav:
       * horizontal tablist ArrowDown belongs to the page, and a tablist that swallowed it would
       * take scrolling away from a reader who is already looking past it. Home and End reach the
       * ends either way, since neither has an axis.
+      *
+      * `Both` is for the one pattern that asks for all four: a radio group moves on Down and
+      * Right alike, and on Up and Left alike, however its buttons are laid out. That is what a
+      * reader gets from native radios without anyone writing it ([[Rating]] rides on exactly
+      * that), so a group built from buttons has to answer the same keys.
       */
     enum Orientation derives CanEqual:
-        case Vertical, Horizontal
+        case Vertical, Horizontal, Both
 
     /** The outcome of one key press. `focus` is the new highlight position (`-1` for none),
       * `activate` asks the host to run the focused row's action, and `dismiss` asks it to
@@ -70,13 +75,19 @@ private[uic] object ListNav:
         orientation: Orientation = Orientation.Vertical
     ): Maybe[Step] =
         import Keyboard.*
-        val forward = if orientation == Orientation.Vertical then ArrowDown else ArrowRight
-        val back    = if orientation == Orientation.Vertical then ArrowUp else ArrowLeft
+        val forward = orientation match
+            case Orientation.Vertical   => List(ArrowDown)
+            case Orientation.Horizontal => List(ArrowRight)
+            case Orientation.Both       => List(ArrowDown, ArrowRight)
+        val back = orientation match
+            case Orientation.Vertical   => List(ArrowUp)
+            case Orientation.Horizontal => List(ArrowLeft)
+            case Orientation.Both       => List(ArrowUp, ArrowLeft)
         key match
-            case k if k == forward => Present(Step(move(navigable, focus, +1, wrap)))
-            case k if k == back    => Present(Step(move(navigable, focus, -1, wrap)))
-            case Home              => Maybe.fromOption(navigable.headOption).map(Step(_))
-            case End               => Maybe.fromOption(navigable.lastOption).map(Step(_))
+            case k if forward.contains(k) => Present(Step(move(navigable, focus, +1, wrap)))
+            case k if back.contains(k)    => Present(Step(move(navigable, focus, -1, wrap)))
+            case Home                     => Maybe.fromOption(navigable.headOption).map(Step(_))
+            case End                      => Maybe.fromOption(navigable.lastOption).map(Step(_))
             case Enter | Space =>
                 if navigable.contains(focus) then Present(Step(focus, activate = true)) else Absent
             case Escape => Present(Step(focus = -1, dismiss = true))

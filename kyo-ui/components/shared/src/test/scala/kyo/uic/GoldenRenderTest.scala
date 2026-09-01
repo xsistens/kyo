@@ -3259,7 +3259,16 @@ class GoldenRenderTest extends UicTest:
         yield
             assert(single.contains("p-selectbutton"), "base class")
             assert(single.contains("p-component"), "p-component class")
-            assert(single.contains("""role="group""""), "group role")
+            // A choice of ONE is a radio group, and its options are radios: `aria-checked` is the
+            // state that role has, and a toggle button's `aria-pressed` would be a second, different
+            // story about the same control. Several independent choices stay a group of toggles.
+            assert(single.contains("""role="radiogroup""""), "single: radio group role")
+            assert(single.contains("""role="radio""""), "single: the options are radios")
+            assert(single.contains("""aria-checked="true""""), "single: and report the checked state of one")
+            assert(!single.contains("aria-pressed"), "single: without also reporting a pressed state")
+            assert(multi.contains("""role="group""""), "multiple: a group of independent toggles")
+            assert(multi.contains("""aria-pressed="true""""), "multiple: which report being pressed")
+            assert(!multi.contains("""role="radio""""), "multiple: and are not radios")
             assert(single.contains("p-togglebutton"), "options render as ToggleButtons")
             assert(
                 (single.sliding("p-togglebutton-checked".length).count(_ == "p-togglebutton-checked") == 1),
