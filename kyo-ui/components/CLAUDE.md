@@ -288,6 +288,13 @@ a place the reader must not be able to put focus, for two reasons that both bit 
   has already moved focus by the time it lands, which is exactly right when nothing inside the
   panel could have taken it.
 
+The same Tab rule holds where the popup's rows ARE real controls and hold real focus
+(`SpeedDial`, whose actions are Buttons): the trigger is the widget's one tab stop, no row is in
+the tab sequence, focus enters by opening and leaves by Tab, which closes. Giving the active row a
+tab stop as well makes the open widget two of them, and Tab then walks the reader between the
+trigger and its own popup instead of past the widget. Nothing is lost by it, because the way back
+into an open popup is the same key that opened it.
+
 ## An opening key has to land on a row
 
 `ArrowDown` on a closed combobox opens it AND puts the highlight on a row: the selected one, else

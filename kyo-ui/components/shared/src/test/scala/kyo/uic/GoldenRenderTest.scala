@@ -4738,6 +4738,8 @@ class GoldenRenderTest extends UicTest:
             assert(open.contains("""aria-label="Add""""), "action label becomes the accessible name")
             assert(open.contains("""title="Add""""), "action label becomes the native tooltip")
             assert(open.contains("""role="menuitem""""), "an action in a role=menu is a menuitem")
+            assert(!open.contains("""tabindex="0""""), "open: no action is a tab stop, the dial's one tab stop is the toggle")
+            assert(open.contains("""tabindex="-1""""), "an action is focusable, but only by opening the fan")
             assert(open.contains("p-speeddial-open"), "open: open modifier (sheet scales the fan in)")
             assert(open.contains("""aria-expanded="true""""), "open: aria-expanded true")
             assert(open.contains("""data-kyo-focus-auto="1""""), "open: the fan seeds focus onto its first action")

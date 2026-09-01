@@ -44,15 +44,16 @@ end SpeedDialDirection
   * `label` becomes the accessible name and native tooltip; `onSelect` runs and
   * the fan closes. `open(ref)` binds the fan two-way (self-managed otherwise).
   *
-  * The fan is a real `role="menu"` and is operated like one. It is ONE tab stop:
-  * the toggle plus, while open, the first action; the arrows along the fan's own
-  * axis walk the rest and come round, Home and End reach the ends, and Escape
-  * closes. Opening seeds focus onto the first action and closing returns it to
-  * the toggle, both declaratively (`focusAuto`/`focusRestore`), the way an
-  * [[Overlay]] panel does. A closed fan renders no actions at all rather than
-  * hiding them with `scale(0)`: the sheet's hidden buttons were still real tab
-  * stops, so a reader tabbing past a closed dial walked through every action it
-  * had.
+  * The fan is a real `role="menu"` and is operated like one. The dial is ONE tab
+  * stop, the toggle: no action is in the tab sequence, focus enters the fan by
+  * opening it and leaves by Tab, which closes it in either direction. Inside, the
+  * arrows along the fan's own axis walk the actions and come round, Home and End
+  * reach the ends, and Escape closes. Opening seeds focus onto the first action
+  * and closing returns it to the toggle, both declaratively
+  * (`focusAuto`/`focusRestore`), the way an [[Overlay]] panel does. A closed fan
+  * renders no actions at all rather than hiding them with `scale(0)`: the sheet's
+  * hidden buttons were still real tab stops, so a reader tabbing past a closed
+  * dial walked through every action it had.
   *
   * Honest deferrals: only the LINEAR type (circle/semi-circle/quarter-circle
   * need JS-measured per-item offsets); the fan-in/out transition is omitted
@@ -157,7 +158,7 @@ final case class SpeedDial private (
                             open match
                                 case Present(r) => r.set(true)
                                 case Absent     => ()
-                    else if e.key == Keyboard.Escape && isOpen then close
+                    else if (e.key == Keyboard.Escape || e.key == Keyboard.Tab) && isOpen then close
                     else ()
                 eff
             }
@@ -191,11 +192,12 @@ final case class SpeedDial private (
                         .id(itemId(i))
                     it.iconV.foreach(g => btn = btn.icon(g))
                     if !it.disabledFlag then
-                        // The fan is one tab stop: the first action holds it, the rest are reached
-                        // by the arrows. That is also the action the fan seeds focus onto when it
-                        // opens, so every open starts the reader at the top of the menu.
+                        // No action is in the tab sequence: the dial's one tab stop is the toggle,
+                        // and focus reaches an action by opening the fan, which seeds it onto the
+                        // first one. A tab stop here would be a second one, and Tab would then walk
+                        // the reader between the toggle and a menu instead of past the dial.
                         btn = btn
-                            .tabIndexRaw(if i == first then 0 else -1)
+                            .tabIndexRaw(-1)
                             .focusSeedRaw(i == first)
                             .onKeyDownRaw(itemKey(i, navigable, itemId, focus, close))
                         if open.isDefined then btn = btn.onClick(activate)
@@ -216,7 +218,13 @@ final case class SpeedDial private (
         el(toChild(toggleBtn: UI), toChild(list(actionUIs.map(toChild)*)))
     end body
 
-    /** Moves focus along the fan, and closes it on Escape.
+    /** Moves focus along the fan, and closes it on Escape or Tab.
+      *
+      * Tab closes in both directions, because either one carries the reader out of the menu: no
+      * action holds a tab stop, so forward lands past the dial and backward on the toggle, and a
+      * fan left open behind them would keep saying `aria-expanded="true"` over a menu nobody is
+      * in. The close is a ref write like any other, so the browser has already moved focus by the
+      * time it lands, which is what keeps the restore out of its way.
       *
       * Activation is deliberately not read from [[ListNav]]: an action IS a `<button>`, so the
       * browser and the dispatcher already agree on one activation per Enter or Space, and a third
@@ -230,10 +238,12 @@ final case class SpeedDial private (
         focus: String => Any < Async,
         close: Any < Async
     )(using Frame): KeyboardEvent => Any < Async = e =>
-        ListNav.onKey(navigable, self, e.key, wrap = true, directionV.axis) match
-            case Present(step) if step.dismiss                                         => close
-            case Present(step) if step.focus != self && navigable.contains(step.focus) => focus(itemId(step.focus))
-            case _                                                                     => ()
+        if e.key == Keyboard.Tab then close
+        else
+            ListNav.onKey(navigable, self, e.key, wrap = true, directionV.axis) match
+                case Present(step) if step.dismiss                                         => close
+                case Present(step) if step.focus != self && navigable.contains(step.focus) => focus(itemId(step.focus))
+                case _                                                                     => ()
 end SpeedDial
 
 object SpeedDial:
