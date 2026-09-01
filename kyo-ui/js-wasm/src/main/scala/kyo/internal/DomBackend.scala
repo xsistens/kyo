@@ -946,10 +946,19 @@ private[kyo] object DomBackend:
             if e.`type` == "keydown" then
                 val ke  = e.asInstanceOf[dom.KeyboardEvent]
                 val tgt = e.target.asInstanceOf[dom.Element]
+                // preventActivation: an inert region declines the browser default for the keys that change a
+                // native control's value, so a readonly checkbox stays focusable rather than being disabled.
+                // The keydown is still forwarded. Twin of the `data-kyo-inert` block in clientJs.
+                if tgt != null && KeyPolicy.suppressesActivation(ke.key) && tgt.closest("[data-kyo-inert]") != null then
+                    e.preventDefault()
                 if tgt != null && scrollKeyPrevented(ke.key, tgt) && tgt.closest("[data-kyo-scroll-keys]") != null then
                     e.preventDefault()
                 if tgt != null && doubleActivation(ke.key, tgt) then e.preventDefault()
             end if
+            // The click's default goes the same way, so a readonly control does not toggle under the pointer.
+            if e.`type` == "click" then
+                val tgt = e.target.asInstanceOf[dom.Element]
+                if tgt != null && tgt.closest("[data-kyo-inert]") != null then e.preventDefault()
             findPathElement(e.target.asInstanceOf[dom.Element]).foreach { target =>
                 val path    = parsePath(target.getAttribute("data-kyo-path"))
                 val evTypes = ChainTypes(target)

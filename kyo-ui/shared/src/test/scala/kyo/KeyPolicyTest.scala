@@ -107,7 +107,8 @@ class KeyPolicyTest extends kyo.test.Test[Any]:
             KeyPolicy.verticalScrollKeys,
             KeyPolicy.edgeScrollKeys,
             KeyPolicy.buttonActivationKeys,
-            KeyPolicy.linkActivationKeys
+            KeyPolicy.linkActivationKeys,
+            KeyPolicy.activationKeys
         )
         val missing = expected.filterNot(keys => clientJs.contains(KeyPolicy.jsKeyTest(keys)))
         assert(missing.isEmpty, s"the client script does not carry these key sets verbatim: $missing")
@@ -141,6 +142,23 @@ class KeyPolicyTest extends kyo.test.Test[Any]:
         val block = clientJs.substring(from, until)
         assert(block.contains(KeyPolicy.jsTagTest(KeyPolicy.spaceActivatedTags)))
         assert(!block.contains("\"A\""), "an anchor must not be exempted: Space scrolls with a link focused")
+    }
+
+    "the inert block names no key by hand either" in {
+        val from  = clientJs.indexOf("data-kyo-inert")
+        val until = clientJs.indexOf("e.preventDefault();", from)
+        assert(from >= 0 && until > from, "the inert block is no longer recognizable in the client script")
+        val stripped = clientJs.substring(from, until).replace(KeyPolicy.jsKeyTest(KeyPolicy.activationKeys), "")
+        val leaked   = KeyPolicy.activationKeys.filter(k => stripped.contains(s"""e.key==="$k""""))
+        assert(leaked.isEmpty, s"these keys are still named by hand in the inert block: $leaked")
+    }
+
+    "the activation keys are the ones that change a native value, and Enter is not among them" in {
+        assert(KeyPolicy.suppressesActivation(" "), "Space toggles a checkbox and walks a radio group")
+        assert(KeyPolicy.activationKeys.count(_.startsWith("Arrow")) == 4, "all four arrows move a radio or a range")
+        assert(!KeyPolicy.suppressesActivation("Enter"), "Enter submits the form; it changes no native value")
+        assert(!KeyPolicy.suppressesActivation("Home"))
+        assert(!KeyPolicy.suppressesActivation("Tab"), "an inert control is still one a reader can leave")
     }
 
 end KeyPolicyTest
