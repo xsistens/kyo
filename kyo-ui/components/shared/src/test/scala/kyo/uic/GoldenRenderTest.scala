@@ -6332,14 +6332,14 @@ class GoldenRenderTest extends UicTest:
                     uic.MenuItem("Delete").icon(uic.Icons.trash).onSelect(())
                 ).wired(fanOpen, "sd", _ => ())
             )
-            cpValue   <- Signal.initRef("#ff0000")
-            cpOpen    <- Signal.initRef(true)
-            cpOpened  <- Signal.initRef("#ff0000")
+            cpValue  <- Signal.initRef("#ff0000")
+            cpOpen   <- Signal.initRef(true)
+            cpOpened <- Signal.initRef("#ff0000")
             colorPick <- renderHtml(
                 uic.ColorPicker().value(cpValue).wired(uic.ColorPicker.Panel(cpOpen, cpOpened), Present(cpValue), "#ff0000")
             )
-            card      <- renderHtml(uic.Card().title("Info").onHeaderClick(())(p("Body")))
-            avatar    <- renderHtml(uic.Avatar().initials("AL").onClick(()))
+            card   <- renderHtml(uic.Card().title("Info").onHeaderClick(())(p("Body")))
+            avatar <- renderHtml(uic.Avatar().initials("AL").onClick(()))
         yield
             val named = List(
                 "Icon"              -> icon,

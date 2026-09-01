@@ -279,8 +279,8 @@ final case class ColorPicker private (
         // they are on the screen: Home and End are the ends of the horizontal axis, PageUp and
         // PageDown ten steps of the vertical one.
         val planeKeys: (Keyboard, (Double, Double, Double)) => Maybe[String] = (k, hsv) =>
-            val (h, s, v)                = hsv
-            def sat(x: Double): String   = ColorPicker.hexOf(h, ColorPicker.clamp01(x), v)
+            val (h, s, v)                 = hsv
+            def sat(x: Double): String    = ColorPicker.hexOf(h, ColorPicker.clamp01(x), v)
             def bright(y: Double): String = ColorPicker.hexOf(h, s, ColorPicker.clamp01(y))
             k match
                 case Keyboard.ArrowLeft  => Present(sat(s - 0.01))
@@ -297,16 +297,16 @@ final case class ColorPicker private (
         // The bar is vertical, so up and down are its axis; right and left mean the same thing,
         // which is what the slider pattern asks of a vertical one.
         val hueKeys: (Keyboard, (Double, Double, Double)) => Maybe[String] = (k, hsv) =>
-            val (h, s, v)              = hsv
-            def at(d: Double): String  = ColorPicker.hexOf(math.max(0.0, math.min(359.0, d)), s, v)
+            val (h, s, v)             = hsv
+            def at(d: Double): String = ColorPicker.hexOf(math.max(0.0, math.min(359.0, d)), s, v)
             k match
-                case Keyboard.ArrowDown | Keyboard.ArrowLeft   => Present(at(h - 1))
-                case Keyboard.ArrowUp | Keyboard.ArrowRight    => Present(at(h + 1))
-                case Keyboard.PageDown                         => Present(at(h - 10))
-                case Keyboard.PageUp                           => Present(at(h + 10))
-                case Keyboard.Home                             => Present(at(0.0))
-                case Keyboard.End                              => Present(at(359.0))
-                case _                                         => Absent
+                case Keyboard.ArrowDown | Keyboard.ArrowLeft => Present(at(h - 1))
+                case Keyboard.ArrowUp | Keyboard.ArrowRight  => Present(at(h + 1))
+                case Keyboard.PageDown                       => Present(at(h - 10))
+                case Keyboard.PageUp                         => Present(at(h + 10))
+                case Keyboard.Home                           => Present(at(0.0))
+                case Keyboard.End                            => Present(at(359.0))
+                case _                                       => Absent
             end match
 
         val axes: List[UI] = ref.toList.filter(_ => interactive).map { r =>
@@ -485,7 +485,7 @@ object ColorPicker:
       * with, which is what Escape puts back. They travel together because the confirm/cancel pair
       * is only meaningful with both.
       */
-    private[uic] final case class Panel(open: SignalRef[Boolean], opened: SignalRef[String])
+    final private[uic] case class Panel(open: SignalRef[Boolean], opened: SignalRef[String])
 
     /** A color picker whose hex value binds two-way to `ref`. */
     def apply(ref: SignalRef[String]): ColorPicker = new ColorPicker(valueBinding = Present(Input.Value.Ref(ref)))

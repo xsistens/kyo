@@ -86,12 +86,12 @@ final case class PickList[A] private (
     // What a region compares to decide whether to repaint is the SNAPSHOT, never an item: the
     // sequences and sets that hold them are compared structurally, and `A` needs no equality of
     // its own for that (it has none to require, since any type can be a row here).
-    private given CanEqual[Seq[A], Seq[A]]                         = CanEqual.derived
-    private given CanEqual[Columns, Columns]                       = CanEqual.derived
-    private given CanEqual[Selections, Selections]                 = CanEqual.derived
-    private given CanEqual[Cursors, Cursors]                       = CanEqual.derived
+    private given CanEqual[Seq[A], Seq[A]]                               = CanEqual.derived
+    private given CanEqual[Columns, Columns]                             = CanEqual.derived
+    private given CanEqual[Selections, Selections]                       = CanEqual.derived
+    private given CanEqual[Cursors, Cursors]                             = CanEqual.derived
     private given CanEqual[(Columns, Selections), (Columns, Selections)] = CanEqual.derived
-    private given CanEqual[Snapshot, Snapshot]                     = CanEqual.derived
+    private given CanEqual[Snapshot, Snapshot]                           = CanEqual.derived
 
     private def sig[T](ref: Maybe[SignalRef[T]], fallback: T)(using CanEqual[T, T], Frame): Signal[T] =
         ref match
@@ -127,11 +127,11 @@ final case class PickList[A] private (
     private[uic] def render(using Frame): UI =
         UI.mounted {
             for
-                cmds      <- UI.commands
-                sourceId  <- cmds.freshId
-                targetId  <- cmds.freshId
-                sourceHi  <- Signal.initRef(-1)
-                targetHi  <- Signal.initRef(-1)
+                cmds     <- UI.commands
+                sourceId <- cmds.freshId
+                targetId <- cmds.freshId
+                sourceHi <- Signal.initRef(-1)
+                targetHi <- Signal.initRef(-1)
             yield wired(
                 Present(ListReorder.Cursor(sourceHi, sourceId)),
                 Present(ListReorder.Cursor(targetHi, targetId))
