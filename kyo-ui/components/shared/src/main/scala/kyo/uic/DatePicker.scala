@@ -709,8 +709,12 @@ final case class DatePicker private (
         def viewButton(cls: String, text: String, target: DatePickerView, label: String): UI =
             var b = button.cssClass(cls).jsProp("type", "button").aria("label", label)
             currentViewRefV match
-                case Present(vref) => b = b.onClick(vref.set(target))
+                // The switch redraws the header without the button that was pressed (the year view
+                // titles a decade, and neither granular view keeps its own button), so the focus
+                // goes on to the grid that appeared rather than falling to the document.
+                case Present(vref) => b = b.onClick(vref.set(target).andThen(focusGrid(nav)))
                 case Absent        => b = b.disabled(true)
+            end match
             b(text)
         end viewButton
 
@@ -880,6 +884,12 @@ final case class DatePicker private (
       * pointer named rather than from wherever the grid last derived one. The ring stays the
       * keyboard's: this writes the highlight, not the focus.
       */
+    /** Hands the focus to the grid on screen, which is where a view switch leaves the reader. */
+    private def focusGrid(nav: Maybe[DatePicker.Nav])(using Frame): Any < Async =
+        nav match
+            case Present(n) => n.focus(n.gridId)
+            case Absent     => ()
+
     private def seedCursor(iso: String, nav: Maybe[DatePicker.Nav])(using Frame): Any < Async =
         nav match
             case Present(n) => n.cursor.set(iso)
@@ -1120,7 +1130,13 @@ final case class DatePicker private (
                 eff
             }
         }
-        grid(cells.map(toChild)*)
+        // A `gridcell` with no `row` over it is outside the grid as far as the ARIA tree is
+        // concerned, and Prime's own markup lays the cells straight into a wrapping flex box. The
+        // rows carry the structure and `display: contents` in the extra sheet keeps the layout,
+        // so the twelve months still wrap the way Prime draws them.
+        val rows: List[UI] =
+            cells.grouped(perRow).toList.map(row => div.role("row")(row.map(toChild)*))
+        grid(rows.map(toChild)*)
     end granularGrid
 
     /** A granularity pick (`view(Month|Year)`): write the ISO prefix, close. */
@@ -1145,7 +1161,8 @@ final case class DatePicker private (
                 Present(
                     for
                         _ <- mref.set(yearMonth)
-                        r <- vref.set(target)
+                        _ <- vref.set(target)
+                        r <- focusGrid(nav)
                     yield r
                 )
             case _ => Absent
