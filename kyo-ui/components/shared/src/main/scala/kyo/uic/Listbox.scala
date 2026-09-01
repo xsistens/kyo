@@ -91,7 +91,8 @@ final case class Listbox private (
     accessibleNameV: Maybe[TextValue] = Absent,
     accessibleNameRefV: Maybe[String] = Absent,
     onBlurF: Maybe[Set[String] => Any < Async] = Absent,
-    idV: Maybe[String] = Absent
+    idV: Maybe[String] = Absent,
+    hostKeyF: Maybe[UI.KeyboardEvent => Maybe[Listbox.HostKey]] = Absent
 ) extends Node, MultiSelectFormControl, HasEmptyContent, HasAccessibleNameRef:
     type Self = Listbox
 
@@ -99,6 +100,15 @@ final case class Listbox private (
       * the bound field's id here so focus-first-invalid can target it.
       */
     def id(v: String): Listbox = copy(idV = Present(v))
+
+    /** Chords the HOST claims, tried before the list's own machine sees them.
+      *
+      * [[OrderList]] and [[PickList]] put their move and transfer keys here, because the list is
+      * the element that holds the focus and so the only one that can answer them. Returning
+      * `Absent` leaves the chord to the list and then to the browser, so a host cannot swallow the
+      * navigation it is nested in.
+      */
+    private[uic] def onHostKey(f: UI.KeyboardEvent => Maybe[Listbox.HostKey]): Listbox = copy(hostKeyF = Present(f))
 
     /** Appends the given options. */
     def items(is: ListItem*): Listbox = copy(optionsV = optionsV ++ is.map(OptionItem.Item(_)))
@@ -188,8 +198,10 @@ final case class Listbox private (
       * against the outer replace (the Overlay renderOpen lesson). The click
       * handlers still write through the BOUND refs.
       */
-    private[uic] def resolved(sel: Set[String], query: String, hi: Maybe[SignalRef[Int]] = Absent)(using Frame): UI =
-        body(sel, query, Absent, hi, idV)
+    private[uic] def resolved(sel: Set[String], query: String, hi: Maybe[SignalRef[Int]] = Absent, focused: Int = -1)(
+        using Frame
+    ): UI =
+        body(sel, query, Absent, hi, idV, focused)
 
     private[uic] def render(using Frame): UI =
         // The validity boundary sits OUTSIDE the query subscriptions but resolves before
@@ -265,7 +277,7 @@ final case class Listbox private (
         val navigable: List[Int] = shown.indices.toList
         val focused: Int         = if navigable.contains(hi) then hi else -1
 
-        val keyHandler: KeyboardEvent => Any < Async = e =>
+        val navigate: KeyboardEvent => Any < Async = e =>
             hiRef match
                 case Present(ref) =>
                     // Prime's listbox stops at the ends rather than cycling, unlike the menu
@@ -278,6 +290,16 @@ final case class Listbox private (
                             ref.set(step.focus).andThen(pick)
                         case Absent => ()
                 case Absent => ()
+
+        // The host is asked first, because the chords it claims (a carried arrow, a transfer) are
+        // ones the list's own machine would otherwise read as plain navigation.
+        val keyHandler: KeyboardEvent => Any < Async = e =>
+            val claimed: Maybe[Listbox.HostKey] = hostKeyF match
+                case Present(f) => f(e)
+                case Absent     => Absent
+            claimed match
+                case Present(claim) => claim.effect
+                case Absent         => navigate(e)
 
         // Arriving on the list highlights a row, rather than leaving the reader to guess where
         // the first arrow will land. The selected row wins, since that is where a reader
@@ -456,3 +478,10 @@ end Listbox
 
 object Listbox:
     def apply(): Listbox = new Listbox()
+
+    /** One chord a host claims, carrying the effect it answers with.
+      *
+      * A bare `Maybe[Any < Async]` cannot say this: the value type is `Any`, so the compiler has to
+      * assume the effect could itself be an `Absent` and the match over it is not exhaustive.
+      */
+    private[uic] final case class HostKey(effect: Any < Async)

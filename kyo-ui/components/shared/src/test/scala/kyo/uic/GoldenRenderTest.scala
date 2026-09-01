@@ -5494,14 +5494,19 @@ class GoldenRenderTest extends UicTest:
 
     "OrderList embeds a multiple Listbox beside Prime's four secondary move buttons" in {
         for
-            (withSel, noSel) <-
+            (withSel, noSel, roving) <-
                 for
                     items <- Signal.initRef(Seq("Bamboo Watch", "Black Watch", "Blue Band"))
                     sel   <- Signal.initRef(Set("Black Watch"))
                     empty <- Signal.initRef(Set.empty[String])
+                    hi    <- Signal.initRef(1)
                     a     <- UI.runRender(uic.OrderList[String]().items(items)(identity).selected(sel)).take(1).run
                     b     <- UI.runRender(uic.OrderList[String]().items(items)(identity).selected(empty)).take(1).run
-                yield (a.mkString, b.mkString)
+                    c <- UI.runRender(
+                        uic.OrderList[String]().items(items)(identity).selected(sel)
+                            .wired(Present(uic.ListReorder.Cursor(hi, "ol")))
+                    ).take(1).run
+                yield (a.mkString, b.mkString, c.mkString)
         yield
             assert(withSel.contains("p-orderlist"), "root class")
             assert(withSel.contains("p-orderlist-controls"), "controls rail")
@@ -5514,6 +5519,14 @@ class GoldenRenderTest extends UicTest:
             assert(withSel.contains("p-listbox-option-selected"), "selection reaches the rows")
             assert(withSel.contains("""aria-multiselectable="true""""), "multiple selection mode")
             assert(noSel.contains("disabled"), "empty selection disables the move buttons")
+            // The live tree comes from a mount, and a golden render shows a mount only as its
+            // placeholder, so the roving shape goes through the `wired` seam.
+            assert(roving.contains("""aria-activedescendant="ol-option-1""""), "the list announces the row it holds")
+            assert(roving.contains("""id="ol-option-1""""), "which is a row that carries that id")
+            assert(
+                roving.sliding(12).count(_ == """tabindex="0"""") == 1,
+                "one tab stop for the whole control: the list, not a row each"
+            )
     }
 
     "PickList renders two Listbox columns, transfer controls, and reorder rails" in {
@@ -5538,6 +5551,23 @@ class GoldenRenderTest extends UicTest:
                         ).targetItems(tgt).showSourceControls(false).showTargetControls(false)
                     ).take(1).run
                 yield out.mkString
+            roving <-
+                for
+                    src    <- Signal.initRef(Seq("San Francisco", "London"))
+                    tgt    <- Signal.initRef(Seq("Paris"))
+                    srcSel <- Signal.initRef(Set("London"))
+                    tgtSel <- Signal.initRef(Set.empty[String])
+                    srcHi  <- Signal.initRef(1)
+                    tgtHi  <- Signal.initRef(-1)
+                    out <- UI.runRender(
+                        uic.PickList[String]().sourceItems(src)(identity).targetItems(tgt).sourceSelected(srcSel)
+                            .targetSelected(tgtSel)
+                            .wired(
+                                Present(uic.ListReorder.Cursor(srcHi, "pl-src")),
+                                Present(uic.ListReorder.Cursor(tgtHi, "pl-tgt"))
+                            )
+                    ).take(1).run
+                yield out.mkString
         yield
             assert(html.contains("p-picklist"), "root class")
             assert(html.contains("p-picklist-source-controls"), "source reorder rail")
@@ -5552,6 +5582,14 @@ class GoldenRenderTest extends UicTest:
             assert(html.contains("San Francisco") && html.contains("Paris"), "both columns render their items")
             assert(!noRails.contains("p-picklist-source-controls"), "showSourceControls(false) drops the rail")
             assert(!noRails.contains("p-picklist-target-controls"), "showTargetControls(false) drops the rail")
+            // The live tree comes from a mount, and a golden render shows a mount only as its
+            // placeholder, so the roving shape goes through the `wired` seam.
+            assert(roving.contains("""aria-activedescendant="pl-src-option-1""""), "the source column announces its row")
+            assert(!roving.contains("aria-activedescendant=\"pl-tgt"), "the column with no highlight announces none")
+            assert(
+                roving.sliding(12).count(_ == """tabindex="0"""") == 2,
+                "one tab stop per column, and none for a row"
+            )
     }
 
     "Carousel renders the visible window, secondary text nav buttons, and indicator dots" in {
