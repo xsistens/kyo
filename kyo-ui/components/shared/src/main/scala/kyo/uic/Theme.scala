@@ -148,6 +148,15 @@ object Theme:
       |.p-datepicker-day-view:focus,
       |.p-datepicker-month-view:focus,
       |.p-datepicker-year-view:focus { outline: none; }
+      |/* The colour plane and the hue bar are operated through sliders that are visually hidden
+      |   (Prime's own .p-hidden-accessible, as Rating's radios are), because the visible thing is
+      |   the handle. The ring therefore has to be drawn on the surface the reader can see, which
+      |   is what :focus-within is for. */
+      |.p-colorpicker-color-selector:focus-within,
+      |.p-colorpicker-hue:focus-within {
+      |  outline: var(--p-focus-ring-width, 1px) var(--p-focus-ring-style, solid) var(--p-focus-ring-color, var(--p-primary-color));
+      |  outline-offset: var(--p-focus-ring-offset, 2px);
+      |}
       |/* Link (kyo extension — Prime has no Link component; skin mirrors Button's
       |   Link variant: primary color, underline on hover, disabled via .p-disabled). */
       |.p-uic-link { color: var(--p-primary-color); cursor: pointer; text-decoration: none; gap: 0.25rem; white-space: nowrap; }

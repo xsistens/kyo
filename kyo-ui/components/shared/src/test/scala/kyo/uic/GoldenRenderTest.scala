@@ -6279,8 +6279,11 @@ class GoldenRenderTest extends UicTest:
                     uic.MenuItem("Delete").icon(uic.Icons.trash).onSelect(())
                 ).wired(fanOpen, "sd", _ => ())
             )
-            card   <- renderHtml(uic.Card().title("Info").onHeaderClick(())(p("Body")))
-            avatar <- renderHtml(uic.Avatar().initials("AL").onClick(()))
+            cpValue   <- Signal.initRef("#ff0000")
+            cpOpen    <- Signal.initRef(true)
+            colorPick <- renderHtml(uic.ColorPicker().value(cpValue).wired(cpOpen, Present(cpValue), "#ff0000"))
+            card      <- renderHtml(uic.Card().title("Info").onHeaderClick(())(p("Body")))
+            avatar    <- renderHtml(uic.Avatar().initials("AL").onClick(()))
         yield
             val named = List(
                 "Icon"              -> icon,
@@ -6294,6 +6297,7 @@ class GoldenRenderTest extends UicTest:
                 "Stepper"           -> stepper,
                 "SelectButton"      -> segmented,
                 "SpeedDial"         -> speedDial,
+                "ColorPicker"       -> colorPick,
                 "Card"              -> card,
                 "Avatar"            -> avatar
             )
