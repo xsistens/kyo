@@ -35,7 +35,8 @@ class GoldenRenderTest extends UicTest:
             view <- dp.currentViewRefV match
                 case Present(r) => Kyo.lift(r)
                 case Absent     => Signal.initRef(dp.viewV)
-            out <- UI.runRender(dp.wired(oref, mref.getOrElse(minted), cursor, view, "dp", _ => ())).take(1).run
+            seed <- Signal.initRef(false)
+            out  <- UI.runRender(dp.wired(oref, mref.getOrElse(minted), cursor, view, seed, "dp", _ => ())).take(1).run
         yield out.mkString
 
     /** Matches one table row group by tag AND class: the renderer writes
@@ -6466,8 +6467,9 @@ class GoldenRenderTest extends UicTest:
             dpCursor <- Signal.initRef("2026-07-15")
             dpValue  <- Signal.initRef("2026-07-15")
             dpView   <- Signal.initRef(uic.DatePickerView.Date)
+            dpSeed   <- Signal.initRef(false)
             datePicker <- renderHtml(
-                uic.DatePicker().value(dpValue).wired(dpOpen, dpMonth, dpCursor, dpView, "dp", _ => ())
+                uic.DatePicker().value(dpValue).wired(dpOpen, dpMonth, dpCursor, dpView, dpSeed, "dp", _ => ())
             )
             selOpen  <- Signal.initRef(true)
             selHi    <- Signal.initRef(1)

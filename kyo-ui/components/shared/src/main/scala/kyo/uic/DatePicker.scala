@@ -302,8 +302,9 @@ final case class DatePicker private (
                     vref <- currentViewRefV match
                         case Present(r) => Kyo.lift(r)
                         case Absent     => Signal.initRef(viewV)
-                    cur <- Signal.initRef("")
-                yield wired(oref, mref, cur, vref, base, id => cmds.focusId(id))
+                    cur  <- Signal.initRef("")
+                    seed <- Signal.initRef(false)
+                yield wired(oref, mref, cur, vref, seed, base, id => cmds.focusId(id))
             }.placeholder(stat)
         end if
     end render
@@ -320,28 +321,39 @@ final case class DatePicker private (
         mref: SignalRef[String],
         cursor: SignalRef[String],
         view: SignalRef[DatePickerView],
+        seed: SignalRef[Boolean],
         base: String,
         focus: String => Any < Async
     )(using Frame): UI =
         // The mount mints a view ref when the caller binds none, the way it mints the month one.
         // Without it the month and year buttons rendered disabled and a drill-down had nothing to
         // write, which left the two granular grids unreachable in the default configuration.
-        copy(currentViewRefV = Present(view)).wiredWith(oref, mref, cursor, base, focus)
+        copy(currentViewRefV = Present(view)).wiredWith(oref, mref, cursor, seed, base, focus)
 
     private def wiredWith(
         oref: SignalRef[Boolean],
         mref: SignalRef[String],
         cursor: SignalRef[String],
+        seed: SignalRef[Boolean],
         base: String,
         focus: String => Any < Async
     )(using Frame): UI =
-        def nav(mv: String, cv: String): DatePicker.Nav = DatePicker.Nav(mref, mv, cursor, cv, base, focus)
+        def nav(mv: String, cv: String, sd: Boolean): DatePicker.Nav =
+            DatePicker.Nav(mref, mv, cursor, cv, seed, sd, base, focus)
+        // The cursor and the seed flag are read together rather than through a second nested
+        // render: two regions over the same grid would leave the inner one drawing against the
+        // cursor it closed over.
         val body: UI =
-            mref.render(mv => cursor.render(cv => calendarReactive(Present(oref), Present(nav(mv, cv)), inline = inlineFlag)))
+            mref.render(mv =>
+                cursor.combineLatest(seed).render { pair =>
+                    val (cv, sd) = pair
+                    calendarReactive(Present(oref), Present(nav(mv, cv, sd)), inline = inlineFlag)
+                }
+            )
         val panel: UI =
             if inlineFlag then when(oref)(body)
             else Overlay(oref).seedFocus(false)(body).render
-        assemble(Present(oref), Present(nav("", "")), floating = !inlineFlag, panel, openSignal = Present(oref))
+        assemble(Present(oref), Present(nav("", "", false)), floating = !inlineFlag, panel, openSignal = Present(oref))
     end wiredWith
 
     /** Field + dropdown button + panel host inside the `.p-datepicker` root. */
@@ -388,7 +400,7 @@ final case class DatePicker private (
             .jsProp("type", "button")
             .aria("label", "Choose date")
         if !interactive || (!floating && oref.isEmpty) then dd = dd.disabled(true)
-        else oref.foreach(r => dd = dd.onClick(togglePanel(r)))
+        else oref.foreach(r => dd = dd.onClick(seedGrid(nav, false).andThen(togglePanel(r))))
         val dropdown: UI = dd(toChild(GlyphSvg(Icons.calendar, "p-icon")))
 
         var el = div.cssClass("p-datepicker").cssClass("p-component")
@@ -462,7 +474,9 @@ final case class DatePicker private (
         nav.foreach(n => i = i.id(n.fieldId))
         if floating && interactive then
             oref.foreach { r =>
-                i = i.onClick(openPanel(r))
+                // A pointer open lowers the seed: the reader clicked a text field and wants to be
+                // in it, not carried off into the grid.
+                i = i.onClick(seedGrid(nav, false).andThen(openPanel(r)))
                 i = i.onKeyDown { e =>
                     // ArrowDown opens, and nothing else does. This is a TEXT BOX, not one of the
                     // library's four div-shaped select triggers: Space types a space and Enter
@@ -480,15 +494,17 @@ final case class DatePicker private (
         i
     end fieldUI
 
-    /** ArrowDown on the field: opens the calendar if it is closed, and steps into the grid if it
-      * is already open.
+    /** ArrowDown on the field: opens the calendar and puts the reader in the grid.
       *
-      * Two presses rather than one, and deliberately: the grid does not exist until the panel is
-      * rendered, so moving focus in the same effect that opens it would race the insert. A reader
-      * who opened the panel by clicking the field gets there in one.
+      * A focus COMMAND cannot do the opening half of that, since the grid does not exist until the
+      * panel is rendered and the command would race the insert. So the press raises the seed flag
+      * instead, the grid renders `focusAuto` while it is up, and the client focuses the grid in
+      * the same patch that inserts it. The flag is declarative for exactly that reason, and it is
+      * lowered by every pointer open, where the reader wants the text field they clicked.
       */
     private def enterGrid(oref: SignalRef[Boolean], nav: Maybe[DatePicker.Nav])(using Frame): Any < Async =
         for
+            _      <- seedGrid(nav, true)
             isOpen <- oref.get
             _ <-
                 if !isOpen then openPanel(oref)
@@ -497,6 +513,17 @@ final case class DatePicker private (
                         case Present(n) => n.focus(n.gridId)
                         case Absent     => (): Any < Async
         yield ()
+
+    /** Raises or lowers the flag that says the next grid to appear takes the focus.
+      *
+      * Written blind rather than compared first: the field and the dropdown are built outside the
+      * panel's subscription, so the `seedV` they carry is the placeholder the host passes, not
+      * what the flag holds.
+      */
+    private def seedGrid(nav: Maybe[DatePicker.Nav], v: Boolean)(using Frame): Any < Async =
+        nav match
+            case Present(n) => n.seed.set(v)
+            case Absent     => ()
 
     private def rangeText(s: String, e: String): String =
         if s.isEmpty then "" else if e.isEmpty then s else s"$s - $e"
@@ -712,8 +739,9 @@ final case class DatePicker private (
                 // The switch redraws the header without the button that was pressed (the year view
                 // titles a decade, and neither granular view keeps its own button), so the focus
                 // goes on to the grid that appeared rather than falling to the document.
-                case Present(vref) => b = b.onClick(vref.set(target).andThen(focusGrid(nav)))
-                case Absent        => b = b.disabled(true)
+                case Present(vref) =>
+                    b = b.onClick(seedGrid(nav, true).andThen(vref.set(target)).andThen(focusGrid(nav)))
+                case Absent => b = b.disabled(true)
             end match
             b(text)
         end viewButton
@@ -821,6 +849,7 @@ final case class DatePicker private (
                 .tabIndex(0)
                 .preventScrollKeys
                 .onKeyDown(dayKey(year, month, cursorIso, snap, oref, n))
+            if n.seedV then grid = grid.focusAuto(true)
             if cursorIso.nonEmpty then
                 grid = grid.aria("activedescendant", n.cellId(firstDow + DatePicker.dayOf(cursorIso) - 1))
         }
@@ -1111,6 +1140,7 @@ final case class DatePicker private (
         var grid = div.cssClass(cls)
         nav.foreach { n =>
             grid = grid.id(n.gridId).tabIndex(0).preventScrollKeys.role("grid")
+            if n.seedV then grid = grid.focusAuto(true)
             if cursor.nonEmpty then grid = grid.aria("activedescendant", n.cellId(indexOf(cursor)))
             grid = grid.onKeyDown { e =>
                 val eff: Any < Async =
@@ -1160,6 +1190,7 @@ final case class DatePicker private (
             case (Present(mref), Present(vref)) =>
                 Present(
                     for
+                        _ <- seedGrid(nav, true)
                         _ <- mref.set(yearMonth)
                         _ <- vref.set(target)
                         r <- focusGrid(nav)
@@ -1348,6 +1379,8 @@ object DatePicker:
         monthOvV: String,
         cursor: SignalRef[String],
         cursorV: String,
+        seed: SignalRef[Boolean],
+        seedV: Boolean,
         base: String,
         focus: String => Any < Async
     ):

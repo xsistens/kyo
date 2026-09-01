@@ -25,8 +25,9 @@ class DatePickerTest extends UicTest:
             cur   <- Signal.initRef(cursor)
             open  <- Signal.initRef(true)
             view  <- Signal.initRef(DatePickerView.Date)
+            seed  <- Signal.initRef(false)
             moved <- Signal.initRef(List.empty[String])
-            ui = uic.DatePicker().value(vref).wired(open, mref, cur, view, "dp", id => moved.updateAndGet(_ :+ id))
+            ui = uic.DatePicker().value(vref).wired(open, mref, cur, view, seed, "dp", id => moved.updateAndGet(_ :+ id))
         yield (vref, mref, cur, open, moved, ui)
 
     /** Presses `key` on the day grid and reports where the cursor landed. */
@@ -132,8 +133,9 @@ class DatePickerTest extends UicTest:
             oref <- Signal.initRef(open)
             // The mount starts its minted ref at the static view, and so does this.
             view  <- Signal.initRef(dp.viewV)
+            seed  <- Signal.initRef(false)
             moved <- Signal.initRef(List.empty[String])
-            ui = dp.value(vref).wired(oref, mref, cur, view, "dp", id => moved.updateAndGet(_ :+ id))
+            ui = dp.value(vref).wired(oref, mref, cur, view, seed, "dp", id => moved.updateAndGet(_ :+ id))
         yield (vref, oref, moved, ui)
 
     "a pick hands the focus back too, since the pick takes the grid with it" in {
@@ -174,8 +176,9 @@ class DatePickerTest extends UicTest:
             cur   <- Signal.initRef("2026-07-09")
             oref  <- Signal.initRef(true)
             view  <- Signal.initRef(DatePickerView.Date)
+            seed  <- Signal.initRef(false)
             moved <- Signal.initRef(List.empty[String])
-            ui = uic.DatePicker().range(start, end).wired(oref, mref, cur, view, "dp", id => moved.updateAndGet(_ :+ id))
+            ui = uic.DatePicker().range(start, end).wired(oref, mref, cur, view, seed, "dp", id => moved.updateAndGet(_ :+ id))
             grid   <- elementWithClass(ui, "p-datepicker-day-view")
             _      <- press(grid, UI.Keyboard.Enter)
             opened <- oref.get
@@ -200,8 +203,9 @@ class DatePickerTest extends UicTest:
             cur   <- Signal.initRef("2026-07-09")
             oref  <- Signal.initRef(true)
             view  <- Signal.initRef(DatePickerView.Date)
+            seed  <- Signal.initRef(false)
             moved <- Signal.initRef(List.empty[String])
-            ui = uic.DatePicker().values(set).wired(oref, mref, cur, view, "dp", id => moved.updateAndGet(_ :+ id))
+            ui = uic.DatePicker().values(set).wired(oref, mref, cur, view, seed, "dp", id => moved.updateAndGet(_ :+ id))
             grid   <- elementWithClass(ui, "p-datepicker-day-view")
             _      <- press(grid, UI.Keyboard.Enter)
             picked <- set.get
@@ -248,10 +252,11 @@ class DatePickerTest extends UicTest:
         for
             vref <- Signal.initRef(july)
             view <- Signal.initRef(DatePickerView.Month)
+            seed <- Signal.initRef(false)
             mref <- Signal.initRef("2026-07")
             cur  <- Signal.initRef("")
             oref <- Signal.initRef(true)
-            ui = uic.DatePicker().value(vref).wired(oref, mref, cur, view, "dp", _ => ())
+            ui = uic.DatePicker().value(vref).wired(oref, mref, cur, view, seed, "dp", _ => ())
             months <- elementWithClass(ui, "p-datepicker-month-view")
             _      <- press(months, UI.Keyboard.ArrowRight)
             // Re-read: the handler on the element above closed over the cursor it rendered with,
@@ -274,7 +279,8 @@ class DatePickerTest extends UicTest:
             cur  <- Signal.initRef("2026-07-15")
             oref <- Signal.initRef(true)
             view <- Signal.initRef(DatePickerView.Date)
-            ui = uic.DatePicker().values(set).wired(oref, mref, cur, view, "dp", _ => ())
+            seed <- Signal.initRef(false)
+            ui = uic.DatePicker().values(set).wired(oref, mref, cur, view, seed, "dp", _ => ())
             days  <- elementsWithClass(ui, "p-datepicker-day")
             _     <- click(days.find(_.children.exists(_ == UI.Ast.Text("4"))).get)
             after <- cur.get
@@ -291,7 +297,7 @@ class DatePickerTest extends UicTest:
         yield assert(!still && got == List("dp-field"))
     }
 
-    "the field opens on ArrowDown, and steps into the grid once it is open" in {
+    "the field opens on ArrowDown, and a press on the open field steps in by command" in {
         for
             closedRef <- Signal.initRef(false)
             mref      <- Signal.initRef("")
@@ -299,7 +305,8 @@ class DatePickerTest extends UicTest:
             moved     <- Signal.initRef(List.empty[String])
             vref      <- Signal.initRef(july)
             view      <- Signal.initRef(DatePickerView.Date)
-            ui = uic.DatePicker().value(vref).wired(closedRef, mref, cur, view, "dp", id => moved.updateAndGet(_ :+ id))
+            seed      <- Signal.initRef(false)
+            ui = uic.DatePicker().value(vref).wired(closedRef, mref, cur, view, seed, "dp", id => moved.updateAndGet(_ :+ id))
             field  <- elementWithClass(ui, "p-datepicker-input")
             _      <- press(field, UI.Keyboard.ArrowDown)
             opened <- closedRef.get
@@ -308,8 +315,41 @@ class DatePickerTest extends UicTest:
             second <- moved.get
         yield
             assert(opened, "the first press opens")
-            assert(first.isEmpty, "and moves no focus, since the grid it would move to does not exist yet")
-            assert(second == List("dp-grid"), "the second steps in")
+            assert(first.isEmpty, "and sends no focus command, since the grid it would name does not exist yet")
+            assert(second == List("dp-grid"), "with the panel open the grid is there to be named")
+    }
+
+    "a keyboard open marks the grid to take the focus in the patch that inserts it" in {
+        for
+            closedRef <- Signal.initRef(false)
+            mref      <- Signal.initRef("")
+            cur       <- Signal.initRef("")
+            view      <- Signal.initRef(DatePickerView.Date)
+            seed      <- Signal.initRef(false)
+            vref      <- Signal.initRef(july)
+            ui = uic.DatePicker().value(vref).wired(closedRef, mref, cur, view, seed, "dp", _ => ())
+            field  <- elementWithClass(ui, "p-datepicker-input")
+            _      <- press(field, UI.Keyboard.ArrowDown)
+            opened <- closedRef.get
+            grid   <- elementWithClass(ui, "p-datepicker-day-view")
+        yield
+            assert(opened)
+            assert(grid.attrs.focusAuto.contains(true), "a focus command would race the insert; this rides with it")
+    }
+
+    "and a pointer open does not, since the reader clicked a text field" in {
+        for
+            closedRef <- Signal.initRef(false)
+            mref      <- Signal.initRef("")
+            cur       <- Signal.initRef("")
+            view      <- Signal.initRef(DatePickerView.Date)
+            seed      <- Signal.initRef(true)
+            vref      <- Signal.initRef(july)
+            ui = uic.DatePicker().value(vref).wired(closedRef, mref, cur, view, seed, "dp", _ => ())
+            field <- elementWithClass(ui, "p-datepicker-input")
+            _     <- click(field)
+            grid  <- elementWithClass(ui, "p-datepicker-day-view")
+        yield assert(!grid.attrs.focusAuto.contains(true), "and it lowers a flag an earlier keyboard open left up")
     }
 
     "the field keeps Space and Enter, because it is a text box" in {
@@ -319,7 +359,8 @@ class DatePickerTest extends UicTest:
             cur       <- Signal.initRef("")
             vref      <- Signal.initRef("")
             view      <- Signal.initRef(DatePickerView.Date)
-            ui = uic.DatePicker().value(vref).wired(closedRef, mref, cur, view, "dp", _ => ())
+            seed      <- Signal.initRef(false)
+            ui = uic.DatePicker().value(vref).wired(closedRef, mref, cur, view, seed, "dp", _ => ())
             field <- elementWithClass(ui, "p-datepicker-input")
             _     <- press(field, UI.Keyboard.Space)
             _     <- press(field, UI.Keyboard.Enter)
@@ -359,11 +400,12 @@ class DatePickerTest extends UicTest:
         for
             vref  <- Signal.initRef(july)
             view  <- Signal.initRef(DatePickerView.Month)
+            seed  <- Signal.initRef(false)
             mref  <- Signal.initRef("2026-07")
             cur   <- Signal.initRef("")
             oref  <- Signal.initRef(true)
             moved <- Signal.initRef(List.empty[String])
-            ui = uic.DatePicker().value(vref).wired(oref, mref, cur, view, "dp", id => moved.updateAndGet(_ :+ id))
+            ui = uic.DatePicker().value(vref).wired(oref, mref, cur, view, seed, "dp", id => moved.updateAndGet(_ :+ id))
             months <- elementWithClass(ui, "p-datepicker-month-view")
             _      <- press(months, UI.Keyboard.Enter)
             landed <- view.get
