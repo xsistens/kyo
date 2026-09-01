@@ -220,15 +220,30 @@ final case class AutoComplete[A] private (
         all: SignalRef[Boolean],
         allV: Boolean,
         /** The id the highlight is announced through, as the rest of the combobox family carries
-          * it: a caller's own `id` wins, and a minted one stands in where there is none.
+          * it: a caller's own `id` wins, and a minted one stands in where there is none. It is the
+          * FIELD's id too, which is what the dropdown trigger hands focus back to.
           */
-        idBase: Maybe[String]
+        idBase: Maybe[String],
+        /** Moves DOM focus to an id. The dropdown trigger is the only caller: it is its own tab
+          * stop, and every key this component answers is answered by the field.
+          */
+        focus: String => Any < Async
     )
 
     private def optionId(base: String, index: Int): String = s"$base-option-$index"
 
     /** The id of the suggestion list, which is what the combobox points `aria-controls` at. */
     private def listId(base: String): String = s"$base-list"
+
+    /** Where the highlight lands when the panel opens: on the option the field's current text
+      * already names, and on the first one otherwise.
+      *
+      * Opening onto nothing is the shape a reader cannot act on. They pressed a key to see the
+      * list, and the next key they press should pick from it rather than only start moving.
+      */
+    private def openHighlight(shown: Seq[A], text: String): Int =
+        val at = shown.indexWhere(a => labelF(a) == text)
+        if at >= 0 then at else if shown.isEmpty then -1 else 0
 
     /** One key over the FIELD, which is where this combobox's keyboard lives: the panel never
       * takes focus, so every key arrives here.
@@ -238,16 +253,19 @@ final case class AutoComplete[A] private (
       * alone. There is no typeahead for the same reason: the reader is already typing, and what
       * they type filters.
       *
-      * ArrowDown on a closed panel opens it rather than moving, which is the combobox pattern and
-      * the one case ListNav cannot express, since a closed panel has no highlight to move.
+      * ArrowDown on a closed panel opens it and lands on an option, which is the combobox pattern
+      * and the one case ListNav cannot express, since a closed panel has no highlight to move.
       */
-    private def fieldKey(visible: List[A], panelShown: Boolean, s: State, pick: A => State => Any < Async)(
+    private def fieldKey(visible: List[A], text: String, panelShown: Boolean, s: State, pick: A => State => Any < Async)(
         e: KeyboardEvent
     )(using Frame): Any < Async =
         val navigable = visible.indices.toList
         val hiEff     = if visible.isEmpty then -1 else math.min(s.hiV, visible.size - 1)
         e.key match
-            case Keyboard.ArrowDown if !s.isOpen => s.open.set(true)
+            case Keyboard.ArrowDown if !s.isOpen =>
+                // Opening lands ON an option, the same one the dropdown trigger lands on, so the
+                // next key picks rather than only starting to move.
+                s.hi.set(openHighlight(visible, text)).andThen(s.open.set(true))
             case Keyboard.ArrowUp | Keyboard.ArrowDown if panelShown =>
                 ListNav.onKey(navigable, hiEff, e.key, wrap = false) match
                     case Present(step) => s.hi.set(step.focus)
@@ -273,7 +291,7 @@ final case class AutoComplete[A] private (
                     open <- Signal.initRef(false)
                     hi   <- Signal.initRef(-1)
                     all  <- Signal.initRef(false)
-                yield wired(open, hi, all, Present(base))
+                yield wired(open, hi, all, Present(base), id => cmds.focusId(id))
             }.placeholder(stat)
         end if
     end render
@@ -282,13 +300,19 @@ final case class AutoComplete[A] private (
       * directly (a full top-down re-render shows mounted regions as placeholders,
       * so the wired anatomy is only reachable here).
       */
-    private[uic] def wired(open: SignalRef[Boolean], hi: SignalRef[Int], all: SignalRef[Boolean], base: Maybe[String] = Absent)(
+    private[uic] def wired(
+        open: SignalRef[Boolean],
+        hi: SignalRef[Int],
+        all: SignalRef[Boolean],
+        base: Maybe[String] = Absent,
+        focus: String => Any < Async = _ => ()
+    )(
         using Frame
     ): UI =
         open.render { o =>
             hi.render { h =>
                 all.render { a =>
-                    withText(cur => body(cur, Present(State(open, o, hi, h, all, a, base))))
+                    withText(cur => body(cur, Present(State(open, o, hi, h, all, a, base, focus))))
                 }
             }
         }
@@ -363,7 +387,11 @@ final case class AutoComplete[A] private (
         // === text field ==========================================================
         var f = input.cssClass("p-autocomplete-input").cssClass("p-inputtext").cssClass("p-component")
         fieldExtraClassesV.foreach(c => f = f.cssClass(c))
+        // The FIELD carries the base id. A caller's own `id` already landed here and is the base;
+        // a minted one had nowhere to go, which left the dropdown trigger with nothing to hand
+        // focus to.
         idV.foreach(v => f = f.id(v))
+        st.flatMap(_.idBase).foreach(b => f = f.id(b))
         sizeV match
             case Size.Small  => f = f.cssClass("p-inputtext-sm")
             case Size.Large  => f = f.cssClass("p-inputtext-lg")
@@ -419,7 +447,7 @@ final case class AutoComplete[A] private (
             // The keyboard stays on the FIELD (the panel never takes focus):
             // ArrowDown opens / moves the highlight down, ArrowUp up (no wrap),
             // Enter picks the highlighted suggestion, Escape closes.
-            f = f.preventScrollKeys.onKeyDown(fieldKey(visible, panelShown, s, pick))
+            f = f.preventScrollKeys.onKeyDown(fieldKey(visible, query, panelShown, s, pick))
             // Native onBlur carries no payload → read the current text from the bound ref
             // (constant/unbound fall back to the fixed/empty value).
             onBlurF.foreach { g =>
@@ -463,10 +491,19 @@ final case class AutoComplete[A] private (
                     .aria("label", "Show options")
                 st match
                     case Present(s) =>
+                        // The trigger is an affordance OF the combobox, not a widget beside it: it
+                        // is its own tab stop, but every key this component answers is answered by
+                        // the field. Opening from here without handing focus over left the reader
+                        // standing on a button with no highlight to act on, no arrows and no
+                        // Escape. Focus moves FIRST, while the field is still the element the
+                        // render produced; the re-render that follows restores it by path.
                         dd = dd.onClick {
                             for
+                                _ <- s.idBase match
+                                    case Present(b) => s.focus(b)
+                                    case Absent     => (): Any < Async
                                 _ <- s.all.set(true)
-                                _ <- s.hi.set(-1)
+                                _ <- s.hi.set(openHighlight(OptionItem.flatten(optionsV), query))
                                 r <- s.open.set(true)
                             yield r
                         }
