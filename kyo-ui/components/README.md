@@ -807,7 +807,7 @@ val saveSplit: UI =
         .items(uic.MenuItem("Save as copy"), uic.MenuItem.separator, uic.MenuItem("Discard"))
 ```
 
-`SpeedDial` is the same items rendered as a fan of rounded icon buttons behind one toggle, which is the floating-action shape. `direction` is the setting that matters: `Up` is the default, and `Down`, `Left`, and `Right` pick which way the fan travels, so the toggle can sit in any corner and still open into the page.
+`SpeedDial` is the same items rendered as a fan of rounded icon buttons behind one toggle, which is the floating-action shape. `direction` is the setting that matters: `Up` is the default, and `Down`, `Left`, and `Right` pick which way the fan travels, so the toggle can sit in any corner and still open into the page. It also picks the fan's keyboard axis: the arrow pointing into the fan opens it from the toggle, the same pair of arrows then walks the actions, and Escape closes the fan and hands focus back to the toggle.
 
 ```scala
 val quickActions: UI =
