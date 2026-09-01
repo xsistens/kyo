@@ -124,7 +124,7 @@ final case class OrderList[A] private (
                     case ListReorder.Move.Edge(down) =>
                         reorder(if down then ListReorder.moveBottom else ListReorder.moveTop)
                     case ListReorder.Move.Out(_) => ()
-                Listbox.HostKey(eff)
+                Listbox.HostKey(keepingCursor(cursor, xs, focused, eff))
             }
 
         // `ariaDisabled` rather than the native attribute, for the reason [[Button.ariaDisabled]]
@@ -176,6 +176,26 @@ final case class OrderList[A] private (
 
         div.cssClass("p-orderlist").cssClass("p-component")(toChild(controls), toChild(listUI))
     end body
+
+    /** Runs `eff` and puts the highlight back on the row it was on.
+      *
+      * A move rewrites the list under a reader whose focus is on it, and an index that no longer
+      * names the same row is a highlight that jumps. [[PickList]] carries the same helper, where
+      * the row can also leave the column entirely.
+      */
+    private def keepingCursor(cursor: Maybe[ListReorder.Cursor], xs: Seq[A], hi: Int, eff: Any < Async)(using
+        Frame
+    ): Any < Async =
+        (cursor, itemsRef) match
+            case (Present(c), Present(r)) if xs.isDefinedAt(hi) =>
+                val id = keyOf(xs(hi))
+                for
+                    _     <- eff
+                    after <- r.get
+                    moved = after.indexWhere(a => keyOf(a) == id)
+                    _ <- c.highlight.set(if moved >= 0 then moved else math.min(hi, after.size - 1))
+                yield ()
+            case _ => eff
 
     /** A move button writes the reordered Seq through the bound items ref, keyed on
       * the current selection.

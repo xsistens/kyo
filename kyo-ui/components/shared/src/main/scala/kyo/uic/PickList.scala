@@ -187,7 +187,10 @@ final case class PickList[A] private (
             ref: Maybe[SignalRef[Seq[A]]],
             selRef: Maybe[SignalRef[Set[String]]],
             other: Maybe[SignalRef[Seq[A]]],
-            toward: Keyboard
+            toward: Keyboard,
+            cursor: Maybe[ListReorder.Cursor],
+            xs: Seq[A],
+            hi: Int
         ): UI.KeyboardEvent => Maybe[Listbox.HostKey] = e =>
             ListReorder.onKey(e.key, e.modifiers, Present(toward)).map { move =>
                 val eff: Any < Async = move match
@@ -197,7 +200,7 @@ final case class PickList[A] private (
                         reorder(ref, selRef, if down then ListReorder.moveBottom else ListReorder.moveTop)
                     case ListReorder.Move.Out(all) =>
                         if all then transferAll(ref, other, selRef) else transferSelected(ref, other, selRef)
-                Listbox.HostKey(eff)
+                Listbox.HostKey(keepingCursor(cursor, ref, xs, hi, eff))
             }
 
         def reorderRail(cls: String, ref: Maybe[SignalRef[Seq[A]]], selRef: Maybe[SignalRef[Set[String]]], off: Boolean): UI =
@@ -273,7 +276,7 @@ final case class PickList[A] private (
                         sourceSelectedRef,
                         source,
                         srcHi,
-                        keys(sourceRef, sourceSelectedRef, targetRef, Keyboard.ArrowRight)
+                        keys(sourceRef, sourceSelectedRef, targetRef, Keyboard.ArrowRight, source, src, srcHi)
                     ),
                     transfer,
                     column(
@@ -283,12 +286,37 @@ final case class PickList[A] private (
                         targetSelectedRef,
                         target,
                         tgtHi,
-                        keys(targetRef, targetSelectedRef, sourceRef, Keyboard.ArrowLeft)
+                        keys(targetRef, targetSelectedRef, sourceRef, Keyboard.ArrowLeft, target, tgt, tgtHi)
                     )
                 ) ++ targetRail
 
         div.cssClass("p-picklist").cssClass("p-component")(parts.map(toChild)*)
     end body
+
+    /** Runs `eff` and puts the highlight back on the row it was on.
+      *
+      * A move rewrites the column under a reader whose focus is on the list, and an index that no
+      * longer names the same row is a highlight that jumps or vanishes. The row is followed by its
+      * key where the column still holds it, and where the move carried it out of the column the
+      * highlight keeps the position instead, clamped to what is left.
+      */
+    private def keepingCursor(
+        cursor: Maybe[ListReorder.Cursor],
+        ref: Maybe[SignalRef[Seq[A]]],
+        xs: Seq[A],
+        hi: Int,
+        eff: Any < Async
+    )(using Frame): Any < Async =
+        (cursor, ref) match
+            case (Present(c), Present(r)) if xs.isDefinedAt(hi) =>
+                val id = keyOf(xs(hi))
+                for
+                    _     <- eff
+                    after <- r.get
+                    moved = after.indexWhere(a => keyOf(a) == id)
+                    _ <- c.highlight.set(if moved >= 0 then moved else math.min(hi, after.size - 1))
+                yield ()
+            case _ => eff
 
     /** A reorder button writes the shuffled Seq through its column's ref, keyed on
       * that column's selection.
