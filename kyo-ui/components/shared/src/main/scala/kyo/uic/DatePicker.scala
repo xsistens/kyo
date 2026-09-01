@@ -879,7 +879,7 @@ final case class DatePicker private (
                 daySpan = daySpan.onClick(seedCursor(iso, nav).andThen(selectDay(iso, snap, oref, nav)))
                 dayStateClass(iso, snap).foreach(c => daySpan = daySpan.cssClass(c))
             end if
-            if iso == cursorIso then daySpan = daySpan.cssClass("p-focus")
+            if iso == cursorIso then daySpan = daySpan.cssClass("p-focus").scrollAuto(true)
             // Every cell answers to an id, not only the highlighted one, so the attribute that
             // names it points at something already in the document whichever day it moves to. The
             // id is on the CELL, which is what carries the role a grid's highlight may name; the
@@ -1096,7 +1096,7 @@ final case class DatePicker private (
                 case Present(a) => cell = cell.onClick(seedCursor(iso7, nav).andThen(a))
                 case Absent     => cell = cell.cssClass("p-disabled").aria("disabled", "true")
             nav.foreach(n => cell = cell.id(n.cellId(m - 1)).role("gridcell"))
-            if iso7 == cursor then cell = cell.cssClass("p-focus")
+            if iso7 == cursor then cell = cell.cssClass("p-focus").scrollAuto(true)
             cell(DatePicker.monthNamesShort(m - 1))
         }
         // Prime lays the twelve months out three to a row, which is the width the vertical
@@ -1148,7 +1148,7 @@ final case class DatePicker private (
                 case Present(a) => cell = cell.onClick(seedCursor(iso4, nav).andThen(a))
                 case Absent     => cell = cell.cssClass("p-disabled").aria("disabled", "true")
             nav.foreach(n => cell = cell.id(n.cellId(y - base)).role("gridcell"))
-            if iso4 == cursor then cell = cell.cssClass("p-focus")
+            if iso4 == cursor then cell = cell.cssClass("p-focus").scrollAuto(true)
             cell(y.toString)
         }
         // Prime lays the decade out two to a row.

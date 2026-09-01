@@ -295,7 +295,7 @@ final case class Tree private (
         var content = div.cssClass("p-tree-node-content")
         if isSelected then content = content.cssClass("p-tree-node-selected")
         if selectable then content = content.cssClass("p-tree-node-selectable")
-        if isFocused then content = content.cssClass("p-focus")
+        if isFocused then content = content.cssClass("p-focus").scrollAuto(true)
         node.tooltip.foreach(t => content = content.jsProp("title", t))
         val contentEl = content(((toggle :: checkboxSlot) ++ iconSlot :+ labelEl).map(toChild)*)
 

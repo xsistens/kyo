@@ -412,7 +412,7 @@ final case class Listbox private (
         var row = li.cssClass("p-listbox-option").role("option").aria("selected", isSel.toString)
         if isSel then row = row.cssClass("p-listbox-option-selected")
         if focused then
-            row = row.cssClass("p-focus")
+            row = row.cssClass("p-focus").scrollAuto(true)
             idBase.foreach(base => row = row.id(optionId(base, index)))
         it.tooltip.foreach(t => row = row.jsProp("title", t))
         if interactive then

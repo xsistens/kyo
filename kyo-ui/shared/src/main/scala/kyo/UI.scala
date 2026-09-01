@@ -1291,6 +1291,24 @@ object UI:
               */
             def focusRestore(v: Boolean): Self = withAttrs(attrs.copy(focusRestore = Present(v)))
 
+            /** Declarative scroll-into-view: whenever a patch leaves this element carrying the flag and the element that
+              * carried it before was a different one (or none), the client scrolls it into view with `block: "nearest"`,
+              * which moves the nearest scrollable ancestor by the least it can and leaves it alone when the element is
+              * already visible.
+              *
+              * This is what a roving HIGHLIGHT needs and cannot get any other way. A moving DOM focus is scrolled into
+              * view by the browser itself, but a highlight is a class plus `aria-activedescendant` on a container that
+              * never moves, so nothing follows it: in a list capped at a few rows the highlight walks out of the panel,
+              * and in a long page list it walks off the screen. Marking the highlighted row with this flag is one line
+              * per host and covers the two moments that matter, the highlight moving and a panel opening onto a row that
+              * was never on screen, the second of which a `scrollIntoView` command cannot: the row does not exist yet
+              * when the handler runs.
+              *
+              * Unlike [[focusAuto]] it re-fires as the flag moves between elements, since that IS the movement it
+              * follows; a re-render that leaves the flag where it was scrolls nothing.
+              */
+            def scrollAuto(v: Boolean): Self = withAttrs(attrs.copy(scrollAuto = Present(v)))
+
             /** Opt-in per-level event consumption: when the dispatch walk (innermost target first, then ancestors) reaches
               * this element AND it declared a handler for the event's type, the event stops here so handlers on elements
               * above do not fire. Only consumes event types this element actually handles; others pass through, and the
@@ -1787,6 +1805,7 @@ object UI:
             focusGroup: Maybe[String] = Absent,
             focusAuto: Maybe[Boolean] = Absent,
             focusRestore: Maybe[Boolean] = Absent,
+            scrollAuto: Maybe[Boolean] = Absent,
             stopPropagation: Maybe[Boolean] = Absent,
             enterTransition: Maybe[String] = Absent,
             leaveTransition: Maybe[String] = Absent,

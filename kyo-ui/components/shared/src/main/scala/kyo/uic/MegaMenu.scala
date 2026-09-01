@@ -225,7 +225,7 @@ final case class MegaMenu private (
                         var row = li.cssClass("p-megamenu-item").role("menuitem")
                         if it.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
                         else if focus == List(r, c, myIdx) then
-                            row = row.cssClass("p-focus")
+                            row = row.cssClass("p-focus").scrollAuto(true)
                             idV.foreach(b => row = row.id(s"$b-active"))
                         end if
                         def activate: Any < Async =
@@ -259,7 +259,7 @@ final case class MegaMenu private (
                     .aria("expanded", isOpen.toString)
                 if isOpen then row = row.cssClass("p-megamenu-item-active")
                 if focus == p then
-                    row = row.cssClass("p-focus")
+                    row = row.cssClass("p-focus").scrollAuto(true)
                     idV.foreach(b => row = row.id(s"$b-active"))
                 if it.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
                 val act: Maybe[Any < Async] =
@@ -296,7 +296,7 @@ final case class MegaMenu private (
             else
                 var row = li.cssClass("p-megamenu-item").role("menuitem")
                 if focus == p then
-                    row = row.cssClass("p-focus")
+                    row = row.cssClass("p-focus").scrollAuto(true)
                     idV.foreach(b => row = row.id(s"$b-active"))
                 if it.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
                 val plain = it.asMenuItem

@@ -6422,6 +6422,20 @@ class GoldenRenderTest extends UicTest:
       * happens. A carrier qualifies by being a tab stop, by being seeded focus, or by being a text
       * box, which the browser focuses on its own.
       */
+    /** Highlighted rows that do not ask the client to scroll them into view.
+      *
+      * A highlight is a class plus an announcement on a container that never moves, so nothing follows it out
+      * of a capped panel or off the bottom of a long page: `scrollAuto` is what does, and it belongs on every
+      * row that can carry the mark.
+      */
+    private def unscrolledHighlights(html: String): Seq[String] =
+        openTag.findAllMatchIn(html).flatMap { m =>
+            val attrs  = m.group(2)
+            val marked = """class="[^"]*\bp-focus\b[^"]*"""".r.findFirstIn(attrs).isDefined
+            if marked && !attrs.contains("data-kyo-scroll-auto") then Some(s"<${m.group(1)}> ${m.group(0).take(120)}")
+            else None
+        }.toSeq
+
     private def strandedAnnouncements(html: String): Seq[String] =
         openTag.findAllMatchIn(html).flatMap { m =>
             val attrs = m.group(2)
@@ -6575,6 +6589,10 @@ class GoldenRenderTest extends UicTest:
             // And the invariant has teeth: each sample really does carry a highlight to check.
             val missing = named.collect { case (n, h) if !h.contains("aria-activedescendant") => n }
             assert(missing.isEmpty, s"no highlight rendered at all in: ${missing.mkString(", ")}")
+            val unscrolled = named.flatMap((n, h) => unscrolledHighlights(h).map(d => s"$n: $d"))
+            assert(unscrolled.isEmpty, s"these highlights nothing scrolls to:\n${unscrolled.mkString("\n")}")
+            val unmarked = named.collect { case (n, h) if !h.contains("p-focus") => n }
+            assert(unmarked.isEmpty, s"no highlight class rendered at all in: ${unmarked.mkString(", ")}")
             assert(select.contains("""role="combobox""""), "a field that opens a list says it is a combobox")
             assert(multi.contains("""role="combobox""""))
             assert(auto.contains("""role="combobox""""))

@@ -792,4 +792,78 @@ class FocusableTest extends UITest:
         }
     }
 
+    // scrollAuto over the server-push transport in real Chrome. Same note as focusAuto above: the
+    // DomBackend SPA mirror has no browser harness and is kept in sync by construction.
+
+    /** A capped scroller of 40 rows where `at` carries the scroll flag, plus buttons that move it. */
+    private def scroller(using Frame): UI < Async =
+        for at <- Signal.initRef(0)
+        yield UI.div(
+            UI.button("far").id("far").onClick(at.set(35)),
+            UI.button("near").id("near").onClick(at.set(1)),
+            UI.button("same").id("same").onClick(at.getAndUpdate(identity).unit),
+            UI.div(
+                at.map(h =>
+                    UI.fragment((0 until 40).map { i =>
+                        val row = UI.div(s"row $i").id(s"r$i").style(_.height(Length.Px(24)))
+                        if i == h then row.scrollAuto(true) else row
+                    }*)
+                )
+            ).id("box").style(Style.maxHeight(Length.Px(120)).overflowY(_.auto))
+        )
+
+    "scrollAuto emits its attribute, and only where it is set" in {
+        withUI(UI.div(
+            UI.div("on").scrollAuto(true).id("on"),
+            UI.div("off").scrollAuto(false).id("off"),
+            UI.div("plain").id("plain")
+        )) {
+            for
+                _ <- Browser.assertAttribute(Selector.id("on"), "data-kyo-scroll-auto", "1")
+                _ <- Browser.assertNoAttribute(Selector.id("off"), "data-kyo-scroll-auto")
+                _ <- Browser.assertNoAttribute(Selector.id("plain"), "data-kyo-scroll-auto")
+            yield ()
+        }
+    }
+
+    "a highlight that moves out of view scrolls its scroller to it" in {
+        withUI(scroller) {
+            for
+                before <- Browser.evalInt("Math.round(document.getElementById('box').scrollTop)")
+                _      <- Browser.click(Selector.id("far"))
+                _      <- Browser.assertAttribute(Selector.id("r35"), "data-kyo-scroll-auto", "1")
+                after  <- Browser.evalInt("Math.round(document.getElementById('box').scrollTop)")
+                // block: "nearest" scrolls the row to the BOTTOM edge, which is the least it can move.
+                shown <- Browser.evalBoolean(
+                    """(function(){var b=document.getElementById('box').getBoundingClientRect();
+                      |var r=document.getElementById('r35').getBoundingClientRect();
+                      |return r.top >= b.top - 1 && r.bottom <= b.bottom + 1;})()""".stripMargin
+                )
+            yield assert(before == 0 && after > 0 && shown, s"scrollTop $before then $after, row visible: $shown")
+        }
+    }
+
+    "and back again when it moves the other way" in {
+        withUI(scroller) {
+            for
+                _    <- Browser.click(Selector.id("far"))
+                far  <- Browser.evalInt("Math.round(document.getElementById('box').scrollTop)")
+                _    <- Browser.click(Selector.id("near"))
+                _    <- Browser.assertAttribute(Selector.id("r1"), "data-kyo-scroll-auto", "1")
+                near <- Browser.evalInt("Math.round(document.getElementById('box').scrollTop)")
+            yield assert(far > 0 && near < far, s"came back from $far to $near")
+        }
+    }
+
+    "a re-render that leaves the flag where it was scrolls nothing" in {
+        // The reader has scrolled the box themselves; a repaint of the same highlight must not undo that.
+        withUI(scroller) {
+            for
+                _     <- Browser.evalDiscard("document.getElementById('box').scrollTop = 300")
+                _     <- Browser.click(Selector.id("same"))
+                after <- Browser.evalInt("Math.round(document.getElementById('box').scrollTop)")
+            yield assert(after == 300, s"the reader's own scroll position survived a repaint, got $after")
+        }
+    }
+
 end FocusableTest

@@ -444,7 +444,7 @@ final case class CascadeSelect[A] private (
                 var row   = li.cssClass("p-cascadeselect-option").role("treeitem").aria("selected", isSel.toString)
                 if isSel then row = row.cssClass("p-cascadeselect-option-selected")
                 if st.exists(_.focus == (path :+ i)) then
-                    row = row.cssClass("p-focus")
+                    row = row.cssClass("p-focus").scrollAuto(true)
                     st.flatMap(_.idBase).foreach(b => row = row.id(activeId(b)))
                 var content = div.cssClass("p-cascadeselect-option-content")
                 if st.isDefined then content = content.onClick(pick(a))
@@ -471,7 +471,7 @@ final case class CascadeSelect[A] private (
                     .aria("level", (p.size).toString)
                 if groupOpen then row = row.cssClass("p-cascadeselect-option-active")
                 if st.exists(_.focus == p) then
-                    row = row.cssClass("p-focus")
+                    row = row.cssClass("p-focus").scrollAuto(true)
                     st.flatMap(_.idBase).foreach(b => row = row.id(activeId(b)))
                 var content = div.cssClass("p-cascadeselect-option-content")
                 if st.isDefined then content = content.onClick(toggleGroup)
