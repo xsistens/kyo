@@ -202,6 +202,13 @@ private[uic] object MenuNav:
             case Escape =>
                 leaveSubmenu(focus).orElse(Present(Step(focus = Nil, open = OpenOp.Close, dismiss = true)))
 
+            // Escape leaves ONE level; Tab leaves the widget, so it closes every level at once. The
+            // browser has already moved focus by the time the close lands, which is what makes this
+            // the right place for it: the menu's keys live on the element the Tab is carrying the
+            // reader away from, so a panel left open behind them would answer nothing.
+            case Tab =>
+                Present(Step(focus = Nil, open = OpenOp.Close, dismiss = true))
+
             case _ => Absent
         end match
     end onKey

@@ -137,4 +137,13 @@ class MenuNavTest extends UicTest:
         // Edit ▸ Undo is a leaf; Right → Help root (no children) focused, subs closed
         hKey(List(1, 0), Keyboard.ArrowRight) == Present(Step(focus = List(2), open = OpenOp.Close))
     )
+
+    // ---- Tab ----
+
+    "Tab closes the whole menu, however deep the reader had opened it" in assert(
+        (vKey(List(0, 1), Keyboard.Tab) == Present(Step(focus = Nil, open = OpenOp.Close, dismiss = true))) &&
+            (vKey(List(0), Keyboard.Tab) == Present(Step(focus = Nil, open = OpenOp.Close, dismiss = true))) &&
+            (hKey(List(1, 0), Keyboard.Tab) == Present(Step(focus = Nil, open = OpenOp.Close, dismiss = true))),
+        "Escape leaves one level, Tab leaves the widget, so it closes every level at once"
+    )
 end MenuNavTest

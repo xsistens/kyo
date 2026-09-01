@@ -81,25 +81,28 @@ final case class SplitButton private (
     private[uic] def render(using Frame): UI =
         // The panel visibility + keyboard highlight live in signals allocated by
         // this effectful mount; static projections render the same closed anatomy.
-        val stat: UI = body(false, Absent, Absent)
+        val stat: UI = body(false, Absent, Absent, "")
         UI.mounted {
             for
                 open <- openRefV match
                     case Present(r) => Kyo.lift(r)
                     case Absent     => Signal.initRef(false)
-                hi <- Signal.initRef(-1)
-            yield wired(open, hi)
+                hi   <- Signal.initRef(-1)
+                cmds <- UI.commands
+                base <- cmds.freshId
+            yield wired(open, hi, base)
         }.placeholder(stat)
     end render
 
     /** The subscription tree the mount publishes (golden-test seam). */
-    private[uic] def wired(open: SignalRef[Boolean], hi: SignalRef[Int])(using Frame): UI =
-        open.render(o => body(o, Present(open), Present(hi)))
+    private[uic] def wired(open: SignalRef[Boolean], hi: SignalRef[Int], base: String)(using Frame): UI =
+        open.render(o => body(o, Present(open), Present(hi), base))
 
     private def body(
         isOpen: Boolean,
         open: Maybe[SignalRef[Boolean]],
-        hi: Maybe[SignalRef[Int]]
+        hi: Maybe[SignalRef[Int]],
+        base: String
     )(using Frame): UI =
         def styled(b: Button): Button =
             val withSev = severityV match
@@ -134,7 +137,9 @@ final case class SplitButton private (
 
         val panel: List[UI] = (open, hi) match
             case (Present(o), Present(h)) =>
-                List(Menu().items(itemsV*).popup(o).wired(h))
+                // The hosted menu announces its highlighted row off an id of its own, minted
+                // from this button's, since nothing outside knows the panel is there to name it.
+                List(Menu().items(itemsV*).popup(o).wired(h, s"$base-menu"))
             case _ => Nil
 
         var el = div.cssClass("p-splitbutton").cssClass("p-component")
