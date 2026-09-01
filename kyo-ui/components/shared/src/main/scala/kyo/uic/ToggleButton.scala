@@ -36,9 +36,21 @@ final case class ToggleButton private (
     onChangeF: Maybe[Boolean => Any < Async] = Absent,
     onBlurF: Maybe[Boolean => Any < Async] = Absent,
     idV: Maybe[String] = Absent,
-    contentV: Maybe[UI] = Absent
+    contentV: Maybe[UI] = Absent,
+    radioV: Maybe[ToggleButton.RadioOption] = Absent
 ) extends Node, BooleanFormControl, HasAccessibleNameRef:
     type Self = ToggleButton
+
+    /** The wiring [[SelectButton]] applies to one option of a SINGLE-select group.
+      *
+      * A choice of one out of several is a radio group, whatever it is built from, and that is
+      * what this button then reports: `role="radio"` with `aria-checked` rather than a toggle
+      * button's `aria-pressed`, one tab stop for the whole group, and the group's own key handler
+      * to move within it. Package-internal, because a toggle button standing on its own is a
+      * toggle button and has none of this.
+      */
+    private[uic] def asRadioOption(tabbable: Boolean, onKey: KeyboardEvent => Any < Async): ToggleButton =
+        copy(radioV = Present(ToggleButton.RadioOption(tabbable, onKey)))
 
     /** Native `id` on the button — pair with `Label.forId`; the form layer stamps the
       * bound field's id here so focus-first-invalid can target it.
@@ -140,7 +152,15 @@ final case class ToggleButton private (
             case Size.Normal => ()
         end match
         if fluidFlag then el = el.cssClass("p-togglebutton-fluid")
-        el = el.jsProp("type", "button").aria("pressed", isChecked.toString)
+        el = el.jsProp("type", "button")
+        // One state per role: a radio reports `aria-checked`, a toggle button `aria-pressed`, and
+        // a control carrying both tells a screen reader two different stories about itself.
+        radioV match
+            case Present(r) =>
+                el = el.role("radio").aria("checked", isChecked.toString).tabIndex(if r.tabbable then 0 else -1)
+                if !disabledFlag && !readonlyFlag then el = el.onKeyDown(r.onKey)
+            case Absent => el = el.aria("pressed", isChecked.toString)
+        end match
         accNameV match
             case Present(TextValue.Const(n)) => el = el.aria("label", n)
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
@@ -186,6 +206,11 @@ end ToggleButton
 
 object ToggleButton:
     def apply(): ToggleButton = new ToggleButton()
+
+    /** What a single-select [[SelectButton]] option is, beyond a toggle button: whether it holds
+      * the group's one tab stop, and the group's key handler for moving within it.
+      */
+    final private[uic] case class RadioOption(tabbable: Boolean, onKey: UI.KeyboardEvent => Any < Async)
 
     /** Const-or-ref carrier for the pending `checked` state (the CheckBox pattern). */
     private[uic] enum Checked:

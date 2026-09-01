@@ -103,6 +103,17 @@ class ListNavTest extends UicTest:
         key(0, Keyboard.ArrowLeft) == Absent && key(0, Keyboard.ArrowRight) == Absent
     )
 
+    private def bkey(focus: Int, k: Keyboard) =
+        ListNav.onKey(navigable, focus, k, wrap = true, ListNav.Orientation.Both)
+
+    "a radio group answers all four arrows, since that is what a radio group does" in assert(
+        bkey(0, Keyboard.ArrowRight) == Present(Step(2)) &&
+            bkey(0, Keyboard.ArrowDown) == Present(Step(2)) &&
+            bkey(2, Keyboard.ArrowLeft) == Present(Step(0)) &&
+            bkey(2, Keyboard.ArrowUp) == Present(Step(0)),
+        "Down and Right are one movement, Up and Left the other"
+    )
+
     "Home and End have no axis, so both orientations reach the ends" in assert(
         hkey(2, Keyboard.Home) == Present(Step(0)) && hkey(2, Keyboard.End) == Present(Step(5))
     )

@@ -121,25 +121,81 @@ final case class SelectButton[A] private (
     /** The stable option key: [[optionKey]] if set, else the label projection. */
     private def key(a: A): String = keyF.getOrElse(labelF)(a)
 
+    /** The ids the group moves focus between, and the way to move it.
+      *
+      * Only a single-select group has them: it is a radio group, so it holds ONE tab stop and the
+      * arrows move within it, and moving focus needs an id to move it to.
+      */
+    private type Nav = Maybe[(List[String], String => Any < Async)]
+
     private[uic] def render(using Frame): UI =
+        // Multiple select is a group of independent toggles, each its own tab stop, so it needs no
+        // ids and no mount. Single select is a radio group, and the mount is where its ids come from.
+        if multipleFlag then invalidGate(Absent)
+        else
+            UI.mounted {
+                UI.commands.map { cmds =>
+                    Kyo.foreach(items)(_ => cmds.freshId).map(ids =>
+                        invalidGate(Present((ids.toList, (id: String) => cmds.focusId(id))))
+                    )
+                }
+            }.placeholder(invalidGate(Absent))
+
+    /** The seam the golden tests render, since a mount shows only its placeholder there. */
+    private[uic] def wired(ids: List[String], focus: String => Any < Async)(using Frame): UI =
+        invalidGate(Present((ids, focus)))
+
+    private def invalidGate(nav: Nav)(using Frame): UI =
         (invalidV.dynSig, invalidMsgDynV) match
-            case (Absent, Absent) => renderDisabledResolved
+            case (Absent, Absent) => renderDisabledResolved(nav)
             case _ => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
-                    copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderDisabledResolved
+                    copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent)
+                        .renderDisabledResolved(nav)
                 )
 
-    private def renderDisabledResolved(using Frame): UI =
+    private def renderDisabledResolved(nav: Nav)(using Frame): UI =
         BoolValue.reactive(disabledFlag): d =>
-            copy(disabledFlag = d).renderResolved
+            copy(disabledFlag = d).renderResolved(nav)
 
-    private def renderResolved(using Frame): UI =
+    private def renderResolved(nav: Nav)(using Frame): UI =
         (valueRef, valuesRef) match
-            case (Present(r), _) if !multipleFlag => r.render(v => body(if v.isEmpty then Set.empty else Set(v)))
-            case (_, Present(r)) if multipleFlag  => r.render(body)
-            case _                                => body(Set.empty)
+            case (Present(r), _) if !multipleFlag => r.render(v => body(if v.isEmpty then Set.empty else Set(v), nav))
+            case (_, Present(r)) if multipleFlag  => r.render(body(_, nav))
+            case _                                => body(Set.empty, nav)
 
-    private def body(selected: Set[String])(using Frame): UI =
-        var el = div.cssClass("p-selectbutton").cssClass("p-component").role("group")
+    /** Writes `k` as THE selection, without the click's clear-on-same-value.
+      *
+      * An arrow moves and selects in one gesture (the radio pattern), so it must never land on an
+      * option and clear it: Home pressed on the option already chosen would empty the group.
+      */
+    private def selectOnly(k: String)(using Frame): Any < Async =
+        val write: Any < Async = valueRef match
+            case Present(ref) => ref.set(k)
+            case Absent       => ()
+        val fire: Any < Async = onChangeF match
+            case Present(f) => f(k)
+            case Absent     => ()
+        write.andThen(fire)
+    end selectOnly
+
+    /** One key on a single-select option: the arrows move focus to the next option a highlight may
+      * sit on and select it, Home and End reach the ends the same way, and the group wraps as the
+      * ARIA radio pattern does. Enter and Space are left alone: the option is a `<button>`, so the
+      * browser and the dispatcher already agree on one activation between them.
+      */
+    private def optionKey(ids: List[String], navigable: List[Int], self: Int, focus: String => Any < Async)(
+        e: KeyboardEvent
+    )(using Frame): Any < Async =
+        ListNav.onKey(navigable, self, e.key, wrap = true, ListNav.Orientation.Both) match
+            case Present(step) if step.focus != self && ids.isDefinedAt(step.focus) && items.isDefinedAt(step.focus) =>
+                focus(ids(step.focus)).andThen(selectOnly(key(items(step.focus))))
+            case _ => ()
+
+    private def body(selected: Set[String], nav: Nav)(using Frame): UI =
+        var el = div.cssClass("p-selectbutton").cssClass("p-component")
+        // A choice of ONE is a radio group: it says so, holds one tab stop, and moves inside it
+        // with the arrows. Several independent choices stay a group of toggle buttons.
+        el = el.role(if multipleFlag then "group" else "radiogroup")
         idV.foreach(v => el = el.id(v))
         if invalidV.constTrue then el = el.cssClass("p-invalid").aria("invalid", "true")
         // Blur fires even without a pick — the validation layer's Blur trigger. Reads the
@@ -167,7 +223,19 @@ final case class SelectButton[A] private (
         end match
         accNameRefV.foreach(v => el = el.aria("labelledby", v))
 
-        val buttons: List[UI] = items.map { a =>
+        // The positions an arrow may land on: a disabled option is out of the tab order, so the
+        // movement steps over it.
+        val navigable = items.zipWithIndex.collect {
+            case (a, i) if !(disabledFlag.constTrue || optionDisabledF.exists(_(a))) => i
+        }
+        // The one tab stop of a radio group sits on the selected option, and on the first one a
+        // reader may choose while nothing is selected: a group nobody has answered yet is still a
+        // group they can tab into.
+        val tabStop = items.indexWhere(a => selected.contains(key(a))) match
+            case -1 => navigable.headOption.getOrElse(-1)
+            case i  => i
+
+        val buttons: List[UI] = items.zipWithIndex.map { (a, i) =>
             val k     = key(a)
             val label = labelF(a)
             var tb = ToggleButton()
@@ -178,6 +246,14 @@ final case class SelectButton[A] private (
             itemTemplateF.foreach(t => tb = tb.content(t(a)).accessibleName(label))
             if disabledFlag.constTrue || optionDisabledF.exists(_(a)) then tb = tb.disabled(true)
             else tb = tb.onChange(_ => activate(k))
+            if !multipleFlag then
+                nav match
+                    case Present((ids, focus)) if ids.isDefinedAt(i) =>
+                        tb = tb.id(ids(i)).asRadioOption(i == tabStop, optionKey(ids, navigable, i, focus))
+                    // No mount, no ids: the static projection reports the role and the state, and
+                    // every option keeps its own tab stop, which is what it had before the arrows.
+                    case _ => tb = tb.asRadioOption(tabbable = true, _ => ())
+            end if
             tb.render
         }
         FieldInvalid.withMessage(
