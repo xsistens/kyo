@@ -70,8 +70,10 @@ end ListReorder
   * the move buttons write the reordered Seq back (Prime's exact move-up/-top/
   * -down/-bottom semantics), and external ref writes re-render the list. The
   * `selected` ref (keyed by `itemKey`, falling back to the label) drives which
-  * rows move; all four buttons are disabled while the selection is empty or the
-  * list is `disabled` — Prime's `moveDisabled`. Rendering goes through the real
+  * rows move; all four buttons go `aria-disabled` while the selection is empty
+  * (Prime's `moveDisabled`) rather than natively disabled, so a button never
+  * leaves the tab order under a reader who is standing on it, and natively
+  * disabled only when the whole control is. Rendering goes through the real
   * Listbox component (Prime embeds Listbox too); `itemTemplate` maps Prime's
   * option slot onto the typed items.
   */
@@ -122,14 +124,20 @@ final case class OrderList[A] private (
     private def body(xs: Seq[A], sel: Set[String])(using Frame): UI =
         val moveDisabled = disabledFlag || sel.isEmpty || itemsRef.isEmpty
 
+        // `ariaDisabled` rather than the native attribute, for the reason [[Button.ariaDisabled]]
+        // is there and [[PickList]] spells out: these buttons turn on and off with a selection the
+        // reader makes next to them, and a control that leaves the tab order mid-interaction takes
+        // the focus with it. The whole control being `disabled` stays native, since that does not
+        // change under anybody.
         def moveButton(glyph: IconGlyph, name: String, move: (List[A], A => Boolean) => List[A]): UI =
-            Button()
+            var b = Button()
                 .icon(glyph)
                 .severity(Severity.Secondary)
                 .accessibleName(name)
-                .disabled(moveDisabled)
-                .onClick(reorder(move))
-                .render
+            if disabledFlag then b = b.disabled(true)
+            else b = b.ariaDisabled(moveDisabled).onClick(if moveDisabled then () else reorder(move))
+            b.render
+        end moveButton
 
         val controls: UI = div.cssClass("p-orderlist-controls")(
             toChild(moveButton(Icons.angleUp, "Move Up", ListReorder.moveUp)),
