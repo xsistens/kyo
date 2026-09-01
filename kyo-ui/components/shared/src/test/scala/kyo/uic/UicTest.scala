@@ -36,6 +36,31 @@ abstract class UicTest extends kyo.test.Test[Any]:
                     case Absent      => Chunk.empty
             case _ => Chunk.empty
 
+    /** How many reactive regions sit between `node` and the nearest element carrying `cls`.
+      *
+      * One is what a control that reads several refs wants. Nesting a render inside another leaves
+      * the inner region subscribed against the values the outer one held when it created it, so an
+      * effect that writes both refs leaves the inner one able to repaint a snapshot that predates
+      * the write. `PickList` is where that stopped being theoretical.
+      */
+    private[uic] def regionsAbove(node: UI, cls: String)(using Frame): Int < Sync =
+        def walk(n: UI, depth: Int): Chunk[Int] < Sync =
+            n match
+                case e: UI.Ast.Element if e.attrs.cssClasses.contains(cls) => Chunk(depth)
+                case e: UI.Ast.Element       => Kyo.foreach(e.children)(walk(_, depth)).map(_.flattenChunk)
+                case r: UI.Ast.Reactive[?]   => r.signal.current(using r.frame).map(walk(_, depth + 1))
+                case f: UI.Ast.Fragment[?]   => Kyo.foreach(f.children)(walk(_, depth)).map(_.flattenChunk)
+                case k: UI.Ast.KeyedChild[?] => walk(k.child, depth)
+                case m: UI.Ast.Mounted =>
+                    m.placeholderUI match
+                        case Present(ui) => walk(ui, depth)
+                        case Absent      => Chunk.empty
+                case _ => Chunk.empty
+        walk(node, 0).map(ds =>
+            if ds.isEmpty then throw new AssertionError(s"no element with class $cls") else ds.min
+        )
+    end regionsAbove
+
     private[uic] def elementWithId(node: UI, id: String)(using Frame): UI.Ast.Element < Sync =
         elements(node).map(_.find(_.attrs.identifier.contains(id)).getOrElse(
             throw new AssertionError(s"no element with id $id")

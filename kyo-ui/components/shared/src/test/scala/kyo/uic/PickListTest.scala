@@ -37,6 +37,13 @@ class PickListTest extends UicTest:
             case b: UI.Ast.Button if b.attrs.ariaAttrs.get("label").contains(name) => b
         }.getOrElse(throw new AssertionError(s"no button labelled $name")))
 
+    "the whole control is ONE reactive region, so nothing can repaint an older snapshot" in {
+        for
+            (_, _, _, ui) <- picks(Seq("a", "b"), Nil, Set("a"))
+            regions       <- regionsAbove(ui, "p-picklist")
+        yield assert(regions == 1, "four nested renders let a transfer be undone by the next click on a row")
+    }
+
     "a transfer button stays in the tab order, because pressing it is what turns it off" in {
         for
             (_, _, _, ui) <- picks(Seq("a", "b"), Nil, Set("a"))
