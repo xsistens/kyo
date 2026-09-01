@@ -299,8 +299,11 @@ final case class DatePicker private (
                     mref <- monthRef match
                         case Present(r) => Kyo.lift(r)
                         case Absent     => Signal.initRef("")
+                    vref <- currentViewRefV match
+                        case Present(r) => Kyo.lift(r)
+                        case Absent     => Signal.initRef(viewV)
                     cur <- Signal.initRef("")
-                yield wired(oref, mref, cur, base, id => cmds.focusId(id))
+                yield wired(oref, mref, cur, vref, base, id => cmds.focusId(id))
             }.placeholder(stat)
         end if
     end render
@@ -316,6 +319,19 @@ final case class DatePicker private (
         oref: SignalRef[Boolean],
         mref: SignalRef[String],
         cursor: SignalRef[String],
+        view: SignalRef[DatePickerView],
+        base: String,
+        focus: String => Any < Async
+    )(using Frame): UI =
+        // The mount mints a view ref when the caller binds none, the way it mints the month one.
+        // Without it the month and year buttons rendered disabled and a drill-down had nothing to
+        // write, which left the two granular grids unreachable in the default configuration.
+        copy(currentViewRefV = Present(view)).wiredWith(oref, mref, cursor, base, focus)
+
+    private def wiredWith(
+        oref: SignalRef[Boolean],
+        mref: SignalRef[String],
+        cursor: SignalRef[String],
         base: String,
         focus: String => Any < Async
     )(using Frame): UI =
@@ -326,7 +342,7 @@ final case class DatePicker private (
             if inlineFlag then when(oref)(body)
             else Overlay(oref).seedFocus(false)(body).render
         assemble(Present(oref), Present(nav("", "")), floating = !inlineFlag, panel, openSignal = Present(oref))
-    end wired
+    end wiredWith
 
     /** Field + dropdown button + panel host inside the `.p-datepicker` root. */
     private def assemble(
@@ -521,6 +537,29 @@ final case class DatePicker private (
                 yield res
             case Absent => ()
 
+    /** Closes the panel after a commit inside it, and hands the focus back to the field.
+      *
+      * A pick destroys what the reader is standing on: the grid they arrowed through, or the
+      * button bar's button they pressed. Without the return the focus falls to the document, and
+      * the next Tab starts at the top of the page instead of after the field. Plain [[closeVia]]
+      * is for the closes whose focus is already outside the panel (the field's own Escape) or
+      * belongs where the pointer left it.
+      *
+      * An in-flow calendar is left alone entirely. It is the page's own furniture rather than a
+      * panel over it: a pick is not a reason to take it away, an Escape has no panel to dismiss,
+      * and the grid the reader is standing on stays, so there is nothing to hand back either.
+      * The `open` ref an inline caller binds is their toggle, not the pick's.
+      */
+    private def closeAfterPick(oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(using Frame): Any < Async =
+        if inlineFlag then ()
+        else
+            for
+                _ <- closeVia(oref)
+                r <- nav match
+                    case Present(n) => n.focus(n.fieldId)
+                    case Absent     => (): Any < Async
+            yield r
+
     // === reactive panel =====================================================
 
     /** The resolved selection at render time. */
@@ -614,7 +653,7 @@ final case class DatePicker private (
             if timeOnlyFlag || (showTimeFlag && view == DatePickerView.Date) then List(timePickerUI(snap))
             else Nil
 
-        val barChildren: List[UI] = if showButtonBarFlag then List(buttonBarUI(snap, oref)) else Nil
+        val barChildren: List[UI] = if showButtonBarFlag then List(buttonBarUI(snap, oref, nav)) else Nil
 
         var panel = div
             .cssClass("p-datepicker-panel")
@@ -624,11 +663,14 @@ final case class DatePicker private (
         panel((calendarChildren ++ timeChildren ++ barChildren).map(toChild)*)
     end panelUI
 
-    /** Prime's calendar header: prev button, the month/year title BUTTONS (they
-      * drill into the month/year grids via the bound `currentView` ref; disabled
-      * without one — Prime's `switchViewButtonDisabled`), next button. The nav
-      * buttons shift the bound `month` ref by month/year/decade depending on the
-      * view; without one they render disabled.
+    /** Prime's calendar header: prev button, the month/year title BUTTONS (they drill into the
+      * month and year grids through the view ref), next button. The nav buttons shift the month
+      * ref by month, year or decade depending on the view.
+      *
+      * The mount mints both refs when the caller binds none, so every button here is live in a
+      * mounted picker. They render disabled only in the static projection, which is inert
+      * throughout: a title button that cannot be pressed would leave the two granular grids, and
+      * the keyboard in them, unreachable.
       */
     private def headerUI(view: DatePickerView, year: Int, month: Int, nav: Maybe[DatePicker.Nav])(using Frame): UI =
         def navButton(cls: String, glyph: IconGlyph, target: (Int, Int), label: String): UI =
@@ -738,7 +780,7 @@ final case class DatePicker private (
             var daySpan = span.cssClass("p-datepicker-day")
             if outOfRange then daySpan = daySpan.cssClass("p-disabled").aria("disabled", "true")
             else
-                daySpan = daySpan.onClick(selectDay(iso, snap, oref))
+                daySpan = daySpan.onClick(seedCursor(iso, nav).andThen(selectDay(iso, snap, oref, nav)))
                 dayStateClass(iso, snap).foreach(c => daySpan = daySpan.cssClass(c))
             end if
             if iso == cursorIso then daySpan = daySpan.cssClass("p-focus")
@@ -783,8 +825,10 @@ final case class DatePicker private (
 
     /** The day the keyboard is on, clamped into the month on the screen. */
     private def dayCursor(year: Int, month: Int, snap: Snapshot, nav: Maybe[DatePicker.Nav]): String =
-        val prefix     = DatePicker.pad(year, 4) + "-" + DatePicker.pad(month, 2)
-        val fromCursor = nav.map(_.cursorV).filter(_.startsWith(prefix))
+        val prefix = DatePicker.pad(year, 4) + "-" + DatePicker.pad(month, 2)
+        // Length as well as prefix: the cursor is shared with the month and year grids, so after
+        // a drill it can still hold a `YYYY-MM`, which starts with the prefix and is no day.
+        val fromCursor = nav.map(_.cursorV).filter(c => c.length == 10 && c.startsWith(prefix))
         if fromCursor.isDefined then fromCursor.getOrElse("")
         else
             val selected = DatePicker.datePart(anchorValue(snap))
@@ -826,11 +870,20 @@ final case class DatePicker private (
                             case Present((ny, nm, nd)) => moveDayCursor(ny, nm, nd, nav)
                             case Absent                => ()
                         val acted: Any < Async = step match
-                            case Activate => selectDay(cursorIso, snap, oref)
-                            case Dismiss  => closeVia(oref).andThen(nav.focus(nav.fieldId))
+                            case Activate => selectDay(cursorIso, snap, oref, Present(nav))
+                            case Dismiss  => closeAfterPick(oref, Present(nav))
                             case _        => ()
                         moved.andThen(acted)
     end dayKey
+
+    /** A click on a cell seeds the highlight, so the next arrow carries on from the cell the
+      * pointer named rather than from wherever the grid last derived one. The ring stays the
+      * keyboard's: this writes the highlight, not the focus.
+      */
+    private def seedCursor(iso: String, nav: Maybe[DatePicker.Nav])(using Frame): Any < Async =
+        nav match
+            case Present(n) => n.cursor.set(iso)
+            case Absent     => ()
 
     /** Writes the cursor and, when the move left the displayed month, the month with it. */
     private def moveDayCursor(y: Int, m: Int, d: Int, nav: DatePicker.Nav)(using Frame): Any < Async =
@@ -864,14 +917,16 @@ final case class DatePicker private (
       * start/end and closes on completion. Every write fires `onChange` with the
       * picked day.
       */
-    private def selectDay(iso: String, snap: Snapshot, oref: Maybe[SignalRef[Boolean]])(using Frame): Any < Async =
+    private def selectDay(iso: String, snap: Snapshot, oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(using
+        Frame
+    ): Any < Async =
         snap match
             case Snapshot.Single(cur) =>
                 val newValue = if showTimeFlag then iso + "T" + DatePicker.timeText(cur) else iso
                 for
                     _ <- writeSingle(newValue)
                     _ <- fireChange(newValue)
-                    r <- if showTimeFlag then (): Any < Async else closeVia(oref)
+                    r <- if showTimeFlag then (): Any < Async else closeAfterPick(oref, nav)
                 yield r
                 end for
             case Snapshot.Multi(set) =>
@@ -898,7 +953,7 @@ final case class DatePicker private (
                             for
                                 _ <- endRef.set(iso)
                                 _ <- fireChange(iso)
-                                r <- closeVia(oref)
+                                r <- closeAfterPick(oref, nav)
                             yield r
                     case Absent => fireChange(iso)
     end selectDay
@@ -927,10 +982,10 @@ final case class DatePicker private (
             if current == iso7 then cell = cell.cssClass("p-datepicker-month-selected")
             val action: Maybe[Any < Async] =
                 if outOfRange then Absent
-                else if viewV == DatePickerView.Month then Present(pickGranular(iso7, oref))
-                else drillTo(iso7, DatePickerView.Date)
+                else if viewV == DatePickerView.Month then Present(pickGranular(iso7, oref, nav))
+                else drillTo(iso7, DatePickerView.Date, nav)
             action match
-                case Present(a) => cell = cell.onClick(a)
+                case Present(a) => cell = cell.onClick(seedCursor(iso7, nav).andThen(a))
                 case Absent     => cell = cell.cssClass("p-disabled").aria("disabled", "true")
             nav.foreach(n => cell = cell.id(n.cellId(m - 1)).role("gridcell"))
             if iso7 == cursor then cell = cell.cssClass("p-focus")
@@ -938,7 +993,7 @@ final case class DatePicker private (
         }
         // Prime lays the twelve months out three to a row, which is the width the vertical
         // arrows step by.
-        granularGrid("p-datepicker-month-view", cells, cursor, iso => DatePicker.monthOf(iso) - 1, 3, nav) { (at, step) =>
+        granularGrid("p-datepicker-month-view", cells, cursor, iso => DatePicker.monthOf(iso) - 1, 3, oref, nav) { (at, step) =>
             import CalendarNav.Step.*
             step match
                 case Move(cells) => Present(DatePicker.pad(year, 4) + "-" + DatePicker.pad(wrapIndex(at + cells, 12) + 1, 2))
@@ -949,9 +1004,9 @@ final case class DatePicker private (
                 case Activate | Dismiss => Absent
             end match
         } { iso7 =>
-            if viewV == DatePickerView.Month then pickGranular(iso7, oref)
+            if viewV == DatePickerView.Month then pickGranular(iso7, oref, nav)
             else
-                drillTo(iso7, DatePickerView.Date) match
+                drillTo(iso7, DatePickerView.Date, nav) match
                     case Present(eff) => eff
                     case Absent       => (): Any < Async
         }
@@ -979,17 +1034,17 @@ final case class DatePicker private (
             if current == iso4 then cell = cell.cssClass("p-datepicker-year-selected")
             val action: Maybe[Any < Async] =
                 if outOfRange then Absent
-                else if viewV == DatePickerView.Year then Present(pickGranular(iso4, oref))
-                else drillTo(iso4 + "-" + DatePicker.pad(month, 2), DatePickerView.Month)
+                else if viewV == DatePickerView.Year then Present(pickGranular(iso4, oref, nav))
+                else drillTo(iso4 + "-" + DatePicker.pad(month, 2), DatePickerView.Month, nav)
             action match
-                case Present(a) => cell = cell.onClick(a)
+                case Present(a) => cell = cell.onClick(seedCursor(iso4, nav).andThen(a))
                 case Absent     => cell = cell.cssClass("p-disabled").aria("disabled", "true")
             nav.foreach(n => cell = cell.id(n.cellId(y - base)).role("gridcell"))
             if iso4 == cursor then cell = cell.cssClass("p-focus")
             cell(y.toString)
         }
         // Prime lays the decade out two to a row.
-        granularGrid("p-datepicker-year-view", cells, cursor, iso => iso.toIntOption.getOrElse(base) - base, 2, nav) {
+        granularGrid("p-datepicker-year-view", cells, cursor, iso => iso.toIntOption.getOrElse(base) - base, 2, oref, nav) {
             (at, step) =>
                 import CalendarNav.Step.*
                 step match
@@ -1000,9 +1055,9 @@ final case class DatePicker private (
                     case Activate | Dismiss => Absent
                 end match
         } { iso4 =>
-            if viewV == DatePickerView.Year then pickGranular(iso4, oref)
+            if viewV == DatePickerView.Year then pickGranular(iso4, oref, nav)
             else
-                drillTo(iso4 + "-" + DatePicker.pad(month, 2), DatePickerView.Month) match
+                drillTo(iso4 + "-" + DatePicker.pad(month, 2), DatePickerView.Month, nav) match
                     case Present(eff) => eff
                     case Absent       => (): Any < Async
         }
@@ -1040,6 +1095,7 @@ final case class DatePicker private (
         cursor: String,
         indexOf: String => Int,
         perRow: Int,
+        oref: Maybe[SignalRef[Boolean]],
         nav: Maybe[DatePicker.Nav]
     )(move: (Int, CalendarNav.Step) => Maybe[String])(activate: String => Any < Async)(using Frame): UI =
         var grid = div.cssClass(cls)
@@ -1058,7 +1114,7 @@ final case class DatePicker private (
                                     case Absent        => ()
                                 val acted: Any < Async = step match
                                     case CalendarNav.Step.Activate => activate(cursor)
-                                    case CalendarNav.Step.Dismiss  => n.focus(n.fieldId)
+                                    case CalendarNav.Step.Dismiss  => closeAfterPick(oref, nav)
                                     case _                         => ()
                                 moved.andThen(acted)
                 eff
@@ -1068,19 +1124,23 @@ final case class DatePicker private (
     end granularGrid
 
     /** A granularity pick (`view(Month|Year)`): write the ISO prefix, close. */
-    private def pickGranular(iso: String, oref: Maybe[SignalRef[Boolean]])(using Frame): Any < Async =
+    private def pickGranular(iso: String, oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(using
+        Frame
+    ): Any < Async =
         for
             _ <- writeSingle(iso)
             _ <- fireChange(iso)
-            r <- closeVia(oref)
+            r <- closeAfterPick(oref, nav)
         yield r
 
     /** A drill-down pick: write the displayed month and switch the view back.
       * Needs BOTH the `month` and `currentView` refs; `Absent` renders the cell
       * disabled instead.
       */
-    private def drillTo(yearMonth: String, target: DatePickerView)(using Frame): Maybe[Any < Async] =
-        (monthRef, currentViewRefV) match
+    private def drillTo(yearMonth: String, target: DatePickerView, nav: Maybe[DatePicker.Nav])(using
+        Frame
+    ): Maybe[Any < Async] =
+        (nav.map(_.monthOv).orElse(monthRef), currentViewRefV) match
             case (Present(mref), Present(vref)) =>
                 Present(
                     for
@@ -1181,7 +1241,7 @@ final case class DatePicker private (
       * date — the render is pure) + Clear, both in Prime's small secondary text
       * Button skin.
       */
-    private def buttonBarUI(snap: Snapshot, oref: Maybe[SignalRef[Boolean]])(using Frame): UI =
+    private def buttonBarUI(snap: Snapshot, oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(using Frame): UI =
         def barButton(cls: String, label: String, action: Any < Async): UI =
             button
                 .cssClass(cls)
@@ -1200,7 +1260,7 @@ final case class DatePicker private (
             val action =
                 for
                     _ <- navigate
-                    r <- selectDay(DatePicker.datePart(iso), snap, oref)
+                    r <- selectDay(DatePicker.datePart(iso), snap, oref, nav)
                 yield r
             barButton("p-datepicker-today-button", "Today", action)
         }
@@ -1222,7 +1282,7 @@ final case class DatePicker private (
                 _ <- wipeMulti
                 _ <- wipeRange
                 _ <- fireChange("")
-                r <- closeVia(oref)
+                r <- closeAfterPick(oref, nav)
             yield r
             end for
         end clearAction

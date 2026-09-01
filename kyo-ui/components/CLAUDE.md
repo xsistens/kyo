@@ -286,6 +286,26 @@ refs themselves held the correct result.
 - The roving highlight of an embedded list belongs in the same combined signal, not in a region of
   its own: the columns and their cursors are one state.
 
+## An unbound ref is not a reason to disable a control
+
+Optional bindings (`month`, `currentView`, `selected`) exist so a page CAN drive a component from
+outside, not so the component only works when it is driven. A control wired straight to such a ref
+and rendered `disabled` without one is a control the reader can neither click nor tab to, and
+whatever it leads to goes with it: DatePicker's month and year title buttons rendered disabled by
+default, which left the month and year grids, and the keyboard those grids had just been given,
+unreachable in every picker that bound no `currentView`.
+
+- **The mount mints what the caller did not bind**, next to the ids it already mints
+  (`DatePicker.render`: the open, month, view and cursor refs), and hands them to the `wired`
+  seam. The static projection is the only place a control renders disabled for want of a ref, and
+  that projection is inert throughout.
+- **The seam must mint the way the mount does**, from the component's own fields
+  (`dp.currentViewRefV` else `Signal.initRef(dp.viewV)`), or the golden documents a control the
+  reader never meets and a caller's own binding stops working through the seam.
+- `aria-disabled` is the right answer where the control is genuinely inapplicable right now: it
+  keeps the tab stop and says so. Native `disabled` removes it from the keyboard entirely, which
+  is also how OrderList's move button lost the focus mid-press.
+
 ## `readonly` is one thing
 
 A readonly control is one a reader can REACH and read the value of and cannot change:
