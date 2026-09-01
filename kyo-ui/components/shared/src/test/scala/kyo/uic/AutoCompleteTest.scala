@@ -80,14 +80,32 @@ class AutoCompleteTest extends UicTest:
         yield assert(got == "Cairo")
     }
 
-    "the list announces the highlighted suggestion" in {
+    /** The announcement rides the INPUT, not the list.
+      *
+      * `aria-activedescendant` is read off whatever has DOM focus, and this panel is
+      * `seedFocus(false)` precisely so focus never leaves the text box. On the list the attribute
+      * named the right option and was hung off an element nothing was focused on.
+      */
+    "the field announces the highlighted suggestion, since the field is what holds focus" in {
         for
             (_, _, _, ui) <- state(1)
+            input         <- elementWithClass(ui, "p-autocomplete-input")
             list          <- elementWithClass(ui, "p-autocomplete-list")
             rows          <- elementsWithClass(ui, "p-autocomplete-option")
         yield
-            assert(list.attrs.ariaAttrs.get("activedescendant").contains("ac-option-1"))
+            assert(input.attrs.role.contains("combobox"), "a text box that opens a list is a combobox")
+            assert(input.attrs.ariaAttrs.get("activedescendant").contains("ac-option-1"))
+            assert(input.attrs.ariaAttrs.get("controls").contains("ac-list"), "and it names the list it opens")
+            assert(list.attrs.identifier.contains("ac-list"))
+            assert(!list.attrs.ariaAttrs.contains("activedescendant"), "the unfocused list says nothing")
             assert(rows(1).attrs.identifier.contains("ac-option-1"))
+    }
+
+    "nothing highlighted announces nothing" in {
+        for
+            (_, _, _, ui) <- state(-1)
+            input         <- elementWithClass(ui, "p-autocomplete-input")
+        yield assert(!input.attrs.ariaAttrs.contains("activedescendant"))
     }
 
 end AutoCompleteTest

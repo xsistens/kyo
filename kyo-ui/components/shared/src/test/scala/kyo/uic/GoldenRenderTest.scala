@@ -6248,4 +6248,123 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    // ---- a highlight is only announced if the element it names says what it is ----
+
+    /** The roles `aria-activedescendant` may legitimately name: a thing in a collection. */
+    private val descendantRoles =
+        Set("menuitem", "menuitemcheckbox", "menuitemradio", "option", "treeitem", "row", "gridcell", "tab")
+
+    private val idAttr   = """\sid="([^"]*)"""".r
+    private val roleAttr = """\srole="([^"]*)"""".r
+
+    /** Every `aria-activedescendant` in `html` whose target is missing, or is there but says
+      * nothing about itself.
+      *
+      * The attribute is a promise that a reader who cannot see the highlight will be told what it
+      * landed on. A target with `role="presentation"` is the exact shape that breaks the promise
+      * while looking wired up: the id resolves, the highlight moves, and what gets announced is
+      * an element that has declared itself to be nothing.
+      */
+    private def danglingActiveDescendants(html: String): Seq[String] =
+        """aria-activedescendant="([^"]*)"""".r.findAllMatchIn(html).map(_.group(1)).distinct.flatMap { target =>
+            openTag.findAllMatchIn(html).find(m => idAttr.findFirstMatchIn(m.group(2)).exists(_.group(1) == target)) match
+                case None => Some(s"$target: names no element")
+                case Some(m) =>
+                    roleAttr.findFirstMatchIn(m.group(2)).map(_.group(1)) match
+                        case Some(r) if descendantRoles.contains(r) => None
+                        case Some(r)                                => Some(s"$target: names a role=$r element")
+                        case None                                   => Some(s"$target: names an element with no role")
+        }.toSeq
+
+    "a highlight names an element that says what it is" in {
+        val bar = uic.Menubar().items(
+            uic.MenuItem("File").items(uic.MenuItem("New").onSelect(()), uic.MenuItem("Recent").items(uic.MenuItem("a.txt"))),
+            uic.MenuItem("Home").icon(uic.Icons.home).onSelect(())
+        )
+        val tiered = uic.TieredMenu().id("tm").items(menuItems*)
+        val mega = uic.MegaMenu().id("mm").items(
+            uic.MegaMenuItem("Shop").column(uic.MenuGroup("Men").items(uic.MenuItem("Shirts").onSelect(())))
+        )
+        val ctx = uic.ContextMenu().id("cm").items(menuItems*)
+        val cascade = uic.CascadeSelect[String]()
+            .options(Seq(uic.CascadeItem.group("Germany")(uic.CascadeItem.leaf("Berlin"))))(identity)
+        def paths(ps: List[List[Int]], open: List[List[Int]]) =
+            Kyo.foreach(ps)(p => Signal.initRef(open.contains(p)).map(p -> _)).map(_.toList)
+        for
+            menuHi     <- Signal.initRef(0)
+            menu       <- renderHtml(uic.Menu().id("m1").items(menuItems*).wired(menuHi))
+            barRefs    <- paths(bar.submenuPaths, List(List(0)))
+            barHi      <- Signal.initRef(List(0, 0))
+            menubar    <- renderHtml(bar.id("mb").wired(barRefs, barHi))
+            tieredRefs <- paths(tiered.submenuPaths, Nil)
+            tieredHi   <- Signal.initRef(List(0))
+            tieredHtml <- renderHtml(tiered.wired(tieredRefs, tieredHi))
+            megaRefs   <- paths(mega.panelPaths, List(List(0)))
+            megaHi     <- Signal.initRef(List(0))
+            megaHtml   <- renderHtml(mega.wired(megaRefs, megaHi))
+            ctxOpen    <- Signal.initRef(true)
+            ctxHi      <- Signal.initRef(List(0))
+            ctxRefs    <- paths(ctx.submenuPaths, Nil)
+            ctxHtml    <- renderHtml(ctx.wired(ctxOpen, ctxHi, ctxRefs))
+            tsOpen     <- Signal.initRef(true)
+            tsExp      <- Signal.initRef(Set.empty[String])
+            tsHi       <- Signal.initRef(0)
+            treeSel <- renderHtml(
+                uic.TreeSelect().nodes(uic.TreeNode("Root", "r")).wired(tsOpen, tsExp, tsHi, "ts")
+            )
+            selOpen  <- Signal.initRef(true)
+            selHi    <- Signal.initRef(1)
+            selQuery <- Signal.initRef("")
+            selValue <- Signal.initRef("")
+            select <- renderHtml(
+                uic.Select[String]().id("sel").options(Seq("a", "b"))(identity).optionKey(identity)
+                    .value(selValue).wired(selOpen, selHi, selQuery, Present("sel"))
+            )
+            msOpen  <- Signal.initRef(true)
+            msHi    <- Signal.initRef(1)
+            msQuery <- Signal.initRef("")
+            msValue <- Signal.initRef(Set.empty[String])
+            multi <- renderHtml(
+                uic.MultiSelect[String]().id("ms").options(Seq("a", "b"))(identity).optionKey(identity)
+                    .value(msValue).wired(msOpen, msHi, msQuery, Present("ms"))
+            )
+            acOpen <- Signal.initRef(true)
+            acHi   <- Signal.initRef(1)
+            acAll  <- Signal.initRef(true)
+            acText <- Signal.initRef("")
+            auto <- renderHtml(
+                uic.AutoComplete[String]().id("ac").options(List("a", "b"))(identity).optionKey(identity)
+                    .value(acText).wired(acOpen, acHi, acAll, Present("ac"))
+            )
+            csValue <- Signal.initRef("")
+            csOpen  <- Signal.initRef(true)
+            csRefs  <- paths(cascade.value(csValue).groupPaths, Nil)
+            csHi    <- Signal.initRef(List(0))
+            csHtml  <- renderHtml(cascade.value(csValue).open(csOpen).wired(csOpen, csRefs, csHi, Present("cs")))
+        yield
+            val named = List(
+                "Menu"          -> menu,
+                "Menubar"       -> menubar,
+                "TieredMenu"    -> tieredHtml,
+                "MegaMenu"      -> megaHtml,
+                "ContextMenu"   -> ctxHtml,
+                "TreeSelect"    -> treeSel,
+                "Select"        -> select,
+                "MultiSelect"   -> multi,
+                "AutoComplete"  -> auto,
+                "CascadeSelect" -> csHtml
+            )
+            val offenders = named.flatMap((n, h) => danglingActiveDescendants(h).map(d => s"$n: $d"))
+            assert(offenders.isEmpty, s"these highlights announce nothing:\n${offenders.mkString("\n")}")
+            // And the invariant has teeth: each sample really does carry a highlight to check.
+            val missing = named.collect { case (n, h) if !h.contains("aria-activedescendant") => n }
+            assert(missing.isEmpty, s"no highlight rendered at all in: ${missing.mkString(", ")}")
+            assert(select.contains("""role="combobox""""), "a field that opens a list says it is a combobox")
+            assert(multi.contains("""role="combobox""""))
+            assert(auto.contains("""role="combobox""""))
+            assert(csHtml.contains("""role="combobox""""))
+            assert(treeSel.contains("""role="combobox""""))
+        end for
+    }
+
 end GoldenRenderTest

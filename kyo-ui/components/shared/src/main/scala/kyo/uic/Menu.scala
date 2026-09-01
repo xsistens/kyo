@@ -139,7 +139,12 @@ final case class Menu private (
                     case TextValue.Dyn(s) =>
                         li.cssClass("p-menu-submenu-label").role("presentation")(toChild(s.render(t => stringToUI(t))))
             case (MenuRow.Item(it), i) =>
-                var row = li.cssClass("p-menu-item").role("presentation")
+                // The row IS the menu item, not scaffolding around one: it is what
+                // `aria-activedescendant` names, what carries the disabled state, and the only
+                // child of a `role="menu"` that a reader can be told about. `role="presentation"`
+                // stripped exactly that away, leaving a menu whose every child claimed to be
+                // nothing. The link inside stays roleless, the way Prime renders it.
+                var row = li.cssClass("p-menu-item").role("menuitem")
                 if it.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
                 if i == hiRow then
                     row = row.cssClass("p-focus")

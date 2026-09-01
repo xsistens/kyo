@@ -211,7 +211,7 @@ final case class MegaMenu private (
                     else
                         val myIdx = navIdx
                         if !it.disabledFlag then navIdx += 1
-                        var row = li.cssClass("p-megamenu-item").role("presentation")
+                        var row = li.cssClass("p-megamenu-item").role("menuitem")
                         if it.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
                         else if focus == List(r, c, myIdx) then
                             row = row.cssClass("p-focus")
@@ -243,7 +243,7 @@ final case class MegaMenu private (
                         case Absent => ()
                 var row = li
                     .cssClass("p-megamenu-item")
-                    .role("presentation")
+                    .role("menuitem")
                     .aria("haspopup", "menu")
                     .aria("expanded", isOpen.toString)
                 if isOpen then row = row.cssClass("p-megamenu-item-active")
@@ -283,7 +283,7 @@ final case class MegaMenu private (
                     case _ => Nil
                 row((content :: panel).map(toChild)*)
             else
-                var row = li.cssClass("p-megamenu-item").role("presentation")
+                var row = li.cssClass("p-megamenu-item").role("menuitem")
                 if focus == p then
                     row = row.cssClass("p-focus")
                     idV.foreach(b => row = row.id(s"$b-active"))

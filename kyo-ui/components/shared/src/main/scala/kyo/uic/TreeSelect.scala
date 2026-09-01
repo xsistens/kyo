@@ -362,7 +362,8 @@ final case class TreeSelect private (
             case Absent                      => ()
         end match
         accNameRefV.foreach(v => el = el.aria("labelledby", v))
-        el = el.aria("haspopup", "tree").aria("expanded", isOpen.toString)
+        el = el.role("combobox").aria("haspopup", "tree").aria("expanded", isOpen.toString)
+        st.foreach(s => el = el.aria("controls", Tree.rootListId(s.idBase)))
         if !disabledFlag then
             el = el.tabIndex(0).preventScrollKeys
             if st.isDefined then
