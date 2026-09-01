@@ -64,9 +64,9 @@ final case class OrderList[A] private (
     // What a region compares to decide whether to repaint is the SNAPSHOT, never an item: the
     // sequence and the set are compared structurally, and `A` needs no equality of its own for
     // that (it has none to require, since any type can be a row here).
-    private given CanEqual[Seq[A], Seq[A]]                             = CanEqual.derived
+    private given CanEqual[Seq[A], Seq[A]]                               = CanEqual.derived
     private given CanEqual[(Seq[A], Set[String]), (Seq[A], Set[String])] = CanEqual.derived
-    private given CanEqual[Snapshot, Snapshot]                         = CanEqual.derived
+    private given CanEqual[Snapshot, Snapshot]                           = CanEqual.derived
 
     /** The order and the selection as ONE signal, so the tree is ONE reactive region.
       *

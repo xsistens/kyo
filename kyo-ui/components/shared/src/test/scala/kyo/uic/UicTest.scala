@@ -47,10 +47,10 @@ abstract class UicTest extends kyo.test.Test[Any]:
         def walk(n: UI, depth: Int): Chunk[Int] < Sync =
             n match
                 case e: UI.Ast.Element if e.attrs.cssClasses.contains(cls) => Chunk(depth)
-                case e: UI.Ast.Element       => Kyo.foreach(e.children)(walk(_, depth)).map(_.flattenChunk)
-                case r: UI.Ast.Reactive[?]   => r.signal.current(using r.frame).map(walk(_, depth + 1))
-                case f: UI.Ast.Fragment[?]   => Kyo.foreach(f.children)(walk(_, depth)).map(_.flattenChunk)
-                case k: UI.Ast.KeyedChild[?] => walk(k.child, depth)
+                case e: UI.Ast.Element                                     => Kyo.foreach(e.children)(walk(_, depth)).map(_.flattenChunk)
+                case r: UI.Ast.Reactive[?]                                 => r.signal.current(using r.frame).map(walk(_, depth + 1))
+                case f: UI.Ast.Fragment[?]                                 => Kyo.foreach(f.children)(walk(_, depth)).map(_.flattenChunk)
+                case k: UI.Ast.KeyedChild[?]                               => walk(k.child, depth)
                 case m: UI.Ast.Mounted =>
                     m.placeholderUI match
                         case Present(ui) => walk(ui, depth)

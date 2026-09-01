@@ -484,4 +484,5 @@ object Listbox:
       * A bare `Maybe[Any < Async]` cannot say this: the value type is `Any`, so the compiler has to
       * assume the effect could itself be an `Absent` and the match over it is not exhaustive.
       */
-    private[uic] final case class HostKey(effect: Any < Async)
+    final private[uic] case class HostKey(effect: Any < Async)
+end Listbox
