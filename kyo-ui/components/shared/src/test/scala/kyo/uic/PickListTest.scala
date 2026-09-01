@@ -33,7 +33,7 @@ class PickListTest extends UicTest:
         yield (src, tgt, srcSel, ui)
 
     /** A PickList wired the way its mount wires it, with a cursor per column. */
-    private def wired(source: Seq[String], target: Seq[String], selected: Set[String])(using
+    private def wired(source: Seq[String], target: Seq[String], selected: Set[String], highlight: Int = -1)(using
         Frame
     ): (SignalRef[Seq[String]], SignalRef[Seq[String]], SignalRef[Set[String]], UI) < Async =
         for
@@ -41,7 +41,7 @@ class PickListTest extends UicTest:
             tgt    <- Signal.initRef(target)
             srcSel <- Signal.initRef(selected)
             tgtSel <- Signal.initRef(Set.empty[String])
-            srcHi  <- Signal.initRef(-1)
+            srcHi  <- Signal.initRef(highlight)
             tgtHi  <- Signal.initRef(-1)
             ui = uic.PickList[String]()
                 .sourceItems(src)(identity)
@@ -187,6 +187,42 @@ class PickListTest extends UicTest:
             left              <- src.get
             moved             <- tgt.get
         yield assert(left == Seq("a", "b") && moved.isEmpty)
+    }
+
+    "the highlight follows the row a move carries, rather than staying on the index" in {
+        for
+            src    <- Signal.initRef(Seq("a", "b", "c"))
+            tgt    <- Signal.initRef(Seq.empty[String])
+            srcSel <- Signal.initRef(Set("a"))
+            tgtSel <- Signal.initRef(Set.empty[String])
+            srcHi  <- Signal.initRef(0)
+            tgtHi  <- Signal.initRef(-1)
+            ui = uic.PickList[String]()
+                .sourceItems(src)(identity).targetItems(tgt).sourceSelected(srcSel).targetSelected(tgtSel)
+                .wired(Present(uic.ListReorder.Cursor(srcHi, "s")), Present(uic.ListReorder.Cursor(tgtHi, "t")))
+            list  <- sourceList(ui)
+            _     <- press(list, UI.Keyboard.ArrowDown, UI.Modifiers.none.copy(meta = true))
+            order <- src.get
+            where <- srcHi.get
+        yield assert(order == Seq("b", "a", "c") && where == 1, "the reader keeps their place")
+    }
+
+    "and where a transfer takes the row away, the highlight stays in the column" in {
+        for
+            src    <- Signal.initRef(Seq("a", "b"))
+            tgt    <- Signal.initRef(Seq.empty[String])
+            srcSel <- Signal.initRef(Set("b"))
+            tgtSel <- Signal.initRef(Set.empty[String])
+            srcHi  <- Signal.initRef(1)
+            tgtHi  <- Signal.initRef(-1)
+            ui = uic.PickList[String]()
+                .sourceItems(src)(identity).targetItems(tgt).sourceSelected(srcSel).targetSelected(tgtSel)
+                .wired(Present(uic.ListReorder.Cursor(srcHi, "s")), Present(uic.ListReorder.Cursor(tgtHi, "t")))
+            list  <- sourceList(ui)
+            _     <- press(list, UI.Keyboard.ArrowRight)
+            left  <- src.get
+            where <- srcHi.get
+        yield assert(left == Seq("a") && where == 0, "clamped to what is left, not left pointing past the end")
     }
 
     "the arrow pointing away from the other column is nobody's" in {
