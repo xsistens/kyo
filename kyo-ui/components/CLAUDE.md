@@ -302,6 +302,24 @@ tab stop as well makes the open widget two of them, and Tab then walks the reade
 trigger and its own popup instead of past the widget. Nothing is lost by it, because the way back
 into an open popup is the same key that opened it.
 
+## Nothing follows a highlight but the flag you put on it
+
+A moving DOM focus is scrolled into view by the browser. A highlight is not focus: it is a class on a
+row plus `aria-activedescendant` on a container that does not move, so in a panel capped at 14rem the
+mark walks out of the panel and in a long page list off the screen, and the reader is steering
+something they cannot see. Every host that moves a highlight marks the highlighted row with
+`scrollAuto(true)` (kyo-ui), and the client scrolls it into view with `block: "nearest"` whenever the
+flag lands on a different element than before.
+
+- **A command cannot do this job on its own.** `cmds.scrollIntoViewId` works while the row is already
+  on the page, and the moment that matters most is the other one: a panel opening onto the selected
+  option scrolls to a row that does not exist when the handler runs (the DatePicker lesson). A flag
+  on the row is read by the patch that inserts it.
+- **`nearest` is not a detail.** It moves the scroller by the least it can and not at all when the row
+  is already visible, so a highlight walking within view never yanks the panel under the reader.
+- `GoldenRenderTest`'s "a highlight names an element that says what it is" holds the rule for the whole
+  family: every element rendering `p-focus` carries the flag.
+
 ## A roving tab stop is state, and needs somewhere to live
 
 A widget whose children hold real focus puts `tabIndex(0)` on the ACTIVE child, and active means

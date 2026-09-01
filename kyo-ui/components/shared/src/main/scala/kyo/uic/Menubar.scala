@@ -196,7 +196,7 @@ private[uic] object MenuTree:
                         .aria("expanded", isOpen.toString)
                     if isOpen then row = row.cssClass(s"p-$prefix-item-active")
                     if focused.exists(_ == p) then
-                        row = row.cssClass("p-focus")
+                        row = row.cssClass("p-focus").scrollAuto(true)
                         idBase.foreach(b => row = row.id(s"$b-active"))
                     if it.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
                     val act: Maybe[Any < Async] =
@@ -251,7 +251,7 @@ private[uic] object MenuTree:
                 else
                     var row = li.cssClass(s"p-$prefix-item").role("menuitem")
                     if focused.exists(_ == p) then
-                        row = row.cssClass("p-focus")
+                        row = row.cssClass("p-focus").scrollAuto(true)
                         idBase.foreach(b => row = row.id(s"$b-active"))
                     if it.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
                     def activate: Any < Async =

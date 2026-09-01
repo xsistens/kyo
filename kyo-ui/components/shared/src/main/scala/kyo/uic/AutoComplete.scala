@@ -544,7 +544,7 @@ final case class AutoComplete[A] private (
                 .cssClass("p-autocomplete-option")
                 .role("option")
                 .data("uic-option-key", keyF.getOrElse(labelF)(a))
-            if i == hiEff then row = row.cssClass("p-focus")
+            if i == hiEff then row = row.cssClass("p-focus").scrollAuto(true)
             s.idBase.foreach(b => row = row.id(optionId(b, i)))
             row.onClick(pick(a)(s))(content)
         }

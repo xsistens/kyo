@@ -587,7 +587,7 @@ final case class Select[A] private (
             var row = li.cssClass("p-select-option").role("option").aria("selected", isSel.toString)
             if isSel then row = row.cssClass("p-select-option-selected")
             if isDis then row = row.cssClass("p-disabled").aria("disabled", "true")
-            if i == hiEff then row = row.cssClass("p-focus")
+            if i == hiEff then row = row.cssClass("p-focus").scrollAuto(true)
             // The id the list points `aria-activedescendant` at. Stamped on every option rather
             // than on the highlighted one alone, so the attribute names a target that is already
             // in the document whichever row the highlight is on.

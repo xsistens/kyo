@@ -159,7 +159,7 @@ final case class Menu private (
                 var row = li.cssClass("p-menu-item").role("menuitem")
                 if it.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
                 if i == hiRow then
-                    row = row.cssClass("p-focus")
+                    row = row.cssClass("p-focus").scrollAuto(true)
                     idV.foreach(base => row = row.id(s"$base-active"))
                 val act: Maybe[Any < Async] =
                     if hiRef.isDefined && !it.disabledFlag then Present(activate(it)) else Absent

@@ -554,7 +554,7 @@ final case class MultiSelect[A] private (
             // OFF): by default the checked box alone marks a selected row.
             if isSel && highlightOnSelectFlag then row = row.cssClass("p-multiselect-option-selected")
             if isDis then row = row.cssClass("p-disabled").aria("disabled", "true")
-            if i == hiEff then row = row.cssClass("p-focus")
+            if i == hiEff then row = row.cssClass("p-focus").scrollAuto(true)
             s.idBase.foreach(b => row = row.id(optionId(b, i)))
             if !isDis then row = row.onClick(toggleOption(a))
             row(List[UI](rowCheckbox(isSel), span(labelF(a))).map(toChild)*)

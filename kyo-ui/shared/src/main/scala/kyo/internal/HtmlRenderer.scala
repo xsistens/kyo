@@ -420,6 +420,7 @@ private[kyo] object HtmlRenderer:
         attrs.focusGroup.foreach(id => w(sb, s""" data-kyo-focus-group="${esc(id)}""""))
         attrs.focusAuto.foreach(v => if v then w(sb, """ data-kyo-focus-auto="1""""))
         attrs.focusRestore.foreach(v => if v then w(sb, """ data-kyo-focus-restore="1""""))
+        attrs.scrollAuto.foreach(v => if v then w(sb, """ data-kyo-scroll-auto="1""""))
         // Marker only: stop-propagation is decided server-side in ReactiveUI.dispatchToElement; the client never reads this.
         attrs.stopPropagation.foreach(v => if v then w(sb, """ data-kyo-stop="1""""))
         // enter/leave transition class lists (read client-side by the patch-application code).
@@ -1011,7 +1012,7 @@ private[kyo] object HtmlRenderer:
            |        __kyoPortalSweep(rp);
            |      }
            |    }
-           |    sweepFocusAuto();
+           |    sweepFocusAuto();sweepScrollAuto(true);
            |  }else if(op.PatchList){
            |    __kyoApplyList(op.PatchList.path.join("."),op.PatchList.keys,op.PatchList.changed,op.PatchList.html);
            |  }else if(op.Remove){
@@ -1026,7 +1027,7 @@ private[kyo] object HtmlRenderer:
            |    kyoSpawnGhosts(__rgh);
            |    // The removed subtree may have held portal placeholders: retire their body twins.
            |    __kyoPortalSweep(null);
-           |    sweepFocusAuto();
+           |    sweepFocusAuto();sweepScrollAuto(true);
            |  }else if(op.InjectCss){
            |    var s=document.createElement("style");
            |    s.textContent=op.InjectCss.css;
@@ -1657,6 +1658,23 @@ private[kyo] object HtmlRenderer:
            |    }
            |  }
            |}
+           |// Scroll-into-view for [data-kyo-scroll-auto]: the flag MOVES with a roving highlight, so the carrier
+           |// set is what tells a moved flag from a re-rendered one. Mirrors DomBackend.sweepScrollAuto.
+           |var __scrollAutoPaths={};
+           |function sweepScrollAuto(scroll){
+           |  var els=document.querySelectorAll("[data-kyo-scroll-auto]");
+           |  var now={},fresh=null;
+           |  for(var i=0;i<els.length;i++){
+           |    var p=els[i].getAttribute("data-kyo-path");
+           |    if(p===null)continue;
+           |    now[p]=true;
+           |    if(fresh===null&&!__scrollAutoPaths[p])fresh=els[i];
+           |  }
+           |  __scrollAutoPaths=now;
+           |  // block:"nearest" moves the nearest scrollable ancestor by the least it can, and not at all when the
+           |  // element is already visible, which is what a highlight walking within view wants.
+           |  if(scroll&&fresh&&typeof fresh.scrollIntoView==='function')fresh.scrollIntoView({block:"nearest",inline:"nearest"});
+           |}
            |// Focus seeding/restore for [data-kyo-focus-auto]/[data-kyo-focus-restore]; __focusReturnStack stacks {fa, ret|null, restore}.
            |// Mirrors DomBackend.focusReturnStack for the SPA transport.
            |var __focusReturnStack=[];
@@ -1830,12 +1848,15 @@ private[kyo] object HtmlRenderer:
            |  // A row this emission inserted can carry a portal element, and a row it dropped can take a
            |  // placeholder with it: same upkeep as the Replace path, scoped to the list's parent.
            |  __kyoPortalSweep(parent);
-           |  sweepFocusAuto();
+           |  sweepFocusAuto();sweepScrollAuto(true);
            |}
            |__kyoRebuild();applyJsProps(document.body);ba(document.body);
            |kyoEnterSeed(document.body,{});
            |// Initial mount: everything server-rendered is new (empty old set), like native autofocus.
            |seedFocusAuto(document.body,{});
+           |// Record what already carries the scroll flag without acting on it: a page that arrives with a
+           |// highlight has not moved it, and scrolling on load would fight the browser's own restoration.
+           |sweepScrollAuto(false);
            |// Portal adopt for the initial paint: a portal element present at load re-homes immediately.
            |__kyoPortalSweep(document.body);
            |// Dropdown helpers: close all dropdowns except the given id
