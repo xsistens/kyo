@@ -115,11 +115,32 @@ final case class OrderList[A] private (
     private def keyOf(a: A): String =
         keyF.orElse(labelF).map(_(a)).getOrElse(a.toString)
 
+    private type Snapshot = (Seq[A], Set[String])
+
+    // What a region compares to decide whether to repaint is the SNAPSHOT, never an item: the
+    // sequence and the set are compared structurally, and `A` needs no equality of its own for
+    // that (it has none to require, since any type can be a row here).
+    private given CanEqual[Seq[A], Seq[A]]     = CanEqual.derived
+    private given CanEqual[Snapshot, Snapshot] = CanEqual.derived
+
+    /** The order and the selection as ONE signal, so the tree is ONE reactive region.
+      *
+      * Nesting one render inside the other leaves the inner one subscribed against the value the
+      * outer one held when it was created, which goes stale the moment an effect writes both refs.
+      * [[PickList]] carries the same shape and is where that stopped being theoretical.
+      */
+    private def snapshot(using Frame): Signal[Snapshot] =
+        val items = itemsRef match
+            case Present(r) => r: Signal[Seq[A]]
+            case Absent     => Signal.initConst(Seq.empty[A])
+        val sel = selectedRef match
+            case Present(r) => r: Signal[Set[String]]
+            case Absent     => Signal.initConst(Set.empty[String])
+        items.combineLatest(sel)
+    end snapshot
+
     private[uic] def render(using Frame): UI =
-        (itemsRef, selectedRef) match
-            case (Present(ir), Present(sr)) => ir.render(xs => sr.render(sel => body(xs, sel)))
-            case (Present(ir), Absent)      => ir.render(xs => body(xs, Set.empty))
-            case _                          => body(Seq.empty, Set.empty)
+        snapshot.render((xs, sel) => body(xs, sel))
 
     private def body(xs: Seq[A], sel: Set[String])(using Frame): UI =
         val moveDisabled = disabledFlag || sel.isEmpty || itemsRef.isEmpty

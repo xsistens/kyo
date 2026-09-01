@@ -78,21 +78,41 @@ final case class PickList[A] private (
     private def keyOf(a: A): String =
         keyF.orElse(labelF).map(_(a)).getOrElse(a.toString)
 
-    private def withRef[T](ref: Maybe[SignalRef[T]], fallback: T)(k: T => UI)(using Frame): UI =
+    private type Columns    = (Seq[A], Seq[A])
+    private type Selections = (Set[String], Set[String])
+    private type Snapshot   = (Columns, Selections)
+
+    // What a region compares to decide whether to repaint is the SNAPSHOT, never an item: the
+    // sequences and sets that hold them are compared structurally, and `A` needs no equality of
+    // its own for that (it has none to require, since any type can be a row here).
+    private given CanEqual[Seq[A], Seq[A]]         = CanEqual.derived
+    private given CanEqual[Columns, Columns]       = CanEqual.derived
+    private given CanEqual[Selections, Selections] = CanEqual.derived
+    private given CanEqual[Snapshot, Snapshot]     = CanEqual.derived
+
+    private def sig[T](ref: Maybe[SignalRef[T]], fallback: T)(using CanEqual[T, T], Frame): Signal[T] =
         ref match
-            case Present(r) => r.render(k)
-            case Absent     => k(fallback)
+            case Present(r) => r
+            case Absent     => Signal.initConst(fallback)
+
+    /** Everything one render of this control reads, as ONE signal.
+      *
+      * It was four nested renders, one per ref, and a transfer writes THREE of them. The outer
+      * region re-rendered with the moved source while the inner regions were still subscribed
+      * against the values they had closed over when they were created, and the next click on a row
+      * repainted that older snapshot over the finished transfer: the item came back and the target
+      * column emptied, while the refs themselves held the correct result the whole time.
+      *
+      * `combineLatest` reads every value on every emission, so there is one region and nothing left
+      * to be stale. It is also why the highlight rides along: the columns and their highlights are
+      * one state, and splitting them again is how this went wrong the first time.
+      */
+    private def snapshot(using Frame): Signal[Snapshot] =
+        sig(sourceRef, Seq.empty[A]).combineLatest(sig(targetRef, Seq.empty[A]))
+            .combineLatest(sig(sourceSelectedRef, Set.empty[String]).combineLatest(sig(targetSelectedRef, Set.empty[String])))
 
     private[uic] def render(using Frame): UI =
-        withRef(sourceRef, Seq.empty[A]) { src =>
-            withRef(targetRef, Seq.empty[A]) { tgt =>
-                withRef(sourceSelectedRef, Set.empty[String]) { srcSel =>
-                    withRef(targetSelectedRef, Set.empty[String]) { tgtSel =>
-                        body(src, tgt, srcSel, tgtSel)
-                    }
-                }
-            }
-        }
+        snapshot.render { case ((src, tgt), (srcSel, tgtSel)) => body(src, tgt, srcSel, tgtSel) }
 
     /** A move or transfer button.
       *
