@@ -4651,7 +4651,7 @@ class GoldenRenderTest extends UicTest:
         def wiredHtml(sd: uic.SpeedDial, open: Boolean): String < Async =
             for
                 oref <- Signal.initRef(open)
-                out  <- UI.runRender(sd.wired(oref)).take(1).run
+                out  <- UI.runRender(sd.wired(oref, "sd", _ => ())).take(1).run
             yield out.mkString
         val base = uic.SpeedDial().items(
             uic.MenuItem("Add").icon(uic.Icons.pencil).onSelect(()),
@@ -4668,16 +4668,22 @@ class GoldenRenderTest extends UicTest:
             assert(closed.contains("p-speeddial-rotate"), "toggle rotate class (sheet rotates the plus glyph)")
             assert(closed.contains("""data-uic-icon="plus""""), "toggle plus glyph")
             assert(closed.contains("p-speeddial-list"), "action list")
-            assert(closed.contains("p-speeddial-item"), "action rows")
-            assert(closed.contains("p-button-rounded"), "actions are rounded icon Buttons")
-            assert(closed.contains("p-button-secondary"), "actions carry the secondary severity")
-            assert(closed.contains("p-button-sm"), "actions are small (Prime's 32px fan buttons)")
-            assert(closed.contains("""aria-label="Add""""), "action label becomes the accessible name")
-            assert(closed.contains("""title="Add""""), "action label becomes the native tooltip")
+            assert(closed.contains("""aria-controls="sd-list""""), "the toggle names the menu it opens")
+            assert(!closed.contains("p-speeddial-item"), "closed: the fan renders no actions to tab through")
             assert(!closed.contains("p-speeddial-open"), "closed: no open modifier")
             assert(closed.contains("""aria-expanded="false""""), "closed: aria-expanded false")
+            assert(open.contains("p-speeddial-item"), "open: action rows")
+            assert(open.contains("p-button-rounded"), "actions are rounded icon Buttons")
+            assert(open.contains("p-button-secondary"), "actions carry the secondary severity")
+            assert(open.contains("p-button-sm"), "actions are small (Prime's 32px fan buttons)")
+            assert(open.contains("""aria-label="Add""""), "action label becomes the accessible name")
+            assert(open.contains("""title="Add""""), "action label becomes the native tooltip")
+            assert(open.contains("""role="menuitem""""), "an action in a role=menu is a menuitem")
             assert(open.contains("p-speeddial-open"), "open: open modifier (sheet scales the fan in)")
             assert(open.contains("""aria-expanded="true""""), "open: aria-expanded true")
+            assert(open.contains("""data-kyo-focus-auto="1""""), "open: the fan seeds focus onto its first action")
+            assert(open.contains("""data-kyo-focus-restore="1""""), "and hands it back to the toggle on close")
+            assert(open.contains("data-kyo-scroll-keys"), "the arrows the fan answers do not scroll the page")
             assert(down.contains("p-speeddial-down"), "direction modifier class")
         end for
     }
@@ -6211,8 +6217,15 @@ class GoldenRenderTest extends UicTest:
             // invariant proves that shape stays reachable rather than being roved by mistake.
             pick      <- Signal.initRef("a")
             segmented <- renderHtml(uic.SelectButton[String]().options(Seq("a", "b")).value(pick).render)
-            card      <- renderHtml(uic.Card().title("Info").onHeaderClick(())(p("Body")))
-            avatar    <- renderHtml(uic.Avatar().initials("AL").onClick(()))
+            fanOpen   <- Signal.initRef(true)
+            speedDial <- renderHtml(
+                uic.SpeedDial().items(
+                    uic.MenuItem("Add").icon(uic.Icons.pencil).onSelect(()),
+                    uic.MenuItem("Delete").icon(uic.Icons.trash).onSelect(())
+                ).wired(fanOpen, "sd", _ => ())
+            )
+            card   <- renderHtml(uic.Card().title("Info").onHeaderClick(())(p("Body")))
+            avatar <- renderHtml(uic.Avatar().initials("AL").onClick(()))
         yield
             val named = List(
                 "Icon"              -> icon,
@@ -6225,6 +6238,7 @@ class GoldenRenderTest extends UicTest:
                 "Galleria"          -> galleria,
                 "Stepper"           -> stepper,
                 "SelectButton"      -> segmented,
+                "SpeedDial"         -> speedDial,
                 "Card"              -> card,
                 "Avatar"            -> avatar
             )

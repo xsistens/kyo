@@ -50,9 +50,13 @@ final case class Button private (
     tooltipV: Maybe[TextValue] = Absent,
     formV: Maybe[String] = Absent,
     onClickEff: Maybe[Any < (Abort[Throwable] & Async)] = Absent,
+    onKeyDownF: Maybe[KeyboardEvent => Any < (Abort[Throwable] & Async)] = Absent,
     extraChildren: List[UI] = Nil,
     extraClassesV: List[String] = Nil,
-    extraAriasV: List[(String, String)] = Nil
+    extraAriasV: List[(String, String)] = Nil,
+    roleRawV: Maybe[String] = Absent,
+    tabIndexV: Maybe[Int] = Absent,
+    focusSeedV: Boolean = false
 ) extends Node, HasTooltip, HasAccessibleNameRef, HasAccessibleDescription:
     type Self = Button
 
@@ -67,6 +71,20 @@ final case class Button private (
       */
     private[uic] def ariaRaw(name: String, value: String): Button =
         copy(extraAriasV = extraAriasV :+ (name -> value))
+
+    /** Package-internal composite-widget hooks: the attributes a button needs when it is a CHILD
+      * of a composite widget rather than a control of its own. A standalone button decides none
+      * of these (it is its own tab stop, it is a button, and the browser gives it Enter and
+      * Space), so they stay off the public surface and belong to the host that owns the widget:
+      * SpeedDial's fan is one `role="menu"` whose actions rove a single tab stop, are announced
+      * as `menuitem`, answer arrows, and take the focus the fan seeds when it opens.
+      */
+    private[uic] def roleRaw(v: String): Button       = copy(roleRawV = Present(v))
+    private[uic] def tabIndexRaw(v: Int): Button      = copy(tabIndexV = Present(v))
+    private[uic] def focusSeedRaw(v: Boolean): Button = copy(focusSeedV = v)
+
+    private[uic] def onKeyDownRaw(f: KeyboardEvent => Any < (Abort[Throwable] & Async)): Button =
+        copy(onKeyDownF = Present(f))
 
     /** Semantic accent (`.p-button-<severity>`); `Primary` is the unsuffixed default. A
       * `Signal[Severity]` swaps the `.p-button-<token>` class IN PLACE via kyo-ui's class channel on
@@ -226,6 +244,10 @@ final case class Button private (
         extraAriasV.foreach((n, v) => el = el.aria(n, v))
         el = el.jsProp("type", buttonTypeV.token.toLowerCase)
         if accessibleRoleV == ButtonAccessibleRole.Link then el = el.role("link")
+        roleRawV.foreach(r => el = el.role(r))
+        tabIndexV.foreach(t => el = el.tabIndex(t))
+        if focusSeedV then el = el.focusAuto(true).focusRestore(true)
+        onKeyDownF.foreach(f => el = el.onKeyDown(f))
         accessibleNameV match
             case Present(TextValue.Const(n)) => el = el.aria("label", n)
             case Present(TextValue.Dyn(s))   => el = el.aria("label", s)
@@ -287,9 +309,15 @@ final case class Button private (
             case Absent                      => ()
         end match
         if loadingNow then el = el.aria("busy", "true")
+        roleRawV.foreach(r => el = el.role(r))
+        if focusSeedV then el = el.focusAuto(true).focusRestore(true)
+        onKeyDownF.foreach(f => el = el.onKeyDown(f))
         val effDisabled = loadingNow || disabledV.constTrue
+        // A disabled link leaves the tab order outright, so the host's roving tabindex has
+        // nothing left to say about it.
         if effDisabled then el = el.cssClass("p-disabled").aria("disabled", "true").tabIndex(-1)
         else
+            tabIndexV.foreach(t => el = el.tabIndex(t))
             el = el.href(Href.Path(h))
             onClickEff.foreach(e => el = el.onClick(e))
         end if
