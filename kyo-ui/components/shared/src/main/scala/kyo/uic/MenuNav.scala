@@ -82,6 +82,14 @@ private[uic] object MenuNav:
             val i   = path.last
             if i >= 0 && i < lvl.size then Present(lvl(i)) else Absent
 
+    /** The first row a highlight may sit on under `parent` (the root list where it is empty).
+      *
+      * What a host seeds when its panel opens: opening has to land ON a row, or the arrow that
+      * opened it has moved nothing and the reader presses it twice to reach the first one.
+      */
+    private[uic] def firstFocus[N: Nodes](items: List[N], parent: List[Int] = Nil): Maybe[List[Int]] =
+        firstChild(items, parent)
+
     private def hasChildren[N](items: List[N], path: List[Int])(using nodes: Nodes[N]): Boolean =
         itemAt(items, path).exists(n => nodes.children(n).nonEmpty)
 

@@ -261,13 +261,15 @@ final case class CascadeSelect[A] private (
                     yield ()
                 case Absent => ()
 
-        // Opens with every group closed and nothing highlighted (fresh chain).
+        // Opens with every group closed and the highlight on the first root option. Not on the
+        // selected one: the chain opens closed, so a leaf chosen three levels down has no row on
+        // the screen to land on.
         def openPanel: Any < Async =
             st match
                 case Present(state) =>
                     for
                         _ <- MenuRender.openExactly(state.refs, Absent)
-                        _ <- state.focusRef.set(Nil)
+                        _ <- state.focusRef.set(MenuNav.firstFocus(items).getOrElse(Nil))
                         _ <- state.open.set(true)
                     yield ()
                 case Absent => ()
@@ -317,21 +319,25 @@ final case class CascadeSelect[A] private (
           * machine runs it, over [[CascadeItem]] through its own [[MenuNav.Nodes]].
           */
         def panelKey(state: CascadeSelect.State): KeyboardEvent => Any < Async = e =>
-            MenuNav.onKey(items, MenuNav.Orientation.Vertical, state.focus, e.key) match
-                case Present(step) =>
-                    val reopen: Any < Async = step.open match
-                        case MenuNav.OpenOp.Keep      => ()
-                        case MenuNav.OpenOp.Close     => MenuRender.openExactly(state.refs, Absent)
-                        case MenuNav.OpenOp.OpenTo(p) => MenuRender.openExactly(state.refs, Present(p))
-                    val chosen: Any < Async =
-                        if step.activate then
-                            MenuNav.itemAt(items, step.focus) match
-                                case Present(CascadeItem.Leaf(a)) => pick(a)
-                                case _                            => ()
-                        else ()
-                    val shut: Any < Async = if step.dismiss then state.open.set(false) else ()
-                    state.focusRef.set(step.focus).andThen(reopen).andThen(chosen).andThen(shut)
-                case Absent => ()
+            // Tab carries the reader away from the element the whole chain's keyboard lives on, so
+            // the chain goes with them rather than floating over the page unanswered.
+            if e.key == Keyboard.Tab then closeAll
+            else
+                MenuNav.onKey(items, MenuNav.Orientation.Vertical, state.focus, e.key) match
+                    case Present(step) =>
+                        val reopen: Any < Async = step.open match
+                            case MenuNav.OpenOp.Keep      => ()
+                            case MenuNav.OpenOp.Close     => MenuRender.openExactly(state.refs, Absent)
+                            case MenuNav.OpenOp.OpenTo(p) => MenuRender.openExactly(state.refs, Present(p))
+                        val chosen: Any < Async =
+                            if step.activate then
+                                MenuNav.itemAt(items, step.focus) match
+                                    case Present(CascadeItem.Leaf(a)) => pick(a)
+                                    case _                            => ()
+                            else ()
+                        val shut: Any < Async = if step.dismiss then state.open.set(false) else ()
+                        state.focusRef.set(step.focus).andThen(reopen).andThen(chosen).andThen(shut)
+                    case Absent => ()
 
         // === floating panel chain ================================================
         val panelUI: List[UI] = st.toList.collect {

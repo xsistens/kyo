@@ -49,6 +49,52 @@ class SelectTest extends UicTest:
             at          <- hi.get
         yield at
 
+    /** Presses `key` on the CLOSED trigger and reports whether the panel opened and where the
+      * highlight landed.
+      */
+    private def opening(key: UI.Keyboard, value: String)(using Frame): (Boolean, Int) < Async =
+        for
+            open  <- Signal.initRef(false)
+            hi    <- Signal.initRef(-1)
+            query <- Signal.initRef("")
+            ref   <- Signal.initRef(value)
+            ui = select.value(ref).wired(open, hi, query, Present("sel"))
+            trigger <- elementWithClass(ui, "p-select")
+            _       <- press(trigger, key)
+            isOpen  <- open.get
+            at      <- hi.get
+        yield (isOpen, at)
+
+    /** Whether the open panel is still open after `key`. */
+    private def stillOpen(key: UI.Keyboard, mods: UI.Modifiers = UI.Modifiers.none, filter: Boolean = false)(using
+        Frame
+    ): Boolean < Async =
+        for
+            open  <- Signal.initRef(true)
+            hi    <- Signal.initRef(1)
+            query <- Signal.initRef("")
+            value <- Signal.initRef("")
+            base = if filter then select.filterable(true) else select
+            ui   = base.value(value).wired(open, hi, query, Present("sel"))
+            host  <- keyboardHost(ui, filter)
+            _     <- press(host, key, mods)
+            still <- open.get
+        yield still
+
+    "an opening key lands on the option already selected" in
+        opening(UI.Keyboard.ArrowDown, "c").map((open, at) => assert(open && at == 2))
+
+    "and on the first option a highlight may sit on where nothing is selected" in {
+        for
+            down  <- opening(UI.Keyboard.ArrowDown, "")
+            enter <- opening(UI.Keyboard.Enter, "")
+            space <- opening(UI.Keyboard.Space, "")
+        yield assert(
+            down == (true, 0) && enter == (true, 0) && space == (true, 0),
+            "opening has to land ON an option, or the arrow that opened the panel moved nothing"
+        )
+    }
+
     "ArrowDown from nothing lands on the first option" in after(-1, UI.Keyboard.ArrowDown).map(at => assert(at == 0))
 
     "ArrowUp from nothing lands on the last, as it does everywhere else in the family" in
@@ -167,6 +213,19 @@ class SelectTest extends UicTest:
             (_, _, ui) <- panel(-1, filter = false)
             trigger    <- elementWithClass(ui, "p-select")
         yield assert(!trigger.attrs.ariaAttrs.contains("activedescendant"))
+    }
+
+    "Tab closes the panel, in both directions and with a filter header too" in {
+        val shift = UI.Modifiers(ctrl = false, alt = false, shift = true, meta = false)
+        for
+            fwd      <- stillOpen(UI.Keyboard.Tab)
+            back     <- stillOpen(UI.Keyboard.Tab, shift)
+            inFilter <- stillOpen(UI.Keyboard.Tab, filter = true)
+        yield assert(
+            !fwd && !back && !inFilter,
+            "a panel the reader has tabbed away from is one nothing answers"
+        )
+        end for
     }
 
     "the panel takes neither focus nor keys, so the two cannot disagree" in {

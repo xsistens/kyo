@@ -269,6 +269,33 @@ cancel-on-same-value fired and every arrow press ended at zero.
   emulated activation on elements the browser already activates. It covers `button` and `a[href]`,
   not a handler pair a component wires itself.
 
+## A panel whose keyboard lives outside it holds no tab stop
+
+The combobox family keeps focus on the trigger (or, with a filter header, on that one input) and
+steers the panel from there through `aria-activedescendant`. Everything else in the panel is then
+a place the reader must not be able to put focus, for two reasons that both bit MultiSelect:
+
+- **A key pressed inside the panel reaches the outside handler too.** Dispatch bubbles to every
+  ancestor that declared the event, and the panel is rendered inside the trigger, so a Space on
+  MultiSelect's header select-all toggled everything AND was read by the trigger as an activation
+  of the highlighted option, deselecting it. The box lost its tab stop (`CheckBox.tabbable(false)`,
+  package-internal) and gained a stamped id, so a key that does arrive from it (a pointer can still
+  focus it) is recognised and ignored. Its keyboard route is a chord on the element that does hold
+  focus: Ctrl or Cmd with A.
+- **Tab then leaves the widget rather than walking into it**, so every panel in the family closes
+  on Tab in both directions. Handling it in the panel's key function rather than by watching focus
+  is what makes it work in both transports: a close is a ref write like any other, and the browser
+  has already moved focus by the time it lands, which is exactly right when nothing inside the
+  panel could have taken it.
+
+## An opening key has to land on a row
+
+`ArrowDown` on a closed combobox opens it AND puts the highlight on a row: the selected one, else
+the first the highlight may sit on. Opening without landing looks like a dropped keystroke, because
+the reader's next arrow moves from nowhere to the first row, which is where they thought the first
+press had already put them. AutoComplete had this right and its four siblings did not; the seed
+belongs in the component's own open path (`openPanel`), which is also the path a pointer takes.
+
 ## A control that reads several refs is ONE region
 
 Nesting `ref.render` inside `ref.render` leaves the inner region subscribed against the value the

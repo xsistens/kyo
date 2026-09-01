@@ -333,6 +333,14 @@ final case class Select[A] private (
         val selIdx  = all.indexWhere(a => key(a) == current)
         val selText = if selIdx >= 0 then labelF(all(selIdx)) else ""
 
+        /** Where an opening key lands: the selected option, or the first one a highlight may sit
+          * on where nothing is selected. Opening has to land ON an option, or the arrow that
+          * opened the panel has moved nothing and the reader presses it twice to reach the first
+          * row. `-1` only where there is no such row at all.
+          */
+        val openHighlight: Int =
+            if selIdx >= 0 then selIdx else all.indexWhere(a => !isOptionDisabled(a))
+
         // Writes the picked key, fires onChange, closes the panel.
         def pick(a: A)(s: State): Any < Async =
             val k = key(a)
@@ -352,7 +360,7 @@ final case class Select[A] private (
         def openPanel(s: State): Any < Async =
             for
                 _ <- s.q.set("")
-                _ <- s.hi.set(selIdx)
+                _ <- s.hi.set(openHighlight)
                 _ <- s.open.set(true)
             yield ()
 
@@ -511,6 +519,11 @@ final case class Select[A] private (
       * Escape closes the panel. It is read HERE rather than by [[Overlay]] because focus never
       * enters the panel, so an Escape pressed by the reader is delivered to whatever holds focus
       * (the trigger, or the filter header's input) and never reaches the panel at all.
+      *
+      * Tab closes it too, in both directions. The panel's keyboard lives on the element the Tab is
+      * carrying the reader away from, so a panel left open behind them is one nothing answers: it
+      * floats over the page with a highlight on it while the keys belong to whatever they landed
+      * on next.
       */
     private def panelKey(
         shown: Seq[A],
@@ -520,7 +533,8 @@ final case class Select[A] private (
         pick: A => State => Any < Async
     )(e: KeyboardEvent)(using Frame): Any < Async =
         val caretOwns = filtering && (e.key == Keyboard.Space || e.key.charValue.isDefined)
-        if caretOwns then ()
+        if e.key == Keyboard.Tab then s.open.set(false)
+        else if caretOwns then ()
         else
             ListNav.onKey(navigable, hiEff, e.key, wrap = false) match
                 case Present(step) if step.dismiss => s.open.set(false)
