@@ -250,9 +250,19 @@ final case class TreeSelect private (
     )(using Frame): UI =
         val selectedLabels = flatNodes.collect { case (id, text) if current.contains(id) => text }
 
+        /** Where an opening key lands: the first selected row, or the first row there is.
+          * Opening has to land ON a row, or the arrow that opened the panel has moved nothing and
+          * the reader presses it twice to reach the top of the tree.
+          */
+        val openHighlight: Int =
+            val rows = Tree.visibleRows(nodeList, exp)
+            val sel  = rows.indexWhere(r => current.contains(r.key))
+            if sel >= 0 then sel else if rows.isEmpty then -1 else 0
+        end openHighlight
+
         def openPanel: Any < Async =
             st match
-                case Present(s) => s.open.set(true)
+                case Present(s) => s.hi.set(openHighlight).andThen(s.open.set(true))
                 case Absent     => ()
 
         def toggle: Any < Async =
@@ -386,7 +396,10 @@ final case class TreeSelect private (
                         e.key match
                             case Keyboard.ArrowDown | Keyboard.Enter | Keyboard.Space => openPanel
                             case _                                                    => ()
-                    else if e.key == Keyboard.Escape then state.open.set(false)
+                    // Escape closes, and so does Tab in either direction: the panel's keyboard
+                    // lives here, on the element the Tab is carrying the reader away from, so a
+                    // panel left open behind them is one nothing answers.
+                    else if e.key == Keyboard.Escape || e.key == Keyboard.Tab then state.open.set(false)
                     else
                         treeKey match
                             case Present(f) => f(e)

@@ -172,6 +172,19 @@ class AutoCompleteTest extends UicTest:
         yield assert(!still)
     }
 
+    "and so does Tab, in both directions: the panel's keyboard is the field's" in {
+        for
+            (_, _, fwdOpen, fwdUi)   <- state(1)
+            fwdInput                 <- elementWithClass(fwdUi, "p-autocomplete-input")
+            _                        <- press(fwdInput, UI.Keyboard.Tab)
+            fwd                      <- fwdOpen.get
+            (_, _, backOpen, backUi) <- state(1)
+            backInput                <- elementWithClass(backUi, "p-autocomplete-input")
+            _                        <- press(backInput, UI.Keyboard.Tab, UI.Modifiers(shift = true))
+            back                     <- backOpen.get
+        yield assert(!fwd && !back, "a panel the reader has tabbed away from is one nothing answers")
+    }
+
     "the field carries the base id, so the trigger has something to hand focus to" in {
         for
             (_, _, _, ui) <- withDropdown("")

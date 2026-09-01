@@ -320,11 +320,20 @@ final case class MultiSelect[A] private (
             val k = key(a)
             write(if current.contains(k) then current - k else current + k)
 
-        // Opens with a fresh query and no highlight.
+        /** Where an opening key lands: the first option already selected, or the first one a
+          * highlight may sit on where none is. Opening has to land ON an option, or the arrow that
+          * opened the panel has moved nothing and the reader presses it twice to reach the first
+          * row. `-1` only where there is no such row at all.
+          */
+        val openHighlight: Int =
+            val sel = items.indexWhere(a => current.contains(key(a)))
+            if sel >= 0 then sel else items.indexWhere(a => !isOptionDisabled(a))
+
+        // Opens with a fresh query and the highlight on the first selected option.
         def openPanel(s: State): Any < Async =
             for
                 _ <- s.q.set("")
-                _ <- s.hi.set(-1)
+                _ <- s.hi.set(openHighlight)
                 _ <- s.open.set(true)
             yield ()
 
@@ -465,7 +474,7 @@ final case class MultiSelect[A] private (
                             case Keyboard.ArrowDown | Keyboard.Enter | Keyboard.Space => openPanel(s)
                             case _                                                    => ()
                     else if filtering then ()
-                    else panelKey(shown, navigable, hiEff, s, toggleOption)(e)
+                    else panelKey(shown, navigable, hiEff, s, toggleOption, toggleAllOf(current, shown))(e)
                 }
             }
             // Focus-loss on the trigger reports the current selection — the validation layer's Blur trigger.
@@ -504,17 +513,29 @@ final case class MultiSelect[A] private (
         (shownGroups, shown, shown.indices.toList.filterNot(i => isOptionDisabled(shown(i))), hiEff)
     end shownState
 
+    /** Prime's select-all semantics: checked while every visible enabled option is selected. */
+    private def isAllSelected(current: Set[String], shown: Seq[A]): Boolean =
+        val enabled = shown.filterNot(isOptionDisabled)
+        enabled.nonEmpty && enabled.forall(a => current.contains(key(a)))
+
+    /** The other half of them: checking replaces the WHOLE value with the visible enabled keys,
+      * unchecking clears the selection entirely. Read by the header checkbox and by the chord that
+      * reaches it from the keyboard, which is why it is a method rather than a local.
+      */
+    private def toggleAllOf(current: Set[String], shown: Seq[A])(using Frame): Any < Async =
+        if isAllSelected(current, shown) then write(Set.empty)
+        else write(shown.filterNot(isOptionDisabled).map(key).toSet)
+
+    /** The id of the header's select-all box: what tells a key pressed ON it apart from one
+      * pressed on the trigger, since both reach the trigger's handler.
+      */
+    private def toggleAllId(base: String): String = s"$base-all"
+
     private def overlayPanel(current: Set[String], s: State, toggleOption: A => Any < Async)(using Frame): UI =
         val (shownGroups, shown, navigable, hiEff) = shownState(s)
 
-        // Prime's select-all semantics: checked while every visible enabled option
-        // is selected; checking replaces the WHOLE value with the visible enabled
-        // keys, unchecking clears the selection entirely.
-        val enabledShown = shown.filterNot(isOptionDisabled)
-        val allSelected  = enabledShown.nonEmpty && enabledShown.forall(a => current.contains(key(a)))
-        val toggleAll: Any < Async =
-            if allSelected then write(Set.empty)
-            else write(enabledShown.map(key).toSet)
+        val allSelected = isAllSelected(current, shown)
+        val toggleAll   = toggleAllOf(current, shown)
 
         // The inert Prime checkbox anatomy on a row (the Tree precedent: no native
         // input — the row's own click handler toggles, so an input would double-fire).
@@ -562,14 +583,18 @@ final case class MultiSelect[A] private (
         // no nested subscription) plus Prime's IconField filter container.
         val headerKids: List[UI] =
             (if showToggleAllFlag then
-                 List(
-                     CheckBox()
-                         .checked(allSelected)
-                         .accessibleName("Toggle All")
-                         .onChange(_ => toggleAll)
-                         .render
-                 )
-             else Nil) ++
+                 // Not a tab stop: the panel's keyboard lives on the element focus is already on,
+                 // and a key pressed in here would reach that element a second time by bubbling.
+                 // Ctrl/Cmd+A is how the keyboard reaches it instead.
+                 var allBox = CheckBox()
+                     .checked(allSelected)
+                     .accessibleName("Toggle All")
+                     .tabbable(false)
+                     .onChange(_ => toggleAll)
+                 s.idBase.foreach(b => allBox = allBox.id(toggleAllId(b)))
+                 List(allBox.render)
+             else Nil)
+            ++
                 (if filtering then
                      var filterEl = input
                          .cssClass("p-multiselect-filter")
@@ -588,7 +613,7 @@ final case class MultiSelect[A] private (
                          .focusAuto(true)
                          .focusRestore(true)
                          .preventScrollKeys
-                         .onKeyDown(panelKey(shown, navigable, hiEff, s, toggleOption))
+                         .onKeyDown(panelKey(shown, navigable, hiEff, s, toggleOption, toggleAll))
                      s.idBase.foreach { b =>
                          filterEl = filterEl.aria("controls", listId(b))
                          if hiEff >= 0 then filterEl = filterEl.aria("activedescendant", optionId(b, hiEff))
@@ -633,12 +658,38 @@ final case class MultiSelect[A] private (
       * A filter header holds a text field, so Space and a printable key belong to the caret there
       * and to the list otherwise. Escape closes: focus never enters the panel, so the key is
       * delivered to the trigger or to the filter header's input and never reaches the panel.
+      * Tab closes it too, in both directions: the panel's keyboard lives on the element the Tab is
+      * carrying the reader away from, so a panel left open behind them is one nothing answers.
+      *
+      * Ctrl/Cmd+A toggles the select-all the header shows, which is the ARIA listbox chord for it
+      * and the only route to that box from the keyboard: the box itself is no tab stop, because a
+      * key pressed on it bubbles into this same handler and would be read twice. The chord is
+      * honored in the filter header too, where the browser also selects the query text: the panel's
+      * options are what the reader is steering there, and the box is otherwise out of reach.
+      *
+      * A key that arrives FROM the select-all box (a pointer can still focus it) belongs to the
+      * box, so nothing here answers it.
       */
-    private def panelKey(shown: Seq[A], navigable: List[Int], hiEff: Int, s: State, toggleOption: A => Any < Async)(
+    private def panelKey(
+        shown: Seq[A],
+        navigable: List[Int],
+        hiEff: Int,
+        s: State,
+        toggleOption: A => Any < Async,
+        toggleAll: Any < Async
+    )(
         e: KeyboardEvent
     )(using Frame): Any < Async =
-        val caretOwns = filtering && (e.key == Keyboard.Space || e.key.charValue.isDefined)
-        if caretOwns then ()
+        val caretOwns     = filtering && (e.key == Keyboard.Space || e.key.charValue.isDefined)
+        val fromToggleAll = s.idBase.exists(b => e.targetId.contains(toggleAllId(b)))
+        val selectsAll = showToggleAllFlag && (e.modifiers.ctrl || e.modifiers.meta) &&
+            (e.key match
+                case Keyboard.Char(c) => c.toLower == 'a'
+                case _                => false)
+        if fromToggleAll then ()
+        else if e.key == Keyboard.Tab then s.open.set(false)
+        else if selectsAll then toggleAll
+        else if caretOwns then ()
         else
             ListNav.onKey(navigable, hiEff, e.key, wrap = false) match
                 case Present(step) if step.dismiss => s.open.set(false)

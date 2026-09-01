@@ -48,6 +48,96 @@ class MultiSelectTest extends UicTest:
             at             <- hi.get
         yield at
 
+    /** Presses `key` on the CLOSED trigger and reports whether the panel opened and where the
+      * highlight landed.
+      */
+    private def opening(key: UI.Keyboard, selected: Set[String])(using Frame): (Boolean, Int) < Async =
+        for
+            open  <- Signal.initRef(false)
+            hi    <- Signal.initRef(-1)
+            query <- Signal.initRef("")
+            value <- Signal.initRef(selected)
+            ui = multi.value(value).wired(open, hi, query, Present("ms"))
+            trigger <- elementWithClass(ui, "p-multiselect")
+            _       <- press(trigger, key)
+            isOpen  <- open.get
+            at      <- hi.get
+        yield (isOpen, at)
+
+    "an opening key lands on the first option already selected" in
+        opening(UI.Keyboard.ArrowDown, Set("c")).map((open, at) => assert(open && at == 2))
+
+    "and on the first option a highlight may sit on where none is" in {
+        for
+            down  <- opening(UI.Keyboard.ArrowDown, Set.empty)
+            space <- opening(UI.Keyboard.Space, Set.empty)
+        yield assert(
+            down == (true, 0) && space == (true, 0),
+            "opening has to land ON an option, or the arrow that opened the panel moved nothing"
+        )
+    }
+
+    "Tab closes the panel, in both directions and with a filter header too" in {
+        val shift = UI.Modifiers(shift = true)
+        for
+            (_, _, fwdOpen, fwdUi)   <- panelOf(2)
+            fwdHost                  <- keyboardHost(fwdUi, filter = false)
+            _                        <- press(fwdHost, UI.Keyboard.Tab)
+            fwd                      <- fwdOpen.get
+            (_, _, backOpen, backUi) <- panelOf(2)
+            backHost                 <- keyboardHost(backUi, filter = false)
+            _                        <- press(backHost, UI.Keyboard.Tab, shift)
+            back                     <- backOpen.get
+            (_, _, filOpen, filUi)   <- panelOf(2, filter = true)
+            filHost                  <- keyboardHost(filUi, filter = true)
+            _                        <- press(filHost, UI.Keyboard.Tab)
+            fil                      <- filOpen.get
+        yield assert(!fwd && !back && !fil, "a panel the reader has tabbed away from is one nothing answers")
+        end for
+    }
+
+    "Ctrl or Cmd with A works the select-all the header shows, since that box is no tab stop" in {
+        val ctrl = UI.Modifiers(ctrl = true)
+        val cmd  = UI.Modifiers(meta = true)
+        for
+            (_, value, _, ui)   <- panelOf(0)
+            host                <- keyboardHost(ui, filter = false)
+            _                   <- press(host, UI.Keyboard.Char('a'), ctrl)
+            all                 <- value.get
+            (_, value2, _, ui2) <- panelOf(0)
+            _                   <- value2.set(Set("a", "c", "d"))
+            host2               <- keyboardHost(ui2, filter = false)
+            _                   <- press(host2, UI.Keyboard.Char('a'), cmd)
+            cleared             <- value2.get
+        yield assert(
+            all == Set("a", "c", "d") && cleared.isEmpty,
+            "every enabled option, and the second press clears them; the sold-out one is never selected"
+        )
+        end for
+    }
+
+    "the select-all box is out of the tab order, so its keys cannot be read twice" in {
+        for
+            (_, _, _, ui) <- panelOf(2)
+            box           <- elementWithClass(ui, "p-checkbox-input")
+        yield
+            assert(box.attrs.tabIndex.contains(-1), "a key pressed on it would reach the trigger by bubbling")
+            assert(box.attrs.identifier.contains("ms-all"), "and that is how the trigger knows one did")
+    }
+
+    "a key that came from the select-all box is the box's own, so the option list ignores it" in {
+        for
+            (_, value, open, ui) <- panelOf(2)
+            trigger              <- elementWithClass(ui, "p-multiselect")
+            bubbled: (Any < Async) = trigger.attrs.onKeyDown match
+                case Present(f) => f(UI.KeyboardEvent(UI.Keyboard.Space, UI.Modifiers.none, Present("ms-all")))
+                case Absent     => ()
+            _      <- bubbled
+            picked <- value.get
+            still  <- open.get
+        yield assert(picked.isEmpty && still, "the box toggles them all; the highlighted option is not a second answer")
+    }
+
     "ArrowDown from nothing lands on the first option" in after(-1, UI.Keyboard.ArrowDown).map(at => assert(at == 0))
 
     "ArrowUp from nothing lands on the last" in after(-1, UI.Keyboard.ArrowUp).map(at => assert(at == 3))

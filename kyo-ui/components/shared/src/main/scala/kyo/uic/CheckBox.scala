@@ -35,9 +35,18 @@ final case class CheckBox private (
     accNameRefV: Maybe[String] = Absent,
     onChangeF: Maybe[Boolean => Any < Async] = Absent,
     onBlurF: Maybe[Boolean => Any < Async] = Absent,
-    idV: Maybe[String] = Absent
+    idV: Maybe[String] = Absent,
+    tabbableFlag: Boolean = true
 ) extends Node, BooleanFormControl, HasAccessibleNameRef:
     type Self = CheckBox
+
+    /** Takes the box out of the tab order while it stays a real, announced checkbox a pointer can
+      * still work. For a box that lives INSIDE a widget whose keyboard runs from somewhere else
+      * ([[MultiSelect]]'s select-all header): the key it would receive there reaches that other
+      * element too, by bubbling, and gets read a second time. Not public, because a checkbox
+      * standing on its own must be reachable.
+      */
+    private[uic] def tabbable(v: Boolean): CheckBox = copy(tabbableFlag = v)
 
     /** Native `id` on the checkbox input — pair with `Label.forId`; the form layer
       * stamps the bound field's id here so focus-first-invalid can target the box.
@@ -140,6 +149,7 @@ final case class CheckBox private (
         val blocked = isReadonly || isDisplayOnly
 
         var box = checkbox.cssClass("p-checkbox-input").checked(isChecked)
+        if !tabbableFlag then box = box.tabIndex(-1)
         box = idV.map(v => box.id(v)).getOrElse(box)
         if isMixed then box = box.indeterminate(true).aria("checked", "mixed")
         box = nameV.map(v => box.jsProp("name", v)).getOrElse(box)

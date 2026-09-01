@@ -140,20 +140,8 @@ final case class Tree private (
             case (Absent, Present(s))     => s.render(sel => body(Set.empty, sel, roving))
             case _                        => body(Set.empty, Set.empty, roving)
 
-    /** The rows the reader can see, outermost first, in the order they render.
-      *
-      * A collapsed node contributes itself and none of its children, which is exactly what
-      * [[TreeNav]] navigates over: the hierarchy survives in each row's depth.
-      */
-    private def visibleRows(nodes: List[TreeNode], exp: Set[String], depth: Int): List[TreeNav.Row] =
-        nodes.flatMap { n =>
-            val open = exp.contains(n.id)
-            TreeNav.Row(depth, n.id, n.children.nonEmpty, open) ::
-                (if open then visibleRows(n.children, exp, depth + 1) else Nil)
-        }
-
     private def body(exp: Set[String], sel: Set[String], roving: Maybe[Roving])(using Frame): UI =
-        val rows     = visibleRows(nodeList, exp, 0)
+        val rows     = Tree.visibleRows(nodeList, exp)
         val rowIndex = rows.map(_.key).zipWithIndex.toMap
         val focus    = roving.map(r => if r.focus >= 0 && r.focus < rows.size then r.focus else -1).getOrElse(-1)
 
@@ -223,7 +211,7 @@ final case class Tree private (
       * `Overlay.onPanelKeyDown`. One handler either way, so the two keyboards cannot drift.
       */
     private[uic] def keyHandler(exp: Set[String], roving: Roving)(using Frame): KeyboardEvent => Any < Async =
-        val rows  = visibleRows(nodeList, exp, 0)
+        val rows  = Tree.visibleRows(nodeList, exp)
         val focus = if roving.focus >= 0 && roving.focus < rows.size then roving.focus else -1
         e =>
             TreeNav.onKey(rows, focus, e.key) match
@@ -421,6 +409,20 @@ final case class Tree private (
 end Tree
 
 object Tree:
+    /** The rows the reader can see, outermost first, in the order they render.
+      *
+      * A collapsed node contributes itself and none of its children, which is exactly what
+      * [[TreeNav]] navigates over: the hierarchy survives in each row's depth. On the companion
+      * because a host that owns the highlight ([[TreeSelect]]) has to count rows before it has a
+      * tree to ask.
+      */
+    private[uic] def visibleRows(nodes: List[TreeNode], exp: Set[String], depth: Int = 0): List[TreeNav.Row] =
+        nodes.flatMap { n =>
+            val open = exp.contains(n.id)
+            TreeNav.Row(depth, n.id, n.children.nonEmpty, open) ::
+                (if open then visibleRows(n.children, exp, depth + 1) else Nil)
+        }
+
     /** The id of the root row list, which is what a host combobox ([[TreeSelect]]) points
       * `aria-controls` at.
       */

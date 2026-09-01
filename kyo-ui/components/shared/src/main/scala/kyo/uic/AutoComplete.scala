@@ -271,8 +271,11 @@ final case class AutoComplete[A] private (
                     case Present(step) => s.hi.set(step.focus)
                     case Absent        => ()
             case Keyboard.Enter if panelShown && hiEff >= 0 && visible.isDefinedAt(hiEff) => pick(visible(hiEff))(s)
-            case Keyboard.Escape if s.isOpen                                              => s.open.set(false)
-            case _                                                                        => ()
+            // Escape closes, and so does Tab: the panel's keyboard lives on this field, the one
+            // the Tab is carrying the reader away from, so a panel left open behind them is one
+            // nothing answers.
+            case Keyboard.Escape | Keyboard.Tab if s.isOpen => s.open.set(false)
+            case _                                          => ()
         end match
     end fieldKey
 
