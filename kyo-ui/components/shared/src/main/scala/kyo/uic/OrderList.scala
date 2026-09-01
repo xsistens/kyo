@@ -3,62 +3,6 @@ package kyo.uic
 import kyo.*
 import kyo.UI.*
 
-/** Package-internal reorder semantics shared by [[OrderList]] and [[PickList]] —
-  * PrimeVue's exact move algorithms over an ordered list with a selected subset.
-  */
-private[uic] object ListReorder:
-
-    /** Each selected item swaps with its predecessor, scanning top-down; a selected
-      * item already at the top stops the pass (Prime's break).
-      */
-    def moveUp[A](xs: List[A], isSel: A => Boolean): List[A] =
-        val buf  = xs.toBuffer
-        var i    = 0
-        var stop = false
-        while i < buf.length && !stop do
-            if isSel(buf(i)) then
-                if i == 0 then stop = true
-                else
-                    val tmp = buf(i - 1)
-                    buf(i - 1) = buf(i)
-                    buf(i) = tmp
-            end if
-            i += 1
-        end while
-        buf.toList
-    end moveUp
-
-    /** Each selected item swaps with its successor, scanning bottom-up; a selected
-      * item already at the bottom stops the pass (Prime's break).
-      */
-    def moveDown[A](xs: List[A], isSel: A => Boolean): List[A] =
-        val buf  = xs.toBuffer
-        var i    = buf.length - 1
-        var stop = false
-        while i >= 0 && !stop do
-            if isSel(buf(i)) then
-                if i == buf.length - 1 then stop = true
-                else
-                    val tmp = buf(i + 1)
-                    buf(i + 1) = buf(i)
-                    buf(i) = tmp
-            end if
-            i -= 1
-        end while
-        buf.toList
-    end moveDown
-
-    /** Selected items move to the front, keeping their relative order. */
-    def moveTop[A](xs: List[A], isSel: A => Boolean): List[A] =
-        val (sel, rest) = xs.partition(isSel)
-        sel ++ rest
-
-    /** Selected items move to the back, keeping their relative order. */
-    def moveBottom[A](xs: List[A], isSel: A => Boolean): List[A] =
-        val (sel, rest) = xs.partition(isSel)
-        rest ++ sel
-end ListReorder
-
 /** OrderList — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's
   * OrderList anatomy: `div.p-orderlist.p-component` > `div.p-orderlist-controls`
   * with the four secondary move Buttons (up / top / down / bottom — Prime's
@@ -115,13 +59,14 @@ final case class OrderList[A] private (
     private def keyOf(a: A): String =
         keyF.orElse(labelF).map(_(a)).getOrElse(a.toString)
 
-    private type Snapshot = (Seq[A], Set[String])
+    private type Snapshot = ((Seq[A], Set[String]), Int)
 
     // What a region compares to decide whether to repaint is the SNAPSHOT, never an item: the
     // sequence and the set are compared structurally, and `A` needs no equality of its own for
     // that (it has none to require, since any type can be a row here).
-    private given CanEqual[Seq[A], Seq[A]]     = CanEqual.derived
-    private given CanEqual[Snapshot, Snapshot] = CanEqual.derived
+    private given CanEqual[Seq[A], Seq[A]]                             = CanEqual.derived
+    private given CanEqual[(Seq[A], Set[String]), (Seq[A], Set[String])] = CanEqual.derived
+    private given CanEqual[Snapshot, Snapshot]                         = CanEqual.derived
 
     /** The order and the selection as ONE signal, so the tree is ONE reactive region.
       *
@@ -129,21 +74,58 @@ final case class OrderList[A] private (
       * outer one held when it was created, which goes stale the moment an effect writes both refs.
       * [[PickList]] carries the same shape and is where that stopped being theoretical.
       */
-    private def snapshot(using Frame): Signal[Snapshot] =
+    private def snapshot(cursor: Maybe[ListReorder.Cursor])(using Frame): Signal[Snapshot] =
         val items = itemsRef match
             case Present(r) => r: Signal[Seq[A]]
             case Absent     => Signal.initConst(Seq.empty[A])
         val sel = selectedRef match
             case Present(r) => r: Signal[Set[String]]
             case Absent     => Signal.initConst(Set.empty[String])
-        items.combineLatest(sel)
+        val hi = cursor match
+            case Present(c) => c.highlight: Signal[Int]
+            case Absent     => Signal.initConst(-1)
+        items.combineLatest(sel).combineLatest(hi)
     end snapshot
 
+    /** One mount for the state the list roves: the highlight, and the id it announces it through.
+      * Minted OUTSIDE the region, since a mount inside a subscribed region re-runs on every
+      * emission and would hand out a new highlight per keystroke. The static projection renders
+      * through the placeholder, which is the shape this control had before its list was one tab
+      * stop: every row its own.
+      */
     private[uic] def render(using Frame): UI =
-        snapshot.render((xs, sel) => body(xs, sel))
+        UI.mounted {
+            for
+                cmds <- UI.commands
+                id   <- cmds.freshId
+                hi   <- Signal.initRef(-1)
+            yield wired(Present(ListReorder.Cursor(hi, id)))
+        }.placeholder(wired(Absent))
 
-    private def body(xs: Seq[A], sel: Set[String])(using Frame): UI =
+    /** The tree the mount publishes — the seam the tests drive, since a golden render shows a mount
+      * only as its placeholder.
+      */
+    private[uic] def wired(cursor: Maybe[ListReorder.Cursor])(using Frame): UI =
+        snapshot(cursor).render { case ((xs, sel), hi) => body(xs, sel, cursor, hi) }
+
+    private def body(xs: Seq[A], sel: Set[String], cursor: Maybe[ListReorder.Cursor] = Absent, focused: Int = -1)(
+        using Frame
+    ): UI =
         val moveDisabled = disabledFlag || sel.isEmpty || itemsRef.isEmpty
+
+        // The same moves the rail makes, on the list the reader is standing in: the buttons are the
+        // pointer's way to them and these are the keyboard's, so both act on the SELECTION. There is
+        // no second column here, so no chord transfers anything.
+        val hostKeys: UI.KeyboardEvent => Maybe[Listbox.HostKey] = e =>
+            ListReorder.onKey(e.key, e.modifiers, Absent).map { move =>
+                val eff: Any < Async = move match
+                    case ListReorder.Move.Step(down) =>
+                        reorder(if down then ListReorder.moveDown else ListReorder.moveUp)
+                    case ListReorder.Move.Edge(down) =>
+                        reorder(if down then ListReorder.moveBottom else ListReorder.moveTop)
+                    case ListReorder.Move.Out(_) => ()
+                Listbox.HostKey(eff)
+            }
 
         // `ariaDisabled` rather than the native attribute, for the reason [[Button.ariaDisabled]]
         // is there and [[PickList]] spells out: these buttons turn on and off with a selection the
@@ -174,6 +156,8 @@ final case class OrderList[A] private (
             .items(xs.map(a => ListItem(TextValue.Const(labelF.map(_(a)).getOrElse(a.toString)), keyOf(a)))*)
             .selectionMode(SelectionMode.Multiple)
             .disabled(disabledFlag)
+            .onHostKey(hostKeys)
+        cursor.foreach(c => lb = lb.id(c.id))
         selectedRef.foreach(r => lb = lb.value(r))
         accessibleNameV match
             case Present(TextValue.Const(v)) => lb = lb.accessibleName(v)
@@ -188,7 +172,7 @@ final case class OrderList[A] private (
                     case TextValue.Dyn(s)   => s.render(t => stringToUI(t)))
             )
         }
-        val listUI: UI = lb.resolved(sel, "")
+        val listUI: UI = lb.resolved(sel, "", cursor.map(_.highlight), focused)
 
         div.cssClass("p-orderlist").cssClass("p-component")(toChild(controls), toChild(listUI))
     end body

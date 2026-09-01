@@ -80,15 +80,18 @@ final case class PickList[A] private (
 
     private type Columns    = (Seq[A], Seq[A])
     private type Selections = (Set[String], Set[String])
-    private type Snapshot   = (Columns, Selections)
+    private type Cursors    = (Int, Int)
+    private type Snapshot   = ((Columns, Selections), Cursors)
 
     // What a region compares to decide whether to repaint is the SNAPSHOT, never an item: the
     // sequences and sets that hold them are compared structurally, and `A` needs no equality of
     // its own for that (it has none to require, since any type can be a row here).
-    private given CanEqual[Seq[A], Seq[A]]         = CanEqual.derived
-    private given CanEqual[Columns, Columns]       = CanEqual.derived
-    private given CanEqual[Selections, Selections] = CanEqual.derived
-    private given CanEqual[Snapshot, Snapshot]     = CanEqual.derived
+    private given CanEqual[Seq[A], Seq[A]]                         = CanEqual.derived
+    private given CanEqual[Columns, Columns]                       = CanEqual.derived
+    private given CanEqual[Selections, Selections]                 = CanEqual.derived
+    private given CanEqual[Cursors, Cursors]                       = CanEqual.derived
+    private given CanEqual[(Columns, Selections), (Columns, Selections)] = CanEqual.derived
+    private given CanEqual[Snapshot, Snapshot]                     = CanEqual.derived
 
     private def sig[T](ref: Maybe[SignalRef[T]], fallback: T)(using CanEqual[T, T], Frame): Signal[T] =
         ref match
@@ -107,12 +110,42 @@ final case class PickList[A] private (
       * to be stale. It is also why the highlight rides along: the columns and their highlights are
       * one state, and splitting them again is how this went wrong the first time.
       */
-    private def snapshot(using Frame): Signal[Snapshot] =
-        sig(sourceRef, Seq.empty[A]).combineLatest(sig(targetRef, Seq.empty[A]))
-            .combineLatest(sig(sourceSelectedRef, Set.empty[String]).combineLatest(sig(targetSelectedRef, Set.empty[String])))
+    private def snapshot(source: Maybe[ListReorder.Cursor], target: Maybe[ListReorder.Cursor])(using Frame): Signal[Snapshot] =
+        val columns    = sig(sourceRef, Seq.empty[A]).combineLatest(sig(targetRef, Seq.empty[A]))
+        val selections = sig(sourceSelectedRef, Set.empty[String]).combineLatest(sig(targetSelectedRef, Set.empty[String]))
+        val cursors    = sig(source.map(_.highlight), -1).combineLatest(sig(target.map(_.highlight), -1))
+        columns.combineLatest(selections).combineLatest(cursors)
+    end snapshot
 
+    /** One mount for the state the two columns rove: a highlight each, and the id each announces it
+      * through. Both are minted OUTSIDE the region, since a mount inside a subscribed region re-runs
+      * on every emission and would hand out a new highlight per keystroke.
+      *
+      * The static projection renders through the placeholder, which is the shape this control had
+      * before its lists were one tab stop each: every row its own.
+      */
     private[uic] def render(using Frame): UI =
-        snapshot.render { case ((src, tgt), (srcSel, tgtSel)) => body(src, tgt, srcSel, tgtSel) }
+        UI.mounted {
+            for
+                cmds      <- UI.commands
+                sourceId  <- cmds.freshId
+                targetId  <- cmds.freshId
+                sourceHi  <- Signal.initRef(-1)
+                targetHi  <- Signal.initRef(-1)
+            yield wired(
+                Present(ListReorder.Cursor(sourceHi, sourceId)),
+                Present(ListReorder.Cursor(targetHi, targetId))
+            )
+        }.placeholder(wired(Absent, Absent))
+
+    /** The tree the mount publishes — the seam the tests drive, since a golden render shows a mount
+      * only as its placeholder.
+      */
+    private[uic] def wired(source: Maybe[ListReorder.Cursor], target: Maybe[ListReorder.Cursor])(using Frame): UI =
+        snapshot(source, target).render {
+            case (((src, tgt), (srcSel, tgtSel)), (srcHi, tgtHi)) =>
+                body(src, tgt, srcSel, tgtSel, source, target, srcHi, tgtHi)
+        }
 
     /** A move or transfer button.
       *
@@ -134,9 +167,38 @@ final case class PickList[A] private (
         b.render
     end moveButton
 
-    private def body(src: Seq[A], tgt: Seq[A], srcSel: Set[String], tgtSel: Set[String])(using Frame): UI =
+    private def body(
+        src: Seq[A],
+        tgt: Seq[A],
+        srcSel: Set[String],
+        tgtSel: Set[String],
+        source: Maybe[ListReorder.Cursor] = Absent,
+        target: Maybe[ListReorder.Cursor] = Absent,
+        srcHi: Int = -1,
+        tgtHi: Int = -1
+    )(using Frame): UI =
         val srcMoveOff = srcSel.isEmpty || sourceRef.isEmpty
         val tgtMoveOff = tgtSel.isEmpty || targetRef.isEmpty
+
+        // The same moves the rails and the transfer buttons make, on the list the reader is
+        // standing in: the buttons are the pointer's way to them and these are the keyboard's, so
+        // both act on the column's SELECTION, and neither can do what the other cannot.
+        def keys(
+            ref: Maybe[SignalRef[Seq[A]]],
+            selRef: Maybe[SignalRef[Set[String]]],
+            other: Maybe[SignalRef[Seq[A]]],
+            toward: Keyboard
+        ): UI.KeyboardEvent => Maybe[Listbox.HostKey] = e =>
+            ListReorder.onKey(e.key, e.modifiers, Present(toward)).map { move =>
+                val eff: Any < Async = move match
+                    case ListReorder.Move.Step(down) =>
+                        reorder(ref, selRef, if down then ListReorder.moveDown else ListReorder.moveUp)
+                    case ListReorder.Move.Edge(down) =>
+                        reorder(ref, selRef, if down then ListReorder.moveBottom else ListReorder.moveTop)
+                    case ListReorder.Move.Out(all) =>
+                        if all then transferAll(ref, other, selRef) else transferSelected(ref, other, selRef)
+                Listbox.HostKey(eff)
+            }
 
         def reorderRail(cls: String, ref: Maybe[SignalRef[Seq[A]]], selRef: Maybe[SignalRef[Set[String]]], off: Boolean): UI =
             div.cssClass("p-picklist-controls").cssClass(cls)(
@@ -146,11 +208,21 @@ final case class PickList[A] private (
                 toChild(moveButton(Icons.angleDoubleDown, "Move Bottom", off, reorder(ref, selRef, ListReorder.moveBottom)))
             )
 
-        def column(cls: String, xs: Seq[A], sel: Set[String], selRef: Maybe[SignalRef[Set[String]]]): UI =
+        def column(
+            cls: String,
+            xs: Seq[A],
+            sel: Set[String],
+            selRef: Maybe[SignalRef[Set[String]]],
+            cursor: Maybe[ListReorder.Cursor],
+            focused: Int,
+            hostKeys: UI.KeyboardEvent => Maybe[Listbox.HostKey]
+        ): UI =
             var lb = Listbox()
                 .items(xs.map(a => ListItem(TextValue.Const(labelF.map(_(a)).getOrElse(a.toString)), keyOf(a)))*)
                 .selectionMode(SelectionMode.Multiple)
                 .disabled(disabledFlag)
+                .onHostKey(hostKeys)
+            cursor.foreach(c => lb = lb.id(c.id))
             selRef.foreach(r => lb = lb.value(r))
             templateF.foreach { f =>
                 val byKey = xs.map(a => keyOf(a) -> a).toMap
@@ -160,7 +232,9 @@ final case class PickList[A] private (
                         case TextValue.Dyn(s)   => s.render(t => stringToUI(t)))
                 )
             }
-            div.cssClass("p-picklist-list-container").cssClass(cls)(toChild(lb.resolved(sel, "")))
+            div.cssClass("p-picklist-list-container").cssClass(cls)(
+                toChild(lb.resolved(sel, "", cursor.map(_.highlight), focused))
+            )
         end column
 
         val transfer: UI = div.cssClass("p-picklist-controls").cssClass("p-picklist-transfer-controls")(
@@ -192,9 +266,25 @@ final case class PickList[A] private (
         val parts: List[UI] =
             sourceRail ++
                 List(
-                    column("p-picklist-source-list-container", src, srcSel, sourceSelectedRef),
+                    column(
+                        "p-picklist-source-list-container",
+                        src,
+                        srcSel,
+                        sourceSelectedRef,
+                        source,
+                        srcHi,
+                        keys(sourceRef, sourceSelectedRef, targetRef, Keyboard.ArrowRight)
+                    ),
                     transfer,
-                    column("p-picklist-target-list-container", tgt, tgtSel, targetSelectedRef)
+                    column(
+                        "p-picklist-target-list-container",
+                        tgt,
+                        tgtSel,
+                        targetSelectedRef,
+                        target,
+                        tgtHi,
+                        keys(targetRef, targetSelectedRef, sourceRef, Keyboard.ArrowLeft)
+                    )
                 ) ++ targetRail
 
         div.cssClass("p-picklist").cssClass("p-component")(parts.map(toChild)*)
