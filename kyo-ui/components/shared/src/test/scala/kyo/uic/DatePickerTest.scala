@@ -24,8 +24,9 @@ class DatePickerTest extends UicTest:
             mref  <- Signal.initRef(month)
             cur   <- Signal.initRef(cursor)
             open  <- Signal.initRef(true)
+            view  <- Signal.initRef(DatePickerView.Date)
             moved <- Signal.initRef(List.empty[String])
-            ui = uic.DatePicker().value(vref).wired(open, mref, cur, "dp", id => moved.updateAndGet(_ :+ id))
+            ui = uic.DatePicker().value(vref).wired(open, mref, cur, view, "dp", id => moved.updateAndGet(_ :+ id))
         yield (vref, mref, cur, open, moved, ui)
 
     /** Presses `key` on the day grid and reports where the cursor landed. */
@@ -120,6 +121,166 @@ class DatePickerTest extends UicTest:
         yield assert(picked == "2026-07-09" && !open && spaced == "2026-07-09")
     }
 
+    /** A picker built the way its mount builds it, with the focus moves it asks for recorded. */
+    private def recording(dp: uic.DatePicker, value: String, month: String = "", cursor: String = "", open: Boolean = true)(
+        using Frame
+    ): (SignalRef[String], SignalRef[Boolean], SignalRef[List[String]], UI) < Async =
+        for
+            vref <- Signal.initRef(value)
+            mref <- Signal.initRef(month)
+            cur  <- Signal.initRef(cursor)
+            oref <- Signal.initRef(open)
+            // The mount starts its minted ref at the static view, and so does this.
+            view  <- Signal.initRef(dp.viewV)
+            moved <- Signal.initRef(List.empty[String])
+            ui = dp.value(vref).wired(oref, mref, cur, view, "dp", id => moved.updateAndGet(_ :+ id))
+        yield (vref, oref, moved, ui)
+
+    "a pick hands the focus back too, since the pick takes the grid with it" in {
+        for
+            (_, open, moved, ui) <- recording(uic.DatePicker(), "", month = "2026-07", cursor = "2026-07-09")
+            grid                 <- elementWithClass(ui, "p-datepicker-day-view")
+            _                    <- press(grid, UI.Keyboard.Enter)
+            still                <- open.get
+            got                  <- moved.get
+        yield assert(!still && got == List("dp-field"), "or the next Tab starts at the top of the document")
+    }
+
+    "the button bar closes on the same terms, and its button goes with the panel" in {
+        for
+            (_, open, moved, ui) <- recording(uic.DatePicker().showButtonBar(true), july)
+            clear                <- elementWithClass(ui, "p-datepicker-clear-button")
+            _                    <- click(clear)
+            still                <- open.get
+            got                  <- moved.get
+        yield assert(!still && got == List("dp-field"))
+    }
+
+    "and so does a month pick, which closes the panel under view(Month)" in {
+        for
+            (_, open, moved, ui) <- recording(uic.DatePicker().view(DatePickerView.Month), "2026-07")
+            grid                 <- elementWithClass(ui, "p-datepicker-month-view")
+            _                    <- press(grid, UI.Keyboard.Enter)
+            still                <- open.get
+            got                  <- moved.get
+        yield assert(!still && got == List("dp-field"))
+    }
+
+    "a completed range closes and returns the focus; the first half of it does neither" in {
+        for
+            start <- Signal.initRef("")
+            end   <- Signal.initRef("")
+            mref  <- Signal.initRef("2026-07")
+            cur   <- Signal.initRef("2026-07-09")
+            oref  <- Signal.initRef(true)
+            view  <- Signal.initRef(DatePickerView.Date)
+            moved <- Signal.initRef(List.empty[String])
+            ui = uic.DatePicker().range(start, end).wired(oref, mref, cur, view, "dp", id => moved.updateAndGet(_ :+ id))
+            grid   <- elementWithClass(ui, "p-datepicker-day-view")
+            _      <- press(grid, UI.Keyboard.Enter)
+            opened <- oref.get
+            half   <- moved.get
+            _      <- cur.set("2026-07-14")
+            later  <- elementWithClass(ui, "p-datepicker-day-view")
+            _      <- press(later, UI.Keyboard.Enter)
+            from   <- start.get
+            to     <- end.get
+            closed <- oref.get
+            got    <- moved.get
+        yield
+            assert(opened && half.isEmpty, "a range half-picked is still being picked, so the panel stays")
+            assert(from == "2026-07-09" && to == "2026-07-14")
+            assert(!closed && got == List("dp-field"))
+    }
+
+    "a pick in multiple mode leaves the panel standing, and the focus on the grid" in {
+        for
+            set   <- Signal.initRef(Set("2026-07-02"))
+            mref  <- Signal.initRef("2026-07")
+            cur   <- Signal.initRef("2026-07-09")
+            oref  <- Signal.initRef(true)
+            view  <- Signal.initRef(DatePickerView.Date)
+            moved <- Signal.initRef(List.empty[String])
+            ui = uic.DatePicker().values(set).wired(oref, mref, cur, view, "dp", id => moved.updateAndGet(_ :+ id))
+            grid   <- elementWithClass(ui, "p-datepicker-day-view")
+            _      <- press(grid, UI.Keyboard.Enter)
+            picked <- set.get
+            still  <- oref.get
+            got    <- moved.get
+        yield assert(picked == Set("2026-07-02", "2026-07-09") && still && got.isEmpty, "there is a second date to pick")
+    }
+
+    "Escape in the month grid closes the panel, the way it does in the day grid" in {
+        for
+            (_, open, moved, ui) <- recording(uic.DatePicker().view(DatePickerView.Month), "2026-07")
+            grid                 <- elementWithClass(ui, "p-datepicker-month-view")
+            _                    <- press(grid, UI.Keyboard.Escape)
+            still                <- open.get
+            got                  <- moved.get
+        yield assert(!still && got == List("dp-field"), "it used to move the focus and leave the panel standing")
+    }
+
+    "an inline calendar stays on the page when a day is picked, and keeps the focus with it" in {
+        for
+            (value, open, moved, ui) <- recording(uic.DatePicker().inline(true), "", month = "2026-07", cursor = "2026-07-09")
+            grid                     <- elementWithClass(ui, "p-datepicker-day-view")
+            _                        <- press(grid, UI.Keyboard.Enter)
+            picked                   <- value.get
+            still                    <- open.get
+            got                      <- moved.get
+        yield
+            assert(picked == "2026-07-09")
+            assert(still, "an in-flow calendar is the page's furniture: a pick is not a reason to take it away")
+            assert(got.isEmpty, "and the reader is standing on the grid that stays")
+    }
+
+    "nor does Escape take it away, there being no panel to dismiss" in {
+        for
+            (_, open, moved, ui) <- recording(uic.DatePicker().inline(true), july)
+            grid                 <- elementWithClass(ui, "p-datepicker-day-view")
+            _                    <- press(grid, UI.Keyboard.Escape)
+            still                <- open.get
+            got                  <- moved.get
+        yield assert(still && got.isEmpty)
+    }
+
+    "drilling down leaves the keyboard on a DAY, not on the month it drilled through" in {
+        for
+            vref <- Signal.initRef(july)
+            view <- Signal.initRef(DatePickerView.Month)
+            mref <- Signal.initRef("2026-07")
+            cur  <- Signal.initRef("")
+            oref <- Signal.initRef(true)
+            ui = uic.DatePicker().value(vref).wired(oref, mref, cur, view, "dp", _ => ())
+            months <- elementWithClass(ui, "p-datepicker-month-view")
+            _      <- press(months, UI.Keyboard.ArrowRight)
+            // Re-read: the handler on the element above closed over the cursor it rendered with,
+            // and the browser would be pressing Enter on the grid the move re-rendered.
+            moved  <- elementWithClass(ui, "p-datepicker-month-view")
+            _      <- press(moved, UI.Keyboard.Enter)
+            landed <- view.get
+            days   <- elementWithClass(ui, "p-datepicker-day-view")
+            _      <- press(days, UI.Keyboard.ArrowRight)
+            at     <- cur.get
+        yield
+            assert(landed == DatePickerView.Date, "Enter on a month drills into it")
+            assert(at.length == 10 && at.startsWith("2026-08"), s"the cursor is a day of the month drilled into, and was $at")
+    }
+
+    "a click seeds the highlight, so the next arrow carries on from the day the pointer named" in {
+        for
+            set  <- Signal.initRef(Set.empty[String])
+            mref <- Signal.initRef("2026-07")
+            cur  <- Signal.initRef("2026-07-15")
+            oref <- Signal.initRef(true)
+            view <- Signal.initRef(DatePickerView.Date)
+            ui = uic.DatePicker().values(set).wired(oref, mref, cur, view, "dp", _ => ())
+            days  <- elementsWithClass(ui, "p-datepicker-day")
+            _     <- click(days.find(_.children.exists(_ == UI.Ast.Text("4"))).get)
+            after <- cur.get
+        yield assert(after == "2026-07-04", "the pointer seeds and the keyboard carries on; it does not start over")
+    }
+
     "Escape closes and hands focus back to the field" in {
         for
             (_, _, _, open, moved, ui) <- wired(july)
@@ -137,7 +298,8 @@ class DatePickerTest extends UicTest:
             cur       <- Signal.initRef("")
             moved     <- Signal.initRef(List.empty[String])
             vref      <- Signal.initRef(july)
-            ui = uic.DatePicker().value(vref).wired(closedRef, mref, cur, "dp", id => moved.updateAndGet(_ :+ id))
+            view      <- Signal.initRef(DatePickerView.Date)
+            ui = uic.DatePicker().value(vref).wired(closedRef, mref, cur, view, "dp", id => moved.updateAndGet(_ :+ id))
             field  <- elementWithClass(ui, "p-datepicker-input")
             _      <- press(field, UI.Keyboard.ArrowDown)
             opened <- closedRef.get
@@ -156,12 +318,26 @@ class DatePickerTest extends UicTest:
             mref      <- Signal.initRef("")
             cur       <- Signal.initRef("")
             vref      <- Signal.initRef("")
-            ui = uic.DatePicker().value(vref).wired(closedRef, mref, cur, "dp", _ => ())
+            view      <- Signal.initRef(DatePickerView.Date)
+            ui = uic.DatePicker().value(vref).wired(closedRef, mref, cur, view, "dp", _ => ())
             field <- elementWithClass(ui, "p-datepicker-input")
             _     <- press(field, UI.Keyboard.Space)
             _     <- press(field, UI.Keyboard.Enter)
             still <- closedRef.get
         yield assert(!still, "neither opens the panel: one types a space, the other belongs to the form")
+    }
+
+    "the title buttons switch the grid without a caller binding a view ref either" in {
+        for
+            (_, _, _, _, _, ui) <- wired(july)
+            month <- elements(ui).map(_.collectFirst {
+                case b: UI.Ast.Button if b.attrs.cssClasses.contains("p-datepicker-select-month") => b
+            }.get)
+            _    <- click(month)
+            grid <- elementWithClass(ui, "p-datepicker-month-view")
+        yield
+            assert(!month.disabled.contains(true), "they used to render disabled, which left the two granular grids unreachable")
+            assert(grid.attrs.role.contains("grid"), "and the grid they switch to is the one with the keyboard")
     }
 
     "the header buttons move the month without a caller binding one" in {

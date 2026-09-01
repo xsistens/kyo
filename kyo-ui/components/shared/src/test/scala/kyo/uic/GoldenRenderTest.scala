@@ -30,7 +30,12 @@ class GoldenRenderTest extends UicTest:
         for
             minted <- Signal.initRef("")
             cursor <- Signal.initRef("")
-            out    <- UI.runRender(dp.wired(oref, mref.getOrElse(minted), cursor, "dp", _ => ())).take(1).run
+            // The mount lifts a caller's view ref and mints one at the static view otherwise;
+            // rendering the seam by hand has to do the same or the golden shows the wrong grid.
+            view <- dp.currentViewRefV match
+                case Present(r) => Kyo.lift(r)
+                case Absent     => Signal.initRef(dp.viewV)
+            out <- UI.runRender(dp.wired(oref, mref.getOrElse(minted), cursor, view, "dp", _ => ())).take(1).run
         yield out.mkString
 
     /** Matches one table row group by tag AND class: the renderer writes
@@ -3723,8 +3728,8 @@ class GoldenRenderTest extends UicTest:
             assert(yearV.contains("2020 - 2029"), "year view: decade range text")
             assert(!yearV.contains("p-datepicker-month-view"), "year view: no month grid")
             assert(
-                noRefs.contains("""aria-label="Choose Month" data-kyo-prop-type="button" type="submit" disabled"""),
-                "no currentView ref: title buttons render disabled (Prime's switchViewButtonDisabled)"
+                noRefs.contains("""aria-label="Choose Month" data-kyo-prop-type="button" data-kyo-ev="click""""),
+                "no currentView ref: the mount mints one, so the title button is live rather than disabled"
             )
         end for
     }
@@ -6460,8 +6465,9 @@ class GoldenRenderTest extends UicTest:
             dpMonth  <- Signal.initRef("2026-07")
             dpCursor <- Signal.initRef("2026-07-15")
             dpValue  <- Signal.initRef("2026-07-15")
+            dpView   <- Signal.initRef(uic.DatePickerView.Date)
             datePicker <- renderHtml(
-                uic.DatePicker().value(dpValue).wired(dpOpen, dpMonth, dpCursor, "dp", _ => ())
+                uic.DatePicker().value(dpValue).wired(dpOpen, dpMonth, dpCursor, dpView, "dp", _ => ())
             )
             selOpen  <- Signal.initRef(true)
             selHi    <- Signal.initRef(1)
