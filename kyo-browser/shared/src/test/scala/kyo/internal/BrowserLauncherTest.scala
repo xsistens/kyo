@@ -238,11 +238,14 @@ class BrowserLauncherTest extends BaseChromeTest:
     // ensures the regex matches ONLY this test's sentinel; not SharedChrome (whose argv contains
     // `kyo-browser-NNNN` but NOT `kyo-browser-orphans-test-...`).
     //
-    // Sentinel form: `sh -c 'true; sleep 30 # --user-data-dir=$pattern'`. Multi-statement script
-    // prevents sh from exec-optimizing into sleep (a single-stmt `sh -c 'sleep 30'` would replace
-    // sh's argv with sleep's, losing the tag). Verified empirically on macOS before writing the
-    // test: `pgrep -f "user-data-dir=.*<tag>"` matches the sh PID for this form, does NOT match
-    // for the single-stmt form.
+    // Sentinel form: `sh -c 'sleep 30; true # --user-data-dir=$pattern'`. The trailing `true` is
+    // load-bearing: a shell exec-optimizes the LAST command of its script, replacing its own argv
+    // and losing the tag with it, and having a statement BEFORE the sleep does not prevent that
+    // (measured with bash 5 as /bin/sh: `sh -c 'true; sleep 30 # tag'` leaves a bare `sleep 30` in
+    // the process table and pgrep finds nothing). With a command after it, the shell has to fork
+    // for the sleep and stays alive under its own argv, where `pgrep -f "user-data-dir=.*<tag>"`
+    // finds it. The forked sleep outlives the killed shell for its remaining seconds; it carries
+    // no tag and nothing looks for it.
     "killOrphans kills processes matching the kyo-browser user-data-dir pattern" in {
         Scope.run {
             System.operatingSystem.map {
@@ -259,7 +262,7 @@ class BrowserLauncherTest extends BaseChromeTest:
                         n <- Random.nextLong
                         uniqueId = f"$n%016x"
                         pattern  = s"kyo-browser-orphans-test-$uniqueId"
-                        script   = s"true; sleep 30 # --user-data-dir=$pattern"
+                        script   = s"sleep 30; true # --user-data-dir=$pattern"
                         proc        <- Command("sh", "-c", script).spawn
                         pid         <- proc.pid
                         aliveBefore <- isPidAlive(pid)

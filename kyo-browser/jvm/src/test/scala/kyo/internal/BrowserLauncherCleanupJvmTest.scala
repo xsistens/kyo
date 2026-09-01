@@ -5,7 +5,6 @@ import java.nio.file.Paths
 import java.util.UUID
 import kyo.*
 import scala.annotation.tailrec
-import scala.jdk.CollectionConverters.*
 
 /** JVM-only verification of the [[BrowserLauncher]] subprocess + user-data-dir cleanup contract.
   *
@@ -24,19 +23,19 @@ import scala.jdk.CollectionConverters.*
   * Plus a JVM-level safety net via `BrowserLauncherPlatform.registerShutdownHook(proc)` for the case where the JVM exits before scope
   * finalizers run (BrowserLauncherPlatform.scala:5-27).
   *
-  * These tests are therefore regression coverage for an already-correct invariant. They probe OS-level state (`ProcessHandle.allProcesses`
-  * for PIDs, `java.nio.file.Files.exists` for the user-data-dir) before and after a `Browser.run` block that aborts mid-action, so a future
+  * These tests are therefore regression coverage for an already-correct invariant. They probe OS-level state (the process table for PIDs,
+  * `java.nio.file.Files.exists` for the user-data-dir) before and after a `Browser.run` block that aborts mid-action, so a future
   * regression that breaks either finalizer chain surfaces here instead of as a flaky test in another suite or as a CI Chrome-leak.
   *
   * Lives in the JVM test tree because:
-  *   - `ProcessHandle.allProcesses` and `ProcessHandle.info().arguments()` are JVM-only.
+  *   - `ProcessHandle` and the process-table scan behind [[commandLines]] are JVM-only.
   *   - `java.nio.file.Files.exists` does not have a usable Scala.js shim.
   *   - The launcher subprocess itself is a JVM/Native concept (there is no Chrome subprocess on Scala.js).
   *
   * Each test launches its own ephemeral Chrome via `Browser.run(config)` (NOT `withBrowser` / `SharedChrome`), so the shared-Chrome
   * instance used by the rest of the test suite is unaffected. To disambiguate "ours" from any unrelated Chrome on the host, every test
-  * injects a unique `--user-agent=<tag>` extra-arg into the `Browser.LaunchConfig`; the tag is a UUID-suffixed string scanned via
-  * `ProcessHandle.info().arguments()`.
+  * injects a unique `--user-agent=<tag>` extra-arg into the `Browser.LaunchConfig`; the tag is a UUID-suffixed string scanned for in the
+  * command lines the OS reports.
   */
 class BrowserLauncherCleanupJvmTest extends BaseChromeTest:
 
@@ -51,68 +50,72 @@ class BrowserLauncherCleanupJvmTest extends BaseChromeTest:
     // ─────────────────────────────────────────────────────────────────────────
 
     /** Generates a sentinel string unique to this test invocation, used as `--user-agent=<tag>` so the test can locate its own Chrome
-      * process(es) via `ProcessHandle.info().arguments()` without colliding with any other Chrome on the host (or in another
+      * process(es) by command line without colliding with any other Chrome on the host (or in another
       * sequentially-run test JVM).
       */
     private def freshTag(): String = s"kyo-cleanup-test-${UUID.randomUUID()}"
 
     /** Returns a `Browser.LaunchConfig` that downloads (or reuses) the cached Chrome-for-Testing binary, then injects the given sentinel as
-      * `--user-agent=<tag>`. Chrome accepts arbitrary user-agent strings and reflects them into `argv`, where
-      * `ProcessHandle.info().arguments()` reads them back.
+      * `--user-agent=<tag>`. Chrome accepts arbitrary user-agent strings and puts them on its command line, where
+      * [[commandLines]] reads them back.
       */
     private def configWithTag(tag: String)(using Frame): Browser.LaunchConfig < (Async & Abort[BrowserSetupException]) =
         Browser.chromeForTestingLaunchConfig().map { base =>
             base.copy(extraArgs = Chunk(s"--user-agent=$tag"))
         }
 
-    /** Captures the snapshot of currently-running OS processes whose command line contains the given sentinel tag. Returns a sequence of
-      * `(pid, userDataDir)` pairs, where `userDataDir` is the value of the `--user-data-dir=...` argument the launcher passed to that Chrome
-      * process.
-      *
-      * Implementation note: macOS's Java implementation of `ProcessHandle.info().arguments()` returns the full argv for processes the JVM
-      * owns (its own children); for other processes the result may be an empty Optional. On Windows both `arguments()` and `commandLine()`
-      * come back empty through `ProcessHandle`, so the scan queries WMI (`Win32_Process`) through PowerShell instead, which exposes the
-      * full command line for same-user processes. Since this test only spawns Chromes via `Browser.run` from the same JVM, our own
-      * Chromes are always discoverable.
-      */
     private val userDataDirArg = """--user-data-dir=("([^"]+)"|(\S+))""".r
 
-    private def chromesByTag(tag: String): Seq[(Long, String)] =
-        if Platform.isWindows then chromesByTagWindows(tag)
+    /** Every running process as `(pid, command line)`, read from the OS rather than from the JVM.
+      *
+      * `ProcessHandle.info().arguments()` cannot be used for this: Chrome collapses its `argv` into one
+      * NUL-terminated string at startup, the ordinary Unix process-title rewrite that lets its children show
+      * up as `--type=renderer`. `/proc/<pid>/cmdline` then holds a single `argv[0]` and no arguments, so the
+      * JVM correctly reports an EMPTY argument array, and `commandLine()` gives the bare binary path. Measured
+      * on Linux against chrome-headless-shell 152: `arguments()` empty, `commandLine()` the executable alone,
+      * `ps -o args=` the whole line including `--user-data-dir` and `--user-agent`. The launcher's own
+      * `killOrphans` sweep matches with `pgrep -f`, which reads the same buffer `ps` prints, and is unaffected.
+      *
+      * Windows exposes neither through `ProcessHandle`, so there the scan queries WMI (`Win32_Process`) through
+      * PowerShell, which gives the full command line for same-user processes.
+      */
+    private def commandLines: Seq[(Long, String)] =
+        if Platform.isWindows then commandLinesWindows
         else
-            ProcessHandle.allProcesses().iterator().asScala.flatMap { ph =>
-                val args = ph.info().arguments().orElse(Array.empty[String])
-                // We require BOTH the sentinel tag AND a `--user-data-dir=<...>` arg. The user-data-dir arg is what
-                // we actually want to capture. If the argv doesn't contain a tag match, this process isn't ours.
-                val hasTag = args.exists(_.contains(tag))
-                val captured: Maybe[(Long, String)] =
-                    if !hasTag then Absent
-                    else
-                        Maybe.fromOption(args.collectFirst {
-                            case a if a.startsWith("--user-data-dir=") => (ph.pid(), a.substring("--user-data-dir=".length))
-                        })
-                captured.toList
+            // -ww: unlimited output width, so a long Chrome command line is not truncated before the
+            // `--user-agent` at its end.
+            val output =
+                try scala.sys.process.Process(Seq("ps", "-A", "-ww", "-o", "pid=,args=")).!!
+                catch case _: Throwable => ""
+            output.linesIterator.flatMap { line =>
+                val trimmed       = line.trim
+                val (pid, rest)   = trimmed.span(!_.isWhitespace)
+                pid.toLongOption.map(p => (p, rest.trim))
             }.toSeq
 
-    private def chromesByTagWindows(tag: String): Seq[(Long, String)] =
+    private def commandLinesWindows: Seq[(Long, String)] =
         val script =
-            "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*" + tag +
-                "*' } | ForEach-Object { '' + $_.ProcessId + '|' + $_.CommandLine }"
+            "Get-CimInstance Win32_Process | ForEach-Object { '' + $_.ProcessId + '|' + $_.CommandLine }"
         val output =
             try scala.sys.process.Process(Seq("powershell", "-NoProfile", "-Command", script)).!!
             catch case _: Throwable => ""
         output.linesIterator.flatMap { line =>
             line.split('|') match
-                case parts if parts.length >= 2 =>
-                    val cl = parts.drop(1).mkString("|")
-                    // Requiring the user-data-dir arg also excludes this scan's own PowerShell
-                    // process, whose command line carries the tag but never that argument.
-                    parts(0).trim.toLongOption.zip(
-                        userDataDirArg.findFirstMatchIn(cl).map(m => Option(m.group(2)).getOrElse(m.group(3)))
-                    )
-                case _ => None
+                case parts if parts.length >= 2 => parts(0).trim.toLongOption.map(p => (p, parts.drop(1).mkString("|")))
+                case _                          => None
         }.toSeq
-    end chromesByTagWindows
+
+    /** The snapshot of running processes whose command line carries the given sentinel tag, as `(pid, userDataDir)`
+      * pairs, where `userDataDir` is the value of the `--user-data-dir=...` argument the launcher passed.
+      *
+      * A process carrying the tag without that argument is not one of ours and is dropped rather than reported
+      * with an empty directory.
+      */
+    private def chromesByTag(tag: String): Seq[(Long, String)] =
+        commandLines.collect {
+            case (pid, cl) if cl.contains(tag) =>
+                userDataDirArg.findFirstMatchIn(cl).map(m => (pid, Option(m.group(2)).getOrElse(m.group(3))))
+        }.flatten
 
     /** Wait (≤ `timeoutMs`, polling every `stepMs`) until `cond()` becomes true. Returns `true` on success, `false` on timeout.
       * Plain blocking call. Used by post-scope assertions where the kyo runtime has already torn everything down and no further
