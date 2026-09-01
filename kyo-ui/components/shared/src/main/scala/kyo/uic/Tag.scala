@@ -11,7 +11,9 @@ import kyo.UI.*
   * Without a `severity`, the base `.p-tag` skin renders the primary chip.
   * Prime's tag vocabulary is success/info/warn/danger/secondary/contrast —
   * `Primary` (and `Help`) keep the unsuffixed base skin. `onClick` is a kyo
-  * extension (Prime's Tag is inert); it adds the pointer cursor.
+  * extension (Prime's Tag is inert): it adds the pointer cursor and makes the
+  * chip a control, `role="button"` and one tab stop answering Enter and Space,
+  * since an action only the mouse can reach is not an action for everyone.
   */
 final case class Tag private (
     labelV: Maybe[TextValue] = Absent,
@@ -59,7 +61,21 @@ final case class Tag private (
             case Absent => ()
         end match
         if roundedFlag then el = el.cssClass("p-tag-rounded")
-        onClickEff.foreach(e => el = el.cssClass("p-uic-clickable").onClick(e))
+        // A tag that acts on a click is a control, so it is reachable and operable as one: the
+        // pointer cursor alone left the action to the mouse, which is the one reader a chip like
+        // this is easiest to overlook. Card, Avatar and Icon carry the same three lines.
+        onClickEff.foreach { e =>
+            el = el
+                .cssClass("p-uic-clickable")
+                .role("button")
+                .tabIndex(0)
+                .onClick(e)
+                .onKeyDown { evt =>
+                    evt.key match
+                        case Keyboard.Enter | Keyboard.Space => e
+                        case _                               => ()
+                }
+        }
         val iconChild: List[UI] = iconV.toList.map(g => GlyphSvg(g, "p-tag-icon"))
         val labelChild: List[UI] = labelV.toList.map {
             case TextValue.Const(t) => span.cssClass("p-tag-label")(t)
