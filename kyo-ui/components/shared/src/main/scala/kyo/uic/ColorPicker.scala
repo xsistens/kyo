@@ -22,17 +22,19 @@ import kyo.UI.*
   * preview swatch all follow from the bound hex, so a ref write from anywhere
   * moves the picker.
   *
-  * Keyboard: the plane and the hue bar are operated through real sliders. The
-  * plane carries TWO values and a `role="slider"` carries exactly one
-  * `aria-valuenow`, so it is a `role="group"` holding two of them — Saturation on
-  * the horizontal arrows, Brightness on the vertical, each with its own Home,
-  * End, PageUp and PageDown. The hue bar IS one axis, so it wears the role
-  * itself. All three are visually hidden (Prime's `.p-hidden-accessible`, as
-  * Rating's radios are) because the visible thing is the handle, and the ring is
-  * drawn on the surface through `:focus-within`. Opening the overlay seeds focus
-  * onto the saturation axis and closing hands it back to the swatch; Escape
-  * closes. The panel traps nothing: a colour picker is not a modal, and Tab out
-  * of it has somewhere to go.
+  * Keyboard: the plane and the hue bar are operated through real sliders, one
+  * each, because each is one visible handle. On the plane the horizontal arrows
+  * are saturation and the vertical ones brightness, Home and End are the ends of
+  * the horizontal axis and PageUp/PageDown ten steps of the vertical; on the bar
+  * both axes mean hue, as a vertical slider asks. A `role="slider"` carries one
+  * `aria-valuenow`, so the plane announces saturation there and both numbers in
+  * `aria-valuetext`. Both sliders are visually hidden (Prime's
+  * `.p-hidden-accessible`, as Rating's radios are) because the visible thing is
+  * the handle, and the ring is drawn on the surface through `:focus-within`.
+  * Opening the overlay seeds focus onto the plane and closing hands it back to
+  * the swatch: Enter and Space confirm the colour, Escape puts back the one the
+  * panel opened with. The panel traps nothing: a colour picker is not a modal,
+  * and Tab out of it has somewhere to go.
   *
   * Interaction is kyo-ui's pointer-drag: the 2D plane and the hue
   * bar each carry `onPointerDown` + `onPointerMove` (drag session with
@@ -156,69 +158,81 @@ final case class ColorPicker private (
       * are `pointer-events: none` (glue) so the pointer lands on the stable
       * surface whose rect defines the coordinate space.
       */
-    /** One axis of the picker as a real slider.
+    /** One hidden control of the picker as a real slider.
       *
-      * The two axes of the PLANE are two sliders and not one, because a `role="slider"` carries
-      * exactly one `aria-valuenow` and the plane carries two values: a single role over both
-      * would announce a number that is only half the truth. They are visually hidden (Prime's own
-      * `.p-hidden-accessible`, the same helper Rating's per-option radios use) because the visible
-      * thing is the handle, and the ring is drawn on the surface through `:focus-within` instead.
+      * The PLANE is one control with one handle, so it is ONE tab stop and answers all four
+      * arrows. It used to be two sliders, one per axis, which announced each number exactly and
+      * left the visible handle answering half the arrows on each of two tab stops: a reader who
+      * tabbed onto it could move the colour sideways and not up. `aria-valuetext` carries the
+      * second number, which is what it is for, and `aria-valuenow` stays saturation because a
+      * `role="slider"` needs one. The hue bar is a single-axis slider, since it IS one axis.
+      *
+      * Both are visually hidden (Prime's own `.p-hidden-accessible`, the same helper Rating's
+      * per-option radios use) because the visible thing is the handle, and the ring is drawn on
+      * the surface through `:focus-within` instead.
       *
       * The element is STABLE: `aria-valuenow` rides the value signal as an attribute rather than
       * a re-render, and the handler reads the value live. A focusable element rebuilt on every
       * arrow press would lose the focus that pressed it, which is the same reason the pointer
       * handlers sit outside the reactive region.
       */
-    private def axisSlider(
+    private def slider(
         label: String,
         r: SignalRef[String],
-        read: ((Double, Double, Double)) => Double,
-        write: ((Double, Double, Double), Double) => String,
+        now: ((Double, Double, Double)) => Double,
+        text: ((Double, Double, Double)) => String,
         max: Double,
-        unit: String,
-        step: Double,
-        decrease: Set[Keyboard],
-        increase: Set[Keyboard],
+        onKey: (Keyboard, (Double, Double, Double)) => Maybe[String],
         ref: Maybe[SignalRef[String]],
-        open: Maybe[SignalRef[Boolean]],
+        panel: Maybe[ColorPicker.Panel],
         seed: Boolean
     )(using Frame): UI =
-        def at(hex: String): Double = read(ColorPicker.hsvOf(hex))
         var el = span
             .cssClass("p-hidden-accessible")
             .role("slider")
             .aria("label", label)
             .aria("valuemin", "0")
             .aria("valuemax", ColorPicker.short(max))
-            .aria("valuenow", r.map(hex => ColorPicker.short(at(hex))))
-            .aria("valuetext", r.map(hex => ColorPicker.short(at(hex)) + unit))
+            .aria("valuenow", r.map(hex => ColorPicker.short(now(ColorPicker.hsvOf(hex)))))
+            .aria("valuetext", r.map(hex => text(ColorPicker.hsvOf(hex))))
             .tabIndex(0)
             .preventScrollKeys
         if seed then el = el.focusAuto(true).focusRestore(true)
         el = el.onKeyDown { e =>
-            def move(delta: Double): Any < Async =
-                r.get.map { cur =>
-                    val hsv = ColorPicker.hsvOf(cur)
-                    commit(write(hsv, math.max(0.0, math.min(max, read(hsv) + delta))), ref)
-                }
             val eff: Any < Async = e.key match
-                case k if decrease.contains(k) => move(-step)
-                case k if increase.contains(k) => move(step)
-                case Keyboard.PageDown         => move(-step * 10)
-                case Keyboard.PageUp           => move(step * 10)
-                case Keyboard.Home             => r.get.map(cur => commit(write(ColorPicker.hsvOf(cur), 0.0), ref))
-                case Keyboard.End              => r.get.map(cur => commit(write(ColorPicker.hsvOf(cur), max), ref))
-                case Keyboard.Escape =>
-                    open match
-                        case Present(o) => o.set(false)
-                        case Absent     => ()
-                case _ => ()
+                case Keyboard.Enter | Keyboard.Space => dismiss(panel, restore = false, ref)
+                case Keyboard.Escape                 => dismiss(panel, restore = true, ref)
+                case k =>
+                    r.get.map { cur =>
+                        val moved: Any < Async = onKey(k, ColorPicker.hsvOf(cur)) match
+                            case Present(hex) => commit(hex, ref)
+                            case Absent       => ()
+                        moved
+                    }
             eff
         }
         el
-    end axisSlider
+    end slider
 
-    private def content(ref: Maybe[SignalRef[String]], fallbackHex: String, open: Maybe[SignalRef[Boolean]] = Absent)(
+    /** Leaves an open panel. Enter and Space confirm the colour the reader arrived at; Escape puts
+      * back the one the panel opened with.
+      *
+      * That pairing is what makes either key mean anything here: this picker writes its value on
+      * every arrow press, so there is nothing to confirm unless leaving by the other key can undo
+      * it. An inline picker has no panel and no open value, so both keys are its host's.
+      */
+    private def dismiss(panel: Maybe[ColorPicker.Panel], restore: Boolean, ref: Maybe[SignalRef[String]])(using
+        Frame
+    ): Any < Async =
+        panel match
+            case Present(p) =>
+                val undo: Any < Async =
+                    if !restore then ()
+                    else p.opened.get.map(hex => commit(hex, ref))
+                undo.andThen(p.open.set(false))
+            case Absent => ()
+
+    private def content(ref: Maybe[SignalRef[String]], fallbackHex: String, panel: Maybe[ColorPicker.Panel] = Absent)(
         using Frame
     ): UI =
         def planeVisual(hex: String): UI =
@@ -261,54 +275,63 @@ final case class ColorPicker private (
                 selector = selector.onPointerDown(onPlane).onPointerMove(onPlane)
                 hue = hue.onPointerDown(onHue).onPointerMove(onHue)
         }
-        // The plane groups the two axes it controls; the hue bar IS one axis, so it wears the
-        // slider role itself rather than hiding one inside.
-        val axes: List[UI] = ref.toList.filter(_ => interactive).flatMap { r =>
-            List(
-                axisSlider(
-                    "Saturation",
-                    r,
-                    _._2 * 100.0,
-                    (hsv, x) => ColorPicker.hexOf(hsv._1, x / 100.0, hsv._3),
-                    100.0,
-                    "%",
-                    1.0,
-                    Set(Keyboard.ArrowLeft),
-                    Set(Keyboard.ArrowRight),
-                    ref,
-                    open,
-                    seed = open.isDefined
-                ),
-                axisSlider(
-                    "Brightness",
-                    r,
-                    _._3 * 100.0,
-                    (hsv, y) => ColorPicker.hexOf(hsv._1, hsv._2, y / 100.0),
-                    100.0,
-                    "%",
-                    1.0,
-                    Set(Keyboard.ArrowDown),
-                    Set(Keyboard.ArrowUp),
-                    ref,
-                    open,
-                    seed = false
-                )
+        // Horizontal keys are saturation and vertical keys are brightness, on the plane the way
+        // they are on the screen: Home and End are the ends of the horizontal axis, PageUp and
+        // PageDown ten steps of the vertical one.
+        val planeKeys: (Keyboard, (Double, Double, Double)) => Maybe[String] = (k, hsv) =>
+            val (h, s, v)                = hsv
+            def sat(x: Double): String   = ColorPicker.hexOf(h, ColorPicker.clamp01(x), v)
+            def bright(y: Double): String = ColorPicker.hexOf(h, s, ColorPicker.clamp01(y))
+            k match
+                case Keyboard.ArrowLeft  => Present(sat(s - 0.01))
+                case Keyboard.ArrowRight => Present(sat(s + 0.01))
+                case Keyboard.ArrowDown  => Present(bright(v - 0.01))
+                case Keyboard.ArrowUp    => Present(bright(v + 0.01))
+                case Keyboard.PageDown   => Present(bright(v - 0.1))
+                case Keyboard.PageUp     => Present(bright(v + 0.1))
+                case Keyboard.Home       => Present(sat(0.0))
+                case Keyboard.End        => Present(sat(1.0))
+                case _                   => Absent
+            end match
+
+        // The bar is vertical, so up and down are its axis; right and left mean the same thing,
+        // which is what the slider pattern asks of a vertical one.
+        val hueKeys: (Keyboard, (Double, Double, Double)) => Maybe[String] = (k, hsv) =>
+            val (h, s, v)              = hsv
+            def at(d: Double): String  = ColorPicker.hexOf(math.max(0.0, math.min(359.0, d)), s, v)
+            k match
+                case Keyboard.ArrowDown | Keyboard.ArrowLeft   => Present(at(h - 1))
+                case Keyboard.ArrowUp | Keyboard.ArrowRight    => Present(at(h + 1))
+                case Keyboard.PageDown                         => Present(at(h - 10))
+                case Keyboard.PageUp                           => Present(at(h + 10))
+                case Keyboard.Home                             => Present(at(0.0))
+                case Keyboard.End                              => Present(at(359.0))
+                case _                                         => Absent
+            end match
+
+        val axes: List[UI] = ref.toList.filter(_ => interactive).map { r =>
+            slider(
+                "Saturation and brightness",
+                r,
+                _._2 * 100.0,
+                hsv => s"Saturation ${ColorPicker.short(hsv._2 * 100.0)}%, brightness ${ColorPicker.short(hsv._3 * 100.0)}%",
+                100.0,
+                planeKeys,
+                ref,
+                panel,
+                seed = panel.isDefined
             )
         }
-        if axes.nonEmpty then selector = selector.role("group").aria("label", "Saturation and brightness")
         val hueAxis: List[UI] = ref.toList.filter(_ => interactive).map { r =>
-            axisSlider(
+            slider(
                 "Hue",
                 r,
                 _._1,
-                (hsv, h) => ColorPicker.hexOf(h, hsv._2, hsv._3),
+                hsv => ColorPicker.short(hsv._1) + " degrees",
                 359.0,
-                " degrees",
-                1.0,
-                Set(Keyboard.ArrowDown),
-                Set(Keyboard.ArrowUp),
+                hueKeys,
                 ref,
-                open,
+                panel,
                 seed = false
             )
         }
@@ -399,34 +422,47 @@ final case class ColorPicker private (
                 )
             }
         UI.mounted {
-            for open <- Signal.initRef(false)
-            yield wired(open, ref, fallbackHex)
+            for
+                open   <- Signal.initRef(false)
+                opened <- Signal.initRef(fallbackHex)
+            yield wired(ColorPicker.Panel(open, opened), ref, fallbackHex)
         }.placeholder(staticRoot)
     end overlayBody
 
     /** The subscription tree the overlay mount publishes — the seam the tests drive, since a
       * golden render shows a mount only as its placeholder.
       */
-    private[uic] def wired(open: SignalRef[Boolean], ref: Maybe[SignalRef[String]], fallbackHex: String)(using
+    private[uic] def wired(panel: ColorPicker.Panel, ref: Maybe[SignalRef[String]], fallbackHex: String)(using
         Frame
     ): UI =
         // Toggles rather than opens. A trigger that only ever opens is a trigger a reader cannot
         // close from, and it is the one control of the component that is reachable when the panel
-        // is shut.
-        val toggle: Any < Async = if interactive then open.getAndUpdate(!_) else ()
+        // is shut. Opening also records the colour the panel opens with, which is what Escape
+        // puts back.
+        val toggle: Any < Async =
+            if !interactive then ()
+            else
+                panel.open.get.map { wasOpen =>
+                    if wasOpen then panel.open.set(false)
+                    else
+                        val remember: Any < Async = ref match
+                            case Present(r) => r.get.map(panel.opened.set)
+                            case Absent     => ()
+                        remember.andThen(panel.open.set(true))
+                }
         // The Overlay primitive floats the panel; the .p-colorpicker-panel skin (sheet:
         // position:absolute; top:0; left:0) rides INSIDE it as a static child (see [[Theme]]'s
         // `position: static` glue) so it does not re-anchor to the panel origin.
         //
-        // The panel seeds no focus of its own: the saturation slider does, which is what the
-        // reader is being taken to, and its `focusRestore` hands focus back to the swatch on
-        // close. A trap here would be worse than none — this panel is not modal, and Tab out of a
-        // colour picker has somewhere to go.
-        val panel = Overlay(open)
+        // The panel seeds no focus of its own: the plane slider does, which is what the reader is
+        // being taken to, and its `focusRestore` hands focus back to the swatch on close. A trap
+        // here would be worse than none: this panel is not modal, and Tab out of a colour picker
+        // has somewhere to go.
+        val floating = Overlay(panel.open)
             .anchor(anchorV)
             .seedFocus(false)
             .matchWidth(false)(
-                div.cssClass("p-colorpicker-panel")(toChild(content(ref, fallbackHex, Present(open))))
+                div.cssClass("p-colorpicker-panel")(toChild(content(ref, fallbackHex, Present(panel))))
             )
         // The validity boundary sits INSIDE the mount: around it, an emission would re-mount and
         // drop `open`, closing the panel mid-interaction.
@@ -434,7 +470,7 @@ final case class ColorPicker private (
             FieldInvalid.withMessage(
                 shellRoot(red, "p-uic-overlay-anchor")(
                     toChild(previewSwatchOf(hex => previewSwatch(hex, toggle), ref, fallbackHex)),
-                    toChild(panel)
+                    toChild(floating)
                 ),
                 red,
                 msg
@@ -444,6 +480,13 @@ final case class ColorPicker private (
 end ColorPicker
 
 object ColorPicker:
+
+    /** The two refs an overlay picker owns: whether the panel is open, and the colour it opened
+      * with, which is what Escape puts back. They travel together because the confirm/cancel pair
+      * is only meaningful with both.
+      */
+    private[uic] final case class Panel(open: SignalRef[Boolean], opened: SignalRef[String])
+
     /** A color picker whose hex value binds two-way to `ref`. */
     def apply(ref: SignalRef[String]): ColorPicker = new ColorPicker(valueBinding = Present(Input.Value.Ref(ref)))
 
