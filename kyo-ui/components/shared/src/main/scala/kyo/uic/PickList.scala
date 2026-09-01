@@ -94,14 +94,25 @@ final case class PickList[A] private (
             }
         }
 
-    private def moveButton(glyph: IconGlyph, name: String, off: Boolean, act: Any < Async)(using Frame): UI =
-        Button()
+    /** A move or transfer button.
+      *
+      * `ariaDisabled` rather than the native attribute, and for the reason [[Button.ariaDisabled]]
+      * is there: a transfer CLEARS the selection it acted on, so the button the reader just
+      * pressed turns off under their hands, and a natively disabled button loses focus to the
+      * document. One keystroke moved the items and sent the reader back to the top of the page.
+      * Staying in the tab order means the click stays wired too, so the action is guarded here
+      * instead of by the attribute. The whole control being `disabled` is different: nothing about
+      * that changes under the reader, so it stays native.
+      */
+    private def moveButton(glyph: IconGlyph, name: String, off: Boolean, act: => Any < Async)(using Frame): UI =
+        var b = Button()
             .icon(glyph)
             .severity(Severity.Secondary)
             .accessibleName(name)
-            .disabled(disabledFlag || off)
-            .onClick(act)
-            .render
+        if disabledFlag then b = b.disabled(true)
+        else b = b.ariaDisabled(off).onClick(if off then () else act)
+        b.render
+    end moveButton
 
     private def body(src: Seq[A], tgt: Seq[A], srcSel: Set[String], tgtSel: Set[String])(using Frame): UI =
         val srcMoveOff = srcSel.isEmpty || sourceRef.isEmpty
