@@ -112,10 +112,14 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
                 _ <- regions.replaceWith(
                     One,
                     s"<tbody data-kyo-range-host='$One'><tr id='new-row'><td>new</td></tr></tbody>"
-                )((_, _, _) => false) { (oldRoots, newRoots) =>
+                    // `tryMorph` declines, so this exercises the wholesale path — which is
+                    // the one that juggles the anchors between a synthetic host and its
+                    // table, and the only one that can produce the assertions below.
+                )(_ => false) { (oldRoots, newRoots) =>
                     assert(oldRoots.map(_.id) == Seq("authored"))
                     assert(newRoots.map(_.id) == Seq("new-row"))
-                } { (_, insertedRoots) =>
+                } { (_, insertedRoots, morphed) =>
+                    assert(!morphed)
                     assert(insertedRoots.map(_.id) == Seq("new-row"))
                 }
             yield
