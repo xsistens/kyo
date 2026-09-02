@@ -3,6 +3,7 @@ package kyo
 import kyo.Browser.*
 import kyo.UI.Ast.Text
 import kyo.UI.foreach
+import kyo.UI.foreachIndexed
 import kyo.UI.foreachKeyed
 
 class HtmlRendererReactiveRangesTest extends UITest:
@@ -41,6 +42,39 @@ class HtmlRendererReactiveRangesTest extends UITest:
             assert(html.indexOf("id=\"before\"") < html.indexOf(host))
             assert(html.indexOf("id=\"after\"") > html.indexOf(s"$end</tbody>"))
             assert(!html.contains("<span data-kyo-reactive"))
+    }
+
+    // GAP F-07 reproduction: the rows of a real table often are not `tr` values at
+    // render time. Each row opens a masked fragment, which is an effect, so it is a
+    // `UI.mounted` whose `tr` only exists once the mount resolves. The region then
+    // carries no statically visible rows, and the anchors go into the table bare —
+    // where the parser is free to fragment the row stream into several implied
+    // tbody elements and strand the anchors in different ones.
+    "reactive rows built from mounts still render inside one explicit tbody" in {
+        for
+            rows <- Signal.initRef(Chunk("dynamic"))
+            html <- kyo.internal.HtmlRenderer.render(
+                UI.table(
+                    UI.tr(UI.td("head").id("head")),
+                    rows.foreachIndexed((_, value) =>
+                        UI.mounted(Sync.defer(UI.tr(UI.td(value).id(value))))
+                            .keyed(value)
+                            .placeholder(UI.tr(UI.td("…")))
+                    )
+                ),
+                Seq.empty
+            )
+        yield
+            // Pin the OUTER region, the one that owns the row stream. Asserting that
+            // SOME host exists is not enough: every row mount is itself a region whose
+            // placeholder is a `tr`, so each row gets its own host and satisfies a
+            // loose match while the outer anchors stay bare in the table.
+            val outerId = "kyo-rs:([^-]+)-->".r.findFirstMatchIn(html).map(_.group(1)).getOrElse("")
+            assert(outerId.nonEmpty, s"no region rendered: $html")
+            assert(
+                html.contains(s"""<tbody data-kyo-range-host="$outerId"><!--kyo-rs:$outerId-->"""),
+                s"outer row region is not hosted, its anchors are bare in the table: $html"
+            )
     }
 
     "reactive authored tbody remains a table child with sibling anchors" in {

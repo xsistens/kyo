@@ -44,10 +44,21 @@ private[kyo] object ReactiveRegion:
 
     def tableContent(ui: UI): TableContent =
         ui match
-            case _: Tbody                               => TableContent.AuthoredSections
-            case _: Tr                                  => TableContent.Rows
-            case _: Reactive[?]                         => TableContent.Transparent
-            case _: Foreach[?, ?]                       => TableContent.Transparent
+            case _: Tbody         => TableContent.AuthoredSections
+            case _: Tr            => TableContent.Rows
+            case _: Reactive[?]   => TableContent.Transparent
+            case _: Foreach[?, ?] => TableContent.Transparent
+            // A mount's static shape is its placeholder: that is what the renderer emits
+            // now, and what the parser will therefore see. Without this case a mount fell
+            // to `Other`, so a `foreach` of mounted rows — every table whose rows open a
+            // masked fragment, which is an effect — classified as `Other` and had its
+            // anchors written bare into the table. The parser is then free to open an
+            // implied <tbody> for a preceding row and capture one anchor but not the
+            // other, which strands the pair in different elements and fails the range.
+            case mounted: Mounted =>
+                mounted.placeholderUI match
+                    case Present(placeholder) => tableContent(placeholder)
+                    case Absent               => TableContent.Transparent
             case KeyedChild(_, child)                   => tableContent(child)
             case Fragment(children) if children.isEmpty => TableContent.Other
             case Fragment(children)                     => tableContent(children)
