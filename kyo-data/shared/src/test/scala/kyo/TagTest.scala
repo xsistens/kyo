@@ -1384,6 +1384,53 @@ class TagTest extends kyo.test.Test[Any]:
         typeCheck("x.method")
     }
 
+    // A tuple type reaches the macro spelled the way its call site produced it: a match type such as
+    // `Tuple.Concat` or `NamedTuple.Concat` reduces to the `*:` chain, while a written `(A, B)` stays a
+    // `TupleN`. They are the same type, so they must derive the same tag: when they did not, a stream
+    // whose element type came from a `Concat` emitted under one spelling and a `foreach` whose lambda
+    // named the type emitted under the other, and the handler silently matched nothing.
+    "tuple spellings" - {
+
+        "a cons chain and its TupleN equal each other" in {
+            assert(Tag[String *: Int *: EmptyTuple] =:= Tag[Tuple2[String, Int]])
+            assert(Tag[String *: Int *: EmptyTuple].hash == Tag[Tuple2[String, Int]].hash)
+        }
+
+        "a chain ending in Tuple1 equals its TupleN" in {
+            assert(Tag[String *: String *: Tuple1[String]] =:= Tag[Tuple3[String, String, String]])
+            assert(Tag[String *: String *: Tuple1[String]].hash == Tag[Tuple3[String, String, String]].hash)
+        }
+
+        "a Concat-reduced tuple equals the written spelling" in {
+            type Concatenated = Tuple.Concat[Tuple.Concat[Tuple1[String], Tuple1[Int]], Tuple1[Boolean]]
+            assert(Tag[Concatenated] =:= Tag[(String, Int, Boolean)])
+            assert(Tag[Concatenated].hash == Tag[(String, Int, Boolean)].hash)
+        }
+
+        "a Concat-reduced named tuple equals the written spelling" in {
+            type Concatenated = NamedTuple.Concat[NamedTuple.Concat[(a: String), (b: Int)], (c: Boolean)]
+            assert(Tag[Concatenated] =:= Tag[(a: String, b: Int, c: Boolean)])
+            assert(Tag[Concatenated].hash == Tag[(a: String, b: Int, c: Boolean)].hash)
+        }
+
+        "the spelling agrees inside a type constructor" in {
+            type Concatenated = NamedTuple.Concat[(a: String), (b: Int)]
+            assert(Tag[Chunk[Concatenated]] =:= Tag[Chunk[(a: String, b: Int)]])
+            assert(Tag[Chunk[Concatenated]].hash == Tag[Chunk[(a: String, b: Int)]].hash)
+        }
+
+        "tuples that differ stay distinct" in {
+            assert(!(Tag[String *: Int *: EmptyTuple] =:= Tag[(Int, String)]))
+            assert(!(Tag[(a: String, b: Int)] =:= Tag[(b: String, a: Int)]))
+            assert(!(Tag[Tuple1[String]] =:= Tag[(String, String)]))
+        }
+
+        "EmptyTuple keeps its own tag" in {
+            assert(Tag[EmptyTuple] =:= Tag[EmptyTuple])
+            assert(!(Tag[EmptyTuple] =:= Tag[Tuple1[String]]))
+        }
+    }
+
     "show determinism" - {
 
         "intersection order is canonical" - {
