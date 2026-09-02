@@ -380,9 +380,29 @@ val derived = uic.Theme.tokens(uic.Theme.Preset.Aura, uic.Theme.Scheme.Dark) ++
     Seq("p-primary-400" -> "#1ed760")
 ```
 
+**That convenience has a price, and it is the one the next section is about.** `Theme.tokens` folds the same blocks `Theme.css` emits, so it reaches all four presets and pulls every token set into your bundle — about 765 KB of it. That is fine when you use `Theme.css` anyway. If you are on the slim path, start from the set you actually want instead, which costs nothing extra:
+
+```scala
+val derived = uic.Tokens.auraDark ++ Seq("p-primary-400" -> "#1ed760")
+```
+
+The difference is only that `Tokens.auraDark` is the dark OVERRIDES rather than the effective dark set; re-pointing the ramps is what a brand does, and the ramps are in `auraLight`, so in practice you pass `Tokens.auraLight` as `light` and your ramps ride on top of it.
+
 ### Shipping only the CSS you use
 
-`Theme.css` is every preset in both schemes plus all 75 component sheets, whatever your page places. That is the right default — nothing can be missing — and it renders to about 684 KB of CSS out of roughly 1.15 MB of Scala string constants (`Tokens` 765 KB of that, `ComponentCss` 328 KB, the kyo remainder 62 KB). In a Scala.js bundle it costs more than the CSS it renders to, because the token sets live as arrays of pairs rather than as text. `Theme.cssFor` is how you pay for less:
+`Theme.css` is every preset in both schemes plus all 75 component sheets, whatever your page places. That is the right default — nothing can be missing — and it renders to about 684 KB of CSS out of roughly 1.15 MB of Scala string constants (`Tokens` 765 KB of that, `ComponentCss` 328 KB, the kyo remainder 62 KB). In a Scala.js bundle it costs more than the CSS it renders to, because the token sets live as arrays of pairs rather than as text.
+
+`Theme.cssFor` is how you pay for less, and there are two rungs. **Take the first one; it is almost all of the win and it costs you nothing.**
+
+**Rung one — one preset instead of four.** Name every sheet, but only the token sets you actually select with `data-theme`/`data-scheme`:
+
+```scala
+val css: String = uic.Theme.cssFor(uic.Tokens.auraLight, uic.Tokens.auraDark, uic.ComponentCss.all)
+```
+
+Nothing can go missing here: `ComponentCss.all` is still every sheet. The only thing you give up is the ability to switch to Material, Lara or Nora at runtime, which most apps never do.
+
+**Rung two — only the sheets you place.** List them:
 
 ```scala
 val css: String = uic.Theme.cssFor(
@@ -394,9 +414,19 @@ val css: String = uic.Theme.cssFor(
 )
 ```
 
-The token sets land on the same two selectors the full sheet uses, `ComponentCss.base` and the kyo remainder are always included, and a preset built with `Theme.preset` composes on top exactly as it does with `Theme.css`.
+Either way the token sets land on the same two selectors the full sheet uses, `ComponentCss.base` and the kyo remainder are always included, and a preset built with `Theme.preset` composes on top exactly as it does with `Theme.css`.
 
-**There is a floor, and it is the remainder.** `Theme.primeExtraCss` is one flat 66.5 KB document of kyo's own glue, and it is keyed on component classes: **62 of the 74 component names appear in it or in `base`**, so a page that places no table still ships the table's slot rules, and one that places no gallery still ships Galleria's. Those rules are inert without the component's own sheet — this costs bytes, not correctness — but it means the floor is component-specific rather than neutral. Two named sheets plus one preset measure about 243 KB against the full sheet's 684 KB, a factor of 2.8, with the token pairs and those 66.5 KB making up most of what is left. Splitting the remainder the way `ComponentCss` is split would lower the floor; today it does not.
+**What each rung is worth**, measured on a real app (Scala.js dev bundle, optimizer off, bytes of the esbuild output; one library version, one line of app source different):
+
+| sheet | bundle bytes | saved |
+|---|---|---|
+| `Theme.css` | 71 761 142 | — |
+| rung one: one preset, all 74 sheets | 70 990 107 | 771 035 |
+| rung two: one preset, the 22 sheets that app places | 70 750 513 | 1 010 629 |
+
+**The tokens are 76 % of the saving and the sheets are 24 %.** Rung one is one line and carries no risk. Rung two buys the last quarter in exchange for a list you have to keep correct, which is the rest of this section.
+
+**There is a floor, and it is the remainder.** `Theme.primeExtraCss` is one flat 66.5 KB document of kyo's own glue, and it is keyed on component classes: **62 of the 74 component names appear in it or in `base`**, so a page that places no table still ships the table's slot rules, and one that places no gallery still ships Galleria's. Those rules are inert without the component's own sheet — this costs bytes, not correctness — but it means the floor is component-specific rather than neutral. Two named sheets plus one preset measure about 243 KB against the full sheet's 684 KB, a factor of 2.8, with the token pairs and those 66.5 KB making up most of what is left. Splitting the remainder per component would lower the floor, and the numbers above say how much that is worth: it sits inside the 24 % that rung two buys, so it is a few per cent of the whole. That is why it has not been done.
 
 **Why it takes sheets rather than names.** Scala.js eliminates dead code per *method*. A `cssFor(parts: Part*)` — an enum, a `Map`, a `byName` lookup — references every branch the moment it is reachable, so it would ship all 1.15 MB while looking like an optimisation. Passing the sheets themselves means the bundle keeps exactly the `Tokens` and `ComponentCss` defs your call site mentions. This is the same rule `Icons` follows for its 309 glyphs, which is why that object has no `all` either, and it is why `Tokens`' accessors are `def`s rather than `val`s: a `val` in an object is built by the static initialiser and would retain all eight token sets the moment anything touched `Tokens` at all.
 

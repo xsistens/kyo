@@ -141,6 +141,11 @@ object Theme:
       * Scheme.Dark) ++ myRamps` is Aura's dark palette with your colours over it. For most
       * brands the ramps alone are enough (the semantic tokens are `var()` chains onto
       * them), and this is the escape hatch for the rest.
+      *
+      * COSTS THE WHOLE TOKEN LAYER. Folding the blocks means reaching all four presets, so
+      * this pulls every token set into a bundle — about 765 KB — exactly the way [[css]]
+      * does. That is free when you use [[css]] anyway. On the [[cssFor]] path, name the set
+      * you want directly (`Tokens.auraLight ++ myRamps`) and keep the saving.
       */
     def tokens(preset: Preset, scheme: Scheme): Seq[(String, String)] =
         val applied = tokenBlocks.filter(_.appliesTo(preset, scheme)).flatMap(_.pairs)
@@ -209,7 +214,16 @@ object Theme:
 
     /** The sheet for a page that places only the components it names.
       *
+      * Two rungs, and the first is almost all of it. Measured on a real app: dropping three
+      * of the four presets saved 771 035 bundle bytes, and dropping 52 of the 74 sheets on
+      * top of that saved a further 239 594 — the tokens are 76 % of the win and cost
+      * nothing to give up, since `ComponentCss.all` is still every sheet.
+      *
       * {{{
+      * // rung one: one preset, nothing can go missing
+      * uic.Theme.cssFor(uic.Tokens.auraLight, uic.Tokens.auraDark, uic.ComponentCss.all)
+      *
+      * // rung two: only what the page places, and the list is yours to keep correct
       * uic.Theme.cssFor(
       *     uic.Tokens.auraLight,
       *     uic.Tokens.auraDark,

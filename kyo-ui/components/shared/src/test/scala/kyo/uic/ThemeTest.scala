@@ -205,6 +205,19 @@ class ThemeTest extends UicTest:
         assert(Theme.primeExtraCss.length > 60000, "the floor is real, not incidental")
     }
 
+    /** The rung worth taking first: every sheet, one preset. Nothing can go missing, and
+      * measured on a consuming app it is 771 035 of the 1 010 629 bundle bytes the slim
+      * path saves — 76 % of the win for a change that needs no maintained list.
+      */
+    "cssFor with ComponentCss.all keeps every sheet and drops the other presets" in {
+        val rungOne = Theme.cssFor(Tokens.auraLight, Tokens.auraDark, ComponentCss.all)
+        assert(rungOne.contains(".p-organizationchart"), "every sheet is present")
+        assert(rungOne.contains(".p-stepper"))
+        assert(!rungOne.contains("""[data-theme="material"]"""), "Material's diff is gone")
+        assert(!rungOne.contains("""[data-theme="nora"]"""), "so is Nora's")
+        assert(rungOne.length < Theme.css.length, "and it is smaller than the full sheet")
+    }
+
     "cssFor is a fraction of the full sheet" in {
         // Measured 2026-09-02: slim 243 223 chars against 683 691, a factor of 2.8. Most of
         // what remains is one preset's token pairs plus the ~62 KB remainder above; the two
