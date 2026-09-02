@@ -5,9 +5,10 @@ import kyo.UI.*
 
 /** One tab of a [[Tabs]] — a hand-authored carrier: a `text` label, the
   * already-rendered `content` shown when the tab is active, a stable `id` (the
-  * value the `selected` ref holds and the `onTabSelect` payload), an optional
+  * value the `selected` binding holds and the `onTabSelect` payload), an optional
   * leading `icon` glyph, an optional `additionalText` count badge (kyo
-  * extension — `span.p-uic-tab-count`), and a `disabled` flag (non-clickable).
+  * extension — `span.p-uic-tab-count`), an optional `url` (renders the header as
+  * a real anchor), and a `disabled` flag (non-clickable).
   */
 final case class Tab private[uic] (
     text: TextValue,
@@ -15,8 +16,38 @@ final case class Tab private[uic] (
     id: String,
     icon: Maybe[IconGlyph],
     additionalText: Maybe[String],
-    disabled: Boolean
-)
+    disabled: Boolean,
+    // No default: the synthetic companion `apply` would then also carry defaults and
+    // clash with the hand-written one below.
+    urlV: Maybe[String]
+):
+    /** Navigation target: the header renders as a real `<a href=…>` instead of a
+      * `<button>`, so a plain click navigates, a middle click opens a new tab, the
+      * link can be copied, and a crawler can follow it — none of which a button
+      * offers. Same slot and same reasoning as [[MenuItem.url]].
+      *
+      * The component learns no navigation concept from this. It emits an anchor;
+      * turning that into client-side routing is `UILocation`'s document-level
+      * interceptor, which claims same-origin unmodified clicks and deliberately
+      * lets a modified one (Ctrl/Cmd/Shift/Alt, middle button) fall through to the
+      * browser.
+      *
+      * A `url` header does NOT write back into a two-way `selected` binding: the
+      * navigation IS the selection, and writing would race it. The `.p-tab` rule
+      * carries no button reset, so the extracted CSS applies to the anchor
+      * unchanged.
+      *
+      * `onTabSelect` still fires — but ADDING it to a url strip costs the modified
+      * click. kyo-ui prevent-defaults a click on any anchor carrying a kyo click
+      * handler, without exempting Ctrl/Cmd/Shift/Alt or the middle button, so the
+      * handler that fires `onTabSelect` is also what stops the browser opening a new
+      * tab. A url strip with no `onTabSelect` declares no handler and keeps the full
+      * native behaviour, which is why a plain navigational strip should not reach for
+      * one. (Measured in a browser: a url tab without `onTabSelect` leaves a
+      * Ctrl-click unprevented; with one, it is prevented.)
+      */
+    def url(v: String): Tab = copy(urlV = Present(v))
+end Tab
 
 object Tab:
     /** Construct a tab with a constant `text` label. The `Tabs.tab` builder takes the same
@@ -29,7 +60,7 @@ object Tab:
         icon: Maybe[IconGlyph] = Absent,
         additionalText: Maybe[String] = Absent,
         disabled: Boolean = false
-    ): Tab = new Tab(TextValue.Const(text), content, id, icon, additionalText, disabled)
+    ): Tab = new Tab(TextValue.Const(text), content, id, icon, additionalText, disabled, Absent)
 end Tab
 
 /** Tabs — native kyo-ui, PrimeOne design (mirrors PrimeVue/PrimeReact's compound
@@ -46,11 +77,16 @@ end Tab
   * selection may live anywhere: a constant, a signal DERIVED from something else
   * (a route, a normalized cache record, a parent), or a writable `SignalRef` for
   * the two-way case. Only the last writes back — see [[Tabs.selected]]. With
-  * nothing bound, the first tab is shown. Tabs are real `<button>`s, so keyboard
-  * activation (Enter/Space) is native; the tablist is ONE tab stop and the arrows
-  * move between headers inside it, which is the ARIA tablist pattern and the only
-  * thing that makes an inactive header reachable at all once the roving tabindex
-  * has taken it out of the Tab order.
+  * nothing bound, the first tab is shown.
+  *
+  * A header is a real `<button>`, or a real `<a href>` when the tab carries a
+  * [[Tab.url]] — the navigational strip, which is what Prime v4 answers with now
+  * that `TabMenu` is gone (there is no `p-tabmenu` sheet to mirror, and `.p-tab`
+  * carries no button reset, so the extracted CSS fits either element). Either way
+  * keyboard activation (Enter/Space) is native; the tablist is ONE tab stop and
+  * the arrows move between headers inside it, which is the ARIA tablist pattern
+  * and the only thing that makes an inactive header reachable at all once the
+  * roving tabindex has taken it out of the Tab order.
   */
 final case class Tabs private (
     tabList: List[Tab] = Nil,
@@ -64,7 +100,7 @@ final case class Tabs private (
 
     /** Appends a single tab from bare content children (ergonomic builder). */
     def tab(text: String | Signal[String], id: String)(content: UI*)(using Frame): Tabs =
-        copy(tabList = tabList :+ new Tab(ReactiveValue(text), fragment(content*), id, Absent, Absent, false))
+        copy(tabList = tabList :+ new Tab(ReactiveValue(text), fragment(content*), id, Absent, Absent, false, Absent))
 
     /** The active tab's id. A `SignalRef` binds two way — clicking a tab writes its
       * id back before firing `onTabSelect`, which is the self-contained panel
@@ -140,6 +176,43 @@ final case class Tabs private (
             case Present(step) if step.focus != self && ids.isDefinedAt(step.focus) => focus(ids(step.focus))
             case _                                                                  => ()
 
+    /** Everything a header carries regardless of which element it is: the tablist
+      * roles, the active marker, the roving tabindex, the click, and the arrow-key
+      * handler. Generic over the builder rather than written twice, because every
+      * setter here lives on `UI.Ast.Interactive` — which `Button` and `Anchor` both
+      * are — and each returns the builder's own `Self`.
+      */
+    private def interactive[E <: UI.Ast.Interactive { type Self = E }](
+        el: E,
+        t: Tab,
+        isActive: Boolean,
+        i: Int,
+        ids: List[String],
+        focus: String => Any < Async,
+        navigable: List[Int]
+    )(using Frame): E =
+        var out = el.role("tab").aria("selected", isActive.toString)
+        if isActive then out = out.cssClass("p-tab-active")
+        if t.disabled then out = out.cssClass("p-disabled")
+        else
+            out = out.tabIndex(if isActive then 0 else -1)
+            // A url header gets a click handler only if there is something for it to
+            // do. It never writes back, so with no `onTabSelect` the handler would be
+            // empty — and an EMPTY handler is not free: kyo-ui prevent-defaults a click
+            // on any anchor that declares one (DomBackend, "the handler, not the href,
+            // drives the action"), which also takes the middle-click and the
+            // Ctrl/Cmd-click with it. Declaring nothing keeps the link a link.
+            if t.urlV.isEmpty || onTabSelectF.isDefined then
+                out = out.onClick(select(t.id, write = t.urlV.isEmpty))
+            // The roving tabindex above takes every inactive tab OUT of the Tab order, which
+            // is what the ARIA tablist pattern asks for and what leaves the arrows as the only
+            // way back to them. Without this handler they were simply unreachable.
+            if ids.isDefinedAt(i) then
+                out = out.id(ids(i)).onKeyDown(headerMove(ids, focus, navigable, i))
+        end if
+        out
+    end interactive
+
     private def bodyWith(active: String, ids: List[String], focus: String => Any < Async)(using Frame): UI =
         // The positions the keyboard may land on: a disabled tab is out of the tab order, so an
         // arrow steps over it.
@@ -156,24 +229,29 @@ final case class Tabs private (
                 case TextValue.Dyn(s)   => s.render(x => span(x))
             val content: List[UI] =
                 (iconSlot :+ textSlot) ++ countSlot ++ barSlot
-            var tabEl = button
-                .cssClass("p-tab")
-                .role("tab")
-                .jsProp("type", "button")
-                .aria("selected", isActive.toString)
-            if isActive then tabEl = tabEl.cssClass("p-tab-active")
-            if t.disabled then tabEl = tabEl.cssClass("p-disabled").disabled(true)
-            else
-                tabEl = tabEl
-                    .tabIndex(if isActive then 0 else -1)
-                    .onClick(select(t.id))
-                // The roving tabindex above takes every inactive tab OUT of the Tab order, which
-                // is what the ARIA tablist pattern asks for and what leaves the arrows as the only
-                // way back to them. Without this handler they were simply unreachable.
-                if ids.isDefinedAt(i) then
-                    tabEl = tabEl.id(ids(i)).onKeyDown(headerMove(ids, focus, navigable, i))
-            end if
-            tabEl(content.map(toChild)*)
+            val kids = content.map(toChild)
+            t.urlV match
+                case Present(u) =>
+                    // An anchor has no native `disabled`, so a disabled nav tab drops its
+                    // href and says so through ARIA instead — Link's handling, for the same
+                    // reason.
+                    var el = interactive(a.cssClass("p-tab"), t, isActive, i, ids, focus, navigable)
+                    if t.disabled then el = el.aria("disabled", "true")
+                    else el = el.href(Href.Path(u))
+                    el(kids*)
+                case Absent =>
+                    var el = interactive(
+                        button.jsProp("type", "button").cssClass("p-tab"),
+                        t,
+                        isActive,
+                        i,
+                        ids,
+                        focus,
+                        navigable
+                    )
+                    if t.disabled then el = el.disabled(true)
+                    el(kids*)
+            end match
         }
         val tablist: UI =
             div.cssClass("p-tablist")(
@@ -198,11 +276,15 @@ final case class Tabs private (
 
     /** Selecting a tab writes its id into the bound ref (only a two-way binding has
       * one), then fires `onTabSelect`.
+      *
+      * `write` is false for a `url` header: the navigation is the selection, and a
+      * write would race it — the ref would hold the new id while the location, and
+      * so anything derived from it, still held the old one.
       */
-    private def select(id: String)(using Frame): Any < Async =
+    private def select(id: String, write: Boolean)(using Frame): Any < Async =
         val setActive: Any < Async = selectedRef match
-            case Present(ref) => ref.set(id)
-            case Absent       => ()
+            case Present(ref) if write => ref.set(id)
+            case _                     => ()
         val fireSelect: Any < Async = onTabSelectF match
             case Present(f) => f(id)
             case Absent     => ()

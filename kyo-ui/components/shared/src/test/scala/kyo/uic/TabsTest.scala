@@ -125,6 +125,83 @@ class TabsTest extends UicTest:
         yield assert(held == "one")
     }
 
+    // ── url headers: a navigational strip, not a panel switcher ──────────────────
+
+    private def navStrip(using Frame) =
+        uic.Tabs().tabs(
+            uic.Tab("One", p("first"), "one").url("/one"),
+            uic.Tab("Two", p("second"), "two", disabled = true).url("/two"),
+            uic.Tab("Three", p("third"), "three").url("/three")
+        )
+
+    "a url header is a real anchor, and keeps the tablist vocabulary" in {
+        for
+            headers <- elementsWithClass(navStrip.selected("one").render, "p-tab")
+        yield
+            val first = headers(0)
+            assert(first.isInstanceOf[UI.Ast.Anchor], "the header is an <a>, not a <button>")
+            assert(
+                first.asInstanceOf[UI.Ast.Anchor].href.contains(Href.Path("/one")),
+                "carrying the href a button could never have"
+            )
+            assert(first.attrs.ariaAttrs.get("selected").contains("true"))
+            assert(first.attrs.tabIndex.contains(0), "and the roving tabindex is unchanged")
+            assert(headers(2).attrs.tabIndex.contains(-1))
+    }
+
+    "a disabled url header drops its href, since an anchor has no native disabled" in {
+        for
+            headers <- elementsWithClass(navStrip.selected("one").render, "p-tab")
+        yield
+            val off = headers(1)
+            assert(off.asInstanceOf[UI.Ast.Anchor].href.isEmpty, "nothing to navigate to")
+            assert(off.attrs.ariaAttrs.get("disabled").contains("true"), "and it says so")
+            assert(off.attrs.cssClasses.contains("p-disabled"))
+            assert(off.attrs.tabIndex.isEmpty, "out of the Tab order, like the button form")
+    }
+
+    "clicking a url header does NOT write back — the navigation is the selection" in {
+        // Writing would race the navigation: the ref would hold the new id while the
+        // location, and anything derived from it, still held the old one.
+        for
+            ref   <- Signal.initRef("three")
+            fired <- Signal.initRef(Absent: Maybe[String])
+            ui = navStrip.selected(ref).onTabSelect(id => fired.set(Present(id))).render
+            headers <- elementsWithClass(ui, "p-tab")
+            _       <- click(headers(0))
+            held    <- ref.get
+            saw     <- fired.get
+        yield assert(held == "three" && saw == Present("one"), "but onTabSelect still fires")
+    }
+
+    "a url header declares no click handler unless there is something for it to do" in {
+        // Not a micro-optimisation. kyo-ui prevent-defaults a click on ANY anchor that
+        // carries a kyo click handler, with no exemption for Ctrl/Cmd/Shift/Alt or the
+        // middle button — so an empty handler would silently cost the very thing an
+        // anchor was chosen for. Verified in a browser both ways.
+        for
+            plain <- elementsWithClass(navStrip.selected("one").render, "p-tab")
+            withSelect <- elementsWithClass(
+                navStrip.selected("one").onTabSelect(_ => ()).render,
+                "p-tab"
+            )
+            noUrls <- elementsWithClass(strip.selected("one").render, "p-tab")
+        yield
+            assert(plain(0).attrs.onClick.isEmpty, "a pure navigation strip stays a plain link")
+            assert(withSelect(0).attrs.onClick.isDefined, "onTabSelect is honoured when asked for")
+            assert(noUrls(0).attrs.onClick.isDefined, "and a button header always has one")
+    }
+
+    "a strip without urls still writes back, so the panel switcher is unchanged" in {
+        for
+            ref <- Signal.initRef("three")
+            ui = strip.selected(ref).render
+            headers <- elementsWithClass(ui, "p-tab")
+            _       <- click(headers(0))
+            held    <- ref.get
+        yield assert(held == "one")
+    }
+
     "only the active header is in the Tab order, and a disabled one is in neither" in {
         for
             active  <- Signal.initRef("three")

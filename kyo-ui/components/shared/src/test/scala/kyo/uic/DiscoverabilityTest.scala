@@ -87,6 +87,21 @@ class DiscoverabilityTest extends UicTest:
         )
     }
 
+    "a Tab can be a link, which is what a navigational strip is made of" in {
+        typeCheck(
+            preamble + """def x(using Frame): uic.Tab = uic.Tab("One", p("a"), "one").url("/one")"""
+        )
+        // The url slot is on Tab, not on Tabs: a strip may mix routed headers with
+        // plain ones, and the anchor/button choice is per header.
+        typeCheck(
+            preamble + "def x(using Frame): uic.Tabs =\n" +
+                """  uic.Tabs().tabs(uic.Tab("One", p("a"), "one").url("/one"), uic.Tab("Two", p("b"), "two"))"""
+        )
+        // Prime v4 retired TabMenu and this library never had it; a nav strip is
+        // Tab.url inside the ordinary tablist.
+        typeCheckFailure(preamble + """def x = uic.TabMenu()""")
+    }
+
     "Card title/subtitle take a reactive Signal[String] alongside the constant String" in {
         typeCheck(preamble + """def x(s: Signal[String]): uic.Card = uic.Card().title(s).subtitle(s)""")
         typeCheck(preamble + """def x: uic.Card = uic.Card().title("Players").subtitle("2 joined")""")
