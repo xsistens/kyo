@@ -1934,8 +1934,14 @@ private[kyo] object ReactiveUI:
                                     // of aliasing. `retained.isEmpty` is exactly "this row was re-rendered
                                     // above": retained iff key survived AND item compared equal, which is the
                                     // same condition under which the row's DOM was left alone.
+                                    // A structural command addresses rows BY KEY, so a row that paints as several
+                                    // roots or as none has nothing for a key to name. The wire cannot discover that
+                                    // late and change its mind: once the untouched rows are left out of a frame, the
+                                    // client has nothing to rebuild them from. So the shape is decided here, beside
+                                    // the duplicate-key gate it restates, and without rendering anything.
+                                    addressable = built.forall((_, _, rowUI, _, _, _) => HtmlRenderer.paintsAsKeyedRoot(rowUI))
                                     _ <-
-                                        if duplicates then
+                                        if duplicates || !addressable then
                                             exchange.onChange(
                                                 rui.region,
                                                 path,

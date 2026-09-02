@@ -160,6 +160,47 @@ private[kyo] object UIServer:
                 end if
             end onChange
 
+            /** Answer a keyed list emission with the row ORDER and the render of only the rows that changed.
+              *
+              * Removing one row of two hundred put every other row on the socket to say it. Now a removal and a
+              * reorder carry no rendered row at all, and a change carries the rows that changed. The changed rows
+              * go as ONE payload rather than one per row, so a full replacement keeps the single bulk parse it
+              * has today. `ReactiveUI` has already refused an emission whose rows are not addressable by key, so
+              * there is nothing to check here and nothing to fall back to: that decision cannot be taken late,
+              * because a frame that left the untouched rows out gives the client nothing to rebuild them from.
+              */
+            override def onListPatch(
+                region: ReactiveRegion,
+                path: Seq[String],
+                contentContext: ReactiveRegion.RegionIdentity,
+                parentContext: ReactiveRegion.ParentContext,
+                previous: Maybe[UI],
+                rows: Seq[ListRow]
+            )(using Frame): Unit < Async =
+                region match
+                    case ReactiveRegion.HtmlRange(id) =>
+                        val host = ReactiveRegion.renderHost(
+                            region,
+                            parentContext,
+                            ReactiveRegion.tableContent(rows.iterator.map(_.ui))
+                        )
+                        val changedRows = rows.filter(_.changed)
+                        Kyo.foreach(Chunk.from(changedRows)) { row =>
+                            HtmlRenderer.renderRowWithCss(row.ui, path :+ row.key, contentContext.child(row.key), host)
+                        }.map { rendered =>
+                            val html  = rendered.map(_._1).mkString
+                            val rules = rendered.flatMap(_._2).toSeq
+                            send(
+                                HtmlOp.PatchList(id, rows.map(_.key), changedRows.map(_.key), html),
+                                rules
+                            )
+                        }
+                    // An SVG region replaces its own group element; there is no row range to address.
+                    case _: ReactiveRegion.SvgElement =>
+                        super.onListPatch(region, path, contentContext, parentContext, previous, rows)
+                end match
+            end onListPatch
+
             override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
                 val op = HtmlOp.SetAttrByPath(path, name, value)
                 Abort.runPartial[Closed](ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](op)))).unit

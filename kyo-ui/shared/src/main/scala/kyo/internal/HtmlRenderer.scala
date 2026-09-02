@@ -43,6 +43,82 @@ private[kyo] object HtmlRenderer:
             ReactiveRegion.BoundaryMode.Suppress
         )
 
+    /** Whether `ui` paints as exactly ONE element carrying its own `data-kyo-path`, which is what makes a row
+      * addressable by key.
+      *
+      * A structural command names rows BY KEY, so a row that paints as several roots or as none has nothing for a
+      * key to name: a fragment paints its children under sub-paths, text and raw HTML carry no path at all, and a
+      * region paints a marker pair whose identity is its range id rather than the row path. Answering this without
+      * rendering is what lets the gate sit before the op is chosen, which a wire needs: the in-process path can
+      * look at the live DOM and change its mind, but once the untouched rows are left out of a frame the client
+      * has nothing to rebuild them from.
+      *
+      * A total match with no `case _`: a new UI node has to be answered here as well as in [[renderTo]], and a
+      * default would answer it silently and wrongly.
+      */
+    private[kyo] def paintsAsKeyedRoot(ui: UI): Boolean =
+        ui match
+            case KeyedChild(_, child) => paintsAsKeyedRoot(child)
+            case _: Element           => true
+            case _: Fragment[?]       => false
+            case _: Text              => false
+            case _: RawHtml           => false
+            case _: Reactive[?]       => false
+            case _: Foreach[?, ?]     => false
+            case _: Mounted           => false
+    end paintsAsKeyedRoot
+
+    /** Render ONE keyed row of a list region, exactly as the region's own render would have placed it.
+      *
+      * A list patch renders the rows that changed and nothing else, so it needs the row alone rather than the
+      * region around it: same path (`path :+ key`), same identity (`context.child(key)`), same namespace and
+      * parent context the enclosing host imposes, and no boundary markers of the region's own. What comes back is
+      * therefore byte-identical to the slice the whole-list render would have produced for that row, which is
+      * what lets the reconciliation match it against the live row by key.
+      */
+    private[kyo] def renderRow(
+        ui: UI,
+        path: Seq[String],
+        context: ReactiveRegion.RegionIdentity,
+        host: ReactiveRegion.RenderHost
+    )(using Frame): String < Sync =
+        renderRowInto(ui, path, context, host, Absent).map(_._1)
+
+    /** [[renderRow]] plus the pseudo-state rules the row introduced, for the transport that has to ship them. */
+    private[kyo] def renderRowWithCss(
+        ui: UI,
+        path: Seq[String],
+        context: ReactiveRegion.RegionIdentity,
+        host: ReactiveRegion.RenderHost
+    )(using Frame): (String, Chunk[(String, String)]) < Sync =
+        val css = new CssCollector
+        renderRowInto(ui, path, context, host, Present(css)).map((html, _) => (html, Chunk.from(css)))
+    end renderRowWithCss
+
+    private def renderRowInto(
+        ui: UI,
+        path: Seq[String],
+        context: ReactiveRegion.RegionIdentity,
+        host: ReactiveRegion.RenderHost,
+        cssRules: Maybe[CssCollector]
+    )(using Frame): (String, Unit) < Sync =
+        val sb = new StringBuilder
+        val (namespace, parentContext) = host match
+            case _: ReactiveRegion.RenderHost.HtmlTableBody =>
+                (ReactiveRegion.Namespace.Html, ReactiveRegion.ParentContext.Other)
+            case other => (ReactiveRegion.namespace(other), ReactiveRegion.contentParent(other))
+        renderTo(
+            sb,
+            ui,
+            path.toVector,
+            context,
+            namespace,
+            cssRules,
+            parentContext,
+            ReactiveRegion.BoundaryMode.Emit
+        ).andThen((sb.toString, ()))
+    end renderRowInto
+
     private[kyo] def renderRegion(
         ui: UI,
         path: Seq[String],
@@ -1440,6 +1516,99 @@ private[kyo] object HtmlRenderer:
           |  if(open.length)kyoRangeFail("start marker has no end after morphing "+id+": "+open[open.length-1].id);
           |  return found;
           |}
+          |// Reconcile a list region against a ROW ORDER rather than a rendered document: the payload holds only the
+          |// rows that changed, every other row is named by key and stays where it is. The walk is the same
+          |// two-ended keyed pass __kyoMorphRun uses, with the order standing in for the `to` side. Twin of
+          |// applyListPatch in DomBackend; keep the two in lockstep.
+          |//
+          |// ReactiveUI refused the emission already if the rows are not addressable by key, so there is nothing to
+          |// check and nothing to fall back to: a frame that left the untouched rows out gives us nothing to rebuild
+          |// them from. A row the live range does not hold is therefore a protocol error, not a repaint trigger.
+          |function __kyoApplyList(id,keys,changedKeys,changedHtml){
+          |  if(!kyoRangeId(id))kyoRangeFail("malformed replacement id: "+id);
+          |  if(!__kyoRanges)kyoRangeFail("registry is closed");
+          |  var endpoints=__kyoRanges.get(id);
+          |  if(!endpoints)kyoRangeFail("unknown id: "+id);
+          |  if(kyoRangeMarker(endpoints.start,"kyo-rs:")!==id||endpoints.end.data!=="kyo-re:"+id)kyoRangeFail("markers are corrupted: "+id);
+          |  var parent=endpoints.start.parentNode;
+          |  if(!parent||parent!==endpoints.end.parentNode)kyoRangeFail("anchors are no longer siblings: "+id);
+          |  var range=document.createRange();range.setStartAfter(endpoints.start);range.setEndBefore(endpoints.end);
+          |  var fragment=changedHtml.length?range.createContextualFragment(changedHtml):null;
+          |  var parsedKeyed={},parsed=fragment?fragment.firstChild:null;
+          |  while(parsed){var pk=__kyoLogicalKey(parsed);if(pk!==null)parsedKeyed[pk]=parsed;parsed=__kyoLogicalNext(parsed);}
+          |  var fromNodes=[],fromKeys=[];
+          |  __kyoCollectLogical(endpoints.start.nextSibling,endpoints.end,fromNodes,fromKeys);
+          |  var fromKeyed={},i;
+          |  for(i=0;i<fromKeys.length;i++)if(fromKeys[i]!==null)fromKeyed[fromKeys[i]]=fromNodes[i];
+          |  var changedSet={};for(i=0;i<changedKeys.length;i++)changedSet[changedKeys[i]]=true;
+          |  var prefix=__kyoRangeIdPath(id);if(prefix===null)prefix="";
+          |  var toKeys=[],toNodes=[],targetKeys={};
+          |  for(i=0;i<keys.length;i++){
+          |    var full=prefix.length?prefix+"."+keys[i]:keys[i];
+          |    toKeys.push(full);targetKeys[full]=true;
+          |    toNodes.push(Object.prototype.hasOwnProperty.call(changedSet,keys[i])?(parsedKeyed[full]||null):null);
+          |  }
+          |  // Focus spans the WHOLE region: a retained row keeps its DOM, but MOVING it is a remove and an insert,
+          |  // which blurs whatever it holds, so a pure reorder is precisely the case this must survive.
+          |  var oldRoots=kyoRangeRoots(endpoints.start,endpoints.end),active=document.activeElement;
+          |  var inside=active&&active!==document.body&&kyoRangeContains(oldRoots,active);
+          |  var activeLocator=inside?kyoRangeFocusLocator(oldRoots,active):null;
+          |  var ss=inside&&typeof active.selectionStart==="number"?active.selectionStart:null;
+          |  var se=inside&&typeof active.selectionEnd==="number"?active.selectionEnd:null;
+          |  var disturbed=[],repainted=[];
+          |  for(i=0;i<fromKeys.length;i++){
+          |    var fk=fromKeys[i];
+          |    if(fk===null||!Object.prototype.hasOwnProperty.call(targetKeys,fk))disturbed.push(fromNodes[i]);
+          |  }
+          |  for(i=0;i<toKeys.length;i++)if(toNodes[i]){var lv=fromKeyed[toKeys[i]];if(lv){repainted.push(lv);disturbed.push(lv);}}
+          |  var survivors=fragment?kyoLeavePathsRoots(kyoRangeFragmentRoots(fragment)):{};
+          |  var oldEnter=kyoEnterPathsRoots(__kyoLogicalElements(repainted));
+          |  var oldFocus=kyoFocusPathsRoots(__kyoLogicalElements(repainted));
+          |  var ghosts=kyoLeavePrepareRoots(__kyoLogicalElements(disturbed),survivors);
+          |  var touched=[];
+          |  function place(from,ti){var to=toNodes[ti];if(to){__kyoPatchLogical(parent,from,to);
+          |    var live=fromKeyed[toKeys[ti]];if(live&&live.nodeType===1)touched.push(live);}}
+          |  var head=0,tail=fromNodes.length-1,toHead=0,toTail=toKeys.length-1,tailBoundary=endpoints.end,scanning=true;
+          |  while(scanning&&head<=tail&&toHead<=toTail){
+          |    if(fromKeys[head]===null||fromKeys[tail]===null)scanning=false;
+          |    else if(fromKeys[head]===toKeys[toHead]){place(fromNodes[head],toHead);head++;toHead++;}
+          |    else if(fromKeys[tail]===toKeys[toTail]){place(fromNodes[tail],toTail);tailBoundary=fromNodes[tail];tail--;toTail--;}
+          |    else if(fromKeys[head]===toKeys[toTail]){
+          |      if(head!==tail)__kyoMoveLogicalBefore(parent,fromNodes[head],tailBoundary);
+          |      place(fromNodes[head],toTail);tailBoundary=fromNodes[head];head++;toTail--;}
+          |    else if(fromKeys[tail]===toKeys[toHead]){
+          |      if(tail!==head)__kyoMoveLogicalBefore(parent,fromNodes[tail],fromNodes[head]);
+          |      place(fromNodes[tail],toHead);tail--;toHead++;}
+          |    else scanning=false;
+          |  }
+          |  var cursor=head<=tail?fromNodes[head]:tailBoundary;
+          |  for(i=toHead;i<=toTail;i++){
+          |    var key=toKeys[i],live2=fromKeyed[key];
+          |    if(live2){if(live2!==cursor)__kyoMoveLogicalBefore(parent,live2,cursor);else cursor=__kyoLogicalNext(cursor);
+          |      place(live2,i);}
+          |    else if(toNodes[i]){__kyoInsertLogicalClone(parent,toNodes[i],cursor);
+          |      var ins=__kyoLogicalElements([toNodes[i]]);for(var q=0;q<ins.length;q++)touched.push(ins[q]);}
+          |    else kyoRangeFail("row is neither retained nor rendered: "+key);
+          |  }
+          |  for(i=0;i<fromKeys.length;i++){
+          |    var lk=fromKeys[i];
+          |    if((lk===null||!Object.prototype.hasOwnProperty.call(targetKeys,lk))&&document.contains(fromNodes[i]))
+          |      __kyoRemoveLogical(parent,fromNodes[i]);
+          |  }
+          |  var finalRoots=kyoRangeRoots(endpoints.start,endpoints.end);
+          |  for(i=0;i<finalRoots.length;i++)applyJsProps(finalRoots[i]);
+          |  var restored=kyoRangeResolveFocus(finalRoots,activeLocator);
+          |  if(restored){restored.focus({preventScroll:true});if(ss!==null)kyoSetCaret(restored,ss,se);}
+          |  kyoSeedEnterRoots(touched,oldEnter);kyoSeedFocusRoots(touched,oldFocus);kyoSpawnGhosts(ghosts);
+          |  for(i=0;i<touched.length;i++)__kyoPortalSweep(touched[i]);
+          |  __kyoPortalSweep(null);sweepFocusAuto();sweepScrollAuto(true);
+          |}
+          |// The elements of a set of logical children, each span contributing the elements it brackets.
+          |function __kyoLogicalElements(nodes){
+          |  var out=[];
+          |  for(var i=0;i<nodes.length;i++)__kyoEachSpanNode(nodes[i],function(n){if(n.nodeType===1)out.push(n);});
+          |  return out;
+          |}
           |function kyoRangeReplace(id,html){
           |  if(!kyoRangeId(id))kyoRangeFail("malformed replacement id: "+id);
           |  if(!__kyoRanges)kyoRangeFail("registry is closed");var endpoints=__kyoRanges.get(id);
@@ -1538,7 +1707,10 @@ private[kyo] object HtmlRenderer:
            |    try{__dragRt.resolve(op.ResolveDrag.sessionId,op.ResolveDrag.decision);}catch(error){kyoClientError(error);}
            |  }else if(op.ReadDropFile||op.ReadDropDirectory||op.CancelDropRead){
            |    try{__dragRt.serveDropRead(op);}catch(error){kyoClientError(error);}
-           |  }else if(op.ReplaceRange){
+           |  }else if(op.PatchList){
+          |    try{__kyoApplyList(op.PatchList.regionId,op.PatchList.keys,op.PatchList.changedKeys,op.PatchList.changed);}
+          |    catch(error){kyoClientError(error);}
+          |  }else if(op.ReplaceRange){
            |    try{kyoRangeReplace(op.ReplaceRange.regionId,op.ReplaceRange.html);}catch(error){kyoClientError(error);}
            |  }else if(op.Replace){
            |    var p=op.Replace.path.join(".");

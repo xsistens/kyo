@@ -11,9 +11,17 @@ private[kyo] object HtmlOp:
 
     case class Replace(path: Seq[String], html: String)     extends HtmlOp derives Schema
     case class ReplaceRange(regionId: String, html: String) extends HtmlOp derives Schema
-    case class Remove(path: Seq[String])                    extends HtmlOp derives Schema
-    case class InjectCss(css: String)                       extends HtmlOp derives Schema
-    case class ScrollIntoView(id: String)                   extends HtmlOp derives Schema
+    // A keyed list emission answered by the ROW ORDER plus the render of only the rows that changed: removing or
+    // reordering carries no rendered row at all, where ReplaceRange puts the whole list on the socket to say it.
+    // `keys` is the new order, `changed` the rendered rows in that same order, concatenated as one payload so a
+    // full replacement keeps its single bulk parse. A wire cannot fall back the way the in-process path does:
+    // once the untouched rows are left out of a frame, the client has nothing to rebuild them from, so the shape
+    // gate sits in ReactiveUI, before the op is ever chosen.
+    case class PatchList(regionId: String, keys: Seq[String], changedKeys: Seq[String], changed: String)
+        extends HtmlOp derives Schema
+    case class Remove(path: Seq[String])  extends HtmlOp derives Schema
+    case class InjectCss(css: String)     extends HtmlOp derives Schema
+    case class ScrollIntoView(id: String) extends HtmlOp derives Schema
 
     // Contracts for these imperative ops live on UI.Commands (requestMeasure / command / *ById).
     case class RequestMeasure(path: Seq[String])        extends HtmlOp derives Schema

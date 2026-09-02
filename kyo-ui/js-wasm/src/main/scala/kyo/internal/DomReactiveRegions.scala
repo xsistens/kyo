@@ -215,6 +215,55 @@ final private[kyo] class DomReactiveRegions private (
     private def ensureOpen()(using Frame): Unit =
         if !open then fail("Reactive range registry is closed")
 
+    /** Hand `reconcile` the live range of `regionId` and a payload parsed in its context, and keep the registry
+      * honest if it takes the job.
+      *
+      * `replaceWith` owns one policy: the payload IS the new content. A list patch has a different one: the
+      * payload holds only the rows that changed, and which live row each one replaces is decided by key rather
+      * than by position. That decision needs the parsed nodes and the live range, which is what this hands over;
+      * everything the two policies share, parsing in the right context and reading the registry back off the DOM
+      * afterwards, stays here rather than being written twice.
+      *
+      * `reconcile` answers whether it took the job. `false` must mean it changed nothing, since the caller then
+      * falls back to a whole-list repaint over the very same range.
+      */
+    private[kyo] def withRegionFragment(regionId: String, html: String)(
+        reconcile: DomReactiveRegions.MorphTarget => Boolean
+    )(using Frame): Boolean < Sync =
+        Sync.defer {
+            ensureOpen()
+            if !ReactiveRegion.isValidHtmlId(regionId) then fail(s"Malformed reactive range id: $regionId")
+            ranges.get(regionId) match
+                // A range that was never painted has nothing to patch, and nothing a repaint would find either.
+                case None => true
+                case Some(endpoints) =>
+                    val parent = validatedParent(regionId, endpoints)
+                    val range  = document.createRange()
+                    range.setStartAfter(endpoints.start)
+                    range.setEndBefore(endpoints.end)
+                    val fragment = range.createContextualFragment(html)
+                    val incoming = DomReactiveRegions.scan(document, fragment)
+                    val removed = ranges.iterator.collect {
+                        case (id, nested) if id != regionId && intersects(range, nested.start) => id
+                    }.toSet
+                    val target = DomReactiveRegions.MorphTarget(
+                        parent,
+                        endpoints.start,
+                        endpoints.end,
+                        fragment,
+                        elementsBetween(endpoints),
+                        childElements(fragment),
+                        incoming.isEmpty
+                    )
+                    val took = reconcile(target)
+                    if took then
+                        removed.foreach(ranges.remove)
+                        ranges.addAll(rescanRange(regionId, endpoints))
+                    took
+            end match
+        }
+    end withRegionFragment
+
     /** The ranges the live content of `regionId` holds right now, read off the DOM.
       *
       * The morph keeps the markers of a range that survived and clones or drops the rest, so the registry cannot be
@@ -298,7 +347,7 @@ final private[kyo] class DomReactiveRegions private (
         end if
     end classifyIncoming
 
-    private def childElements(node: dom.Node): Seq[dom.Element] =
+    private[kyo] def childElements(node: dom.Node): Seq[dom.Element] =
         val elements = mutable.ArrayBuffer.empty[dom.Element]
         var current  = DomReactiveRegions.firstChild(node)
         while current.nonEmpty do

@@ -426,6 +426,211 @@ private[kyo] object DomBackend:
         end while
     end morphRangeCursor
 
+    /** Reconcile a list region against a ROW ORDER rather than a rendered document.
+      *
+      * The payload holds only the rows that changed; every other row is named by key and stays where it is. That
+      * is the whole point: a retained row costs one string comparison here, where a whole-list repaint pays a
+      * render, a parse and a reconciliation for it. The walk itself is the same two-ended keyed pass
+      * [[morphNodeRun]] uses, with the row order standing in for the `to` side.
+      *
+      * Answers `false`, having changed nothing, when the rows are not individually addressable: a row that paints
+      * as several roots or as none has no single key naming its DOM, and a live range that disagrees with the
+      * region about which rows are on screen cannot be matched either. The caller then repaints the whole list,
+      * which needs no such structure because it diffs whole documents.
+      */
+    private def applyListPatch(target: DomReactiveRegions.MorphTarget, path: Seq[String], rows: Seq[ListRow]): Boolean =
+        val parent   = target.parent.asInstanceOf[dom.Element]
+        val pathAttr = path.mkString(".")
+
+        val parsedKeyed      = js.Dictionary.empty[dom.Node]
+        var parsedCount      = 0
+        var parsed: dom.Node = target.fragment.firstChild
+        while parsed != null do
+            logicalKey(parsed).foreach(key => parsedKeyed(key) = parsed)
+            parsedCount += 1
+            parsed = logicalNext(parsed)
+        end while
+
+        val fromNodes = js.Array[dom.Node]()
+        val fromKeys  = js.Array[String]()
+        collectLogical(target.start.nextSibling, target.end, fromNodes, fromKeys)
+        val fromKeyed = js.Dictionary.empty[dom.Node]
+        var i         = 0
+        while i < fromKeys.length do
+            if fromKeys(i) != null then fromKeyed(fromKeys(i)) = fromNodes(i)
+            i += 1
+        end while
+
+        val toKeys       = js.Array[String]()
+        val toNodes      = js.Array[dom.Node]()
+        val changedCount = rows.count(_.changed)
+        var addressable  = parsedCount == changedCount && parsedKeyed.size == changedCount
+        i = 0
+        while addressable && i < rows.length do
+            val row  = rows(i)
+            val key  = if pathAttr.isEmpty then row.key else s"$pathAttr.${row.key}"
+            val node = if row.changed then parsedKeyed.get(key).orNull else null
+            addressable = if row.changed then node != null else fromKeyed.contains(key)
+            discard(toKeys.push(key))
+            discard(toNodes.push(node))
+            i += 1
+        end while
+        if !addressable then false
+        else
+            // A retained row is bit-identical before and after, so it can contribute nothing to the enter, leave
+            // or focus-auto sets: only the rows leaving and the rows being repainted are read. Scanning the rest
+            // would be one whole-subtree query per row per set, for entries nothing can match.
+            val targetKeys = js.Dictionary.empty[Boolean]
+            i = 0
+            while i < toKeys.length do
+                targetKeys(toKeys(i)) = true
+                i += 1
+            end while
+            val leaving = js.Array[dom.Node]()
+            i = 0
+            while i < fromKeys.length do
+                if fromKeys(i) == null || !targetKeys.contains(fromKeys(i)) then discard(leaving.push(fromNodes(i)))
+                i += 1
+            end while
+            val repainted = js.Array[dom.Node]()
+            i = 0
+            while i < toKeys.length do
+                if toNodes(i) != null then
+                    val live = fromKeyed.get(toKeys(i)).orNull
+                    if live != null then discard(repainted.push(live))
+                i += 1
+            end while
+
+            // Focus spans the WHOLE region, not just the disturbed rows: a retained row keeps its DOM, but MOVING
+            // it is a remove and an insert, which blurs whatever it holds. A pure reorder disturbs no row at all
+            // and is precisely the case that would drop the caret if this were scoped to the disturbed ones.
+            val active = Maybe(document.activeElement)
+                .filter(el => (el ne document.body) && containsAny(target.oldElements, el))
+            val locator                        = active.flatMap(focusLocator(target.oldElements, _))
+            val (selectionStart, selectionEnd) = active.map(readSelection).getOrElse((Absent, Absent))
+            val disturbed                      = logicalElementsOf(leaving) ++ logicalElementsOf(repainted)
+            val survivors                      = leavePaths(target.newElements)
+            val oldEnter                       = enterPaths(logicalElementsOf(repainted))
+            val oldFocusAuto                   = focusAutoPaths(logicalElementsOf(repainted))
+            val ghosts                         = prepareLeaveGhosts(disturbed, survivors)
+
+            val touched = scala.collection.mutable.ArrayBuffer.empty[dom.Element]
+            def place(from: dom.Node, index: Int): Unit =
+                val to = toNodes(index)
+                if to != null then
+                    patchLogical(parent, from, to)
+                    fromKeyed.get(toKeys(index)).orNull match
+                        case element: dom.Element => touched += element
+                        case _                    => ()
+                end if
+            end place
+
+            var head                   = 0
+            var tail                   = fromNodes.length - 1
+            var toHead                 = 0
+            var toTail                 = toKeys.length - 1
+            var tailBoundary: dom.Node = target.end
+            var scanning               = true
+            while scanning && head <= tail && toHead <= toTail do
+                if fromKeys(head) == null || fromKeys(tail) == null then scanning = false
+                else if fromKeys(head) == toKeys(toHead) then
+                    place(fromNodes(head), toHead)
+                    head += 1
+                    toHead += 1
+                else if fromKeys(tail) == toKeys(toTail) then
+                    place(fromNodes(tail), toTail)
+                    tailBoundary = fromNodes(tail)
+                    tail -= 1
+                    toTail -= 1
+                else if fromKeys(head) == toKeys(toTail) then
+                    if head != tail then moveLogicalBefore(parent, fromNodes(head), tailBoundary)
+                    place(fromNodes(head), toTail)
+                    tailBoundary = fromNodes(head)
+                    head += 1
+                    toTail -= 1
+                else if fromKeys(tail) == toKeys(toHead) then
+                    if tail != head then moveLogicalBefore(parent, fromNodes(tail), fromNodes(head))
+                    place(fromNodes(tail), toHead)
+                    tail -= 1
+                    toHead += 1
+                else scanning = false
+                end if
+            end while
+
+            // The unresolved middle, by key: every remaining row either names a live node, which moves into place,
+            // or is new, which is cloned in. Rows the order no longer names are removed at the end.
+            var cursor: dom.Node = if head <= tail then fromNodes(head) else tailBoundary
+            var index            = toHead
+            while index <= toTail do
+                val key  = toKeys(index)
+                val live = fromKeyed.get(key).orNull
+                if live != null then
+                    if live ne cursor then moveLogicalBefore(parent, live, cursor)
+                    else cursor = logicalNext(cursor)
+                    place(live, index)
+                else
+                    toNodes(index) match
+                        case null => ()
+                        case node =>
+                            insertLogicalClone(parent, node, cursor)
+                            logicalElementsOf(js.Array[dom.Node](node)).foreach(touched += _)
+                end if
+                index += 1
+            end while
+            i = 0
+            while i < fromKeys.length do
+                val key = fromKeys(i)
+                if key == null || !targetKeys.contains(key) then
+                    if document.contains(fromNodes(i)) then removeLogical(parent, fromNodes(i))
+                i += 1
+            end while
+
+            val finalRoots = target.oldElements
+            val live       = elementsBetweenLive(target)
+            live.foreach(applyJsPropsSync)
+            locator.flatMap(resolveFocus(live, _)).foreach { element =>
+                focusNoScroll(element)
+                (selectionStart, selectionEnd) match
+                    case (Present(start), Present(end)) => setSelection(element, start, end)
+                    case _                              => ()
+            }
+            seedEnter(touched.toSeq, oldEnter)
+            seedFocusAuto(touched.toSeq, oldFocusAuto)
+            touched.foreach(portalSweep)
+            spawnGhosts(ghosts)
+            sweepFocusAuto()
+            sweepScrollAuto()
+            discard(finalRoots)
+            true
+        end if
+    end applyListPatch
+
+    /** The elements of a set of logical children, each span contributing the elements it brackets. */
+    private def logicalElementsOf(nodes: js.Array[dom.Node]): Seq[dom.Element] =
+        val out = scala.collection.mutable.ArrayBuffer.empty[dom.Element]
+        var i   = 0
+        while i < nodes.length do
+            eachSpanNode(nodes(i)) {
+                case element: dom.Element => out += element
+                case _                    => ()
+            }
+            i += 1
+        end while
+        out.toSeq
+    end logicalElementsOf
+
+    private def elementsBetweenLive(target: DomReactiveRegions.MorphTarget): Seq[dom.Element] =
+        val out            = scala.collection.mutable.ArrayBuffer.empty[dom.Element]
+        var node: dom.Node = target.start.nextSibling
+        while node != null && !(node eq target.end) do
+            node match
+                case element: dom.Element => out += element
+                case _                    => ()
+            node = node.nextSibling
+        end while
+        out.toSeq
+    end elementsBetweenLive
+
     private def moveLogicalBefore(parent: dom.Element, node: dom.Node, ref: dom.Node): Unit =
         eachSpanNode(node)(current => discard(parent.insertBefore(current, ref)))
 
@@ -838,6 +1043,44 @@ private[kyo] object DomBackend:
                     }
             }
         end onChange
+
+        /** Render ONLY the rows that changed, and as ONE payload rather than one parse per row: a full replacement
+          * must not lose the single bulk parse it has today just because a one-row removal wants to skip it.
+          *
+          * Rows that turn out not to be addressable one-to-one leave the DOM untouched and fall through to the
+          * inherited whole-list repaint, which needs no per-row structure at all.
+          */
+        override def onListPatch(
+            region: ReactiveRegion,
+            path: Seq[String],
+            contentContext: ReactiveRegion.RegionIdentity,
+            parentContext: ReactiveRegion.ParentContext,
+            previous: Maybe[UI],
+            rows: Seq[ListRow]
+        )(using Frame): Unit < Async =
+            def repaint: Unit < Async = super.onListPatch(region, path, contentContext, parentContext, previous, rows)
+            region match
+                case ReactiveRegion.HtmlRange(regionId) =>
+                    val host = ReactiveRegion.renderHost(
+                        region,
+                        parentContext,
+                        ReactiveRegion.tableContent(rows.iterator.map(_.ui))
+                    )
+                    Kyo.foreach(Chunk.from(rows.filter(_.changed))) { row =>
+                        HtmlRenderer.renderRow(row.ui, path :+ row.key, contentContext.child(row.key), host)
+                    }.map(_.mkString).flatMap { changed =>
+                        Sync.defer(open).flatMap { isOpen =>
+                            if !isOpen then Kyo.unit
+                            else
+                                regions.withRegionFragment(regionId, changed)(applyListPatch(_, path, rows)).flatMap {
+                                    applied => if applied then Kyo.unit else repaint
+                                }
+                        }
+                    }
+                // An SVG region replaces its own group element; there is no row range to address.
+                case _: ReactiveRegion.SvgElement => repaint
+            end match
+        end onListPatch
 
         // Each channel patches in place and marks the attribute owned (__kyoOwn), so a parent region's morph
         // will not reconcile the live value back. The `*Now` forms are the patches themselves, written without
