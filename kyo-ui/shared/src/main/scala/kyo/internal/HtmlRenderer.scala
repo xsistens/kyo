@@ -249,19 +249,28 @@ private[kyo] object HtmlRenderer:
                 val tag  = tagName(elem)
                 val void = elem.isInstanceOf[Void]
                 renderBoundElementBoundary(sb, elem, context, namespace, parentContext, boundaryMode) {
-                    for
-                        // Reactive classes currently true, folded into the class list so SSR is correct. Empty when
-                        // none are bound, so the `class` attribute is byte-identical there.
-                        extraClasses <- reactiveTrueClasses(elem.attrs)
-                        _ = w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}"""")
-                        _ = renderCommonAttrs(
+                    // Reactive classes currently true, folded into the class list so SSR is correct. Empty when
+                    // none are bound, so the `class` attribute is byte-identical there.
+                    def openTag(extraClasses: Seq[String]): Unit =
+                        w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}"""")
+                        renderCommonAttrs(
                             sb,
                             if extraClasses.isEmpty then elem.attrs
                             else elem.attrs.copy(cssClasses = elem.attrs.cssClasses ++ extraClasses),
                             elem.isInstanceOf[Svg.SvgElement],
                             cssRules
                         )
-                        _ = renderEventAttr(sb, elem)
+                        renderEventAttr(sb, elem)
+                    end openTag
+                    // Reading a reactive class is an effect, so only an element that binds one suspends before its
+                    // tag is written. Every other element keeps the open tag on the eager path, which is what makes
+                    // an attribute the renderer rejects (an oversized drag config, say) fail where the render is
+                    // built rather than where it is later run.
+                    val opened: Unit < Sync =
+                        if elem.attrs.reactiveClasses.isEmpty then openTag(Seq.empty)
+                        else reactiveTrueClasses(elem.attrs).map(openTag)
+                    for
+                        _ <- opened
                         _ <- renderElementAttrs(sb, elem)
                         _ <- renderReactiveAttrs(sb, elem.attrs)
                         _ <- renderReactiveBoolAttrs(sb, elem.attrs)
