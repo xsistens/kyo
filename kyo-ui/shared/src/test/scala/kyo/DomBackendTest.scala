@@ -39,6 +39,32 @@ class DomBackendTest extends UITest:
         }
     }
 
+    "morph reuses an inner element (preserving its DOM-local state) across a re-render of its region" in {
+        val app: UI < Async =
+            for outer <- Signal.initRef[Int](0)
+            yield UI.div(
+                outer.map(o =>
+                    UI.div(
+                        UI.div("keep-me").id("inner"),
+                        UI.span(s"o=$o").id("status")
+                    )
+                ),
+                UI.button("bump").id("bump").onClick(outer.getAndUpdate(_ + 1).unit)
+            )
+        withUI(app) {
+            for
+                _      <- Browser.assertText(Selector.id("status"), "o=0")
+                _      <- Browser.evalDiscard("document.getElementById('inner').__kyoMark = 4242;")
+                before <- Browser.evalJson[Int]("document.getElementById('inner').__kyoMark || 0")
+                _      <- Browser.evalDiscard("document.getElementById('bump').click()")
+                _      <- Browser.assertText(Selector.id("status"), "o=1")
+                after  <- Browser.evalJson[Int]("document.getElementById('inner').__kyoMark || 0")
+            yield
+                assert(before == 4242)
+                assert(after == 4242) // node reused; an outerHTML replace would recreate it (mark gone)
+        }
+    }
+
     "empty reactive remains updateable without an element placeholder" in {
         val app: UI < Async =
             for show <- Signal.initRef(false)
@@ -421,6 +447,58 @@ class DomBackendTest extends UITest:
                 _ <- Browser.assertAttributeSatisfies(Selector.id("chost"), "class", "hot survives morph")(_.contains("hot"))
                 _ <- Browser.click(Selector.id("ctoggle"))
                 _ <- Browser.assertAttributeSatisfies(Selector.id("chost"), "class", "hot removed in place")(c => !c.contains("hot"))
+            yield ()
+        }
+    }
+
+    // The sibling `tick` signal bumps the reactive region containing `host`, so morphAttrs runs against server HTML
+    // that lacks the owned class, proving the ownership guard shields the client-set class from reconciliation.
+    "imperatively-bound class survives a re-render morph of its element" in {
+        val app: UI < Async =
+            for
+                tick <- Signal.initRef(0)
+                on   <- Signal.initRef(true)
+            yield UI.div(
+                UI.button("tick").id("tick").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map(t => UI.div.id("host")(UI.span(s"t:$t").id("txt"))),
+                UI.mounted {
+                    for
+                        cmds <- UI.commands
+                        _    <- cmds.bindClassById("host", "owned-cls", on)
+                    yield UI.empty
+                }.placeholder(UI.empty)
+            )
+        withUI(app) {
+            for
+                _ <- Browser.waitForAttribute(Selector.id("host"), "class", "owned-cls")
+                _ <- Browser.click(Selector.id("tick"))
+                _ <- Browser.assertText(Selector.id("txt"), "t:1") // the element was morphed
+                _ <- Browser.assertAttribute(Selector.id("host"), "class", "owned-cls")
+            yield ()
+        }
+    }
+
+    "imperatively-bound attribute survives a re-render morph of its element" in {
+        val app: UI < Async =
+            for
+                tick <- Signal.initRef(0)
+                v    <- Signal.initRef("yes")
+            yield UI.div(
+                UI.button("tick").id("atick").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map(t => UI.div.id("ahost")(UI.span(s"t:$t").id("atxt"))),
+                UI.mounted {
+                    for
+                        cmds <- UI.commands
+                        _    <- cmds.bindAttrById("ahost", "data-owned", v)
+                    yield UI.empty
+                }.placeholder(UI.empty)
+            )
+        withUI(app) {
+            for
+                _ <- Browser.waitForAttribute(Selector.id("ahost"), "data-owned", "yes")
+                _ <- Browser.click(Selector.id("atick"))
+                _ <- Browser.assertText(Selector.id("atxt"), "t:1")
+                _ <- Browser.assertAttribute(Selector.id("ahost"), "data-owned", "yes") // owned attr survives the morph
             yield ()
         }
     }

@@ -1213,16 +1213,75 @@ private[kyo] object HtmlRenderer:
           |    __focusReturnStack.push({fa:fa,ret:ret,restore:cand[i].hasAttribute("data-kyo-focus-restore")});
           |    if(typeof cand[i].focus==="function")cand[i].focus({preventScroll:true});return;}}
           |}
-          |function kyoRangeMorph(active,oldRoots,newRoots,incoming){
-          |  if(!active||oldRoots.length!==1||newRoots.length!==1||active!==oldRoots[0]||incoming.size!==0)return false;
-          |  if((active.tagName!=="INPUT"&&active.tagName!=="TEXTAREA")||active.tagName!==newRoots[0].tagName)return false;
-          |  // An attribute the imperative id-addressed channel owns is never reconciled: server HTML never carries
+          |// ---- range morph (twin of morphNode and its neighbours in DomBackend; keep the two in lockstep) ----
+          |// Reconciling a re-rendered region against its live nodes instead of replacing them is what keeps node
+          |// identity across a paint: focus, caret, scroll position, an imperatively bound attribute, anything a
+          |// DOM-local expando holds. Replacing the range is always correct and always loses all of it, so it stays
+          |// the fallback rather than the default.
+          |function __kyoIsRangeMarker(node){
+          |  if(node.nodeType!==8)return false;
+          |  var d=node.data;return d.indexOf("kyo-rs:")===0||d.indexOf("kyo-re:")===0;
+          |}
+          |function __kyoMorphCompatible(from,to){
+          |  if(from.nodeType!==to.nodeType)return false;
+          |  if(from.nodeType!==1)return true;
+          |  return from.tagName===to.tagName&&from.namespaceURI===to.namespaceURI;
+          |}
+          |function __kyoMorphNode(from,to){
+          |  if(from.nodeType!==1){if(from.nodeValue!==to.nodeValue)from.nodeValue=to.nodeValue;return;}
+          |  __kyoMorphAttrs(from,to);
+          |  // A focused contenteditable would lose its caret if its children were rewritten mid-edit; leave its
+          |  // subtree alone (INPUT and TEXTAREA have no element children, so they need no such guard).
+          |  if(!((from===document.activeElement)&&from.hasAttribute("contenteditable")))
+          |    __kyoMorphRun(from,from.firstChild,null,to.firstChild);
+          |}
+          |function __kyoMorphAttrs(from,to){
+          |  var tag=from.tagName;
+          |  var activeInput=(from===document.activeElement)&&(tag==="INPUT"||tag==="TEXTAREA");
+          |  // An attribute the imperative id-addressed channel owns is never reconciled: rendered HTML never carries
           |  // the client-set value, so reconciling would clobber it. Twin of ownedAttrs in DomBackend.
-          |  var own=active.__kyoOwn||{};
-          |  var fresh=newRoots[0];for(var i=0;i<fresh.attributes.length;i++){var a=fresh.attributes[i];if(!own[a.name]&&active.getAttribute(a.name)!==a.value)active.setAttribute(a.name,a.value);}
-          |  for(var i=active.attributes.length-1;i>=0;i--){var name=active.attributes[i].name;if(!own[name]&&!fresh.hasAttribute(name))active.removeAttribute(name);}
-          |  var value=active.tagName==="TEXTAREA"?fresh.textContent:(fresh.getAttribute("value")||"");if(value!==active.value)active.value=value;
-          |  applyJsProps(active);return true;
+          |  var own=from.__kyoOwn||{};
+          |  for(var i=0;i<to.attributes.length;i++){var a=to.attributes[i];
+          |    if(!own[a.name]&&from.getAttribute(a.name)!==a.value)from.setAttribute(a.name,a.value);}
+          |  for(var j=from.attributes.length-1;j>=0;j--){var n=from.attributes[j].name;
+          |    if(!own[n]&&!to.hasAttribute(n))from.removeAttribute(n);}
+          |  // Active-input preservation: two-way binding echoes each keystroke back as a re-render. Never overwrite
+          |  // the focused field's live value (its caret) with its own echo; assign only a genuine external change.
+          |  if(activeInput){var v=tag==="TEXTAREA"?to.textContent:(to.getAttribute("value")||"");
+          |    if(from.value!==v)from.value=v;}
+          |}
+          |// Reconcile the live sibling run of `parent` from `fromStart` up to (not including) `fromEnd`, null meaning
+          |// the end of the parent, toward the run starting at `toStart` inside a detached fragment. Positional, pair
+          |// by pair: what did not move keeps its identity; reordering a keyed list is the two-ended pass's business.
+          |function __kyoMorphRun(parent,fromStart,fromEnd,toStart){
+          |  var from=fromStart,to=toStart,inserted=[];
+          |  while(to){var nextTo=to.nextSibling;
+          |    if(!from||from===fromEnd){var fresh=document.importNode(to,true);parent.insertBefore(fresh,fromEnd);inserted.push(fresh);}
+          |    else{var nextFrom=from.nextSibling;
+          |      if(__kyoMorphCompatible(from,to))__kyoMorphNode(from,to);
+          |      else{var swap=document.importNode(to,true);parent.replaceChild(swap,from);inserted.push(swap);}
+          |      from=nextFrom;}
+          |    to=nextTo;}
+          |  while(from&&from!==fromEnd){var nf=from.nextSibling;parent.removeChild(from);from=nf;}
+          |  // SMIL animations only start on nodes this pass actually inserted; a reused one is already running.
+          |  for(var k=0;k<inserted.length;k++)ba(inserted[k]);
+          |}
+          |function __kyoMorphHoldsRange(node){
+          |  if(__kyoIsRangeMarker(node))return true;
+          |  if(node.nodeType!==1)return false;
+          |  var w=document.createTreeWalker(node,128,null,false),c;
+          |  while((c=w.nextNode()))if(__kyoIsRangeMarker(c))return true;
+          |  return false;
+          |}
+          |// Declined in two shapes this pass does not maintain, both of which fall back to the wholesale replacement
+          |// that always works: a payload declaring nested ranges of its own, and a live range that still holds one.
+          |// Either would leave the range registry describing markers the morph moved or dropped.
+          |function kyoRangeMorph(endpoints,fragment,incoming,synthetic){
+          |  if(synthetic||incoming.size!==0)return false;
+          |  for(var n=endpoints.start.nextSibling;n&&n!==endpoints.end;n=n.nextSibling)
+          |    if(__kyoMorphHoldsRange(n))return false;
+          |  __kyoMorphRun(endpoints.start.parentNode,endpoints.start.nextSibling,endpoints.end,fragment.firstChild);
+          |  return true;
           |}
           |function kyoRangeReplace(id,html){
           |  if(!kyoRangeId(id))kyoRangeFail("malformed replacement id: "+id);
@@ -1239,15 +1298,21 @@ private[kyo] object HtmlRenderer:
           |  __kyoRanges.forEach(function(pair,key){if(key!==id&&range.intersectsNode(pair.start))removed.push(key);});
           |  incoming.forEach(function(pair,key){if(__kyoRanges.has(key)&&removed.indexOf(key)<0)kyoRangeFail("duplicate id: "+key);});
           |  var oldRoots=kyoRangeRoots(endpoints.start,endpoints.end),newRoots=kyoRangeFragmentRoots(fragment),newSemanticRoots=kyoRangeSemanticRoots(newRoots,id),active=document.activeElement;
-          |  if(kyoRangeMorph(active,oldRoots,newSemanticRoots,incoming))return;
+          |  // The pre-patch reads (focused node, enter and leave path sets, ghost clones of what is about to depart)
+          |  // happen before either path touches the DOM, and the post-patch tail below runs for both: a morph is
+          |  // still a patch, and a leave transition or a portal re-home has no business depending on which one painted.
           |  var inside=active&&active!==document.body&&kyoRangeContains(oldRoots,active);
           |  var activeLocator=inside?kyoRangeFocusLocator(oldRoots,active):null;
           |  var ss=inside&&typeof active.selectionStart==="number"?active.selectionStart:null;
           |  var se=inside&&typeof active.selectionEnd==="number"?active.selectionEnd:null;
           |  var oldEnter=kyoEnterPathsRoots(oldRoots),ghosts=kyoLeavePrepareRoots(oldRoots,kyoLeavePathsRoots(newSemanticRoots));
           |  var oldFocus=kyoFocusPathsRoots(oldRoots);
+          |  var finalRoots,morphed=!synthetic&&kyoRangeMorph(endpoints,fragment,incoming,synthetic);
+          |  if(morphed){finalRoots=kyoRangeRoots(endpoints.start,endpoints.end);
+          |    for(var i=0;i<finalRoots.length;i++)applyJsProps(finalRoots[i]);
+          |  }else{
           |  range.deleteContents();for(var i=0;i<removed.length;i++)__kyoRanges.delete(removed[i]);
-          |  var finalRoots=newSemanticRoots;if(synthetic&&newRoots.length===1&&newRoots[0].tagName==="TBODY"&&newRoots[0].getAttribute("data-kyo-range-host")===id){
+          |  finalRoots=newSemanticRoots;if(synthetic&&newRoots.length===1&&newRoots[0].tagName==="TBODY"&&newRoots[0].getAttribute("data-kyo-range-host")===id){
           |    var incomingHost=newRoots[0];kyoRangeSyncHost(parent,incomingHost,id);while(incomingHost.firstChild)parent.insertBefore(incomingHost.firstChild,endpoints.end);finalRoots=kyoRangeRoots(endpoints.start,endpoints.end);
           |  }else if(synthetic){var table=parent.parentNode;if(!table)kyoRangeFail("table range host is detached: "+id);
           |    table.insertBefore(endpoints.start,parent);table.insertBefore(fragment,parent);table.insertBefore(endpoints.end,parent);table.removeChild(parent);
@@ -1255,6 +1320,7 @@ private[kyo] object HtmlRenderer:
           |    newRoots[0].insertBefore(endpoints.start,newRoots[0].firstChild);newRoots[0].appendChild(endpoints.end);finalRoots=kyoRangeRoots(endpoints.start,endpoints.end);}}
           |  incoming.forEach(function(pair,key){__kyoRanges.set(key,pair);});
           |  for(var i=0;i<finalRoots.length;i++){applyJsProps(finalRoots[i]);ba(finalRoots[i]);}
+          |  }
           |  var restored=kyoRangeResolveFocus(finalRoots,activeLocator);if(restored){restored.focus({preventScroll:true});if(ss!==null)kyoSetCaret(restored,ss,se);}
           |  kyoSeedEnterRoots(finalRoots,oldEnter);kyoSeedFocusRoots(finalRoots,oldFocus);kyoSpawnGhosts(ghosts);
           |  // Portal upkeep over the roots this patch inserted, and retirement of a placeholder it removed
