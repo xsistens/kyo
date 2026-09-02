@@ -4,6 +4,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import kyo.*
 import kyo.apollo.exception.DefaultApolloException
 import kyo.internal.HtmlRenderer
+import kyo.internal.ReactiveRegion
 import kyo.internal.ReactiveUI
 import kyo.internal.UIExchange
 
@@ -27,7 +28,14 @@ class ApolloMountSupervisionSpec extends kyo.test.Test[Any]:
     final private class Recording(markers: Map[String, Fiber.Promise.Unsafe[String, Any]]):
         val emissions = new CopyOnWriteArrayList[String]()
         val exchange = new UIExchange:
-            def onChange(path: Seq[String], changed: UI, mount: Boolean)(using Frame): Unit < Async =
+            def onChange(
+                region: ReactiveRegion,
+                path: Seq[String],
+                contentContext: ReactiveRegion.RegionIdentity,
+                parentContext: ReactiveRegion.ParentContext,
+                previous: Maybe[UI],
+                changed: UI
+            )(using Frame): Unit < Async =
                 HtmlRenderer.render(changed, path).map { html =>
                     discard(emissions.add(html))
                     markers.foreach { (marker, p) =>

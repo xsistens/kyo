@@ -102,7 +102,9 @@ object StreamProbe:
         def cancel(using Frame): Unit < Sync =
             for
                 _ <- interruptDrain
-                _ <- channel.close
+                // `close` now hands back the drained backlog on a fiber; the probe wants the channel shut,
+                // not its leftovers, and must stay in Sync.
+                _ <- channel.closeDiscard
             yield ()
     end Pull
 

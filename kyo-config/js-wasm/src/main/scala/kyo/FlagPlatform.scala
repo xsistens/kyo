@@ -11,22 +11,15 @@ private[kyo] object FlagPlatform {
     def properties: Iterable[String] =
         java.lang.System.getProperties.propertyNames().asScala.map(_.toString).toList
 
-    /** Must stay INLINE on the global selection: only then does Scala.js emit a plain `typeof process`, which
-      * JS semantics make safe on an undeclared identifier. Binding the selection to a val first emits a bare
-      * `process` read, which throws `ReferenceError` before any guard can run.
-      */
-    private def hasProcess: Boolean =
-        js.typeOf(js.Dynamic.global.process) != "undefined"
-
     // A host with no `process` global (a browser, or a Wasm host with no Node shim) or a missing variable
     // falls back to the stdlib read: `java.lang.System.getenv` always returns null under Scala.js-Node, but
     // a Wasm host may resolve it through its own environment binding, so the fallback still gives the
     // caller its best answer instead of a hardcoded null.
-    //
-    // The `js.typeOf(js.Dynamic.global.process)` probe must stay INLINE: Scala.js only compiles it to the
-    // safe `typeof process` when typeOf is applied directly to the global selection. Hoisting the selection
-    // into a `val proc` first emits a bare `process` read, which throws a ReferenceError on hosts where the
-    // global does not exist at all — exactly the browsers this guard is for.
+    /** Must stay INLINE on the global selection: only then does Scala.js emit a plain `typeof process`, which
+      * JS semantics make safe on an undeclared identifier. Binding the selection to a val first emits a bare
+      * `process` read, which throws `ReferenceError` before any guard can run -- exactly on the hosts where
+      * the global does not exist at all, which is what this guard is for.
+      */
     private def hasProcess: Boolean =
         js.typeOf(js.Dynamic.global.process) != "undefined"
 
