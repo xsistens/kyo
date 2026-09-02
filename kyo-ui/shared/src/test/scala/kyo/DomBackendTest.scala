@@ -39,6 +39,32 @@ class DomBackendTest extends UITest:
         }
     }
 
+    "morph reuses an inner element (preserving its DOM-local state) across a re-render of its region" in {
+        val app: UI < Async =
+            for outer <- Signal.initRef[Int](0)
+            yield UI.div(
+                outer.map(o =>
+                    UI.div(
+                        UI.div("keep-me").id("inner"),
+                        UI.span(s"o=$o").id("status")
+                    )
+                ),
+                UI.button("bump").id("bump").onClick(outer.getAndUpdate(_ + 1).unit)
+            )
+        withUI(app) {
+            for
+                _      <- Browser.assertText(Selector.id("status"), "o=0")
+                _      <- Browser.evalDiscard("document.getElementById('inner').__kyoMark = 4242;")
+                before <- Browser.evalJson[Int]("document.getElementById('inner').__kyoMark || 0")
+                _      <- Browser.evalDiscard("document.getElementById('bump').click()")
+                _      <- Browser.assertText(Selector.id("status"), "o=1")
+                after  <- Browser.evalJson[Int]("document.getElementById('inner').__kyoMark || 0")
+            yield
+                assert(before == 4242)
+                assert(after == 4242) // node reused; an outerHTML replace would recreate it (mark gone)
+        }
+    }
+
     "empty reactive remains updateable without an element placeholder" in {
         val app: UI < Async =
             for show <- Signal.initRef(false)
@@ -324,6 +350,81 @@ class DomBackendTest extends UITest:
         }
     }
 
+    "an adopted keyed mount keeps its live DOM across a parent re-render" in {
+        // The `m`+`k` marker contract. A keyed mount survives its enclosing region's re-render as an
+        // INSTANCE (the effect does not re-run), but until the region claimed `m`, the parent's paint
+        // projected the mount to its placeholder and morphed the live subtree away, so every node below
+        // it was recreated. Focus, caret, scroll and in-place bindings all died with it. Pinned here by
+        // node identity: the expando survives only if the parent left the span alone.
+        val app: UI < Async =
+            for tick <- Signal.initRef[Int](0)
+            yield UI.div(
+                UI.button("tick").id("ktick").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map(t =>
+                    UI.div(
+                        UI.span(s"t:$t").id("ktxt"),
+                        UI.mounted(Kyo.lift[UI, Async](UI.div("live").id("kinner")))
+                            .keyed("stable")
+                            .placeholder(UI.span("..."))
+                    )
+                )
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("kinner"), "live")
+                // First re-render: a server-rendered page carries no `k` (client-only flag, golden HTML
+                // stays byte-identical), so this pass falls through the guard and ADOPTS the key. The
+                // SPA transport boots with the flags already stamped and is opaque from the start.
+                _      <- Browser.click(Selector.id("ktick"))
+                _      <- Browser.assertText(Selector.id("ktxt"), "t:1")
+                _      <- Browser.evalDiscard("document.getElementById('kinner').__kyoMark = 7;")
+                before <- Browser.evalJson[Int]("document.getElementById('kinner').__kyoMark || 0")
+                // Steady state: the live marker names the same mount the incoming slot does, so the parent
+                // leaves the span alone entirely.
+                _     <- Browser.click(Selector.id("ktick"))
+                _     <- Browser.assertText(Selector.id("ktxt"), "t:2")
+                _     <- Browser.assertText(Selector.id("kinner"), "live")
+                after <- Browser.evalJson[Int]("document.getElementById('kinner').__kyoMark || 0")
+            yield
+                assert(before == 7)
+                assert(after == 7)
+        }
+    }
+
+    "a keyless mount republish does not ghost leave-marked content (enclosing region repaint)" in {
+        val app: UI < Async =
+            for tick <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("gtick").id("gtick").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map { t =>
+                    UI.div(
+                        UI.span(s"t:$t").id("gtxt"),
+                        UI.mounted {
+                            Signal.initRef(0).map(_ =>
+                                // Effect shape is fragment(marker, panel), so the panel's path differs from
+                                // the placeholder's and the survivor set cannot match it.
+                                UI.fragment(
+                                    UI.span("m").id("gmark"),
+                                    UI.div("panel").id("glpanel").leaveTransition("ghost-probe-leave")
+                                ): UI
+                            )
+                        }.placeholder(UI.div("panel").id("glpanel").leaveTransition("ghost-probe-leave"))
+                    ): UI
+                }
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("glpanel"), "panel")
+                _ <- Browser.evalDiscard(ghostCounterJs)
+                _ <- Browser.click(Selector.id("gtick"))
+                // The enclosing region repainted, which republished the mount.
+                _ <- Browser.assertText(Selector.id("gtxt"), "t:1")
+                _ <- Browser.assertText(Selector.id("glpanel"), "panel")
+                g <- Browser.evalJson[Int]("window.__kyoGhostCount")
+            yield assert(g == 0)
+        }
+    }
+
     "declarative reactive attribute patches a const element in place (no re-render), survives a sibling morph" in {
         val app: UI < Async =
             for
@@ -421,6 +522,58 @@ class DomBackendTest extends UITest:
                 _ <- Browser.assertAttributeSatisfies(Selector.id("chost"), "class", "hot survives morph")(_.contains("hot"))
                 _ <- Browser.click(Selector.id("ctoggle"))
                 _ <- Browser.assertAttributeSatisfies(Selector.id("chost"), "class", "hot removed in place")(c => !c.contains("hot"))
+            yield ()
+        }
+    }
+
+    // The sibling `tick` signal bumps the reactive region containing `host`, so morphAttrs runs against server HTML
+    // that lacks the owned class, proving the ownership guard shields the client-set class from reconciliation.
+    "imperatively-bound class survives a re-render morph of its element" in {
+        val app: UI < Async =
+            for
+                tick <- Signal.initRef(0)
+                on   <- Signal.initRef(true)
+            yield UI.div(
+                UI.button("tick").id("tick").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map(t => UI.div.id("host")(UI.span(s"t:$t").id("txt"))),
+                UI.mounted {
+                    for
+                        cmds <- UI.commands
+                        _    <- cmds.bindClassById("host", "owned-cls", on)
+                    yield UI.empty
+                }.placeholder(UI.empty)
+            )
+        withUI(app) {
+            for
+                _ <- Browser.waitForAttribute(Selector.id("host"), "class", "owned-cls")
+                _ <- Browser.click(Selector.id("tick"))
+                _ <- Browser.assertText(Selector.id("txt"), "t:1") // the element was morphed
+                _ <- Browser.assertAttribute(Selector.id("host"), "class", "owned-cls")
+            yield ()
+        }
+    }
+
+    "imperatively-bound attribute survives a re-render morph of its element" in {
+        val app: UI < Async =
+            for
+                tick <- Signal.initRef(0)
+                v    <- Signal.initRef("yes")
+            yield UI.div(
+                UI.button("tick").id("atick").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map(t => UI.div.id("ahost")(UI.span(s"t:$t").id("atxt"))),
+                UI.mounted {
+                    for
+                        cmds <- UI.commands
+                        _    <- cmds.bindAttrById("ahost", "data-owned", v)
+                    yield UI.empty
+                }.placeholder(UI.empty)
+            )
+        withUI(app) {
+            for
+                _ <- Browser.waitForAttribute(Selector.id("ahost"), "data-owned", "yes")
+                _ <- Browser.click(Selector.id("atick"))
+                _ <- Browser.assertText(Selector.id("atxt"), "t:1")
+                _ <- Browser.assertAttribute(Selector.id("ahost"), "data-owned", "yes") // owned attr survives the morph
             yield ()
         }
     }
@@ -654,6 +807,35 @@ class DomBackendTest extends UITest:
                 _      <- Browser.press(Selector.id("kin"), Key.Enter)
                 _      <- Browser.assertText(Selector.id("khits"), "k:1")
             yield assert(atBody)
+        }
+    }
+
+    "a region re-render reconciles the body twin in place through the placeholder (no inline duplicate)" in {
+        val app: UI < Async =
+            for tick <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("tick").id("ptick").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map(t => UI.div.id("ppanel").portal(true)(UI.span(s"n:$t").id("ptxt")): UI)
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("ptxt"), "n:0")
+                // Stamp an expando on the live twin: it survives ONLY if the morph patches the same node in place
+                // (an inline re-materialization or a replace would produce a fresh node without it).
+                _ <- Browser.evalDiscard("document.getElementById('ppanel').__probe=1")
+                _ <- Browser.click(Selector.id("ptick"))
+                _ <- Browser.assertText(Selector.id("ptxt"), "n:1")
+                ok <- Browser.evalBoolean(
+                    """(function(){
+                      |  var el=document.getElementById('ppanel');
+                      |  if(!el)return false;
+                      |  var p=el.getAttribute('data-kyo-path');
+                      |  return el.parentElement===document.body
+                      |    && el.__probe===1
+                      |    && document.querySelectorAll('[data-kyo-path="'+p+'"]').length===1;
+                      |})()""".stripMargin
+                )
+            yield assert(ok)
         }
     }
 

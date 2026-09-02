@@ -14,14 +14,28 @@ final private[kyo] class DomReactiveRegions private (
     private var open = true
 
     def replace(regionId: String, html: String)(using Frame): Unit < Sync =
-        replaceWith(regionId, html)((_, _, _) => false)((_, _) => ())((_, _) => ())
+        replaceWith(regionId, html)(_ => false)((_, _) => ())((_, _, _) => ())
 
+    /** Replace the content of range `regionId` with `html`, morphing it in place where the morph can.
+      *
+      * `tryMorph` is offered the whole reconciliation and answers whether it took it. It receives a
+      * [[DomReactiveRegions.MorphTarget]] rather than the two element lists a wholesale replacement needs, because a
+      * morph reconciles NODES: text between two elements is part of the range and invisible in an element list, and
+      * the marker pair is the only thing that says where the range stops. Handing over the anchors and the parsed
+      * fragment is a deliberate widening of this seam against upstream; a narrower one cannot express an in-place
+      * reconciliation, and dropping back to element lists would silently reintroduce the wholesale rebuild that
+      * destroys node identity on every region re-render.
+      *
+      * The offer is made only for the plain sibling case. A synthetic `<tbody>` host on either side juggles the
+      * anchors between the host and its table, which is the wholesale path's business; the morph declines those by
+      * never being asked.
+      */
     private[kyo] def replaceWith[A](regionId: String, html: String)(
-        tryMorph: (Seq[dom.Element], Seq[dom.Element], Boolean) => Boolean
+        tryMorph: DomReactiveRegions.MorphTarget => Boolean
     )(
         before: (Seq[dom.Element], Seq[dom.Element]) => A
     )(
-        after: (A, Seq[dom.Element]) => Unit
+        after: (A, Seq[dom.Element], Boolean) => Unit
     )(using Frame): Unit < Sync =
         Sync.defer {
             ensureOpen()
@@ -58,8 +72,29 @@ final private[kyo] class DomReactiveRegions private (
             val oldElements     = elementsBetween(endpoints)
             val incomingContent = classifyIncoming(regionId, fragment)
             val newElements     = incomingContent.semanticRoots
-            if !tryMorph(oldElements, newElements, incoming.isEmpty) then
-                val state = before(oldElements, newElements)
+            val morphTarget: Maybe[DomReactiveRegions.MorphTarget] = (liveHost, incomingContent) match
+                case (DomReactiveRegions.LiveHost.Siblings(siblingParent), DomReactiveRegions.IncomingContent.Semantic(_)) =>
+                    Present(
+                        DomReactiveRegions.MorphTarget(
+                            siblingParent,
+                            endpoints.start,
+                            endpoints.end,
+                            fragment,
+                            oldElements,
+                            newElements,
+                            incoming.isEmpty
+                        )
+                    )
+                case _ => Absent
+            // `before` reads the pre-patch DOM (the focused node, the enter and leave path sets, the ghost clones of
+            // what is about to depart) and `after` applies the post-patch work to whatever ended up in the range.
+            // Both run for the morph as well as for the replacement: a reconciliation is still a patch, and a leave
+            // transition, a portal re-home or a focus-auto seed has no business depending on which path painted it.
+            val state = before(oldElements, newElements)
+            val morphed = morphTarget match
+                case Present(target) => tryMorph(target)
+                case Absent          => false
+            if !morphed then
                 range.deleteContents()
                 removed.foreach(ranges.remove)
                 val insertedRoots = (liveHost, incomingContent) match
@@ -101,7 +136,14 @@ final private[kyo] class DomReactiveRegions private (
                         discard(parent.insertBefore(fragment, endpoints.end))
                         roots
                 ranges.addAll(incoming)
-                after(state, insertedRoots)
+                after(state, insertedRoots, false)
+            else
+                // The morph reconciles nested ranges in place, so which markers ended up in the range is a property
+                // of the DOM rather than of the payload: `incoming` describes comments that were cloned or dropped,
+                // never the live ones. Reading the range back is the only account that cannot drift.
+                removed.foreach(ranges.remove)
+                ranges.addAll(rescanRange(regionId, endpoints))
+                after(state, elementsBetween(endpoints), true)
             end if
         }
     end replaceWith
@@ -173,8 +215,49 @@ final private[kyo] class DomReactiveRegions private (
     private def ensureOpen()(using Frame): Unit =
         if !open then fail("Reactive range registry is closed")
 
+    /** The ranges the live content of `regionId` holds right now, read off the DOM.
+      *
+      * The morph keeps the markers of a range that survived and clones or drops the rest, so the registry cannot be
+      * updated from the payload the way the wholesale path does it. Walking what is actually between the anchors is
+      * both simpler and the only version that stays true when the two disagree.
+      */
+    private def rescanRange(regionId: String, endpoints: DomReactiveRegions.Endpoints)(using
+        Frame
+    ): mutable.HashMap[String, DomReactiveRegions.Endpoints] =
+        val found = mutable.HashMap.empty[String, DomReactiveRegions.Endpoints]
+        val open  = mutable.ArrayBuffer.empty[(String, dom.Comment)]
+        def visit(node: dom.Node): Unit =
+            DomReactiveRegions.startMarkerId(node) match
+                case Present(id) => open += ((id, node.asInstanceOf[dom.Comment]))
+                case Absent =>
+                    DomReactiveRegions.endMarkerId(node).foreach { id =>
+                        if open.isEmpty || open.last._1 != id then
+                            fail(s"Crossed reactive ranges after morphing $regionId: found $id")
+                        val (_, start) = open.remove(open.length - 1)
+                        found.update(id, DomReactiveRegions.Endpoints(start, node.asInstanceOf[dom.Comment]))
+                    }
+            end match
+            var child = DomReactiveRegions.firstChild(node)
+            while child.nonEmpty do
+                val next = DomReactiveRegions.next(child.get)
+                visit(child.get)
+                child = next
+            end while
+        end visit
+        var node = DomReactiveRegions.next(endpoints.start)
+        while node.nonEmpty && !(node.get eq endpoints.end) do
+            val next = DomReactiveRegions.next(node.get)
+            visit(node.get)
+            node = next
+        end while
+        if open.nonEmpty then fail(s"Reactive range start marker has no end after morphing $regionId: ${open.last._1}")
+        found
+    end rescanRange
+
     private def validatedParent(regionId: String, endpoints: DomReactiveRegions.Endpoints)(using Frame): dom.Node =
-        if endpoints.start.data != s"${DomReactiveRegions.StartPrefix}$regionId" ||
+        // The opening marker may carry a flag section after its id (a mount slot, and the `m` the client stamps on
+        // once it adopts one), so the id is compared rather than the whole payload.
+        if !DomReactiveRegions.startMarkerId(endpoints.start).contains(regionId) ||
             endpoints.end.data != s"${DomReactiveRegions.EndPrefix}$regionId"
         then fail(s"Reactive range markers are corrupted: $regionId")
         (DomReactiveRegions.parent(endpoints.start), DomReactiveRegions.parent(endpoints.end)) match
@@ -252,6 +335,24 @@ private[kyo] object DomReactiveRegions:
 
     final private case class Endpoints(start: dom.Comment, end: dom.Comment)
 
+    /** Everything a range morph reconciles against.
+      *
+      * `start` and `end` are the live anchors: the range is the sibling run strictly between them, which is why the
+      * morph is handed the anchors rather than a node list (a list cannot say where to append). `fragment` holds the
+      * parsed incoming content, `oldElements` and `newElements` the semantic roots either side, and
+      * `incomingRangesEmpty` records whether the payload declares nested ranges of its own, which a morph that does
+      * not maintain the registry has to decline.
+      */
+    final private[kyo] case class MorphTarget(
+        parent: dom.Node,
+        start: dom.Comment,
+        end: dom.Comment,
+        fragment: dom.DocumentFragment,
+        oldElements: Seq[dom.Element],
+        newElements: Seq[dom.Element],
+        incomingRangesEmpty: Boolean
+    )
+
     private enum LiveHost:
         case Siblings(parent: dom.Node)
         case Synthetic(host: dom.Element, table: dom.Node)
@@ -281,7 +382,7 @@ private[kyo] object DomReactiveRegions:
             val comment = next.get
             val value   = comment.data
             if value.startsWith(StartPrefix) then
-                val id = value.substring(StartPrefix.length)
+                val id = ReactiveRegion.markerIdOf(value.substring(StartPrefix.length))
                 if !ReactiveRegion.isValidHtmlId(id) then fail(s"Malformed reactive range id: $id")
                 if seen.contains(id) then fail(s"Duplicate reactive range id: $id")
                 seen += id
@@ -304,6 +405,39 @@ private[kyo] object DomReactiveRegions:
         if open.nonEmpty then fail(s"Reactive range start marker has no end: ${open.last._1}")
         found
     end scan
+
+    /** Whether `node` is one of the comments that delimit a reactive range. */
+    private[kyo] def isRangeMarker(node: dom.Node): Boolean =
+        startMarkerId(node).nonEmpty || endMarkerId(node).nonEmpty
+
+    /** The range id `node` opens, `Absent` when it is not an opening marker.
+      *
+      * A morph walks the range as LOGICAL children, where a nested range and everything between its markers is one
+      * child; recognizing the two ends is what makes that possible, so the prefixes are read here rather than spelled
+      * again at every caller.
+      */
+    private[kyo] def startMarkerId(node: dom.Node): Maybe[String] = markerId(node, StartPrefix)
+
+    /** The range id `node` closes, `Absent` when it is not a closing marker. */
+    private[kyo] def endMarkerId(node: dom.Node): Maybe[String] = markerId(node, EndPrefix)
+
+    private def markerId(node: dom.Node, prefix: String): Maybe[String] =
+        if node.nodeType != dom.Node.COMMENT_NODE then Absent
+        else
+            val data = node.asInstanceOf[dom.Comment].data
+            if data.startsWith(prefix) then Present(ReactiveRegion.markerIdOf(data.substring(prefix.length)))
+            else Absent
+
+    /** The payload of an opening marker for `id` carrying `flags` (which already includes its leading space). */
+    private[kyo] def openMarkerData(id: String, flags: String): String = s"$StartPrefix$id$flags"
+
+    /** The flag section of an opening marker (`m`, `s`, `k=`), `""` when it carries none. */
+    private[kyo] def markerFlags(node: dom.Node): String =
+        if node.nodeType != dom.Node.COMMENT_NODE then ""
+        else
+            val data  = node.asInstanceOf[dom.Comment].data
+            val space = data.indexOf(' ')
+            if space < 0 then "" else data.substring(space + 1)
 
     private def nextComment(walker: dom.TreeWalker): Maybe[dom.Comment] =
         val node = walker.nextNode()

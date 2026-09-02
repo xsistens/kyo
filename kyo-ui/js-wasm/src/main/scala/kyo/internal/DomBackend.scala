@@ -55,11 +55,6 @@ private[kyo] object DomBackend:
     private val viewportObservers: js.WrappedMap[String, js.Function1[dom.Event, Unit]] =
         new js.WrappedMap(js.Map.empty[String, js.Function1[dom.Event, Unit]])
 
-    /** Mark attribute `name` on `el` as owned by the imperative id-addressed channel (SetClassById/SetStyleById),
-      * applied out of the render pass so CSS transitions on the toggled class/style fire. The owned names live in a
-      * `__kyoOwn` expando dict ON the element, so the flag is reclaimed with the node (no session-lived set that only
-      * ever grows) and `morphAttrs` shields each owned attribute BY NAME. Mirrors `__kyoMark` in HtmlRenderer.clientJs.
-      */
     /** The attribute names on `el` the imperative id-addressed channel owns (see [[markOwned]]). */
     private def ownedAttrs(el: dom.Element): Set[String] =
         val d = el.asInstanceOf[js.Dynamic]
@@ -67,6 +62,11 @@ private[kyo] object DomBackend:
         else d.__kyoOwn.asInstanceOf[js.Dictionary[Boolean]].keySet.toSet
     end ownedAttrs
 
+    /** Mark attribute `name` on `el` as owned by the imperative id-addressed channel (SetClassById/SetStyleById),
+      * applied out of the render pass so CSS transitions on the toggled class/style fire. The owned names live in a
+      * `__kyoOwn` expando dict ON the element, so the flag is reclaimed with the node (no session-lived set that only
+      * ever grows) and `morphAttrs` shields each owned attribute BY NAME. Mirrors `__kyoMark` in HtmlRenderer.clientJs.
+      */
     private def markOwned(el: dom.Element, name: String): Unit =
         val d = el.asInstanceOf[js.Dynamic]
         val own =
@@ -90,6 +90,393 @@ private[kyo] object DomBackend:
             val dyn = el.asInstanceOf[js.Dynamic]
             if dyn.value.asInstanceOf[String] != value then dyn.value = value
     end syncFieldProperty
+
+    // ---- Range morph ---------------------------------------------------------------------------------------
+    //
+    // Reconciling a re-rendered region against its live nodes instead of replacing them is what keeps node identity
+    // across a paint: focus, caret, scroll position, an imperatively bound attribute, anything a DOM-local expando
+    // holds. Replacing the range is always correct and always loses all of it, so it stays the fallback rather than
+    // the default. Twin of `__kyoMorphNode` and its neighbours in HtmlRenderer.clientJs; keep the two in lockstep.
+
+    /** Reconcile a live portal slot against the portal element the payload carries inline, and answer whether that
+      * is what this pair is.
+      *
+      * The pair matches when the incoming node is a portal element, the live node is the inert slot standing in for
+      * it at the same path, and the twin the first sweep parked under `<body>` is still there. The twin is then the
+      * node that gets reconciled; the slot stays exactly where it is. Anything else is not this case and reconciles
+      * the ordinary way.
+      */
+    private def morphPortalPair(from: dom.Node, to: dom.Node): Boolean =
+        (from.nodeType == dom.Node.ELEMENT_NODE && to.nodeType == dom.Node.ELEMENT_NODE) && {
+            val slot     = from.asInstanceOf[dom.Element]
+            val incoming = to.asInstanceOf[dom.Element]
+            val path     = incoming.getAttribute("data-kyo-path")
+            path != null &&
+            incoming.hasAttribute("data-kyo-portal") &&
+            slot.getAttribute("data-kyo-portal-slot") == path && {
+                val twin = portalTwin(path)
+                (twin != null) && { morphEl(twin, incoming); true }
+            }
+        }
+
+    /** Whether `to` can be reconciled onto `from` in place, or has to replace it outright. */
+    private def morphCompatible(from: dom.Node, to: dom.Node): Boolean =
+        from.nodeType == to.nodeType && {
+            if from.nodeType != dom.Node.ELEMENT_NODE then true
+            else
+                val fromEl = from.asInstanceOf[dom.Element]
+                val toEl   = to.asInstanceOf[dom.Element]
+                fromEl.tagName == toEl.tagName && fromEl.namespaceURI == toEl.namespaceURI
+        }
+
+    /** Reconcile one live node toward `toNode`. A node of a different kind or tag cannot be patched into the target,
+      * so it is replaced; everything else keeps its identity.
+      */
+    private def morphNode(fromNode: dom.Node, toNode: dom.Node): Unit =
+        if fromNode.nodeType != dom.Node.ELEMENT_NODE then
+            if fromNode.nodeValue != toNode.nodeValue then fromNode.nodeValue = toNode.nodeValue
+        else morphEl(fromNode.asInstanceOf[dom.Element], toNode.asInstanceOf[dom.Element])
+
+    private def morphEl(fromEl: dom.Element, toEl: dom.Element): Unit =
+        morphAttrs(fromEl, toEl)
+        // A focused contenteditable would lose its caret if its children were rewritten mid-edit; leave its subtree
+        // alone (INPUT and TEXTAREA have no element children, so they need no such guard).
+        val editing = (fromEl eq document.activeElement) && fromEl.hasAttribute("contenteditable")
+        if !editing then morphChildren(fromEl, toEl)
+    end morphEl
+
+    private def morphAttrs(fromEl: dom.Element, toEl: dom.Element): Unit =
+        val tag = fromEl.tagName
+        val activeInput =
+            (fromEl eq document.activeElement) && (tag == "INPUT" || tag == "TEXTAREA")
+        // An attribute the imperative id-addressed channel owns is never reconciled: rendered HTML never carries the
+        // client-set value, so reconciling would clobber it. Twin of the `own` shield in `__kyoMorphAttrs`.
+        val owned   = ownedAttrs(fromEl)
+        val toAttrs = toEl.attributes
+        var i       = 0
+        while i < toAttrs.length do
+            val attribute = toAttrs(i)
+            val name      = attribute.name
+            if !owned.contains(name) then
+                if fromEl.getAttribute(name) != attribute.value then fromEl.setAttribute(name, attribute.value)
+                // A field renders its `value` PROPERTY, and the property stops tracking the attribute the first time
+                // the user types. Writing the attribute alone is therefore invisible on any field that has been typed
+                // into: a ref write that clears it leaves the typed text on screen. The attribute may even be
+                // unchanged in that case (both empty), so the property is written on every pass rather than only when
+                // the attribute moves. The focused field is the exception the block below owns: overwriting its live
+                // value with its own echo would move the caret.
+                if !activeInput then syncFieldProperty(fromEl, name, attribute.value)
+            end if
+            i += 1
+        end while
+        // Remove attributes gone from `to`. Walk the live NamedNodeMap backward so a removal never shifts an index
+        // still to be visited (no intermediate collection allocated).
+        val fromAttrs = fromEl.attributes
+        var j         = fromAttrs.length - 1
+        while j >= 0 do
+            val name = fromAttrs(j).name
+            if !owned.contains(name) && !toEl.hasAttribute(name) then fromEl.removeAttribute(name)
+            j -= 1
+        end while
+        // Active-input preservation: two-way binding echoes each keystroke back as a re-render. Never overwrite the
+        // focused field's live `.value` (its caret) with its own echo (the value already matches); assign only a
+        // genuine external change (a submit-clear, a programmatic update).
+        if activeInput then
+            val incoming =
+                if tag == "TEXTAREA" then toEl.textContent
+                else Maybe(toEl.getAttribute("value")).getOrElse("")
+            val dynamic = fromEl.asInstanceOf[js.Dynamic]
+            if dynamic.value.asInstanceOf[String] != incoming then dynamic.value = incoming
+        end if
+    end morphAttrs
+
+    private def morphChildren(fromParent: dom.Element, toParent: dom.Element): Unit =
+        morphNodeRun(fromParent, fromParent.firstChild, null, toParent.firstChild, null)
+
+    // ---- logical children ----------------------------------------------------------------------------------
+    //
+    // A nested range is opened and closed by comments that are siblings of its content, so to a naive sibling walk it
+    // looks like several unrelated children. It is one: the markers carry the identity the registry is keyed by, and
+    // pairing them up positionally would rewrite marker text and hand the registry a range that is no longer there.
+    // The morph therefore walks LOGICAL children, where an opening marker stands for its whole span.
+
+    /** The matching close marker for the span `open` starts, `Absent` when the run is unbalanced (the caller then
+      * treats the comment as an ordinary node). Ids are unique among siblings, so a direct match suffices.
+      */
+    private def spanClose(open: dom.Node, id: String): Maybe[dom.Node] =
+        var node   = open.nextSibling
+        var result = Maybe.empty[dom.Node]
+        while result.isEmpty && node != null do
+            if DomReactiveRegions.endMarkerId(node).contains(id) then result = Present(node)
+            node = node.nextSibling
+        end while
+        result
+    end spanClose
+
+    /** The reconciliation key of a logical child: an element's `data-kyo-path`, a span's range id, else `Absent` for
+      * text and plain comments, which reconcile positionally.
+      */
+    private def logicalKey(node: dom.Node): Maybe[String] =
+        if node.nodeType == dom.Node.ELEMENT_NODE then
+            Maybe(node.asInstanceOf[dom.Element].getAttribute("data-kyo-path"))
+        else DomReactiveRegions.startMarkerId(node).filter(id => spanClose(node, id).nonEmpty)
+
+    /** The next logical sibling: past the whole span for an opening marker, the next node otherwise. */
+    private def logicalNext(node: dom.Node): dom.Node =
+        val close: Maybe[dom.Node] = DomReactiveRegions.startMarkerId(node).flatMap(spanClose(node, _))
+        close match
+            case Present(marker) => marker.nextSibling
+            case Absent          => node.nextSibling
+    end logicalNext
+
+    /** Apply `f` to every node of the logical child starting at `first`, its markers included. */
+    private def eachSpanNode(first: dom.Node)(f: dom.Node => Unit): Unit =
+        val last = DomReactiveRegions.startMarkerId(first).flatMap(spanClose(first, _)).getOrElse(first)
+        var node = first
+        var stop = false
+        while !stop && node != null do
+            val next = node.nextSibling
+            stop = node eq last
+            f(node)
+            node = next
+        end while
+    end eachSpanNode
+
+    private def removeLogical(parent: dom.Element, node: dom.Node): Unit =
+        eachSpanNode(node)(current => discard(parent.removeChild(current)))
+
+    private def insertLogicalClone(parent: dom.Element, toNode: dom.Node, ref: dom.Node): Unit =
+        eachSpanNode(toNode) { current =>
+            val fresh = document.importNode(current, true)
+            discard(parent.insertBefore(fresh, ref))
+            // SMIL animations only start on a node this pass actually inserted; a reused one is already running, and
+            // restarting it every paint would snap a chart transition back to its beginning.
+            fresh match
+                case element: dom.Element => beginAnimationsSync(element)
+                case _                    => ()
+        }
+
+    /** Reconcile the live sibling run of `parent` that starts at `fromStart` and stops before `fromEnd` (null meaning
+      * the end of the parent) toward the run starting at `toStart`, which lives in a detached fragment.
+      *
+      * Positional, pair by pair: this pass reuses a node where the shapes line up and replaces it where they do not.
+      * Reordering a keyed list therefore costs more than it has to here, which is the two-ended keyed pass's job; what
+      * matters at this level is that the nodes that did not move keep their identity.
+      */
+    /** Reconcile the live logical run `[fromStart, fromEnd)` of `parent` toward `[toStart, toEnd)`.
+      *
+      * A two-ended keyed pass runs first, then a single cursor over whatever it could not settle. The cursor alone
+      * can only insert IN FRONT of itself, so a key it finds behind itself has to be dragged forward past every
+      * sibling in between: swapping two rows of a thousand costs 997 moves and a full relayout. Matching both ends
+      * first relocates only the children that actually changed place, two for that swap and none for a removal in
+      * the middle.
+      */
+    private def morphNodeRun(
+        parent: dom.Element,
+        fromStart: dom.Node,
+        fromEnd: dom.Node,
+        toStart: dom.Node,
+        toEnd: dom.Node
+    ): Unit =
+        val fromNodes = js.Array[dom.Node]()
+        val fromKeys  = js.Array[String]()
+        val toNodes   = js.Array[dom.Node]()
+        val toKeys    = js.Array[String]()
+        collectLogical(fromStart, fromEnd, fromNodes, fromKeys)
+        collectLogical(toStart, toEnd, toNodes, toKeys)
+
+        var fromKeyed: js.Dictionary[dom.Node] = null
+        var toKeyed: js.Dictionary[Boolean]    = null
+        var i                                  = 0
+        while i < fromKeys.length do
+            if fromKeys(i) != null then
+                if fromKeyed == null then fromKeyed = js.Dictionary.empty[dom.Node]
+                fromKeyed(fromKeys(i)) = fromNodes(i)
+            i += 1
+        end while
+        i = 0
+        while i < toKeys.length do
+            if toKeys(i) != null then
+                if toKeyed == null then toKeyed = js.Dictionary.empty[Boolean]
+                toKeyed(toKeys(i)) = true
+            i += 1
+        end while
+
+        // Invariant: the children still to place are exactly fromNodes[head..tail], a contiguous DOM run ending
+        // immediately before `tailBoundary`. Only run boundaries are ever moved, and only out to a boundary, so the
+        // run stays contiguous and the snapshot stays valid.
+        var head         = 0
+        var tail         = fromNodes.length - 1
+        var toHead       = 0
+        var toTail       = toNodes.length - 1
+        var tailBoundary = fromEnd
+        var scanning     = true
+        while scanning && head <= tail && toHead <= toTail do
+            // Unkeyed at either end: positional reconciliation is the cursor's job, so hand over.
+            if fromKeys(head) == null || fromKeys(tail) == null || toKeys(toHead) == null || toKeys(toTail) == null
+            then scanning = false
+            else if fromKeys(head) == toKeys(toHead) then
+                patchLogical(parent, fromNodes(head), toNodes(toHead))
+                head += 1
+                toHead += 1
+            else if fromKeys(tail) == toKeys(toTail) then
+                patchLogical(parent, fromNodes(tail), toNodes(toTail))
+                tailBoundary = fromNodes(tail)
+                tail -= 1
+                toTail -= 1
+            else if fromKeys(head) == toKeys(toTail) then
+                // The run's head belongs at its tail. A single remaining child already sits there.
+                if head != tail then moveLogicalBefore(parent, fromNodes(head), tailBoundary)
+                patchLogical(parent, fromNodes(head), toNodes(toTail))
+                tailBoundary = fromNodes(head)
+                head += 1
+                toTail -= 1
+            else if fromKeys(tail) == toKeys(toHead) then
+                if tail != head then moveLogicalBefore(parent, fromNodes(tail), fromNodes(head))
+                patchLogical(parent, fromNodes(tail), toNodes(toHead))
+                tail -= 1
+                toHead += 1
+            else scanning = false
+            end if
+        end while
+
+        // Hand the unresolved middle to the cursor. The dictionaries stay whole: keys are unique among siblings, so
+        // a key consumed at an end cannot be asked for again from the middle.
+        val cursorFrom  = if head <= tail then fromNodes(head) else tailBoundary
+        val cursorToEnd = if toTail + 1 < toNodes.length then toNodes(toTail + 1) else toEnd
+        val cursorTo    = if toHead <= toTail then toNodes(toHead) else cursorToEnd
+        morphRangeCursor(parent, cursorFrom, tailBoundary, cursorTo, cursorToEnd, fromKeyed, toKeyed)
+    end morphNodeRun
+
+    /** Snapshot the logical children of `[start, end)` into `nodes` and their keys into `keys`, null where unkeyed.
+      * One pass: the two-ended walk reads keys four times per step, and finding a span's close marker is not free.
+      */
+    private def collectLogical(
+        start: dom.Node,
+        end: dom.Node,
+        nodes: js.Array[dom.Node],
+        keys: js.Array[String]
+    ): Unit =
+        var scan = start
+        while scan != null && !(scan eq end) do
+            discard(nodes.push(scan))
+            discard(keys.push(logicalKey(scan).getOrElse(null)))
+            scan = logicalNext(scan)
+        end while
+    end collectLogical
+
+    /** Single-cursor reconciliation of whatever the two-ended pass left over: a keyed child is pulled to the cursor
+      * by key, an unkeyed one morphs positionally against the first compatible live child.
+      */
+    private def morphRangeCursor(
+        parent: dom.Element,
+        fromStart: dom.Node,
+        fromEnd: dom.Node,
+        toStart: dom.Node,
+        toEnd: dom.Node,
+        fromKeyed: js.Dictionary[dom.Node],
+        toKeyed: js.Dictionary[Boolean]
+    ): Unit =
+        var curFrom = fromStart
+        var curTo   = toStart
+        while curTo != null && !(curTo eq toEnd) do
+            val toNext = logicalNext(curTo)
+            if curFrom != null && !(curFrom eq fromEnd) && morphPortalPair(curFrom, curTo) then
+                curFrom = logicalNext(curFrom)
+            else
+                val toKey = logicalKey(curTo).getOrElse(null)
+                if toKey != null then
+                    val match_ = if fromKeyed != null then fromKeyed.get(toKey).orNull else null
+                    if match_ != null then
+                        if match_ ne curFrom then moveLogicalBefore(parent, match_, curFrom)
+                        else curFrom = logicalNext(curFrom)
+                        patchLogical(parent, match_, curTo)
+                    else insertLogicalClone(parent, curTo, curFrom)
+                    end if
+                else
+                    var handled = false
+                    var loop    = true
+                    while loop && curFrom != null && !(curFrom eq fromEnd) do
+                        val fromNext = logicalNext(curFrom)
+                        val fromKey  = logicalKey(curFrom).getOrElse(null)
+                        if fromKey != null then
+                            // A keyed live child at an unkeyed slot: keep it if the payload reuses it elsewhere (its
+                            // own slot moves it into place), else it is stale and goes.
+                            if toKeyed == null || !toKeyed.contains(fromKey) then removeLogical(parent, curFrom)
+                            curFrom = fromNext
+                        else if morphCompatible(curFrom, curTo) then
+                            morphNode(curFrom, curTo)
+                            curFrom = fromNext
+                            handled = true
+                            loop = false
+                        else
+                            removeLogical(parent, curFrom)
+                            curFrom = fromNext
+                        end if
+                    end while
+                    if !handled then insertLogicalClone(parent, curTo, curFrom)
+                end if
+            end if
+            curTo = toNext
+        end while
+        while curFrom != null && !(curFrom eq fromEnd) do
+            val fromNext = logicalNext(curFrom)
+            removeLogical(parent, curFrom)
+            curFrom = fromNext
+        end while
+    end morphRangeCursor
+
+    private def moveLogicalBefore(parent: dom.Element, node: dom.Node, ref: dom.Node): Unit =
+        eachSpanNode(node)(current => discard(parent.insertBefore(current, ref)))
+
+    private def hasFlag(flags: String, flag: String): Boolean =
+        flags.nonEmpty && flags.split(' ').exists(_ == flag)
+
+    private def flagKey(flags: String): Maybe[String] =
+        if flags.isEmpty then Absent
+        else Maybe.fromOption(flags.split(' ').find(_.startsWith("k=")).map(_.substring(2)))
+
+    /** The flag section a live marker carries once it has adopted the slot: `m`, and the key it adopted. */
+    private def adoptedFlags(key: Maybe[String]): String =
+        key match
+            case Present(value) => s" m k=$value"
+            case Absent         => " m"
+
+    /** Reconcile one matched pair of logical children.
+      *
+      * Two spans of the same id are the same region still sitting here, so the pass recurses into their contents and
+      * never touches the live markers: the registry stays keyed by the nodes it already holds. Any other mismatch,
+      * including a span against a plain node, is replaced whole, markers and all.
+      */
+    private def patchLogical(parent: dom.Element, fromNode: dom.Node, toNode: dom.Node): Unit =
+        val fromSpan = DomReactiveRegions.startMarkerId(fromNode).flatMap(id => spanClose(fromNode, id).map((id, _)))
+        val toSpan   = DomReactiveRegions.startMarkerId(toNode).flatMap(id => spanClose(toNode, id).map((id, _)))
+        (fromSpan, toSpan) match
+            case (Present((fromId, fromClose)), Present((toId, toClose))) if fromId == toId =>
+                val liveFlags     = DomReactiveRegions.markerFlags(fromNode)
+                val incomingFlags = DomReactiveRegions.markerFlags(toNode)
+                val incomingSlot  = hasFlag(incomingFlags, "s")
+                // A mount that already owns this slot repaints its own content, so the span is opaque and its live
+                // marker is left alone: reconciling it against the placeholder the parent rendered would morph the
+                // instance's subtree away, and with it focus, caret and every DOM-local thing hanging off it. The key
+                // is what makes that safe. A differing key means a different instance, which falls through to the
+                // morph and resets the slot exactly as it did before flags existed. The live marker adopts the
+                // incoming key on the way out, which also covers boot: a full-page render stamps no `m`, so the first
+                // re-render after it morphs once and every one after that skips.
+                if hasFlag(liveFlags, "m") && incomingSlot && flagKey(liveFlags) == flagKey(incomingFlags) then ()
+                else
+                    morphNodeRun(parent, fromNode.nextSibling, fromClose, toNode.nextSibling, toClose)
+                    if incomingSlot then
+                        fromNode.asInstanceOf[dom.Comment].data =
+                            DomReactiveRegions.openMarkerData(fromId, adoptedFlags(flagKey(incomingFlags)))
+                end if
+            case (Absent, Absent) if morphCompatible(fromNode, toNode) =>
+                morphNode(fromNode, toNode)
+            case _ =>
+                insertLogicalClone(parent, toNode, fromNode)
+                removeLogical(parent, fromNode)
+        end match
+    end patchLogical
 
     /** Mount a UI into the page body. */
     def mount(ui: UI)(using Frame): Unit < (Async & Scope) =
@@ -501,49 +888,20 @@ private[kyo] object DomBackend:
         override val classPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit]    = Present(classPatchNow)
         override val textPatcherNow: Maybe[(Seq[String], String) => Unit]              = Present(textPatchNow)
 
-        private def tryMorphRange(
-            oldElements: Seq[dom.Element],
-            newElements: Seq[dom.Element],
-            incomingRangesEmpty: Boolean
-        ): Boolean =
-            val active = document.activeElement
-            if active == null ||
-                (active eq document.body) ||
-                oldElements.size != 1 ||
-                newElements.size != 1 ||
-                (active ne oldElements.head) ||
-                !incomingRangesEmpty
-            then false
-            else
-                val fresh = newElements.head
-                if (active.tagName != "INPUT" && active.tagName != "TEXTAREA") || active.tagName != fresh.tagName then false
-                else
-                    // An attribute the imperative id-addressed channel owns (its name is in the element's
-                    // __kyoOwn expando) is never reconciled: server HTML never carries the client-set value,
-                    // so reconciling would clobber it. Twin of the clientJs __kyoMorphAttrs shield.
-                    val owned = ownedAttrs(active)
-                    var i     = 0
-                    while i < fresh.attributes.length do
-                        val attribute = fresh.attributes(i)
-                        if !owned.contains(attribute.name) && active.getAttribute(attribute.name) != attribute.value then
-                            active.setAttribute(attribute.name, attribute.value)
-                        i += 1
-                    end while
-                    i = active.attributes.length - 1
-                    while i >= 0 do
-                        val name = active.attributes(i).name
-                        if !owned.contains(name) && !fresh.hasAttribute(name) then active.removeAttribute(name)
-                        i -= 1
-                    end while
-                    val value =
-                        if active.tagName == "TEXTAREA" then fresh.textContent
-                        else Maybe(fresh.getAttribute("value")).getOrElse("")
-                    val dynamic = active.asInstanceOf[scalajs.js.Dynamic]
-                    if dynamic.value.asInstanceOf[String] != value then dynamic.value = value
-                    applyJsPropsSync(active)
-                    true
-                end if
-            end if
+        /** Reconcile the region's live nodes toward the incoming payload instead of replacing them.
+          *
+          * Nested ranges are reconciled as logical children, so a region containing another region morphs like any
+          * other; `replaceWith` re-reads the live markers afterwards and hands the registry what is actually there.
+          */
+        private def tryMorphRange(target: DomReactiveRegions.MorphTarget): Boolean =
+            morphNodeRun(
+                target.parent.asInstanceOf[dom.Element],
+                target.start.nextSibling,
+                target.end,
+                target.fragment.firstChild,
+                null
+            )
+            true
         end tryMorphRange
 
         private def prepareRangePatch(oldElements: Seq[dom.Element], newElements: Seq[dom.Element]): RangePatchState =
@@ -559,10 +917,12 @@ private[kyo] object DomBackend:
             )
         end prepareRangePatch
 
-        private def finishRangePatch(state: RangePatchState, newElements: Seq[dom.Element]): Unit =
+        private def finishRangePatch(state: RangePatchState, newElements: Seq[dom.Element], morphed: Boolean): Unit =
             newElements.foreach { element =>
                 applyJsPropsSync(element)
-                beginAnimationsSync(element)
+                // A replacement inserted every one of these roots, so every animation under them is new. A morph
+                // reused what it could and started the animations of the nodes it did insert as it inserted them.
+                if !morphed then beginAnimationsSync(element)
             }
             state.active.flatMap(resolveFocus(newElements, _)).foreach { target =>
                 focusNoScroll(target)
