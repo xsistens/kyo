@@ -321,7 +321,7 @@ val productHeader: UI =
 
 ## Installing the theme
 
-Nothing injects the stylesheet for you. Without `uic.Theme.css` on the page, every component renders correct `.p-*` markup and every one of them is completely unstyled. That sheet is Prime's own CSS, extracted from the MIT `@primeuix` packages at build time and frozen into generated Scala sources, and `uic.Theme.css` is the whole of it as one `String`: design tokens (`generated.Tokens`), the per-component `.p-*` rules (`generated.ComponentCss`), and a small kyo-specific remainder (`Theme.primeExtraCss`) covering the pieces Prime implements in JS or in slots.
+Nothing injects the stylesheet for you. Without `uic.Theme.css` on the page, every component renders correct `.p-*` markup and every one of them is completely unstyled. That sheet is Prime's own CSS, extracted from the MIT `@primeuix` packages at build time and frozen into generated Scala sources, and `uic.Theme.css` is the whole of it as one `String`: design tokens (`uic.Tokens`), the per-component `.p-*` rules (`uic.ComponentCss`), and a small kyo-specific remainder (`Theme.primeExtraCss`) covering the pieces Prime implements in JS or in slots.
 
 ```scala
 val head: PageHead = PageHead(title = "Catalog", css = uic.Theme.css)
@@ -362,7 +362,7 @@ val spotify: Stylesheet = uic.Theme.preset(
 val sheet: String = uic.Theme.css + "\n" + spotify.render
 ```
 
-Token names carry no leading `--`, the way `generated.Tokens` stores them and `Stylesheet.scopedVars` renders them. The result is a `Stylesheet`, so it composes with `++` and can be injected live with `UI.runStylesheet` instead of rendered into a `<style>`. Emit it **after** `Theme.css`: at equal specificity the later declaration wins.
+Token names carry no leading `--`, the way `uic.Tokens` stores them and `Stylesheet.scopedVars` renders them. The result is a `Stylesheet`, so it composes with `++` and can be injected live with `UI.runStylesheet` instead of rendered into a `<style>`. Emit it **after** `Theme.css`: at equal specificity the later declaration wins.
 
 Two mechanics decide whether your values actually land, and both are about *where*:
 
@@ -379,6 +379,30 @@ To start from a shipped palette rather than from nothing, `Theme.tokens` hands y
 val derived = uic.Theme.tokens(uic.Theme.Preset.Aura, uic.Theme.Scheme.Dark) ++
     Seq("p-primary-400" -> "#1ed760")
 ```
+
+### Shipping only the CSS you use
+
+`Theme.css` is every preset in both schemes plus all 75 component sheets, whatever your page places. That is the right default — nothing can be missing — and it renders to about 684 KB of CSS out of roughly 1.15 MB of Scala string constants (`Tokens` 765 KB of that, `ComponentCss` 328 KB, the kyo remainder 62 KB). In a Scala.js bundle it costs more than the CSS it renders to, because the token sets live as arrays of pairs rather than as text. `Theme.cssFor` is how you pay for less:
+
+```scala
+val css: String = uic.Theme.cssFor(
+    uic.Tokens.auraLight,
+    uic.Tokens.auraDark,
+    uic.ComponentCss.button,
+    uic.ComponentCss.datatable,
+    uic.ComponentCss.slider
+)
+```
+
+The token sets land on the same two selectors the full sheet uses, `ComponentCss.base` and the kyo remainder are always included, and a preset built with `Theme.preset` composes on top exactly as it does with `Theme.css`.
+
+**There is a floor, and it is the remainder.** `Theme.primeExtraCss` is one flat 66.5 KB document of kyo's own glue, and it is keyed on component classes: **62 of the 74 component names appear in it or in `base`**, so a page that places no table still ships the table's slot rules, and one that places no gallery still ships Galleria's. Those rules are inert without the component's own sheet — this costs bytes, not correctness — but it means the floor is component-specific rather than neutral. Two named sheets plus one preset measure about 243 KB against the full sheet's 684 KB, a factor of 2.8, with the token pairs and those 66.5 KB making up most of what is left. Splitting the remainder the way `ComponentCss` is split would lower the floor; today it does not.
+
+**Why it takes sheets rather than names.** Scala.js eliminates dead code per *method*. A `cssFor(parts: Part*)` — an enum, a `Map`, a `byName` lookup — references every branch the moment it is reachable, so it would ship all 1.15 MB while looking like an optimisation. Passing the sheets themselves means the bundle keeps exactly the `Tokens` and `ComponentCss` defs your call site mentions. This is the same rule `Icons` follows for its 309 glyphs, which is why that object has no `all` either, and it is why `Tokens`' accessors are `def`s rather than `val`s: a `val` in an object is built by the static initialiser and would retain all eight token sets the moment anything touched `Tokens` at all.
+
+**The list is yours to keep correct**, and this is the real cost of the slim path. A component whose sheet you did not name renders its `.p-*` markup completely unstyled, and nothing warns you — not the compiler, not the renderer, not a console message. It looks like a layout bug. Adding a `uic.Chip` to a page means adding `uic.ComponentCss.chip` to this list in the same change. If you cannot hold that discipline, use `Theme.css`; it is correct by construction and the whole point of it being the default.
+
+A practical way to derive the list rather than guess it: render the app, collect every `class` attribute in the result, and map the `p-<name>` prefixes onto sheet names. That also catches the components your components place internally — a `Select` brings an overlay, a `DataTable` brings a paginator — which reading your own source will not tell you.
 
 ### The one class you can still stamp yourself
 

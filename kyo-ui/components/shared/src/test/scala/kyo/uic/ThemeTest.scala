@@ -22,16 +22,16 @@ class ThemeTest extends UicTest:
         def varBlock(selector: String, pairs: Seq[(String, String)]): String =
             if pairs.isEmpty then ""
             else pairs.map((n, vl) => s"--$n:$vl").mkString(s"$selector{", ";", "}")
-        val auraLight = generated.Tokens.auraLight.toMap
+        val auraLight = Tokens.auraLight.toMap
         def diff(preset: Seq[(String, String)]): Seq[(String, String)] =
             preset.filterNot((n, vl) => auraLight.get(n).contains(vl))
         val presets = Seq(
-            "material" -> (generated.Tokens.materialLight, generated.Tokens.materialDark),
-            "lara"     -> (generated.Tokens.laraLight, generated.Tokens.laraDark),
-            "nora"     -> (generated.Tokens.noraLight, generated.Tokens.noraDark)
+            "material" -> (Tokens.materialLight, Tokens.materialDark),
+            "lara"     -> (Tokens.laraLight, Tokens.laraDark),
+            "nora"     -> (Tokens.noraLight, Tokens.noraDark)
         )
-        val root = varBlock(""":root, [data-theme], [data-scheme]""", generated.Tokens.auraLight)
-        val dark = varBlock("""[data-scheme="dark"]""", generated.Tokens.auraDark)
+        val root = varBlock(""":root, [data-theme], [data-scheme]""", Tokens.auraLight)
+        val dark = varBlock("""[data-scheme="dark"]""", Tokens.auraDark)
         val scoped = presets.flatMap { (name, sets) =>
             val (light, darkSet) = sets
             Seq(
@@ -87,13 +87,13 @@ class ThemeTest extends UicTest:
 
     "tokens(Aura, Light) is the Aura base set, with unique names" in {
         val t = Theme.tokens(Theme.Preset.Aura, Theme.Scheme.Light)
-        assert(t.toMap == generated.Tokens.auraLight.toMap)
+        assert(t.toMap == Tokens.auraLight.toMap)
         assert(t.map(_._1).distinct.size == t.size, "a folded set names each token once")
     }
 
     "tokens(Aura, Dark) takes the dark value where the dark set overrides one" in {
-        val light      = generated.Tokens.auraLight.toMap
-        val overridden = generated.Tokens.auraDark.find((n, vl) => light.get(n).exists(_ != vl))
+        val light      = Tokens.auraLight.toMap
+        val overridden = Tokens.auraDark.find((n, vl) => light.get(n).exists(_ != vl))
         assert(overridden.isDefined, "the dark set overrides at least one base token")
         val (name, darkValue) = overridden.get
         val folded            = Theme.tokens(Theme.Preset.Aura, Theme.Scheme.Dark).toMap
@@ -107,10 +107,10 @@ class ThemeTest extends UicTest:
       * contributes and nothing else re-covers.
       */
     "tokens(Material, Dark) keeps the Aura dark tokens that Material never mentions" in {
-        val auraLight        = generated.Tokens.auraLight.toMap
-        val materialDiff     = generated.Tokens.materialLight.filterNot((n, vl) => auraLight.get(n).contains(vl))
-        val coveredByPreset  = (materialDiff.map(_._1) ++ generated.Tokens.materialDark.map(_._1)).toSet
-        val onlyFromAuraDark = generated.Tokens.auraDark.filterNot((n, _) => coveredByPreset.contains(n))
+        val auraLight        = Tokens.auraLight.toMap
+        val materialDiff     = Tokens.materialLight.filterNot((n, vl) => auraLight.get(n).contains(vl))
+        val coveredByPreset  = (materialDiff.map(_._1) ++ Tokens.materialDark.map(_._1)).toSet
+        val onlyFromAuraDark = Tokens.auraDark.filterNot((n, _) => coveredByPreset.contains(n))
         assert(onlyFromAuraDark.nonEmpty, "the Aura dark set contributes tokens Material does not re-declare")
         val folded = Theme.tokens(Theme.Preset.Material, Theme.Scheme.Dark).toMap
         onlyFromAuraDark.foreach((n, vl) => assert(folded.get(n).contains(vl), s"$n survives from the Aura dark set"))
@@ -162,5 +162,77 @@ class ThemeTest extends UicTest:
         // Last declaration wins inside the block, so the override sits after the base value.
         val block = css.substring(css.indexOf("""[data-theme="brand"] {"""))
         assert(block.lastIndexOf("--p-primary-400:") > block.indexOf("--p-surface-0:"))
+    }
+    // ── the slim sheet ──────────────────────────────────────────────────────────────
+
+    private def slim: String =
+        Theme.cssFor(Tokens.auraLight, Tokens.auraDark, ComponentCss.button, ComponentCss.slider)
+
+    "cssFor carries the sheets it was given, plus base and the kyo remainder" in {
+        assert(slim.contains(".p-button"), "a named sheet is present")
+        assert(slim.contains(".p-slider"), "the other named sheet is present")
+        assert(slim.contains(".p-hidden-accessible"), "base is always included")
+        assert(slim.contains(".p-uic-invalid-message"), "the kyo remainder is always included")
+    }
+
+    /** The assertion the whole exercise turns on. A `cssFor` that quietly included
+      * everything would pass every other case here and save nothing.
+      */
+    /** The probes have to come from the twelve components the always-included parts never
+      * name — see the floor case below. `organizationchart` and `stepper` are two of them.
+      */
+    "cssFor OMITS a sheet it was not given" in {
+        assert(Theme.css.contains(".p-organizationchart"), "the full sheet has it")
+        assert(!slim.contains(".p-organizationchart"), "the slim sheet does not")
+        assert(Theme.css.contains(".p-stepper"), "the full sheet has it")
+        assert(!slim.contains(".p-stepper"), "the slim sheet does not")
+    }
+
+    /** What `cssFor` CANNOT drop, pinned so nobody promises otherwise.
+      *
+      * `primeExtraCss` is one flat document of kyo's own glue, 66.5 KB of it, and it is
+      * keyed on component classes: measured 2026-09-02, **62 of the 74 component names
+      * appear in it or in `base`**, so a page that places no table still ships the table's
+      * slot rules. The rules are inert without the component's own sheet, so this costs
+      * bytes rather than correctness — but it means the slim path has a floor, and the
+      * floor is component-specific rather than neutral. Splitting the remainder the way
+      * `ComponentCss` is split is a separate piece of work.
+      */
+    "the kyo remainder is not component-neutral, so cssFor has a floor" in {
+        assert(Theme.primeExtraCss.contains(".p-datatable-tbody"), "the remainder names DataTable")
+        assert(slim.contains(".p-datatable-tbody"), "and it rides along even unnamed")
+        assert(slim.contains(".p-galleria"), "so does Galleria, which was never asked for")
+        assert(Theme.primeExtraCss.length > 60000, "the floor is real, not incidental")
+    }
+
+    "cssFor is a fraction of the full sheet" in {
+        // Measured 2026-09-02: slim 243 223 chars against 683 691, a factor of 2.8. Most of
+        // what remains is one preset's token pairs plus the ~62 KB remainder above; the two
+        // named sheets are a rounding error next to those.
+        assert(slim.length * 2 < Theme.css.length, s"slim=${slim.length} full=${Theme.css.length}")
+    }
+
+    "cssFor puts the two token sets on the selectors the full sheet uses" in {
+        assert(slim.contains(""":root, [data-theme], [data-scheme]{"""))
+        assert(slim.contains("""[data-scheme="dark"]{"""))
+        // Aura's dark set declares the surface ramp; the light set declares the primary ramp.
+        val darkBlock = slim.substring(
+            slim.indexOf("""[data-scheme="dark"]{"""),
+            slim.indexOf("}", slim.indexOf("""[data-scheme="dark"]{"""))
+        )
+        assert(darkBlock.contains("--p-surface-900:"), "the dark set landed in the dark block")
+    }
+
+    "cssFor with no dark tokens emits no dark block" in {
+        val lightOnly = Theme.cssFor(Tokens.auraLight, Nil, ComponentCss.button)
+        assert(lightOnly.contains(""":root, [data-theme], [data-scheme]{"""))
+        assert(!lightOnly.contains("""[data-scheme="dark"]{"""))
+    }
+
+    "a brand preset composes onto a slim sheet the same way it does onto the full one" in {
+        val brand = Theme.preset("brand", Seq("p-primary-400" -> "#1ed760"))
+        val sheet = slim + "\n" + brand.render
+        assert(sheet.indexOf("""[data-theme="brand"] {""") > sheet.indexOf(""":root, [data-theme]"""))
+        assert(sheet.contains("--p-primary-400: #1ed760;"))
     }
 end ThemeTest

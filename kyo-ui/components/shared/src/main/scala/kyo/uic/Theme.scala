@@ -3,8 +3,8 @@ package kyo.uic
 import kyo.*
 
 /** The PrimeOne theme for the uic components: generated design tokens
-  * ([[generated.Tokens]], frozen from the MIT `@primeuix/themes` presets by
-  * gen/extract.mjs) plus the per-component CSS ([[generated.ComponentCss]],
+  * ([[Tokens]], frozen from the MIT `@primeuix/themes` presets by
+  * gen/extract.mjs) plus the per-component CSS ([[ComponentCss]],
   * Prime's own `.p-*` stylesheets with `dt()` resolved to `var(--p-*)`) plus a
   * small kyo-specific remainder ([[primeExtraCss]]).
   *
@@ -20,7 +20,12 @@ import kyo.*
   * Branding: [[preset]] emits your own palette in the same shape the four shipped
   * presets take, and [[tokens]] hands you a shipped preset's effective token set to
   * derive from. Both speak the `(name, value)` pairs (no leading `--`) that
-  * [[kyo.uic.generated.Tokens]] stores and [[kyo.Stylesheet.scopedVars]] renders.
+  * [[kyo.uic.Tokens]] stores and [[kyo.Stylesheet.scopedVars]] renders.
+  *
+  * Size: [[css]] is every preset in both schemes and all 75 component sheets, whatever
+  * the page places — the right default, and about 684 KB of CSS out of ~1.15 MB of Scala
+  * constants. [[cssFor]] takes the token sets and the sheets themselves, so a bundle keeps
+  * only what its own call site names.
   */
 object Theme:
 
@@ -93,25 +98,25 @@ object Theme:
 
     private def presetSets(p: Preset): (Seq[(String, String)], Seq[(String, String)]) =
         p match
-            case Preset.Aura     => (generated.Tokens.auraLight, generated.Tokens.auraDark)
-            case Preset.Material => (generated.Tokens.materialLight, generated.Tokens.materialDark)
-            case Preset.Lara     => (generated.Tokens.laraLight, generated.Tokens.laraDark)
-            case Preset.Nora     => (generated.Tokens.noraLight, generated.Tokens.noraDark)
+            case Preset.Aura     => (Tokens.auraLight, Tokens.auraDark)
+            case Preset.Material => (Tokens.materialLight, Tokens.materialDark)
+            case Preset.Lara     => (Tokens.laraLight, Tokens.laraDark)
+            case Preset.Nora     => (Tokens.noraLight, Tokens.noraDark)
 
     /** Every token block in EMISSION ORDER, which is also resolution order: CSS is
       * last-declaration-wins at equal specificity, and the three single-attribute blocks
       * are all (0,1,0). The paired preset+dark block is (0,2,0) and wins outright.
       */
     private lazy val tokenBlocks: Seq[TokenBlock] =
-        val auraLight = generated.Tokens.auraLight.toMap
+        val auraLight = Tokens.auraLight.toMap
         // The Aura base set is re-declared on every theme/scheme scope (not just
         // `:root`): component tokens are var() chains (`--p-inputtext-background:
         // var(--p-form-field-background)`), and CSS substitutes var() at the element
         // that DECLARES the property — a `data-scheme="dark"` scope below `<html>`
         // only re-derives the chains if they are declared on the scope element too.
         val base = Seq(
-            TokenBlock(Absent, false, generated.Tokens.auraLight),
-            TokenBlock(Absent, true, generated.Tokens.auraDark)
+            TokenBlock(Absent, false, Tokens.auraLight),
+            TokenBlock(Absent, true, Tokens.auraDark)
         )
         val scoped = Preset.values.toSeq.filterNot(_ == Preset.Aura).flatMap { p =>
             val (light, darkSet) = presetSets(p)
@@ -146,7 +151,7 @@ object Theme:
     /** Your own preset, in the shape the four shipped ones take: a block keyed by
       * `data-theme="name"`, plus a PAIRED `[data-theme="name"][data-scheme="dark"]` block
       * that out-specifies the library's own `[data-scheme="dark"]` (0,1,0) at (0,2,0).
-      * Token names carry no leading `--`, matching [[kyo.uic.generated.Tokens]].
+      * Token names carry no leading `--`, matching [[kyo.uic.Tokens]].
       *
       * The paired block is ALWAYS emitted and carries `light ++ dark` — `dark` is a delta,
       * so name only what actually differs there. Two things it buys:
@@ -186,14 +191,68 @@ object Theme:
         else base.scopedVars(themed.and(Selector.data("scheme", "dark")), darkPairs*)
     end preset
 
-    /** The PrimeOne layer: tokens + base/component CSS + the inherited page font
-      * (Prime sets no font-family of its own; the showcase look is Inter) + the
+    /** Prime sets no font-family of its own; the showcase look is Inter, with a system
+      * fallback, so self-hosting Inter stays optional.
+      */
+    private val fontRule =
+        ":root{font-family:Inter,system-ui,-apple-system,\"Segoe UI\",Roboto,sans-serif}"
+
+    /** The PrimeOne layer: tokens + base/component CSS + the inherited page font + the
       * kyo-specific remainder ([[primeExtraCss]]).
+      *
+      * This is every preset in both schemes and all 75 sheets, whatever the page places.
+      * That is the right default — nothing can be missing — and it is roughly 1.15 MB of
+      * string constants. [[cssFor]] is the way to pay for less.
       */
     lazy val primeCss: String =
-        primeTokensCss + "\n" +
-            ":root{font-family:Inter,system-ui,-apple-system,\"Segoe UI\",Roboto,sans-serif}\n" +
-            generated.ComponentCss.all + "\n" + primeExtraCss
+        primeTokensCss + "\n" + fontRule + "\n" + ComponentCss.all + "\n" + primeExtraCss
+
+    /** The sheet for a page that places only the components it names.
+      *
+      * {{{
+      * uic.Theme.cssFor(
+      *     uic.Tokens.auraLight,
+      *     uic.Tokens.auraDark,
+      *     uic.ComponentCss.button, uic.ComponentCss.datatable, uic.ComponentCss.slider
+      * )
+      * }}}
+      *
+      * DCE-safe BY CONSTRUCTION, and the shape is the point. Nothing here maps a name or an
+      * enum case to a sheet, because Scala.js eliminates dead code per METHOD: a `match`, a
+      * `Map` or a `byName` lookup references every branch as soon as it is reachable, so a
+      * `cssFor(parts: Part*)` would ship all 1.15 MB and look like it had done something.
+      * Taking the sheets themselves means a bundle keeps exactly the `ComponentCss` and
+      * `Tokens` defs its own call site mentions — the same rule `Icons` follows for its 309
+      * glyphs, which is why that object has no `all` either.
+      *
+      * `light` lands on `:root, [data-theme], [data-scheme]` and `dark` on
+      * `[data-scheme="dark"]`, the two selectors [[primeTokensCss]] uses for the base set, so
+      * a brand preset from [[preset]] composes on top exactly as it does with [[css]].
+      * `ComponentCss.base` and [[primeExtraCss]] are always included: the first is the shared
+      * anatomy every component builds on, the second is kyo's glue and is one flat document.
+      * That second one is the FLOOR here, and it is not neutral: 62 of the 74 component
+      * names appear in it or in `base`, so a page that places no table still ships the
+      * table's slot rules. Those rules are inert without the component's own sheet, so it
+      * costs bytes rather than correctness. Measured 2026-09-02: two sheets and one preset
+      * come to ~243 KB against [[css]]'s ~684 KB, a factor of 2.8.
+      *
+      * The list is yours to keep correct. A component whose sheet is not named here renders
+      * its `.p-*` markup completely unstyled, and nothing says so — see the README section
+      * "Shipping only the CSS you use".
+      */
+    def cssFor(
+        light: Seq[(String, String)],
+        dark: Seq[(String, String)],
+        sheets: String*
+    ): String =
+        Seq(
+            varBlock(""":root, [data-theme], [data-scheme]""", light),
+            varBlock("""[data-scheme="dark"]""", dark),
+            fontRule,
+            ComponentCss.base
+        ).filter(_.nonEmpty).mkString("\n") + "\n" +
+            sheets.mkString("\n") + "\n" + primeExtraCss
+    end cssFor
 
     /** The kyo-specific PrimeOne remainder (`.p-uic-*` plus pieces Prime implements
       * in JS or slots rather than component CSS): the Button loading spinner

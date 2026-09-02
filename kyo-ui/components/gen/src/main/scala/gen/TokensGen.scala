@@ -26,9 +26,14 @@ object TokensGen:
            |  )""".stripMargin
             }
             .mkString("\n\n")
+        // `def`, never `val`: a val in an object is built by the static initialiser, so it is
+        // retained the moment anything touches `Tokens` at all, and a consumer that names one
+        // preset would still carry all eight sets. One def per accessor is what lets Scala.js
+        // method-level DCE keep only what a bundle references — the same rule PrimeIconsGen
+        // states for the 309 icon defs.
         val concat =
-            if groups.isEmpty then s"  val $ident: Seq[(String, String)] = Seq.empty"
-            else s"  val $ident: Seq[(String, String)] = ${groups.indices.map(i => s"${ident}_$i").mkString(" ++ ")}"
+            if groups.isEmpty then s"  def $ident: Seq[(String, String)] = Seq.empty"
+            else s"  def $ident: Seq[(String, String)] = ${groups.indices.map(i => s"${ident}_$i").mkString(" ++ ")}"
         s"$defs\n\n$concat"
     end chunked
 
@@ -48,12 +53,17 @@ object TokensGen:
 
         val content =
             s"""${Common.header(s"@primeuix/themes ${Common.PrimeUixVersion} via gen/extract.mjs")}package kyo.uic
-         |package generated
          |
          |/** PrimeOne design tokens (`--p-*`, stored without the leading `--`) per
          |  * preset x color scheme. `<preset>Light` is the complete set for
          |  * `Stylesheet.vars`/`scopedVars`; `<preset>Dark` holds only the dark-scheme
          |  * overrides the engine emits under the dark selector.
+         |  *
+         |  * Each accessor is a `def`, so Scala.js method-level dead-code elimination keeps
+         |  * only the preset and scheme a bundle actually names; `Theme.cssFor` is the entry
+         |  * point that consumes them directly. For the same reason there is no `all`, no
+         |  * `byName` and no `Map` here: a lookup that maps a value to a token set references
+         |  * every token set, and the whole 765 KB comes along.
          |  */
          |object Tokens:
          |
