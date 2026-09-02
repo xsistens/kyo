@@ -1586,6 +1586,8 @@ private[kyo] object HtmlRenderer:
            |// prepare its leave ghost, remove it, then spawn, since kyoSpawnGhosts drops ghosts whose source is still
            |// connected. Document-wide by necessity: the twin sits outside every region subtree, so the regular leave
            |// sweep cannot see it.
+           |// Twin of DomBackend.portalTwin: the (unique) re-homed body child carrying the path.
+           |function __kyoPortalTwin(p){return document.querySelector('body > [data-kyo-path="'+p+'"][data-kyo-portal]');}
            |function __kyoPortalSweep(root){
            |  if(root&&root.querySelectorAll){
            |    var cand=[];

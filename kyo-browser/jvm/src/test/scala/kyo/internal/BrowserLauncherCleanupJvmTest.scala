@@ -88,8 +88,8 @@ class BrowserLauncherCleanupJvmTest extends BaseChromeTest:
                 try scala.sys.process.Process(Seq("ps", "-A", "-ww", "-o", "pid=,args=")).!!
                 catch case _: Throwable => ""
             output.linesIterator.flatMap { line =>
-                val trimmed       = line.trim
-                val (pid, rest)   = trimmed.span(!_.isWhitespace)
+                val trimmed     = line.trim
+                val (pid, rest) = trimmed.span(!_.isWhitespace)
                 pid.toLongOption.map(p => (p, rest.trim))
             }.toSeq
 
@@ -104,6 +104,7 @@ class BrowserLauncherCleanupJvmTest extends BaseChromeTest:
                 case parts if parts.length >= 2 => parts(0).trim.toLongOption.map(p => (p, parts.drop(1).mkString("|")))
                 case _                          => None
         }.toSeq
+    end commandLinesWindows
 
     /** The snapshot of running processes whose command line carries the given sentinel tag, as `(pid, userDataDir)`
       * pairs, where `userDataDir` is the value of the `--user-data-dir=...` argument the launcher passed.
