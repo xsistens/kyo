@@ -169,5 +169,5 @@ object ApolloClientResource:
       * block completes, even on failure.
       */
     def acquire(build: => ApolloClient)(using Frame): ApolloClient < (Async & Scope) =
-        Scope.acquireRelease(build)(client => Sync.defer(client.close()))
+        Scope.acquireRelease(build)(client => client.closeAndAwait)
 end ApolloClientResource

@@ -104,6 +104,13 @@ final class WebSocketNetworkTransport(
     private val mailbox: Channel[Msg] =
         Sync.Unsafe.evalOrThrow(Channel.initUnscoped[Msg](Int.MaxValue))
 
+    // Completed by the owner fiber once a Shutdown has actually torn the socket down. `close()` only
+    // ENQUEUES the shutdown, so without this a caller has no way to know when the socket is gone: the
+    // Scope release returned while the owner fiber had not yet reached the command, which made "the
+    // transport is closed when the block completes" a race the caller happened to win.
+    private val shutdownDone: Fiber.Promise.Unsafe[Unit, Any] =
+        Sync.Unsafe.evalOrThrow(Sync.Unsafe.defer(Fiber.Promise.Unsafe.init[Unit, Any]()))
+
     private def ensureStarted(using Frame): Unit < Async =
         Sync.defer(ownerStarted.compareAndSet(false, true)).map { firstStart =>
             val eff: Unit < Async =
@@ -186,6 +193,18 @@ final class WebSocketNetworkTransport(
         discard(mailbox.unsafe.offer(Msg.Shutdown))
     end close
 
+    /** Enqueue the shutdown and wait for the owner fiber to have completed it: on return the socket is
+      * closed and every route has seen its terminal value. A transport that was never started has no owner
+      * fiber to run the command, so it completes the promise itself.
+      */
+    def closeAndAwait(using Frame): Unit < Async =
+        Sync.defer {
+            given AllowUnsafe = AllowUnsafe.embrace.danger
+            discard(mailbox.unsafe.offer(Msg.Shutdown))
+            if !ownerStarted.get() then shutdownDone.completeUnitDiscard()
+        }.andThen(shutdownDone.safe.get)
+    end closeAndAwait
+
     // ---- owner-fiber command handling (single-threaded by construction) --------
 
     private def handle(msg: Msg): Unit < Async =
@@ -203,7 +222,11 @@ final class WebSocketNetworkTransport(
             case Msg.IdleTimeout(token) =>
                 if token == s.idleToken && s.routes.isEmpty then terminate(s, normalClose) else ()
             case Msg.DoReconnect(token) => if token == s.reconnectToken then doReconnect(s) else ()
-            case Msg.Shutdown           => terminate(s, normalClose).andThen(closeMailbox)
+            case Msg.Shutdown =>
+                terminate(s, normalClose).andThen(closeMailbox).andThen(Sync.Unsafe.defer {
+                    given AllowUnsafe = AllowUnsafe.embrace.danger
+                    shutdownDone.completeUnitDiscard()
+                })
         end match
     end handle
 

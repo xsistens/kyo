@@ -201,6 +201,12 @@ final class ApolloClient private (
       * Mirrors apollo-kotlin's `ApolloClient.close()`.
       */
     def close(): Unit = webSocketTransport.close()
+
+    /** Close the client and wait for its subscription socket to be gone: `close()` only enqueues the
+      * shutdown onto the transport's owner fiber, so a caller that needs the socket actually closed when it
+      * returns (a `Scope` release, a test) awaits here.
+      */
+    def closeAndAwait(using Frame): Unit < Async = webSocketTransport.closeAndAwait
 end ApolloClient
 
 /** A prepared, not-yet-executed GraphQL operation carrying its own

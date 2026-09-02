@@ -40,10 +40,12 @@ class PreloadSpec extends kyo.test.Test[Any]:
                     preloaded <- Apollo.preload(
                         summon[ApolloClient].query(CurrentUserQuery())
                     )
-                    // The fetch left before anyone read; `state` answers without suspending.
-                    _       <- Async.sleep(30L.millis)
+                    // The fetch left before anyone read; `state` answers without suspending. Waiting on the
+                    // observable count rather than a time budget: how long the preload fiber needs to reach
+                    // the engine is a scheduling question, and under the suite's parallelism a fixed sleep
+                    // is a coin flip.
+                    _       <- assertEventually(Sync.defer(engine.started == 1))
                     pending <- preloaded.state.current
-                    _ = assert(engine.started == 1)
                     _ = assert(pending == QueryState.Loading)
                     _    <- Sync.defer(engine.release())
                     sig  <- preloaded.read(UpdateFailure.Notify)
@@ -59,9 +61,10 @@ class PreloadSpec extends kyo.test.Test[Any]:
                 for
                     first  <- Apollo.preload(summon[ApolloClient].query(CurrentUserQuery()))
                     second <- Apollo.preload(summon[ApolloClient].query(CurrentUserQuery()))
-                    _      <- Async.sleep(30L.millis)
-                    // Both left before EITHER was read — the loader shape, not a waterfall.
-                    _ = assert(engine.started == 2)
+                    // Both left before EITHER was read — the loader shape, not a waterfall. The count is
+                    // waited on rather than slept for: the claim is that neither fetch waits for the other,
+                    // not that both finish inside a fixed budget.
+                    _ <- assertEventually(Sync.defer(engine.started == 2))
                     _ = engine.release()
                     s1 <- first.read(UpdateFailure.Notify)
                     s2 <- second.read(UpdateFailure.Notify)
