@@ -751,7 +751,8 @@ class UIServerWsTest extends kyo.test.Test[Any]:
                     serverWs => UIServer.serveSession(serverWs, app),
                     clientWs =>
                         for
-                            _     <- clientWs.take()
+                            // Subscribe repaints nothing, so the barrier is the subscription's own park on `ref`.
+                            _     <- assertEventually(ref.waiters.map(_ >= 1))
                             _     <- clientWs.put(HttpWebSocket.Payload.Text(Json.encode[UIEvent](start)))
                             _     <- clientWs.put(HttpWebSocket.Payload.Text(Json.encode[UIEvent](drop)))
                             frame <- clientWs.take()
@@ -793,7 +794,8 @@ class UIServerWsTest extends kyo.test.Test[Any]:
                     serverWs => UIServer.serveSession(serverWs, app),
                     clientWs =>
                         for
-                            _ <- clientWs.take()
+                            // Subscribe repaints nothing, so the barrier is the subscription's own park on `ref`.
+                            _ <- assertEventually(ref.waiters.map(_ >= 1))
                             _ <- clientWs.put(HttpWebSocket.Payload.Text(Json.encode[UIEvent](invalidStart)))
                             click = UIEvent.Click(Seq("1"), MouseEventData(UI.Modifiers.none, Absent))
                             _     <- clientWs.put(HttpWebSocket.Payload.Text(Json.encode[UIEvent](click)))

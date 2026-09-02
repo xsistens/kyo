@@ -117,8 +117,10 @@ class ReactiveSetterWireTest extends UITest:
                 _  <- Browser.click(Selector.id("go"))
                 op <- lastOp
             yield op match
-                case _: HtmlOp.Replace => succeed
-                case other             => fail(s"expected a re-render, got $other")
+                // An HTML region re-renders the content between its comment anchors, so the op is
+                // ReplaceRange; HtmlOp.Replace is the SVG-only, path-addressed form (UIServer.sendRegion).
+                case HtmlOp.ReplaceRange(_, html) => assert(html.contains("font-weight: bold"))
+                case other                        => fail(s"expected a re-render, got $other")
         }
     }
 
