@@ -202,6 +202,38 @@ class TabsTest extends UicTest:
         yield assert(held == "one")
     }
 
+    // ── the id base, and what derives from it ────────────────────────────────────
+
+    "header ids derive from a caller's base, using each tab's own logical id" in {
+        for
+            headers <- elementsWithClass(strip.id("library").render, "p-tab")
+        yield assert(
+            headers.map(_.attrs.identifier).toList ==
+                List(Present("library-one"), Present("library-two"), Present("library-three"))
+        )
+    }
+
+    "without a base the ids are minted, so a pure render has none at all" in {
+        // The minting needs a mount, and a pure render shows only the placeholder — which is
+        // why a golden render and an SSG page had no header ids before a base could be given.
+        for
+            headers <- elementsWithClass(strip.render, "p-tab")
+        yield assert(headers.forall(_.attrs.identifier.isEmpty))
+    }
+
+    "a disabled header is still addressable, though it is out of the arrow wiring" in {
+        // The id used to be assigned inside the not-disabled branch, because it existed only
+        // to move the arrow focus and the arrows skip a disabled header. A CHOSEN id is a
+        // different thing: naming a header is often exactly how a caller asserts it is
+        // disabled.
+        for
+            headers <- elementsWithClass(strip.id("library").render, "p-tab")
+        yield
+            assert(headers(1).attrs.identifier == Present("library-two"), "named")
+            assert(headers(1).attrs.tabIndex.isEmpty, "but out of the Tab order")
+            assert(headers(1).attrs.onKeyDown.isEmpty, "and out of the arrow wiring")
+    }
+
     "only the active header is in the Tab order, and a disabled one is in neither" in {
         for
             active  <- Signal.initRef("three")

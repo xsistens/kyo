@@ -31,9 +31,13 @@ final case class Fieldset private (
     legendV: Maybe[TextValue] = Absent,
     toggleableFlag: Boolean = false,
     collapsedRef: Maybe[SignalRef[Boolean]] = Absent,
+    idV: Maybe[String] = Absent,
     kids: List[UI] = Nil
-) extends Node:
+) extends Node, HasElementId:
     type Self = Fieldset
+
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): Fieldset = copy(idV = v)
 
     /** Legend text, rendered inside `.p-fieldset-legend`. A `Signal[String]` re-renders it in place on
       * emission, e.g. a locale-driven `I18n.t` leaf.
@@ -62,6 +66,7 @@ final case class Fieldset private (
             case _                           => Absent
 
         var shell = div.cssClass("p-fieldset").cssClass("p-component").role("group")
+        idV.foreach(v => shell = shell.id(v))
         if toggleableFlag then shell = shell.cssClass("p-fieldset-toggleable")
         legendConst.foreach(l => shell = shell.aria("label", l))
 

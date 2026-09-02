@@ -21,9 +21,13 @@ final case class Tag private (
     roundedFlag: Boolean = false,
     iconV: Maybe[IconGlyph] = Absent,
     onClickEff: Maybe[Any < Async] = Absent,
+    idV: Maybe[String] = Absent,
     kids: List[UI] = Nil
-) extends Node:
+) extends Node, HasElementId:
     type Self = Tag
+
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): Tag = copy(idV = v)
 
     /** Semantic accent (`.p-tag-<token>`); unset keeps the primary base skin. A `Signal[Severity]` swaps
       * the class IN PLACE via kyo-ui's class channel on emission (no re-render).
@@ -54,6 +58,7 @@ final case class Tag private (
 
     private[uic] def render(using Frame): UI =
         var el = span.cssClass("p-tag").cssClass("p-component")
+        idV.foreach(v => el = el.id(v))
         severityV match
             case Present(SeverityValue.Const(s)) => tagToken(s).foreach(t => el = el.cssClass(s"p-tag-$t"))
             case Present(SeverityValue.Dyn(sig)) =>

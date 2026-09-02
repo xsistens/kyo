@@ -27,6 +27,11 @@ end PanelAccessibleRole
   * two-way to the `collapsed` `SignalRef[Boolean]`: pressing the button toggles
   * the ref, and external ref writes collapse/expand the content.
   *
+  * `id(...)` lands on the panel root, and the toggle takes `s"$id-toggle"`. That
+  * derivation is the only way to address the button: it belongs to the panel, so
+  * wrapping the panel in a `div` with an id does not reach it — the wrapper is
+  * not that button.
+  *
   * Collapse ANIMATION: the content container is a `.p-uic-collapse` grid,
   * reactive on the `collapsed` ref. Under DOM morphing a class-only re-render
   * patches `.p-uic-collapsed` onto the same element in place (no `outerHTML`
@@ -42,8 +47,9 @@ final case class Panel private (
     accessibleNameV: Maybe[TextValue] = Absent,
     accessibleRoleV: PanelAccessibleRole = PanelAccessibleRole.Region,
     footerV: Maybe[UI] = Absent,
+    idV: Maybe[String] = Absent,
     kids: List[UI] = Nil
-) extends Node, HasAccessibleName:
+) extends Node, HasElementId, HasAccessibleName:
     type Self = Panel
 
     /** Header title. A `Signal[String]` re-renders it in place on emission, e.g. a
@@ -78,8 +84,12 @@ final case class Panel private (
     /** Adds content children. */
     def apply(cs: UI*): Panel = copy(kids = kids ++ cs)
 
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): Panel = copy(idV = v)
+
     private[uic] def render(using Frame): UI =
         var shell = div.cssClass("p-panel").cssClass("p-component").role(accessibleRoleV.roleToken)
+        idV.foreach(v => shell = shell.id(v))
         if toggleableFlag then shell = shell.cssClass("p-panel-toggleable")
         accessibleNameV match
             case Present(TextValue.Const(n)) => shell = shell.aria("label", n)
@@ -110,7 +120,7 @@ final case class Panel private (
                 List(
                     div.cssClass("p-panel-header-actions")(
                         toChild(ref.render { c =>
-                            button
+                            var b = button
                                 .cssClass("p-panel-toggle-button")
                                 .cssClass("p-button")
                                 .cssClass("p-component")
@@ -121,9 +131,13 @@ final case class Panel private (
                                 .jsProp("type", "button")
                                 .aria("expanded", (!c).toString)
                                 .aria("label", "Toggle")
-                                .onClick(ref.getAndUpdate(!_))(
-                                    toChild(GlyphSvg(if c then Icons.plus else Icons.minus, "p-button-icon"))
-                                )
+                                .onClick(ref.getAndUpdate(!_))
+                            // The toggle is Panel's own button, so it is not reachable by
+                            // wrapping the panel — the wrapper is not that button. It takes
+                            // its id from the panel's, per the derivation HasElementId
+                            // describes.
+                            idV.foreach(base => b = b.id(s"$base-toggle"))
+                            b(toChild(GlyphSvg(if c then Icons.plus else Icons.minus, "p-button-icon")))
                         })
                     )
                 )

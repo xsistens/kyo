@@ -6610,4 +6610,52 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "a chosen id lands on the component's own root, not on a wrapper" in {
+        // Wrapping a component in a `div(...).id(...)` is ordinary composition and works for
+        // the whole of it. What it cannot do is BE the component, which is what a walk that
+        // wants `.p-tag` at `#status` needs, and what measuring or focusing a component
+        // needs.
+        for
+            tag   <- renderHtml(uic.Tag("live").id("status"))
+            msg   <- renderHtml(uic.Message().id("errors")(p("boom")))
+            field <- renderHtml(uic.Fieldset().legend("Local").id("settings-local")(p("x")))
+            panel <- renderHtml(uic.Panel().header("Rail").id("rail")(p("x")))
+            table <- renderHtml(
+                uic.DataTable[String]().id("cache").rows(List("a")).columns(uic.column("C")(identity))
+            )
+        yield
+            // Both halves per component: the id is present AND it is on the element that
+            // carries the component's own class. Asserted separately so a failure says which.
+            assert(tag.contains("""id="status""""), s"Tag id: $tag")
+            assert(tag.contains("""id="status" class="p-tag p-component""""), s"Tag root: $tag")
+            assert(msg.contains("""id="errors""""), s"Message id: ${msg.take(200)}")
+            assert(msg.contains("p-message"), "Message root class")
+            assert(field.contains("""id="settings-local""""), s"Fieldset id: ${field.take(200)}")
+            assert(field.contains("p-fieldset"), "Fieldset root class")
+            assert(panel.contains("""id="rail""""), s"Panel id: ${panel.take(200)}")
+            assert(panel.contains("p-panel"), "Panel root class")
+            assert(table.contains("""id="cache""""), s"DataTable id: ${table.take(300)}")
+    }
+
+    "a component's internal control derives its id from the component's" in {
+        // Panel's toggle is the case a wrapper provably cannot reach: the wrapper is not
+        // that button. Without the derivation the only handle on it is Prime's own private
+        // class names.
+        for
+            ref <- Signal.initRef(false)
+            ui = uic.Panel().header("Rail").id("rail").toggleable(true).collapsed(ref)(p("x"))
+            html <- UI.runRender(ui).take(1).run.map(_.mkString)
+            plain <- Signal.initRef(false).map(r =>
+                uic.Panel().header("Rail").toggleable(true).collapsed(r)(p("x"))
+            )
+            plainHtml <- UI.runRender(plain).take(1).run.map(_.mkString)
+        yield
+            assert(html.contains("""id="rail-toggle""""), "the toggle is named after the panel")
+            assert(html.contains("p-panel-toggle-button"), "and is still Prime's button")
+            assert(
+                !plainHtml.contains("-toggle\""),
+                "with no id on the panel there is nothing to derive from, and none is invented"
+            )
+    }
+
 end GoldenRenderTest

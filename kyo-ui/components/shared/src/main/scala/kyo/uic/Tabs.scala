@@ -87,12 +87,20 @@ end Tab
   * the arrows move between headers inside it, which is the ARIA tablist pattern
   * and the only thing that makes an inactive header reachable at all once the
   * roving tabindex has taken it out of the Tab order.
+  *
+  * `id(...)` is the base each header derives from: `s"$id-${tab.id}"`, using the
+  * tab's own logical id, so a strip's headers are addressable without `Tab`
+  * growing a second id slot beside the one it already has. Without a base the
+  * mount mints them, which keeps the arrow wiring working unasked but leaves the
+  * ids arbitrary — and absent entirely from a golden render or an SSG page,
+  * since minting needs a mount. With a base they are the same in all three.
   */
 final case class Tabs private (
     tabList: List[Tab] = Nil,
     selectedBinding: Maybe[ReactiveValue[String]] = Absent,
-    onTabSelectF: Maybe[String => Any < Async] = Absent
-) extends Node:
+    onTabSelectF: Maybe[String => Any < Async] = Absent,
+    idV: Maybe[String] = Absent
+) extends Node, HasElementId:
     type Self = Tabs
 
     /** Appends the given tabs. */
@@ -121,21 +129,43 @@ final case class Tabs private (
 
     def onTabSelect(f: String => Any < Async): Tabs = copy(onTabSelectF = Present(f))
 
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): Tabs = copy(idV = v)
+
+    /** Header ids derived from a caller-set base — `s"$base-${tab.id}"`, chosen and stable.
+      * `Absent` when no base was given, which is what sends [[render]] to the mount to mint
+      * them instead.
+      */
+    private def derivedIds: Maybe[List[String]] =
+        idV.map(base => tabList.map(t => s"$base-${t.id}"))
+
     private[uic] def render(using Frame): UI =
         UI.mounted {
             UI.commands.map { cmds =>
-                Kyo.foreach(tabList)(_ => cmds.freshId).map(ids => renderTabs(Present((cmds, ids.toList))))
+                idsFor(cmds).map(ids => renderTabs(ids, id => cmds.focusId(id)))
             }
-        }.placeholder(renderTabs(Absent))
+        }
+            // With a base the ids are known without a mount, so the placeholder carries them
+            // too: a golden render, an SSG page and the live tree then agree on the header
+            // ids instead of only the live one having any. Arrow-key focus still needs the
+            // mount, which is what the no-op focus says here.
+            .placeholder(renderTabs(derivedIds.getOrElse(Nil), _ => ()))
 
-    /** The rendered tabs, with the roving-focus wiring when there is a mount to mint ids in.
-      *
-      * `Absent` is the placeholder: a golden render and an SSG page both show it, and it is what
-      * the component did before the arrows, which is a usable tab strip whose inactive headers are
-      * reachable by clicking. The wiring arrives with the mount.
+    /** The header ids: a caller's base wins, and only without one does the mount mint them.
+      * Same rule as [[Menu]]'s base — the ARIA and focus wiring works unasked, and a caller
+      * who wants to address a header can.
       */
-    private def renderTabs(nav: Maybe[(UI.Commands, List[String])])(using Frame): UI =
-        withActive(active => body(active, nav))
+    private def idsFor(cmds: UI.Commands)(using Frame): List[String] < Sync =
+        derivedIds match
+            case Present(ids) => ids
+            case Absent       => Kyo.foreach(tabList)(_ => cmds.freshId).map(_.toList)
+
+    /** The rendered tabs. `ids` empty means no header carries one, which is what a
+      * placeholder shows for an un-based strip: a usable tab strip whose inactive headers
+      * are reachable by clicking, with the arrow wiring arriving with the mount.
+      */
+    private def renderTabs(ids: List[String], focus: String => Any < Async)(using Frame): UI =
+        withActive(active => bodyWith(active, ids, focus))
 
     /** The seam the golden tests render, since a mount shows only its placeholder there. */
     private[uic] def wired(ids: List[String], focus: String => Any < Async)(using Frame): UI =
@@ -157,11 +187,6 @@ final case class Tabs private (
     private def selectedRef: Maybe[SignalRef[String]] = selectedBinding match
         case Present(ReactiveVariable(ref)) => Present(ref)
         case _                              => Absent
-
-    private def body(active: String, nav: Maybe[(UI.Commands, List[String])])(using Frame): UI =
-        nav match
-            case Present((cmds, ids)) => bodyWith(active, ids, id => cmds.focusId(id))
-            case Absent               => bodyWith(active, Nil, _ => ())
 
     /** Moves focus to the header `step` lands on, and to nothing else.
       *
@@ -193,6 +218,11 @@ final case class Tabs private (
     )(using Frame): E =
         var out = el.role("tab").aria("selected", isActive.toString)
         if isActive then out = out.cssClass("p-tab-active")
+        // The id goes on before the disabled branch, not inside it. While ids were minted
+        // only to move the arrow focus, giving one to a header the arrows skip was pointless;
+        // a CHOSEN id is different — a caller who names a header may well be naming it to
+        // assert that it is disabled.
+        if ids.isDefinedAt(i) then out = out.id(ids(i))
         if t.disabled then out = out.cssClass("p-disabled")
         else
             out = out.tabIndex(if isActive then 0 else -1)
@@ -207,8 +237,7 @@ final case class Tabs private (
             // The roving tabindex above takes every inactive tab OUT of the Tab order, which
             // is what the ARIA tablist pattern asks for and what leaves the arrows as the only
             // way back to them. Without this handler they were simply unreachable.
-            if ids.isDefinedAt(i) then
-                out = out.id(ids(i)).onKeyDown(headerMove(ids, focus, navigable, i))
+            if ids.isDefinedAt(i) then out = out.onKeyDown(headerMove(ids, focus, navigable, i))
         end if
         out
     end interactive

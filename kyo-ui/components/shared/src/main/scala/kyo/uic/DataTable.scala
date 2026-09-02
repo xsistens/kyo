@@ -418,9 +418,13 @@ final case class DataTable[A] private (
     columnOrderRef: Maybe[SignalRef[List[List[String]]]] = Absent,
     reorderRowsFlag: Boolean = false,
     onRowReorderF: Maybe[RowMove[A] => Any < Async] = Absent,
-    orderedPaths: List[List[String]] = Nil
-) extends Node, HasEmptyContent, HasAccessibleNameRef:
+    orderedPaths: List[List[String]] = Nil,
+    idV: Maybe[String] = Absent
+) extends Node, HasElementId, HasEmptyContent, HasAccessibleNameRef:
     type Self = DataTable[A]
+
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): DataTable[A] = copy(idV = v)
 
     /** Appends data rows. */
     def rows(rs: Seq[A]): DataTable[A] = copy(rowsV = rowsV ++ rs.toList)
@@ -1687,8 +1691,12 @@ final case class DataTable[A] private (
         else
             UI.mounted {
                 for
-                    cmds   <- UI.commands
-                    prefix <- cmds.freshId
+                    cmds <- UI.commands
+                    // A caller's own id wins; the mount mints one only when none was given,
+                    // so the derived part ids (headers, rows, the frozen group) work unasked
+                    // but are addressable when the caller cares. Same rule as Menu's base.
+                    minted <- cmds.freshId
+                    prefix = idV.getOrElse(minted)
                     drafts <- Kyo.foreach(editableLeaves)((path, _) => Signal.initRef("").map(path -> _))
                     err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
                     menus  <- Kyo.foreach(filterableLeaves)((path, _) => Signal.initRef(false).map(path -> _))
@@ -2428,6 +2436,7 @@ final case class DataTable[A] private (
         val footerSlot: List[UI] = footerV.toList.map(f => div.cssClass("p-datatable-footer")(toChild(f)))
 
         var root = div.cssClass("p-datatable").cssClass("p-component")
+        idV.foreach(v => root = root.id(v))
         // Prime: hoverable whenever a selection mode is set (checkbox included) or
         // rows react to clicks.
         if selectionModeV != SelectionMode.None || onRowClickF.isDefined then
