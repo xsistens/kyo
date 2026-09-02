@@ -253,6 +253,173 @@ object Apollo:
         }
     end fragmentSignal
 
+    /** Reactively read a LIST of masked refs — [[fragment]] for a collection, and
+      * the shape a table of masked rows actually has.
+      *
+      * `refOf` says which elements carry a ref, so a list that mixes masked entities
+      * with plain ones (a playlist of tracks and podcast episodes) stays ONE list:
+      * `Absent` elements pass through untouched, and `row` builds the view value from
+      * the element together with the data its ref opened. The result is a single
+      * signal, so nothing downstream has to zip a list of values back against the
+      * list it came from and get the glitch window wrong.
+      *
+      * ==Why this is not `Kyo.foreach(refs)(fragment)`==
+      *
+      * A per-ref [[fragment]] owns a store listener and a channel, and therefore a
+      * `Scope` that has to live exactly as long as that row does. Nothing outside a
+      * mount owns a lifetime per list element, so a growing list — one `fetchMore`
+      * appending a page — leaves a caller opening every row's watcher again on each
+      * append, or opening them inside a per-row `UI.mounted` and giving up on ever
+      * holding the rows as data.
+      *
+      * This reads the whole list through ONE listener instead. There is nothing per
+      * row to own: the dependent keys of every row are watched together, a change
+      * that touches none of them costs a set intersection, and one that touches some
+      * re-reads the list. Adding rows changes what is watched, not what is
+      * subscribed.
+      *
+      * Total in the same way [[fragment]] is: a row seeds from the entity record when
+      * the cache has it, from the last value it read when a later re-read misses (an
+      * eviction mid-life), and from the ref's own captured slice when it never had
+      * one. A cache-less client has no store to watch, so the values are the refs'
+      * slices and only the list moves.
+      */
+    private def fragmentList[Origin, D <: AnyNamedTuple, A, B](items: Signal[Seq[A]])(
+        refOf: A => Maybe[EntityFragment[Origin, D]#Ref]
+    )(row: (A, Maybe[D]) => B)(using
+        client: ApolloClient,
+        frame: Frame,
+        canEqualD: CanEqual[D, D],
+        canEqualB: CanEqual[B, B]
+    ): Signal[Seq[B]] < (Async & Scope) =
+        val maybeStore =
+            try Some(client.apolloStore)
+            catch case _: IllegalStateException => None
+
+        // One row: the store's value plus the keys it depended on, or None on a miss.
+        def read(ref: EntityFragment[Origin, D]#Ref): Option[(D, Set[String])] =
+            maybeStore.flatMap { store =>
+                try
+                    val (data, keys) = store.readFragmentWithKeys(ref.definition.cacheFragment, ref.key)
+                    Some((data, keys + ref.key.key))
+                catch case _: CacheMissException => None
+            }
+
+        // Pure, so it can run inside `AtomicRef.updateAndGet` (which may retry) and so
+        // the two drivers below cannot interleave a half-updated key set.
+        def project(as: Seq[A])(prev: Apollo.FragmentList[D, B]): Apollo.FragmentList[D, B] =
+            var keys  = Set.empty[String]
+            var known = prev.last
+            val rows = as.map { a =>
+                refOf(a) match
+                    case Absent => row(a, Absent)
+                    case Present(ref) =>
+                        val id = ref.key.key
+                        val d = read(ref) match
+                            case Some((data, ks)) =>
+                                keys = keys ++ ks
+                                known = known.updated(id, data)
+                                data
+                            case None =>
+                                keys = keys + id
+                                known.getOrElse(id, ref.decoded)
+                        row(a, Present(d))
+            }
+            // Values are remembered only for rows still in the list, so a list that
+            // scrolls forever does not accumulate the ones that left.
+            val live = as.flatMap(a => refOf(a).map(_.key.key)).toSet
+            Apollo.FragmentList(keys, known.view.filterKeys(live).toMap, rows)
+        end project
+
+        items.current.map { initial =>
+            AtomicRef.init(project(initial)(Apollo.FragmentList(Set.empty, Map.empty, Seq.empty[B]))).map { state =>
+                state.get.map { seeded =>
+                    Signal.initRef[Seq[B]](seeded.rows).map { out =>
+                        def reproject: Unit < Async =
+                            items.current.map(as => state.updateAndGet(project(as)).map(s => out.set(s.rows)))
+
+                        // The list driver. Seeded with `initial`, so the value already
+                        // projected above is not projected a second time.
+                        val follow = items.observe(Present(initial), Signal.defaultRepairInterval)(_ => reproject)
+
+                        maybeStore match
+                            case None => UI.fork(follow).andThen(out)
+                            case Some(store) =>
+                                Channel.initUnscoped[Set[String]](Int.MaxValue).map { channel =>
+                                    given AllowUnsafe = AllowUnsafe.embrace.danger
+                                    val unsubscribe = store.addChangedKeysListener { changed =>
+                                        val _ = channel.unsafe.offer(changed)
+                                    }
+                                    val consume = channel.streamUntilClosed().foreach { changed =>
+                                        state.get.map { s =>
+                                            if changed.exists(s.watched) then reproject
+                                            else Sync.defer(())
+                                        }
+                                    }
+                                    Scope
+                                        .ensure(Sync.defer {
+                                            unsubscribe()
+                                            val _ = channel.unsafe.close()
+                                        })
+                                        .andThen(UI.fork(consume))
+                                        .andThen(UI.fork(follow))
+                                        .andThen(out)
+                                }
+                        end match
+                    }
+                }
+            }
+        }
+    end fragmentList
+
+    /** [[fragments]] over a list whose elements are not bare refs — a list of table
+      * rows, where each row CARRIES a ref (or does not).
+      *
+      * `refOf` says which elements carry one, so a list that mixes masked entities
+      * with plain ones (a playlist of tracks and podcast episodes) stays ONE list and
+      * ONE signal: `row` builds a view value from an element and the data its ref
+      * opened, `plain` from an element that carries no ref. Two functions rather than
+      * one taking a `Maybe`, so neither of them has a case that cannot happen.
+      *
+      * A separate name and not an overload of [[fragments]]: an overload cannot be
+      * resolved before its function arguments are typed, and these two are exactly the
+      * arguments whose parameter types the caller wants inferred.
+      */
+    def fragmentRows[Origin, D <: AnyNamedTuple, A, B](items: Signal[Seq[A]])(
+        refOf: A => Maybe[EntityFragment[Origin, D]#Ref]
+    )(row: (A, D) => B, plain: A => B)(using
+        client: ApolloClient,
+        frame: Frame,
+        canEqualD: CanEqual[D, D],
+        canEqualB: CanEqual[B, B]
+    ): Signal[Seq[B]] < (Async & Scope) =
+        fragmentList(items)(refOf) { (a, d) =>
+            d match
+                case Present(v) => row(a, v)
+                case Absent     => plain(a)
+        }
+
+    /** [[fragmentRows]] over a list that is nothing but refs.
+      *
+      * The fragment comes first and the refs read their type off it
+      * (`fragments(TrackRow.fields)(refs)`). A `Signal` is invariant, so a
+      * `Signal[Seq[TrackRow.fields.Ref]]` does not on its own tell the compiler what
+      * `Origin` and `D` are the way a single `ref` argument does — naming the
+      * definition once is what makes the element type follow.
+      */
+    def fragments[Origin, D <: AnyNamedTuple](fragment: EntityFragment[Origin, D])(
+        refs: Signal[Seq[fragment.Ref]]
+    )(using
+        client: ApolloClient,
+        frame: Frame,
+        canEqualD: CanEqual[D, D]
+    ): Signal[Seq[D]] < (Async & Scope) =
+        // `refOf` answers `Present` for every element, so the core never reaches the
+        // Absent branch; there is no value of `D` to put there and none is needed.
+        fragmentList[Origin, D, fragment.Ref, D](refs)(Present(_)) { (_, d) =>
+            d.getOrElse(throw new NoSuchElementException("Apollo.fragments: a ref opened to nothing"))
+        }
+
     /** Read a masked embedded fragment's ref — the value-carrying counterpart of
       * the entity overload. The object has no cache identity, so there is nothing
       * to watch: the signal is constant, and updates arrive the way the value did —
@@ -565,5 +732,15 @@ object Apollo:
         configure: ApolloClient.Builder => ApolloClient.Builder
     )(using Frame): Layer[ApolloClient, Async & Scope & Abort[ApolloConfigException]] =
         Layer(client(configure))
+
+    /** What [[fragments]] carries between emissions: the union of the dependent keys of
+      * every row (so a change that touches none of them costs one set intersection), the
+      * last value read per row (so a re-read that misses keeps a working view instead of
+      * blanking it), and the projected rows themselves.
+      *
+      * One value in one `AtomicRef` and not three vars, because the list driver and the
+      * store driver are separate fibers and either may project.
+      */
+    final private case class FragmentList[D, B](watched: Set[String], last: Map[String, D], rows: Seq[B])
 
 end Apollo
