@@ -98,6 +98,27 @@ private[kyo] object DomBackend:
     // holds. Replacing the range is always correct and always loses all of it, so it stays the fallback rather than
     // the default. Twin of `__kyoMorphNode` and its neighbours in HtmlRenderer.clientJs; keep the two in lockstep.
 
+    /** Reconcile a live portal slot against the portal element the payload carries inline, and answer whether that
+      * is what this pair is.
+      *
+      * The pair matches when the incoming node is a portal element, the live node is the inert slot standing in for
+      * it at the same path, and the twin the first sweep parked under `<body>` is still there. The twin is then the
+      * node that gets reconciled; the slot stays exactly where it is. Anything else is not this case and reconciles
+      * the ordinary way.
+      */
+    private def morphPortalPair(from: dom.Node, to: dom.Node): Boolean =
+        (from.nodeType == dom.Node.ELEMENT_NODE && to.nodeType == dom.Node.ELEMENT_NODE) && {
+            val slot     = from.asInstanceOf[dom.Element]
+            val incoming = to.asInstanceOf[dom.Element]
+            val path     = incoming.getAttribute("data-kyo-path")
+            path != null &&
+            incoming.hasAttribute("data-kyo-portal") &&
+            slot.getAttribute("data-kyo-portal-slot") == path && {
+                val twin = portalTwin(path)
+                (twin != null) && { morphEl(twin, incoming); true }
+            }
+        }
+
     /** Whether `to` can be reconciled onto `from` in place, or has to replace it outright. */
     private def morphCompatible(from: dom.Node, to: dom.Node): Boolean =
         from.nodeType == to.nodeType && {
@@ -162,7 +183,66 @@ private[kyo] object DomBackend:
     end morphAttrs
 
     private def morphChildren(fromParent: dom.Element, toParent: dom.Element): Unit =
-        morphNodeRun(fromParent, fromParent.firstChild, null, toParent.firstChild)
+        morphNodeRun(fromParent, fromParent.firstChild, null, toParent.firstChild, null)
+
+    // ---- logical children ----------------------------------------------------------------------------------
+    //
+    // A nested range is opened and closed by comments that are siblings of its content, so to a naive sibling walk it
+    // looks like several unrelated children. It is one: the markers carry the identity the registry is keyed by, and
+    // pairing them up positionally would rewrite marker text and hand the registry a range that is no longer there.
+    // The morph therefore walks LOGICAL children, where an opening marker stands for its whole span.
+
+    /** The matching close marker for the span `open` starts, `Absent` when the run is unbalanced (the caller then
+      * treats the comment as an ordinary node). Ids are unique among siblings, so a direct match suffices.
+      */
+    private def spanClose(open: dom.Node, id: String): Maybe[dom.Node] =
+        var node   = open.nextSibling
+        var result = Maybe.empty[dom.Node]
+        while result.isEmpty && node != null do
+            if DomReactiveRegions.endMarkerId(node).contains(id) then result = Present(node)
+            node = node.nextSibling
+        end while
+        result
+    end spanClose
+
+    /** The reconciliation key of a logical child: an element's `data-kyo-path`, a span's range id, else `Absent` for
+      * text and plain comments, which reconcile positionally.
+      */
+    private def logicalKey(node: dom.Node): Maybe[String] =
+        if node.nodeType == dom.Node.ELEMENT_NODE then
+            Maybe(node.asInstanceOf[dom.Element].getAttribute("data-kyo-path"))
+        else DomReactiveRegions.startMarkerId(node).filter(id => spanClose(node, id).nonEmpty)
+
+    /** The next logical sibling: past the whole span for an opening marker, the next node otherwise. */
+    private def logicalNext(node: dom.Node): dom.Node =
+        val close: Maybe[dom.Node] = DomReactiveRegions.startMarkerId(node).flatMap(spanClose(node, _))
+        close match
+            case Present(marker) => marker.nextSibling
+            case Absent          => node.nextSibling
+    end logicalNext
+
+    /** Apply `f` to every node of the logical child starting at `first`, its markers included. */
+    private def eachSpanNode(first: dom.Node)(f: dom.Node => Unit): Unit =
+        val last = DomReactiveRegions.startMarkerId(first).flatMap(spanClose(first, _)).getOrElse(first)
+        var node = first
+        var stop = false
+        while !stop && node != null do
+            val next = node.nextSibling
+            stop = node eq last
+            f(node)
+            node = next
+        end while
+    end eachSpanNode
+
+    private def removeLogical(parent: dom.Element, node: dom.Node): Unit =
+        eachSpanNode(node)(current => discard(parent.removeChild(current)))
+
+    private def insertLogicalClone(parent: dom.Element, toNode: dom.Node, ref: dom.Node)(note: dom.Node => Unit): Unit =
+        eachSpanNode(toNode) { current =>
+            val fresh = document.importNode(current, true)
+            discard(parent.insertBefore(fresh, ref))
+            note(fresh)
+        }
 
     /** Reconcile the live sibling run of `parent` that starts at `fromStart` and stops before `fromEnd` (null meaning
       * the end of the parent) toward the run starting at `toStart`, which lives in a detached fragment.
@@ -171,41 +251,95 @@ private[kyo] object DomBackend:
       * Reordering a keyed list therefore costs more than it has to here, which is the two-ended keyed pass's job; what
       * matters at this level is that the nodes that did not move keep their identity.
       */
-    private def morphNodeRun(parent: dom.Element, fromStart: dom.Node, fromEnd: dom.Node, toStart: dom.Node): Unit =
+    private def morphNodeRun(
+        parent: dom.Element,
+        fromStart: dom.Node,
+        fromEnd: dom.Node,
+        toStart: dom.Node,
+        toEnd: dom.Node
+    ): Unit =
         var from     = fromStart
         var to       = toStart
         val inserted = scala.collection.mutable.ArrayBuffer.empty[dom.Element]
         def note(node: dom.Node): Unit = node match
             case element: dom.Element => inserted += element
             case _                    => ()
-        while to != null do
-            val nextTo = to.nextSibling
-            if from == null || (from eq fromEnd) then
-                val fresh = document.importNode(to, true)
-                discard(parent.insertBefore(fresh, fromEnd))
-                note(fresh)
+        while to != null && !(to eq toEnd) do
+            val nextTo = logicalNext(to)
+            if from != null && !(from eq fromEnd) && morphPortalPair(from, to) then
+                // A portal element does not live in the range: the first sweep moved it under `<body>` and left an
+                // inert slot behind. The payload still carries it inline, so reconcile the twin where it actually
+                // lives and step over the live slot. Re-inserting it here would hand `portalSweep` a second copy,
+                // which retires the twin and takes everything hanging off it along.
+                from = logicalNext(from)
+            else if from == null || (from eq fromEnd) then
+                insertLogicalClone(parent, to, fromEnd)(note)
             else
-                val nextFrom = from.nextSibling
-                if morphCompatible(from, to) then morphNode(from, to)
-                else
-                    val swap = document.importNode(to, true)
-                    discard(parent.replaceChild(swap, from))
-                    note(swap)
-                end if
+                val nextFrom = logicalNext(from)
+                patchLogical(parent, from, to)(note)
                 from = nextFrom
             end if
             to = nextTo
         end while
         // Whatever the target run does not reach is gone.
         while from != null && !(from eq fromEnd) do
-            val nextFrom = from.nextSibling
-            discard(parent.removeChild(from))
+            val nextFrom = logicalNext(from)
+            removeLogical(parent, from)
             from = nextFrom
         end while
         // SMIL animations only start on nodes this pass actually inserted; a reused one is already running, and
         // restarting it every paint would snap a chart transition back to its beginning.
         inserted.foreach(beginAnimationsSync)
     end morphNodeRun
+
+    private def hasFlag(flags: String, flag: String): Boolean =
+        flags.nonEmpty && flags.split(' ').exists(_ == flag)
+
+    private def flagKey(flags: String): Maybe[String] =
+        if flags.isEmpty then Absent
+        else Maybe.fromOption(flags.split(' ').find(_.startsWith("k=")).map(_.substring(2)))
+
+    /** The flag section a live marker carries once it has adopted the slot: `m`, and the key it adopted. */
+    private def adoptedFlags(key: Maybe[String]): String =
+        key match
+            case Present(value) => s" m k=$value"
+            case Absent         => " m"
+
+    /** Reconcile one matched pair of logical children.
+      *
+      * Two spans of the same id are the same region still sitting here, so the pass recurses into their contents and
+      * never touches the live markers: the registry stays keyed by the nodes it already holds. Any other mismatch,
+      * including a span against a plain node, is replaced whole, markers and all.
+      */
+    private def patchLogical(parent: dom.Element, fromNode: dom.Node, toNode: dom.Node)(note: dom.Node => Unit): Unit =
+        val fromSpan = DomReactiveRegions.startMarkerId(fromNode).flatMap(id => spanClose(fromNode, id).map((id, _)))
+        val toSpan   = DomReactiveRegions.startMarkerId(toNode).flatMap(id => spanClose(toNode, id).map((id, _)))
+        (fromSpan, toSpan) match
+            case (Present((fromId, fromClose)), Present((toId, toClose))) if fromId == toId =>
+                val liveFlags     = DomReactiveRegions.markerFlags(fromNode)
+                val incomingFlags = DomReactiveRegions.markerFlags(toNode)
+                val incomingSlot  = hasFlag(incomingFlags, "s")
+                // A mount that already owns this slot repaints its own content, so the span is opaque and its live
+                // marker is left alone: reconciling it against the placeholder the parent rendered would morph the
+                // instance's subtree away, and with it focus, caret and every DOM-local thing hanging off it. The key
+                // is what makes that safe. A differing key means a different instance, which falls through to the
+                // morph and resets the slot exactly as it did before flags existed. The live marker adopts the
+                // incoming key on the way out, which also covers boot: a full-page render stamps no `m`, so the first
+                // re-render after it morphs once and every one after that skips.
+                if hasFlag(liveFlags, "m") && incomingSlot && flagKey(liveFlags) == flagKey(incomingFlags) then ()
+                else
+                    morphNodeRun(parent, fromNode.nextSibling, fromClose, toNode.nextSibling, toClose)
+                    if incomingSlot then
+                        fromNode.asInstanceOf[dom.Comment].data =
+                            DomReactiveRegions.openMarkerData(fromId, adoptedFlags(flagKey(incomingFlags)))
+                end if
+            case (Absent, Absent) if morphCompatible(fromNode, toNode) =>
+                morphNode(fromNode, toNode)
+            case _ =>
+                insertLogicalClone(parent, toNode, fromNode)(note)
+                removeLogical(parent, fromNode)
+        end match
+    end patchLogical
 
     /** Mount a UI into the page body. */
     def mount(ui: UI)(using Frame): Unit < (Async & Scope) =
@@ -619,45 +753,19 @@ private[kyo] object DomBackend:
 
         /** Reconcile the region's live nodes toward the incoming payload instead of replacing them.
           *
-          * Declined in two shapes this pass does not maintain, both of which fall back to the wholesale replacement
-          * that always works: a payload declaring nested ranges of its own, and a live range that still holds one.
-          * Either would leave the range registry describing markers the morph moved or dropped, and a registry that
-          * disagrees with the DOM is worse than a lost node identity. Lifting that restriction is the logical-node
-          * pass; until then a region containing another region repaints exactly as it did before.
+          * Nested ranges are reconciled as logical children, so a region containing another region morphs like any
+          * other; `replaceWith` re-reads the live markers afterwards and hands the registry what is actually there.
           */
         private def tryMorphRange(target: DomReactiveRegions.MorphTarget): Boolean =
-            if !target.incomingRangesEmpty || liveHoldsNestedRange(target) then false
-            else
-                morphNodeRun(
-                    target.parent.asInstanceOf[dom.Element],
-                    target.start.nextSibling,
-                    target.end,
-                    target.fragment.firstChild
-                )
-                true
+            morphNodeRun(
+                target.parent.asInstanceOf[dom.Element],
+                target.start.nextSibling,
+                target.end,
+                target.fragment.firstChild,
+                null
+            )
+            true
         end tryMorphRange
-
-        private def liveHoldsNestedRange(target: DomReactiveRegions.MorphTarget): Boolean =
-            var node  = target.start.nextSibling
-            var found = false
-            while !found && node != null && !(node eq target.end) do
-                found = DomReactiveRegions.isRangeMarker(node) ||
-                    (node.nodeType == dom.Node.ELEMENT_NODE && holdsRangeMarker(node.asInstanceOf[dom.Element]))
-                node = node.nextSibling
-            end while
-            found
-        end liveHoldsNestedRange
-
-        private def holdsRangeMarker(element: dom.Element): Boolean =
-            val walker = document.createTreeWalker(element, dom.NodeFilter.SHOW_COMMENT, null, false)
-            var found  = false
-            var next   = walker.nextNode()
-            while !found && next != null do
-                found = DomReactiveRegions.isRangeMarker(next)
-                next = walker.nextNode()
-            end while
-            found
-        end holdsRangeMarker
 
         private def prepareRangePatch(oldElements: Seq[dom.Element], newElements: Seq[dom.Element]): RangePatchState =
             val active = Maybe(document.activeElement).filter(el => (el ne document.body) && containsAny(oldElements, el))

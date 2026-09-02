@@ -138,8 +138,11 @@ final private[kyo] class DomReactiveRegions private (
                 ranges.addAll(incoming)
                 after(state, insertedRoots, false)
             else
-                // The morph declines a payload that declares ranges, so there is nothing to register; the roots it
-                // reconciled are read back off the live range rather than off the fragment it consumed.
+                // The morph reconciles nested ranges in place, so which markers ended up in the range is a property
+                // of the DOM rather than of the payload: `incoming` describes comments that were cloned or dropped,
+                // never the live ones. Reading the range back is the only account that cannot drift.
+                removed.foreach(ranges.remove)
+                ranges.addAll(rescanRange(regionId, endpoints))
                 after(state, elementsBetween(endpoints), true)
             end if
         }
@@ -212,8 +215,49 @@ final private[kyo] class DomReactiveRegions private (
     private def ensureOpen()(using Frame): Unit =
         if !open then fail("Reactive range registry is closed")
 
+    /** The ranges the live content of `regionId` holds right now, read off the DOM.
+      *
+      * The morph keeps the markers of a range that survived and clones or drops the rest, so the registry cannot be
+      * updated from the payload the way the wholesale path does it. Walking what is actually between the anchors is
+      * both simpler and the only version that stays true when the two disagree.
+      */
+    private def rescanRange(regionId: String, endpoints: DomReactiveRegions.Endpoints)(using
+        Frame
+    ): mutable.HashMap[String, DomReactiveRegions.Endpoints] =
+        val found = mutable.HashMap.empty[String, DomReactiveRegions.Endpoints]
+        val open  = mutable.ArrayBuffer.empty[(String, dom.Comment)]
+        def visit(node: dom.Node): Unit =
+            DomReactiveRegions.startMarkerId(node) match
+                case Present(id) => open += ((id, node.asInstanceOf[dom.Comment]))
+                case Absent =>
+                    DomReactiveRegions.endMarkerId(node).foreach { id =>
+                        if open.isEmpty || open.last._1 != id then
+                            fail(s"Crossed reactive ranges after morphing $regionId: found $id")
+                        val (_, start) = open.remove(open.length - 1)
+                        found.update(id, DomReactiveRegions.Endpoints(start, node.asInstanceOf[dom.Comment]))
+                    }
+            end match
+            var child = DomReactiveRegions.firstChild(node)
+            while child.nonEmpty do
+                val next = DomReactiveRegions.next(child.get)
+                visit(child.get)
+                child = next
+            end while
+        end visit
+        var node = DomReactiveRegions.next(endpoints.start)
+        while node.nonEmpty && !(node.get eq endpoints.end) do
+            val next = DomReactiveRegions.next(node.get)
+            visit(node.get)
+            node = next
+        end while
+        if open.nonEmpty then fail(s"Reactive range start marker has no end after morphing $regionId: ${open.last._1}")
+        found
+    end rescanRange
+
     private def validatedParent(regionId: String, endpoints: DomReactiveRegions.Endpoints)(using Frame): dom.Node =
-        if endpoints.start.data != s"${DomReactiveRegions.StartPrefix}$regionId" ||
+        // The opening marker may carry a flag section after its id (a mount slot, and the `m` the client stamps on
+        // once it adopts one), so the id is compared rather than the whole payload.
+        if !DomReactiveRegions.startMarkerId(endpoints.start).contains(regionId) ||
             endpoints.end.data != s"${DomReactiveRegions.EndPrefix}$regionId"
         then fail(s"Reactive range markers are corrupted: $regionId")
         (DomReactiveRegions.parent(endpoints.start), DomReactiveRegions.parent(endpoints.end)) match
@@ -338,7 +382,7 @@ private[kyo] object DomReactiveRegions:
             val comment = next.get
             val value   = comment.data
             if value.startsWith(StartPrefix) then
-                val id = value.substring(StartPrefix.length)
+                val id = ReactiveRegion.markerIdOf(value.substring(StartPrefix.length))
                 if !ReactiveRegion.isValidHtmlId(id) then fail(s"Malformed reactive range id: $id")
                 if seen.contains(id) then fail(s"Duplicate reactive range id: $id")
                 seen += id
@@ -362,16 +406,38 @@ private[kyo] object DomReactiveRegions:
         found
     end scan
 
-    /** Whether `node` is one of the comments that delimit a reactive range.
-      *
-      * A morph that does not maintain the range registry has to recognize a nested range to decline it, and the
-      * prefixes that spell one live here.
-      */
+    /** Whether `node` is one of the comments that delimit a reactive range. */
     private[kyo] def isRangeMarker(node: dom.Node): Boolean =
-        node.nodeType == dom.Node.COMMENT_NODE && {
+        startMarkerId(node).nonEmpty || endMarkerId(node).nonEmpty
+
+    /** The range id `node` opens, `Absent` when it is not an opening marker.
+      *
+      * A morph walks the range as LOGICAL children, where a nested range and everything between its markers is one
+      * child; recognizing the two ends is what makes that possible, so the prefixes are read here rather than spelled
+      * again at every caller.
+      */
+    private[kyo] def startMarkerId(node: dom.Node): Maybe[String] = markerId(node, StartPrefix)
+
+    /** The range id `node` closes, `Absent` when it is not a closing marker. */
+    private[kyo] def endMarkerId(node: dom.Node): Maybe[String] = markerId(node, EndPrefix)
+
+    private def markerId(node: dom.Node, prefix: String): Maybe[String] =
+        if node.nodeType != dom.Node.COMMENT_NODE then Absent
+        else
             val data = node.asInstanceOf[dom.Comment].data
-            data.startsWith(StartPrefix) || data.startsWith(EndPrefix)
-        }
+            if data.startsWith(prefix) then Present(ReactiveRegion.markerIdOf(data.substring(prefix.length)))
+            else Absent
+
+    /** The payload of an opening marker for `id` carrying `flags` (which already includes its leading space). */
+    private[kyo] def openMarkerData(id: String, flags: String): String = s"$StartPrefix$id$flags"
+
+    /** The flag section of an opening marker (`m`, `s`, `k=`), `""` when it carries none. */
+    private[kyo] def markerFlags(node: dom.Node): String =
+        if node.nodeType != dom.Node.COMMENT_NODE then ""
+        else
+            val data  = node.asInstanceOf[dom.Comment].data
+            val space = data.indexOf(' ')
+            if space < 0 then "" else data.substring(space + 1)
 
     private def nextComment(walker: dom.TreeWalker): Maybe[dom.Comment] =
         val node = walker.nextNode()

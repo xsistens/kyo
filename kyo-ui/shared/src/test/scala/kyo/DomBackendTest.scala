@@ -350,6 +350,81 @@ class DomBackendTest extends UITest:
         }
     }
 
+    "an adopted keyed mount keeps its live DOM across a parent re-render" in {
+        // The `m`+`k` marker contract. A keyed mount survives its enclosing region's re-render as an
+        // INSTANCE (the effect does not re-run), but until the region claimed `m`, the parent's paint
+        // projected the mount to its placeholder and morphed the live subtree away, so every node below
+        // it was recreated. Focus, caret, scroll and in-place bindings all died with it. Pinned here by
+        // node identity: the expando survives only if the parent left the span alone.
+        val app: UI < Async =
+            for tick <- Signal.initRef[Int](0)
+            yield UI.div(
+                UI.button("tick").id("ktick").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map(t =>
+                    UI.div(
+                        UI.span(s"t:$t").id("ktxt"),
+                        UI.mounted(Kyo.lift[UI, Async](UI.div("live").id("kinner")))
+                            .keyed("stable")
+                            .placeholder(UI.span("..."))
+                    )
+                )
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("kinner"), "live")
+                // First re-render: a server-rendered page carries no `k` (client-only flag, golden HTML
+                // stays byte-identical), so this pass falls through the guard and ADOPTS the key. The
+                // SPA transport boots with the flags already stamped and is opaque from the start.
+                _      <- Browser.click(Selector.id("ktick"))
+                _      <- Browser.assertText(Selector.id("ktxt"), "t:1")
+                _      <- Browser.evalDiscard("document.getElementById('kinner').__kyoMark = 7;")
+                before <- Browser.evalJson[Int]("document.getElementById('kinner').__kyoMark || 0")
+                // Steady state: the live marker names the same mount the incoming slot does, so the parent
+                // leaves the span alone entirely.
+                _     <- Browser.click(Selector.id("ktick"))
+                _     <- Browser.assertText(Selector.id("ktxt"), "t:2")
+                _     <- Browser.assertText(Selector.id("kinner"), "live")
+                after <- Browser.evalJson[Int]("document.getElementById('kinner').__kyoMark || 0")
+            yield
+                assert(before == 7)
+                assert(after == 7)
+        }
+    }
+
+    "a keyless mount republish does not ghost leave-marked content (enclosing region repaint)" in {
+        val app: UI < Async =
+            for tick <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("gtick").id("gtick").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map { t =>
+                    UI.div(
+                        UI.span(s"t:$t").id("gtxt"),
+                        UI.mounted {
+                            Signal.initRef(0).map(_ =>
+                                // Effect shape is fragment(marker, panel), so the panel's path differs from
+                                // the placeholder's and the survivor set cannot match it.
+                                UI.fragment(
+                                    UI.span("m").id("gmark"),
+                                    UI.div("panel").id("glpanel").leaveTransition("ghost-probe-leave")
+                                ): UI
+                            )
+                        }.placeholder(UI.div("panel").id("glpanel").leaveTransition("ghost-probe-leave"))
+                    ): UI
+                }
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("glpanel"), "panel")
+                _ <- Browser.evalDiscard(ghostCounterJs)
+                _ <- Browser.click(Selector.id("gtick"))
+                // The enclosing region repainted, which republished the mount.
+                _ <- Browser.assertText(Selector.id("gtxt"), "t:1")
+                _ <- Browser.assertText(Selector.id("glpanel"), "panel")
+                g <- Browser.evalJson[Int]("window.__kyoGhostCount")
+            yield assert(g == 0)
+        }
+    }
+
     "declarative reactive attribute patches a const element in place (no re-render), survives a sibling morph" in {
         val app: UI < Async =
             for
@@ -732,6 +807,35 @@ class DomBackendTest extends UITest:
                 _      <- Browser.press(Selector.id("kin"), Key.Enter)
                 _      <- Browser.assertText(Selector.id("khits"), "k:1")
             yield assert(atBody)
+        }
+    }
+
+    "a region re-render reconciles the body twin in place through the placeholder (no inline duplicate)" in {
+        val app: UI < Async =
+            for tick <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("tick").id("ptick").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map(t => UI.div.id("ppanel").portal(true)(UI.span(s"n:$t").id("ptxt")): UI)
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("ptxt"), "n:0")
+                // Stamp an expando on the live twin: it survives ONLY if the morph patches the same node in place
+                // (an inline re-materialization or a replace would produce a fresh node without it).
+                _ <- Browser.evalDiscard("document.getElementById('ppanel').__probe=1")
+                _ <- Browser.click(Selector.id("ptick"))
+                _ <- Browser.assertText(Selector.id("ptxt"), "n:1")
+                ok <- Browser.evalBoolean(
+                    """(function(){
+                      |  var el=document.getElementById('ppanel');
+                      |  if(!el)return false;
+                      |  var p=el.getAttribute('data-kyo-path');
+                      |  return el.parentElement===document.body
+                      |    && el.__probe===1
+                      |    && document.querySelectorAll('[data-kyo-path="'+p+'"]').length===1;
+                      |})()""".stripMargin
+                )
+            yield assert(ok)
         }
     }
 
