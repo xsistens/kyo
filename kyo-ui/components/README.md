@@ -344,6 +344,42 @@ val themed: UI =
 
 The Aura base token set is re-declared on every theme and scheme scope, not only on `:root`. Component tokens are `var()` chains, and CSS substitutes a `var()` at the element that declares the property, so a `data-scheme="dark"` scope below `<html>` only re-derives those chains if the base set is declared on the scope element too.
 
+### Your own preset
+
+A shipped preset is a block of token values keyed by `data-theme`, and a fifth one is the same thing with your palette in it. `Theme.preset` emits it in that shape:
+
+```scala
+val spotify: Stylesheet = uic.Theme.preset(
+    "spotify",
+    Seq(
+        "p-primary-400" -> "#1ed760",
+        "p-primary-500" -> "#1db954",
+        "p-surface-900" -> "#121212",
+        "p-surface-950" -> "#000000"
+    )
+)
+
+val sheet: String = uic.Theme.css + "\n" + spotify.render
+```
+
+Token names carry no leading `--`, the way `generated.Tokens` stores them and `Stylesheet.scopedVars` renders them. The result is a `Stylesheet`, so it composes with `++` and can be injected live with `UI.runStylesheet` instead of rendered into a `<style>`. Emit it **after** `Theme.css`: at equal specificity the later declaration wins.
+
+Two mechanics decide whether your values actually land, and both are about *where*:
+
+- **Re-pointing the ramps is enough, because everything else is a `var()` chain.** `--p-content-background` is `var(--p-surface-900)`, the primary button reads from the primary ramp, and so on down the graph — so you do not have to name the semantic tokens. But that only works because your block matches the same element the library's own blocks do, since CSS substitutes a `var()` at the element that *declares* the property. The ramps meant as a brand surface are `p-primary-*` (50…950) and `p-surface-*` (0…950).
+- **The `data-theme` and `data-scheme` attributes must sit on the element your tokens are declared against.** Stamping them on a shell `div` works. Declaring your own tokens on `:root` while theming a `div` does not: the base set is re-declared on that `div`, and a `:root` declaration never reaches it.
+
+`preset` always emits a second, paired block on `[data-theme="spotify"][data-scheme="dark"]` carrying your light tokens plus whatever you pass as `dark`. `dark` is a delta, so name only what actually differs in the dark scheme.
+
+Two things that block buys. It is the only place a preset can hold values that differ by scheme at all. And at (0,2,0) it out-specifies the library's own `[data-scheme="dark"]` block (0,1,0), so your preset lands whatever order the sheets end up in — which matters because the library's dark set really does declare tokens a brand re-points (the whole `p-surface-*` ramp, `--p-content-background`, `--p-text-color`; the `p-primary-*` ramp it leaves alone). Emitted after `Theme.css` as above, your plain block already wins on source order at equal specificity; the paired block is what makes the order stop mattering.
+
+To start from a shipped palette rather than from nothing, `Theme.tokens` hands you the set as it EFFECTIVELY resolves for a preset and scheme — the same blocks the sheet emits, folded in the same order:
+
+```scala
+val derived = uic.Theme.tokens(uic.Theme.Preset.Aura, uic.Theme.Scheme.Dark) ++
+    Seq("p-primary-400" -> "#1ed760")
+```
+
 ### The one class you can still stamp yourself
 
 Floating panels position against the nearest positioned ancestor, so a panel's anchor element must be `position: relative`. The sheet provides `p-uic-overlay-anchor` for exactly that, and the failure when it is missing is silent and visual: the panel positions against some far-away ancestor.
