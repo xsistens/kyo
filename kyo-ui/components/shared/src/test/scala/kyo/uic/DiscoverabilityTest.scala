@@ -69,6 +69,24 @@ class DiscoverabilityTest extends UicTest:
         typeCheck(preamble + """def x(s: Signal[String]): uic.Input = uic.Input().placeholder(s).disabled(true)""")
     }
 
+    "the tab selection is ONE setter over the whole union, not a SignalRef demand" in {
+        // A SignalRef in a slot is a CAPABILITY demand: it asks every caller for write
+        // access so the callers that want write-back can have it. Reading needs none —
+        // `Signal.render` serves all three — so the union is the strictly weaker ask.
+        typeCheck(preamble + """def x(r: SignalRef[String]): uic.Tabs = uic.Tabs().selected(r)""")
+        typeCheck(preamble + """def x(s: Signal[String]): uic.Tabs = uic.Tabs().selected(s)""")
+        typeCheck(preamble + """def x: uic.Tabs = uic.Tabs().selected("overview")""")
+        // The shape a route-driven strip actually has: a derived signal, which is a
+        // Signal and by construction not a SignalRef.
+        typeCheck(
+            preamble + """def x(r: SignalRef[Int]): uic.Tabs = uic.Tabs().selected(r.map(_.toString))"""
+        )
+        // And it still chains, so the slot did not cost the concrete return type.
+        typeCheck(
+            preamble + """def x(s: Signal[String]): uic.Tabs = uic.Tabs().selected(s).onTabSelect(_ => ())"""
+        )
+    }
+
     "Card title/subtitle take a reactive Signal[String] alongside the constant String" in {
         typeCheck(preamble + """def x(s: Signal[String]): uic.Card = uic.Card().title(s).subtitle(s)""")
         typeCheck(preamble + """def x: uic.Card = uic.Card().title("Players").subtitle("2 joined")""")

@@ -54,6 +54,17 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
 - **`invalidMessage` is the one deliberate exception.** Its two forms carry different element
   types (`String` always shown vs `Signal[Maybe[String]]` that can clear the row), so
   `String | Signal[Maybe[String]]` would be a heterogeneous union, not this pattern.
+- **The DISPLAY slots follow this; the SELECTION slots do not yet.** `Tabs.selected` was the
+  first converted. Still outstanding: `Select`/`MultiSelect`/`Listbox`/`TreeSelect`/
+  `CascadeSelect`/`SelectButton` take `SignalRef` and nothing else, and
+  `CheckBox`/`RadioButton`/`ToggleSwitch`/`ToggleButton`/`Input`/`AutoComplete` carry the
+  constant/`SignalRef` overload pair through two private ADTs (`CheckBox.Checked`,
+  `Input.Value`) that duplicate `ReactiveValue` without its one-way case.
+- **A `SignalRef` in a slot is a CAPABILITY demand, not a data hand-over.** It asks every
+  caller for write access so that the callers who want write-back can have it. Reading needs
+  none — `Signal.render` serves `Const`, `Dyn` and `ReactiveVariable` alike — so check which
+  half of the slot actually needs the ref before writing the signature. In `Tabs` only the
+  click path did; the union made the ask strictly weaker without changing the two-way case.
 
 ## Shared slots live in traits, not in every component
 

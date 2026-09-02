@@ -42,18 +42,19 @@ end Tab
   * with JS measuring; here it sits inside the active tab and spans it via a
   * remainder rule, which is visually identical without a measuring runtime.
   *
-  * The active tab binds two-way to a `SignalRef[String]` holding the tab id: the
-  * panel re-renders reactively so it always shows the selected tab, and clicking
-  * a tab writes its id back before firing `onTabSelect`. With no ref bound, the
-  * first tab is shown. Tabs are real `<button>`s, so keyboard activation
-  * (Enter/Space) is native; the tablist is ONE tab stop and the arrows move between
-  * headers inside it, which is the ARIA tablist pattern and the only thing that makes
-  * an inactive header reachable at all once the roving tabindex has taken it out of the
-  * Tab order.
+  * The active tab is one `selected` slot taking `String | Signal[String]`, so the
+  * selection may live anywhere: a constant, a signal DERIVED from something else
+  * (a route, a normalized cache record, a parent), or a writable `SignalRef` for
+  * the two-way case. Only the last writes back — see [[Tabs.selected]]. With
+  * nothing bound, the first tab is shown. Tabs are real `<button>`s, so keyboard
+  * activation (Enter/Space) is native; the tablist is ONE tab stop and the arrows
+  * move between headers inside it, which is the ARIA tablist pattern and the only
+  * thing that makes an inactive header reachable at all once the roving tabindex
+  * has taken it out of the Tab order.
   */
 final case class Tabs private (
     tabList: List[Tab] = Nil,
-    selectedRef: Maybe[SignalRef[String]] = Absent,
+    selectedBinding: Maybe[ReactiveValue[String]] = Absent,
     onTabSelectF: Maybe[String => Any < Async] = Absent
 ) extends Node:
     type Self = Tabs
@@ -65,8 +66,22 @@ final case class Tabs private (
     def tab(text: String | Signal[String], id: String)(content: UI*)(using Frame): Tabs =
         copy(tabList = tabList :+ new Tab(ReactiveValue(text), fragment(content*), id, Absent, Absent, false))
 
-    /** Binds the active tab two-way to `ref` (holds the active tab id). */
-    def selected(ref: SignalRef[String]): Tabs = copy(selectedRef = Present(ref))
+    /** The active tab's id. A `SignalRef` binds two way — clicking a tab writes its
+      * id back before firing `onTabSelect`, which is the self-contained panel
+      * switcher. Any other `Signal` binds ONE way: the strip renders what the signal
+      * says and fires `onTabSelect`, and never writes, which is what a selection
+      * owned elsewhere needs — a route is a `map` over the location and has no ref
+      * to write into. A plain `String` is the same contract without a stream.
+      *
+      * Reading needs no ref at all (`Signal.render` serves every case); only the
+      * write-back does. Demanding a `SignalRef` from every caller to serve the
+      * callers that want write-back is the capability this slot used to require and
+      * no longer does.
+      *
+      * The two-way choice is made on the RUNTIME class, so ascribing a ref as
+      * `Signal[String]` does not opt out; pass `ref.readOnly` for that.
+      */
+    def selected(v: String | Signal[String]): Tabs = copy(selectedBinding = Present(ReactiveValue(v)))
 
     def onTabSelect(f: String => Any < Async): Tabs = copy(onTabSelectF = Present(f))
 
@@ -84,15 +99,28 @@ final case class Tabs private (
       * reachable by clicking. The wiring arrives with the mount.
       */
     private def renderTabs(nav: Maybe[(UI.Commands, List[String])])(using Frame): UI =
-        selectedRef match
-            case Present(ref) => ref.render(active => body(active, nav))
-            case Absent       => body(tabList.headOption.map(_.id).getOrElse(""), nav)
+        withActive(active => body(active, nav))
 
     /** The seam the golden tests render, since a mount shows only its placeholder there. */
     private[uic] def wired(ids: List[String], focus: String => Any < Async)(using Frame): UI =
-        selectedRef match
-            case Present(ref) => ref.render(active => bodyWith(active, ids, focus))
-            case Absent       => bodyWith(tabList.headOption.map(_.id).getOrElse(""), ids, focus)
+        withActive(active => bodyWith(active, ids, focus))
+
+    /** Builds `f` against the active tab id, however the selection is bound.
+      *
+      * `Dyn` before `Const` and no `ReactiveVariable` case: a two-way binding IS-A
+      * `Dyn`, and reading it is identical to reading a one-way signal. The ref is
+      * only needed to WRITE, which happens in [[select]].
+      */
+    private def withActive(f: String => UI)(using Frame): UI =
+        selectedBinding match
+            case Present(ReactiveValue.Dyn(sig)) => sig.render(f)
+            case Present(ReactiveValue.Const(v)) => f(v)
+            case Absent                          => f(tabList.headOption.map(_.id).getOrElse(""))
+
+    /** The ref to write back to — `Absent` unless the binding is two-way. */
+    private def selectedRef: Maybe[SignalRef[String]] = selectedBinding match
+        case Present(ReactiveVariable(ref)) => Present(ref)
+        case _                              => Absent
 
     private def body(active: String, nav: Maybe[(UI.Commands, List[String])])(using Frame): UI =
         nav match
@@ -168,7 +196,9 @@ final case class Tabs private (
         div.cssClass("p-tabs").cssClass("p-component")(toChild(tablist), toChild(panels))
     end bodyWith
 
-    /** Selecting a tab writes its id into the bound ref (if any), then fires `onTabSelect`. */
+    /** Selecting a tab writes its id into the bound ref (only a two-way binding has
+      * one), then fires `onTabSelect`.
+      */
     private def select(id: String)(using Frame): Any < Async =
         val setActive: Any < Async = selectedRef match
             case Present(ref) => ref.set(id)

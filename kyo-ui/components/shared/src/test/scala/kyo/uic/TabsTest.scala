@@ -68,6 +68,63 @@ class TabsTest extends UicTest:
         yield assert(enter == Absent && space == Absent)
     }
 
+    // ── the selection slot: one setter, three bindings ───────────────────────────
+
+    /** The id the strip marks active, read off the rendered headers. */
+    private def activeId(ui: UI)(using Frame): Maybe[Int] < Sync =
+        elementsWithClass(ui, "p-tab").map { hs =>
+            Maybe.fromOption(hs.indexWhere(_.attrs.cssClasses.contains("p-tab-active")) match
+                case -1 => None
+                case i  => Some(i))
+        }
+
+    "a constant selection names the active tab" in {
+        for
+            ui <- Kyo.lift(strip.selected("three").render)
+            at <- activeId(ui)
+            none = strip.render
+            head <- activeId(none)
+        yield assert(at == Present(2) && head == Present(0), "and with nothing bound the first tab is active")
+    }
+
+    "a derived signal binds ONE way: the strip follows it and never writes back" in {
+        // `map` is what a route-shaped selection looks like — a Signal that is not a
+        // SignalRef, so there is nothing to write into even in principle. Before this
+        // slot took a union it could not be handed over at all.
+        for
+            src <- Signal.initRef(2)
+            derived = src.map(i => List("one", "two", "three")(i))
+            ui      = strip.selected(derived).render
+            before <- activeId(ui)
+            _      <- src.set(0)
+            after  <- activeId(ui)
+        yield assert(before == Present(2) && after == Present(0))
+    }
+
+    "clicking a one-way tab fires onTabSelect and changes nothing" in {
+        for
+            src   <- Signal.initRef("three")
+            fired <- Signal.initRef(Absent: Maybe[String])
+            // `.readOnly` is the documented opt-out from two-way binding, and the
+            // runtime class is what the dispatch reads — so this stays one-way.
+            ui = strip.selected(src.readOnly).onTabSelect(id => fired.set(Present(id))).render
+            headers <- elementsWithClass(ui, "p-tab")
+            _       <- click(headers(0))
+            held    <- src.get
+            saw     <- fired.get
+        yield assert(held == "three" && saw == Present("one"), "the source of truth is untouched")
+    }
+
+    "a writable ref still binds two way" in {
+        for
+            ref <- Signal.initRef("three")
+            ui = strip.selected(ref).render
+            headers <- elementsWithClass(ui, "p-tab")
+            _       <- click(headers(0))
+            held    <- ref.get
+        yield assert(held == "one")
+    }
+
     "only the active header is in the Tab order, and a disabled one is in neither" in {
         for
             active  <- Signal.initRef("three")
