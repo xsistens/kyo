@@ -83,8 +83,8 @@ final case class MultiSelect[A] private (
 ) extends Node, MultiSelectFormControl, HasEmptyContent, HasTooltip, HasPlaceholder, HasAccessibleNameRef:
     type Self = MultiSelect[A]
 
-    /** Native `id` on the trigger — pair with `Label.forId` / `FloatLabel.forId`. */
-    def id(v: String): MultiSelect[A] = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): MultiSelect[A] = copy(idV = v)
 
     /** Appends typed options with their text projection. */
     def options(is: Seq[A])(label: A => String): MultiSelect[A] =

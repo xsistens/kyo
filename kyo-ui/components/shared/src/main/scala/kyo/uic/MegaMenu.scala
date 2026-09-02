@@ -72,7 +72,9 @@ end MegaMenuItem
   * a panel ArrowUp/Down move within a column (wrapping), ArrowLeft/Right move
   * between columns (row index clamped), Home/End jump, Enter/Space activate, and
   * Escape closes the panel back to the bar. The panel does NOT seed focus (the
-  * root list keeps the keys); `id(...)` wires `aria-activedescendant`.
+  * root list keeps the keys); `id(...)` wires `aria-activedescendant`, exposing
+  * the focused row as `s"$id-active"`. Keyboard navigation works without an id,
+  * only the ARIA hook is omitted.
   *
   * Honest deferrals: no mobile/hamburger mode; typeahead is not implemented.
   */
@@ -82,7 +84,7 @@ final case class MegaMenu private (
     startV: Maybe[UI] = Absent,
     endV: Maybe[UI] = Absent,
     idV: Maybe[String] = Absent
-) extends Node:
+) extends Node, HasElementId:
     type Self = MegaMenu
 
     /** Appends root items ([[MegaMenuItem]]). */
@@ -97,10 +99,8 @@ final case class MegaMenu private (
     /** Content after the root list (`div.p-megamenu-end`). */
     def end(ui: UI): MegaMenu = copy(endV = Present(ui))
 
-    /** Base id for the bar — enables `aria-activedescendant` (the focused row is
-      * exposed as `s"$id-active"`). Keyboard navigation works without it.
-      */
-    def id(v: String): MegaMenu = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): MegaMenu = copy(idV = v)
 
     /** Root indices that open a panel (one open/closed ref each). */
     private[uic] def panelPaths: List[List[Int]] =

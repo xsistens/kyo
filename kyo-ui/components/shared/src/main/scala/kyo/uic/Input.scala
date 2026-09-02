@@ -56,8 +56,8 @@ final case class Input private (
       */
     private[uic] def extraClass(cls: String): Input = copy(extraClassesV = extraClassesV :+ cls)
 
-    /** Native element `id` — pair with `Label.forId` / `FloatLabel.forId`. */
-    def id(v: String): Input = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): Input = copy(idV = v)
 
     /** Seeds focus onto this field when a re-render inserts it into the DOM for the first
       * time, kyo-ui's `focusAuto`. A field that appears in place of something else, a cell

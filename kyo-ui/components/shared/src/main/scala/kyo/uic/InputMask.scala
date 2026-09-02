@@ -53,8 +53,8 @@ final case class InputMask private (
 
     private[uic] def withPlaceholder(v: Maybe[TextValue]): InputMask = copy(placeholderText = v)
 
-    /** Native element `id` — pair with `Label.forId`. */
-    def id(v: String): InputMask = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): InputMask = copy(idV = v)
 
     /** Disables the field. A `Signal[Boolean]` toggles it IN PLACE via kyo-ui's boolean attribute channel
       * (no re-render).

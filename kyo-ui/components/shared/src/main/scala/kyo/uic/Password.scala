@@ -117,8 +117,8 @@ final case class Password private (
 
     private[uic] def withAccessibleName(v: Maybe[TextValue]): Password = copy(accNameV = v)
 
-    /** Native element `id` — pair with `Label.forId` / `FloatLabel.forId`. */
-    def id(v: String): Password = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): Password = copy(idV = v)
 
     def onChange(f: String => Any < Async): Password = copy(onChangeSF = Present(f))
     def onInput(f: String => Any < Async): Password  = copy(onInputSF = Present(f))

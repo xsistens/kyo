@@ -43,10 +43,8 @@ final case class InputOtp private (
 ) extends Node, TextFormControl, HasAccessibleName:
     type Self = InputOtp
 
-    /** Native `id` on the FIRST OTP cell input — pair with `Label.forId`; the form layer
-      * stamps the bound field's id here so focus-first-invalid targets the first cell.
-      */
-    def id(v: String): InputOtp = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): InputOtp = copy(idV = v)
 
     /** Sets a constant code. */
     def value(v: String): InputOtp = copy(valueBinding = Present(Input.Value.Const(v)))

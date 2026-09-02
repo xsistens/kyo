@@ -50,10 +50,8 @@ final case class Rating private (
 ) extends Node, NumberFormControl, HasAccessibleName:
     type Self = Rating
 
-    /** Native `id` on the option group — pair with `Label.forId`; the form layer stamps the
-      * bound field's id here so focus-first-invalid can target it.
-      */
-    def id(v: String): Rating = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): Rating = copy(idV = v)
 
     /** The star count, in any of the three bindings a value slot holds (0 = nothing selected). A
       * constant renders the stars statically. A writable `SignalRef[Int]` binds TWO-WAY: clicks

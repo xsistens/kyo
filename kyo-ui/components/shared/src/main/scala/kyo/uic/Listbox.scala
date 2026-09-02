@@ -96,10 +96,8 @@ final case class Listbox private (
 ) extends Node, MultiSelectFormControl, HasEmptyContent, HasAccessibleNameRef:
     type Self = Listbox
 
-    /** Native `id` on the option list — pair with `Label.forId`; the form layer stamps
-      * the bound field's id here so focus-first-invalid can target it.
-      */
-    def id(v: String): Listbox = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): Listbox = copy(idV = v)
 
     /** Chords the HOST claims, tried before the list's own machine sees them.
       *

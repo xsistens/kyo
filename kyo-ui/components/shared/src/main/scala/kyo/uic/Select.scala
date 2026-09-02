@@ -93,8 +93,8 @@ final case class Select[A] private (
       */
     private[uic] def inputwrapper: Select[A] = copy(inputwrapperFlag = true)
 
-    /** Native `id` on the trigger — pair with `Label.forId` / `FloatLabel.forId`. */
-    def id(v: String): Select[A] = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): Select[A] = copy(idV = v)
 
     /** Package-internal: hosts that already render inside their own subscription
       * supply the resolved selection directly (no nested subscription; writes go

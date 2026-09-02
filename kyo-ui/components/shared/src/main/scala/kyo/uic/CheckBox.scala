@@ -48,10 +48,8 @@ final case class CheckBox private (
       */
     private[uic] def tabbable(v: Boolean): CheckBox = copy(tabbableFlag = v)
 
-    /** Native `id` on the checkbox input — pair with `Label.forId`; the form layer
-      * stamps the bound field's id here so focus-first-invalid can target the box.
-      */
-    def id(v: String): CheckBox = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): CheckBox = copy(idV = v)
 
     def text(v: String): CheckBox = copy(labelText = Present(v))
 

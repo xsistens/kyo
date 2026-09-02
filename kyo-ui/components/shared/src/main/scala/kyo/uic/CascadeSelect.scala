@@ -99,8 +99,8 @@ final case class CascadeSelect[A] private (
 ) extends Node, TextFormControl, HasTooltip, HasPlaceholder, HasAccessibleNameRef:
     type Self = CascadeSelect[A]
 
-    /** Native `id` on the trigger label — pair with `Label.forId`. */
-    def id(v: String): CascadeSelect[A] = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): CascadeSelect[A] = copy(idV = v)
 
     /** Appends typed option-tree roots with the leaf text projection. */
     def options(is: Seq[CascadeItem[A]])(label: A => String): CascadeSelect[A] =

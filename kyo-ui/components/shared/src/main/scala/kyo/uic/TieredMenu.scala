@@ -28,7 +28,9 @@ import kyo.UI.*
   * Space activates a leaf (runs its action, then collapses the tree / closes the
   * popup), and Escape closes one level (then the popup at the root). Only the ROOT
   * list ever holds focus — the nested submenu panels do not seed it, and the
-  * highlight rides `aria-activedescendant` from the root, wired by `id(...)`.
+  * highlight rides `aria-activedescendant` from the root, wired by `id(...)` —
+  * the focused row is exposed as `s"$id-active"`. Keyboard navigation works
+  * without an id, only the ARIA hook is omitted.
   *
   * Honest deferrals as Menubar: no mobile mode; typeahead is not implemented.
   */
@@ -36,7 +38,7 @@ final case class TieredMenu private (
     itemsV: List[MenuItem] = Nil,
     popupRefV: Maybe[SignalRef[Boolean]] = Absent,
     idV: Maybe[String] = Absent
-) extends Node:
+) extends Node, HasElementId:
     type Self = TieredMenu
 
     /** Appends root items ([[MenuItem]]; nested `items(...)` open side
@@ -49,10 +51,8 @@ final case class TieredMenu private (
       */
     def popup(ref: SignalRef[Boolean]): TieredMenu = copy(popupRefV = Present(ref))
 
-    /** Base id for the menu — enables `aria-activedescendant` (the focused row is
-      * exposed as `s"$id-active"`). Keyboard navigation works without it.
-      */
-    def id(v: String): TieredMenu = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): TieredMenu = copy(idV = v)
 
     /** Paths of the items carrying submenus (one open/closed ref each). */
     private[uic] def submenuPaths: List[List[Int]] = MenuRender.submenuPaths(itemsV)

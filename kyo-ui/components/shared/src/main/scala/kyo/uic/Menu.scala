@@ -31,7 +31,10 @@ import kyo.UI.*
   * first/last, Enter or Space activates it. An inline menu highlights its first
   * enabled row when it takes focus and drops the highlight when it loses it. The
   * item links carry `tabindex="-1"` (out of the Tab order — the list roves the
-  * highlight), and `id(...)` wires `aria-activedescendant` to the focused row.
+  * highlight), and `id(...)` wires `aria-activedescendant` to the focused row,
+  * which is exposed as `s"$id-active"`. Give distinct ids to multiple menus on a
+  * page. The mount mints a base when none was given, so the announcement works
+  * unasked; a caller's own `id` still wins.
   *
   * Honest deferrals: no per-item templates; typeahead is not implemented.
   */
@@ -39,7 +42,7 @@ final case class Menu private (
     itemsV: List[MenuItem] = Nil,
     popupRefV: Maybe[SignalRef[Boolean]] = Absent,
     idV: Maybe[String] = Absent
-) extends Node:
+) extends Node, HasElementId:
     type Self = Menu
 
     /** Appends items ([[MenuItem]] rows, `MenuItem.separator` dividers, and
@@ -47,12 +50,8 @@ final case class Menu private (
       */
     def items(is: MenuItem*): Menu = copy(itemsV = itemsV ++ is.toList)
 
-    /** Base id for the list — enables `aria-activedescendant` (the focused row is
-      * exposed as `s"$id-active"`). Give distinct ids to multiple menus on a page.
-      * Without it the keyboard highlight still works; only the ARIA hook is
-      * omitted.
-      */
-    def id(v: String): Menu = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): Menu = copy(idV = v)
 
     /** Popup mode: the menu renders as a floating [[Overlay]] panel bound two-way
       * to `ref` — writes open and close it, outside click/Escape write back.

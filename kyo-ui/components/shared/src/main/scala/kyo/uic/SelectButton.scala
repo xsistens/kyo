@@ -46,10 +46,8 @@ final case class SelectButton[A] private (
 ) extends Node, TextFormControl, MultiSelectFormControl, HasAccessibleNameRef:
     type Self = SelectButton[A]
 
-    /** Native `id` on the group — pair with `Label.forId`; the form layer stamps the bound
-      * field's id here so focus-first-invalid can target its first button.
-      */
-    def id(v: String): SelectButton[A] = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): SelectButton[A] = copy(idV = v)
 
     /** Appends typed options with their text projection. */
     def options(is: Seq[A])(label: A => String): SelectButton[A] =

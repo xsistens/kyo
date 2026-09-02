@@ -97,10 +97,8 @@ final case class DatePicker private (
 ) extends Node, TextFormControl, HasPlaceholder, HasAccessibleNameRef:
     type Self = DatePicker
 
-    /** Native `id` on the picker's text input — pair with `Label.forId`; the form layer
-      * stamps the bound field's id here so focus-first-invalid can target the input.
-      */
-    def id(v: String): DatePicker = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): DatePicker = copy(idV = v)
 
     /** Sets a constant ISO value (`YYYY-MM-DD`; `YYYY-MM` / `YYYY` under
       * `view(Month|Year)`; datetime/time under `showTime`/`timeOnly`).

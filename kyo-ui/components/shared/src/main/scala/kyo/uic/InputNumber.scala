@@ -144,8 +144,8 @@ final case class InputNumber private (
 
     private[uic] def withAccessibleName(v: Maybe[TextValue]): InputNumber = copy(accNameV = v)
 
-    /** Native element `id` — pair with `Label.forId` / `FloatLabel.forId`. */
-    def id(v: String): InputNumber = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): InputNumber = copy(idV = v)
 
     /** Restricts entry to whole numbers: the client keystroke filter (`inputFilter("int")`)
       * rejects the decimal separator before it reaches the field, so the bound value stays

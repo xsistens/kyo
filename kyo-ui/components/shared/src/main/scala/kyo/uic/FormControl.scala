@@ -28,7 +28,7 @@ import scala.annotation.targetName
   * only for the field-shaped controls, so requiring them would mean inventing CSS for
   * a Slider or a Rating that Prime does not style that way.
   */
-trait FormControl extends Node:
+trait FormControl extends Node, HasElementId:
     /** Stores the resolved invalid slot. Implemented as `copy(invalidV = v)`. */
     private[uic] def withInvalid(v: Maybe[BoolValue]): Self
 
@@ -56,11 +56,11 @@ trait FormControl extends Node:
       */
     final def invalidMessage(sig: Signal[Maybe[String]]): Self = withInvalidMessageDyn(Present(sig))
 
-    /** Native element `id`. The form layer stamps each field's minted id here at
-      * `bind` time so focus-first-invalid can address the control's focusable element
-      * (`Commands.focusId`); pair it with `Label.forId` off [[form.FormField.domId]].
-      */
-    def id(v: String): Self
+    // `id` comes from HasElementId. The form layer stamps each field's minted id there at
+    // `bind` time so focus-first-invalid can address the control's focusable element
+    // (`Commands.focusId`); pair it with `Label.forId` off `form.FormField.domId`. That the
+    // id lands on the FOCUSABLE element rather than the root is the field-shaped half of the
+    // trait's contract, and the reason the slot started here.
 end FormControl
 
 /** A `String`-valued text field: two-way value binding plus a focus-loss trigger. */

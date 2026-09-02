@@ -71,10 +71,8 @@ final case class ColorPicker private (
 ) extends Node, TextFormControl, HasAccessibleName:
     type Self = ColorPicker
 
-    /** Native `id` on the root — pair with `Label.forId`; the form layer stamps the bound
-      * field's id here so focus-first-invalid can target it.
-      */
-    def id(v: String): ColorPicker = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): ColorPicker = copy(idV = v)
 
     /** Sets a constant color (renders the plane/handles/swatch statically). */
     def value(v: String): ColorPicker = copy(valueBinding = Present(Input.Value.Const(v)))

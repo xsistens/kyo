@@ -30,6 +30,10 @@ import kyo.UI.*
   * panels do NOT seed focus (the root list keeps the keys); `id(...)` wires
   * `aria-activedescendant`.
   *
+  * `id(...)` is the base for `aria-activedescendant`: the focused row is exposed
+  * as `s"$id-active"`. Keyboard navigation works without one, only the ARIA hook
+  * is omitted.
+  *
   * Honest deferrals: no mobile/hamburger breakpoint mode; typeahead is not
   * implemented.
   */
@@ -38,7 +42,7 @@ final case class Menubar private (
     startV: Maybe[UI] = Absent,
     endV: Maybe[UI] = Absent,
     idV: Maybe[String] = Absent
-) extends Node:
+) extends Node, HasElementId:
     type Self = Menubar
 
     /** Appends root items ([[MenuItem]]; nested `items(...)` open submenus). */
@@ -52,10 +56,8 @@ final case class Menubar private (
       */
     def end(ui: UI): Menubar = copy(endV = Present(ui))
 
-    /** Base id for the bar — enables `aria-activedescendant` (the focused row is
-      * exposed as `s"$id-active"`). Keyboard navigation works without it.
-      */
-    def id(v: String): Menubar = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): Menubar = copy(idV = v)
 
     /** Paths of the items carrying submenus (one open/closed ref each). */
     private[uic] def submenuPaths: List[List[Int]] = MenuRender.submenuPaths(itemsV)

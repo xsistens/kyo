@@ -32,10 +32,8 @@ final case class ToggleSwitch private (
 ) extends Node, BooleanFormControl, HasTooltip, HasAccessibleNameRef:
     type Self = ToggleSwitch
 
-    /** Native `id` on the switch input — pair with `Label.forId`; the form layer
-      * stamps the bound field's id here so focus-first-invalid can target the input.
-      */
-    def id(v: String): ToggleSwitch = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): ToggleSwitch = copy(idV = v)
 
     /** Sets a constant on/off state. */
     def checked(v: Boolean): ToggleSwitch = copy(checkedBinding = Present(CheckBox.Checked.Const(v)))

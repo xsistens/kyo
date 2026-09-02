@@ -52,10 +52,8 @@ final case class ToggleButton private (
     private[uic] def asRadioOption(tabbable: Boolean, onKey: KeyboardEvent => Any < Async): ToggleButton =
         copy(radioV = Present(ToggleButton.RadioOption(tabbable, onKey)))
 
-    /** Native `id` on the button — pair with `Label.forId`; the form layer stamps the
-      * bound field's id here so focus-first-invalid can target it.
-      */
-    def id(v: String): ToggleButton = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): ToggleButton = copy(idV = v)
 
     /** Package-internal content slot: SelectButton's `itemTemplate` replaces the
       * icon+label pair inside `.p-togglebutton-content` with arbitrary UI (the

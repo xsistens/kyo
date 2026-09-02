@@ -28,13 +28,15 @@ import kyo.UI.*
   * or Space activates a leaf (runs its `onSelect`, closes the menu), and Escape
   * closes one level then the whole menu at the root. Nested submenu panels do
   * NOT seed focus — the highlight rides `aria-activedescendant` (wired by
-  * `id(...)`) from the root panel that owns the keys.
+  * `id(...)`) from the root panel that owns the keys. The focused row is exposed
+  * as `s"$id-active"`; keyboard navigation works without an id, only the ARIA
+  * hook is omitted.
   */
 final case class ContextMenu private (
     itemsV: List[MenuItem] = Nil,
     kids: List[UI] = Nil,
     idV: Maybe[String] = Absent
-) extends Node:
+) extends Node, HasElementId:
     type Self = ContextMenu
 
     /** Appends menu items ([[MenuItem]] rows, `MenuItem.separator` dividers;
@@ -45,10 +47,8 @@ final case class ContextMenu private (
     /** Adds target children — the region whose right-click opens the menu. */
     def apply(cs: UI*): ContextMenu = copy(kids = kids ++ cs)
 
-    /** Base id for the menu — enables `aria-activedescendant` (the focused row is
-      * exposed as `s"$id-active"`). Keyboard navigation works without it.
-      */
-    def id(v: String): ContextMenu = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): ContextMenu = copy(idV = v)
 
     /** Paths of the items carrying submenus (one open/closed ref each). */
     private[uic] def submenuPaths: List[List[Int]] = MenuRender.submenuPaths(itemsV)

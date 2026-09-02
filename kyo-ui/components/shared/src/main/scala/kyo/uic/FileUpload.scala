@@ -51,11 +51,18 @@ final case class FileUpload private (
       */
     def inputId(v: String): FileUpload = copy(inputIdV = v)
 
-    /** [[inputId]] under the name the form layer uses: `bind` stamps the field's minted id
-      * here so focus-first-invalid lands on the native input, and it is the same `for`
-      * target the choose label points at.
+    /** The one implementor of [[HasElementId]] whose storage is not `Maybe[String]`:
+      * `inputIdV` is a plain `String` with a working default, because the native input needs
+      * a `for` target whether or not a caller named one. So an `Absent` here means "keep the
+      * default", not "clear it" — which is why this writer is spelled out rather than being
+      * the `copy(idV = v)` every other implementor supplies.
+      *
+      * `id` and [[inputId]] are the same slot: `bind` stamps the field's minted id here so
+      * focus-first-invalid lands on the native input, and it is the same `for` target the
+      * choose label points at.
       */
-    def id(v: String): FileUpload = inputId(v)
+    private[uic] def withElementId(v: Maybe[String]): FileUpload =
+        v.map(inputId).getOrElse(this)
 
     /** Binds the picked files two-way: a pick writes the [[kyo.UI.FilePayload]] metadata
       * (name, size, MIME type, content) into `ref`, and a ref write of an empty Seq clears

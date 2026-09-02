@@ -41,8 +41,8 @@ final case class TextArea private (
       */
     private[uic] def extraClass(cls: String): TextArea = copy(extraClassesV = extraClassesV :+ cls)
 
-    /** Native element `id` — pair with `Label.forId` / `FloatLabel.forId`. */
-    def id(v: String): TextArea = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): TextArea = copy(idV = v)
 
     /** Sets a constant value. */
     def value(v: String): TextArea = copy(valueBinding = Present(Input.Value.Const(v)))

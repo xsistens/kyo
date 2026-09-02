@@ -42,6 +42,48 @@ private[uic] trait HasAccessibleName extends Node:
         withAccessibleName(Present(ReactiveValue(v)))
 end HasAccessibleName
 
+/** A component whose rendered element carries a chosen DOM `id`.
+  *
+  * The slot every page needs and only a third of the components had. It began on
+  * [[FormControl]], because the form layer stamps each field's minted id there so
+  * focus-first-invalid can reach the control — which is why the 31 components that had it
+  * were exactly the form controls plus the menus, and why `Card`, `Panel`, `Tag`, `Message`,
+  * `DataTable` and the rest of the display family had none. `Node` carries no `id` either,
+  * so there was no escape hatch at the base type.
+  *
+  * Storage was already uniform across every implementor (`copy(idV = Present(v))`), which is
+  * the test `Capabilities.scala` applies before lifting anything — and the test `disabled`
+  * and `severity` fail. `FileUpload` is the single exception and answers with its
+  * `inputId`.
+  *
+  * ==Which element it lands on==
+  *
+  * The one a caller would want to address, which is not the same element in every family:
+  *
+  *   - a **field-shaped control** puts it on the focusable native input, because that is
+  *     what `Commands.focusById` and a `Label.forId` pairing have to reach;
+  *   - a **container or display component** puts it on its own root.
+  *
+  * ==Internal parts derive from it==
+  *
+  * A component with addressable internals treats this id as their BASE and derives
+  * `s"$id-<part>"` — `Menu`'s highlighted row is `s"$id-active"`, `Panel`'s collapse button
+  * is `s"$id-toggle"`, a `Tabs` header is `s"$id-<tab id>"`. A component that mints a base
+  * for itself when none was given (so its ARIA still works unasked) must prefer the
+  * caller's: `if idV.isDefined then this else copy(idV = Present(minted))`. Every derived
+  * name is documented on the component that derives it — an undocumented derived id is as
+  * unreachable as no id at all.
+  */
+private[uic] trait HasElementId extends Node:
+    /** Stores the element id. Implemented as `copy(idV = v)`. */
+    private[uic] def withElementId(v: Maybe[String]): Self
+
+    /** Chosen DOM `id`. See [[HasElementId]] for which element it lands on and how a
+      * component's internal parts derive from it.
+      */
+    final def id(v: String): Self = withElementId(Present(v))
+end HasElementId
+
 /** A component that can ALSO be labelled by reference to other elements. Separate from
   * [[HasAccessibleName]] rather than folded into it because only 21 of the 38 name-bearing
   * components carry the slot, and a trait whose members half the implementors cannot answer is

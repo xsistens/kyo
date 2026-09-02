@@ -87,6 +87,23 @@ class DiscoverabilityTest extends UicTest:
         )
     }
 
+    "the element id is one slot, and it still hands back the concrete component" in {
+        // Lifting `id` off FormControl and the seven standalones onto HasElementId is a
+        // pure reshaping: the setter has to stay on every component that had it, and it
+        // has to keep returning `Self` — a trait that returned `Node` would silently end
+        // every builder chain it appeared in.
+        typeCheck(preamble + """def x: uic.Input = uic.Input().id("a").placeholder("b")""")
+        typeCheck(preamble + """def x: uic.Button = uic.Button("Save").id("a").rounded(true)""")
+        typeCheck(preamble + """def x: uic.Menu = uic.Menu().id("a")""")
+        typeCheck(preamble + """def x: uic.InputGroup = uic.InputGroup().id("a")""")
+        typeCheck(preamble + """def x: uic.Slider = uic.Slider().id("a").min(1)""")
+        typeCheck(preamble + """def x: uic.FileUpload = uic.FileUpload().id("a")""")
+        typeCheck(preamble + """def x: uic.Select[String] = uic.Select[String]().id("a")""")
+        // FileUpload keeps its own spelling of the same slot: the native input needs a
+        // `for` target whether or not a caller named one.
+        typeCheck(preamble + """def x: uic.FileUpload = uic.FileUpload().inputId("a")""")
+    }
+
     "a Tab can be a link, which is what a navigational strip is made of" in {
         typeCheck(
             preamble + """def x(using Frame): uic.Tab = uic.Tab("One", p("a"), "one").url("/one")"""

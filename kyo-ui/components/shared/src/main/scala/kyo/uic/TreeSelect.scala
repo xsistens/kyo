@@ -70,8 +70,8 @@ final case class TreeSelect private (
 ) extends Node, MultiSelectFormControl, HasEmptyContent, HasTooltip, HasPlaceholder, HasAccessibleNameRef:
     type Self = TreeSelect
 
-    /** Native `id` on the trigger — pair with `Label.forId`. */
-    def id(v: String): TreeSelect = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): TreeSelect = copy(idV = v)
 
     /** Appends typed root options in the picker family's shape: `label` projects an
       * `A` to its visible text and `children` to its sub-options, so the tree

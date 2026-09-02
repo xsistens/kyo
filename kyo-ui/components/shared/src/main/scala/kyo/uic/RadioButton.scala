@@ -32,10 +32,8 @@ final case class RadioButton private (
 ) extends Node, BooleanFormControl, HasAccessibleNameRef:
     type Self = RadioButton
 
-    /** Native `id` on the radio input — pair with `Label.forId`; the form layer
-      * stamps the bound field's id here so focus-first-invalid can target the input.
-      */
-    def id(v: String): RadioButton = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): RadioButton = copy(idV = v)
 
     def text(v: String): RadioButton = copy(labelText = Present(v))
 

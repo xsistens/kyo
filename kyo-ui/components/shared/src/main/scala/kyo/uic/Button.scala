@@ -57,7 +57,7 @@ final case class Button private (
     roleRawV: Maybe[String] = Absent,
     tabIndexV: Maybe[Int] = Absent,
     focusSeedV: Boolean = false
-) extends Node, HasTooltip, HasAccessibleNameRef, HasAccessibleDescription:
+) extends Node, HasElementId, HasTooltip, HasAccessibleNameRef, HasAccessibleDescription:
     type Self = Button
 
     /** Package-internal class hook: hosts (SplitButton, SpeedDial) stamp Prime's
@@ -112,8 +112,8 @@ final case class Button private (
     /** Icon rendered after the label. */
     def endIcon(glyph: IconGlyph): Button = copy(endIconV = Present(glyph))
 
-    /** Native element `id` — for e2e/selector hooks and label associations. */
-    def id(v: String): Button = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): Button = copy(idV = v)
 
     /** Disables the button. A `Signal[Boolean]` enables/disables it in place on emission (e.g. a
       * mutation-in-flight signal).

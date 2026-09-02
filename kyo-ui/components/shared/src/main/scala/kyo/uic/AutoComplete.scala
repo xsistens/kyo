@@ -87,10 +87,8 @@ final case class AutoComplete[A] private (
     private[uic] def fieldExtraClass(cls: String): AutoComplete[A] =
         copy(fieldExtraClassesV = fieldExtraClassesV :+ cls)
 
-    /** Native `id` on the inner text input — pair with `Label.forId` /
-      * `FloatLabel.forId`.
-      */
-    def id(v: String): AutoComplete[A] = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): AutoComplete[A] = copy(idV = v)
 
     /** Appends typed options with their text projection. */
     def options(is: Seq[A])(label: A => String): AutoComplete[A] =

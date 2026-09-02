@@ -56,10 +56,8 @@ final case class Knob private (
 ) extends Node, NumberFormControl, HasAccessibleName:
     type Self = Knob
 
-    /** Native `id` on the focusable dial — pair with `Label.forId`; the form layer stamps
-      * the bound field's id here so focus-first-invalid can target it.
-      */
-    def id(v: String): Knob = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): Knob = copy(idV = v)
 
     /** The knob's value, in any of the three bindings a value slot holds. A constant renders the
       * dial statically. A writable `SignalRef[Double]` binds TWO-WAY: drags and keyboard steps

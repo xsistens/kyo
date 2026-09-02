@@ -47,10 +47,8 @@ final case class Slider private (
 ) extends Node, NumberFormControl, HasAccessibleName:
     type Self = Slider
 
-    /** Native `id` on the range input — pair with `Label.forId`; the form layer stamps
-      * the bound field's id here so focus-first-invalid can target it.
-      */
-    def id(v: String): Slider = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): Slider = copy(idV = v)
 
     /** The slider's value, in any of the three bindings a value slot holds. A constant renders the
       * fill/handle statically. A writable `SignalRef[Double]` binds TWO-WAY: drags and keys write the

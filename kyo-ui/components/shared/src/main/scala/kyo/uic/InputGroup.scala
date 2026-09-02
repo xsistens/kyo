@@ -28,18 +28,19 @@ import kyo.UI.*
   *   uic.InputGroup.addon(span(".com"))
   * )
   * }}}
+  *
+  * `id(...)` lands on the wrapping `div`. Because that wrapper is not itself
+  * focusable, a `Form`-level error can target it (`form.check(code, focusId =
+  * Present(id))`) and the focus-jump lands on the group's FIRST focusable field.
   */
 final case class InputGroup private (
     kids: List[UI] = Nil,
     idV: Maybe[String] = Absent
-) extends Node:
+) extends Node, HasElementId:
     type Self = InputGroup
 
-    /** Native `id` on the wrapping `div`. Because the wrapper is not itself focusable, a
-      * `Form`-level error can target this id (`form.check(code, focusId = Present(id))`) and
-      * the focus-jump lands on the group's FIRST focusable field.
-      */
-    def id(v: String): InputGroup = copy(idV = Present(v))
+    /** Stores the element id. */
+    private[uic] def withElementId(v: Maybe[String]): InputGroup = copy(idV = v)
 
     /** Appends children (fields and [[InputGroup.addon]]s, in visual order). */
     def apply(cs: UI*): InputGroup = copy(kids = kids ++ cs)
