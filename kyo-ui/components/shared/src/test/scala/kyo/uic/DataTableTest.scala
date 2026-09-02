@@ -1201,6 +1201,25 @@ class DataTableTest extends UicTest:
             assert(last == List("1", "2"), "and nothing after them makes page 2 the last")
     }
 
+    // A computed row list is a Signal and not a SignalRef: nothing can write into a
+    // `map` of a query state, so the read-only binding is the only honest one for it.
+    "rows bound to a read-only signal are read, and re-read when it emits" in {
+        for
+            source <- Signal.initRef[Seq[Item]](items)
+            // A derived signal — exactly what a query state or a paginated
+            // connection hands a caller, and not something anyone can write into.
+            derived = source.map(_.filter(_.price >= 20))
+            table = uic.DataTable[Item]().rows(derived).rowKey(_.id).columns(
+                uic.column("Name")(_.name)
+            )
+            before <- bodyNames(table.render)
+            _      <- source.set(items :+ Item("3", "C", 30))
+            after  <- bodyNames(table.render)
+        yield
+            assert(before == Chunk("B"), "the projection is what the table shows")
+            assert(after == Chunk("B", "C"), "and a later emission is picked up")
+    }
+
     "rows bound twice are reported, since only one binding is read" in {
         for
             rows  <- Signal.initRef[Seq[Item]](items)
@@ -1214,6 +1233,18 @@ class DataTableTest extends UicTest:
         yield
             assert(text.contains("bound twice"))
             assert(text.contains("source") && text.contains("rows(ref)"), "and both bindings are named")
+    }
+
+    "a signal binding and a seq binding are reported the same way, and named apart from a source" in {
+        for
+            rows <- Signal.initRef[Seq[Item]](items)
+            text <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+                uic.column("Name")(_.name)
+            ).rows(rows.readOnly).render)
+        yield
+            assert(text.contains("bound twice"))
+            assert(text.contains("rows(signal)") && text.contains("rows(seq)"))
+            assert(!text.contains("source"), "no RowSource is bound, so nothing may claim one is")
     }
 
     // ---- a windowed body ----

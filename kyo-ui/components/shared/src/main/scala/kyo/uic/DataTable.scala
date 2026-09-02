@@ -874,6 +874,23 @@ final case class DataTable[A] private (
       */
     def rows(ref: SignalRef[Seq[A]]): DataTable[A] = copy(rowsRefV = Present(ref))
 
+    /** Binds the rows ONE-way to a derived signal: the table re-reads them on every
+      * emission and writes nothing back.
+      *
+      * This is the shape a computed row list actually has. A list mapped out of a query
+      * state, a paginated connection, a `combineLatestAll` over per-row signals — none of
+      * them is a cell anyone can write into, so none of them is a `SignalRef`, and
+      * mirroring one into a ref just to satisfy a binding puts a second thing in the
+      * program that claims to be the row list. Reach for [[rows(ref:SignalRef[Seq[A]])*]]
+      * when the table should be able to store an edit or a reorder itself, and for this
+      * one otherwise; a read-only signal simply leaves those features unbound, exactly as
+      * [[rows(rs:Seq[A])*]] does.
+      *
+      * A [[source]] binds the same slot, so binding both is the same mistake as binding
+      * two row lists and says so.
+      */
+    def rows(sig: Signal[Seq[A]]): DataTable[A] = copy(rowsSigV = Present(sig))
+
     /** Runs after a committed cell edit, with the row before and after the column's write.
       * With [[rows(ref:SignalRef[Seq[A]])*]] bound this is a notification; without it, it
       * is the only exit, and storing the new row is the caller's.
@@ -2758,7 +2775,9 @@ final case class DataTable[A] private (
       */
     private def rowsCards(using Frame): List[UI] =
         val bound = List(
-            if rowsSigV.isDefined then List("source") else Nil,
+            if sourceV.isDefined then List("source")
+            else if rowsSigV.isDefined then List("rows(signal)")
+            else Nil,
             if rowsRefV.isDefined then List("rows(ref)") else Nil,
             if rowsV.nonEmpty then List("rows(seq)") else Nil
         ).flatten
