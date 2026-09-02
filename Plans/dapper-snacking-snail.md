@@ -144,6 +144,15 @@ hinter ihm gefundenen Key durch Vorziehen auf, was jede Zwischenzeile verschiebt
 **Fertig, wenn:** die Messwerte in derselben Größenordnung reproduziert sind und alle
 `DomBackendTest`-Blätter grün bleiben.
 
+**Stand 2026-09-02: der zwei-endige Pass ist drin, der Text-Fast-Path nicht.** Er ist zweimal
+gebaut und beide Male verworfen worden, weil er auf upstreams Fundament Suiten wegbricht, die ohne
+ihn grün sind: mit ihm lief `ReactiveScenarioItTest` in 48 s statt 12 s und `CrossComponentItTest`
+in eine Kaskade, ohne ihn sind beide grün (12/12 und 17/17). Der Grund liegt vermutlich in der
+Nachbereitung, die die Region auf dem neuen Fundament fährt (Portal-Sweep, focusAuto, scrollAuto):
+die Variante ohne Sweeps ließ Portal-Zusicherungen fallen, die Variante mit Sweeps kostete den
+Durchsatz. Der Nutzen ist eine eingesparte `<template>`-Parse pro Textregion und damit deutlich
+kleiner als das Risiko; er gehört mit einer eigenen Messung wiederaufgenommen, nicht nebenbei.
+
 ## Schritt 5: Listen-Patch auf der Leitung
 
 Die zweite Hälfte von `a73faace2` plus `e3d3ff573`. Die Protokollhälfte liegt bereits.
