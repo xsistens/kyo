@@ -6,8 +6,9 @@ package kyo
   * matching [[kyo.UI.cssClass]]. `id` and `data-*` selectors are also provided for the existing
   * `UI.id`/`UI.data` hooks. A pseudo-class/element variant (`:hover`, `:focus`, `::before`, ...)
   * is attached with [[kyo.Selector.pseudo]]; a descendant combinator with [[kyo.Selector.descendant]]
-  * and a direct-child combinator with [[kyo.Selector.child]]. Selectors are immutable values;
-  * building one never mutates the receiver.
+  * and a direct-child combinator with [[kyo.Selector.child]]. Two conditions on the SAME element are
+  * combined with [[kyo.Selector.and]]. Selectors are immutable values; building one never mutates
+  * the receiver.
   *
   * @see
   *   [[kyo.Stylesheet.rule]] for the rule a selector heads
@@ -26,6 +27,15 @@ final case class Selector private[kyo] (css: String) derives CanEqual:
       * yields `.btn::before`.
       */
     def pseudoElement(name: String): Selector = Selector(css + "::" + name)
+
+    /** A compound selector: both parts must match the SAME element, e.g.
+      * `Selector.data("theme", "spotify").and(Selector.data("scheme", "dark"))` yields
+      * `[data-theme="spotify"][data-scheme="dark"]`, and `Selector.cls("btn").and(Selector.cls("lg"))`
+      * yields `.btn.lg`. Distinct from [[descendant]] (a space) and [[child]] (a `>`), which relate
+      * two DIFFERENT elements; a compound selector also raises specificity, which is what a token
+      * override scoped to a theme AND a color scheme needs in order to win.
+      */
+    def and(other: Selector): Selector = Selector(css + other.css)
 
     /** A descendant combinator: `parent.descendant(child)` yields `parent child`. */
     def descendant(child: Selector): Selector = Selector(css + " " + child.css)

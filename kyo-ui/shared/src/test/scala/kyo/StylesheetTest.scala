@@ -31,6 +31,32 @@ class StylesheetTest extends kyo.test.Test[Any]:
         assert(Selector.tag("body").css == "body")
     }
 
+    "Selector.and joins two conditions on the same element, with no separator" in {
+        assert(Selector.cls("btn").and(Selector.cls("lg")).css == ".btn.lg")
+        assert(
+            Selector.data("theme", "spotify").and(Selector.data("scheme", "dark")).css ==
+                "[data-theme=\"spotify\"][data-scheme=\"dark\"]"
+        )
+        // The distinction that matters: `and` is one element, the combinators are two.
+        assert(Selector.cls("a").and(Selector.cls("b")).css != Selector.cls("a").descendant(Selector.cls("b")).css)
+        assert(Selector.cls("a").and(Selector.cls("b")).css != Selector.cls("a").child(Selector.cls("b")).css)
+    }
+
+    "Selector.and chains, and a pseudo attaches to the whole compound" in {
+        val sel = Selector.tag("a").and(Selector.cls("nav")).and(Selector.data("current", "page"))
+        assert(sel.css == "a.nav[data-current=\"page\"]")
+        assert(sel.pseudo("hover").css == "a.nav[data-current=\"page\"]:hover")
+    }
+
+    "scopedVars takes a compound selector (the paired theme + scheme override)" in {
+        val css = Stylesheet.scopedVars(
+            Selector.data("theme", "spotify").and(Selector.data("scheme", "dark")),
+            "p-primary-400" -> "#1ed760"
+        ).render
+        assert(css.contains("[data-theme=\"spotify\"][data-scheme=\"dark\"] {"))
+        assert(css.contains("--p-primary-400: #1ed760;"))
+    }
+
     "media query wraps inner rule in @media block" in {
         val css = Stylesheet.media(MediaQuery.minWidth(768.px))(
             Stylesheet.rule("grid", Style.column)
