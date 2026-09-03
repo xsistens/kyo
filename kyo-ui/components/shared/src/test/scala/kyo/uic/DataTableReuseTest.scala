@@ -76,4 +76,35 @@ class DataTableReuseTest extends UicTest:
         }
     }
 
+    "a scroll of one row costs one row" in {
+        Scope.run {
+            val counted = new Renders
+            val hundred = List.tabulate(100)(i => Item(s"k$i", s"row-$i"))
+            for
+                rows   <- Signal.initRef[Seq[Item]](hundred)
+                scroll <- Signal.initRef(0.0)
+                err    <- Signal.initRef(Absent: Maybe[(CellPath, kyo.uic.form.FieldError)])
+                // Five rows fit the viewport (200 / 40), with no overscan.
+                ui = uic.DataTable[Item]().rows(rows).rowKey(_.id)
+                    .scrollHeight("200px").scrollRows(40, overscan = 0)
+                    .columns(uic.column("Name") { i =>
+                        counted.bump(); i.name
+                    })
+                    .wired("t", Map.empty, err, _ => (), scroll = Present(scroll))
+                root <- ReactiveUI.normalize(ui, Seq.empty)
+                _    <- ReactiveUI.subscribe(root, quiet)
+                _    <- Async.sleep(100.millis)
+                _ = counted.reset()
+                // Exactly one row's worth: the window moves from [0, n) to [1, n + 1).
+                _ <- scroll.set(40.0)
+                _ <- Async.sleep(300.millis)
+                after = counted.get
+            yield assert(
+                after == 1,
+                s"scrolling by one row rendered $after rows; the window holds six"
+            )
+            end for
+        }
+    }
+
 end DataTableReuseTest

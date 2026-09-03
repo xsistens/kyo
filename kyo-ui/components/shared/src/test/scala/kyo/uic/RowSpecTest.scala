@@ -66,14 +66,12 @@ class RowSpecTest extends UicTest:
     "every entry paints as exactly one tr" in {
         val t = table
         Kyo.foreach(Chunk.from(specs(t))) { spec =>
-            val painted = t.renderTr(spec)
             // Rendered rather than inspected: "one element" is a property of the MARKUP, and an
             // Ast node that wrapped its row would still be one node here.
-            Kyo.foreach(Chunk.from(painted))(ui => kyo.internal.HtmlRenderer.render(ui, Seq("t")))
-                .map(html => (t.rowSpecKey(spec), painted.size, html.mkString))
+            kyo.internal.HtmlRenderer.render(t.renderTr(spec), Seq("t"))
+                .map(html => (t.rowSpecKey(spec), html))
         }.map { rendered =>
-            rendered.foreach { (key, count, html) =>
-                assert(count == 1, s"$key painted $count nodes")
+            rendered.foreach { (key, html) =>
                 assert(html.startsWith("<tr"), s"$key painted $html")
                 assert(html.endsWith("</tr>"), s"$key painted $html")
                 assert(

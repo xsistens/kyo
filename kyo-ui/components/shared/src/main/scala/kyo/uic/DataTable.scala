@@ -306,6 +306,14 @@ sealed private[uic] trait RowSpec[A]
 
 private[uic] object RowSpec:
 
+    /** Entries are compared to decide whether a row has to be rendered again, so equality here is
+      * the question "would this `<tr>` come out differently". The cases are case classes, so it is
+      * their fields — and a field holding a function compares by reference, which is why what a
+      * handler needs about the whole list is READ at event time (see [[BodyView]]) rather than
+      * carried here: a lambda rebuilt per emission would make every row unequal and reuse nothing.
+      */
+    given canEqual[A]: CanEqual[RowSpec[A], RowSpec[A]] = CanEqual.derived
+
     /** A data row. The fields are what `dataRow` always took; holding them as a value is what lets
       * the body decide whether a row has to be rendered again without rendering it.
       */
@@ -2752,7 +2760,7 @@ final case class DataTable[A] private (
                 )
                 if isExpanded(a, exp) then List(data, RowSpec.Expansion(a, colCount)) else List(data)
             }
-            group(specs.flatMap(renderTr).map(toChild)*)
+            group(specs.map(renderTr).map(toChild)*)
         end frozenGroup
 
         val frozenBody: List[UI] =
@@ -2763,15 +2771,22 @@ final case class DataTable[A] private (
                     case Absent       => frozenGroup(held, Absent))
 
         val tbodyEl: UI =
-            if !windowOn then tbody.cssClass("p-datatable-tbody")(bodySpecs.flatMap(renderTr).map(toChild)*)
+            if !windowOn then tbody.cssClass("p-datatable-tbody")(bodySpecs.map(renderTr).map(toChild)*)
             else
                 val group = tbody
                     .cssClass("p-datatable-tbody")
                     .style(_.height((windowCount * viewport.itemSize).px))
-                def drawn(top: Double)(using Frame): List[UI] = windowSpecs(top).flatMap(renderTr)
                 scroll.ref match
-                    case Present(r) => group(toChild(r.render(top => UI.fragment(drawn(top)*))))
-                    case Absent     => group(drawn(0.0).map(toChild)*)
+                    case Present(r) =>
+                        // A KEYED list rather than a re-render: a scroll of one row moves the two
+                        // spacers and draws one row, and the rows that stayed on the screen keep
+                        // their nodes, their handlers and their open editors. `map` is what carries
+                        // the scroll ref's projection through, so this region still binds without a
+                        // fiber; `zip` or `combineLatest` would fall back to the repair loop.
+                        val specs = r.map(top => Chunk.from(windowSpecs(top)))
+                        group(toChild(specs.foreachKeyed(rowSpecKey)(renderTr)))
+                    case Absent => group(windowSpecs(0.0).map(renderTr).map(toChild)*)
+                end match
             end if
         end tbodyEl
 
@@ -4545,13 +4560,18 @@ final case class DataTable[A] private (
         tr.style(_.height(spec.height.px))((leading ++ cells ++ trailing).map(toChild)*)
     end slotRow
 
-    /** The `<tr>` an expanded row emits under itself, if the caller gave it content. */
-    private def expansionRow(spec: RowSpec.Expansion[A])(using Frame): List[UI] =
-        expansionF.toList.map { f =>
-            tr.cssClass("p-datatable-row-expansion")(
-                td.colspan(math.max(spec.colCount, 1))(toChild(f(spec.a)))
-            )
-        }
+    /** The `<tr>` an expanded row emits under itself.
+      *
+      * An `Expansion` entry only exists where there is content to draw (`isExpanded` requires the
+      * template), so this cannot be asked for one that has none.
+      */
+    private def expansionRow(spec: RowSpec.Expansion[A])(using Frame): UI =
+        expansionF match
+            case Present(f) =>
+                tr.cssClass("p-datatable-row-expansion")(
+                    td.colspan(math.max(spec.colCount, 1))(toChild(f(spec.a)))
+                )
+            case Absent => tr.cssClass("p-datatable-row-expansion")(td.colspan(math.max(spec.colCount, 1)))
 
     /** What identifies one entry of the `<tr>` stream across emissions.
       *
@@ -4578,24 +4598,24 @@ final case class DataTable[A] private (
       * condition a keyed list region reuses rows under; `Expansion` is the one that could decline,
       * and it declines by never becoming an entry (see `leafRows`).
       */
-    private[uic] def renderTr(spec: RowSpec[A])(using Frame): List[UI] =
+    private[uic] def renderTr(spec: RowSpec[A])(using Frame): UI =
         spec match
-            case d: RowSpec.Data[A]      => List(dataRow(d))
+            case d: RowSpec.Data[A]      => dataRow(d)
             case e: RowSpec.Expansion[A] => expansionRow(e)
             case g: RowSpec.GroupHead[A] =>
-                List(groupHeaderRow(g.level, g.path, g.rows, g.colCount, g.collapsible, g.open))
+                groupHeaderRow(g.level, g.path, g.rows, g.colCount, g.collapsible, g.open)
             case g: RowSpec.GroupFoot[A] =>
-                List(tr.cssClass("p-datatable-row-group-footer")(
+                tr.cssClass("p-datatable-row-group-footer")(
                     toChild(td.colspan(math.max(g.colCount, 1))(toChild(g.render(g.path, g.rows))))
-                ))
+                )
             case s: RowSpec.Spacer[A] =>
                 var pad = padRow(s.px)
                 s.marks.foreach { (first, count) =>
                     pad = pad.data("uic-vs-first", first.toString).data("uic-vs-count", count.toString)
                 }
-                List(pad)
-            case s: RowSpec.Slot[A]  => List(slotRow(s))
-            case e: RowSpec.Empty[A] => List(emptyRow(e.colCount))
+                pad
+            case s: RowSpec.Slot[A]  => slotRow(s)
+            case e: RowSpec.Empty[A] => emptyRow(e.colCount)
         end match
     end renderTr
 
