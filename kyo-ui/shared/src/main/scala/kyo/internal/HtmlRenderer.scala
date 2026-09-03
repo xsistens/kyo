@@ -1609,6 +1609,10 @@ private[kyo] object HtmlRenderer:
           |  for(var i=0;i<nodes.length;i++)__kyoEachSpanNode(nodes[i],function(n){if(n.nodeType===1)out.push(n);});
           |  return out;
           |}
+          |// The topmost node above this one: the Document for anything attached, the detached subtree's own root
+          |// otherwise. Two nodes share a tree exactly when this returns the same node for both. Twin of treeRoot
+          |// in DomReactiveRegions.
+          |function __kyoTreeRoot(node){var top=node;while(top.parentNode)top=top.parentNode;return top;}
           |// Is this live marker sitting inside a portal twin — an element the sweep re-homed to <body>?
           |// Twin of inPortalTwin in DomReactiveRegions.
           |function __kyoInPortalTwin(node){
@@ -1630,7 +1634,18 @@ private[kyo] object HtmlRenderer:
           |  var parent=endpoints.start.parentNode,synthetic=parent.tagName==="TBODY"&&parent.getAttribute("data-kyo-range-host")===id;
           |  var parser=range;if(synthetic){parser=document.createRange();parser.selectNode(parent);}
           |  var fragment=parser.createContextualFragment(html),incoming=kyoRangeScan(fragment),removed=[];
-          |  __kyoRanges.forEach(function(pair,key){if(key!==id&&range.intersectsNode(pair.start))removed.push(key);});
+          |  // Gone from the registry's point of view: inside the range about to be patched, or stranded in a tree
+          |  // this one no longer shares. The second case is a portal twin the sweep retired — its markers went with
+          |  // it into a detached subtree, and the sweep moves DOM without walking the registry, so the entry
+          |  // outlives the nodes it names. A dead entry is not a duplicate of the region coming back; it is the
+          |  // same region's corpse, and keeping it would refuse the live one.
+          |  //
+          |  // The test is "same tree", not "in the document": a live portal twin under <body> shares the document
+          |  // with the range being patched and therefore stays, which is what the twin check below relies on.
+          |  // Twin of the `removed` computation in DomReactiveRegions.
+          |  var liveRoot=__kyoTreeRoot(endpoints.start);
+          |  __kyoRanges.forEach(function(pair,key){
+          |    if(key!==id&&(range.intersectsNode(pair.start)||__kyoTreeRoot(pair.start)!==liveRoot))removed.push(key);});
           |  // A region registered inside a portal twin is not a second copy of itself: the payload carries the portal
           |  // element inline (the twin's inline original), and this patch either morphs the twin in place — markers,
           |  // and so the registration, untouched — or replaces the range wholesale, in which case the incoming markers

@@ -104,4 +104,32 @@ class ContextMenuTest extends UicTest:
             assert(panels.isEmpty, "the static projection renders the region inert, with no panel")
     }
 
+    // A menu whose mount is keyless is rebuilt by every emission of the region around it, and
+    // `openRef` IS that mount's state — so the menu resets, and a subscription of the departing
+    // content that emits into a range the rebuild has already taken away dies on `Unknown
+    // reactive range` and never paints again. The id the caller gave is the identity that stops
+    // it; without one the mount stays keyless, exactly as it was.
+    "a menu the caller named keeps its instance across a re-render of the region around it" in {
+        val named = uic.ContextMenu(Seq(uic.MenuItem("Copy").onSelect(())))(UI.div("region")).id("m1")
+        val anon  = uic.ContextMenu(Seq(uic.MenuItem("Copy").onSelect(())))(UI.div("region"))
+        // `key` is `Maybe[Any]` and Any is not comparable under strict equality, so the keys are
+        // held against each other by their rendered form rather than by ==.
+        (named.render, anon.render) match
+            case (n: Ast.Mounted, a: Ast.Mounted) =>
+                assert(n.key.map(_.toString).contains((uic.ContextMenu -> "m1").toString), "the id is the key")
+                assert(a.key.isEmpty, "and no id means no key, as before")
+            case other => fail(s"a ContextMenu renders as a mount; got: $other")
+        end match
+    }
+
+    "two named menus on one page take two distinct keys" in {
+        val a = uic.ContextMenu(Seq(uic.MenuItem("Copy").onSelect(())))(UI.div("a")).id("m1").render
+        val b = uic.ContextMenu(Seq(uic.MenuItem("Copy").onSelect(())))(UI.div("b")).id("m2").render
+        (a, b) match
+            case (x: Ast.Mounted, y: Ast.Mounted) =>
+                assert(x.key.map(_.toString) != y.key.map(_.toString))
+            case other => fail(s"a ContextMenu renders as a mount; got: $other")
+        end match
+    }
+
 end ContextMenuTest

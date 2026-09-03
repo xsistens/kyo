@@ -71,7 +71,7 @@ final case class ContextMenu private (
         // by this effectful mount; static projections (SSG, the SSR page HTML)
         // render the closed target region inert.
         val stat: UI = body(false, Absent, Nil, Absent, Map.empty.withDefaultValue(false), Absent, Absent)
-        UI.mounted {
+        val mount = UI.mounted {
             for
                 openRef <- Signal.initRef(false)
                 focus   <- Signal.initRef(List.empty[Int])
@@ -83,6 +83,26 @@ final case class ContextMenu private (
                 base <- cmds.freshId
             yield wired(openRef, focus, at, refs.toList, base)
         }.placeholder(stat)
+        // An id is the caller declaring which menu this is, so it is also the identity the
+        // instance keeps. Without one the mount stays keyless, which is what it always was.
+        //
+        // Keyless was wrong for a menu that sits in a region something else re-renders: the
+        // effect re-runs per enclosing emission, `openRef` — the mount's OWN state — resets,
+        // and the whole subtree under the target is rebuilt each time. kyo-ui says so out
+        // loud after ten of them ("keyless UI.mounted at …: give it a stable identity"), and
+        // the wreckage is worse than a reset flag: a subscription of the departing content
+        // that emits into a range the rebuild already took away dies on `Unknown reactive
+        // range`, and a dead subscription never paints again. Measured on a page whose store
+        // writes re-render around the menu: the menu opened once and then never again.
+        //
+        // What a key costs: the effect runs ONCE, so `items(...)` and the target children are
+        // read at mount time. Anything that must change afterwards belongs in a `Signal` —
+        // which is what `MenuItem`'s reactive label and `disabled` are for, and what
+        // `Overlay` already assumes by keying its own panel on the same id.
+        idV match
+            case Present(id) => mount.keyed(ContextMenu -> id)
+            case Absent      => mount
+        end match
     end render
 
     /** The subscription tree the mount publishes (golden-test seam).

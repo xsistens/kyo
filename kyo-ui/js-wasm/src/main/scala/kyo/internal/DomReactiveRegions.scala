@@ -60,8 +60,20 @@ final private[kyo] class DomReactiveRegions private (
                 case DomReactiveRegions.LiveHost.Siblings(_) =>
                     range.createContextualFragment(html)
             val incoming = DomReactiveRegions.scan(document, fragment)
+            // Gone from the registry's point of view: inside the range about to be patched, or stranded in a tree
+            // this one no longer shares. The second case is a portal twin the sweep retired — its markers went with
+            // it into a detached subtree, and the sweep moves DOM without walking the registry, so the entry
+            // outlives the nodes it names. A dead entry is not a duplicate of the region coming back; it is the same
+            // region's corpse, and keeping it would refuse the live one.
+            //
+            // The test is "same tree", not "in the document": a whole mount can legitimately be patched while it is
+            // still detached, and a live portal twin under `<body>` shares the document with the range being
+            // patched, so both stay.
+            val liveRoot = treeRoot(endpoints.start)
             val removed = ranges.iterator.collect {
-                case (id, nested) if id != regionId && intersects(range, nested.start) => id
+                case (id, nested)
+                    if id != regionId && (intersects(range, nested.start) || !(treeRoot(nested.start) eq liveRoot)) =>
+                    id
             }.toSet
 
             // A region registered inside a portal twin is not a second copy of itself: the payload carries the portal
@@ -331,6 +343,18 @@ final private[kyo] class DomReactiveRegions private (
 
     private def intersects(range: dom.Range, node: dom.Node): Boolean =
         range.asInstanceOf[js.Dynamic].intersectsNode(node).asInstanceOf[Boolean]
+
+    /** The topmost node above this one: the Document for anything attached, the detached subtree's own root
+      * otherwise. Two nodes share a tree exactly when this returns the same node for both.
+      */
+    private def treeRoot(node: dom.Node): dom.Node =
+        var top    = node
+        var parent = DomReactiveRegions.parent(top)
+        while parent.nonEmpty do
+            top = parent.get
+            parent = DomReactiveRegions.parent(top)
+        top
+    end treeRoot
 
     /** Does this live marker sit inside a portal twin — an element `portalSweep` re-homed to `<body>`?
       *
