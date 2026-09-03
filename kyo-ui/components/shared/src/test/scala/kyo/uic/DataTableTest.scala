@@ -1228,6 +1228,27 @@ class DataTableTest extends UicTest:
             assert(after == Chunk("B", "C"), "and a later emission is picked up")
     }
 
+    "a rowKey that repeats is reported, since it costs the selection and the reuse both" in {
+        // Two rows the projection cannot tell apart. Selecting one selects both, and the body's
+        // keyed list refuses to reuse anything and rebuilds every emission — neither of which
+        // shows on the page, and the second only became a cost once the body was keyed.
+        val twins = List(Item("1", "A", 10), Item("2", "A", 20), Item("3", "B", 30))
+        for text <- cards(uic.DataTable[Item]().rows(twins).rowKey(_.name).columns(
+                uic.column("Name")(_.name)
+            ).onRowClick(_ => ()).render)
+        yield
+            assert(text.contains("rowKey repeats"))
+            assert(text.contains("A"), "and the repeated key is named")
+        end for
+    }
+
+    "a rowKey that is unique is not reported" in {
+        for text <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id).columns(
+                uic.column("Name")(_.name)
+            ).onRowClick(_ => ()).render)
+        yield assert(!text.contains("rowKey repeats"))
+    }
+
     "rows bound twice are reported, since only one binding is read" in {
         for
             rows  <- Signal.initRef[Seq[Item]](items)

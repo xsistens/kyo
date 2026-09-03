@@ -3000,7 +3000,7 @@ final case class DataTable[A] private (
             case Size.Normal => ()
         end match
         root(
-            (rowKeyCard ++ headerCards(
+            (rowKeyCard(paged) ++ headerCards(
                 sort,
                 flags
             ) ++ editCards ++ filterCards(filter) ++ sizeCards(
@@ -3068,19 +3068,38 @@ final case class DataTable[A] private (
       * different record. The component cannot tell a static list from a live one, so
       * the moment identity is actually consumed the key stops being optional.
       */
-    private def rowKeyCard(using Frame): List[UI] =
+    private def rowKeyCard(shown: Seq[A])(using Frame): List[UI] =
         val usesIdentity =
             selectedBinding.isDefined || expandedRef.isDefined || onRowClickF.isDefined ||
                 editingRowsRef.isDefined || editingCellRef.isDefined
-        if rowKeyF.isDefined || !usesIdentity then Nil
-        else
-            List(KeyDiagnostics.card(
-                "DataTable",
-                "selection, expansion or onRowClick is bound but rowKey is unset, so rows are keyed by position " +
-                    "and a data change re-associates that state with the wrong record; set rowKey",
-                Nil
-            ))
-        end if
+        val unset =
+            if rowKeyF.isDefined || !usesIdentity then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "selection, expansion or onRowClick is bound but rowKey is unset, so rows are keyed by position " +
+                        "and a data change re-associates that state with the wrong record; set rowKey",
+                    Nil
+                ))
+        // A rowKey that is not an identity costs twice, and neither cost reaches the page: the
+        // reader's selection lands on both rows at once, and the body's keyed list refuses to
+        // reuse anything at all — it warns to the console and rebuilds the whole emission. The
+        // column keys have had this card since they were introduced; the row keys read from the
+        // caller's own data, which is where a duplicate is likelier and harder to see.
+        val repeated =
+            if rowKeyF.isEmpty then Nil
+            else
+                KeyDiagnostics.duplicates(shown.map(keyOf)) match
+                    case Nil => Nil
+                    case dups =>
+                        List(KeyDiagnostics.card(
+                            "DataTable",
+                            "rowKey repeats over the rows on the screen, so the rows sharing a key share their " +
+                                "selection and expansion, and the body renders every row again on every change; " +
+                                "project rowKey to something unique",
+                            dups
+                        ))
+        unset ++ repeated
     end rowKeyCard
 
     /** The loud cards for the ways a column tree and a sort spec mislead at render time
