@@ -2637,4 +2637,101 @@ class DataTableTest extends UicTest:
         yield assert(after.isEmpty)
     }
 
+    // ── the anchor the caller owns ──────────────────────────────────────────────────
+
+    /** The app shape that found this: modifier selection, a bound anchor, rendered through
+      * `render` rather than the `wired` seam, so the anchor takes the route a live table takes.
+      */
+    private def rangingTable(sel: SignalRef[Set[String]], anchor: SignalRef[Maybe[String]])(using Frame): UI =
+        uic.DataTable[Item]().rows(four).rowKey(_.id).columns(uic.column("Name")(_.name))
+            .selectionMode(SelectionMode.Multiple).selected(sel).metaKeySelection(true)
+            .selectionAnchor(anchor).render
+
+    "an anchor the caller bound survives the table being rendered again — a minted one cannot" in {
+        // Two independent renders of the same table is what a page re-render produces, and it is
+        // where a minted anchor is lost: it lives in the table's mount, whose state ends with the
+        // region enclosing it. Bound, the range is measured across the gap.
+        for
+            sel    <- Signal.initRef(Set.empty[String])
+            anchor <- Signal.initRef(Absent: Maybe[String])
+            trs1   <- bodyTrs(rangingTable(sel, anchor))
+            _      <- click(trs1.head)
+            held   <- anchor.get
+            trs2   <- bodyTrs(rangingTable(sel, anchor))
+            _      <- clickWith(trs2(2), UI.Modifiers(shift = true))
+            got    <- sel.get
+        yield
+            assert(held.contains("1"), "the plain click moved the anchor the caller holds")
+            assert(got == Set("1", "2", "3"), "and the next render measured its range from there")
+    }
+
+    "a bound anchor is the only state a ranging table needed, so it stays a pure render" in {
+        for
+            sel    <- Signal.initRef(Set.empty[String])
+            anchor <- Signal.initRef(Absent: Maybe[String])
+        yield rangingTable(sel, anchor) match
+            case m: Ast.Mounted => fail("a bound anchor should not force a mount")
+            case _              => succeed
+    }
+
+    "an unbound ranging table still mints its anchor in a mount, as it always did" in {
+        for sel <- Signal.initRef(Set.empty[String])
+        yield
+            val ui = uic.DataTable[Item]().rows(four).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple).selected(sel).metaKeySelection(true).render
+            ui match
+                case _: Ast.Mounted => succeed
+                case other          => fail(s"a table that mints its anchor renders as a mount; got: $other")
+    }
+
+    // ── the mount's identity ────────────────────────────────────────────────────────
+    //
+    // Everything behind this mount is state the table owns and no caller can hand back: the
+    // shift anchor, the column grab and drag, the row drag, the scroll offset, the measured
+    // frozen-header height. Keyless, the mount's effect re-runs on every emission of whatever
+    // region encloses the table, and all of it is re-allocated — so a shift-click reads an
+    // anchor ref that no click ever wrote, which is what a range failing on a live page looks
+    // like. The three cases below pin the identity that stops it.
+
+    /** A table that owns state, so it renders through the mount rather than as a plain tree. */
+    private def stateful(id: Maybe[String])(using Frame): UI =
+        val t = uic.DataTable[Item]().rows(four).rowKey(_.id).columns(uic.column("Name")(_.name))
+            .selectionMode(SelectionMode.Multiple).metaKeySelection(true)
+            .onSelectionChange(_ => ()).selected(Set.empty[String])
+        (id match
+            case Present(v) => t.id(v)
+            case Absent     => t
+        ).render
+    end stateful
+
+    "a table the caller named keeps its instance, and an unnamed one stays as it was" in {
+        // `key` is `Maybe[Any]` and Any is not comparable under strict equality, so the keys are
+        // held against each other by their rendered form rather than by ==.
+        (stateful(Present("t1")), stateful(Absent)) match
+            case (n: Ast.Mounted, a: Ast.Mounted) =>
+                assert(n.key.map(_.toString).contains((uic.DataTable -> "t1").toString), "the id is the key")
+                assert(a.key.isEmpty, "and no id means no key, as before")
+            case other => fail(s"a stateful DataTable renders as a mount; got: $other")
+        end match
+    }
+
+    "two renders of the same named table carry the same key, which is the whole point" in {
+        // A re-render builds the value again from scratch — this is that, and the key has to
+        // survive it or the instance behind the mount does not.
+        (stateful(Present("t1")), stateful(Present("t1"))) match
+            case (x: Ast.Mounted, y: Ast.Mounted) =>
+                assert(x.key.map(_.toString) == y.key.map(_.toString))
+                assert(x.key.isDefined)
+            case other => fail(s"a stateful DataTable renders as a mount; got: $other")
+        end match
+    }
+
+    "two named tables on one page take two distinct keys" in {
+        (stateful(Present("t1")), stateful(Present("t2"))) match
+            case (x: Ast.Mounted, y: Ast.Mounted) =>
+                assert(x.key.map(_.toString) != y.key.map(_.toString))
+            case other => fail(s"a stateful DataTable renders as a mount; got: $other")
+        end match
+    }
+
 end DataTableTest

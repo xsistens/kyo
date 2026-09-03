@@ -458,7 +458,8 @@ final case class DataTable[A] private (
     reorderRowsFlag: Boolean = false,
     onRowReorderF: Maybe[RowMove[A] => Any < Async] = Absent,
     orderedPaths: List[List[String]] = Nil,
-    idV: Maybe[String] = Absent
+    idV: Maybe[String] = Absent,
+    anchorRef: Maybe[SignalRef[Maybe[String]]] = Absent
 ) extends Node, HasElementId, HasEmptyContent, HasAccessibleNameRef:
     type Self = DataTable[A]
 
@@ -724,17 +725,37 @@ final case class DataTable[A] private (
       * tests and what every desktop convention expects, and pinning it to `metaKey` alone locks
       * out every reader who is not on a Mac.
       *
-      * Two consequences worth knowing before turning it on. The range needs an ANCHOR, which is
-      * the one piece of selection state the caller does not own, so a table with this on
-      * allocates a mount and renders as a placeholder under a pure render — which is why it is
-      * opt-in rather than the shape every selectable table pays for. And [[selectableWhen]] still
-      * applies: a range steps over the rows it rejects rather than dragging them in.
+      * Two consequences worth knowing before turning it on. The range needs an ANCHOR: unless the
+      * caller binds one with [[selectionAnchor]], the table mints it in a mount and renders as a
+      * placeholder under a pure render — which is why it is opt-in rather than the shape every
+      * selectable table pays for. And [[selectableWhen]] still applies: a range steps over the
+      * rows it rejects rather than dragging them in.
       *
       * Deviation from Prime, deliberate: there, shift-ranging works in `Multiple` mode whether or
       * not `metaKeySelection` is set. Here the two arrive together, so a table that never asked
       * for modifier semantics keeps a render with no state in it.
       */
     def metaKeySelection(v: Boolean): DataTable[A] = copy(metaKeyFlag = v)
+
+    /** Binds the row a shift-click measures its range from, so the caller owns it.
+      *
+      * The anchor is the one thing a selection cannot be asked for: a `Set` has no order, so
+      * "the last row picked without shift" is not derivable from what is selected. Unbound, the
+      * table mints it inside its own mount — and a mount's state lives exactly as long as the
+      * region enclosing it, so a page that re-renders around the table re-allocates the anchor
+      * and a shift-click reads one no click ever wrote. That is not a fault in the mount: keyed
+      * continuity spans re-renders of the immediately enclosing region and ends with it, by
+      * design. It is the same reason [[sort]], [[page]], the column filters and the column
+      * widths are all bindable — state that has to outlive the table's own render belongs to
+      * the caller.
+      *
+      * Bind it and two things follow: the anchor survives whatever the page does, and ranging
+      * no longer forces a mount, so a table that owns nothing else stays a pure render.
+      *
+      * A shift-click READS this and leaves it where it is; a click without shift moves it.
+      * Written, never read for display, so nothing re-renders when it changes.
+      */
+    def selectionAnchor(ref: SignalRef[Maybe[String]]): DataTable[A] = copy(anchorRef = Present(ref))
 
     /** The selection's write-back ref, where the caller bound one that can be written.
       *
@@ -1339,16 +1360,22 @@ final case class DataTable[A] private (
       */
     private def ownsState: Boolean =
         editingBound || navOn || filterBound || resizeOn || reorderOn || windowOn || frozenRowsOn ||
-            handleColumn || rangeOn
+            handleColumn || mintsAnchor
 
-    /** Whether a shift-click can range, which is the only reason this table would own an anchor.
+    /** Whether a shift-click can range at all.
       *
       * Tied to [[metaKeySelection]] rather than to `Multiple` alone (where Prime puts it) because
-      * the anchor is what forces a mount, and a mount is what makes a table render as a
+      * an anchor the table mints forces a mount, and a mount is what makes a table render as a
       * placeholder in a pure render. Every selectable table paying that for a gesture it never
       * offered is the wrong trade; asking for modifier selection is the caller saying they want it.
       */
     private def rangeOn: Boolean = metaKeyFlag && rowClickSelects && selectedBinding.isDefined
+
+    /** Whether the table has to MINT the anchor, which is the only reason ranging forces a mount.
+      * A caller who bound one has already supplied it, and supplied it somewhere that outlives
+      * this table's mount — see [[selectionAnchor]].
+      */
+    private def mintsAnchor: Boolean = rangeOn && anchorRef.isEmpty
 
     /** Whether the filter row is rendered: the filters have to be bound somewhere, and
       * some column has to carry a pipeline for the row to hold anything.
@@ -1836,11 +1863,14 @@ final case class DataTable[A] private (
                 SizeState(),
                 OrderState(),
                 ScrollState(),
-                MoveState[A]()
+                MoveState[A](),
+                // A caller-bound anchor works without a mount, which is the point of binding it:
+                // a table that ranges and owns nothing else stays a pure render.
+                SelectState(metaKey = metaKeyFlag, anchor = anchorRef)
             )
         if !ownsState then static
         else
-            UI.mounted {
+            val mount = UI.mounted {
                 for
                     cmds <- UI.commands
                     // A caller's own id wins; the mount mints one only when none was given,
@@ -1891,11 +1921,38 @@ final case class DataTable[A] private (
                         if frozenRowsOn then Present(headTop) else Absent,
                         if handleColumn then Present(rowsIn) else Absent,
                         drafts0.toMap,
-                        if rangeOn then Present(anchorRow) else Absent
+                        // A caller who bound the anchor owns it; the minted one is the fallback for
+                        // a table that did not, and it lives exactly as long as this mount does.
+                        if !rangeOn then Absent
+                        else if anchorRef.isDefined then anchorRef
+                        else Present(anchorRow)
                     )
                     if !frozenRowsOn then tree
                     else UI.fragment(headProbe(cmds, headId(prefix), headTop), tree)
             }.placeholder(static)
+            // An id is the caller declaring which table this is, so it is also the identity the
+            // instance keeps. Without one the mount stays keyless, which is what it always was.
+            //
+            // Everything this mount allocates is state the table owns and nobody else can hand
+            // back: the shift anchor, the column grab and drag, the row drag, the scroll offset,
+            // the measured frozen-header height, the editing drafts. Keyless, all of it is
+            // re-allocated on every emission of whatever region encloses the table — a page that
+            // re-renders on a store write rebuilds the table several times between two clicks,
+            // and a shift-click then reads an anchor ref that no click ever wrote. Measured that
+            // way: `anchorSet ref=70`, then `shift anchor=Absent ref=74`.
+            //
+            // kyo-ui's own keyless-remount warning does not catch this, because the identity is
+            // minted INSIDE the mount and every run takes the next one, so the registry never
+            // sees a path repeat to count.
+            //
+            // What a key costs is the documented price of any keyed mount: the effect runs once,
+            // so the column set and the editable/filterable leaves are read at mount time.
+            // Anything that must change afterwards belongs in a `Signal` — which is what `rows`,
+            // `sort`, `page` and the bound refs already are.
+            idV match
+                case Present(id) => mount.keyed(DataTable -> id)
+                case Absent      => mount
+            end match
         end if
     end render
 
