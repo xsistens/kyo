@@ -266,6 +266,22 @@ end FrozenPlan
 /** Where the reader is in the list, and what that leaves on the screen. */
 final private[uic] case class Paging[A](rows: List[A], base: Int, current: Int)
 
+/** The bindings that change the ROWS and nothing else, as one value.
+  *
+  * The table's other bindings — column order, visibility, sort, filter, page, widths — rebuild
+  * every cell when they move, so resolving them around the body is right and costs nothing. These
+  * five do not: a selection, a context row, a picked cell, an expanded row, a collapsed group each
+  * change a handful of `<tr>`s and leave the rest of the table exactly as it was. Held as one
+  * value, they can drive the row list itself instead of the component around it.
+  */
+final private[uic] case class RowInputs(
+    sel: Set[String] = Set.empty,
+    ctx: Maybe[String] = Absent,
+    cells: Set[CellPath] = Set.empty,
+    exp: Set[String] = Set.empty,
+    groups: Set[GroupPath] = Set.empty
+) derives CanEqual
+
 /** The whole-list values a row handler needs, as one value that can be read AT THE MOMENT IT RUNS.
   *
   * A handler closed over these is correct only for as long as every emission rebuilds it, which is
@@ -314,16 +330,21 @@ private[uic] object RowSpec:
       */
     given canEqual[A]: CanEqual[RowSpec[A], RowSpec[A]] = CanEqual.derived
 
-    /** A data row. The fields are what `dataRow` always took; holding them as a value is what lets
-      * the body decide whether a row has to be rendered again without rendering it.
+    /** A data row.
+      *
+      * The four reader-state fields are NARROWED to this row on purpose. `dataRow` was handed the
+      * table-wide sets and asked them about its own key; carrying those sets here instead would
+      * make every row of the table unequal the moment any one row's selection changed, which is
+      * reuse spent on nothing. What decides whether this `<tr>` is painted again has to be about
+      * this `<tr>`.
       */
     final case class Data[A](
         a: A,
         index: Int,
-        sel: Set[String],
-        ctx: Maybe[String],
-        cells: Set[CellPath],
-        exp: Set[String],
+        selected: Boolean,
+        contextRow: Boolean,
+        pickedCells: Set[List[String]],
+        expanded: Boolean,
         colCount: Int,
         spans: Map[Int, SpanCell],
         edit: EditState,
@@ -1415,6 +1436,70 @@ final case class DataTable[A] private (
             case Present(ReactiveValue.Const(c)) => k(c)
             case _                               => k(fallback)
 
+    /** Whether the row bindings may be resolved BELOW the body rather than around it.
+      *
+      * They may whenever nothing outside the row stream reads them. Three features do read them
+      * from outside: a select-all header asks the whole selection whether every row is picked, a
+      * frozen row group renders a second body from the same five values, and a windowed body
+      * already drives its rows from the scroll. Any of those and they stay where they were, which
+      * is exactly what the table did before — no gain there yet, and no change either.
+      */
+    private def rowInputsBelow: Boolean = !checkboxColumn && !frozenRowsOn && !windowOn
+
+    /** The five row bindings as one signal, or `Absent` when none of them is one.
+      *
+      * Folded over the bound ones only, so a table binding exactly one of them gets a plain `map`
+      * and keeps the ref projection that lets the region bind without a fiber. `combineLatest`
+      * rather than `zip`: `zip` waits for BOTH sides to move, and a selection changing while the
+      * expansion stands still has to reach the rows.
+      */
+    private def rowInputsSignal(using Frame): Maybe[Signal[RowInputs]] =
+        def fold[T](
+            acc: Maybe[Signal[RowInputs]],
+            sig: Maybe[Signal[T]],
+            set: (RowInputs, T) => RowInputs
+        )(using CanEqual[T, T]): Maybe[Signal[RowInputs]] =
+            sig match
+                case Absent => acc
+                case Present(s) =>
+                    acc match
+                        case Absent       => Present(s.map(t => set(RowInputs(), t)))
+                        case Present(cur) => Present(cur.combineLatest(s).map((r, t) => set(r, t)))
+        val selSig: Maybe[Signal[Set[String]]] = selectedBinding.flatMap {
+            case ReactiveValue.Dyn(sig) => Present(sig)
+            case ReactiveValue.Const(_) => Absent
+        }
+        val a = fold(Absent, selSig, (r, v: Set[String]) => r.copy(sel = v))
+        val b = fold(a, contextRowRef.map(_.asInstanceOf[Signal[Maybe[String]]]), (r, v: Maybe[String]) => r.copy(ctx = v))
+        val c = fold(b, selectedCellsRef.map(_.asInstanceOf[Signal[Set[CellPath]]]), (r, v: Set[CellPath]) => r.copy(cells = v))
+        val d = fold(c, expandedRef.map(_.asInstanceOf[Signal[Set[String]]]), (r, v: Set[String]) => r.copy(exp = v))
+        fold(d, expandedGroupsRef.map(_.asInstanceOf[Signal[Set[GroupPath]]]), (r, v: Set[GroupPath]) => r.copy(groups = v))
+    end rowInputsSignal
+
+    /** Resolves the row bindings, below the body where that is allowed and around it otherwise.
+      *
+      * On the signal path `k`'s first argument is the empty value and MUST NOT be read: everything
+      * outside the row stream that could read it is exactly what makes [[rowInputsBelow]] false.
+      */
+    private def withRowInputs(k: (RowInputs, Maybe[Signal[RowInputs]]) => UI)(using Frame): UI =
+        val live = if rowInputsBelow then rowInputsSignal else Absent
+        live match
+            case Present(_) => k(RowInputs(), live)
+            case Absent =>
+                withValue(selectedBinding, Set.empty[String]) { sel =>
+                    withRef(contextRowRef, Absent: Maybe[String]) { ctx =>
+                        withRef(selectedCellsRef, Set.empty[CellPath]) { cells =>
+                            withRef(expandedRef, Set.empty[String]) { exp =>
+                                withRef(expandedGroupsRef, Set.empty[GroupPath]) { groups =>
+                                    k(RowInputs(sel, ctx, cells, exp, groups), Absent)
+                                }
+                            }
+                        }
+                    }
+                }
+        end match
+    end withRowInputs
+
     /** Whether anything can be edited at all, which is what decides whether the table
       * needs state of its own.
       */
@@ -2224,39 +2309,28 @@ final case class DataTable[A] private (
                             withRef(columnFiltersRef, Map.empty[List[String], ColumnFilter]) { specs =>
                                 withRef(columnWidthsRef, Map.empty[List[String], Double]) { widths =>
                                     withRef(pageRef, 0) { page =>
-                                        withValue(selectedBinding, Set.empty[String]) { sel =>
-                                            withRef(contextRowRef, Absent: Maybe[String]) { ctx =>
-                                                withRef(selectedCellsRef, Set.empty[CellPath]) { cells =>
-                                                    withRef(expandedRef, Set.empty[String]) { exp =>
-                                                        withRef(expandedGroupsRef, Set.empty[GroupPath]) { groups =>
-                                                            withTotal { total =>
-                                                                body(
-                                                                    rows,
-                                                                    offset,
-                                                                    held,
-                                                                    sort,
-                                                                    query,
-                                                                    page,
-                                                                    total,
-                                                                    sel,
-                                                                    ctx,
-                                                                    cells,
-                                                                    exp,
-                                                                    groups,
-                                                                    flags,
-                                                                    edit,
-                                                                    nav,
-                                                                    filter.copy(specs = specs),
-                                                                    size.copy(widths = widths),
-                                                                    order,
-                                                                    scroll,
-                                                                    move,
-                                                                    select
-                                                                )
-                                                            }
-                                                        }
-                                                    }
-                                                }
+                                        withRowInputs { (inputs, live) =>
+                                            withTotal { total =>
+                                                body(
+                                                    rows,
+                                                    offset,
+                                                    held,
+                                                    sort,
+                                                    query,
+                                                    page,
+                                                    total,
+                                                    inputs,
+                                                    live,
+                                                    flags,
+                                                    edit,
+                                                    nav,
+                                                    filter.copy(specs = specs),
+                                                    size.copy(widths = widths),
+                                                    order,
+                                                    scroll,
+                                                    move,
+                                                    select
+                                                )
                                             }
                                         }
                                     }
@@ -2500,11 +2574,8 @@ final case class DataTable[A] private (
         query: String,
         page: Int,
         total: Total,
-        sel: Set[String],
-        ctx: Maybe[String],
-        cells: Set[CellPath],
-        exp: Set[String],
-        openGroups: Set[GroupPath],
+        staticInputs: RowInputs,
+        liveInputs: Maybe[Signal[RowInputs]],
         flags: Map[List[String], Boolean],
         edit: EditState,
         nav: NavState[A],
@@ -2560,7 +2631,9 @@ final case class DataTable[A] private (
 
         // The whole-list values, from the same pipeline a handler will re-run when it needs them
         // live. The render's copy is the one that paints; the handlers below take the live one.
-        val view = bodyViewOf(rows, sorted, pg, openGroups)
+        // Neither of the two values read off it here depends on which groups are open, so the
+        // static inputs answer for both; the keyboard's rows do, and are taken per emission below.
+        val view = bodyViewOf(rows, sorted, pg, staticInputs.groups)
 
         // The range measures against the same list the select-all header covers — filtered, in
         // the reader's order, across every page — so the two cannot disagree about what the set
@@ -2602,7 +2675,11 @@ final case class DataTable[A] private (
                         var cell = th.cssClass("p-datatable-header-cell")
                         if depth > 1 then cell = cell.rowspan(depth)
                         List(cell)
-                val checkboxTh: List[Ast.Element] = if checkboxColumn then List(selectAllCell(sorted, sel, depth)) else Nil
+                // A select-all header reads the whole selection, which is why a table that has one
+                // resolves the row bindings above the body (see `rowInputsBelow`) and this value
+                // is the real one rather than the empty stand-in.
+                val checkboxTh: List[Ast.Element] =
+                    if checkboxColumn then List(selectAllCell(sorted, staticInputs.sel, depth)) else Nil
                 (expanderTh ++ checkboxTh).zipWithIndex.map((cell, i) => freeze(cell, frozen.leadAt(i)))
             end leading
             val rows = if matrix.isEmpty then List(Nil) else matrix
@@ -2637,26 +2714,31 @@ final case class DataTable[A] private (
 
         // The rows the keyboard moves over are the ones on the SCREEN: a collapsed group
         // renders none of its own, so stepping by the paged index would land on a row
-        // nobody can see.
-        val navHere =
+        // nobody can see. Which groups are open is a row binding, so this is per emission.
+        def navFor(in: RowInputs): NavState[A] =
             if !nav.on then nav
-            else nav.copy(rows = view.navRows, page = view.navPage)
+            else
+                val v = bodyViewOf(rows, sorted, pg, in.groups)
+                nav.copy(rows = v.navRows, page = v.navPage)
 
-        lazy val bodySpecs: List[RowSpec[A]] =
+        /** The `<tr>` stream for one value of the row bindings. The only thing under the body that
+          * they reach, which is what lets them drive the row list instead of the whole component.
+          */
+        def specsFor(in: RowInputs): List[RowSpec[A]] =
             if paged.isEmpty then List(RowSpec.Empty(colCount))
             else
                 groupSegments(
                     paged.zipWithIndex,
                     groupsV,
                     Nil,
-                    sel,
-                    ctx,
-                    cells,
-                    exp,
-                    openGroups,
+                    in.sel,
+                    in.ctx,
+                    in.cells,
+                    in.exp,
+                    in.groups,
                     colCount,
                     edit,
-                    navHere,
+                    navFor(in),
                     frozen,
                     move,
                     select
@@ -2690,14 +2772,16 @@ final case class DataTable[A] private (
                         RowSpec.Data(
                             held(i - rowOffset),
                             i,
-                            sel,
-                            ctx,
-                            cells,
-                            exp,
+                            staticInputs.sel.contains(keyOf(held(i - rowOffset))),
+                            staticInputs.ctx.contains(keyOf(held(i - rowOffset))),
+                            staticInputs.cells.collect {
+                                case c if c.row == keyOf(held(i - rowOffset)) => c.column
+                            },
+                            staticInputs.exp.contains(keyOf(held(i - rowOffset))),
                             colCount,
                             Map.empty,
                             edit,
-                            navHere,
+                            navFor(staticInputs),
                             frozen,
                             move,
                             select,
@@ -2743,22 +2827,24 @@ final case class DataTable[A] private (
             if size.idPrefix.nonEmpty then group = group.id(s"${size.idPrefix}-frozen")
             top.foreach(px => group = group.style(_.top(px.px)))
             val specs: List[RowSpec[A]] = rows.toList.zipWithIndex.flatMap { (a, i) =>
+                val rowId = keyOf(a)
                 val data: RowSpec[A] = RowSpec.Data(
                     a,
                     i,
-                    sel,
-                    ctx,
-                    cells,
-                    exp,
+                    staticInputs.sel.contains(rowId),
+                    staticInputs.ctx.contains(rowId),
+                    staticInputs.cells.collect { case c if c.row == rowId => c.column },
+                    staticInputs.exp.contains(rowId),
                     colCount,
                     Map.empty,
                     edit,
-                    navHere.copy(on = false),
+                    navFor(staticInputs).copy(on = false),
                     frozen,
                     move.copy(live = false, held = Absent),
                     select
                 )
-                if isExpanded(a, exp) then List(data, RowSpec.Expansion(a, colCount)) else List(data)
+                if isExpanded(a, staticInputs.exp) then List(data, RowSpec.Expansion(a, colCount))
+                else List(data)
             }
             group(specs.map(renderTr).map(toChild)*)
         end frozenGroup
@@ -2771,7 +2857,17 @@ final case class DataTable[A] private (
                     case Absent       => frozenGroup(held, Absent))
 
         val tbodyEl: UI =
-            if !windowOn then tbody.cssClass("p-datatable-tbody")(bodySpecs.map(renderTr).map(toChild)*)
+            if !windowOn then
+                val group = tbody.cssClass("p-datatable-tbody")
+                liveInputs match
+                    // The row bindings drive the ROWS: a keyed list inside the authored tbody, so a
+                    // selection or an expansion costs the rows it changed rather than all of them.
+                    case Present(sig) =>
+                        group(toChild(sig.map(in => Chunk.from(specsFor(in))).foreachKeyed(rowSpecKey)(renderTr)))
+                    // Nothing bound, or something outside the rows reads them: rendered inline,
+                    // exactly as before, and a table bound to nothing stays free of markers.
+                    case Absent => group(specsFor(staticInputs).map(renderTr).map(toChild)*)
+                end match
             else
                 val group = tbody
                     .cssClass("p-datatable-tbody")
@@ -4216,8 +4312,23 @@ final case class DataTable[A] private (
         val spans = spanCells(rows.map(_._1), exp)
         rows.zip(spans).flatMap { (row, spanned) =>
             val (a, index) = row
+            val id         = keyOf(a)
             val data: RowSpec[A] =
-                RowSpec.Data(a, index, sel, ctx, cells, exp, colCount, spanned, edit, nav, frozen, move, select)
+                RowSpec.Data(
+                    a,
+                    index,
+                    sel.contains(id),
+                    ctx.contains(id),
+                    cells.collect { case c if c.row == id => c.column },
+                    exp.contains(id),
+                    colCount,
+                    spanned,
+                    edit,
+                    nav,
+                    frozen,
+                    move,
+                    select
+                )
             // The expansion is its own entry, and only when there is one to draw: an entry that
             // rendered to nothing would break the one-element-per-entry rule the reuse rests on.
             if isExpanded(a, exp) then List(data, RowSpec.Expansion(a, colCount)) else List(data)
@@ -4293,9 +4404,10 @@ final case class DataTable[A] private (
     /** One data row (plus its expansion row while expanded). */
     private def dataRow(spec: RowSpec.Data[A])(using Frame): UI =
         import spec.*
-        val id        = keyOf(a)
-        val isSel     = sel.contains(id)
-        val isExp     = exp.contains(id)
+        val id = keyOf(a)
+        // Qualified: `selected` and `expanded` are also setter names on the table itself.
+        val isSel     = spec.selected
+        val isExp     = spec.expanded
         val rowEdit   = edit.rows.contains(id)
         val navRow    = nav.indexOf(id, keyOf).getOrElse(-1)
         val canSelect = selectableAt(a)
@@ -4378,8 +4490,8 @@ final case class DataTable[A] private (
                 // rule that reaches a cell, so the class and the rule are both kyo's, over
                 // Prime's own selected-row tokens.
                 if cellSelectOn then
-                    cell = cell.aria("selected", cells.contains(here).toString)
-                    if cells.contains(here) then cell = cell.cssClass("p-uic-dt-cell-selected")
+                    cell = cell.aria("selected", pickedCells.contains(path).toString)
+                    if pickedCells.contains(path) then cell = cell.cssClass("p-uic-dt-cell-selected")
                     if canSelect then cell = cell.onClick(toggleCell(here)).stopPropagation(true)
                 end if
                 // With navigation on, every cell is addressable and the editable ones are
@@ -4473,7 +4585,7 @@ final case class DataTable[A] private (
         if selectionModeV != SelectionMode.None && !cellSelectOn then row = row.aria("selected", isSel.toString)
         // A second, separate mark: the reader is acting ON this row without changing what
         // is selected, which is why Prime gives it a class of its own.
-        if ctx.contains(id) then row = row.cssClass("p-datatable-contextmenu-row-selected")
+        if contextRow then row = row.cssClass("p-datatable-contextmenu-row-selected")
         if contextRowOn then row = row.onContextMenu(openRowContext(a, id))
         // After a drop the browser still owes a click, and it does not land on the grip the
         // press started on: the rows moved under the pointer. A row that would select takes

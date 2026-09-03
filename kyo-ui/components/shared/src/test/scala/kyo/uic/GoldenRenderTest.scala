@@ -1438,12 +1438,25 @@ class GoldenRenderTest extends UicTest:
         yield
             assert(twoWay.mkString.contains("p-datatable-row-selected"), "the mark is there to compare")
             assert(oneWay.mkString == twoWay.mkString, "a one-way selection is not a lesser table")
-            // The constant is the same document with the reactive region taken away: a value that
-            // cannot change needs nothing to watch it, so the markers are the whole difference and
-            // the element anatomy is byte-identical.
+            // The constant is the same document with the SUBSCRIPTION taken away: a value that
+            // cannot change needs nothing to watch it, so a bound table carries two things a
+            // constant one does not, and nothing else. Both are named here rather than trimmed off
+            // the ends — which was only ever an accident of the region having wrapped the whole
+            // document back when a bound selection re-rendered the whole table.
+            //
+            //   - the region's own comment markers, wherever they now sit;
+            //   - the engine's `data-kyo-path` on the rows. A bound selection renders its rows as a
+            //     KEYED list, and a keyed child is addressed by its key while a static one is
+            //     addressed by its index. Addressing follows structure, so this is the one thing
+            //     that cannot be equal here — and it is not something a reader can see.
+            //
+            // Everything a reader CAN see — every element, class, attribute value and order — is
+            // still compared byte for byte, including the selection mark this test is named after.
+            def withoutSubscription(html: String): String =
+                html.replaceAll("<!--kyo-r[se]:[^>]*-->", "").replaceAll(" data-kyo-path=\"[^\"]*\"", "")
             assert(
-                constant.mkString == twoWay.mkString.stripPrefix("<!--kyo-rs:r-->").stripSuffix("<!--kyo-re:r-->"),
-                "a constant selection is the same anatomy without the region"
+                withoutSubscription(constant.mkString) == withoutSubscription(twoWay.mkString),
+                "a constant selection is the same anatomy without the subscription"
             )
             assert(!constant.mkString.contains("kyo-rs"), "and it subscribes to nothing")
         end for

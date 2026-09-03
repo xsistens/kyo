@@ -43,10 +43,9 @@ class DataTableReuseTest extends UicTest:
                 changed: UI
             )(using Frame): Unit < Async = ()
 
-    "one selected row costs one rendered row".pendingUntilFixed(
-        "F-16: the body's reactive unit is the table, so one changed row re-renders all of them " +
-            "(measured: 80 column-body calls for a 40-row table, i.e. two full passes per write)"
-    ) in {
+    // Was 80 for these forty rows — two full passes per write — before the body's reactive unit
+    // became the row.
+    "one selected row costs one rendered row" in {
         Scope.run {
             val counted = new Renders
             for

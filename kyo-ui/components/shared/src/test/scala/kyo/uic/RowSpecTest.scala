@@ -32,10 +32,10 @@ class RowSpecTest extends UicTest:
         val data = RowSpec.Data[Item](
             items.head,
             0,
-            Set("a"),
-            Present("a"),
+            true,
+            true,
             Set.empty,
-            Set("a"),
+            true,
             3,
             Map.empty,
             EditState(Set.empty, Absent),
@@ -46,7 +46,7 @@ class RowSpecTest extends UicTest:
         )
         List(
             data,
-            data.copy(a = items(1), index = 1, sel = Set.empty, ctx = Absent, exp = Set.empty),
+            data.copy(a = items(1), index = 1, selected = false, contextRow = false, expanded = false),
             RowSpec.Expansion(items.head, 3),
             RowSpec.GroupHead(uic.RowGroup[Item, String](_.name), GroupPath(List("A")), items, 3, true, true),
             RowSpec.GroupFoot((_, rows) => UI.span(rows.size.toString), GroupPath(List("A")), items, 3),
