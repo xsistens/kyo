@@ -105,6 +105,13 @@ class DiscoverabilityTest extends UicTest:
         )
     }
 
+    "modifier row selection is one boolean, and it chains" in {
+        typeCheck(
+            preamble +
+                """def x(r: SignalRef[Set[String]]) = uic.DataTable[String]().selectionMode(uic.SelectionMode.Multiple).selected(r).metaKeySelection(true)"""
+        )
+    }
+
     "a menu item's disabled takes a Signal, like its label already did" in {
         // The item type was uneven with ITSELF: a label that may follow a signal beside an
         // availability that may not. That is the argument for this one, not the count of

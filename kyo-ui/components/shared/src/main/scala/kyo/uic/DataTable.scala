@@ -77,6 +77,26 @@ final private[uic] case class NavState[A](
         if i < 0 then Absent else Present(i)
 end NavState
 
+/** What a row click needs beyond the selection itself, once [[DataTable.metaKeySelection]] is
+  * on: where a range would be measured, and where it would start.
+  *
+  * `keys` is the FILTERED rows in the order the reader sees them, across every page — the same
+  * list the select-all header covers, so a range and a select-all cannot disagree about what
+  * "all of them" means. It is empty when no range is possible, which is also how the render
+  * without a mount says so.
+  *
+  * `anchor` is the last row picked WITHOUT shift. It is the one piece of selection state the
+  * caller does not own — a `Set` has no order, so it cannot be derived from the selection — and
+  * the only reason a table with modifier selection needs a mount at all. A shift-click READS it
+  * and leaves it where it is, which is what makes widening and narrowing the same range one
+  * gesture repeated rather than a walk.
+  */
+final private[uic] case class SelectState(
+    metaKey: Boolean = false,
+    keys: IndexedSeq[String] = IndexedSeq.empty,
+    anchor: Maybe[SignalRef[Maybe[String]]] = Absent
+)
+
 /** What the filter row needs to know: the filters that are bound, which of them this
   * table cannot apply, the open state of each column's mode menu, and whether the mount
   * has run.
@@ -391,6 +411,7 @@ final case class DataTable[A] private (
     paginatorF: Maybe[Paginator => Paginator] = Absent,
     selectionModeV: SelectionMode = SelectionMode.None,
     selectedBinding: Maybe[ReactiveValue[Set[String]]] = Absent,
+    metaKeyFlag: Boolean = false,
     selectableF: Maybe[A => Boolean] = Absent,
     selectedCellsRef: Maybe[SignalRef[Set[CellPath]]] = Absent,
     contextRowRef: Maybe[SignalRef[Maybe[String]]] = Absent,
@@ -684,6 +705,35 @@ final case class DataTable[A] private (
       */
     def selected(v: Set[String] | Signal[Set[String]]): DataTable[A] =
         copy(selectedBinding = Present(ReactiveValue(v)))
+
+    /** Whether picking rows takes a modifier key (Prime's `metaKeySelection`).
+      *
+      * Off (the default, and Prime's since 3.45.0) every click toggles its row, which is the
+      * behaviour a checkbox list has without the checkboxes. On, a row click reads like a file
+      * manager and a spreadsheet:
+      *
+      *   - a plain click REPLACES the selection with the row it landed on — including when that
+      *     row was already selected, which collapses a selection to one rather than clearing it
+      *   - Ctrl or Cmd + click toggles that row into or out of the selection
+      *   - Shift + click selects the RANGE from the last row picked without shift up to this one,
+      *     replacing the selection; a shift-click does not move that anchor, so widening and
+      *     narrowing the same range is one gesture repeated
+      *
+      * '''Ctrl OR Cmd''', never one of the two: `event.metaKey || event.ctrlKey` is what Prime
+      * tests and what every desktop convention expects, and pinning it to `metaKey` alone locks
+      * out every reader who is not on a Mac.
+      *
+      * Two consequences worth knowing before turning it on. The range needs an ANCHOR, which is
+      * the one piece of selection state the caller does not own, so a table with this on
+      * allocates a mount and renders as a placeholder under a pure render — which is why it is
+      * opt-in rather than the shape every selectable table pays for. And [[selectableWhen]] still
+      * applies: a range steps over the rows it rejects rather than dragging them in.
+      *
+      * Deviation from Prime, deliberate: there, shift-ranging works in `Multiple` mode whether or
+      * not `metaKeySelection` is set. Here the two arrive together, so a table that never asked
+      * for modifier semantics keeps a render with no state in it.
+      */
+    def metaKeySelection(v: Boolean): DataTable[A] = copy(metaKeyFlag = v)
 
     /** The selection's write-back ref, where the caller bound one that can be written.
       *
@@ -1272,7 +1322,17 @@ final case class DataTable[A] private (
       * and the menu-open state of a filter row.
       */
     private def ownsState: Boolean =
-        editingBound || navOn || filterBound || resizeOn || reorderOn || windowOn || frozenRowsOn || handleColumn
+        editingBound || navOn || filterBound || resizeOn || reorderOn || windowOn || frozenRowsOn ||
+            handleColumn || rangeOn
+
+    /** Whether a shift-click can range, which is the only reason this table would own an anchor.
+      *
+      * Tied to [[metaKeySelection]] rather than to `Multiple` alone (where Prime puts it) because
+      * the anchor is what forces a mount, and a mount is what makes a table render as a
+      * placeholder in a pure render. Every selectable table paying that for a gesture it never
+      * offered is the wrong trade; asking for modifier selection is the caller saying they want it.
+      */
+    private def rangeOn: Boolean = metaKeyFlag && rowClickSelects && selectedBinding.isDefined
 
     /** Whether the filter row is rendered: the filters have to be bound somewhere, and
       * some column has to carry a pipeline for the row to hold anything.
@@ -1797,6 +1857,10 @@ final case class DataTable[A] private (
                     // too, from repainting anything: the height is the same, and a ref set
                     // to what it already holds tells nobody.
                     headTop <- Signal.initRef(Absent: Maybe[Int])
+                    // The row a shift-click measures its range from. Allocated whether or not
+                    // this table ranges, because a mount allocates a fixed set; only `rangeOn`
+                    // decides whether it is handed on.
+                    anchorRow <- Signal.initRef(Absent: Maybe[String])
                 yield
                     val tree = wired(
                         prefix,
@@ -1810,7 +1874,8 @@ final case class DataTable[A] private (
                         if windowOn then Present(scroll) else Absent,
                         if frozenRowsOn then Present(headTop) else Absent,
                         if handleColumn then Present(rowsIn) else Absent,
-                        drafts0.toMap
+                        drafts0.toMap,
+                        if rangeOn then Present(anchorRow) else Absent
                     )
                     if !frozenRowsOn then tree
                     else UI.fragment(headProbe(cmds, headId(prefix), headTop), tree)
@@ -1853,7 +1918,8 @@ final case class DataTable[A] private (
         scroll: Maybe[SignalRef[Double]] = Absent,
         headTop: Maybe[Signal[Maybe[Int]]] = Absent,
         rowDrag: Maybe[SignalRef[Maybe[RowDrag]]] = Absent,
-        filterDrafts: Map[List[String], SignalRef[ColumnFilter]] = Map.empty
+        filterDrafts: Map[List[String], SignalRef[ColumnFilter]] = Map.empty,
+        anchor: Maybe[SignalRef[Maybe[String]]] = Absent
     )(using Frame): UI =
         errRef.render(e =>
             withRef(editingRowsRef, Set.empty[String]) { editRows =>
@@ -1873,7 +1939,8 @@ final case class DataTable[A] private (
                                     idPrefix = idPrefix,
                                     live = true,
                                     measure = measure
-                                )
+                                ),
+                                SelectState(metaKey = metaKeyFlag, anchor = anchor)
                             )
                         }
                     }
@@ -1888,9 +1955,12 @@ final case class DataTable[A] private (
         size: SizeState,
         order: OrderState,
         scroll: ScrollState,
-        move: MoveState[A]
+        move: MoveState[A],
+        select: SelectState = SelectState()
     )(using Frame): UI =
-        withColumnOrder(order)((t, o) => t.withVisibleColumns(_.buildAll(edit, nav, filter, size, o, scroll, move)))
+        withColumnOrder(order)((t, o) =>
+            t.withVisibleColumns(_.buildAll(edit, nav, filter, size, o, scroll, move, select))
+        )
 
     /** Resolves a bound [[columnOrder]] and hands on the table with its columns in that
       * order, so the header, the body, the footer, the widths and the keyboard grid all
@@ -1952,7 +2022,8 @@ final case class DataTable[A] private (
         size: SizeState,
         order: OrderState,
         scroll: ScrollState,
-        move: MoveState[A]
+        move: MoveState[A],
+        select: SelectState
     )(using Frame): UI =
         withSortableFlags { flags =>
             withFrozenRows { held =>
@@ -1988,7 +2059,8 @@ final case class DataTable[A] private (
                                                                     size.copy(widths = widths),
                                                                     order,
                                                                     scroll,
-                                                                    move
+                                                                    move,
+                                                                    select
                                                                 )
                                                             }
                                                         }
@@ -2164,7 +2236,8 @@ final case class DataTable[A] private (
         size: SizeState,
         order: OrderState,
         scroll: ScrollState,
-        moveIn: MoveState[A]
+        moveIn: MoveState[A],
+        selectIn: SelectState
     )(using Frame): UI =
         // A lazily loaded table is handed a window onto rows prepared elsewhere, so the
         // three passes below would filter a page, sort a page and slice a slice. It skips
@@ -2175,6 +2248,11 @@ final case class DataTable[A] private (
         val reads  = if prepared then Nil else filterReads(filterIn.specs)
         val filter = filterIn.copy(unusable = reads.collect { case (p, Absent) => p }.toSet)
         val sorted = arranged(rows, sort, query, reads)
+        // The range measures against the same list the select-all header covers — filtered, in
+        // the reader's order, across every page — so the two cannot disagree about what the set
+        // of rows is. Only the rows a range may actually take are listed, since a range that
+        // stepped over a rejected row would still have to report where it stopped.
+        val select = selectIn.copy(keys = sorted.filter(selectableAt).map(keyOf).toIndexedSeq)
 
         // 3. Paginate: clamp the 0-based page, slice, and embed the standalone Paginator
         //    (resolved page passed directly, since the table already renders inside its own
@@ -2298,7 +2376,22 @@ final case class DataTable[A] private (
         lazy val bodyRows: List[UI] =
             if paged.isEmpty then List(emptyRow)
             else
-                groupSegments(paged.zipWithIndex, groupsV, Nil, sel, ctx, cells, exp, openGroups, colCount, edit, navHere, frozen, move)
+                groupSegments(
+                    paged.zipWithIndex,
+                    groupsV,
+                    Nil,
+                    sel,
+                    ctx,
+                    cells,
+                    exp,
+                    openGroups,
+                    colCount,
+                    edit,
+                    navHere,
+                    frozen,
+                    move,
+                    select
+                )
 
         /** One spacer row, which is what holds the height of the rows that are not drawn.
           *
@@ -2351,7 +2444,22 @@ final case class DataTable[A] private (
                 val until         = math.min(count, reach)
                 val drawn = (from until until).toList.flatMap { i =>
                     if i >= rowOffset && i < loadedEnd then
-                        dataRow(held(i - rowOffset), i, sel, ctx, cells, exp, colCount, Map.empty, edit, navHere, frozen, move, rowHeightV)
+                        dataRow(
+                            held(i - rowOffset),
+                            i,
+                            sel,
+                            ctx,
+                            cells,
+                            exp,
+                            colCount,
+                            Map.empty,
+                            edit,
+                            navHere,
+                            frozen,
+                            move,
+                            select,
+                            rowHeightV
+                        )
                     else List(slotRow)
                 }
                 // Both spacers are always emitted, one of them at nothing at either end of
@@ -2397,7 +2505,8 @@ final case class DataTable[A] private (
                     edit,
                     navHere.copy(on = false),
                     frozen,
-                    move.copy(live = false, held = Absent)
+                    move.copy(live = false, held = Absent),
+                    select
                 )
             )
             group(trs.map(toChild)*)
@@ -3769,10 +3878,11 @@ final case class DataTable[A] private (
         edit: EditState,
         nav: NavState[A],
         frozen: FrozenPlan,
-        move: MoveState[A]
+        move: MoveState[A],
+        select: SelectState
     )(using Frame): List[UI] =
         levels match
-            case Nil => leafRows(rows, sel, ctx, cells, exp, colCount, edit, nav, frozen, move)
+            case Nil => leafRows(rows, sel, ctx, cells, exp, colCount, edit, nav, frozen, move, select)
             case level :: rest =>
                 RowGroup.runs(rows)((a, _) => level.keyF(a)).flatMap { (key, run) =>
                     val groupPath = GroupPath(path :+ key)
@@ -3789,7 +3899,22 @@ final case class DataTable[A] private (
                     val innerRows: List[UI] =
                         if !open then Nil
                         else
-                            groupSegments(run, rest, groupPath.keys, sel, ctx, cells, exp, openGroups, colCount, edit, nav, frozen, move)
+                            groupSegments(
+                                run,
+                                rest,
+                                groupPath.keys,
+                                sel,
+                                ctx,
+                                cells,
+                                exp,
+                                openGroups,
+                                colCount,
+                                edit,
+                                nav,
+                                frozen,
+                                move,
+                                select
+                            )
                     val footerRow: List[UI] =
                         if !open then Nil
                         else
@@ -3815,11 +3940,12 @@ final case class DataTable[A] private (
         edit: EditState,
         nav: NavState[A],
         frozen: FrozenPlan,
-        move: MoveState[A]
+        move: MoveState[A],
+        select: SelectState
     )(using Frame): List[UI] =
         val spans = spanCells(rows.map(_._1), exp)
         rows.zip(spans).flatMap((row, spanned) =>
-            dataRow(row._1, row._2, sel, ctx, cells, exp, colCount, spanned, edit, nav, frozen, move)
+            dataRow(row._1, row._2, sel, ctx, cells, exp, colCount, spanned, edit, nav, frozen, move, select)
         )
     end leafRows
 
@@ -3903,6 +4029,7 @@ final case class DataTable[A] private (
         nav: NavState[A],
         frozen: FrozenPlan,
         move: MoveState[A],
+        select: SelectState,
         height: Maybe[Int] = Absent
     )(using Frame): List[UI] =
         val id        = keyOf(a)
@@ -4091,18 +4218,23 @@ final case class DataTable[A] private (
         // press started on: the rows moved under the pointer. A row that would select takes
         // it and drops it, so the press cannot reach the next row the reader clicks.
         if rowInteractive then
-            val act: Any < Async = if move.held.exists(_.done) then clearRowMove(move) else activate(id, canSelect)
+            def act(e: MouseEvent): Any < Async =
+                if move.held.exists(_.done) then clearRowMove(move) else activate(id, canSelect, e, select)
+            // Enter and Space are a click with no pointer behind them, so they carry no
+            // modifiers: a keyboard activation is always the plain kind.
+            val actPlain: Any < Async = act(MouseEvent(Absent, Modifiers.none))
             // A click that passed through a control of the reader's own is that control's, not the
             // row's: following a link in a cell, pressing the expander, starting a row edit. Without
             // this the row selects as well, and the control cannot decline the click for it — one
             // that navigates natively declares no kyo handler, so it has no `stopPropagation` to set
             // (and giving an anchor one costs it the middle click). The keyboard path below is
             // deliberately untouched: Enter on the ROW is the row's, whatever it contains.
-            val clicked: MouseEvent => Any < Async = e => if e.onControl then () else act
+            val clicked: MouseEvent => Any < Async = e => if e.onControl then () else act(e)
             // The row's tab stop is this table's, not a control's, so Enter and Space are too.
             // A row being edited overwrites this handler below, which is the order that belongs:
             // while an editor is open Enter commits the row rather than re-selecting it.
-            row = row.tabIndex(0).onClick(clicked).onKeyDown(e => if activationOf(e).isDefined then act else ())
+            row = row.tabIndex(0).onClick(clicked)
+                .onKeyDown(e => if activationOf(e).isDefined then actPlain else ())
         end if
         if rowEdit then
             // Enter and Escape reach here from whichever cell editor has focus, since a
@@ -4364,7 +4496,11 @@ final case class DataTable[A] private (
                     case Present(to)                   => if rowEdit then () else openAt(to, nav, edit)
                     case Absent                        => ()
                 val selectStep: Any < Async =
-                    if step.selectRow && rowInteractive then activate(cell.row, selectableAt(row)) else ()
+                    // The grid's own key step, which is a selection with no pointer and no
+                    // anchor behind it: the plain kind, whatever the modifier setting is.
+                    if step.selectRow && rowInteractive then
+                        activate(cell.row, selectableAt(row), MouseEvent(Absent, Modifiers.none), SelectState())
+                    else ()
                 for
                     // A refused commit stops the step that would move on: opening the next
                     // cell clears the error, so moving anyway left the refusal invisible
@@ -4581,15 +4717,63 @@ final case class DataTable[A] private (
             r <- setRowEditing(id, false)
         yield r
 
-    /** Clicking a row updates the bound selection set (per the mode), then fires `onRowClick`. */
-    private def activate(id: String, canSelect: Boolean)(using Frame): Any < Async =
-        val setSelection: Any < Async = (selectedRef, selectionModeV) match
-            case _ if !canSelect => ()
-            case (Present(ref), SelectionMode.Single | SelectionMode.Radio) =>
-                ref.getAndUpdate(cur => if cur == Set(id) then Set.empty else Set(id))
-            case (Present(ref), SelectionMode.Multiple) =>
-                ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
-            case _ => ()
+    /** Clicking a row updates the bound selection set (per the mode), then fires `onRowClick`.
+      *
+      * Two rulesets, and which one applies is [[metaKeySelection]]. Without it every click
+      * toggles its row and the modifiers mean nothing. With it the row reads the way a file
+      * manager's does, and the shape below is Prime's `onRowClick`, kept deliberately close to
+      * it: shift ranges when there is an anchor to range from, otherwise the anchor moves to
+      * this row and Ctrl/Cmd decides between toggling and replacing.
+      *
+      * `onRowClick` fires either way and regardless of whether anything was written, which is
+      * what lets a caller who owns the selection elsewhere (a one-way [[selected]]) close the
+      * loop themselves.
+      */
+    private def activate(id: String, canSelect: Boolean, e: MouseEvent, select: SelectState)(using
+        Frame
+    ): Any < Async =
+        // Ctrl OR Cmd. Prime tests `metaKey || ctrlKey` and so does every desktop convention;
+        // pinning this to `meta` alone locks out everyone not on a Mac.
+        val meta = e.modifiers.meta || e.modifiers.ctrl
+
+        def plain(ref: SignalRef[Set[String]]): Any < Async =
+            (selectedRef, selectionModeV) match
+                case (_, SelectionMode.Single | SelectionMode.Radio) =>
+                    ref.getAndUpdate(cur => if cur == Set(id) then Set.empty else Set(id))
+                case _ => ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
+
+        def modified(ref: SignalRef[Set[String]]): Any < Async =
+            def anchorTo(v: Set[String]): Any < Async =
+                select.anchor match
+                    case Present(a) => a.set(Present(id)).andThen(ref.set(v))
+                    case Absent     => ref.set(v)
+            (select.anchor, e.modifiers.shift, selectionModeV) match
+                // A range needs somewhere to start. Without an anchor the shift-click is the
+                // first pick, which is what sets one.
+                case (Present(a), true, SelectionMode.Multiple) =>
+                    a.get.map {
+                        case Present(from) => ref.set(DataTable.between(select.keys, from, id))
+                        case Absent        => anchorTo(Set(id))
+                    }
+                case _ =>
+                    ref.get.map { cur =>
+                        // Prime: only a MODIFIED click on an already-picked row removes it. A
+                        // plain click on one collapses the selection to it rather than clearing,
+                        // which is what makes "click, then shift-click" a range every time.
+                        val next =
+                            if cur.contains(id) && meta then cur - id
+                            else if meta && selectionModeV == SelectionMode.Multiple then cur + id
+                            else Set(id)
+                        anchorTo(next)
+                    }
+            end match
+        end modified
+
+        val setSelection: Any < Async = selectedRef match
+            case _ if !canSelect                                => ()
+            case Present(ref) if metaKeyFlag && rowClickSelects => modified(ref)
+            case Present(ref) if rowClickSelects                => plain(ref)
+            case _                                              => ()
         val fireClick: Any < Async = onRowClickF match
             case Present(f) => f(id)
             case Absent     => ()
@@ -4603,6 +4787,20 @@ end DataTable
 
 object DataTable:
     def apply[A](): DataTable[A] = new DataTable[A]()
+
+    /** The keys from `from` to `to` inclusive, in either direction — what a shift-click picks.
+      *
+      * `keys` is the reader's own order, so a range is what they see between the two rows and
+      * not what the underlying list happens to hold. A key that is not there (the anchor row was
+      * filtered away, or is on a page this table no longer holds) leaves the click meaning the
+      * one row it landed on, which is the same thing an anchorless shift-click means.
+      */
+    private[uic] def between(keys: IndexedSeq[String], from: String, to: String): Set[String] =
+        val a = keys.indexOf(from)
+        val b = keys.indexOf(to)
+        if a < 0 || b < 0 then Set(to)
+        else keys.slice(math.min(a, b), math.max(a, b) + 1).toSet
+    end between
 
     /** How narrow a drag may leave a column, in CSS pixels. Prime's own floor: low enough
       * that a reader can push a column almost out of the way, high enough that the handle

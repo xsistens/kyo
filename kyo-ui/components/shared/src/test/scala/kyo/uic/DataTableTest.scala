@@ -1717,6 +1717,127 @@ class DataTableTest extends UicTest:
             assert(!twoWay.contains("a row click has nowhere to go"), "and so is a writable ref")
     }
 
+    // ---- metaKeySelection: the modifier ruleset, and the range it brings ----
+
+    /** A range needs more than the two rows the rest of this file gets by with. */
+    private val four =
+        List(Item("1", "A", 10), Item("2", "B", 20), Item("3", "C", 30), Item("4", "D", 40))
+
+    /** A table with modifier selection, through the mount seam it needs for its anchor. */
+    private def modifierTable(sel: SignalRef[Set[String]], rows: Seq[Item] = four)(using Frame) =
+        for
+            err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            anchor <- Signal.initRef(Absent: Maybe[String])
+        yield
+            val t = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple).selected(sel).metaKeySelection(true)
+            (t.wired("t", Map.empty, err, _ => (), anchor = Present(anchor)), anchor)
+
+    private def clickWith(el: UI.Ast.Element, mods: UI.Modifiers)(using Frame): Any < Async =
+        el.attrs.onClickEvt match
+            case Present(f) => f(UI.MouseEvent(el.attrs.identifier, mods))
+            case Absent     => throw new AssertionError("the row declares no typed click handler")
+
+    "with metaKeySelection a plain click replaces the selection instead of adding to it" in {
+        for
+            sel     <- Signal.initRef(Set.empty[String])
+            (ui, _) <- modifierTable(sel)
+            trs     <- bodyTrs(ui)
+            _       <- click(trs.head)
+            first   <- sel.get
+            _       <- click(trs(1))
+            second  <- sel.get
+            // Prime: a plain click on an ALREADY picked row collapses to it rather than clearing,
+            // which is what keeps "click, then shift-click" a range every time.
+            _     <- click(trs(1))
+            again <- sel.get
+        yield
+            assert(first == Set("1"))
+            assert(second == Set("2"), "the second click replaced rather than added")
+            assert(again == Set("2"), "and a plain click never clears the row it lands on")
+    }
+
+    "Ctrl or Cmd toggles the row into and out of the selection" in {
+        for
+            sel      <- Signal.initRef(Set.empty[String])
+            (ui, _)  <- modifierTable(sel)
+            trs      <- bodyTrs(ui)
+            _        <- click(trs.head)
+            _        <- clickWith(trs(1), UI.Modifiers(ctrl = true))
+            withCtrl <- sel.get
+            _        <- clickWith(trs(2), UI.Modifiers(meta = true))
+            withMeta <- sel.get
+            _        <- clickWith(trs(1), UI.Modifiers(meta = true))
+            removed  <- sel.get
+        yield
+            assert(withCtrl == Set("1", "2"), "Ctrl adds")
+            assert(withMeta == Set("1", "2", "3"), "and so does Cmd — it is meta OR ctrl, never one")
+            assert(removed == Set("1", "3"), "a modified click on a picked row takes it out")
+    }
+
+    "Shift selects the range from the last row picked without it" in {
+        for
+            sel     <- Signal.initRef(Set.empty[String])
+            (ui, _) <- modifierTable(sel)
+            trs     <- bodyTrs(ui)
+            _       <- click(trs.head)
+            _       <- clickWith(trs(2), UI.Modifiers(shift = true))
+            down    <- sel.get
+            // The anchor does NOT move with a shift-click, so narrowing the range is the same
+            // gesture repeated rather than a walk back.
+            _      <- clickWith(trs(1), UI.Modifiers(shift = true))
+            narrow <- sel.get
+        yield
+            assert(down == Set("1", "2", "3"), "inclusive, in the reader's order")
+            assert(narrow == Set("1", "2"), "and re-measured from the same anchor")
+    }
+
+    "a range runs upwards as readily as down, and an anchorless shift picks one row" in {
+        for
+            sel      <- Signal.initRef(Set.empty[String])
+            (ui, _)  <- modifierTable(sel)
+            trs      <- bodyTrs(ui)
+            _        <- clickWith(trs(1), UI.Modifiers(shift = true))
+            noAnchor <- sel.get
+            _        <- click(trs(2))
+            _        <- clickWith(trs.head, UI.Modifiers(shift = true))
+            up       <- sel.get
+        yield
+            assert(noAnchor == Set("2"), "the first shift-click is just a pick, and sets the anchor")
+            assert(up == Set("1", "2", "3"))
+    }
+
+    "a range steps over the rows the predicate rejects" in {
+        for
+            sel    <- Signal.initRef(Set.empty[String])
+            err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            anchor <- Signal.initRef(Absent: Maybe[String])
+            ui = uic.DataTable[Item]().rows(four).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple).selected(sel).metaKeySelection(true)
+                .selectableWhen(_.id != "2")
+                .wired("t", Map.empty, err, _ => (), anchor = Present(anchor))
+            trs    <- bodyTrs(ui)
+            _      <- click(trs.head)
+            _      <- clickWith(trs(2), UI.Modifiers(shift = true))
+            picked <- sel.get
+        yield assert(picked == Set("1", "3"), "a rejected row is not dragged in by a range")
+    }
+
+    "without metaKeySelection the modifiers mean nothing, and no anchor is owned" in {
+        for
+            sel <- Signal.initRef(Set.empty[String])
+            ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple).selected(sel).render
+            trs   <- bodyTrs(ui)
+            _     <- click(trs.head)
+            _     <- clickWith(trs(1), UI.Modifiers(shift = true))
+            after <- sel.get
+        yield
+            // The default table is not mounted at all, which is the whole reason the anchor is
+            // tied to the opt-in: `bodyTrs` reaching real rows here proves there is no mount.
+            assert(after == Set("1", "2"), "shift is just another click while the flag is off")
+    }
+
     "a selection restriction over a table with no selection is reported" in {
         for
             text <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id)
