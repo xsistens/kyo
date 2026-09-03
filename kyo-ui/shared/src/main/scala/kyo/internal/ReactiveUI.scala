@@ -2362,20 +2362,13 @@ private[kyo] object ReactiveUI:
           * object identity, an inline-derived `Signal` inside the key) evicts and re-creates the instance on
           * every enclosing re-render: keyed continuity silently degrades to remount semantics. A key that
           * changes ONCE (`.keyed(EraPanel -> era)` on an era switch) is the intended re-creation and resets the
-          * streak; only consecutive-change streaks of COMPOSITE keys are flagged: simple value keys
-          * (String/primitive) are exempt, since a location-driven region (route node keyed by path) re-renders
-          * exclusively on key changes and would otherwise be flagged after three navigations.
+          * streak; only consecutive-change streaks of keys WITHOUT value identity are flagged, since a
+          * location-driven region (a route outlet keyed by its route) re-renders exclusively on key changes and
+          * would otherwise be flagged after three navigations.
           */
         private def noteKeyAt(path: Seq[String], key: Any)(using Frame): Unit < Sync =
-            if simpleValueKey(key) then lastKeyByPath.getAndUpdate(_.remove(path)).unit
+            if MountRegistry.valueIdentityKey(key) then lastKeyByPath.getAndUpdate(_.remove(path)).unit
             else noteCompositeKeyAt(path, key)
-
-        /** String / primitive / boxed-primitive keys: value equality, no identity risk. */
-        private def simpleValueKey(key: Any): Boolean = key match
-            case _: String | _: Int | _: Long | _: Boolean | _: Double | _: Float | _: Short |
-                _: Byte | _: Char =>
-                true
-            case _ => false
 
         private def noteCompositeKeyAt(path: Seq[String], key: Any)(using Frame): Unit < Sync =
             lastKeyByPath.getAndUpdate { m =>
@@ -2443,6 +2436,35 @@ private[kyo] object ReactiveUI:
     end MountRegistry
 
     private[kyo] object MountRegistry:
+
+        /** Whether a key's equality is by VALUE, which is what makes a CHANGE meaningful.
+          *
+          * The streak hint looks for a key rebuilt per render — an object identity, a lambda, a
+          * `Signal` captured inside a tuple — where "changed" really means "was never the same value
+          * twice". A key with value identity that changes says the opposite: the caller meant a
+          * different instance. A route outlet does that on every navigation, which is why the
+          * exemption exists at all.
+          *
+          * Beyond primitives and `String`:
+          *
+          *   - `java.lang.Class`: one instance per class by construction, so keying a routed page by
+          *     `ct.runtimeClass` is as stable as keying it by name
+          *   - a `Product` whose elements all have value identity, which covers a case OBJECT (arity
+          *     zero, `Route.Queue`) and a case class over stable values (`Route.Track(id)`)
+          *
+          * A tuple is a `Product` too, and that is not a hole in the hint. A tuple of stable parts
+          * compares equal and never registers as a change in the first place; a tuple holding a
+          * `Signal`, a function or a bare object still fails here, because none of those is a
+          * `Product`, and stays flagged.
+          */
+        private[kyo] def valueIdentityKey(key: Any): Boolean = key match
+            case _: String | _: Int | _: Long | _: Boolean | _: Double | _: Float | _: Short |
+                _: Byte | _: Char =>
+                true
+            case _: Class[?] => true
+            case p: Product  => p.productIterator.forall(valueIdentityKey)
+            case _           => false
+
         def init(using Frame): MountRegistry < Sync =
             for
                 instances       <- AtomicRef.init(Dict.empty[Any, MountInstance])
