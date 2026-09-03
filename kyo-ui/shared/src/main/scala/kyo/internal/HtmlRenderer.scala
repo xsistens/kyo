@@ -1609,6 +1609,15 @@ private[kyo] object HtmlRenderer:
           |  for(var i=0;i<nodes.length;i++)__kyoEachSpanNode(nodes[i],function(n){if(n.nodeType===1)out.push(n);});
           |  return out;
           |}
+          |// Is this live marker sitting inside a portal twin — an element the sweep re-homed to <body>?
+          |// Twin of inPortalTwin in DomReactiveRegions.
+          |function __kyoInPortalTwin(node){
+          |  var el=node.parentNode;
+          |  while(el&&el.nodeType===1){
+          |    if(el.parentNode===document.body&&el.hasAttribute("data-kyo-portal"))return true;
+          |    el=el.parentNode;}
+          |  return false;
+          |}
           |function kyoRangeReplace(id,html){
           |  if(!kyoRangeId(id))kyoRangeFail("malformed replacement id: "+id);
           |  if(!__kyoRanges)kyoRangeFail("registry is closed");var endpoints=__kyoRanges.get(id);
@@ -1622,7 +1631,14 @@ private[kyo] object HtmlRenderer:
           |  var parser=range;if(synthetic){parser=document.createRange();parser.selectNode(parent);}
           |  var fragment=parser.createContextualFragment(html),incoming=kyoRangeScan(fragment),removed=[];
           |  __kyoRanges.forEach(function(pair,key){if(key!==id&&range.intersectsNode(pair.start))removed.push(key);});
-          |  incoming.forEach(function(pair,key){if(__kyoRanges.has(key)&&removed.indexOf(key)<0)kyoRangeFail("duplicate id: "+key);});
+          |  // A region registered inside a portal twin is not a second copy of itself: the payload carries the portal
+          |  // element inline (the twin's inline original), and this patch either morphs the twin in place — markers,
+          |  // and so the registration, untouched — or replaces the range wholesale, in which case the incoming markers
+          |  // take the id over and the sweep retires the stale twin. It must NOT join `removed` either: nothing inside
+          |  // the live range re-registers it, so deleting it would leave the next write to that region unknown.
+          |  incoming.forEach(function(pair,key){
+          |    if(__kyoRanges.has(key)&&removed.indexOf(key)<0&&!__kyoInPortalTwin(__kyoRanges.get(key).start))
+          |      kyoRangeFail("duplicate id: "+key);});
           |  var oldRoots=kyoRangeRoots(endpoints.start,endpoints.end),newRoots=kyoRangeFragmentRoots(fragment),newSemanticRoots=kyoRangeSemanticRoots(newRoots,id),active=document.activeElement;
           |  // The pre-patch reads (focused node, enter and leave path sets, ghost clones of what is about to depart)
           |  // happen before either path touches the DOM, and the post-patch tail below runs for both: a morph is

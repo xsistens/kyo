@@ -64,8 +64,14 @@ final private[kyo] class DomReactiveRegions private (
                 case (id, nested) if id != regionId && intersects(range, nested.start) => id
             }.toSet
 
+            // A region registered inside a portal twin is not a second copy of itself: the payload carries the portal
+            // element inline (the twin's inline original), and this patch either morphs the twin in place — markers,
+            // and so the registration, untouched — or replaces the range wholesale, in which case the incoming markers
+            // take the id over and the sweep retires the stale twin. It stays out of `removed` for the same reason:
+            // nothing inside the live range re-registers it, so dropping it would leave the next write to that region
+            // with an unknown id.
             incoming.keysIterator.foreach { id =>
-                if ranges.contains(id) && !removed.contains(id) then
+                if ranges.contains(id) && !removed.contains(id) && !inPortalTwin(ranges(id).start) then
                     fail(s"Duplicate reactive range id: $id")
             }
 
@@ -325,6 +331,25 @@ final private[kyo] class DomReactiveRegions private (
 
     private def intersects(range: dom.Range, node: dom.Node): Boolean =
         range.asInstanceOf[js.Dynamic].intersectsNode(node).asInstanceOf[Boolean]
+
+    /** Does this live marker sit inside a portal twin — an element `portalSweep` re-homed to `<body>`?
+      *
+      * Twin of `__kyoInPortalTwin` in HtmlRenderer.clientJs; keep the two in lockstep.
+      */
+    private def inPortalTwin(node: dom.Node): Boolean =
+        // The registry is handed a bare Document (so a detached one can be tested against) and `body` lives on
+        // HTMLDocument; every document a mount runs over is one.
+        val body    = document.asInstanceOf[dom.HTMLDocument].body
+        var current = DomReactiveRegions.parent(node)
+        var found   = false
+        while !found && current.exists(_.nodeType == dom.Node.ELEMENT_NODE) do
+            val element = current.get.asInstanceOf[dom.Element]
+            if DomReactiveRegions.parent(element).exists(_ eq body) && element.hasAttribute("data-kyo-portal")
+            then found = true
+            else current = DomReactiveRegions.parent(element)
+        end while
+        found
+    end inPortalTwin
 
     private def elementsBetween(endpoints: DomReactiveRegions.Endpoints): Seq[dom.Element] =
         val elements = mutable.ArrayBuffer.empty[dom.Element]

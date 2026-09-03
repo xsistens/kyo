@@ -842,10 +842,11 @@ class DomBackendTest extends UITest:
     // A portaled element that CONTAINS a reactive region is the shape every overlay has:
     // `uic.Overlay` portals its panel to `document.body`, and the panel's contents are
     // reactive. The region inside it is registered while the element is still under its
-    // host, and `portalSweep` then moves the element — so the region's markers end up
-    // somewhere the enclosing range does not reach.
-    "a reactive region INSIDE a portaled element still updates after the region around it re-renders"
-        .pendingUntilFixed("the region inside the twin is never registered: 'unknown id' on the first write") in {
+    // host, and `portalSweep` then moves the element — so its markers end up outside every
+    // range, and the payload of the region AROUND it carries the portal element inline and
+    // therefore that same id a second time. Only the twin check keeps that from reading as a
+    // collision and aborting the whole patch.
+    "a reactive region INSIDE a portaled element still updates after the region around it re-renders" in {
         val app: UI < Async =
             for
                 outer <- Signal.initRef(0)
@@ -875,8 +876,7 @@ class DomBackendTest extends UITest:
         }
     }
 
-    "two portaled elements, each with a region inside, do not collide"
-        .pendingUntilFixed("same cause as the single-portal case above") in {
+    "two portaled elements, each with a region inside, do not collide" in {
         val app: UI < Async =
             for
                 outer <- Signal.initRef(0)
