@@ -803,7 +803,7 @@ private[kyo] object ReactiveUI:
             case ev: UIEvent.Click =>
                 // Disabled or hidden elements ignore their own click handler, but allow bubbling
                 unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isHidden(elem))) {
-                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
+                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position)
                     val self = if isTarget then
                         invoke(attrs.onClickSelf).andThen(invokeWith(attrs.onClickSelfEvt, mouse))
                     else Kyo.lift(())
@@ -831,7 +831,7 @@ private[kyo] object ReactiveUI:
             case ev: UIEvent.ContextMenu =>
                 // Mirrors Click: a disabled or hidden target skips its own handler but still bubbles.
                 unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isHidden(elem))) {
-                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
+                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position)
                     invoke(attrs.onContextMenu)
                         .andThen(invokeWith(attrs.onContextMenuEvt, mouse))
                         .andThen(keepBubbling(elem, attrs.onContextMenu.nonEmpty || attrs.onContextMenuEvt.nonEmpty))
@@ -839,14 +839,14 @@ private[kyo] object ReactiveUI:
             case ev: UIEvent.Focus =>
                 val isFocusable = elem.isInstanceOf[Focusable] || elem.attrs.tabIndex.nonEmpty
                 if isTarget && isFocusable then
-                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
+                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position)
                     invoke(attrs.onFocus).andThen(invokeWith(attrs.onFocusEvt, mouse)).andThen(true)
                 else if isTarget then Kyo.lift(false) // not focusable; reject
                 else true
                 end if
             case ev: UIEvent.Blur =>
                 if isTarget then
-                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
+                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position)
                     invoke(attrs.onBlur).andThen(invokeWith(attrs.onBlurEvt, mouse)).andThen(true)
                 else true
             case e: UIEvent.KeyDown =>
@@ -975,15 +975,15 @@ private[kyo] object ReactiveUI:
             case ev: UIEvent.Submit =>
                 elem match
                     case f: Form =>
-                        val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
+                        val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position)
                         invoke(f.onSubmit).andThen(invokeWith(f.onSubmitEvt, mouse)).andThen(true)
                     case _ => true
             case ev: UIEvent.Hover =>
-                val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
+                val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position)
                 invoke(attrs.onHover).andThen(invokeWith(attrs.onHoverEvt, mouse))
                     .andThen(keepBubbling(elem, attrs.onHover.nonEmpty || attrs.onHoverEvt.nonEmpty))
             case ev: UIEvent.Unhover =>
-                val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
+                val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position)
                 invoke(attrs.onUnhover).andThen(invokeWith(attrs.onUnhoverEvt, mouse))
                     .andThen(keepBubbling(elem, attrs.onUnhover.nonEmpty || attrs.onUnhoverEvt.nonEmpty))
             case ev: UIEvent.Scroll =>

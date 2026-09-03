@@ -1627,7 +1627,8 @@ private[kyo] object DomBackend:
                         val me       = e.asInstanceOf[dom.MouseEvent]
                         val mouse = MouseEventData(
                             modifiers = UI.Modifiers(me.ctrlKey, me.altKey, me.shiftKey, me.metaKey),
-                            targetId = targetId
+                            targetId = targetId,
+                            position = Present(UI.Point(me.clientX, me.clientY))
                         )
                         // Prevent the browser's default navigation only when the anchor carries a kyo
                         // click handler (so the handler, not the href, drives the action). A plain href
@@ -1647,7 +1648,8 @@ private[kyo] object DomBackend:
                             path,
                             MouseEventData(
                                 modifiers = UI.Modifiers(me.ctrlKey, me.altKey, me.shiftKey, me.metaKey),
-                                targetId = targetId
+                                targetId = targetId,
+                                position = Present(UI.Point(me.clientX, me.clientY))
                             )
                         ))
                     else if t == "input" && evTypes.contains("input") then
@@ -1748,7 +1750,8 @@ private[kyo] object DomBackend:
                             path,
                             MouseEventData(
                                 modifiers = UI.Modifiers(me.ctrlKey, me.altKey, me.shiftKey, me.metaKey),
-                                targetId = hoverTargetId
+                                targetId = hoverTargetId,
+                                position = Present(UI.Point(me.clientX, me.clientY))
                             )
                         ))
                     else if t == "mouseout" && evTypes.contains("mouseout") then
@@ -1758,7 +1761,8 @@ private[kyo] object DomBackend:
                             path,
                             MouseEventData(
                                 modifiers = UI.Modifiers(me.ctrlKey, me.altKey, me.shiftKey, me.metaKey),
-                                targetId = unhoverTargetId
+                                targetId = unhoverTargetId,
+                                position = Present(UI.Point(me.clientX, me.clientY))
                             )
                         ))
                     else if t == "wheel" && evTypes.contains("wheel") then

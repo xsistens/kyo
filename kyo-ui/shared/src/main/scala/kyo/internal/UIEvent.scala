@@ -4,10 +4,16 @@ import kyo.*
 
 // --- Event payloads ---
 
-/** Mouse event payload on the wire. Reconstructed into UI.MouseEvent on the server. */
+/** Mouse event payload on the wire. Reconstructed into UI.MouseEvent on the server.
+  *
+  * `position` is the pointer's viewport position, sent only by the events that have one: click, contextmenu and the two
+  * hover events. Focus, blur and submit are not mouse events in the browser and carry no coordinates, so they leave it
+  * `Absent` (the field is omitted on the wire) rather than sending an invented origin.
+  */
 final private[kyo] case class MouseEventData(
     modifiers: UI.Modifiers,
-    targetId: Maybe[String]
+    targetId: Maybe[String],
+    position: Maybe[UI.Point] = Absent
 ) derives CanEqual, Schema
 
 /** Keyboard event payload on the wire. Reconstructed into UI.KeyboardEvent on the server. */

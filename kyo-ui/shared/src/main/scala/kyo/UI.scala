@@ -1006,14 +1006,30 @@ object UI:
         content: String
     ) derives CanEqual, Schema
 
-    /** The typed payload delivered to a typed `onClick`/`onClickSelf`/`onFocus`/`onBlur` handler.
+    /** A pointer position in VIEWPORT coordinates: CSS pixels from the top-left of the visible page, the frame
+      * `getBoundingClientRect` and [[kyo.UI.Rect]] already speak, so a point and a measured box can be compared without a
+      * conversion.
+      *
+      * Carried by [[kyo.UI.MouseEvent.position]] and by the drag protocol, which names it [[kyo.Drag.Point]]: one pointer
+      * position, one type, whichever event delivered it.
+      */
+    final case class Point(x: Double, y: Double) derives CanEqual, Schema
+
+    /** The typed payload delivered to a typed `onClick`/`onClickSelf`/`onContextMenu`/`onFocus`/`onBlur` handler.
       *
       * `targetId` is the `id` of the element the event fired on (`Absent` when that element has no id), and `modifiers` is the
       * [[kyo.UI.Modifiers]] chord at the time of the event.
+      *
+      * `position` is where the pointer was, in viewport coordinates. It is `Absent` for the events that have no pointer to
+      * report: `focus`, `blur` and `submit` are not mouse events in the browser either and carry no coordinates, so the
+      * `Maybe` says which half of this payload an event actually answered rather than reporting a `(0, 0)` no one clicked.
+      * A menu that opens where the reader right-clicked reads it (see [[kyo.uic.ContextMenu]]); a handler that only wants to
+      * know THAT a click happened ignores it.
       */
     final case class MouseEvent(
         targetId: Maybe[String],
-        modifiers: Modifiers
+        modifiers: Modifiers,
+        position: Maybe[Point] = Absent
     ) derives CanEqual
 
     /** The typed payload delivered to an `onKeyDown`/`onKeyUp` handler.

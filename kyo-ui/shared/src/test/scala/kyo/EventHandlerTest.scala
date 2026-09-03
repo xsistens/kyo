@@ -1381,6 +1381,12 @@ class EventHandlerTest extends UITest:
             s"""document.getElementById('$id').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,ctrlKey:false}))"""
         )
 
+    /** The same, at a viewport position: what a menu that opens where the reader clicked reads. */
+    private def rightClickAt(id: String, x: Int, y: Int)(using Frame) =
+        Browser.evalBoolean(
+            s"""document.getElementById('$id').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:$x,clientY:$y}))"""
+        )
+
     "onContextMenu emits the contextmenu event marker; absent on plain elements" in {
         val app: UI < Async = UI.div(
             UI.div("target").id("t").onContextMenu(()),
@@ -1459,6 +1465,38 @@ class EventHandlerTest extends UITest:
             for
                 _ <- rightClick("t")
                 _ <- Browser.assertText(Selector.id("v"), "t")
+            yield ()
+        }
+    }
+
+    "typed onContextMenu receives the viewport position the right-click landed at" in {
+        val app: UI < Async =
+            for ref <- Signal.initRef("")
+            yield UI.div(
+                UI.div("target").id("t").onContextMenu(me =>
+                    ref.set(me.position.map(p => s"${p.x.toInt},${p.y.toInt}").getOrElse("none"))
+                ),
+                ref.map(v => UI.span(v).id("v"))
+            )
+        withUI(app) {
+            for
+                _ <- rightClickAt("t", 137, 42)
+                _ <- Browser.assertText(Selector.id("v"), "137,42")
+            yield ()
+        }
+    }
+
+    "a focus event carries no position, since it has no pointer to report" in {
+        val app: UI < Async =
+            for ref <- Signal.initRef("")
+            yield UI.div(
+                UI.input.id("t").onFocus(me => ref.set(me.position.map(_ => "some").getOrElse("none"))),
+                ref.map(v => UI.span(v).id("v"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.eval("document.getElementById('t').focus()")
+                _ <- Browser.assertText(Selector.id("v"), "none")
             yield ()
         }
     }
