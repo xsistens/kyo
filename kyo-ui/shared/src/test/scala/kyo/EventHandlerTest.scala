@@ -1523,4 +1523,91 @@ class EventHandlerTest extends UITest:
         }
     }
 
+    // MouseEvent.onControl — what an element that makes a whole REGION clickable needs in order to
+    // leave the reader's own controls inside that region alone.
+
+    "a click that reached a region through a control of the reader's own says so" in {
+        val app: UI < Async =
+            for ref <- Signal.initRef("none")
+            yield UI.div(
+                UI.div
+                    .id("region")
+                    .onClick((me: UI.MouseEvent) => ref.set(me.onControl.toString))(
+                        // Fragment("") goes nowhere, so the click is observable without navigating away.
+                        UI.a.href(UI.Href.Fragment("")).id("link")("Link"),
+                        UI.button("Go").id("btn"),
+                        UI.input.id("field"),
+                        UI.span("plain").id("plain")
+                    ),
+                ref.map(v => UI.span(v).id("v"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.click(Selector.id("link"))
+                _ <- Browser.assertText(Selector.id("v"), "true")
+                _ <- Browser.click(Selector.id("btn"))
+                _ <- Browser.assertText(Selector.id("v"), "true")
+                _ <- Browser.click(Selector.id("field"))
+                _ <- Browser.assertText(Selector.id("v"), "true")
+                _ <- Browser.click(Selector.id("plain"))
+                _ <- Browser.assertText(Selector.id("v"), "false")
+            yield ()
+        }
+    }
+
+    "an anchor with nowhere to go and nothing to run is markup, not a control" in {
+        val app: UI < Async =
+            for ref <- Signal.initRef("none")
+            yield UI.div(
+                UI.div
+                    .id("region")
+                    .onClick((me: UI.MouseEvent) => ref.set(me.onControl.toString))(
+                        UI.a.id("inert")("Inert")
+                    ),
+                ref.map(v => UI.span(v).id("v"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.click(Selector.id("inert"))
+                _ <- Browser.assertText(Selector.id("v"), "false")
+            yield ()
+        }
+    }
+
+    "the element the click landed on never answers for itself, or a button would decline its own click" in {
+        val app: UI < Async =
+            for ref <- Signal.initRef("none")
+            yield UI.div(
+                UI.button("Go").id("btn").onClick((me: UI.MouseEvent) => ref.set(me.onControl.toString)),
+                ref.map(v => UI.span(v).id("v"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.click(Selector.id("btn"))
+                _ <- Browser.assertText(Selector.id("v"), "false")
+            yield ()
+        }
+    }
+
+    "a control answers for a click that landed on what is inside it" in {
+        // The whole chain between the region and the target is asked, not just the target: a click on
+        // the icon inside a button targets the icon, which is no control at all on its own.
+        val app: UI < Async =
+            for ref <- Signal.initRef("none")
+            yield UI.div(
+                UI.div
+                    .id("region")
+                    .onClick((me: UI.MouseEvent) => ref.set(me.onControl.toString))(
+                        UI.button.id("btn")(UI.span("icon").id("icon"))
+                    ),
+                ref.map(v => UI.span(v).id("v"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.click(Selector.id("icon"))
+                _ <- Browser.assertText(Selector.id("v"), "true")
+            yield ()
+        }
+    }
+
 end EventHandlerTest

@@ -559,13 +559,20 @@ private[kyo] object ReactiveUI:
                 targetIsSelect <- event match
                     case _: UIEvent.KeyDown => isTargetSelect(elem, myPath, targetPath)
                     case _                  => Kyo.lift(false)
+                // Whether a control of the reader's own stands between this element and the target,
+                // reported to the handler rather than acted on here: only the handler knows whether
+                // its click means something the control already means (see UI.MouseEvent.onControl).
+                targetOnControl <- event match
+                    case _: UIEvent.Click => isControlBelow(elem, myPath, targetPath)
+                    case _                => Kyo.lift(false)
                 bubble = dispatchToElement(
                     elem,
                     event,
                     isTarget = false,
                     disabledTarget = targetDisabled,
                     submitOrigin = targetIsButton,
-                    selectTarget = targetIsSelect
+                    selectTarget = targetIsSelect,
+                    controlTarget = targetOnControl
                 )
                 result <- staticChild match
                     case Present(childHandle) =>
@@ -718,22 +725,28 @@ private[kyo] object ReactiveUI:
       * The predicate is effectful because "is it disabled" is a question about the CURRENT value behind a
       * channel, not about a field (see [[boolAttrNow]]).
       */
-    private def targetSatisfies(node: UI, nodePath: Seq[String], targetPath: Seq[String], predicate: Element => Boolean < Sync)(using
+    private def targetSatisfies(
+        node: UI,
+        nodePath: Seq[String],
+        targetPath: Seq[String],
+        predicate: Element => Boolean < Sync,
+        alongPath: Boolean = false
+    )(using
         Frame
     ): Boolean < Sync =
         node match
             case kc: KeyedChild[?] =>
-                targetSatisfies(kc.child, nodePath, targetPath, predicate)
+                targetSatisfies(kc.child, nodePath, targetPath, predicate, alongPath)
             case r: Reactive[?] =>
                 // A Reactive's rendered content occupies the same path as the boundary, so re-test at nodePath.
-                r.signal.current(using r.frame).map(cur => targetSatisfies(cur, nodePath, targetPath, predicate))
+                r.signal.current(using r.frame).map(cur => targetSatisfies(cur, nodePath, targetPath, predicate, alongPath))
             case Fragment(children) =>
                 if targetPath.size <= nodePath.size then false
                 else
                     val seg = targetPath(nodePath.size)
                     Maybe.fromOption(seg.toIntOption) match
                         case Present(i) if i >= 0 && i < children.size =>
-                            targetSatisfies(children(i), nodePath :+ seg, targetPath, predicate)
+                            targetSatisfies(children(i), nodePath :+ seg, targetPath, predicate, alongPath)
                         case _ => false
                     end match
             case fe: Foreach[?, ?] @unchecked =>
@@ -748,7 +761,7 @@ private[kyo] object ReactiveUI:
                                         case Present(f) => items.indexWhere(it => f(it) == seg)
                                         case Absent     => Maybe.fromOption(seg.toIntOption).getOrElse(-1)
                                     if idx >= 0 && idx < items.size then
-                                        targetSatisfies(renderFn(idx, items(idx)), nodePath :+ seg, targetPath, predicate)
+                                        targetSatisfies(renderFn(idx, items(idx)), nodePath :+ seg, targetPath, predicate, alongPath)
                                     else false
                             }
                     }
@@ -756,11 +769,18 @@ private[kyo] object ReactiveUI:
                 if targetPath.size <= nodePath.size then predicate(e)
                 else
                     val seg = targetPath(nodePath.size)
-                    Maybe.fromOption(seg.toIntOption) match
-                        case Present(i) if i >= 0 && i < e.children.size =>
-                            targetSatisfies(e.children(i), nodePath :+ seg, targetPath, predicate)
-                        case _ => false
-                    end match
+                    def descend: Boolean < Sync =
+                        Maybe.fromOption(seg.toIntOption) match
+                            case Present(i) if i >= 0 && i < e.children.size =>
+                                targetSatisfies(e.children(i), nodePath :+ seg, targetPath, predicate, alongPath)
+                            case _ => false
+                    // `alongPath` asks about the WHOLE chain rather than its last link: an element between
+                    // the dispatching element and the target answers for it. A click on the icon inside a
+                    // button targets the icon, so "was a control involved" is not a question the leaf alone
+                    // can answer.
+                    if alongPath then predicate(e).map(hit => if hit then true else descend)
+                    else descend
+                    end if
             // Text and RawHtml are leaf content with no kyo-addressable Element children, so no event
             // target can resolve through them: neither can satisfy an Element predicate.
             case _: Text | _: RawHtml => false
@@ -778,6 +798,34 @@ private[kyo] object ReactiveUI:
     private def isTargetSelect(elem: Element, myPath: Seq[String], targetPath: Seq[String])(using Frame): Boolean < Sync =
         targetSatisfies(elem, myPath, targetPath, e => Kyo.lift(e.isInstanceOf[Select]))
 
+    /** Whether an element is a control in its own right — something the reader operates directly, as
+      * opposed to markup an ancestor made clickable.
+      *
+      * `Focusable` is the set: every input flavour, `Textarea`, `Select`, the checkbox/radio pair,
+      * `Button` and `Anchor`. An anchor qualifies only when it actually goes somewhere or does
+      * something, since `a` with neither an href nor a handler is inert markup that happens to be in
+      * the hierarchy.
+      */
+    private def isOwnControl(e: Element): Boolean = e match
+        case a: Anchor    => a.href.isDefined || a.attrs.onClick.nonEmpty || a.attrs.onClickEvt.nonEmpty
+        case _: Focusable => true
+        case _            => false
+
+    /** Whether the click passed through a control on its way from `elem` down to the target.
+      *
+      * Strictly BELOW `elem`: the element being dispatched to never answers for itself, or a button
+      * would decline its own click. See [[kyo.UI.MouseEvent.onControl]] for what reads this.
+      */
+    private def isControlBelow(elem: Element, myPath: Seq[String], targetPath: Seq[String])(using Frame): Boolean < Sync =
+        if targetPath.size <= myPath.size then Kyo.lift(false)
+        else
+            val seg = targetPath(myPath.size)
+            Maybe.fromOption(seg.toIntOption) match
+                case Present(i) if i >= 0 && i < elem.children.size =>
+                    targetSatisfies(elem.children(i), myPath :+ seg, targetPath, e => Kyo.lift(isOwnControl(e)), alongPath = true)
+                case _ => Kyo.lift(false)
+            end match
+
     /** Bubble-continue value after an element handled `event`: `false` (consume) only when the element set
       * `stopPropagation(true)` AND actually declared a handler for this event's type (`declared`). The result flows up the
       * dispatch recursion, so a `false` makes every element ABOVE this one skip its own handler.
@@ -794,7 +842,8 @@ private[kyo] object ReactiveUI:
         isTarget: Boolean,
         disabledTarget: Boolean = false,
         submitOrigin: Boolean = false,
-        selectTarget: Boolean = false
+        selectTarget: Boolean = false,
+        controlTarget: Boolean = false
     )(
         using Frame
     ): Boolean < Async =
@@ -803,7 +852,7 @@ private[kyo] object ReactiveUI:
             case ev: UIEvent.Click =>
                 // Disabled or hidden elements ignore their own click handler, but allow bubbling
                 unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isHidden(elem))) {
-                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position)
+                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position, controlTarget)
                     val self = if isTarget then
                         invoke(attrs.onClickSelf).andThen(invokeWith(attrs.onClickSelfEvt, mouse))
                     else Kyo.lift(())

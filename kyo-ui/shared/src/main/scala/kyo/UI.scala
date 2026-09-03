@@ -1025,11 +1025,23 @@ object UI:
       * `Maybe` says which half of this payload an event actually answered rather than reporting a `(0, 0)` no one clicked.
       * A menu that opens where the reader right-clicked reads it (see [[kyo.uic.ContextMenu]]); a handler that only wants to
       * know THAT a click happened ignores it.
+      *
+      * `onControl` says the click passed through an element that is its own control on its way to this handler — an anchor
+      * with an href, a button, or a form field strictly BELOW the element being dispatched to. It is what an element that
+      * makes a whole REGION clickable needs in order to leave the controls inside that region alone: a table row that
+      * selects on click must not also select when the reader presses the row's edit button or follows a link in a cell.
+      * Without it such a region has no way to tell the two apart, because a control that navigates natively declares no
+      * kyo handler and therefore cannot consume the click with `stopPropagation` either.
+      *
+      * It is always `false` on the element the click actually landed on, so a control's own handler still runs; and it does
+      * not resolve through a [[kyo.UI.mounted]] boundary, the same v1 limit the disabled/button-target refinements carry —
+      * a control inside a mounted subtree reads as `false`.
       */
     final case class MouseEvent(
         targetId: Maybe[String],
         modifiers: Modifiers,
-        position: Maybe[Point] = Absent
+        position: Maybe[Point] = Absent,
+        onControl: Boolean = false
     ) derives CanEqual
 
     /** The typed payload delivered to an `onKeyDown`/`onKeyUp` handler.

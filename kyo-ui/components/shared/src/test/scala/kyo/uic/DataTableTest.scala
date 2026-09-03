@@ -1525,6 +1525,38 @@ class DataTableTest extends UicTest:
             throw new AssertionError("the row renders no checkbox")
         ))
 
+    "a click that passed through a control in the row is that control's, not the row's" in {
+        // Following a link in a cell, pressing the expander, starting a row edit: each is a click the
+        // reader aimed at something, and a row that also selected on it would be answering a question
+        // nobody asked. The control cannot decline the click for the row — one that navigates natively
+        // declares no kyo handler, so it has no `stopPropagation` to set.
+        for
+            sel <- Signal.initRef(Set.empty[String])
+            ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple).selected(sel).render
+            trs        <- bodyTrs(ui)
+            _          <- clickViaControl(trs.head)
+            viaControl <- sel.get
+            _          <- click(trs.head)
+            plain      <- sel.get
+        yield
+            assert(viaControl.isEmpty, "the control's click does not also select")
+            assert(plain == Set("1"), "and a click on the row itself still does")
+    }
+
+    "the keyboard path is the row's, whatever the row contains" in {
+        // `onControl` answers where a POINTER went; Enter on the row is the row's, and the row is
+        // what holds the tab stop.
+        for
+            sel <- Signal.initRef(Set.empty[String])
+            ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple).selected(sel).render
+            trs    <- bodyTrs(ui)
+            _      <- press(trs.head, UI.Keyboard.Enter)
+            picked <- sel.get
+        yield assert(picked == Set("1"))
+    }
+
     "a row the predicate rejects stays out of the selection when it is clicked" in {
         for
             sel <- Signal.initRef(Set.empty[String])

@@ -4021,10 +4021,17 @@ final case class DataTable[A] private (
         // it and drops it, so the press cannot reach the next row the reader clicks.
         if rowInteractive then
             val act: Any < Async = if move.held.exists(_.done) then clearRowMove(move) else activate(id, canSelect)
+            // A click that passed through a control of the reader's own is that control's, not the
+            // row's: following a link in a cell, pressing the expander, starting a row edit. Without
+            // this the row selects as well, and the control cannot decline the click for it — one
+            // that navigates natively declares no kyo handler, so it has no `stopPropagation` to set
+            // (and giving an anchor one costs it the middle click). The keyboard path below is
+            // deliberately untouched: Enter on the ROW is the row's, whatever it contains.
+            val clicked: MouseEvent => Any < Async = e => if e.onControl then () else act
             // The row's tab stop is this table's, not a control's, so Enter and Space are too.
             // A row being edited overwrites this handler below, which is the order that belongs:
             // while an editor is open Enter commits the row rather than re-selecting it.
-            row = row.tabIndex(0).onClick(act).onKeyDown(e => if activationOf(e).isDefined then act else ())
+            row = row.tabIndex(0).onClick(clicked).onKeyDown(e => if activationOf(e).isDefined then act else ())
         end if
         if rowEdit then
             // Enter and Escape reach here from whichever cell editor has focus, since a

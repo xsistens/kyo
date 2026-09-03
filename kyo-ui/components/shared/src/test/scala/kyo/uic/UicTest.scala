@@ -95,4 +95,14 @@ abstract class UicTest extends kyo.test.Test[Any]:
                     case Present(f) => f(UI.MouseEvent(el.attrs.identifier, UI.Modifiers.none))
                     case Absent     => throw new AssertionError("the element declares no click handler")
 
+    /** The same, for a click that reached `el` THROUGH a control of the reader's own — an anchor in
+      * a cell, a button in a row. Only the typed handler can be told, since the flag rides
+      * [[kyo.UI.MouseEvent.onControl]]; an element that took the untyped form never asked.
+      */
+    private[uic] def clickViaControl(el: UI.Ast.Element)(using Frame): Any < Async =
+        el.attrs.onClickEvt match
+            case Present(f) =>
+                f(UI.MouseEvent(el.attrs.identifier, UI.Modifiers.none, Absent, onControl = true))
+            case Absent => throw new AssertionError("the element declares no typed click handler")
+
 end UicTest
