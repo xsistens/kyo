@@ -412,6 +412,7 @@ final case class DataTable[A] private (
     selectionModeV: SelectionMode = SelectionMode.None,
     selectedBinding: Maybe[ReactiveValue[Set[String]]] = Absent,
     metaKeyFlag: Boolean = false,
+    onSelectionF: Maybe[Set[String] => Any < Async] = Absent,
     selectableF: Maybe[A => Boolean] = Absent,
     selectedCellsRef: Maybe[SignalRef[Set[CellPath]]] = Absent,
     contextRowRef: Maybe[SignalRef[Maybe[String]]] = Absent,
@@ -1100,6 +1101,21 @@ final case class DataTable[A] private (
 
     /** Fired with the row key after any selection write from a row click. */
     def onRowClick(f: String => Any < Async): DataTable[A] = copy(onRowClickF = Present(f))
+
+    /** Runs with the selection the table WORKED OUT, whenever a click changes it.
+      *
+      * The write-side counterpart of a one-way [[selected]], and the only outlet that can carry
+      * [[metaKeySelection]]: the table resolves the mode, the modifier and the range into a new
+      * set, and hands that set over instead of writing it, so a caller whose selection lives
+      * somewhere else — a URL, a parent, a record in a normalized cache — applies it there.
+      * [[onRowClick]] cannot do this job once modifiers are on, because a row key says which row
+      * was clicked and not what the selection became.
+      *
+      * Every path that changes a selection goes through it: a row click, a row checkbox, and the
+      * select-all header. With a two-way binding the ref is written first and this fires after,
+      * so both forms see the same value and a caller may bind either or both.
+      */
+    def onSelectionChange(f: Set[String] => Any < Async): DataTable[A] = copy(onSelectionF = Present(f))
 
     private[uic] def withAccessibleName(v: Maybe[TextValue]): DataTable[A] = copy(accNameV = v)
     private[uic] def withAccessibleNameRef(v: Maybe[String]): DataTable[A] = copy(accNameRefV = v)
@@ -3027,26 +3043,42 @@ final case class DataTable[A] private (
         // A one-way `selected` paints but never writes, which is the point of it — the caller owns
         // the set and closes the loop through `onRowClick`. Two shapes have no loop to close, and
         // both look exactly like a working selection until a reader clicks one.
-        val oneWay = selectedBinding.isDefined && selectedRef.isEmpty
+        // A one-way `selected` paints but never writes, which is the point of it — the caller owns
+        // the set and applies the change themselves. `onSelectionChange` is the outlet that
+        // carries it; `onRowClick` covers the toggling case only, since a row key cannot say what
+        // a range or a replacement became.
+        val oneWay   = selectedBinding.isDefined && selectedRef.isEmpty
+        val noOutlet = onSelectionF.isEmpty
         val unwritable =
-            if !oneWay || selectionModeV != SelectionMode.Checkbox then Nil
+            if !oneWay || !noOutlet || selectionModeV != SelectionMode.Checkbox then Nil
             else
                 List(KeyDiagnostics.card(
                     "DataTable",
                     "selected is bound one way, so the checkbox column has nothing to write; a checkbox is not a row " +
-                        "click, so onRowClick is no outlet for it either — bind a SignalRef, or pick Single/Multiple",
+                        "click, so onRowClick is no outlet for it — bind onSelectionChange, or a SignalRef",
                     List(selectionModeV.toString)
                 ))
         val inert =
-            if !oneWay || !rowClickSelects || onRowClickF.isDefined then Nil
+            if !oneWay || !noOutlet || !rowClickSelects || onRowClickF.isDefined then Nil
             else
                 List(KeyDiagnostics.card(
                     "DataTable",
-                    "selected is bound one way and no onRowClick is bound, so a row click has nowhere to go; the " +
-                        "rows offer the pointer that says they can be picked and then do nothing",
+                    "selected is bound one way with no onSelectionChange and no onRowClick, so a row click has " +
+                        "nowhere to go; the rows offer the pointer that says they can be picked and then do nothing",
                     List(selectionModeV.toString)
                 ))
-        limited ++ clash ++ modeless ++ unwritable ++ inert
+        // The one combination that looks wired and is not: modifiers resolve into a whole new SET,
+        // and a row key cannot carry a range or a replacement back to a caller who owns the state.
+        val keyOnly =
+            if !oneWay || !metaKeyFlag || !noOutlet || onRowClickF.isEmpty then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "metaKeySelection resolves a click into a new selection, and onRowClick reports a row key, which " +
+                        "cannot express a range or a replacement; a one-way selected needs onSelectionChange",
+                    List(selectionModeV.toString)
+                ))
+        limited ++ clash ++ modeless ++ unwritable ++ inert ++ keyOnly
     end selectionCards
 
     /** Two answers to how tall the viewport is, where the table can read only one. */
@@ -3293,9 +3325,9 @@ final case class DataTable[A] private (
     private def selectAllCell(inFilter: List[A], sel: Set[String], rows: Int)(using Frame): Ast.Element =
         val keys        = inFilter.filter(selectableAt).map(keyOf)
         val allSelected = keys.nonEmpty && keys.forall(sel.contains)
-        val toggle: Any < Async = selectedRef match
-            case Present(ref) => ref.getAndUpdate(cur => if allSelected then cur -- keys else cur ++ keys)
-            case Absent       => ()
+        val toggle: Any < Async =
+            currentValue(selectedBinding, Set.empty[String])
+                .map(cur => applySelection(if allSelected then cur -- keys else cur ++ keys))
         var cell = th.cssClass("p-datatable-header-cell")
         if rows > 1 then cell = cell.rowspan(rows)
         cell(
@@ -4314,10 +4346,27 @@ final case class DataTable[A] private (
         write.andThen(fire)
     end openRowContext
 
-    private def toggleSelect(id: String)(using Frame): Any < Async =
-        selectedRef match
-            case Present(ref) => ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
+    /** Writes a new selection wherever it can go: into the bound ref if there is one to write,
+      * and to [[onSelectionChange]] either way.
+      *
+      * Both, not one or the other — a caller may bind a `SignalRef` and still want to hear about
+      * the change, and a caller with a one-way binding has nothing BUT the callback. The ref is
+      * written first so the two see the same value in the same order.
+      */
+    private def applySelection(next: Set[String])(using Frame): Any < Async =
+        val write: Any < Async = selectedRef match
+            case Present(ref) => ref.set(next)
             case Absent       => ()
+        val tell: Any < Async = onSelectionF match
+            case Present(f) => f(next)
+            case Absent     => ()
+        write.andThen(tell)
+    end applySelection
+
+    private def toggleSelect(id: String)(using Frame): Any < Async =
+        currentValue(selectedBinding, Set.empty[String]).map(cur =>
+            applySelection(if cur.contains(id) then cur - id else cur + id)
+        )
 
     /** What one open cell shows: the column's editor over the table's draft, and under it
       * the message of a commit this cell refused.
@@ -4736,28 +4785,27 @@ final case class DataTable[A] private (
         // pinning this to `meta` alone locks out everyone not on a Mac.
         val meta = e.modifiers.meta || e.modifiers.ctrl
 
-        def pick(ref: SignalRef[Set[String]]): Any < Async =
+        def pick: Any < Async =
             def anchorTo(v: Set[String]): Any < Async =
                 select.anchor match
-                    case Present(a) => a.set(Present(id)).andThen(ref.set(v))
-                    case Absent     => ref.set(v)
+                    case Present(a) => a.set(Present(id)).andThen(applySelection(v))
+                    case Absent     => applySelection(v)
             (select.anchor, e.modifiers.shift, selectionModeV) match
                 // A range needs somewhere to start. Without an anchor the shift-click is just the
                 // first pick, which is what sets one.
                 case (Present(a), true, SelectionMode.Multiple) if metaKeyFlag =>
                     a.get.map {
-                        case Present(from) => ref.set(DataTable.between(select.keys, from, id))
+                        case Present(from) => applySelection(DataTable.between(select.keys, from, id))
                         case Absent        => anchorTo(Set(id))
                     }
                 case _ =>
-                    ref.get.map(cur => anchorTo(SelectionPick.next(selectionModeV, metaKeyFlag, meta, id, cur)))
+                    currentValue(selectedBinding, Set.empty[String])
+                        .map(cur => anchorTo(SelectionPick.next(selectionModeV, metaKeyFlag, meta, id, cur)))
             end match
         end pick
 
-        val setSelection: Any < Async = selectedRef match
-            case _ if !canSelect                 => ()
-            case Present(ref) if rowClickSelects => pick(ref)
-            case _                               => ()
+        val setSelection: Any < Async =
+            if !canSelect || !rowClickSelects || selectedBinding.isEmpty then () else pick
         val fireClick: Any < Async = onRowClickF match
             case Present(f) => f(id)
             case Absent     => ()

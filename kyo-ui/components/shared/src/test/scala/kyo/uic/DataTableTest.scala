@@ -1838,6 +1838,66 @@ class DataTableTest extends UicTest:
             assert(after == Set("1", "2"), "shift is just another click while the flag is off")
     }
 
+    "onSelectionChange carries what the table worked out, which a row key cannot" in {
+        for
+            src    <- Signal.initRef(Set.empty[String])
+            heard  <- Signal.initRef(List.empty[Set[String]])
+            err    <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            anchor <- Signal.initRef(Absent: Maybe[String])
+            ui = uic.DataTable[Item]().rows(four).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple)
+                // One way in, and the callback is the only way out — the shape a selection whose
+                // truth lives in a cache has.
+                .selected(src.map(identity))
+                .metaKeySelection(true)
+                .onSelectionChange(s => heard.getAndUpdate(_ :+ s).unit)
+                .wired("t", Map.empty, err, _ => (), anchor = Present(anchor))
+            trs <- bodyTrs(ui)
+            _   <- click(trs.head)
+            // The table computed a range off its own anchor; the caller could not have.
+            _   <- clickWith(trs(2), UI.Modifiers(shift = true))
+            got <- heard.get
+            end <- src.get
+        yield
+            assert(got == List(Set("1"), Set("1", "2", "3")))
+            assert(end.isEmpty, "and it wrote to nothing, because nothing writable was bound")
+    }
+
+    "a bound ref and the callback both hear it, and hear the same thing" in {
+        // `applySelection` writes then tells, so a caller may bind either or both and the two can
+        // never disagree about what the selection became. Every selection path goes through it.
+        for
+            sel   <- Signal.initRef(Set.empty[String])
+            heard <- Signal.initRef(List.empty[Set[String]])
+            ui = uic.DataTable[Item]().rows(four).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple).selected(sel)
+                .onSelectionChange(s => heard.getAndUpdate(_ :+ s).unit).render
+            trs   <- bodyTrs(ui)
+            _     <- click(trs.head)
+            _     <- click(trs(1))
+            got   <- heard.get
+            inRef <- sel.get
+        yield
+            assert(got == List(Set("1"), Set("1", "2")))
+            assert(inRef == got.last, "the ref and the callback ended on the same value")
+    }
+
+    "a one-way selection with modifiers and only a row key to report with is reported" in {
+        for
+            src <- Signal.initRef(Set.empty[String])
+            text <- cards(uic.DataTable[Item]().rows(four).rowKey(_.id)
+                .columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple).selected(src.map(identity))
+                .metaKeySelection(true).onRowClick(_ => ()).render)
+            quiet <- cards(uic.DataTable[Item]().rows(four).rowKey(_.id)
+                .columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple).selected(src.map(identity))
+                .metaKeySelection(true).onSelectionChange(_ => ()).render)
+        yield
+            assert(text.contains("cannot express a range or a replacement"))
+            assert(!quiet.contains("cannot express a range or a replacement"))
+    }
+
     "a selection restriction over a table with no selection is reported" in {
         for
             text <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id)
