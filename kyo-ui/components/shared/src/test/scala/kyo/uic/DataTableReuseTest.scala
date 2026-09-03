@@ -106,4 +106,41 @@ class DataTableReuseTest extends UicTest:
         }
     }
 
+    "a rows emission still costs every row, which is the boundary of what is fixed" in {
+        // Not a wish, a MEASUREMENT of where the reuse stops, pinned so the next step knows what it
+        // is moving. `rows` is resolved above the body like sort, filter and page, so an emission
+        // rebuilds the body — and with it the keyed list itself, whose row registry is then new and
+        // empty. Nothing can be retained across it, however equal the rows are.
+        //
+        // It matters more than it looks: a caller whose selection lives in the DATA rather than in
+        // a selection ref — a `@client` field on the row, say, with `selected` derived from the
+        // same signal — writes a row and gets a rows emission. That caller sees none of the reuse
+        // the test above measures.
+        Scope.run {
+            val counted = new Renders
+            for
+                rows <- Signal.initRef[Seq[Item]](items)
+                err  <- Signal.initRef(Absent: Maybe[(CellPath, kyo.uic.form.FieldError)])
+                ui = uic.DataTable[Item]().rows(rows).rowKey(_.id)
+                    .columns(uic.column("Name") { i =>
+                        counted.bump(); i.name
+                    })
+                    .wired("t", Map.empty, err, _ => ())
+                root <- ReactiveUI.normalize(ui, Seq.empty)
+                _    <- ReactiveUI.subscribe(root, quiet)
+                _    <- Async.sleep(100.millis)
+                _ = counted.reset()
+                // One row's value changes; the other thirty-nine are equal to what they were.
+                _ <- rows.set(items.updated(5, Item("k5", "row-5-changed")))
+                _ <- Async.sleep(300.millis)
+                after = counted.get
+            yield assert(
+                after >= rowCount,
+                s"a rows emission rendered $after rows; if this is now 1, the rows binding moved " +
+                    "under the body and this test should say so instead"
+            )
+            end for
+        }
+    }
+
 end DataTableReuseTest
