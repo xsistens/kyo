@@ -839,4 +839,70 @@ class DomBackendTest extends UITest:
         }
     }
 
+    // A portaled element that CONTAINS a reactive region is the shape every overlay has:
+    // `uic.Overlay` portals its panel to `document.body`, and the panel's contents are
+    // reactive. The region inside it is registered while the element is still under its
+    // host, and `portalSweep` then moves the element — so the region's markers end up
+    // somewhere the enclosing range does not reach.
+    "a reactive region INSIDE a portaled element still updates after the region around it re-renders"
+        .pendingUntilFixed("the region inside the twin is never registered: 'unknown id' on the first write") in {
+        val app: UI < Async =
+            for
+                outer <- Signal.initRef(0)
+                inner <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("outer").id("po").onClick(outer.getAndUpdate(_ + 1).unit),
+                UI.button("inner").id("pi").onClick(inner.getAndUpdate(_ + 1).unit),
+                outer.map(o =>
+                    UI.div.id("nested-portal").portal(true)(
+                        inner.map(i => UI.span(s"$o/$i").id("nptxt"): UI)
+                    ): UI
+                )
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("nptxt"), "0/0")
+                _ <- Browser.click(Selector.id("pi"))
+                _ <- Browser.assertText(Selector.id("nptxt"), "0/1")
+                // The outer emission re-renders the region that owns the portaled element.
+                _ <- Browser.click(Selector.id("po"))
+                _ <- Browser.assertText(Selector.id("nptxt"), "1/1")
+                // And the region inside the portal has to still be live, or writing its ref
+                // reaches nothing and the panel is frozen at whatever it last showed.
+                _ <- Browser.click(Selector.id("pi"))
+                _ <- Browser.assertText(Selector.id("nptxt"), "1/2")
+            yield ()
+        }
+    }
+
+    "two portaled elements, each with a region inside, do not collide"
+        .pendingUntilFixed("same cause as the single-portal case above") in {
+        val app: UI < Async =
+            for
+                outer <- Signal.initRef(0)
+                inner <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("outer").id("to").onClick(outer.getAndUpdate(_ + 1).unit),
+                UI.button("inner").id("ti").onClick(inner.getAndUpdate(_ + 1).unit),
+                outer.map(o =>
+                    UI.div.id("tp-a").portal(true)(inner.map(i => UI.span(s"a$o$i").id("ta"): UI)): UI
+                ),
+                outer.map(o =>
+                    UI.div.id("tp-b").portal(true)(inner.map(i => UI.span(s"b$o$i").id("tb"): UI)): UI
+                )
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("ta"), "a00")
+                _ <- Browser.assertText(Selector.id("tb"), "b00")
+                _ <- Browser.click(Selector.id("to"))
+                _ <- Browser.assertText(Selector.id("ta"), "a10")
+                _ <- Browser.assertText(Selector.id("tb"), "b10")
+                _ <- Browser.click(Selector.id("ti"))
+                _ <- Browser.assertText(Selector.id("ta"), "a11")
+                _ <- Browser.assertText(Selector.id("tb"), "b11")
+            yield ()
+        }
+    }
+
 end DomBackendTest
