@@ -398,7 +398,17 @@ object UI:
         extension (m: Mounted)
             /** Continuity anchor: a mounted node with a key keeps its live instance (Scope, resources, published content)
               * across re-renders of its immediately enclosing reactive region while an equal key is re-emitted; the instance
-              * is torn down (closed and awaited) when the key changes or disappears. Any `CanEqual`-comparable value works:
+              * is torn down (closed and awaited) when the key changes or disappears.
+              *
+              * '''"Immediately enclosing" is the whole boundary, not a detail.''' The instance is claimed from that region's
+              * mount registry, and the registry is created when the region subscribes — so a key survives that region
+              * re-rendering, and does NOT survive the region itself being re-subscribed because something further out
+              * re-rendered. A mount one region deeper than a stable parent is rebuilt on every outer pass, keyed or not, and
+              * the keyless-remount warning cannot report it because the mount is keyed; the engine counts these separately
+              * and warns after ten. State that must outlive those passes does not belong in the mount at all — hand it to
+              * the caller as a bound ref, the way `uic.DataTable` does with its sort, its filters and its shift anchor.
+              *
+              * Any `CanEqual`-comparable value works:
               * the idiomatic key is the component's singleton object (`.keyed(ScoreboardView)`), tupled with value inputs the
               * effect closed over when identity depends on them (`.keyed(EraPanel -> era)`): changing inputs that should
               * UPDATE the live instance belong in `Signal` parameters, not the key; non-Signal inputs the effect captures

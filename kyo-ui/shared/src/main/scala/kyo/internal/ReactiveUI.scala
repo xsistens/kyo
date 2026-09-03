@@ -68,9 +68,55 @@ end ForeachSpec
   * observe's closed-and-awaited ordering makes unregister-then-reregister safe across region rebuilds), and read by
   * the dispatch-time handler of whatever fresh Mounted node value occupies the same path.
   */
-final private[kyo] class MountDispatch(cells: AtomicRef[Dict[Seq[String], Signal[UI]]]):
+final private[kyo] class MountDispatch(
+    cells: AtomicRef[Dict[Seq[String], Signal[UI]]],
+    // Session-scoped, and that is the whole point: a MountRegistry cannot count this, because the
+    // registry is exactly what goes missing. See `noteKeyedMiss`.
+    keyedMisses: AtomicRef[Dict[Seq[String], (Any, Int)]]
+):
     def register(path: Seq[String], cell: Signal[UI])(using Frame): Unit < Sync =
         cells.getAndUpdate(_.update(path, cell)).unit
+
+    /** Dev hint against the keyed-mount-in-a-doomed-registry anti-pattern: a key that keeps MISSING.
+      *
+      * A keyed mount claims its instance from the registry of the nearest enclosing region, so its
+      * continuity spans re-renders of THAT region and ends with it. Under an intervening region —
+      * one that is itself re-subscribed when something further out re-renders — the registry is new
+      * and empty every time, the claim misses, and the instance is rebuilt exactly as a keyless one
+      * would be. The state the mount allocated is gone with it.
+      *
+      * Nothing else reports this. `noteKeylessRemount` counts only KEYLESS mounts, and `noteKeyAt`'s
+      * unstable-key streak lives in the registry that just vanished, so both are silent here.
+      *
+      * The same key missing at the same path, over and over, is the signal: the first miss is an
+      * ordinary first mount, and a key that CHANGED is a deliberate re-creation, which resets the
+      * count rather than adding to it.
+      *
+      * Returns the running count, which is what decides whether anything is logged — the streak is
+      * the testable part, the message is not.
+      */
+    def noteKeyedMiss(path: Seq[String], key: Any)(using Frame): Int < Sync =
+        keyedMisses.getAndUpdate { m =>
+            m.get(path) match
+                case Present((prev, n)) if prev.equals(key) => m.update(path, (key, n + 1))
+                case _                                      => m.update(path, (key, 1))
+        }.map { prev =>
+            val n = prev.get(path) match
+                case Present((p, c)) if p.equals(key) => c + 1
+                case _                                => 1
+            if n == 10 || n == 100 || n == 1000 then
+                Log.warn(
+                    s"kyo-ui: keyed UI.mounted '$key' at ${path.mkString(".")} was re-created $n times: its key is " +
+                        "stable, but the mount registry it is claimed from is not — a region between it and the " +
+                        "nearest enclosing mount is re-subscribed on every pass, so the instance never survives. " +
+                        "Keyed continuity spans re-renders of the immediately enclosing region and ends with that " +
+                        "region. Either place the mount directly in the content of a mount that outlives those " +
+                        "passes, or give the state to the caller as a bound ref instead of allocating it here."
+                ).andThen(n)
+            else Kyo.lift(n)
+            end if
+        }
+    end noteKeyedMiss
 
     /** Unregister only if `cell` is still the registered one: a successor that already re-registered wins. */
     def unregister(path: Seq[String], cell: Signal[UI])(using Frame): Unit < Sync =
@@ -82,7 +128,11 @@ end MountDispatch
 
 private[kyo] object MountDispatch:
     def init(using Frame): MountDispatch < Sync =
-        AtomicRef.init(Dict.empty[Seq[String], Signal[UI]]).map(new MountDispatch(_))
+        for
+            cells  <- AtomicRef.init(Dict.empty[Seq[String], Signal[UI]])
+            misses <- AtomicRef.init(Dict.empty[Seq[String], (Any, Int)])
+        yield new MountDispatch(cells, misses)
+end MountDispatch
 
 /** Normalization-time companion of a [[kyo.UI.Ast.Mounted]] node: the node, the render path it was normalized at, and its
   * rendering defaults.
@@ -2070,7 +2120,7 @@ private[kyo] object ReactiveUI:
     )(using Frame): Unit < (Async & Scope) =
         spec.node.key match
             case Present(key) =>
-                mounts.claim(key, rui.path, spec).map {
+                mounts.claim(key, rui.path, spec, () => mountDispatch.noteKeyedMiss(rui.path, key).unit).map {
                     case Present(inst) =>
                         for
                             _       <- mountDispatch.register(rui.path, inst.cell)
@@ -2266,7 +2316,7 @@ private[kyo] object ReactiveUI:
           * silently sharing the first slot's instance), and the warning names key and path (Laminar's
           * duplicate-split-key discipline, made visible in the page).
           */
-        def claim(key: Any, path: Seq[String], spec: MountedSpec)(using
+        def claim(key: Any, path: Seq[String], spec: MountedSpec, onMiss: () => Unit < Sync)(using
             Frame
         ): Maybe[MountInstance] < (Async & Scope) =
             claimedThisWalk.getAndUpdate(_ + key).map(_.contains(key)).map {
@@ -2281,8 +2331,10 @@ private[kyo] object ReactiveUI:
                         m <- instances.get
                         inst <- m.get(key) match
                             case Present(inst) => Kyo.lift(inst)
-                            case Absent =>
-                                for
+                            case Absent        =>
+                                // A miss means a fresh instance: either the first mount, or continuity
+                                // that did not happen. The caller counts them; only a repeat is a fault.
+                                onMiss().andThen(for
                                     seed        <- keepLatestSeed(path, spec)
                                     cell        <- Signal.initRef[UI](seed)
                                     childMounts <- MountRegistry.init
@@ -2302,7 +2354,7 @@ private[kyo] object ReactiveUI:
                                     }
                                     inst = new MountInstance(key, cell, fiber, childMounts)
                                     _ <- instances.getAndUpdate(_.update(key, inst))
-                                yield inst
+                                yield inst)
                     yield Present(inst)
             }
 
@@ -2380,7 +2432,10 @@ private[kyo] object ReactiveUI:
                     Log.warn(
                         s"kyo-ui: keyless UI.mounted at ${path.mkString(".")} remounted $n times: its effect re-runs on " +
                             "every enclosing region re-render. Give it a stable identity with .keyed(...) if the instance " +
-                            "should live across re-renders, or move it out of the hot region."
+                            "should live across re-renders OF THAT REGION — a key does not reach further: the instance is " +
+                            "claimed from the enclosing region's registry and ends with it, so a mount under a region that " +
+                            "is itself re-subscribed is rebuilt keyed or not. Otherwise move it out of the hot region, or " +
+                            "let the caller hold the state in a bound ref."
                     )
                 else Kyo.unit
                 end if
