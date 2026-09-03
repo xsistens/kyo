@@ -1044,7 +1044,25 @@ private[kyo] object DomBackend:
                             else
                                 region match
                                     case ReactiveRegion.HtmlRange(regionId) =>
-                                        regions.replaceWith(regionId, html)(tryMorphRange)(prepareRangePatch)(finishRangePatch)
+                                        // A region that is not painted right now has nothing to patch. It is the
+                                        // sibling of the `open` guard above, and it is reachable for the same kind
+                                        // of reason: a patch somewhere above discarded this subtree, and whatever
+                                        // owns it has not repainted yet. The emission that lands in that window is
+                                        // either obsolete (the next paint renders the signal's CURRENT value, so
+                                        // nothing is lost) or early (same). Neither is worth the registry's
+                                        // strict diagnostic, which panics — and a panic here does not just skip a
+                                        // frame, it ends the subscription fiber, so the region never paints again.
+                                        // The registry keeps that diagnostic for callers who really are addressing
+                                        // a range that ought to exist; the engine simply does not ask when it knows
+                                        // there is none. Same reading `withRegionFragment` already applies to a
+                                        // range that was never painted.
+                                        regions.contains(regionId).flatMap { painted =>
+                                            if !painted then Kyo.unit
+                                            else
+                                                regions.replaceWith(regionId, html)(tryMorphRange)(
+                                                    prepareRangePatch
+                                                )(finishRangePatch)
+                                        }
                                     case svgRegion: ReactiveRegion.SvgElement =>
                                         replaceSvg(svgRegion, html)
                                 end match
