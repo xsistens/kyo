@@ -87,6 +87,19 @@ class DiscoverabilityTest extends UicTest:
         )
     }
 
+    "a menu item's disabled takes a Signal, like its label already did" in {
+        // The item type was uneven with ITSELF: a label that may follow a signal beside an
+        // availability that may not. That is the argument for this one, not the count of
+        // `disabled` slots elsewhere — nineteen of those are plain Booleans and rightly so.
+        typeCheck(preamble + """def x: uic.MenuItem = uic.MenuItem("Play").disabled(true)""")
+        typeCheck(preamble + """def x(s: Signal[Boolean]): uic.MenuItem = uic.MenuItem("Play").disabled(s)""")
+        // Chains on, and composes with the rest of the item's slots.
+        typeCheck(
+            preamble + "def x(s: Signal[Boolean])(using Frame): uic.MenuItem =\n" +
+                """  uic.MenuItem("Play").icon(uic.Icons.play).disabled(s).onSelect(())"""
+        )
+    }
+
     "the element id is one slot, and it still hands back the concrete component" in {
         // Lifting `id` off FormControl and the seven standalones onto HasElementId is a
         // pure reshaping: the setter has to stay on every component that had it, and it

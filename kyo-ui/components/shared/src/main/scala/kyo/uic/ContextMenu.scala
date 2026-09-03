@@ -82,11 +82,24 @@ final case class ContextMenu private (
         refs: List[(List[Int], SignalRef[Boolean])],
         base: String
     )(using Frame): UI =
-        val self = if idV.isDefined then this else copy(idV = Present(base))
-        openRef.render { isOpen =>
-            focus.render { f =>
-                MenuRender.renderAll(refs) { open =>
-                    self.body(isOpen, Present(openRef), f, Present(focus), open.withDefaultValue(false), Present(refs))
+        // See Menu.wired for why the resolution sits inside the mount's content. It matters
+        // most here: `openRef` IS the mount's state, so resolving one level higher would
+        // close the menu on the right-click that opened it — which is the whole reason this
+        // slot could not simply be rebuilt per target.
+        MenuRender.resolveDisabled(itemsV) { items =>
+            val self = copy(itemsV = items, idV = if idV.isDefined then idV else Present(base))
+            openRef.render { isOpen =>
+                focus.render { f =>
+                    MenuRender.renderAll(refs) { open =>
+                        self.body(
+                            isOpen,
+                            Present(openRef),
+                            f,
+                            Present(focus),
+                            open.withDefaultValue(false),
+                            Present(refs)
+                        )
+                    }
                 }
             }
         }

@@ -6610,6 +6610,71 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "every host of MenuItem resolves a reactive disabled" in {
+        // `MenuItem` is ONE model type shared by six hosts, and a host that forgets to
+        // resolve does not fail — it reads `constTrue` on an unresolved `Dyn` and quietly
+        // renders the row enabled. This sweep is what makes that impossible to ship: each
+        // host is given one item disabled by a signal that is `true`, and its row has to
+        // carry `.p-disabled`. A host missing from the list below is a host with no guard.
+        def off(using Frame) = Signal.initRef(true)
+        for
+            s1   <- off
+            s2   <- off
+            s3   <- off
+            s4   <- off
+            s5   <- off
+            s6   <- off
+            hi   <- Signal.initRef(0)
+            foc1 <- Signal.initRef(List.empty[Int])
+            foc2 <- Signal.initRef(List.empty[Int])
+            foc3 <- Signal.initRef(List.empty[Int])
+            foc4 <- Signal.initRef(List.empty[Int])
+            open <- Signal.initRef(true)
+            fan  <- Signal.initRef(true)
+            // MegaMenu renders its panel only while the root is open, so without this ref
+            // the leaf rows are not in the tree at all and the sweep would pass vacuously.
+            panel <- Signal.initRef(true)
+
+            menu   = uic.Menu().items(uic.MenuItem("A").disabled(s1).onSelect(())).wired(hi, "m")
+            bar    = uic.Menubar().items(uic.MenuItem("A").disabled(s2).onSelect(())).wired(Nil, foc1, "b")
+            tiered = uic.TieredMenu().items(uic.MenuItem("A").disabled(s3).onSelect(())).wired(Nil, foc2, "t")
+            ctx = uic
+                .ContextMenu(Seq(uic.MenuItem("A").disabled(s4).onSelect(())))(p("target"))
+                .wired(open, foc3, Nil, "c")
+            mega = uic
+                .MegaMenu()
+                .items(
+                    uic.MegaMenuItem("Root").column(
+                        uic.MenuGroup("G").items(uic.MenuItem("A").disabled(s5).onSelect(()))
+                    )
+                )
+                .wired(List((List(0), panel)), foc4, "g")
+            dial = uic.SpeedDial().items(uic.MenuItem("A").disabled(s6).onSelect(())).wired(fan, "s", _ => ())
+
+            // The marker differs by host because "disabled" does: a menu ROW is a link and
+            // wears Prime's `.p-disabled`, while SpeedDial renders its actions as real
+            // `<button>`s, which take the native attribute instead.
+            rows <- Kyo.foreach(
+                List(
+                    ("Menu", menu, "p-disabled"),
+                    ("Menubar", bar, "p-disabled"),
+                    ("TieredMenu", tiered, "p-disabled"),
+                    ("ContextMenu", ctx, "p-disabled"),
+                    ("MegaMenu", mega, "p-disabled"),
+                    ("SpeedDial", dial, "disabled")
+                )
+            )((name, ui, marker) => renderHtml(ui).map(h => (name, h, marker)))
+        yield
+            val unresolved = rows.collect {
+                case (name, html, marker) if !html.contains(marker) => name
+            }
+            assert(
+                unresolved.isEmpty,
+                s"these hosts render a signal-disabled item as enabled: ${unresolved.mkString(", ")}"
+            )
+        end for
+    }
+
     "a chosen id lands on the component's own root, not on a wrapper" in {
         // Wrapping a component in a `div(...).id(...)` is ordinary composition and works for
         // the whole of it. What it cannot do is BE the component, which is what a walk that

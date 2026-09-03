@@ -81,9 +81,14 @@ final case class TieredMenu private (
         focus: SignalRef[List[Int]],
         base: String
     )(using Frame): UI =
-        val self = if idV.isDefined then this else copy(idV = Present(base))
-        focus.render { f =>
-            MenuRender.renderAll(refs)(open => self.body(open.withDefaultValue(false), Present(refs), f, Present(focus)))
+        // See Menu.wired for why the resolution sits inside the mount's content.
+        MenuRender.resolveDisabled(itemsV) { items =>
+            val self = copy(itemsV = items, idV = if idV.isDefined then idV else Present(base))
+            focus.render { f =>
+                MenuRender.renderAll(refs)(open =>
+                    self.body(open.withDefaultValue(false), Present(refs), f, Present(focus))
+                )
+            }
         }
     end wired
 

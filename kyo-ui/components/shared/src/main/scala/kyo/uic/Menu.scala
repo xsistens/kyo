@@ -95,15 +95,21 @@ final case class Menu private (
       * to be given an id to say it said nothing in most of the pages that use one.
       */
     private[uic] def wired(hi: SignalRef[Int], base: String)(using Frame): UI =
-        val self = if idV.isDefined then this else copy(idV = Present(base))
-        hi.render(h => self.body(h, Present(hi)))
+        // Resolved HERE and not in `render`: the resolution is a reactive region, and one
+        // placed outside the mount would rebuild the mount on every emission — taking the
+        // open state with it. Inside the mount's content it re-renders the rows and nothing
+        // else.
+        MenuRender.resolveDisabled(itemsV) { items =>
+            val self = copy(itemsV = items, idV = if idV.isDefined then idV else Present(base))
+            hi.render(h => self.body(h, Present(hi)))
+        }
     end wired
 
     private def body(h: Int, hiRef: Maybe[SignalRef[Int]])(using Frame): UI =
         val rows = flatRows
         // Positions (into `rows`) of the keyboard-navigable rows.
         val navigable: List[Int] = rows.zipWithIndex.collect {
-            case (MenuRow.Item(it), i) if !it.disabledFlag => i
+            case (MenuRow.Item(it), i) if !it.disabledFlag.constTrue => i
         }
         // `h` is a ROW position, the same coordinate [[ListNav]] navigates in, so a row that
         // went disabled under a live update simply stops being the highlighted one.
@@ -156,12 +162,12 @@ final case class Menu private (
                 // stripped exactly that away, leaving a menu whose every child claimed to be
                 // nothing. The link inside stays roleless, the way Prime renders it.
                 var row = li.cssClass("p-menu-item").role("menuitem")
-                if it.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
+                if it.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
                 if i == hiRow then
                     row = row.cssClass("p-focus").scrollAuto(true)
                     idV.foreach(base => row = row.id(s"$base-active"))
                 val act: Maybe[Any < Async] =
-                    if hiRef.isDefined && !it.disabledFlag then Present(activate(it)) else Absent
+                    if hiRef.isDefined && !it.disabledFlag.constTrue then Present(activate(it)) else Absent
                 row(toChild(MenuRender.itemContent("menu", it, act, Absent, roving = true)))
         }
 

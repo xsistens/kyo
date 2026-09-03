@@ -103,7 +103,10 @@ final case class SpeedDial private (
 
     /** The subscription tree the mount publishes (golden-test seam). */
     private[uic] def wired(open: SignalRef[Boolean], base: String, focus: String => Any < Async)(using Frame): UI =
-        open.render(o => body(o, Present(open), base, focus))
+        // See Menu.wired for why the resolution sits inside the mount's content.
+        MenuRender.resolveDisabled(itemsV) { items =>
+            open.render(o => copy(itemsV = items).body(o, Present(open), base, focus))
+        }
 
     /** The actions the fan actually fans out: a separator has no place in a row of round icon
       * buttons, the extracted sheet has no `.p-speeddial-separator` to style one, and rendering
@@ -128,7 +131,7 @@ final case class SpeedDial private (
         val acts = actions
         // The positions the keyboard may land on: a disabled action is natively disabled, so it
         // is out of the tab order and an arrow steps over it.
-        val navigable              = acts.zipWithIndex.collect { case (it, i) if !it.disabledFlag => i }
+        val navigable              = acts.zipWithIndex.collect { case (it, i) if !it.disabledFlag.constTrue => i }
         val first                  = navigable.headOption.getOrElse(-1)
         val listId                 = s"$base-list"
         def itemId(i: Int): String = s"$base-i$i"
@@ -187,11 +190,11 @@ final case class SpeedDial private (
                         .size(Size.Small)
                         .accessibleName(it.labelV.constOrEmpty)
                         .tooltip(it.labelV.constOrEmpty)
-                        .disabled(it.disabledFlag)
+                        .disabled(it.disabledFlag.constTrue)
                         .roleRaw("menuitem")
                         .id(itemId(i))
                     it.iconV.foreach(g => btn = btn.icon(g))
-                    if !it.disabledFlag then
+                    if !it.disabledFlag.constTrue then
                         // No action is in the tab sequence: the dial's one tab stop is the toggle,
                         // and focus reaches an action by opening the fan, which seeds it onto the
                         // first one. A tab stop here would be a second one, and Tab would then walk

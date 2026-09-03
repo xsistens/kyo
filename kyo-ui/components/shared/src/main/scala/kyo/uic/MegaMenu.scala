@@ -33,6 +33,9 @@ final case class MegaMenuItem private (
     /** Appends one panel column holding the given groups. */
     def column(groups: MenuGroup*): MegaMenuItem = copy(columnsV = columnsV :+ groups.toList)
 
+    /** Package-internal: replaces the columns wholesale (see [[MenuItem.withItems]]). */
+    private[uic] def withColumns(cs: List[List[MenuGroup]]): MegaMenuItem = copy(columnsV = cs)
+
     /** The equivalent plain [[MenuItem]] of a column-less root row. */
     private[uic] def asMenuItem: MenuItem =
         var it = MenuItem.fromText(labelV)
@@ -130,9 +133,14 @@ final case class MegaMenu private (
         focus: SignalRef[List[Int]],
         base: String
     )(using Frame): UI =
-        val self = if idV.isDefined then this else copy(idV = Present(base))
-        focus.render { f =>
-            MenuRender.renderAll(refs)(open => self.body(open.withDefaultValue(false), Present(refs), f, Present(focus)))
+        // See Menu.wired for why the resolution sits inside the mount's content.
+        MenuRender.resolveMegaDisabled(itemsV) { items =>
+            val self = copy(itemsV = items, idV = if idV.isDefined then idV else Present(base))
+            focus.render { f =>
+                MenuRender.renderAll(refs)(open =>
+                    self.body(open.withDefaultValue(false), Present(refs), f, Present(focus))
+                )
+            }
         }
     end wired
 
@@ -221,9 +229,9 @@ final case class MegaMenu private (
                     if it.separatorFlag then li.cssClass("p-megamenu-separator").role("separator")
                     else
                         val myIdx = navIdx
-                        if !it.disabledFlag then navIdx += 1
+                        if !it.disabledFlag.constTrue then navIdx += 1
                         var row = li.cssClass("p-megamenu-item").role("menuitem")
-                        if it.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
+                        if it.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
                         else if focus == List(r, c, myIdx) then
                             row = row.cssClass("p-focus").scrollAuto(true)
                             idV.foreach(b => row = row.id(s"$b-active"))
@@ -236,7 +244,7 @@ final case class MegaMenu private (
                                 _ <- onActivated
                             yield ()
                         val act: Maybe[Any < Async] =
-                            if refs.isDefined && !it.disabledFlag then Present(activate) else Absent
+                            if refs.isDefined && !it.disabledFlag.constTrue then Present(activate) else Absent
                         row(toChild(MenuRender.itemContent("megamenu", it, act, Absent, roving = true)))
                 }
                 ul.cssClass("p-megamenu-submenu").role("menu")((heading :: rows).map(toChild)*)

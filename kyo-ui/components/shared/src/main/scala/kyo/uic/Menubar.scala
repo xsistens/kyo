@@ -88,9 +88,14 @@ final case class Menubar private (
         focus: SignalRef[List[Int]],
         base: String
     )(using Frame): UI =
-        val self = if idV.isDefined then this else copy(idV = Present(base))
-        focus.render { f =>
-            MenuRender.renderAll(refs)(open => self.body(open.withDefaultValue(false), Present(refs), f, Present(focus)))
+        // See Menu.wired for why the resolution sits inside the mount's content.
+        MenuRender.resolveDisabled(itemsV) { items =>
+            val self = copy(itemsV = items, idV = if idV.isDefined then idV else Present(base))
+            focus.render { f =>
+                MenuRender.renderAll(refs)(open =>
+                    self.body(open.withDefaultValue(false), Present(refs), f, Present(focus))
+                )
+            }
         }
     end wired
 
@@ -200,9 +205,9 @@ private[uic] object MenuTree:
                     if focused.exists(_ == p) then
                         row = row.cssClass("p-focus").scrollAuto(true)
                         idBase.foreach(b => row = row.id(s"$b-active"))
-                    if it.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
+                    if it.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
                     val act: Maybe[Any < Async] =
-                        if refs.isDefined && !it.disabledFlag then Present(toggle) else Absent
+                        if refs.isDefined && !it.disabledFlag.constTrue then Present(toggle) else Absent
                     val content = MenuRender.itemContent(prefix, it, act, Present(subIcon), roving)
                     // The enclosing wired render already subscribes to every submenu ref
                     // (MenuRender.renderAll), so the overlay is host-gated: rendered only
@@ -255,7 +260,7 @@ private[uic] object MenuTree:
                     if focused.exists(_ == p) then
                         row = row.cssClass("p-focus").scrollAuto(true)
                         idBase.foreach(b => row = row.id(s"$b-active"))
-                    if it.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
+                    if it.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
                     def activate: Any < Async =
                         for
                             _ <- it.actionV match
@@ -267,7 +272,7 @@ private[uic] object MenuTree:
                                 case Absent       => (): Any < Async
                         yield ()
                     val act: Maybe[Any < Async] =
-                        if refs.isDefined && !it.disabledFlag then Present(activate) else Absent
+                        if refs.isDefined && !it.disabledFlag.constTrue then Present(activate) else Absent
                     row(toChild(MenuRender.itemContent(prefix, it, act, Absent, roving)))
                 end if
         }

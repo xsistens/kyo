@@ -82,6 +82,30 @@ field names differ (`accNameV` in the field-shaped controls, `accessibleNameV` i
   no reactive path in their render. `severity` is not either: its storage disagrees on whether the
   slot is optional. Check the storage before lifting; forcing a trait onto the second group is a
   behaviour change per component, not a refactor.
+- **The split above is not an argument for widening any given `disabled`.** Ask what the flag
+  DESCRIBES. Almost every one describes the state of the page, and a plain `Boolean` is right.
+  `MenuItem.disabled` is the exception because it describes the item's TARGET, which changes with
+  each open — and rebuilding the list per target is not the alternative, since the host allocates
+  its open state in its own unkeyed `UI.mounted`.
+
+## A slot on a shared MODEL type is not a per-component decision
+
+`MenuItem` is one type rendered by six hosts (Menu — which SplitButton delegates to — Menubar,
+MegaMenu, TieredMenu, ContextMenu, SpeedDial). Widening a slot there means every host has to
+honour it, or the same call means different things in different places with nothing in the type
+to say so. Contrast `HasElementId`, where each component genuinely was its own decision.
+
+- **A reactive slot on a model type is resolved by the HOST, before it builds rows.**
+  `MenuRender.resolveDisabled` folds every reactive slot in the tree into ONE subscription chain
+  and hands back items pinned to `Const`, so `MenuNav`, the navigable index set and the row
+  builders all stay pure functions of a plain `Boolean` read through `constTrue`. This is
+  `BoolValue.reactive` lifted from a value to a list.
+- **Resolve INSIDE the mount, never around it.** These hosts keep their open state in their own
+  `UI.mounted`; a reactive region placed around `render` rebuilds the mount on every emission and
+  takes that state with it. The seam is `wired`, which is already below the mount boundary.
+- **A forgotten host fails silently** — `constTrue` on an unresolved `Dyn` reads `false`. The
+  sweep in `GoldenRenderTest` ("every host of MenuItem resolves a reactive disabled") is what
+  makes that impossible to ship; a host added later belongs in that list.
 - **A slot only some implementors have gets its own trait** (`HasAccessibleNameRef` extends
   `HasAccessibleName` for the 21 of 38 that carry the reference), never an abstract member the
   others cannot answer.

@@ -34,7 +34,7 @@ private[uic] object MegaNav:
       */
     private[uic] def colItems(items: List[MegaMenuItem], r: Int, c: Int): List[MenuItem] =
         if r >= 0 && r < items.size && c >= 0 && c < items(r).columnsV.size then
-            items(r).columnsV(c).flatMap(_.itemsV).filter(it => !it.separatorFlag && !it.disabledFlag)
+            items(r).columnsV(c).flatMap(_.itemsV).filter(it => !it.separatorFlag && !it.disabledFlag.constTrue)
         else Nil
 
     private def moveRoot(items: List[MegaMenuItem], r: Int, dir: Int): Int =
