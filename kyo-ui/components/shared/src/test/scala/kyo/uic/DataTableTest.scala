@@ -1852,10 +1852,10 @@ class DataTableTest extends UicTest:
         for
             sel  <- Signal.initRef(Set.empty[String])
             ctx  <- Signal.initRef(Absent: Maybe[String])
-            seen <- Signal.initRef(List.empty[String])
+            seen <- Signal.initRef(List.empty[Item])
             table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
                 .selectionMode(SelectionMode.Multiple).selected(sel)
-                .contextMenuRow(ctx).onRowContextMenu(id => seen.getAndUpdate(_ :+ id))
+                .contextMenuRow(ctx).onRowContextMenu(t => seen.getAndUpdate(_ :+ t.row))
             trs <- bodyTrs(table.render)
             _ <- trs(1).attrs.onContextMenu match
                 case Present(h) => h
@@ -1865,10 +1865,55 @@ class DataTableTest extends UicTest:
             told   <- seen.get
             after  <- bodyTrs(table.render)
         yield
-            assert(on == Present("2") && told == List("2"))
+            assert(on == Present("2") && told == List(items(1)))
             assert(picked.isEmpty, "acting on a row is not selecting it")
             assert(after(1).attrs.cssClasses.contains("p-datatable-contextmenu-row-selected"))
             assert(!after.head.attrs.cssClasses.contains("p-datatable-contextmenu-row-selected"))
+    }
+
+    "the right-click hands over the selected ROWS beside the one it landed on" in {
+        for
+            sel  <- Signal.initRef(Set("1"))
+            seen <- Signal.initRef(Absent: Maybe[uic.RowContext[Item]])
+            table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple).selected(sel)
+                .onRowContextMenu(t => seen.set(Present(t)))
+            trs <- bodyTrs(table.render)
+            // Row 2 is NOT in the selection: the pair is what lets a menu tell the two cases apart.
+            _ <- trs(1).attrs.onContextMenu match
+                case Present(h) => h
+                case Absent     => throw new AssertionError("the row declares no context handler")
+            outside <- seen.get
+            _       <- sel.set(Set("1", "2"))
+            _ <- trs(1).attrs.onContextMenu match
+                case Present(h) => h
+                case Absent     => throw new AssertionError("the row declares no context handler")
+            inside <- seen.get
+        yield
+            assert(outside == Present(uic.RowContext(items(1), List(items.head))))
+            assert(!outside.exists(t => t.selected.contains(t.row)), "a right-click outside the selection")
+            assert(inside == Present(uic.RowContext(items(1), items)))
+            assert(inside.exists(t => t.selected.contains(t.row)), "a right-click inside it")
+    }
+
+    "the selection handed over is the rows, in the table's own order, filtering aside" in {
+        for
+            sel  <- Signal.initRef(Set("2", "1"))
+            qry  <- Signal.initRef("B")
+            seen <- Signal.initRef(Absent: Maybe[uic.RowContext[Item]])
+            table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple).selected(sel).globalFilter(qry)
+                .onRowContextMenu(t => seen.set(Present(t)))
+            trs <- bodyTrs(table.render)
+            _ <- trs.head.attrs.onContextMenu match
+                case Present(h) => h
+                case Absent     => throw new AssertionError("the row declares no context handler")
+            told <- seen.get
+        yield
+            // One row is on the screen, both are selected: the menu is asked about the selection,
+            // not about the page.
+            assert(trs.size == 1)
+            assert(told == Present(uic.RowContext(items(1), items)))
     }
 
     "a table with no context binding leaves the browser's own menu alone" in {

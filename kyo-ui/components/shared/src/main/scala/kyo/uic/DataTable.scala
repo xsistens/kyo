@@ -13,6 +13,23 @@ import kyo.uic.form.FieldError
   */
 final case class CellPath(row: String, column: List[String]) derives CanEqual
 
+/** What a right-click over a data row was aimed at: the row under the pointer, and the rows
+  * selected at that moment.
+  *
+  * Both halves, because a context menu over a table is one question with two answers behind it.
+  * A reader who right-clicks a row inside their selection means the selection; one who
+  * right-clicks outside it means that row. Which of the two a given menu item follows is the
+  * caller's rule, not the table's, so the table hands over what it knows and decides nothing:
+  * `selected.contains(row)` is the whole of the usual test.
+  *
+  * `selected` is the ROWS, resolved against the table's full set in its own order, not the keys
+  * the selection is stored as: a menu acts on records, and looking them back up is work the table
+  * has already done. A [[DataTable.source]] table is the one place this cannot be complete, since a
+  * lazily loaded table only holds the window it has fetched, so a selected row outside it is not
+  * there to hand over.
+  */
+final case class RowContext[A](row: A, selected: Seq[A]) derives CanEqual
+
 /** What the table is currently editing: the rows in row mode, the one cell in cell mode,
   * the per-column drafts an open editor writes into, and the error a refused commit left
   * behind. Threaded to the row renderer as one value, since all four reach the same cells.
@@ -377,7 +394,7 @@ final case class DataTable[A] private (
     selectableF: Maybe[A => Boolean] = Absent,
     selectedCellsRef: Maybe[SignalRef[Set[CellPath]]] = Absent,
     contextRowRef: Maybe[SignalRef[Maybe[String]]] = Absent,
-    onRowContextF: Maybe[String => Any < Async] = Absent,
+    onRowContextF: Maybe[RowContext[A] => Any < Async] = Absent,
     csvSeparatorV: String = ",",
     rowClassF: Maybe[A => Seq[String]] = Absent,
     expandedRef: Maybe[SignalRef[Set[String]]] = Absent,
@@ -693,10 +710,19 @@ final case class DataTable[A] private (
       */
     def contextMenuRow(ref: SignalRef[Maybe[String]]): DataTable[A] = copy(contextRowRef = Present(ref))
 
-    /** Runs on a right-click over a row, with its [[rowKey]] id, after
-      * [[contextMenuRow]] is written.
+    /** Runs on a right-click over a row with what that click was aimed at (the row under the
+      * pointer and the rows selected at that moment, as a [[RowContext]]), after [[contextMenuRow]]
+      * is written.
+      *
+      * That is what a menu needs to decide what it should do, and why it is a pair: acting on the
+      * selection when the reader right-clicked inside it and on the one row when they did not is
+      * the rule almost every table wants, and neither half alone can express it. The table takes
+      * no position on the rule itself and changes nothing about the selection.
+      *
+      * The menu is [[kyo.uic.ContextMenu]], which wraps the table and opens where the click was;
+      * a menu item that runs later reads what this handler put in a ref of yours.
       */
-    def onRowContextMenu(f: String => Any < Async): DataTable[A] = copy(onRowContextF = Present(f))
+    def onRowContextMenu(f: RowContext[A] => Any < Async): DataTable[A] = copy(onRowContextF = Present(f))
 
     /** The field separator [[csv]] writes (Prime's `csvSeparator`, and a comma by default). */
     def csvSeparator(v: String): DataTable[A] = copy(csvSeparatorV = v)
@@ -3989,7 +4015,7 @@ final case class DataTable[A] private (
         // A second, separate mark: the reader is acting ON this row without changing what
         // is selected, which is why Prime gives it a class of its own.
         if ctx.contains(id) then row = row.cssClass("p-datatable-contextmenu-row-selected")
-        if contextRowOn then row = row.onContextMenu(openRowContext(id))
+        if contextRowOn then row = row.onContextMenu(openRowContext(a, id))
         // After a drop the browser still owes a click, and it does not land on the grip the
         // press started on: the rows moved under the pointer. A row that would select takes
         // it and drops it, so the press cannot reach the next row the reader clicks.
@@ -4053,14 +4079,28 @@ final case class DataTable[A] private (
             case Present(ref) => ref.getAndUpdate(cur => if cur.contains(cell) then cur - cell else cur + cell)
             case Absent       => ()
 
-    /** A right-click over a row: remember which one, then tell the caller. */
-    private def openRowContext(id: String)(using Frame): Any < Async =
+    /** A right-click over a row: remember which one, then tell the caller what it was aimed at.
+      *
+      * The selection is read HERE rather than taken from the render, because the row's handler is
+      * a closure the render left behind: reading it now is reading what is selected at the moment
+      * of the click. The keys are resolved against [[currentRows]], the table's full set, so a
+      * selected row the reader has since filtered off the screen is still part of what the menu
+      * is being asked about.
+      */
+    private def openRowContext(a: A, id: String)(using Frame): Any < Async =
         val write: Any < Async = contextRowRef match
             case Present(ref) => ref.set(Present(id))
             case Absent       => ()
         val fire: Any < Async = onRowContextF match
-            case Present(f) => f(id)
-            case Absent     => ()
+            case Present(f) =>
+                for
+                    keys <- selectedRef match
+                        case Present(ref) => ref.get
+                        case Absent       => Kyo.lift(Set.empty[String])
+                    all <- currentRows
+                    _   <- f(RowContext(a, all.filter(r => keys.contains(keyOf(r)))))
+                yield ()
+            case Absent => ()
         write.andThen(fire)
     end openRowContext
 
