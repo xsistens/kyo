@@ -263,6 +263,85 @@ final private[uic] case class FrozenPlan(
     end span
 end FrozenPlan
 
+/** One `<tr>` of a table body, as data rather than as markup.
+  *
+  * A body does not emit one element per row: a row with an expansion is two, a group contributes a
+  * header and a summary that belong to no row, and a windowed body pads with spacers and draws slots
+  * for rows the source has not reached. So the body's list is the stream of `<tr>`s, and this is one
+  * element of it — a description complete enough that rendering it needs nothing else.
+  *
+  * Why the shape matters. A keyed list region reuses a row only when it paints as exactly ONE
+  * element, and only when the value it was rendered from is `equals` to the previous one. Splitting
+  * the stream this way is what makes the first true; carrying resolved values rather than the
+  * table-wide sets they came from is what will make the second useful. Nothing depends on either
+  * yet: today the body renders this list inline, exactly as it rendered the rows before.
+  */
+sealed private[uic] trait RowSpec[A]
+
+private[uic] object RowSpec:
+
+    /** A data row. The fields are what `dataRow` always took; holding them as a value is what lets
+      * the body decide whether a row has to be rendered again without rendering it.
+      */
+    final case class Data[A](
+        a: A,
+        index: Int,
+        sel: Set[String],
+        ctx: Maybe[String],
+        cells: Set[CellPath],
+        exp: Set[String],
+        colCount: Int,
+        spans: Map[Int, SpanCell],
+        edit: EditState,
+        nav: NavState[A],
+        frozen: FrozenPlan,
+        move: MoveState[A],
+        select: SelectState,
+        height: Maybe[Int] = Absent
+    ) extends RowSpec[A]
+
+    /** The second `<tr>` an expanded row emits. Its own entry, not part of the row's, because a row
+      * that painted as two elements could never be reused.
+      */
+    final case class Expansion[A](a: A, colCount: Int) extends RowSpec[A]
+
+    final case class GroupHead[A](
+        level: RowGroup[A],
+        path: GroupPath,
+        rows: List[A],
+        colCount: Int,
+        collapsible: Boolean,
+        open: Boolean
+    ) extends RowSpec[A]
+
+    final case class GroupFoot[A](
+        render: (GroupPath, List[A]) => UI,
+        path: GroupPath,
+        rows: List[A],
+        colCount: Int
+    ) extends RowSpec[A]
+
+    /** One of the two rows that hold the height of the window's undrawn rows. `marks` carries the
+      * first drawn index and how many are drawn, which only the leading spacer states.
+      */
+    final case class Spacer[A](px: Int, marks: Maybe[(Int, Int)] = Absent) extends RowSpec[A]
+
+    /** A row of the window the source has not reached: one skeleton per column. The column counts
+      * and the frozen plan ride along because a slot has to hold the same grid as a real row.
+      */
+    final case class Slot[A](
+        index: Int,
+        height: Int,
+        lead: Int,
+        cells: Int,
+        trail: Int,
+        frozen: FrozenPlan
+    ) extends RowSpec[A]
+
+    final case class Empty[A](colCount: Int) extends RowSpec[A]
+
+end RowSpec
+
 /** The row before and after a committed cell edit, plus the column that wrote it. */
 final case class CellChange[A](rowKey: String, column: List[String], before: A, after: A)
 
@@ -2441,13 +2520,8 @@ final case class DataTable[A] private (
                 val shown = RowGroup.visible(paged, groupsV, Nil, openGroups, expandedGroupsRef.isDefined)
                 nav.copy(rows = shown.toVector, page = pageSizeV.getOrElse(math.max(shown.size, 1)))
 
-        def emptyRow: UI =
-            tr.cssClass("p-datatable-empty-message")(
-                toChild(EmptyContent.render(emptyContentV, "No records found")(c => td.colspan(math.max(colCount, 1))(c)))
-            )
-
-        lazy val bodyRows: List[UI] =
-            if paged.isEmpty then List(emptyRow)
+        lazy val bodySpecs: List[RowSpec[A]] =
+            if paged.isEmpty then List(RowSpec.Empty(colCount))
             else
                 groupSegments(
                     paged.zipWithIndex,
@@ -2466,32 +2540,6 @@ final case class DataTable[A] private (
                     select
                 )
 
-        /** One spacer row, which is what holds the height of the rows that are not drawn.
-          *
-          * Prime's own, and the only shape that works: an empty `tr` collapses to nothing
-          * in table layout, and `.p-datatable-virtualscroller-spacer` makes it a flex box,
-          * which takes the height it is given. There is one of them ahead of the window
-          * and one behind it, so the drawn rows sit at the scroll position they belong to
-          * without any of them being positioned.
-          */
-        def padRow(px: Int)(using Frame): Ast.Element =
-            tr.cssClass("p-datatable-virtualscroller-spacer").style(_.height(math.max(0, px).px))
-
-        /** A row of the window the source has not reached yet: one `Skeleton` per column,
-          * so the grid stays whole and the geometry never moves once the rows land.
-          */
-        def slotRow(using Frame): UI =
-            val height = rowHeightV.getOrElse(1)
-            // A line's worth of skeleton, which is what the cell would hold: the row is as
-            // tall as every other one because the row says so, not because the slot does.
-            def slot(f: Maybe[FrozenSlot]): UI =
-                freeze(td(toChild(Skeleton().height("1rem").render)), f)
-            val leading  = leadTerms.indices.toList.map(i => slot(frozen.leadAt(i)))
-            val cells    = leafCols.indices.toList.map(i => slot(frozen.at(i)))
-            val trailing = trailTerms.indices.toList.map(i => slot(frozen.trailAt(i)))
-            tr.style(_.height(height.px))((leading ++ cells ++ trailing).map(toChild)*)
-        end slotRow
-
         /** How many rows there are to scroll over, which does not depend on where the
           * reader is: the rows themselves locally, and how far the source reaches over one.
           */
@@ -2506,18 +2554,18 @@ final case class DataTable[A] private (
           * exactly as long as a fetch is in flight, and drawing the published rows at the
           * asked-for offsets is how a list flickers through wrong rows while it loads.
           */
-        def windowRows(scrollTop: Double)(using Frame): List[UI] =
+        def windowSpecs(scrollTop: Double): List[RowSpec[A]] =
             val vp        = viewport
             val held      = paged.toVector
             val loadedEnd = rowOffset + held.size
             val count     = windowCount
-            if count <= 0 then List(emptyRow)
+            if count <= 0 then List(RowSpec.Empty(colCount))
             else
                 val (from, reach) = vp.span(vp.clamp(scrollTop, count))
                 val until         = math.min(count, reach)
-                val drawn = (from until until).toList.flatMap { i =>
+                val drawn: List[RowSpec[A]] = (from until until).toList.map { i =>
                     if i >= rowOffset && i < loadedEnd then
-                        dataRow(
+                        RowSpec.Data(
                             held(i - rowOffset),
                             i,
                             sel,
@@ -2533,17 +2581,24 @@ final case class DataTable[A] private (
                             select,
                             rowHeightV
                         )
-                    else List(slotRow)
+                    else
+                        RowSpec.Slot(
+                            i,
+                            rowHeightV.getOrElse(1),
+                            leadTerms.size,
+                            leafCols.size,
+                            trailTerms.size,
+                            frozen
+                        )
                 }
                 // Both spacers are always emitted, one of them at nothing at either end of
                 // the list, so a window is the same shape wherever it sits and the leading
                 // one is always there to say where it starts.
-                val lead = padRow(from * vp.itemSize)
-                    .data("uic-vs-first", from.toString)
-                    .data("uic-vs-count", (until - from).toString)
-                (lead :: drawn) :+ padRow((count - until) * vp.itemSize)
+                val lead: RowSpec[A] =
+                    RowSpec.Spacer(from * vp.itemSize, Present((from, until - from)))
+                (lead :: drawn) :+ RowSpec.Spacer[A]((count - until) * vp.itemSize)
             end if
-        end windowRows
+        end windowSpecs
 
         /** The `tbody`. Over a windowed body the reactive region is its ROWS rather than the
           * group itself, and that is what keeps the scroll position: replacing a region
@@ -2565,8 +2620,8 @@ final case class DataTable[A] private (
             var group = tbody.cssClass("p-datatable-tbody").cssClass("p-datatable-frozen-tbody")
             if size.idPrefix.nonEmpty then group = group.id(s"${size.idPrefix}-frozen")
             top.foreach(px => group = group.style(_.top(px.px)))
-            val trs = rows.toList.zipWithIndex.flatMap((a, i) =>
-                dataRow(
+            val specs: List[RowSpec[A]] = rows.toList.zipWithIndex.flatMap { (a, i) =>
+                val data: RowSpec[A] = RowSpec.Data(
                     a,
                     i,
                     sel,
@@ -2581,8 +2636,9 @@ final case class DataTable[A] private (
                     move.copy(live = false, held = Absent),
                     select
                 )
-            )
-            group(trs.map(toChild)*)
+                if isExpanded(a, exp) then List(data, RowSpec.Expansion(a, colCount)) else List(data)
+            }
+            group(specs.flatMap(renderTr).map(toChild)*)
         end frozenGroup
 
         val frozenBody: List[UI] =
@@ -2593,14 +2649,15 @@ final case class DataTable[A] private (
                     case Absent       => frozenGroup(held, Absent))
 
         val tbodyEl: UI =
-            if !windowOn then tbody.cssClass("p-datatable-tbody")(bodyRows.map(toChild)*)
+            if !windowOn then tbody.cssClass("p-datatable-tbody")(bodySpecs.flatMap(renderTr).map(toChild)*)
             else
                 val group = tbody
                     .cssClass("p-datatable-tbody")
                     .style(_.height((windowCount * viewport.itemSize).px))
+                def drawn(top: Double)(using Frame): List[UI] = windowSpecs(top).flatMap(renderTr)
                 scroll.ref match
-                    case Present(r) => group(toChild(r.render(top => UI.fragment(windowRows(top)*))))
-                    case Absent     => group(windowRows(0.0).map(toChild)*)
+                    case Present(r) => group(toChild(r.render(top => UI.fragment(drawn(top)*))))
+                    case Absent     => group(drawn(0.0).map(toChild)*)
             end if
         end tbodyEl
 
@@ -3969,7 +4026,7 @@ final case class DataTable[A] private (
         frozen: FrozenPlan,
         move: MoveState[A],
         select: SelectState
-    )(using Frame): List[UI] =
+    )(using Frame): List[RowSpec[A]] =
         levels match
             case Nil => leafRows(rows, sel, ctx, cells, exp, colCount, edit, nav, frozen, move, select)
             case level :: rest =>
@@ -3982,10 +4039,10 @@ final case class DataTable[A] private (
                     val collapsible = expandedGroupsRef.isDefined && level.showHeaderFlag
                     val open        = !collapsible || openGroups.contains(groupPath)
 
-                    val headerRow: List[UI] =
+                    val headerRow: List[RowSpec[A]] =
                         if !level.showHeaderFlag then Nil
-                        else List(groupHeaderRow(level, groupPath, groupRows, colCount, collapsible, open))
-                    val innerRows: List[UI] =
+                        else List(RowSpec.GroupHead(level, groupPath, groupRows, colCount, collapsible, open))
+                    val innerRows: List[RowSpec[A]] =
                         if !open then Nil
                         else
                             groupSegments(
@@ -4004,14 +4061,9 @@ final case class DataTable[A] private (
                                 move,
                                 select
                             )
-                    val footerRow: List[UI] =
+                    val footerRow: List[RowSpec[A]] =
                         if !open then Nil
-                        else
-                            level.footerF.toList.map(f =>
-                                tr.cssClass("p-datatable-row-group-footer")(
-                                    toChild(td.colspan(math.max(colCount, 1))(toChild(f(groupPath, groupRows))))
-                                )
-                            )
+                        else level.footerF.toList.map(f => RowSpec.GroupFoot(f, groupPath, groupRows, colCount))
                     headerRow ++ innerRows ++ footerRow
                 }
     end groupSegments
@@ -4031,11 +4083,16 @@ final case class DataTable[A] private (
         frozen: FrozenPlan,
         move: MoveState[A],
         select: SelectState
-    )(using Frame): List[UI] =
+    )(using Frame): List[RowSpec[A]] =
         val spans = spanCells(rows.map(_._1), exp)
-        rows.zip(spans).flatMap((row, spanned) =>
-            dataRow(row._1, row._2, sel, ctx, cells, exp, colCount, spanned, edit, nav, frozen, move, select)
-        )
+        rows.zip(spans).flatMap { (row, spanned) =>
+            val (a, index) = row
+            val data: RowSpec[A] =
+                RowSpec.Data(a, index, sel, ctx, cells, exp, colCount, spanned, edit, nav, frozen, move, select)
+            // The expansion is its own entry, and only when there is one to draw: an entry that
+            // rendered to nothing would break the one-element-per-entry rule the reuse rests on.
+            if isExpanded(a, exp) then List(data, RowSpec.Expansion(a, colCount)) else List(data)
+        }
     end leafRows
 
     /** Resolves the merged cells of one slice: for each row, which of the marked columns it
@@ -4105,22 +4162,8 @@ final case class DataTable[A] private (
             case Absent       => ()
 
     /** One data row (plus its expansion row while expanded). */
-    private def dataRow(
-        a: A,
-        index: Int,
-        sel: Set[String],
-        ctx: Maybe[String],
-        cells: Set[CellPath],
-        exp: Set[String],
-        colCount: Int,
-        spans: Map[Int, SpanCell],
-        edit: EditState,
-        nav: NavState[A],
-        frozen: FrozenPlan,
-        move: MoveState[A],
-        select: SelectState,
-        height: Maybe[Int] = Absent
-    )(using Frame): List[UI] =
+    private def dataRow(spec: RowSpec.Data[A])(using Frame): UI =
+        import spec.*
         val id        = keyOf(a)
         val isSel     = sel.contains(id)
         val isExp     = exp.contains(id)
@@ -4351,19 +4394,92 @@ final case class DataTable[A] private (
         end match
         if move.live && move.idPrefix.nonEmpty then row = row.id(DataTable.rowId(move.idPrefix, move.base + index))
         rowClassF.foreach(f => f(a).foreach(cls => if cls.nonEmpty then row = row.cssClass(cls)))
-        val rowEl: UI = row((handleTd ++ expanderTd ++ checkboxTd ++ dataTds ++ editorTd).map(toChild)*)
-
-        val expansionRow: List[UI] =
-            if isExp then
-                expansionF.toList.map { f =>
-                    tr.cssClass("p-datatable-row-expansion")(
-                        td.colspan(math.max(colCount, 1))(toChild(f(a)))
-                    )
-                }
-            else Nil
-
-        rowEl :: expansionRow
+        row((handleTd ++ expanderTd ++ checkboxTd ++ dataTds ++ editorTd).map(toChild)*)
     end dataRow
+
+    private def emptyRow(colCount: Int)(using Frame): UI =
+        tr.cssClass("p-datatable-empty-message")(
+            toChild(EmptyContent.render(emptyContentV, "No records found")(c => td.colspan(math.max(colCount, 1))(c)))
+        )
+
+    /** One spacer row, which is what holds the height of the rows that are not drawn.
+      *
+      * Prime's own, and the only shape that works: an empty `tr` collapses to nothing
+      * in table layout, and `.p-datatable-virtualscroller-spacer` makes it a flex box,
+      * which takes the height it is given. There is one of them ahead of the window
+      * and one behind it, so the drawn rows sit at the scroll position they belong to
+      * without any of them being positioned.
+      */
+    private def padRow(px: Int)(using Frame): Ast.Element =
+        tr.cssClass("p-datatable-virtualscroller-spacer").style(_.height(math.max(0, px).px))
+
+    /** A row of the window the source has not reached yet: one `Skeleton` per column,
+      * so the grid stays whole and the geometry never moves once the rows land.
+      */
+    private def slotRow(spec: RowSpec.Slot[A])(using Frame): UI =
+        // A line's worth of skeleton, which is what the cell would hold: the row is as
+        // tall as every other one because the row says so, not because the slot does.
+        def slot(f: Maybe[FrozenSlot]): UI =
+            freeze(td(toChild(Skeleton().height("1rem").render)), f)
+        val leading  = (0 until spec.lead).toList.map(i => slot(spec.frozen.leadAt(i)))
+        val cells    = (0 until spec.cells).toList.map(i => slot(spec.frozen.at(i)))
+        val trailing = (0 until spec.trail).toList.map(i => slot(spec.frozen.trailAt(i)))
+        tr.style(_.height(spec.height.px))((leading ++ cells ++ trailing).map(toChild)*)
+    end slotRow
+
+    /** The `<tr>` an expanded row emits under itself, if the caller gave it content. */
+    private def expansionRow(spec: RowSpec.Expansion[A])(using Frame): List[UI] =
+        expansionF.toList.map { f =>
+            tr.cssClass("p-datatable-row-expansion")(
+                td.colspan(math.max(spec.colCount, 1))(toChild(f(spec.a)))
+            )
+        }
+
+    /** What identifies one entry of the `<tr>` stream across emissions.
+      *
+      * The prefixes keep the namespaces apart: a data row and its expansion are two entries about
+      * the same record, and a group path and a row key are both strings a caller chose. Two entries
+      * of one emission sharing a key would make a keyed region rebuild the whole list, so the
+      * prefixes are not cosmetic.
+      */
+    private[uic] def rowSpecKey(spec: RowSpec[A]): String =
+        spec match
+            case d: RowSpec.Data[A]      => s"r:${keyOf(d.a)}"
+            case e: RowSpec.Expansion[A] => s"x:${keyOf(e.a)}"
+            case g: RowSpec.GroupHead[A] => s"gh:${g.path.keys.mkString(" ")}"
+            case g: RowSpec.GroupFoot[A] => s"gf:${g.path.keys.mkString(" ")}"
+            // The leading spacer is the one that states where the window starts; the trailing one
+            // never does, which is what tells them apart without carrying a flag for it.
+            case s: RowSpec.Spacer[A] => if s.marks.isDefined then "sp:top" else "sp:bottom"
+            case s: RowSpec.Slot[A]   => s"slot:${s.index}"
+            case _: RowSpec.Empty[A]  => "empty"
+        end match
+    end rowSpecKey
+
+    /** One entry of the `<tr>` stream, painted. Exactly one element per entry, which is the
+      * condition a keyed list region reuses rows under; `Expansion` is the one that could decline,
+      * and it declines by never becoming an entry (see `leafRows`).
+      */
+    private[uic] def renderTr(spec: RowSpec[A])(using Frame): List[UI] =
+        spec match
+            case d: RowSpec.Data[A]      => List(dataRow(d))
+            case e: RowSpec.Expansion[A] => expansionRow(e)
+            case g: RowSpec.GroupHead[A] =>
+                List(groupHeaderRow(g.level, g.path, g.rows, g.colCount, g.collapsible, g.open))
+            case g: RowSpec.GroupFoot[A] =>
+                List(tr.cssClass("p-datatable-row-group-footer")(
+                    toChild(td.colspan(math.max(g.colCount, 1))(toChild(g.render(g.path, g.rows))))
+                ))
+            case s: RowSpec.Spacer[A] =>
+                var pad = padRow(s.px)
+                s.marks.foreach { (first, count) =>
+                    pad = pad.data("uic-vs-first", first.toString).data("uic-vs-count", count.toString)
+                }
+                List(pad)
+            case s: RowSpec.Slot[A]  => List(slotRow(s))
+            case e: RowSpec.Empty[A] => List(emptyRow(e.colCount))
+        end match
+    end renderTr
 
     private def toggleExpand(id: String)(using Frame): Any < Async =
         expandedRef match
