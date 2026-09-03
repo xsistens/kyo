@@ -263,6 +263,32 @@ final private[uic] case class FrozenPlan(
     end span
 end FrozenPlan
 
+/** Where the reader is in the list, and what that leaves on the screen. */
+final private[uic] case class Paging[A](rows: List[A], base: Int, current: Int)
+
+/** The whole-list values a row handler needs, as one value that can be read AT THE MOMENT IT RUNS.
+  *
+  * A handler closed over these is correct only for as long as every emission rebuilds it, which is
+  * what a table that re-renders its whole body does today. The moment rows are retained across an
+  * emission, a retained row keeps its handler, and a handler holding last emission's list will span
+  * a range over rows that moved, write back an order missing what was appended since, or fail to
+  * find the row it is committing and discard the reader's input.
+  *
+  * So they are read rather than closed over, which is the rule this module already writes down for
+  * the drag ("reads the ref LIVE, never a closed-over render-time value") and for the context menu
+  * ("reading it now is reading what is selected at the moment of the click"). The values come back
+  * from the same bound refs the render read, through the same arrangement pipeline, so there is one
+  * implementation of "what is on the screen" and not two.
+  */
+final private[uic] case class BodyView[A](
+    selectKeys: IndexedSeq[String],
+    navRows: Vector[A],
+    navPage: Int,
+    moveAll: Seq[A],
+    moveBase: Int,
+    moveCount: Int
+)
+
 /** One `<tr>` of a table body, as data rather than as markup.
   *
   * A body does not emit one element per row: a row with an expansion is two, a group contributes a
@@ -1865,15 +1891,20 @@ final case class DataTable[A] private (
     private def writeRowMove(d: RowDrag, move: MoveState[A])(using Frame): Any < Async =
         if d.target == d.from || d.target == d.from + 1 then ()
         else
-            val next = DataTable.moveBlock(move.all.toList, d.from, d.from + 1, d.target)
-            val to   = if d.target > d.from then d.target - 1 else d.target
-            val store: Any < Async = rowsRefV match
-                case Present(ref) => ref.set(next)
-                case Absent       => ()
-            val notify: Any < Async = onRowReorderF match
-                case Present(f) => f(RowMove(d.from, to, next))
-                case Absent     => ()
-            store.andThen(notify)
+            // The list is read at DROP time. This one writes its result back into the caller's ref,
+            // so a stale copy does not merely display wrongly: it would store a list missing
+            // whatever arrived while the row was being dragged.
+            bodyViewNow.map { v =>
+                val next = DataTable.moveBlock(v.moveAll.toList, d.from, d.from + 1, d.target)
+                val to   = if d.target > d.from then d.target - 1 else d.target
+                val store: Any < Async = rowsRefV match
+                    case Present(ref) => ref.set(next)
+                    case Absent       => ()
+                val notify: Any < Async = onRowReorderF match
+                    case Present(f) => f(RowMove(d.from, to, next))
+                    case Absent     => ()
+                store.andThen(notify)
+            }
         end if
     end writeRowMove
 
@@ -2229,6 +2260,91 @@ final case class DataTable[A] private (
             }
         }
 
+    /** Which of the arranged rows are on the screen, and where that slice starts.
+      *
+      * `count` only clamps the page number: it is the total the paginator shows, which over a
+      * prepared table is the source's rather than the list's. Neither the rows nor the base depend
+      * on it there, since a prepared table was handed its page already.
+      */
+    private def paging(sorted: List[A], page: Int, count: Int): Paging[A] =
+        val prepared = lazyOn
+        if windowOn then Paging(sorted, 0, 0)
+        else
+            pageSizeV match
+                case Present(size) =>
+                    val at         = math.max(page, 0)
+                    val totalPages = math.max(1, (count + size - 1) / size)
+                    val cur        = math.min(at, totalPages - 1)
+                    Paging(
+                        if prepared then sorted else sorted.slice(cur * size, cur * size + size),
+                        if prepared then 0 else cur * size,
+                        cur
+                    )
+                case Absent => Paging(sorted, 0, 0)
+        end if
+    end paging
+
+    /** The whole-list values, off one arrangement. Called by the render for the values it paints
+      * with, and by [[bodyViewNow]] for the ones a handler reads when it fires.
+      */
+    private def bodyViewOf(rows: List[A], sorted: List[A], pg: Paging[A], openGroups: Set[GroupPath])
+        : BodyView[A] =
+        // The rows the keyboard moves over are the ones on the SCREEN: a collapsed group renders
+        // none of its own, so stepping by the paged index would land on a row nobody can see.
+        val shown = RowGroup.visible(pg.rows, groupsV, Nil, openGroups, expandedGroupsRef.isDefined)
+        BodyView(
+            selectKeys = sorted.filter(selectableAt).map(keyOf).toIndexedSeq,
+            navRows = shown.toVector,
+            navPage = pageSizeV.getOrElse(math.max(shown.size, 1)),
+            moveAll = rows,
+            moveBase = pg.base,
+            moveCount = pg.rows.size
+        )
+    end bodyViewOf
+
+    /** The same values, as they are NOW rather than as they were when the row was rendered.
+      *
+      * Every input is read from the ref the render read it from, and the arrangement is the same
+      * one — so a handler that takes this sees what a fresh render would have painted. A table
+      * bound to nothing reads its own constants back and this is the render's answer exactly.
+      */
+    private def bodyViewNow(using Frame): BodyView[A] < Async =
+        for
+            rowsNow <- currentRows
+            sort    <- currentOf(sortRef, List.empty[SortKey])
+            query   <- currentOf(filterRef, "")
+            specs   <- currentOf(columnFiltersRef, Map.empty[List[String], ColumnFilter])
+            page    <- currentOf(pageRef, 0)
+            groups  <- currentOf(expandedGroupsRef, Set.empty[GroupPath])
+        yield
+            val rows   = rowsNow.toList
+            val reads  = if lazyOn then Nil else filterReads(specs)
+            val sorted = arranged(rows, sort, query, reads)
+            bodyViewOf(rows, sorted, paging(sorted, page, sorted.size), groups)
+    end bodyViewNow
+
+    /** The keyboard's view of the grid, as it is when the key arrives rather than when the cell was
+      * rendered. With navigation off the render's own copy is returned untouched, which is empty
+      * and is what every path here already reads it as.
+      */
+    private def navNow(nav: NavState[A])(using Frame): NavState[A] < Async =
+        if !nav.on then Kyo.lift(nav)
+        else bodyViewNow.map(v => nav.copy(rows = v.navRows, page = v.navPage))
+
+    /** What the drag is doing NOW. The render's snapshot is one paint behind by definition; the
+      * ref is the drag itself, and the module already reads it that way everywhere else.
+      */
+    private def heldNow(move: MoveState[A])(using Frame): Maybe[RowDrag] < Async =
+        move.drag match
+            case Present(ref) => ref.get
+            case Absent       => Kyo.lift(move.held)
+
+    /** Which cell is open NOW, for the same reason. */
+    private def openCellNow(edit: EditState)(using Frame): Maybe[CellPath] < Async =
+        editingCellRef match
+            case Present(ref) => ref.get
+            case Absent       => Kyo.lift(edit.cell)
+
     /** The rows a query, a filter spec and a sort leave, in the order they leave them in:
       * steps 1, 1b and 2 of what the body renders, without the paging step 3.
       *
@@ -2400,12 +2516,6 @@ final case class DataTable[A] private (
         val reads  = if prepared then Nil else filterReads(filterIn.specs)
         val filter = filterIn.copy(unusable = reads.collect { case (p, Absent) => p }.toSet)
         val sorted = arranged(rows, sort, query, reads)
-        // The range measures against the same list the select-all header covers — filtered, in
-        // the reader's order, across every page — so the two cannot disagree about what the set
-        // of rows is. Only the rows a range may actually take are listed, since a range that
-        // stepped over a rejected row would still have to report where it stopped.
-        val select = selectIn.copy(keys = sorted.filter(selectableAt).map(keyOf).toIndexedSeq)
-
         // 3. Paginate: clamp the 0-based page, slice, and embed the standalone Paginator
         //    (resolved page passed directly, since the table already renders inside its own
         //    page-ref subscription). A prepared table slices nothing, the rows ARE the page,
@@ -2414,35 +2524,41 @@ final case class DataTable[A] private (
         // A windowed table scrolls instead of paginating: the scrollbar answers the same
         // question the page list does, and only one of them can be right about which rows
         // are on the screen.
-        val (paged, paginatorUI, pageBase) = if windowOn then (sorted, Nil, 0)
-        else
-            pageSizeV match
-                case Present(size) =>
-                    val at = math.max(page, 0)
-                    // An unknown total counts the furthest the source has reached, never less
-                    // than what is on the screen, and adds one page while anything follows.
-                    // Counting the screen alone would shrink the page list on the way back.
-                    val count =
-                        if !prepared then sorted.size
-                        else
-                            total match
-                                case Total.Known(n) => n
-                                case Total.Unknown(more, atLeast) =>
-                                    math.max(at * size + sorted.size, atLeast) + (if more then 1 else 0)
-                    val totalPages = math.max(1, (count + size - 1) / size)
-                    val cur        = math.min(at, totalPages - 1)
-                    var pag = paginatorF.getOrElse(identity[Paginator])(Paginator())
-                        .totalRecords(count)
-                        .rows(size)
-                        .currentPage(cur)
-                        .hostClass("p-datatable-paginator-bottom")
-                    pageRef.foreach(ref => pag = pag.page(ref))
-                    (
-                        if prepared then sorted else sorted.slice(cur * size, cur * size + size),
-                        List(pag.render),
-                        if prepared then 0 else cur * size
-                    )
-                case Absent => (sorted, Nil, 0)
+        // An unknown total counts the furthest the source has reached, never less
+        // than what is on the screen, and adds one page while anything follows.
+        // Counting the screen alone would shrink the page list on the way back.
+        val pageCount = pageSizeV match
+            case Present(size) if prepared =>
+                total match
+                    case Total.Known(n) => n
+                    case Total.Unknown(more, atLeast) =>
+                        math.max(math.max(page, 0) * size + sorted.size, atLeast) + (if more then 1 else 0)
+            case _ => sorted.size
+        val pg = paging(sorted, page, pageCount)
+
+        val paginatorUI: List[UI] = pageSizeV match
+            case Present(size) if !windowOn =>
+                var pag = paginatorF.getOrElse(identity[Paginator])(Paginator())
+                    .totalRecords(pageCount)
+                    .rows(size)
+                    .currentPage(pg.current)
+                    .hostClass("p-datatable-paginator-bottom")
+                pageRef.foreach(ref => pag = pag.page(ref))
+                List(pag.render)
+            case _ => Nil
+
+        val paged    = pg.rows
+        val pageBase = pg.base
+
+        // The whole-list values, from the same pipeline a handler will re-run when it needs them
+        // live. The render's copy is the one that paints; the handlers below take the live one.
+        val view = bodyViewOf(rows, sorted, pg, openGroups)
+
+        // The range measures against the same list the select-all header covers — filtered, in
+        // the reader's order, across every page — so the two cannot disagree about what the set
+        // of rows is. Only the rows a range may actually take are listed, since a range that
+        // stepped over a rejected row would still have to report where it stopped.
+        val select = selectIn.copy(keys = view.selectKeys)
 
         // The paths whose headers the reader can actually click, which is what both click
         // transitions may clear. Everything else in the spec is the caller's to keep.
@@ -2462,7 +2578,7 @@ final case class DataTable[A] private (
         // since it is part of the anatomy, with nothing behind it and a card saying which.
         val move =
             if handleColumn && rowMoveWritable && rowOrderOwners(sort, query, filterIn.specs).isEmpty then
-                moveIn.copy(all = rows, base = pageBase, count = paged.size)
+                moveIn.copy(all = view.moveAll, base = view.moveBase, count = view.moveCount)
             else moveIn.copy(live = false, held = Absent)
 
         // One tr per header level. The leading expander and checkbox cells belong to the
@@ -2516,9 +2632,7 @@ final case class DataTable[A] private (
         // nobody can see.
         val navHere =
             if !nav.on then nav
-            else
-                val shown = RowGroup.visible(paged, groupsV, Nil, openGroups, expandedGroupsRef.isDefined)
-                nav.copy(rows = shown.toVector, page = pageSizeV.getOrElse(math.max(shown.size, 1)))
+            else nav.copy(rows = view.navRows, page = view.navPage)
 
         lazy val bodySpecs: List[RowSpec[A]] =
             if paged.isEmpty then List(RowSpec.Empty(colCount))
@@ -4351,7 +4465,11 @@ final case class DataTable[A] private (
         // it and drops it, so the press cannot reach the next row the reader clicks.
         if rowInteractive then
             def act(e: MouseEvent): Any < Async =
-                if move.held.exists(_.done) then clearRowMove(move) else activate(id, canSelect, e, select)
+                // The drag's own ref, not the paint's copy of it: after a drop the browser still
+                // owes a click, and whether it is owed is a fact about now.
+                heldNow(move).map(h =>
+                    if h.exists(_.done) then clearRowMove(move) else activate(id, canSelect, e, select)
+                )
             // Enter and Space are a click with no pointer behind them, so they carry no
             // modifiers: a keyboard activation is always the plain kind.
             val actPlain: Any < Async = act(MouseEvent(Absent, Modifiers.none))
@@ -4679,6 +4797,20 @@ final case class DataTable[A] private (
         nav: NavState[A],
         edit: EditState
     )(e: KeyboardEvent)(using Frame): Any < Async =
+        // The grid is read against the rows on the screen NOW: PageDown steps by a page height and
+        // Down stops at the last row, and both are answers about a list this cell no longer owns.
+        navNow(nav).map(live => onCellKeyAt(pos, cell, row, c, cellEdit, rowEdit, live, edit)(e))
+
+    private def onCellKeyAt(
+        pos: GridNav.Pos,
+        cell: CellPath,
+        row: A,
+        c: Column[A, FlatOnly],
+        cellEdit: Boolean,
+        rowEdit: Boolean,
+        nav: NavState[A],
+        edit: EditState
+    )(e: KeyboardEvent)(using Frame): Any < Async =
         GridNav.onKey(gridFor(nav), pos, cellEdit || rowEdit, e.key, e.modifiers) match
             case Absent        => ()
             case Present(step) =>
@@ -4732,7 +4864,7 @@ final case class DataTable[A] private (
                     r  <- selectStep
                 yield r
                 end for
-    end onCellKey
+    end onCellKeyAt
 
     /** Puts a row into the editing set, or takes it out. */
     private def setRowEditing(id: String, on: Boolean)(using Frame): Any < Async =
@@ -4789,14 +4921,14 @@ final case class DataTable[A] private (
         // click from cell to cell used to open the next and drop what was typed into the
         // last, without asking anything and without saying so. A refusal keeps the reader
         // in the value they are fixing, the same as Enter and Tab do.
-        edit.cell match
+        openCellNow(edit).map {
             case Present(open) if open != cell =>
                 commitOpen(open, nav, edit).map { ok =>
                     val next: Any < Async = if ok then move else ()
                     next
                 }
             case _ => move
-        end match
+        }
     end beginCellEditing
 
     /** Commits whatever cell is open, wherever the gesture that ends it came from.
@@ -4806,9 +4938,14 @@ final case class DataTable[A] private (
       * open editor, and there is nothing left to commit.
       */
     private def commitOpen(open: CellPath, nav: NavState[A], edit: EditState)(using Frame): Boolean < Async =
-        (nav.rows.find(r => keyOf(r) == open.row), leafPaths.find(_._1 == open.column)) match
-            case (Some(r), Some((_, c))) => commitCell(open, r, c, edit)
-            case _                       => true
+        // Read live, because failing to find the row here does not report anything — it answers
+        // "committed" and DROPS what the reader typed. A handler holding the rows as they were
+        // would do that to any row that moved under an open editor.
+        navNow(nav).map { now =>
+            (now.rows.find(r => keyOf(r) == open.row), leafPaths.find(_._1 == open.column)) match
+                case (Some(r), Some((_, c))) => commitCell(open, r, c, edit)
+                case _                       => true
+        }
 
     /** Opens a row: every editable column's draft is seeded before the row joins the set. */
     private def beginRowEditing(id: String, row: A, edit: EditState)(using Frame): Any < Async =
@@ -4968,8 +5105,12 @@ final case class DataTable[A] private (
                 // first pick, which is what sets one.
                 case (Present(a), true, SelectionMode.Multiple) if metaKeyFlag =>
                     a.get.map {
-                        case Present(from) => applySelection(DataTable.between(select.keys, from, id))
-                        case Absent        => anchorTo(Set(id))
+                        // The list is read HERE, not where this handler was built: a row kept across
+                        // an emission keeps its handler, and a range spanned over the list as it was
+                        // would silently degrade to a single pick the moment anything was appended.
+                        case Present(from) =>
+                            bodyViewNow.map(v => applySelection(DataTable.between(v.selectKeys, from, id)))
+                        case Absent => anchorTo(Set(id))
                     }
                 case _ =>
                     currentValue(selectedBinding, Set.empty[String])
