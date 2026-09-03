@@ -390,7 +390,7 @@ final case class DataTable[A] private (
     pageRef: Maybe[SignalRef[Int]] = Absent,
     paginatorF: Maybe[Paginator => Paginator] = Absent,
     selectionModeV: SelectionMode = SelectionMode.None,
-    selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
+    selectedBinding: Maybe[ReactiveValue[Set[String]]] = Absent,
     selectableF: Maybe[A => Boolean] = Absent,
     selectedCellsRef: Maybe[SignalRef[Set[CellPath]]] = Absent,
     contextRowRef: Maybe[SignalRef[Maybe[String]]] = Absent,
@@ -666,8 +666,33 @@ final case class DataTable[A] private (
       */
     def selectionMode(v: SelectionMode): DataTable[A] = copy(selectionModeV = v)
 
-    /** Binds selection two-way to `ref` (a set of [[rowKey]] ids). */
-    def selected(ref: SignalRef[Set[String]]): DataTable[A] = copy(selectedRef = Present(ref))
+    /** The selected rows, as a set of [[rowKey]] ids.
+      *
+      * A `SignalRef` binds two way — the table writes the reader's clicks back into it. A plain
+      * `Signal` binds ONE way: the table paints what the signal says and never writes to it, which
+      * is what a selection whose source of truth lives elsewhere needs — a URL, a parent, a record
+      * in a normalized cache the rows are read from. A constant set is a selection that cannot
+      * change at all.
+      *
+      * Reading needs no write access (`Signal.render` serves every case), so only four paths care
+      * which form this is: a row click, the checkbox column, its select-all, and [[restore]]. Under
+      * a one-way binding each of those has nowhere to write, so each does nothing — and
+      * [[onRowClick]] still fires on every row click, which is how a caller owning the state
+      * elsewhere closes the loop: the click writes THERE, and the new value arrives back through
+      * this signal. `Checkbox` mode has no such outlet, and a one-way binding without an
+      * `onRowClick` cannot move at all; both are reported as cards rather than left silent.
+      */
+    def selected(v: Set[String] | Signal[Set[String]]): DataTable[A] =
+        copy(selectedBinding = Present(ReactiveValue(v)))
+
+    /** The selection's write-back ref, where the caller bound one that can be written.
+      *
+      * `ReactiveVariable` is matched before `Dyn` on purpose: it IS-A `Dyn`, so the wrong order
+      * silently swallows the two-way case (`kyo-ui/components/CLAUDE.md`).
+      */
+    private def selectedRef: Maybe[SignalRef[Set[String]]] = selectedBinding match
+        case Present(ReactiveVariable(ref)) => Present(ref)
+        case _                              => Absent
 
     /** Selects CELLS rather than rows (Prime's `cellSelection`), bound as a set of
       * [[CellPath]], which pairs a [[rowKey]] id with a column path.
@@ -784,7 +809,7 @@ final case class DataTable[A] private (
             query  <- currentOf(filterRef, "")
             specs  <- currentOf(columnFiltersRef, Map.empty[List[String], ColumnFilter])
             page   <- currentOf(pageRef, 0)
-            sel    <- currentOf(selectedRef, Set.empty[String])
+            sel    <- currentValue(selectedBinding, Set.empty[String])
             exp    <- currentOf(expandedRef, Set.empty[String])
             groups <- currentOf(expandedGroupsRef, Set.empty[GroupPath])
             widths <- currentOf(columnWidthsRef, Map.empty[List[String], Double])
@@ -793,6 +818,9 @@ final case class DataTable[A] private (
 
     /** Puts a reader back where they were: writes each field of `s` into the ref it came
       * from, and skips the ones that are not bound, since they have nowhere to go.
+      *
+      * A one-way [[selected]] is skipped for the same reason a slot nobody bound is: the table does
+      * not own that set, so restoring it is the caller's to do wherever they do own it.
       *
       * Nothing is validated here, because nothing has to be: a restored spec naming a
       * column this table no longer has, a width for one it never had, or a page past the
@@ -821,6 +849,18 @@ final case class DataTable[A] private (
         ref match
             case Present(r) => r.get
             case Absent     => fallback
+
+    /** The same for a slot bound as a [[ReactiveValue]], which may be one-way or constant.
+      *
+      * Reading is where the difference between the three bindings disappears, so this is what every
+      * read of the selection goes through: asking `selectedRef` instead would read `Set.empty` for a
+      * one-way binding and report it as "nothing selected".
+      */
+    private def currentValue[T](v: Maybe[ReactiveValue[T]], fallback: T)(using Frame): T < Async =
+        v match
+            case Present(ReactiveValue.Dyn(sig)) => sig.current
+            case Present(ReactiveValue.Const(c)) => c
+            case _                               => fallback
 
     /** The rows the table holds, whichever way it was given them. */
     private def currentRows(using Frame): Seq[A] < Async =
@@ -1113,7 +1153,7 @@ final case class DataTable[A] private (
       * a mode that is about a checkbox column says nothing about a cell.
       */
     private def cellSelectOn: Boolean =
-        selectedCellsRef.isDefined && editingCellRef.isEmpty && selectedRef.isEmpty &&
+        selectedCellsRef.isDefined && editingCellRef.isEmpty && selectedBinding.isEmpty &&
             (selectionModeV == SelectionMode.Single || selectionModeV == SelectionMode.Multiple)
 
     /** Whether a right-click over a row means anything here. */
@@ -1165,6 +1205,15 @@ final case class DataTable[A] private (
         ref match
             case Present(r) => r.render(k)
             case Absent     => k(fallback)
+
+    /** The same for a [[ReactiveValue]] slot. A constant needs no reactive region at all, which is
+      * what lets a constant selection paint under a pure render (no mount, no subscription).
+      */
+    private def withValue[T](v: Maybe[ReactiveValue[T]], fallback: T)(k: T => UI)(using Frame): UI =
+        v match
+            case Present(ReactiveValue.Dyn(sig)) => sig.render(k)
+            case Present(ReactiveValue.Const(c)) => k(c)
+            case _                               => k(fallback)
 
     /** Whether anything can be edited at all, which is what decides whether the table
       * needs state of its own.
@@ -1913,7 +1962,7 @@ final case class DataTable[A] private (
                             withRef(columnFiltersRef, Map.empty[List[String], ColumnFilter]) { specs =>
                                 withRef(columnWidthsRef, Map.empty[List[String], Double]) { widths =>
                                     withRef(pageRef, 0) { page =>
-                                        withRef(selectedRef, Set.empty[String]) { sel =>
+                                        withValue(selectedBinding, Set.empty[String]) { sel =>
                                             withRef(contextRowRef, Absent: Maybe[String]) { ctx =>
                                                 withRef(selectedCellsRef, Set.empty[CellPath]) { cells =>
                                                     withRef(expandedRef, Set.empty[String]) { exp =>
@@ -2557,7 +2606,7 @@ final case class DataTable[A] private (
       */
     private def rowKeyCard(using Frame): List[UI] =
         val usesIdentity =
-            selectedRef.isDefined || expandedRef.isDefined || onRowClickF.isDefined ||
+            selectedBinding.isDefined || expandedRef.isDefined || onRowClickF.isDefined ||
                 editingRowsRef.isDefined || editingCellRef.isDefined
         if rowKeyF.isDefined || !usesIdentity then Nil
         else
@@ -2842,7 +2891,7 @@ final case class DataTable[A] private (
         // more than one is bound. Cell editing keeps the click, since it is the one that
         // does something a second click cannot undo.
         val claimed = List(
-            if selectedRef.isEmpty then Nil else List("selected, which picks rows"),
+            if selectedBinding.isEmpty then Nil else List("selected, which picks rows"),
             if selectedCellsRef.isEmpty then Nil else List("selectedCells, which picks cells"),
             if editingCellRef.isEmpty then Nil else List("editingCell, which opens an editor")
         ).flatten
@@ -2866,7 +2915,29 @@ final case class DataTable[A] private (
                         "Radio are about a column of the table, which a cell is not in",
                     List(selectionModeV.toString)
                 ))
-        limited ++ clash ++ modeless
+        // A one-way `selected` paints but never writes, which is the point of it — the caller owns
+        // the set and closes the loop through `onRowClick`. Two shapes have no loop to close, and
+        // both look exactly like a working selection until a reader clicks one.
+        val oneWay = selectedBinding.isDefined && selectedRef.isEmpty
+        val unwritable =
+            if !oneWay || selectionModeV != SelectionMode.Checkbox then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "selected is bound one way, so the checkbox column has nothing to write; a checkbox is not a row " +
+                        "click, so onRowClick is no outlet for it either — bind a SignalRef, or pick Single/Multiple",
+                    List(selectionModeV.toString)
+                ))
+        val inert =
+            if !oneWay || !rowClickSelects || onRowClickF.isDefined then Nil
+            else
+                List(KeyDiagnostics.card(
+                    "DataTable",
+                    "selected is bound one way and no onRowClick is bound, so a row click has nowhere to go; the " +
+                        "rows offer the pointer that says they can be picked and then do nothing",
+                    List(selectionModeV.toString)
+                ))
+        limited ++ clash ++ modeless ++ unwritable ++ inert
     end selectionCards
 
     /** Two answers to how tall the viewport is, where the table can read only one. */
@@ -4101,11 +4172,11 @@ final case class DataTable[A] private (
         val fire: Any < Async = onRowContextF match
             case Present(f) =>
                 for
-                    keys <- selectedRef match
-                        case Present(ref) => ref.get
-                        case Absent       => Kyo.lift(Set.empty[String])
-                    all <- currentRows
-                    _   <- f(RowContext(a, all.filter(r => keys.contains(keyOf(r)))))
+                    // Through the BINDING, not the ref: a menu over a one-way selection is asked
+                    // about that selection just the same, and reading it needs no write access.
+                    keys <- currentValue(selectedBinding, Set.empty[String])
+                    all  <- currentRows
+                    _    <- f(RowContext(a, all.filter(r => keys.contains(keyOf(r)))))
                 yield ()
             case Absent => ()
         write.andThen(fire)

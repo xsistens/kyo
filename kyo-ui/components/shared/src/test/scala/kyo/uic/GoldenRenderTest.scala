@@ -1413,6 +1413,42 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    // The three bindings `selected` accepts differ only in who may WRITE the set. What the reader
+    // sees must not be able to tell them apart, or a caller owning the selection elsewhere would be
+    // shipping a second-class table.
+    "a one-way and a constant row selection render byte-identically to a two-way one" in {
+        final case class Row(id: String, name: String) derives CanEqual
+        val rows = List(Row("1", "Alice"), Row("2", "Bob"), Row("3", "Carol"))
+        def tableOf(selected: Set[String] | Signal[Set[String]])(using Frame): UI =
+            uic.DataTable[Row]()
+                .rows(rows)
+                .rowKey(_.id)
+                .columns(uic.Column[Row]("Name")(_.name))
+                .selectionMode(uic.SelectionMode.Multiple)
+                .selected(selected)
+                // Keeps the one-way forms off the "cannot move" card, which would itself be a
+                // difference in the output.
+                .onRowClick(_ => ())
+        for
+            ref      <- Signal.initRef(Set("2"))
+            src      <- Signal.initRef(Set("2"))
+            twoWay   <- UI.runRender(tableOf(ref)).take(1).run
+            oneWay   <- UI.runRender(tableOf(src.map(identity))).take(1).run
+            constant <- UI.runRender(tableOf(Set("2"))).take(1).run
+        yield
+            assert(twoWay.mkString.contains("p-datatable-row-selected"), "the mark is there to compare")
+            assert(oneWay.mkString == twoWay.mkString, "a one-way selection is not a lesser table")
+            // The constant is the same document with the reactive region taken away: a value that
+            // cannot change needs nothing to watch it, so the markers are the whole difference and
+            // the element anatomy is byte-identical.
+            assert(
+                constant.mkString == twoWay.mkString.stripPrefix("<!--kyo-rs:r-->").stripSuffix("<!--kyo-re:r-->"),
+                "a constant selection is the same anatomy without the region"
+            )
+            assert(!constant.mkString.contains("kyo-rs"), "and it subscribes to nothing")
+        end for
+    }
+
     // A lazily loaded table is the same anatomy with the three passes taken out: it renders
     // the page it was handed and paginates over a total it could not have counted itself.
     "DataTable renders a lazily loaded page verbatim and paginates over the total it was given" in {

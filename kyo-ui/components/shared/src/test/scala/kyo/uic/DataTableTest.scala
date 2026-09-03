@@ -1607,6 +1607,116 @@ class DataTableTest extends UicTest:
             assert(no.attrs.cssClasses.contains("p-disabled"), "and it says so")
     }
 
+    // ---- selected: the three bindings the union carries ----
+
+    "a constant selection paints, and nothing can move it" in {
+        for
+            ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple).selected(Set("2")).onRowClick(_ => ()).render
+            trs <- bodyTrs(ui)
+            _   <- click(trs.head)
+            // Re-rendered from the same constant: a click had nowhere to go, so nothing changed.
+            after <- bodyTrs(ui)
+        yield
+            assert(after(1).attrs.cssClasses.contains("p-datatable-row-selected"))
+            assert(!after.head.attrs.cssClasses.contains("p-datatable-row-selected"))
+            assert(after(1).attrs.ariaAttrs.get("selected").contains("true"))
+    }
+
+    "a one-way selection follows its source and is never written back" in {
+        // The shape a caller owning the state elsewhere binds: the table paints what the signal
+        // says, the click goes out through onRowClick, and the new value comes back in through the
+        // signal. One circle, one direction.
+        for
+            src    <- Signal.initRef(Set("1"))
+            clicks <- Signal.initRef(List.empty[String])
+            ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple)
+                .selected(src.map(identity))
+                .onRowClick(k => clicks.getAndUpdate(_ :+ k).unit).render
+            trs   <- bodyTrs(ui)
+            _     <- click(trs(1))
+            after <- src.get
+            heard <- clicks.get
+            _     <- src.set(Set("2"))
+            moved <- bodyTrs(ui)
+        yield
+            assert(after == Set("1"), "the table did not write to a signal it was only given to read")
+            assert(heard == List("2"), "and the click still reached the caller")
+            assert(moved(1).attrs.cssClasses.contains("p-datatable-row-selected"))
+            assert(!moved.head.attrs.cssClasses.contains("p-datatable-row-selected"))
+    }
+
+    "a SignalRef still binds two ways" in {
+        // The regression nail: the union dispatches on the RUNTIME class, and ReactiveVariable
+        // IS-A Dyn, so the wrong match order would silently downgrade every existing caller.
+        for
+            sel <- Signal.initRef(Set.empty[String])
+            ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple).selected(sel).render
+            trs    <- bodyTrs(ui)
+            _      <- click(trs(1))
+            picked <- sel.get
+        yield assert(picked == Set("2"))
+    }
+
+    "a one-way selection still reports what it holds, and restore leaves it alone" in {
+        for
+            src <- Signal.initRef(Set("1", "2"))
+            table = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple).selected(src.map(identity)).onRowClick(_ => ())
+            st           <- table.state
+            _            <- table.restore(uic.TableState(selected = Set("9")))
+            afterRestore <- src.get
+        yield
+            assert(st.selected == Set("1", "2"), "reading needs no write access")
+            assert(afterRestore == Set("1", "2"), "and restoring has nowhere to write")
+    }
+
+    "a right-click over a one-way selection is still told what is selected" in {
+        for
+            src  <- Signal.initRef(Set("1"))
+            seen <- Signal.initRef(Absent: Maybe[uic.RowContext[Item]])
+            ui = uic.DataTable[Item]().rows(items).rowKey(_.id).columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple).selected(src.map(identity))
+                .onRowClick(_ => ())
+                .onRowContextMenu(t => seen.set(Present(t))).render
+            trs <- bodyTrs(ui)
+            _ <- trs(1).attrs.onContextMenu match
+                case Present(h) => h
+                case Absent     => throw new AssertionError("the row declares no context handler")
+            told <- seen.get
+        yield assert(told == Present(uic.RowContext(items(1), List(items.head))))
+    }
+
+    "a checkbox column over a one-way selection has nothing to write, and says so" in {
+        for
+            src <- Signal.initRef(Set.empty[String])
+            text <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id)
+                .columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Checkbox).selected(src.map(identity)).render)
+        yield assert(text.contains("checkbox column has nothing to write"))
+    }
+
+    "a one-way selection with no onRowClick cannot move at all, and says so" in {
+        for
+            src <- Signal.initRef(Set.empty[String])
+            inert <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id)
+                .columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple).selected(src.map(identity)).render)
+            wired <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id)
+                .columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple).selected(src.map(identity))
+                .onRowClick(_ => ()).render)
+            twoWay <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id)
+                .columns(uic.column("Name")(_.name))
+                .selectionMode(SelectionMode.Multiple).selected(src).render)
+        yield
+            assert(inert.contains("a row click has nowhere to go"))
+            assert(!wired.contains("a row click has nowhere to go"), "an onRowClick is the outlet")
+            assert(!twoWay.contains("a row click has nowhere to go"), "and so is a writable ref")
+    }
+
     "a selection restriction over a table with no selection is reported" in {
         for
             text <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id)

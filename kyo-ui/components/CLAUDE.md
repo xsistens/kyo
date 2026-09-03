@@ -55,7 +55,10 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   types (`String` always shown vs `Signal[Maybe[String]]` that can clear the row), so
   `String | Signal[Maybe[String]]` would be a heterogeneous union, not this pattern.
 - **The DISPLAY slots follow this; the SELECTION slots do not yet.** `Tabs.selected` was the
-  first converted. Still outstanding: `Select`/`MultiSelect`/`Listbox`/`TreeSelect`/
+  first converted, `DataTable.selected` the second — and the second is the warning about how this
+  list was drawn up: it was not on it. The family was enumerated from the pickers, and a table's
+  row selection is the same slot wearing different clothes. Assume the list is short, not complete.
+  Still outstanding: `Select`/`MultiSelect`/`Listbox`/`TreeSelect`/
   `CascadeSelect`/`SelectButton` take `SignalRef` and nothing else, and
   `CheckBox`/`RadioButton`/`ToggleSwitch`/`ToggleButton`/`Input`/`AutoComplete` carry the
   constant/`SignalRef` overload pair through two private ADTs (`CheckBox.Checked`,
@@ -65,6 +68,18 @@ named subclass, so the two reactive cases are exact rather than a heuristic.
   none — `Signal.render` serves `Const`, `Dyn` and `ReactiveVariable` alike — so check which
   half of the slot actually needs the ref before writing the signature. In `Tabs` only the
   click path did; the union made the ask strictly weaker without changing the two-way case.
+- **Widening one of these is not a rename.** In `DataTable` the field went to
+  `selectedBinding: Maybe[ReactiveValue[…]]` with a private `selectedRef` deriving the writable
+  case, and of the twelve uses only four were writes. The other eight still COMPILED against the
+  derived ref and six of them would have been wrong: three read the value (a one-way binding would
+  have reported `Set.empty` from `state`, from the render and from `RowContext.selected`) and three
+  only ask whether anything is bound at all (`rowKey`'s card must still fire, and the click-clash
+  card is about who claims the click, not who may write). Classify each use as read / write /
+  bound-at-all before touching it; the compiler checks none of this.
+- **Say what a one-way binding cannot do, in a card.** A slot that paints but never writes looks
+  exactly like a working one until someone clicks it. `DataTable` reports the two shapes that have
+  no outlet — a `Checkbox` column, whose boxes are not row clicks and so cannot fall back to
+  `onRowClick`, and a `Single`/`Multiple` selection with no `onRowClick` bound at all.
 
 ## Shared slots live in traits, not in every component
 

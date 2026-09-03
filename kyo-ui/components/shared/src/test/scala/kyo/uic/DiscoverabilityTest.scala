@@ -87,6 +87,24 @@ class DiscoverabilityTest extends UicTest:
         )
     }
 
+    "a table's row selection is the same union, for the same reason" in {
+        // Found by the spotify example after F-05 closed: the family table in that entry did not
+        // list this slot, and a selection whose truth is a record in a normalized cache is exactly
+        // the case it was written about.
+        typeCheck(
+            preamble + """def x(r: SignalRef[Set[String]]) = uic.DataTable[String]().selected(r)"""
+        )
+        typeCheck(
+            preamble + """def x(s: Signal[Set[String]]) = uic.DataTable[String]().selected(s)"""
+        )
+        typeCheck(preamble + """def x = uic.DataTable[String]().selected(Set("a"))""")
+        // The shape the app has: derived from the rows themselves, so a Signal by construction.
+        typeCheck(
+            preamble +
+                """def x(rows: Signal[Seq[String]]) = uic.DataTable[String]().selected(rows.map(_.toSet)).onRowClick(_ => ())"""
+        )
+    }
+
     "a menu item's disabled takes a Signal, like its label already did" in {
         // The item type was uneven with ITSELF: a label that may follow a signal beside an
         // availability that may not. That is the argument for this one, not the count of
