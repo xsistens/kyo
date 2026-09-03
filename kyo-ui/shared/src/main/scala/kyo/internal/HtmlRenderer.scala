@@ -1400,9 +1400,17 @@ private[kyo] object HtmlRenderer:
           |    // marker is left alone: reconciling it against the placeholder the parent rendered would morph the
           |    // instance's subtree away, and with it focus, caret and every DOM-local thing hanging off it. The key
           |    // is what makes that safe; a differing key falls through to the morph and resets the slot. The live
-          |    // marker adopts the incoming key on the way out, which also covers boot (a full-page render stamps no m).
+          |    // marker adopts the incoming key on the way out.
+          |    //
+          |    // A NAMED slot is opaque from the first pass, not from the second. `m` says the client adopted the
+          |    // span; `s` with the same key says the same thing one beat earlier, because the render that emitted
+          |    // the slot named the instance that owns it. Waiting for `m` bought exactly one destructive morph per
+          |    // slot, and the regions inside the discarded subtree leave the registry with it while the instance
+          |    // republishes asynchronously — a subscription emitting in between dies on an unknown range, for good.
+          |    // An UNNAMED slot keeps the old rule: without a key nothing tells one instance from the next.
           |    var lf=__kyoSpanFlags(fromNode),tf=__kyoSpanFlags(toNode),slot=__kyoHasFlag(tf,"s");
-          |    if(__kyoHasFlag(lf,"m")&&slot&&__kyoFlagKey(lf)===__kyoFlagKey(tf))return;
+          |    var sameKey=__kyoFlagKey(lf)===__kyoFlagKey(tf),named=__kyoFlagKey(tf)!==null&&sameKey;
+          |    if((__kyoHasFlag(lf,"m")||(named&&__kyoHasFlag(lf,"s")))&&slot&&sameKey)return;
           |    __kyoMorphRun(parent,fromNode.nextSibling,fclose,toNode.nextSibling,tclose);
           |    if(slot){var k=__kyoFlagKey(tf);fromNode.data="kyo-rs:"+fid+(k===null?" m":" m k="+k);}
           |    return;}

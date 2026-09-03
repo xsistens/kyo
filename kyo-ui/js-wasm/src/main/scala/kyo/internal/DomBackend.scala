@@ -665,10 +665,19 @@ private[kyo] object DomBackend:
                 // marker is left alone: reconciling it against the placeholder the parent rendered would morph the
                 // instance's subtree away, and with it focus, caret and every DOM-local thing hanging off it. The key
                 // is what makes that safe. A differing key means a different instance, which falls through to the
-                // morph and resets the slot exactly as it did before flags existed. The live marker adopts the
-                // incoming key on the way out, which also covers boot: a full-page render stamps no `m`, so the first
-                // re-render after it morphs once and every one after that skips.
-                if hasFlag(liveFlags, "m") && incomingSlot && flagKey(liveFlags) == flagKey(incomingFlags) then ()
+                // morph and resets the slot exactly as it did before flags existed.
+                //
+                // A NAMED slot is opaque from the first pass, not from the second. `m` says the client adopted the
+                // span; `s` with the same key says the same thing one beat earlier, because the render that emitted
+                // the slot named the instance that owns it. Waiting for `m` bought exactly one destructive morph per
+                // slot, and the damage was not confined to the DOM: the regions inside the discarded subtree leave
+                // the registry with it, the instance republishes asynchronously, and a subscription that emits in
+                // between dies on an unknown range — permanently, since a dead subscription never paints again. An
+                // UNNAMED slot keeps the old rule: without a key there is nothing to tell one instance from the next,
+                // and a keyless mount is rebuilt by every enclosing emission by design.
+                val namedSlot = flagKey(incomingFlags).isDefined && flagKey(liveFlags) == flagKey(incomingFlags)
+                val ownsSlot  = hasFlag(liveFlags, "m") || (namedSlot && hasFlag(liveFlags, "s"))
+                if ownsSlot && incomingSlot && flagKey(liveFlags) == flagKey(incomingFlags) then ()
                 else
                     morphNodeRun(parent, fromNode.nextSibling, fromClose, toNode.nextSibling, toClose)
                     if incomingSlot then

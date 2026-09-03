@@ -372,11 +372,14 @@ class DomBackendTest extends UITest:
         withUI(app) {
             for
                 _ <- Browser.assertText(Selector.id("kinner"), "live")
-                // First re-render: a server-rendered page carries no `k` (client-only flag, golden HTML
-                // stays byte-identical), so this pass falls through the guard and ADOPTS the key. The
-                // SPA transport boots with the flags already stamped and is opaque from the start.
+                // The FIRST re-render is the one that used to cost a subtree. A named slot is opaque from
+                // this pass on, not from the next: the render that emitted it named the instance that owns
+                // it, so waiting for the client's own `m` bought one destructive morph per slot — and the
+                // regions inside the discarded subtree left the registry with it.
+                _      <- Browser.evalDiscard("document.getElementById('kinner').__kyoMark = 7;")
                 _      <- Browser.click(Selector.id("ktick"))
                 _      <- Browser.assertText(Selector.id("ktxt"), "t:1")
+                first  <- Browser.evalJson[Int]("document.getElementById('kinner').__kyoMark || 0")
                 _      <- Browser.evalDiscard("document.getElementById('kinner').__kyoMark = 7;")
                 before <- Browser.evalJson[Int]("document.getElementById('kinner').__kyoMark || 0")
                 // Steady state: the live marker names the same mount the incoming slot does, so the parent
@@ -386,6 +389,7 @@ class DomBackendTest extends UITest:
                 _     <- Browser.assertText(Selector.id("kinner"), "live")
                 after <- Browser.evalJson[Int]("document.getElementById('kinner').__kyoMark || 0")
             yield
+                assert(first == 7, "the first parent re-render already leaves the named slot alone")
                 assert(before == 7)
                 assert(after == 7)
         }
