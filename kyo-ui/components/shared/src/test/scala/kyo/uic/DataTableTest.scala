@@ -329,6 +329,14 @@ class DataTableTest extends UicTest:
             case e: UI.Ast.Element       => Chunk(e)
             case r: UI.Ast.Reactive[?]   => r.signal.current(using r.frame).map(resolve)
             case f: UI.Ast.Fragment[?]   => Kyo.foreach(f.children)(resolve).map(_.flatten)
+            case f: UI.Ast.Foreach[?, ?] =>
+                // A keyed row list is the same kind of layer as the reactive one above: what the rows
+                // currently are is what the assertions are about.
+                f.applyTyped([T] =>
+                    (signal: Signal[Chunk[T]], _: Maybe[T => String], render: (Int, T) => UI) =>
+                        signal.current(using f.frame).map { items =>
+                            Kyo.foreach(items.zipWithIndex) { (item, i) => resolve(render(i, item)) }.map(_.flatten)
+                    })
             case k: UI.Ast.KeyedChild[?] => resolve(k.child)
             case _                       => Chunk.empty
 

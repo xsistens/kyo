@@ -29,12 +29,26 @@ abstract class UicTest extends kyo.test.Test[Any]:
                 r.signal.current(using r.frame).map(elements)
             case f: UI.Ast.Fragment[?] =>
                 Kyo.foreach(f.children)(elements).map(_.flatten)
+            case f: UI.Ast.Foreach[?, ?] => foreachElements(f)
             case k: UI.Ast.KeyedChild[?] => elements(k.child)
             case m: UI.Ast.Mounted =>
                 m.placeholderUI match
                     case Present(ui) => elements(ui)
                     case Absent      => Chunk.empty
             case _ => Chunk.empty
+
+    /** A keyed list region resolved to the elements it currently renders.
+      *
+      * Same reasoning as `Reactive` above: a list region is a subscription boundary, not a node the client sees, so a
+      * walk that stopped here would miss every row a component renders through one. Split out because recovering the
+      * element type costs a polymorphic continuation, which does not fit inside a match arm.
+      */
+    private def foreachElements(f: UI.Ast.Foreach[?, ?])(using Frame): Chunk[UI.Ast.Element] < Sync =
+        f.applyTyped([T] =>
+            (signal: Signal[Chunk[T]], _: Maybe[T => String], render: (Int, T) => UI) =>
+                signal.current(using f.frame).map { items =>
+                    Kyo.foreach(items.zipWithIndex) { (item, i) => elements(render(i, item)) }.map(_.flatten)
+            })
 
     /** How many reactive regions sit between `node` and the nearest element carrying `cls`.
       *
@@ -50,7 +64,16 @@ abstract class UicTest extends kyo.test.Test[Any]:
                 case e: UI.Ast.Element                                     => Kyo.foreach(e.children)(walk(_, depth)).map(_.flattenChunk)
                 case r: UI.Ast.Reactive[?]                                 => r.signal.current(using r.frame).map(walk(_, depth + 1))
                 case f: UI.Ast.Fragment[?]                                 => Kyo.foreach(f.children)(walk(_, depth)).map(_.flattenChunk)
-                case k: UI.Ast.KeyedChild[?]                               => walk(k.child, depth)
+                case f: UI.Ast.Foreach[?, ?]                               =>
+                    // A list region is a subscription boundary like `Reactive`, so it counts the same: a row rendered
+                    // through one is a region deeper than the list itself.
+                    f.applyTyped([T] =>
+                        (signal: Signal[Chunk[T]], _: Maybe[T => String], render: (Int, T) => UI) =>
+                            signal.current(using f.frame).map { items =>
+                                Kyo.foreach(items.zipWithIndex) { (item, i) => walk(render(i, item), depth + 1) }
+                                    .map(_.flattenChunk)
+                        })
+                case k: UI.Ast.KeyedChild[?] => walk(k.child, depth)
                 case m: UI.Ast.Mounted =>
                     m.placeholderUI match
                         case Present(ui) => walk(ui, depth)

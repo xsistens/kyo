@@ -1,0 +1,79 @@
+package kyo.uic
+
+import kyo.*
+import kyo.internal.ReactiveRegion
+import kyo.internal.ReactiveUI
+import kyo.internal.UIExchange
+
+/** What one emission COSTS: how many rows a table renders when one row changed.
+  *
+  * Every other suite here asks what the table renders. This one asks how much of it the table renders
+  * again, which no assertion on markup can see: the same HTML comes out either way. The unit is a
+  * count of column-body invocations, taken around the real engine — `normalize` plus `subscribe` —
+  * because reuse is an engine property and a pure walk of the tree re-renders everything by
+  * construction.
+  *
+  * The measured shape is the one the spotify example hits per click: forty bound rows, a selection
+  * signal, one key added to it. That changes the markup of exactly one row.
+  */
+class DataTableReuseTest extends UicTest:
+
+    final case class Item(id: String, name: String) derives CanEqual
+
+    private val rowCount = 40
+    private val items    = List.tabulate(rowCount)(i => Item(s"k$i", s"row-$i"))
+
+    /** Counts column-body calls. The body is a pure `A => String`, so the counter is plain state. */
+    final private class Renders:
+        private var n     = 0
+        def bump(): Unit  = synchronized { n += 1 }
+        def get: Int      = synchronized(n)
+        def reset(): Unit = synchronized { n = 0 }
+    end Renders
+
+    /** The engine needs a sink; nothing here asserts on the painted HTML. */
+    private val quiet: UIExchange =
+        new UIExchange:
+            def onChange(
+                region: ReactiveRegion,
+                path: Seq[String],
+                contentContext: ReactiveRegion.RegionIdentity,
+                parentContext: ReactiveRegion.ParentContext,
+                previous: Maybe[UI],
+                changed: UI
+            )(using Frame): Unit < Async = ()
+
+    "one selected row costs one rendered row".pendingUntilFixed(
+        "F-16: the body's reactive unit is the table, so one changed row re-renders all of them " +
+            "(measured: 80 column-body calls for a 40-row table, i.e. two full passes per write)"
+    ) in {
+        Scope.run {
+            val counted = new Renders
+            for
+                rows <- Signal.initRef[Seq[Item]](items)
+                sel  <- Signal.initRef(Set.empty[String])
+                err  <- Signal.initRef(Absent: Maybe[(CellPath, kyo.uic.form.FieldError)])
+                ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).selected(sel)
+                    .columns(uic.column("Name") { i =>
+                        counted.bump(); i.name
+                    })
+                    .wired("t", Map.empty, err, _ => ())
+                root <- ReactiveUI.normalize(ui, Seq.empty)
+                _    <- ReactiveUI.subscribe(root, quiet)
+                _    <- Async.sleep(100.millis)
+                first = counted.get
+                _     = counted.reset()
+                _ <- sel.set(Set("k5"))
+                _ <- Async.sleep(300.millis)
+                after = counted.get
+            yield
+                assert(first >= rowCount, s"the first pass has to render every row; it rendered $first")
+                assert(
+                    after == 1,
+                    s"selecting one row re-rendered $after of $rowCount rows"
+                )
+            end for
+        }
+    }
+
+end DataTableReuseTest
