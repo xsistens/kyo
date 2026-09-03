@@ -5125,8 +5125,9 @@ class GoldenRenderTest extends UicTest:
             for
                 oref <- Signal.initRef(open)
                 fref <- Signal.initRef(focus)
+                at   <- Signal.initRef(Present(UI.Point(120, 80)): Maybe[UI.Point])
                 refs <- Kyo.foreach(cm.submenuPaths)(p => Signal.initRef(openPaths.contains(p)).map(p -> _))
-                out  <- UI.runRender(cm.wired(oref, fref, refs.toList, "mint")).take(1).run
+                out  <- UI.runRender(cm.wired(oref, fref, at, refs.toList, "mint")).take(1).run
             yield out.mkString
         val base = uic.ContextMenu(
             Seq(
@@ -5150,7 +5151,11 @@ class GoldenRenderTest extends UicTest:
             assert(closed.contains("""aria-haspopup="menu""""), "target advertises the menu popup")
             assert(closed.contains("target-region"), "target children render")
             assert(!closed.contains("p-contextmenu-root-list"), "closed: no panel")
+            assert(closed.contains("""id="mint"""), "the wrapped region carries the element id the parts derive from")
             assert(open.contains("p-uic-overlay-panel"), "open: panel rides the Overlay primitive")
+            assert(open.contains("""id="mint-panel"""), "open: the panel is addressable, which is what the measure needs")
+            assert(open.contains("p-uic-overlay-portal"), "open: a menu at a point portals out of any clipping ancestor")
+            assert(open.contains("""data-kyo-portal="1"""), "open: panel and backdrop re-home to the body")
             assert(open.contains("p-contextmenu"), "open: Prime's contextmenu skin")
             assert(open.contains("p-contextmenu-root-list"), "open: root list")
             assert(open.contains("""role="menu""""), "open: menu role")
@@ -6140,6 +6145,46 @@ class GoldenRenderTest extends UicTest:
         end for
     }
 
+    "Overlay.pointerGeometryFor opens down-right of the point, turns per axis at an edge, and clamps" in {
+        // The placement a context menu gets. Patched in place like geometryFor, so both edges of
+        // both axes are always set, so assert the serialized form.
+        def geom(at: UI.Point, panel: UI.Rect): String < Async =
+            renderHtml(div.style(uic.Overlay.pointerGeometryFor(at, panel)))
+        // A 200x300 panel measured in a 1000x600 viewport; only the size and the viewport are read.
+        val panel = UI.Rect(x = 0, y = 0, width = 200, height = 300, viewportWidth = 1000, viewportHeight = 600)
+        val huge  = UI.Rect(x = 0, y = 0, width = 200, height = 900, viewportWidth = 1000, viewportHeight = 600)
+        for
+            room    <- geom(UI.Point(120, 80), panel)
+            atFloor <- geom(UI.Point(120, 550), panel)
+            atRight <- geom(UI.Point(950, 80), panel)
+            corner  <- geom(UI.Point(950, 550), panel)
+            taller  <- geom(UI.Point(120, 550), huge)
+        yield
+            assert(room.contains("top: 80px") && room.contains("left: 120px"), "room: opens at the point")
+            assert(room.contains("bottom: auto") && room.contains("right: auto"), "the leaving edges are reset")
+            assert(room.contains("opacity: 1"), "a placed panel is painted")
+            assert(atFloor.contains("top: 250px"), "no room below: turns back over the point (550-300)")
+            assert(atFloor.contains("left: 120px"), "the axis with room is left alone")
+            assert(atRight.contains("left: 750px"), "no room right: turns back over the point (950-200)")
+            assert(atRight.contains("top: 80px"), "the axis with room is left alone")
+            assert(corner.contains("top: 250px") && corner.contains("left: 750px"), "a corner turns on both axes")
+            // Taller than the viewport: neither side fits, so it is clamped rather than placed off-screen.
+            assert(taller.contains("top: 4px"), "a panel too tall for the viewport is clamped to the gutter")
+        end for
+    }
+
+    "Overlay(pointerAnchor) portals the panel and holds it invisible until the point is measured" in {
+        for
+            open <- Signal.initRef(true)
+            at   <- Signal.initRef(Present(UI.Point(120, 80)): Maybe[UI.Point])
+            out  <- UI.runRender(uic.Overlay(open).pointerAnchor(at)(span("panel-content"))).take(1).run
+            html = out.mkString
+        yield
+            assert(html.contains("p-uic-overlay-portal"), "a point is a viewport coordinate: the panel portals")
+            assert(html.contains("p-uic-overlay-panel"), "panel present")
+            assert(html.contains("p-uic-overlay-backdrop"), "outside-click backdrop present")
+    }
+
     "Overlay(autoFlip default true) open still renders the anchored backdrop + panel placeholder" in {
         def overlay(flip: Boolean): String < Async =
             for
@@ -6481,7 +6526,8 @@ class GoldenRenderTest extends UicTest:
             ctxOpen    <- Signal.initRef(true)
             ctxHi      <- Signal.initRef(List(0))
             ctxRefs    <- paths(ctx.submenuPaths, Nil)
-            ctxHtml    <- renderHtml(ctx.wired(ctxOpen, ctxHi, ctxRefs, "mint"))
+            ctxAt      <- Signal.initRef(Present(UI.Point(120, 80)): Maybe[UI.Point])
+            ctxHtml    <- renderHtml(ctx.wired(ctxOpen, ctxHi, ctxAt, ctxRefs, "mint"))
         yield
             for (name, html) <- Seq("Menu" -> menu, "TieredMenu" -> tieredHtml, "MegaMenu" -> megaHtml, "ContextMenu" -> ctxHtml)
             do
@@ -6529,7 +6575,8 @@ class GoldenRenderTest extends UicTest:
             ctxOpen     <- Signal.initRef(true)
             ctxHi       <- Signal.initRef(List(0))
             ctxRefs     <- paths(ctx.submenuPaths, Nil)
-            ctxHtml     <- renderHtml(ctx.wired(ctxOpen, ctxHi, ctxRefs, "mint"))
+            ctxAt       <- Signal.initRef(Present(UI.Point(120, 80)): Maybe[UI.Point])
+            ctxHtml     <- renderHtml(ctx.wired(ctxOpen, ctxHi, ctxAt, ctxRefs, "mint"))
             tsOpen      <- Signal.initRef(true)
             tsExp       <- Signal.initRef(Set.empty[String])
             tsHi        <- Signal.initRef(0)
@@ -6630,6 +6677,7 @@ class GoldenRenderTest extends UicTest:
             foc3 <- Signal.initRef(List.empty[Int])
             foc4 <- Signal.initRef(List.empty[Int])
             open <- Signal.initRef(true)
+            at   <- Signal.initRef(Present(UI.Point(120, 80)): Maybe[UI.Point])
             fan  <- Signal.initRef(true)
             // MegaMenu renders its panel only while the root is open, so without this ref
             // the leaf rows are not in the tree at all and the sweep would pass vacuously.
@@ -6640,7 +6688,7 @@ class GoldenRenderTest extends UicTest:
             tiered = uic.TieredMenu().items(uic.MenuItem("A").disabled(s3).onSelect(())).wired(Nil, foc2, "t")
             ctx = uic
                 .ContextMenu(Seq(uic.MenuItem("A").disabled(s4).onSelect(())))(p("target"))
-                .wired(open, foc3, Nil, "c")
+                .wired(open, foc3, at, Nil, "c")
             mega = uic
                 .MegaMenu()
                 .items(

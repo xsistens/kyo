@@ -824,7 +824,7 @@ val rowActions: UI < Async =
     )
 ```
 
-> **Note:** the context menu anchors to the wrapped region, not to the pointer. kyo-ui's `MouseEvent` carries no coordinates, so there is nowhere to read a click point from. Prime opens at the click position; this one opens at the region.
+> **Note:** the context menu opens at the pointer, reading the click position off `UI.MouseEvent.position` and placing the panel there through `Overlay.pointerAnchor`. The panel portals to the body, so a scroll container around the region cannot clip it, and it turns back over the pointer near a viewport edge. A right-click while the menu is open closes it rather than moving it: the outside-click backdrop covers the viewport, so that click never reaches the row under it, and a moved panel would leave `DataTable.contextMenuRow` pointing at the row of the first click.
 
 `Tooltip` wraps its target and shows a box on hover or focus.
 

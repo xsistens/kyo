@@ -90,6 +90,14 @@ end OverlayAnchor
   * lands, so it never flashes unpositioned; the enter fade is subsumed by that
   * gate, the leave ghost plays unchanged.
   *
+  * Pointer anchor (`pointerAnchor`, default off): the panel can be placed at a POINT
+  * instead of at a box: the viewport position a [[kyo.UI.MouseEvent]] carries, which is
+  * how a context menu opens where the reader right-clicked. It portals (a viewport
+  * coordinate needs a fixed-position panel), measures only the panel, and turns back over
+  * the point per axis when that side cannot hold it. A change to the point MOVES the open
+  * panel through the same in-place style patch, so the panel is not re-rendered and its
+  * content, focus and open submenus survive being moved.
+  *
   * Honest limitation WITHOUT portal (server-side geometry): the panel stays
   * inside the anchor's subtree, so do NOT place `transform` (or
   * `filter`/`will-change`) on overlay ancestors: they make the ancestor the
@@ -115,6 +123,9 @@ final case class Overlay private (
     scrollV: Overlay.Scroll = Overlay.Scroll.Close,
     panelClassesV: List[String] = Nil,
     keyHandlerV: Maybe[KeyboardEvent => Any < Async] = Absent,
+    pointerAnchorV: Maybe[Signal[Maybe[UI.Point]]] = Absent,
+    panelIdV: Maybe[String] = Absent,
+    backdropCtxV: Maybe[MouseEvent => Any < Async] = Absent,
     triggerV: Maybe[UI] = Absent,
     kids: List[UI] = Nil
 ) extends Node:
@@ -153,6 +164,45 @@ final case class Overlay private (
       * single-subscription, in-tree contract.
       */
     def portal(v: Boolean): Overlay = copy(portalV = v)
+
+    /** Places the panel at a POINT rather than at the anchor box: the pointer position a
+      * [[kyo.UI.MouseEvent.position]] carries, in viewport coordinates.
+      *
+      * This is what a menu opening where the reader right-clicked needs, and it is the anchor
+      * story turned inside out: there is no box to attach to, so the panel portals to
+      * `document.body` (the point is a viewport coordinate, and only a fixed-position panel can
+      * honour one) and is placed by the measured geometry alone. It opens down and to the right
+      * of the point, turns back over the point on the side that cannot hold it, and clamps into
+      * the viewport when neither side can. See [[Overlay.pointerGeometryFor]].
+      *
+      * The signal is read, never written: the host decides where the point comes from and when
+      * it changes, and a change MOVES the open panel without re-rendering it (the geometry is
+      * patched in place, as every other measured placement here is). While the signal holds
+      * `Absent` there is nowhere for the panel to be, so it stays hidden rather than landing in
+      * a corner: set the point before opening.
+      *
+      * `matchWidth` is meaningless here (a point has no width) and is ignored.
+      */
+    def pointerAnchor(sig: Signal[Maybe[UI.Point]]): Overlay = copy(pointerAnchorV = Present(sig))
+
+    /** Package-internal: the DOM id to stamp on the panel, for the host-gated [[renderOpen]]
+      * path, which has no mount of its own to mint one in and cannot grow one: a mount that
+      * PUBLISHED the panel would have to be keyed to survive the host's re-renders, and a keyed
+      * mount freezes the content it published. Hosts derive it from their own element id
+      * (`s"$id-panel"`), so it is stable across those re-renders and the measured placement
+      * outlives them.
+      */
+    private[uic] def panelId(id: String): Overlay = copy(panelIdV = Present(id))
+
+    /** Package-internal: what a right-click landing on the outside-click backdrop means.
+      *
+      * The backdrop covers the viewport, so while the panel is open it is what a right-click
+      * anywhere else hits. Without a handler the browser's own menu opens on top of the panel
+      * (kyo suppresses the native menu only where a handler was declared), which is why a
+      * pointer-anchored host wires this.
+      */
+    private[uic] def onBackdropContextMenu(f: MouseEvent => Any < Async): Overlay =
+        copy(backdropCtxV = Present(f))
 
     /** How the open overlay responds to scroll input outside its panel (default
       * [[Overlay.Scroll.Close]] — the Prime family's hide-on-scroll). See [[Overlay.Scroll]].
@@ -219,6 +269,25 @@ final case class Overlay private (
       * scroll/resize observer, via the mount's Scope).
       */
     private def openContent(using Frame): UI =
+        pointerAnchorV match
+            case Present(at) =>
+                // A point needs no anchor probe: the placement is the point plus the panel's own size,
+                // so only the panel is measured. Same self-addressing shape as the paths below (mint,
+                // stamp, observe, patch in place) and the same portal-shaped placeholder, so the panel
+                // is position:fixed and invisible from the first frame instead of sitting in flow.
+                UI.mounted {
+                    for
+                        cmds <- UI.commands
+                        id   <- cmds.freshId
+                    yield fragment(
+                        pointerRepositionTrigger(at, id),
+                        renderOpenAt(anchorV, Present(id), portal = true)
+                    )
+                }.placeholder(renderOpenAt(anchorV, Absent, portal = true))
+            case Absent => anchoredOpenContent
+
+    /** The anchor-box placements: the portal path, the declared-anchor path, and the measured flip. */
+    private def anchoredOpenContent(using Frame): UI =
         if portalV then
             // Portal: the panel (and backdrop) re-home to document.body via the fork's element-level
             // portal(true), so the CSS anchor geometry (absolute against the anchor) cannot position
@@ -302,6 +371,33 @@ final case class Overlay private (
             yield UI.empty
         }.placeholder(UI.empty)
 
+    /** The pointer-anchored twin of [[repositionTrigger]]: observes the panel (the placement needs
+      * its size), combines that with the point, and binds the resolved fixed-position geometry onto
+      * the panel in place. `Style.empty` until both have landed, which keeps the panel hidden
+      * (`.p-uic-overlay-portal` gates the unmeasured paint) rather than showing it unplaced.
+      *
+      * KEYED, and this is load-bearing on the host-gated path: the host re-renders the panel subtree
+      * on every keystroke that moves its highlight, and an unkeyed mount would tear this instance
+      * down and build another each time: a fresh observer, a fresh round trip, and `Style.empty`
+      * in between, which blinks the panel out on every arrow key. The key is the panel's own id,
+      * which the host derives from its element id and is therefore stable across those re-renders
+      * and distinct per open. Nothing is frozen by it: what this mount publishes is empty.
+      */
+    private def pointerRepositionTrigger(at: Signal[Maybe[UI.Point]], panelId: String)(using Frame): UI =
+        UI.mounted {
+            for
+                cmds     <- UI.commands
+                panelSig <- cmds.observeViewportById(panelId)
+                _ <- cmds.bindStyleById(
+                    panelId,
+                    panelSig.combineLatest(at).map {
+                        case (Present(panel), Present(at)) => Overlay.pointerGeometryFor(at, panel)
+                        case _                             => Style.empty
+                    }
+                )
+            yield UI.empty
+        }.keyed(panelId).placeholder(UI.empty)
+
     private def repositionTrigger(cmds: UI.Commands, panelId: String)(using Frame): UI =
         UI.mounted {
             cmds.observeViewportById(panelId).map { rectSig =>
@@ -324,7 +420,12 @@ final case class Overlay private (
       * subscription. Escape/outside-click still write `false` into the ref.
       */
     private[uic] def renderOpen(using Frame): UI =
-        renderOpenAt(anchorV, Absent)
+        (pointerAnchorV, panelIdV) match
+            // The pointer placement survives here because nothing it needs is subscribed to the
+            // host's ref: the id comes from the host, and the measuring mount publishes nothing.
+            case (Present(at), Present(id)) =>
+                fragment(pointerRepositionTrigger(at, id), renderOpenAt(anchorV, Present(id), portal = true))
+            case _ => renderOpenAt(anchorV, Absent)
 
     /** The backdrop + panel at the DECLARED anchor, optionally id-stamped: the
       * shared builder behind both the host-gated [[renderOpen]] (no id) and the
@@ -345,6 +446,9 @@ final case class Overlay private (
                 scrollV match
                     case Overlay.Scroll.Close => b = b.onScroll(close)
                     case Overlay.Scroll.Lock  => ()
+                // Explicitly a lambda over the event: `onContextMenu` also has a payload-free
+                // overload, and binding to that one would register the event and drop the handler.
+                backdropCtxV.foreach(f => b = b.onContextMenu((e: MouseEvent) => f(e)))
                 if portal then b = b.portal(true)
                 List(b)
             else Nil
@@ -506,6 +610,41 @@ object Overlay:
         val sized  = if matchWidth then placed.minWidth(anchor.width.px) else placed
         sized.opacity(1.0)
     end portalGeometryFor
+
+    /** The fixed-position geometry for a panel placed at a POINT ([[Overlay.pointerAnchor]]): where
+      * the reader's pointer was, plus the measured panel size, as viewport coordinates.
+      *
+      * Down and to the right of the point is the resting placement, which is where a context menu
+      * goes when there is room. Each axis turns back over the point on its own when the panel does
+      * not fit that way AND fits the other, so a right-click near the bottom of the window opens
+      * upward from the pointer rather than off the screen, and one in the corner turns on both
+      * axes. When neither side fits (a panel taller than the viewport) the placement is clamped
+      * into the viewport with the [[Gutter]], so the reader always sees the panel and its own
+      * scrolling covers the rest.
+      *
+      * The pointer is a POINT, not a box, so unlike [[portalGeometryFor]] there is no anchor size
+      * to align to and no `min-width` to match. Both edges of each axis are set (one `auto`) for
+      * the same reason as there: `bindStyleById` merges and never clears, so a move that flips back
+      * has to reset the edge it is leaving. `opacity` lifts the portal class's unmeasured-paint gate.
+      */
+    private[uic] def pointerGeometryFor(at: UI.Point, panel: UI.Rect): Style =
+        val vw        = panel.viewportWidth
+        val vh        = panel.viewportHeight
+        val fitsBelow = at.y + panel.height <= vh - Gutter
+        val fitsAbove = at.y - panel.height >= Gutter
+        val fitsRight = at.x + panel.width <= vw - Gutter
+        val fitsLeft  = at.x - panel.width >= Gutter
+        val top       = if !fitsBelow && fitsAbove then at.y - panel.height else at.y
+        val left      = if !fitsRight && fitsLeft then at.x - panel.width else at.x
+        def clamp(v: Double, extent: Double, viewport: Double): Double =
+            math.max(Gutter, math.min(v, viewport - extent - Gutter))
+        Style
+            .top(clamp(top, panel.height, vh).px)
+            .bottom(Length.Auto)
+            .left(clamp(left, panel.width, vw).px)
+            .right(Length.Auto)
+            .opacity(1.0)
+    end pointerGeometryFor
 
     private[uic] def geometryFor(declared: OverlayAnchor, rect: UI.Rect): Style =
         val flipped = flipAnchor(declared, rect)

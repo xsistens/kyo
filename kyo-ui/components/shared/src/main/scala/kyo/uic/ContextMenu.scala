@@ -16,10 +16,23 @@ import kyo.UI.*
   * menu). Escape or an outside click closes it; picking a leaf item runs its
   * `onSelect` and closes everything.
   *
-  * Honest deviation (server-side geometry is declared, not measured): kyo's
-  * `MouseEvent` carries no pointer coordinates, so the menu anchors to the
-  * TARGET REGION (an [[Overlay]] at `BottomStart` of the wrapped element), not
-  * to the pointer position. Prime opens the panel at the click point.
+  * The panel opens AT THE POINTER, which is what a context menu is: the
+  * `contextmenu` event carries its viewport position ([[kyo.UI.MouseEvent.position]]),
+  * the component keeps it in a ref, and [[Overlay.pointerAnchor]] places the panel
+  * there: down and to the right of the point, turning back over it near a viewport
+  * edge. The panel therefore portals to `document.body`, so a table's own scroll
+  * container cannot clip it either.
+  *
+  * A right-click while the menu is OPEN closes it, and the next one opens the menu
+  * at the new place. The open panel's outside-click backdrop covers the viewport, so
+  * that second right-click never reaches what is under it: moving the panel to the
+  * new point instead would leave every host that reads the row under the pointer
+  * (`DataTable.contextMenuRow`) pointing at the row of the FIRST click, which is a
+  * menu saying one thing and acting on another. Closing keeps the two honest, and
+  * costs the reader a second click.
+  *
+  * Derived ids ([[HasElementId]]): the panel is `s"$id-panel"` and the highlighted
+  * row `s"$id-active"`; the wrapped region carries the id itself.
   *
   * Keyboard (WAI-ARIA menu): the open LIST seeds focus and holds it, so the
   * full navigation works without a prior click — ArrowUp/Down rove Prime's
@@ -57,15 +70,18 @@ final case class ContextMenu private (
         // Open state, keyboard focus path, and one signal per submenu are allocated
         // by this effectful mount; static projections (SSG, the SSR page HTML)
         // render the closed target region inert.
-        val stat: UI = body(false, Absent, Nil, Absent, Map.empty.withDefaultValue(false), Absent)
+        val stat: UI = body(false, Absent, Nil, Absent, Map.empty.withDefaultValue(false), Absent, Absent)
         UI.mounted {
             for
                 openRef <- Signal.initRef(false)
                 focus   <- Signal.initRef(List.empty[Int])
-                refs    <- Kyo.foreach(submenuPaths)(p => Signal.initRef(false).map(p -> _))
-                cmds    <- UI.commands
-                base    <- cmds.freshId
-            yield wired(openRef, focus, refs.toList, base)
+                // Where the last right-click was. Not a render input: it is bound onto the open
+                // panel as a style, so the point can change without rebuilding the panel.
+                at   <- Signal.initRef(Absent: Maybe[UI.Point])
+                refs <- Kyo.foreach(submenuPaths)(p => Signal.initRef(false).map(p -> _))
+                cmds <- UI.commands
+                base <- cmds.freshId
+            yield wired(openRef, focus, at, refs.toList, base)
         }.placeholder(stat)
     end render
 
@@ -79,6 +95,7 @@ final case class ContextMenu private (
     private[uic] def wired(
         openRef: SignalRef[Boolean],
         focus: SignalRef[List[Int]],
+        at: SignalRef[Maybe[UI.Point]],
         refs: List[(List[Int], SignalRef[Boolean])],
         base: String
     )(using Frame): UI =
@@ -97,7 +114,8 @@ final case class ContextMenu private (
                             f,
                             Present(focus),
                             open.withDefaultValue(false),
-                            Present(refs)
+                            Present(refs),
+                            Present(at)
                         )
                     }
                 }
@@ -111,7 +129,8 @@ final case class ContextMenu private (
         focus: List[Int],
         focusRef: Maybe[SignalRef[List[Int]]],
         open: Map[List[Int], Boolean],
-        refs: Maybe[List[(List[Int], SignalRef[Boolean])]]
+        refs: Maybe[List[(List[Int], SignalRef[Boolean])]],
+        at: Maybe[SignalRef[Maybe[UI.Point]]]
     )(using Frame): UI =
         def resetTree: Any < Async =
             refs match
@@ -130,10 +149,12 @@ final case class ContextMenu private (
                 case Present(r) => for _ <- r.set(false); _ <- resetTree; _ <- resetFocus yield ()
                 case Absent     => ()
 
-        def openMenu: Any < Async =
-            openRef match
-                case Present(r) => for _ <- resetTree; _ <- resetFocus; _ <- r.set(true) yield ()
-                case Absent     => ()
+        // The point is written BEFORE the open, so the panel never exists without one to be at.
+        val openMenu: MouseEvent => Any < Async = e =>
+            (openRef, at) match
+                case (Present(r), Present(pt)) =>
+                    for _ <- resetTree; _ <- resetFocus; _ <- pt.set(e.position); _ <- r.set(true) yield ()
+                case _ => ()
 
         val keyHandler: KeyboardEvent => Any < Async = e =>
             focusRef match
@@ -172,25 +193,41 @@ final case class ContextMenu private (
                         .preventScrollKeys
                         .onKeyDown(e => if e.key == Keyboard.Escape then () else keyHandler(e))
                     val listUI: UI = listEl(rows.map(toChild)*)
-                    List(
-                        // Host-gated (renderOpen): this component already subscribes to
-                        // openRef in `wired` — the single-subscription form avoids the
-                        // duplicated-panel race. Escape/outside-click write false back;
-                        // the highlight/tree reset rides the NEXT right-click's openMenu.
-                        Overlay(r)
-                            .matchWidth(false)
-                            .animate(false)
-                            .panelClass("p-contextmenu")
-                            .panelClass("p-component")
-                            .seedFocus(false)(listUI)
-                            .renderOpen
-                    )
+                    // Host-gated (renderOpen): this component already subscribes to
+                    // openRef in `wired`, and the single-subscription form avoids the
+                    // duplicated-panel race. Escape/outside-click write false back;
+                    // the highlight/tree reset rides the NEXT right-click's openMenu.
+                    var ov = Overlay(r)
+                        .matchWidth(false)
+                        .animate(false)
+                        .panelClass("p-contextmenu")
+                        .panelClass("p-component")
+                        .seedFocus(false)
+                    // The pointer placement needs both halves: somewhere to read the point from,
+                    // and a panel id the measure can address. The id is derived rather than minted
+                    // because a mount that published this panel would freeze its rows (see
+                    // Overlay.pointerRepositionTrigger), and by `wired` there is always one.
+                    (at, idV) match
+                        case (Present(pt), Present(b)) =>
+                            ov = ov
+                                .pointerAnchor(pt)
+                                .panelId(s"$b-panel")
+                                // The open panel's backdrop covers the viewport, so it is what a
+                                // right-click anywhere else lands on; without this the browser's
+                                // own menu would open over the panel.
+                                .onBackdropContextMenu(_ => closeMenu)
+                        case _ => ()
+                    end match
+                    List(ov(listUI).renderOpen)
                 case _ => Nil
 
         var target = div
             .cssClass("p-uic-contextmenu-target")
             .cssClass("p-uic-overlay-anchor")
             .aria("haspopup", "menu")
+        // The wrapped region is this component's root, so the element id lands here (HasElementId),
+        // and the panel's derived id hangs off it.
+        idV.foreach(b => target = target.id(b))
         if openRef.isDefined then target = target.onContextMenu(openMenu)
         target((kids ++ panel).map(toChild)*)
     end body
