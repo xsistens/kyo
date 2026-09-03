@@ -63,6 +63,49 @@ end Size
 enum SelectionMode derives CanEqual:
     case None, Single, Multiple, Checkbox, Radio
 
+/** What one activation does to a selection set — the two rulesets behind [[SelectionMode]],
+  * written down once so the components that offer them cannot drift apart.
+  *
+  * `metaKeySelection` off is the plain ruleset and the default everywhere: an activation toggles
+  * its own id and the modifiers mean nothing. On, it is the ruleset a file manager has, and this
+  * is Prime's `metaKeySelection` down to the corner that makes it work:
+  *
+  *   - only a MODIFIED activation on an already-picked id removes it
+  *   - a plain one replaces the whole set with that id, INCLUDING when the id was already in it,
+  *     which collapses a selection to one rather than clearing it — that is what leaves an anchor
+  *     under the pointer, so click-then-shift-click is a range every time rather than every
+  *     other time
+  *   - `meta` is the caller's `event.metaKey || event.ctrlKey`, never one of the two, or the
+  *     gesture belongs to Mac owners only
+  *
+  * `Checkbox` keeps the plain ruleset under either flag: a checkbox is the affordance saying the
+  * set is additive, and asking for a modifier on top of it would be asking twice.
+  */
+private[uic] object SelectionPick:
+    def next(
+        mode: SelectionMode,
+        metaKeySelection: Boolean,
+        meta: Boolean,
+        id: String,
+        current: Set[String]
+    ): Set[String] =
+        def plain: Set[String] = mode match
+            case SelectionMode.None => current
+            case SelectionMode.Single | SelectionMode.Radio =>
+                if current == Set(id) then Set.empty else Set(id)
+            case SelectionMode.Multiple | SelectionMode.Checkbox =>
+                if current.contains(id) then current - id else current + id
+        mode match
+            case SelectionMode.None                => current
+            case _ if !metaKeySelection            => plain
+            case SelectionMode.Checkbox            => plain
+            case _ if current.contains(id) && meta => current - id
+            case SelectionMode.Multiple if meta    => current + id
+            case _                                 => Set(id)
+        end match
+    end next
+end SelectionPick
+
 /** Package-internal builder for the `invalidMessage` row shared by the migrated
   * form fields: when the field is `invalid` AND a message is set, the field is
   * followed by a `div.p-uic-invalid-message` (kyo extension — Prime leaves the

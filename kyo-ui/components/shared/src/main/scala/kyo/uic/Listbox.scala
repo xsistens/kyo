@@ -77,6 +77,7 @@ end ListItem
 final case class Listbox private (
     optionsV: List[OptionItem[ListItem]] = Nil,
     selectionModeV: SelectionMode = SelectionMode.None,
+    metaKeyFlag: Boolean = false,
     selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
     filterQueryRef: Maybe[SignalRef[String]] = Absent,
     filterableFlag: Boolean = false,
@@ -132,6 +133,18 @@ final case class Listbox private (
       * `Multiple` (picking toggles the row in the set).
       */
     def selectionMode(v: SelectionMode): Listbox = copy(selectionModeV = v)
+
+    /** Whether picking takes a modifier key (Prime's `metaKeySelection`).
+      *
+      * Off (the default, and Prime's) every click toggles its row. On, a plain click replaces
+      * the selection with the row it landed on and Ctrl or Cmd toggles — `metaKey || ctrlKey`,
+      * never one of the two. `Checkbox` mode ignores it: a checkbox already says the set is
+      * additive. See [[SelectionPick]] for the exact rule, which every component offering it
+      * shares.
+      *
+      * There is no shift-range here, matching Prime, which ranges on shift in `DataTable` only.
+      */
+    def metaKeySelection(v: Boolean): Listbox = copy(metaKeyFlag = v)
 
     /** Binds selection two-way to `ref`: clicks update the set, ref changes re-render
       * `aria-selected`. Spelled `value` like every other picker's bound selection — a
@@ -423,12 +436,14 @@ final case class Listbox private (
                     // no tabindex the click lands on the list, which is what holds focus anyway.
                     // The click also seeds the highlight, so the next arrow key continues from the
                     // row the reader just picked rather than from the top.
-                    row = row.onClick(ref.set(index).andThen(activate(it.id)))
+                    row = row.onClick((e: MouseEvent) =>
+                        ref.set(index).andThen(activate(it.id, e.modifiers.meta || e.modifiers.ctrl))
+                    )
                 case Absent =>
                     // No highlight to rove: the rows stay their own tab stops, which is what this
                     // listbox did before the list became one, and keeps the embedded render usable.
                     row = row
-                        .onClick(activate(it.id))
+                        .onClick((e: MouseEvent) => activate(it.id, e.modifiers.meta || e.modifiers.ctrl))
                         .tabIndex(0)
                         .onKeyDown { e =>
                             e.key match
@@ -447,10 +462,10 @@ final case class Listbox private (
     end renderOption
 
     /** Clicking a row updates the bound selection set (per the mode), then fires `onItemClick`. */
-    private def activate(id: String)(using Frame): Any < Async =
+    private def activate(id: String, meta: Boolean = false)(using Frame): Any < Async =
         val setSelection: Any < Async = selectedRef match
             case Present(ref) if selectionModeV != SelectionMode.None =>
-                ref.getAndUpdate(cur => nextSelection(id, cur))
+                ref.getAndUpdate(cur => SelectionPick.next(selectionModeV, metaKeyFlag, meta, id, cur))
             case _ => ()
         val fireClick: Any < Async = onItemClickF match
             case Present(f) => f(id)
@@ -462,16 +477,6 @@ final case class Listbox private (
         end for
     end activate
 
-    /** The selection set after activating `id`, honouring the current mode
-      * (`Radio` follows single-, `Checkbox` multi-select semantics).
-      */
-    private def nextSelection(id: String, current: Set[String]): Set[String] =
-        selectionModeV match
-            case SelectionMode.None => current
-            case SelectionMode.Single | SelectionMode.Radio =>
-                if current == Set(id) then Set.empty else Set(id)
-            case SelectionMode.Multiple | SelectionMode.Checkbox =>
-                if current.contains(id) then current - id else current + id
 end Listbox
 
 object Listbox:

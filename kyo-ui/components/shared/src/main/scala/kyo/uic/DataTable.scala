@@ -4736,44 +4736,28 @@ final case class DataTable[A] private (
         // pinning this to `meta` alone locks out everyone not on a Mac.
         val meta = e.modifiers.meta || e.modifiers.ctrl
 
-        def plain(ref: SignalRef[Set[String]]): Any < Async =
-            (selectedRef, selectionModeV) match
-                case (_, SelectionMode.Single | SelectionMode.Radio) =>
-                    ref.getAndUpdate(cur => if cur == Set(id) then Set.empty else Set(id))
-                case _ => ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
-
-        def modified(ref: SignalRef[Set[String]]): Any < Async =
+        def pick(ref: SignalRef[Set[String]]): Any < Async =
             def anchorTo(v: Set[String]): Any < Async =
                 select.anchor match
                     case Present(a) => a.set(Present(id)).andThen(ref.set(v))
                     case Absent     => ref.set(v)
             (select.anchor, e.modifiers.shift, selectionModeV) match
-                // A range needs somewhere to start. Without an anchor the shift-click is the
+                // A range needs somewhere to start. Without an anchor the shift-click is just the
                 // first pick, which is what sets one.
-                case (Present(a), true, SelectionMode.Multiple) =>
+                case (Present(a), true, SelectionMode.Multiple) if metaKeyFlag =>
                     a.get.map {
                         case Present(from) => ref.set(DataTable.between(select.keys, from, id))
                         case Absent        => anchorTo(Set(id))
                     }
                 case _ =>
-                    ref.get.map { cur =>
-                        // Prime: only a MODIFIED click on an already-picked row removes it. A
-                        // plain click on one collapses the selection to it rather than clearing,
-                        // which is what makes "click, then shift-click" a range every time.
-                        val next =
-                            if cur.contains(id) && meta then cur - id
-                            else if meta && selectionModeV == SelectionMode.Multiple then cur + id
-                            else Set(id)
-                        anchorTo(next)
-                    }
+                    ref.get.map(cur => anchorTo(SelectionPick.next(selectionModeV, metaKeyFlag, meta, id, cur)))
             end match
-        end modified
+        end pick
 
         val setSelection: Any < Async = selectedRef match
-            case _ if !canSelect                                => ()
-            case Present(ref) if metaKeyFlag && rowClickSelects => modified(ref)
-            case Present(ref) if rowClickSelects                => plain(ref)
-            case _                                              => ()
+            case _ if !canSelect                 => ()
+            case Present(ref) if rowClickSelects => pick(ref)
+            case _                               => ()
         val fireClick: Any < Async = onRowClickF match
             case Present(f) => f(id)
             case Absent     => ()

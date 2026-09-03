@@ -36,7 +36,8 @@ final case class PickList[A] private (
     targetSelectedRef: Maybe[SignalRef[Set[String]]] = Absent,
     showSourceControlsFlag: Boolean = true,
     showTargetControlsFlag: Boolean = true,
-    disabledFlag: Boolean = false
+    disabledFlag: Boolean = false,
+    metaKeyFlag: Boolean = false
 ) extends Node:
     type Self = PickList[A]
 
@@ -74,6 +75,12 @@ final case class PickList[A] private (
 
     /** Disables the whole control: both listboxes dim and every button locks. */
     def disabled(v: Boolean): PickList[A] = copy(disabledFlag = v)
+
+    /** Whether picking takes a modifier key, forwarded to BOTH embedded [[Listbox]]es (Prime's
+      * `metaKeySelection`, which this component has there too). Off by default, as in Prime:
+      * every click toggles, which is what a list whose whole purpose is picking several wants.
+      */
+    def metaKeySelection(v: Boolean): PickList[A] = copy(metaKeyFlag = v)
 
     private def keyOf(a: A): String =
         keyF.orElse(labelF).map(_(a)).getOrElse(a.toString)
@@ -223,6 +230,7 @@ final case class PickList[A] private (
             var lb = Listbox()
                 .items(xs.map(a => ListItem(TextValue.Const(labelF.map(_(a)).getOrElse(a.toString)), keyOf(a)))*)
                 .selectionMode(SelectionMode.Multiple)
+                .metaKeySelection(metaKeyFlag)
                 .disabled(disabledFlag)
                 .onHostKey(hostKeys)
             cursor.foreach(c => lb = lb.id(c.id))

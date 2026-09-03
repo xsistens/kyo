@@ -51,6 +51,7 @@ final case class TreeTable[A] private (
     selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
     sortRef: Maybe[SignalRef[List[SortKey]]] = Absent,
     selectionModeV: SelectionMode = SelectionMode.None,
+    metaKeyFlag: Boolean = false,
     removableSortFlag: Boolean = true,
     gridlinesFlag: Boolean = false,
     sizeV: Size = Size.Normal,
@@ -106,6 +107,19 @@ final case class TreeTable[A] private (
       * (default) leaves rows inert.
       */
     def selectionMode(v: SelectionMode): TreeTable[A] = copy(selectionModeV = v)
+
+    /** Whether picking rows takes a modifier key (Prime's `metaKeySelection`).
+      *
+      * Off (the default, and Prime's) every click toggles its row. On, a plain click replaces
+      * the selection with the row it landed on and Ctrl or Cmd toggles — `metaKey || ctrlKey`,
+      * never one of the two. See [[SelectionPick]] for the rule every component offering this
+      * shares.
+      *
+      * No shift-range, matching Prime, which ranges in `DataTable` only — and here that is also
+      * the honest answer, since a range over a tree would have to say what it means to reach
+      * across a collapsed branch.
+      */
+    def metaKeySelection(v: Boolean): TreeTable[A] = copy(metaKeyFlag = v)
 
     /** Cell borders on every edge (`.p-treetable-gridlines`). */
     def showGridlines(v: Boolean): TreeTable[A] = copy(gridlinesFlag = v)
@@ -505,16 +519,19 @@ final case class TreeTable[A] private (
             // selectable row stays its own tab stop and answers the two activation keys, which is
             // what the table did before it grew a cursor.
             if rowInteractive then
-                row = row.tabIndex(0).onClick(activate(id)).onKeyDown(e =>
-                    if activationOf(e).isDefined then activate(id) else ()
-                )
+                row = row.tabIndex(0)
+                    .onClick((e: MouseEvent) => activate(id, e.modifiers.meta || e.modifiers.ctrl))
+                    // A key activation carries no pointer, so it is always the plain kind.
+                    .onKeyDown(e => if activationOf(e).isDefined then activate(id) else ())
         else
             // A treegrid is ONE tab stop, and it sits where the reader is: the cursor, else the
             // chosen row, else the first. The rest are reachable by the arrows, which is what the
             // role has been claiming all along. Navigation does not wait for selection to be
             // bound: a tree that cannot be selected can still be read, and a click still leaves
             // the cursor where the pointer put it.
-            val clicked: Any < Async = if rowInteractive then seed(id).andThen(activate(id)) else seed(id)
+            val clicked: MouseEvent => Any < Async = e =>
+                if rowInteractive then seed(id).andThen(activate(id, e.modifiers.meta || e.modifiers.ctrl))
+                else seed(id)
             row = row
                 .id(rowId(base, index))
                 .tabIndex(if index == tabStop then 0 else -1)
@@ -600,12 +617,10 @@ final case class TreeTable[A] private (
     end toggleNode
 
     /** A row click updates the bound selection per the mode, then fires `onRowClick`. */
-    private def activate(id: String)(using Frame): Any < Async =
+    private def activate(id: String, meta: Boolean = false)(using Frame): Any < Async =
         val write: Any < Async = (selectedRef, selectionModeV) match
-            case (Present(ref), SelectionMode.Single | SelectionMode.Radio) =>
-                ref.getAndUpdate(cur => if cur == Set(id) then Set.empty else Set(id))
-            case (Present(ref), SelectionMode.Multiple | SelectionMode.Checkbox) =>
-                ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
+            case (Present(ref), m) if m != SelectionMode.None =>
+                ref.getAndUpdate(cur => SelectionPick.next(m, metaKeyFlag, meta, id, cur))
             case _ => ()
         val fire: Any < Async = onRowClickF match
             case Present(f) => f(id)

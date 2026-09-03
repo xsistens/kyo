@@ -28,6 +28,7 @@ final case class OrderList[A] private (
     templateF: Maybe[A => UI] = Absent,
     selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
     disabledFlag: Boolean = false,
+    metaKeyFlag: Boolean = false,
     accessibleNameV: Maybe[TextValue] = Absent
 ) extends Node, HasAccessibleName:
     type Self = OrderList[A]
@@ -53,6 +54,12 @@ final case class OrderList[A] private (
 
     /** Disables the whole control: the listbox dims and the buttons lock. */
     def disabled(v: Boolean): OrderList[A] = copy(disabledFlag = v)
+
+    /** Whether picking takes a modifier key, forwarded to the embedded [[Listbox]] (Prime's
+      * `metaKeySelection`, which this component has there too). Off by default, as in Prime:
+      * every click toggles, which is what a list whose whole purpose is picking several wants.
+      */
+    def metaKeySelection(v: Boolean): OrderList[A] = copy(metaKeyFlag = v)
 
     private[uic] def withAccessibleName(v: Maybe[TextValue]): OrderList[A] = copy(accessibleNameV = v)
 
@@ -155,6 +162,7 @@ final case class OrderList[A] private (
         var lb = Listbox()
             .items(xs.map(a => ListItem(TextValue.Const(labelF.map(_(a)).getOrElse(a.toString)), keyOf(a)))*)
             .selectionMode(SelectionMode.Multiple)
+            .metaKeySelection(metaKeyFlag)
             .disabled(disabledFlag)
             .onHostKey(hostKeys)
         cursor.foreach(c => lb = lb.id(c.id))

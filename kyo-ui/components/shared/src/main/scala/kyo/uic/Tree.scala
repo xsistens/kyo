@@ -66,6 +66,7 @@ final case class Tree private (
     onNodeToggleF: Maybe[String => Any < Async] = Absent,
     onItemClickF: Maybe[String => Any < Async] = Absent,
     selectionModeV: SelectionMode = SelectionMode.None,
+    metaKeyFlag: Boolean = false,
     emptyContentV: Maybe[EmptyContent] = Absent,
     accessibleNameV: Maybe[TextValue] = Absent
 ) extends Node, HasEmptyContent, HasAccessibleName:
@@ -94,6 +95,16 @@ final case class Tree private (
       * and parents render indeterminate while partially checked).
       */
     def selectionMode(v: SelectionMode): Tree = copy(selectionModeV = v)
+
+    /** Whether picking takes a modifier key (Prime's `metaKeySelection`).
+      *
+      * Off (the default, and Prime's) every click toggles its node. On, a plain click replaces
+      * the selection with the node it landed on and Ctrl or Cmd toggles — `metaKey || ctrlKey`,
+      * never one of the two. `Checkbox` mode ignores it and keeps cascading, which is the whole
+      * point of that mode. See [[SelectionPick]] for the rule every component offering this
+      * shares; there is no shift-range, matching Prime.
+      */
+    def metaKeySelection(v: Boolean): Tree = copy(metaKeyFlag = v)
 
     private[uic] def withEmptyContent(v: Maybe[EmptyContent]): Tree = copy(emptyContentV = v)
 
@@ -286,7 +297,8 @@ final case class Tree private (
         // button presses. The label stretches across the free row width
         // (.p-tree-node-label { flex: 1 } remainder), so the row still feels clickable.
         var label = span.cssClass("p-tree-node-label")
-        if selectable then label = label.onClick(selectNode(node.id))
+        if selectable then
+            label = label.onClick((e: MouseEvent) => selectNode(node.id, e.modifiers.meta || e.modifiers.ctrl))
         val labelEl: UI = label(node.text)
 
         val myRow     = rowIndex.getOrElse(node.id, -1)
@@ -335,14 +347,14 @@ final case class Tree private (
     /** Clicking a node's content updates the bound `selected` set per the selection
       * mode, then fires `onItemClick`.
       */
-    private def selectNode(id: String)(using Frame): Any < Async =
+    private def selectNode(id: String, meta: Boolean = false)(using Frame): Any < Async =
         val setSelection: Any < Async = (selectedRef, selectionModeV) match
-            case (Present(ref), SelectionMode.Single | SelectionMode.Radio) =>
-                ref.getAndUpdate(cur => if cur == Set(id) then Set.empty else Set(id))
-            case (Present(ref), SelectionMode.Multiple) =>
-                ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
+            // Checkbox cascades to the node's children, which is a Tree-only rule and the reason
+            // this mode does not go through the shared one.
             case (Present(ref), SelectionMode.Checkbox) =>
                 ref.getAndUpdate(cur => cascadeToggle(id, cur))
+            case (Present(ref), m) if m != SelectionMode.None =>
+                ref.getAndUpdate(cur => SelectionPick.next(m, metaKeyFlag, meta, id, cur))
             case _ => ()
         val fireClick: Any < Async = onItemClickF match
             case Present(f) => f(id)

@@ -105,11 +105,19 @@ class DiscoverabilityTest extends UicTest:
         )
     }
 
-    "modifier row selection is one boolean, and it chains" in {
+    "modifier selection is one boolean, on every component Prime puts it on" in {
+        // Six, and only six: Prime has no `metaKeySelection` on OrganizationChart, so neither has
+        // this. The range that comes with it is DataTable's alone, there and here.
         typeCheck(
             preamble +
                 """def x(r: SignalRef[Set[String]]) = uic.DataTable[String]().selectionMode(uic.SelectionMode.Multiple).selected(r).metaKeySelection(true)"""
         )
+        typeCheck(preamble + """def x = uic.Listbox().metaKeySelection(true)""")
+        typeCheck(preamble + """def x = uic.Tree().metaKeySelection(true)""")
+        typeCheck(preamble + """def x = uic.TreeTable[String]().metaKeySelection(true)""")
+        typeCheck(preamble + """def x = uic.OrderList[String]().metaKeySelection(true)""")
+        typeCheck(preamble + """def x = uic.PickList[String]().metaKeySelection(true)""")
+        typeCheckFailure(preamble + """def x = uic.OrganizationChart[String]().metaKeySelection(true)""")
     }
 
     "a menu item's disabled takes a Signal, like its label already did" in {

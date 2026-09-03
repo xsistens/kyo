@@ -34,6 +34,30 @@ class TreeTableTest extends UicTest:
             assert(afterSpace.head.direction != afterEnter.head.direction, "Space cycles it, as a second click would")
     }
 
+    "with metaKeySelection a plain click replaces and Ctrl or Cmd toggles" in {
+        def clickWith(el: UI.Ast.Element, mods: UI.Modifiers)(using Frame): Any < Async =
+            el.attrs.onClickEvt match
+                case Present(f) => f(UI.MouseEvent(el.attrs.identifier, mods))
+                case Absent     => throw new AssertionError("the row declares no typed click handler")
+        for
+            sel <- Signal.initRef(Set.empty[String])
+            ui = table.selectionMode(uic.SelectionMode.Multiple).selected(sel)
+                .metaKeySelection(true).render
+            rows    <- elementsWithClass(ui, "p-treetable-selectable-row")
+            _       <- clickWith(rows(0), UI.Modifiers.none)
+            _       <- clickWith(rows(1), UI.Modifiers.none)
+            plain   <- sel.get
+            _       <- clickWith(rows(0), UI.Modifiers(ctrl = true))
+            added   <- sel.get
+            _       <- clickWith(rows(0), UI.Modifiers(meta = true))
+            removed <- sel.get
+        yield
+            assert(plain == Set("r2"), "a plain click replaces rather than adds")
+            assert(added == Set("r1", "r2"), "Ctrl adds")
+            assert(removed == Set("r2"), "and Cmd takes it back out — meta OR ctrl, never one")
+        end for
+    }
+
     "a selectable row selects on Enter and on Space" in {
         for
             sel <- Signal.initRef(Set.empty[String])
