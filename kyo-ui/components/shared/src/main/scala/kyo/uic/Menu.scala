@@ -164,7 +164,7 @@ final case class Menu private (
                 // child of a `role="menu"` that a reader can be told about. `role="presentation"`
                 // stripped exactly that away, leaving a menu whose every child claimed to be
                 // nothing. The link inside stays roleless, the way Prime renders it.
-                var row = li.cssClass("p-menu-item").role("menuitem")
+                var row = MenuRender.markCurrent(li.cssClass("p-menu-item").role("menuitem"), it)
                 if it.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
                 if i == hiRow then
                     row = row.cssClass("p-focus").scrollAuto(true)

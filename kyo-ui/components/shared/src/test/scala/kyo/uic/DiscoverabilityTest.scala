@@ -1471,6 +1471,20 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheckFailure(preamble + """def x = uic.MenuItem("a").command(() => ())""")
     }
 
+    "a MenuItem can say it is the current page, constantly or from the route signal" in {
+        // The slot a menu needs to be a NAV, which is what a menu of `url` rows is. Both forms,
+        // because the constant one is a static page's whole need and the signal one is what a
+        // router-driven strip binds — and the signal form is why this is not a class passthrough:
+        // the component knows to write `aria-current` as well, and a page painting a class from
+        // outside cannot.
+        typeCheck(preamble + """def x: uic.MenuItem = uic.MenuItem("Queue").url("/queue").current(true)""")
+        typeCheck(
+            preamble + """def x(s: Signal[Boolean]): uic.MenuItem = uic.MenuItem("Queue").url("/queue").current(s)"""
+        )
+        // There is still no class/style escape hatch on the model — the typed slot is the answer.
+        typeCheckFailure(preamble + """def x = uic.MenuItem("a").cssClass("mine")""")
+    }
+
     "Menu/TieredMenu popup only via SignalRef; items are MenuItem (no string rows)" in {
         typeCheck(
             preamble + """def x(o: SignalRef[Boolean])(using Frame): uic.Menu = uic.Menu().items(uic.MenuItem("New"), uic.MenuItem.separator).popup(o)"""

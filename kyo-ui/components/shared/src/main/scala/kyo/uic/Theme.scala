@@ -290,6 +290,13 @@ object Theme:
       |   the failure it causes is silent and data-dependent, so the card is deliberately loud. */
       |.p-uic-key-error { color: var(--p-form-field-invalid-placeholder-color, #ef4444); border: 1px solid currentColor;
       |  border-radius: var(--p-border-radius-sm, 4px); padding: 0.375rem 0.5rem; font-size: 0.875rem; }
+      |/* "You are here" on a menu row (MenuItem.current) — a nav's whole job. Deliberately NOT
+      |   Prime's item-focus tokens: .p-focus is the roving keyboard highlight the component
+      |   moves and drops on blur, and the two co-occur, so arrowing past the current page must
+      |   not hide which page that is. Weight inherits down to the label; the colour is set on
+      |   the link, which is where Prime puts the row's own colour. */
+      |.p-uic-menu-item-current { font-weight: 600; }
+      |.p-uic-menu-item-current a { color: var(--p-primary-color, inherit); }
       |.p-uic-label { display: inline-flex; align-items: baseline; }
       |.p-uic-label-required::after { content: "*"; color: var(--p-form-field-invalid-border-color, #ef4444); margin-inline-start: 0.125rem; }
       |.p-uic-label-colon::after { content: ":"; }

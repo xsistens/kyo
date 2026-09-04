@@ -873,7 +873,7 @@ val toastLayer: Layer[uic.ToastService, Sync] = uic.ToastService.layer
 
 ## Menus and navigation
 
-Seven components render menus, and they all consume one typed item model. `MenuItem` carries a label, an optional icon, an optional url, an `onSelect` effect, a `disabled` flag, and nested `items`. `MenuItem.separator` is a rule. `MegaMenu` adds one layer over that model: its roots are `MegaMenuItem`s, and each `column(groups*)` call appends one column of titled `MenuGroup`s to the panel that root opens. Learning the model once covers `Menu`, `Menubar`, `TieredMenu`, `MegaMenu`, `ContextMenu`, `SplitButton`, and `SpeedDial`.
+Seven components render menus, and they all consume one typed item model. `MenuItem` carries a label, an optional icon, an optional url, an `onSelect` effect, a `disabled` flag, a `current` flag for the nav case, and nested `items`. `MenuItem.separator` is a rule. `MegaMenu` adds one layer over that model: its roots are `MegaMenuItem`s, and each `column(groups*)` call appends one column of titled `MenuGroup`s to the panel that root opens. Learning the model once covers `Menu`, `Menubar`, `TieredMenu`, `MegaMenu`, `ContextMenu`, `SplitButton`, and `SpeedDial`.
 
 ```scala
 val fileMenu: Seq[uic.MenuItem] =
@@ -888,6 +888,15 @@ val bar: UI = uic.Menubar().start(span("CATALOG")).items(uic.MenuItem("File").it
 ```
 
 `Menu` renders inline by default and becomes a popup when you give it a visibility ref via `popup`. `TieredMenu` is the vertical form with side-nested submenus, `MegaMenu` opens one panel of grouped columns per root item, and `SplitButton` is a primary action with an attached menu.
+
+A menu of `url` rows is a nav, and a nav's whole job is to mark the page you are on. `current` is that mark: `aria-current="page"` on the row's link plus `.p-uic-menu-item-current` on the row. Give it the route signal rather than a boolean you recompute, and the strip is built once — the class and the attribute are both channels, patched in place with no re-render, so navigating does not rebuild the list and the reader's keyboard position survives it. Do not reach for `.p-focus`: that is the roving highlight the component moves as the reader arrows through, and it is gone when the list loses focus.
+
+```scala
+def navItem(label: String, path: String)(using Frame): uic.MenuItem =
+    uic.MenuItem(label).url(path).current(UILocation.current.map(_ == path))
+
+val sidebar: UI = uic.Menu().items(navItem("Home", "/"), navItem("Queue", "/queue")).id("sidebar-nav")
+```
 
 ```scala
 val saveSplit: UI =

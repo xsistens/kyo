@@ -138,4 +138,50 @@ class MenuTest extends UicTest:
         yield assert(constant == 1 && reactive == 2, s"constant=$constant reactive=$reactive")
     }
 
+    "a nav row says which page the reader is on — on the row AND on its link" in {
+        // The class is for the sheet; `aria-current` is the whole of what is said to a reader
+        // who cannot see it, which is the same split as the highlight two tests above.
+        for
+            hi <- Signal.initRef(-1)
+            ui = uic.Menu().items(
+                uic.MenuItem("Home").url("/"),
+                uic.MenuItem("Queue").url("/queue").current(true)
+            ).wired(hi, "m")
+            marked <- elementsWithClass(ui, "p-uic-menu-item-current")
+            links  <- elementsWithClass(ui, "p-menu-item-link")
+        yield
+            assert(marked.size == 1, s"one row of two is current; got ${marked.size}")
+            assert(links.count(_.attrs.ariaAttrs.get("current").contains("page")) == 1)
+            assert(
+                links.count(_.attrs.ariaAttrs.contains("current")) == 1,
+                "and a row that declares nothing says nothing, so an ordinary menu renders as it did"
+            )
+    }
+
+    "a reactive current is a CHANNEL: it costs no region, which is what a nav is built on" in {
+        // The contrast with `disabled` directly above is the point. Resolving a reactive
+        // `disabled` must cost a region, because the navigable index set, `MenuNav.skip` and
+        // whether an activate effect is attached all read it as a plain Boolean. Being current
+        // changes none of those, so it goes through `cssClass(name, sig)` and `aria(name, sig)`
+        // — patched in place. That is what lets a nav be built ONCE: were this a region, every
+        // navigation would rebuild the strip and throw away the reader's keyboard position.
+        for
+            here <- Signal.initRef(false)
+            hi   <- Signal.initRef(0)
+            ui = uic.Menu().items(rows(0), rows(1).url("/queue").current(here), rows(2)).wired(hi, "m")
+            regions <- regionsAbove(ui, "p-menu-item")
+            rowEls  <- elementsWithClass(ui, "p-menu-item")
+            links   <- elementsWithClass(ui, "p-menu-item-link")
+        yield
+            assert(regions == 1, s"the highlight render is the only one; got $regions")
+            assert(
+                rowEls.count(_.attrs.reactiveClasses.contains("p-uic-menu-item-current")) == 1,
+                "the class is a channel on the row"
+            )
+            assert(
+                links.count(_.attrs.reactiveAttrs.contains("aria-current")) == 1,
+                "and aria-current is a channel on the link"
+            )
+    }
+
 end MenuTest

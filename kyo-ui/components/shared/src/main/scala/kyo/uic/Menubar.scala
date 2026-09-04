@@ -195,15 +195,20 @@ private[uic] object MenuTree:
                                 MenuRender.openExactly(rs, target)
                             case Absent => ()
                     val subIcon = if nested then Icons.angleRight else rootSubmenuIcon
-                    var row = li
-                        .cssClass(s"p-$prefix-item")
-                        .cssClass("p-uic-overlay-anchor")
-                        // `aria-haspopup` and `aria-expanded` below say this row opens a submenu,
-                        // and neither means anything on a row that also claims to be presentational.
-                        // The row IS the menu item; the link inside it stays roleless, as in Prime.
-                        .role("menuitem")
-                        .aria("haspopup", "menu")
-                        .aria("expanded", isOpen.toString)
+                    // A row that opens a submenu can be current too — a section whose page is the
+                    // one open, in a nav that groups its links.
+                    var row = MenuRender.markCurrent(
+                        li
+                            .cssClass(s"p-$prefix-item")
+                            .cssClass("p-uic-overlay-anchor")
+                            // `aria-haspopup` and `aria-expanded` below say this row opens a submenu,
+                            // and neither means anything on a row that also claims to be presentational.
+                            // The row IS the menu item; the link inside it stays roleless, as in Prime.
+                            .role("menuitem")
+                            .aria("haspopup", "menu")
+                            .aria("expanded", isOpen.toString),
+                        it
+                    )
                     if isOpen then row = row.cssClass(s"p-$prefix-item-active")
                     if focused.exists(_ == p) then
                         row = row.cssClass("p-focus").scrollAuto(true)
@@ -259,7 +264,7 @@ private[uic] object MenuTree:
                         case _ => Nil
                     row((content :: panel).map(toChild)*)
                 else
-                    var row = li.cssClass(s"p-$prefix-item").role("menuitem")
+                    var row = MenuRender.markCurrent(li.cssClass(s"p-$prefix-item").role("menuitem"), it)
                     if focused.exists(_ == p) then
                         row = row.cssClass("p-focus").scrollAuto(true)
                         idBase.foreach(b => row = row.id(s"$b-active"))

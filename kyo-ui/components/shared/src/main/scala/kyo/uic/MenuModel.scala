@@ -19,7 +19,8 @@ final case class MenuItem private (
     urlV: Maybe[String] = Absent,
     actionV: Maybe[Any < Async] = Absent,
     itemsV: List[MenuItem] = Nil,
-    separatorFlag: Boolean = false
+    separatorFlag: Boolean = false,
+    currentFlag: Maybe[BoolValue] = Absent
 ):
     /** Leading icon (`.p-<component>-item-icon`). */
     def icon(glyph: IconGlyph): MenuItem = copy(iconV = Present(glyph))
@@ -49,6 +50,33 @@ final case class MenuItem private (
       * clicks (and Enter on the focused row) navigate natively.
       */
     def url(v: String): MenuItem = copy(urlV = Present(v))
+
+    /** THIS row is the page the reader is on: `aria-current="page"` on the row's link plus
+      * `.p-uic-menu-item-current` on the row, for a menu carrying [[url]] rows — which is what
+      * a menu becomes the moment it is a nav, and the one thing such a menu is for.
+      *
+      * Distinct from `.p-focus`, which is the roving keyboard highlight the component moves as
+      * the reader arrows through and drops when the list loses focus. The two co-occur: arrowing
+      * past the current page must not hide which page that is.
+      *
+      * Takes a `Signal[Boolean]` because the current route is one, and both slots it writes are
+      * kyo-ui CHANNELS — `cssClass(name, sig)` toggles the class through `classList.toggle` and
+      * `aria(name, sig)` patches the attribute in place, each with NO re-render. So a nav is
+      * built once and stays built: navigating does not rebuild the list, and the keyboard
+      * position survives the navigation that a `Routes.current.render { … }` around the whole
+      * strip would have thrown away.
+      *
+      * That is also why this needs none of [[MenuRender.resolveDisabled]]'s machinery, which
+      * `disabled` does need: being current changes nothing structural — not the navigable index
+      * set, not `MenuNav.skip`, not whether an activate effect is attached — so there is nothing
+      * downstream that must read it as a plain `Boolean`.
+      *
+      * Rendered by every host that builds `MenuItem` rows: Menu, Menubar, TieredMenu, ContextMenu
+      * and MegaMenu's leaves. MegaMenu's ROOT rows are [[MegaMenuItem]]s, a different carrier, and
+      * carry no such slot; SpeedDial renders buttons rather than links and carries none either.
+      */
+    def current(v: Boolean | Signal[Boolean]): MenuItem =
+        copy(currentFlag = Present(ReactiveValue(v)))
 
     /** Runs `action` (any kyo `Async` effect) when the item is selected; the
       * hosting menu closes afterwards.
@@ -286,6 +314,16 @@ private[uic] object MenuRender:
         end for
     end applyStep
 
+    /** Stamps [[MenuItem.current]] onto a row, through kyo-ui's class channel: a constant applies
+      * statically, a `Signal[Boolean]` toggles the class in place with no re-render.
+      *
+      * One function rather than a line in each of the five hosts that build `MenuItem` rows, so
+      * the class name and the channel cannot drift apart between them. A row whose item declares
+      * nothing is returned untouched, so every existing render is byte-identical.
+      */
+    def markCurrent[E <: UI.Ast.Element { type Self <: E }](row: E, it: MenuItem): E =
+        it.currentFlag.foldFlag(row)(on => row.cssClass("p-uic-menu-item-current", on))
+
     /** The shared row content: `div.p-<prefix>-item-content` >
       * `a.p-<prefix>-item-link` holding icon + label (+ trailing submenu glyph).
       * `activate` (when interactive) runs on click and on Enter with the row
@@ -300,6 +338,15 @@ private[uic] object MenuRender:
     )(using Frame): UI =
         var link = a.cssClass(s"p-$prefix-item-link")
         it.urlV.foreach(u => link = link.href(Href.Path(u)))
+        // `aria-current` belongs on the LINK, not on the row: it says "this link points at the
+        // page you are on". The reactive form is the attribute channel (patched in place), and
+        // the negative spelling is written out rather than omitted so the attribute the channel
+        // writes into exists from the first render.
+        it.currentFlag match
+            case Present(BoolValue.Const(true)) => link = link.aria("current", "page")
+            case Present(BoolValue.Dyn(sig))    => link = link.aria("current", sig.map(if _ then "page" else "false"))
+            case _                              => ()
+        end match
         if !it.disabledFlag.constTrue then
             // Roving hosts give the enclosing list the single tab stop and handle keys
             // centrally (the WAI-ARIA aria-activedescendant model the `.p-focus` CSS

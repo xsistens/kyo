@@ -233,7 +233,7 @@ final case class MegaMenu private (
                     else
                         val myIdx = navIdx
                         if !it.disabledFlag.constTrue then navIdx += 1
-                        var row = li.cssClass("p-megamenu-item").role("menuitem")
+                        var row = MenuRender.markCurrent(li.cssClass("p-megamenu-item").role("menuitem"), it)
                         if it.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
                         else if focus == List(r, c, myIdx) then
                             row = row.cssClass("p-focus").scrollAuto(true)
