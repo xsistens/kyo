@@ -443,24 +443,76 @@ object Apollo:
         Tag[Emit[Chunk[ApolloResponse[D]]]],
         CanEqual[D, D]
     ): PaginatedQuery[D, C] < (Async & Scope) =
+        watchSignal(page(initial)).map(pagedOver(initial, page))
+
+    /** [[paginatedQuery]] with a live `skip` — the same gate [[query]] and
+      * [[watchSignal]] carry, and the same retention: while `skip` is `true` the
+      * watcher freezes ([[SkipMode.Freeze]]) or is torn down
+      * ([[SkipMode.Unsubscribe]]), and the last emitted page **stays** in
+      * [[PaginatedQuery.state]]. A tab parked by a URL-derived signal therefore
+      * repaints what it had instead of flashing its loading line.
+      *
+      * Not the same gate as the `values` form below, though the two read as siblings:
+      * `values = Absent` says "this query has no variables yet" and parks the state at
+      * [[QueryState.Idle]], discarding what was on screen; `skip = true` says "not
+      * now", and keeps it. Reach for `skip` to PARK a query, for `values` to RE-POINT
+      * one.
+      *
+      * The cursor state is deliberately not reset on resume (a `values` switch does
+      * reset it). The watcher always reads `page(initial)`, whose cache slot still
+      * holds every page merged into it, so resuming repaints the whole accumulated
+      * list and the next `fetchMore` continues where it stopped.
+      *
+      * `fetchMore` stays live while skipped, the way [[query]]'s `refetch` does: the
+      * gate is on the watcher, not on the imperative verbs. Under
+      * [[SkipMode.Unsubscribe]] its write-back lands in the cache unobserved and is
+      * picked up by the re-opened watcher on resume.
+      *
+      * `mode` is explicit here, where [[query]] and [[watchSignal]] default it to
+      * [[SkipMode.Freeze]]: Scala allows default arguments on only one alternative of
+      * an overloaded method, and `paginatedQuery` has two that take a `skip`. Naming
+      * the mode is no loss — parking a route's tab wants [[SkipMode.Unsubscribe]],
+      * which is not the default anywhere else either.
+      */
+    def paginatedQuery[D, C](initial: C, skip: Signal[Boolean], mode: SkipMode)(
+        page: C => ApolloCall[D]
+    )(using
+        Frame,
+        CanEqual[C, C],
+        Tag[Emit[Chunk[ApolloResponse[D]]]],
+        CanEqual[D, D]
+    ): PaginatedQuery[D, C] < (Async & Scope) =
+        watchSignal(page(initial), skip, mode).map(pagedOver(initial, page))
+
+    /** The cursor cell and the `fetchMore` reducer every [[paginatedQuery]] form over
+      * a fixed operation shares — what differs between them is only how `state` is
+      * driven. (The `values` form keeps its own copy: its reducer additionally has to
+      * read the current variables, and is a no-op without them.)
+      */
+    private def pagedOver[D, C](initial: C, page: C => ApolloCall[D])(
+        state: Signal[QueryState[D]]
+    )(using
+        Frame,
+        CanEqual[C, C],
+        Tag[Emit[Chunk[ApolloResponse[D]]]],
+        CanEqual[D, D]
+    ): PaginatedQuery[D, C] < Sync =
         Signal.initRef[C](initial).map { cursors =>
-            watchSignal(page(initial)).map { state =>
-                val refetch: C => Unit < (Async & Abort[ApolloException]) =
-                    c => page(c).fetchPolicy(FetchPolicy.NetworkOnly).data.unit
-                val advance: ((C, D) => Option[C]) => (Unit < (Async & Abort[ApolloException])) =
-                    reduce =>
-                        cursors.current.map { c =>
-                            state.current.map { qs =>
-                                val next: Option[C] = PaginatedQuery.dataOf(qs) match
-                                    case Some(d) => reduce(c, d)
-                                    case None    => None
-                                next match
-                                    case Some(c2) => cursors.set(c2).andThen(refetch(c2))
-                                    case None     => ()
-                            }
+            val refetch: C => Unit < (Async & Abort[ApolloException]) =
+                c => page(c).fetchPolicy(FetchPolicy.NetworkOnly).data.unit
+            val advance: ((C, D) => Option[C]) => (Unit < (Async & Abort[ApolloException])) =
+                reduce =>
+                    cursors.current.map { c =>
+                        state.current.map { qs =>
+                            val next: Option[C] = PaginatedQuery.dataOf(qs) match
+                                case Some(d) => reduce(c, d)
+                                case None    => None
+                            next match
+                                case Some(c2) => cursors.set(c2).andThen(refetch(c2))
+                                case None     => ()
                         }
-                new PaginatedQuery(state, advance)
-            }
+                    }
+            new PaginatedQuery(state, advance)
         }
 
     /** Prepare a paginated query whose operation **variables** are live — the shape a
@@ -482,7 +534,10 @@ object Apollo:
       *     had already accumulated.
       *
       * `Absent` parks the watcher at [[QueryState.Idle]] and makes every `fetchMore` a
-      * no-op.
+      * no-op — the state a page holds before its parameter exists, which DISCARDS
+      * whatever was on screen. To park a query that already painted and have it
+      * repaint on return, use the `skip` overload above; the two gates are not
+      * interchangeable.
       */
     def paginatedQuery[D, C, V](values: Signal[Maybe[V]])(initial: C)(page: (V, C) => ApolloCall[D])(
         using
@@ -539,10 +594,23 @@ object Apollo:
         Tag[Emit[Chunk[ApolloResponse[D]]]],
         CanEqual[D, D]
     ): PaginatedQueryHandle[D] < (Async & Scope) =
-        paginatedQuery[D, Option[String]](initial = None)(page).map { paged =>
-            val conn = paged.connection(cursorOf, (_, cur) => cur)
-            PaginatedQueryHandle(paged.state, conn.fetchMore)
-        }
+        paginatedQuery[D, Option[String]](initial = None)(page).map(_.singleConnection(cursorOf))
+
+    /** The single-connection sugar with a live `skip` — [[paginatedQuery]]'s gate,
+      * yielding the flat handle rather than making the caller re-assemble one.
+      */
+    def paginatedQuery[D](
+        page: Option[String] => ApolloCall[D],
+        skip: Signal[Boolean],
+        mode: SkipMode
+    )(
+        cursorOf: D => Option[String]
+    )(using
+        Frame,
+        Tag[Emit[Chunk[ApolloResponse[D]]]],
+        CanEqual[D, D]
+    ): PaginatedQueryHandle[D] < (Async & Scope) =
+        paginatedQuery[D, Option[String]](None, skip, mode)(page).map(_.singleConnection(cursorOf))
 
     // --- Preloading ------------------------------------------------------------
 

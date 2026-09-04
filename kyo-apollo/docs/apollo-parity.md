@@ -119,6 +119,7 @@ widening to `FetchPolicy` would break every call site and collide in the context
 |---|---|---|
 | `@client` fields in the normalized cache (typed, schema-shaped) | **PRESENT** | `ClientField.scala`, `api/ClientFieldStructure.scala` |
 | Relay-style connection merge + imperative `fetchMore` | **PRESENT** | `api/FieldPolicy.scala` (`ConnectionFieldPolicy`); `ApolloPagination.scala` |
+| A paginated query carries the same `skip` gate as a plain one | **PRESENT (ahead)** | react has no paginated hook to skip; `Apollo.paginatedQuery(initial, skip, mode)(page)` parks one and keeps its accumulated pages |
 | Codegen: schema types + selectors, no per-operation hooks (the V4-echoed foot-gun) | **PRESENT** | `kyo-apollo-codegen/…/ApolloClientWriter.scala` |
 | Codegen: `SchemaIdentities` (schema-wide `CacheIdentity` collector) | **PRESENT** | `ApolloClientWriter.emitSchemaIdentities` |
 | Colocated/namespaced types (V4's `useLazyQuery.Options` idea) | **PRESENT** | `QueryState`, `MutationState`, `NetworkStatus`, `Apollo.*` |

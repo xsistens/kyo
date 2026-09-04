@@ -172,6 +172,23 @@ final case class PaginatedQueryHandle[D](
     fetchMore: Unit < (Async & Abort[ApolloException])
 )
 
+extension [D](paged: PaginatedQuery[D, Option[String]])
+    /** Flatten a general [[PaginatedQuery]] whose cursor state IS the one connection's
+      * cursor into the [[PaginatedQueryHandle]] the sugar returns.
+      *
+      * The sugar covers `Apollo.paginatedQuery(page)(cursorOf)` and its `skip`
+      * overload, but the live-variables form
+      * `Apollo.paginatedQuery(values)(initial)(page)` always yields the general
+      * `PaginatedQuery` — a single-connection query that gains live variables would
+      * otherwise have to re-assemble its own handle from the two lines below. It
+      * cannot be a further `paginatedQuery` overload: that alternative's first
+      * argument list would be `Signal[Maybe[V]]` too, and overload resolution has
+      * nothing left to separate them by.
+      */
+    def singleConnection(cursorOf: D => Option[String])(using Frame): PaginatedQueryHandle[D] =
+        PaginatedQueryHandle(paged.state, paged.connection(cursorOf, (_, cur) => cur).fetchMore)
+end extension
+
 /** Prepare a paginated query with a single connection — the sugar over the
   * general form. `page(None)` is the first page; `page(Some(cursor))` each next
   * one. Yields a flat [[PaginatedQueryHandle]] whose `fetchMore` advances that one
