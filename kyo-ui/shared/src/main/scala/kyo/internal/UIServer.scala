@@ -67,6 +67,10 @@ private[kyo] object UIServer:
                             DragFiles.local.let(Present(files)) {
                                 for
                                     sub <- ReactiveUI.subscribe(root, exchange)
+                                    // Devtools statistics ride this connection, on a fiber bound to the
+                                    // session Scope so they end with it. Nothing is forked unless an overlay
+                                    // is registered, which no build without kyo-ui-devtools ever does.
+                                    _ <- devtoolsPump(ws)
                                     // Single-consumer drain: element handlers run in ARRIVAL order on one fiber, the twin of
                                     // the browser mount's drain in DomBackend. A fiber forked per event let two handlers race,
                                     // so a blur and the focus that followed it could be applied in either order.
@@ -98,6 +102,30 @@ private[kyo] object UIServer:
                 }
             yield ()
         }
+
+    /** Ship devtools statistics over this session's socket until it closes; a no-op with no overlay
+      * registered.
+      *
+      * A poll rather than a push from the store: the store is written by every region fiber of every session
+      * and reading it on a timer is what keeps those writes free of any knowledge that a devtool exists. A
+      * frame lost to a closed socket is dropped, since the numbers describe a moment that has passed.
+      */
+    private def devtoolsPump(ws: HttpWebSocket)(using Frame): Unit < (Async & Scope) =
+        Devtools.statsProvider match
+            case Absent => Kyo.unit
+            case Present(provider) =>
+                Fiber.init(
+                    Loop.forever {
+                        Sync.defer(provider())
+                            .map(payload =>
+                                Abort.runPartial[Closed](
+                                    ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](HtmlOp.DevtoolsStats(payload))))
+                                ).unit
+                            )
+                            .andThen(Async.sleep(Devtools.statsInterval))
+                    }
+                ).unit
+    end devtoolsPump
 
     private def wsRoute(base: String, ui: => UI < Async)(using Frame): HttpHandler[?, ?, ?] =
         HttpHandler.webSocket(s"$base/_kyo/ws") { (_, ws) =>
@@ -156,6 +184,10 @@ private[kyo] object UIServer:
                         discard(sentBelowRegion.put(path, rendered.map((opPath, html, _) => (opPath, html)).toMap))
                         val changed = rendered.filterNot((opPath, html, _) => previouslySent.get(opPath).contains(html))
                         Kyo.foreachDiscard(changed)((opPath, html, rules) => send(HtmlOp.Replace(opPath, html), rules))
+                            // The wasted-render report falls out of the filter this branch already applies:
+                            // an emission whose every candidate rendered byte-identically to the last one puts
+                            // nothing on the socket, and that is precisely a render that was for nothing.
+                            .andThen(Devtools.notePaint(changed.foldLeft(0)(_ + _._2.length), wasted = changed.isEmpty))
                     }
                 end if
             end onChange
@@ -193,7 +225,7 @@ private[kyo] object UIServer:
                             send(
                                 HtmlOp.PatchList(id, rows.map(_.key), changedRows.map(_.key), html),
                                 rules
-                            )
+                            ).andThen(Devtools.notePaint(html.length, wasted = false))
                         }
                     // An SVG region replaces its own group element; there is no row range to address.
                     case _: ReactiveRegion.SvgElement =>
@@ -232,7 +264,10 @@ private[kyo] object UIServer:
                         val replaceOp = region match
                             case ReactiveRegion.HtmlRange(id) => HtmlOp.ReplaceRange(id, html)
                             case _: ReactiveRegion.SvgElement => HtmlOp.Replace(path, HtmlRenderer.wrapReactiveRegion(region, html))
-                        send(replaceOp, rules)
+                        // Never wasted: a whole-region replace is sent unconditionally, because the client
+                        // compares against the LIVE DOM before applying and that is what repairs a field the
+                        // user has typed into.
+                        send(replaceOp, rules).andThen(Devtools.notePaint(html.length, wasted = false))
                 }
             end sendRegion
 

@@ -19,9 +19,15 @@ private[kyo] object HtmlOp:
     // gate sits in ReactiveUI, before the op is ever chosen.
     case class PatchList(regionId: String, keys: Seq[String], changedKeys: Seq[String], changed: String)
         extends HtmlOp derives Schema
-    case class Remove(path: Seq[String])  extends HtmlOp derives Schema
-    case class InjectCss(css: String)     extends HtmlOp derives Schema
-    case class ScrollIntoView(id: String) extends HtmlOp derives Schema
+    case class Remove(path: Seq[String]) extends HtmlOp derives Schema
+    case class InjectCss(css: String)    extends HtmlOp derives Schema
+    // Render statistics for the devtools overlay, as the JSON the overlay reads (see kyo-ui-devtools). Sent
+    // only while a devtools sink is installed, on a session fiber of its own, and carried here rather than on
+    // a socket of its own so it shares the connection's ordering and lifetime with the updates it describes.
+    // Opaque to the engine on purpose: the shape belongs to the overlay, and putting it in the wire protocol
+    // would tie a devtool's presentation to the transport's compatibility surface.
+    case class DevtoolsStats(payload: String) extends HtmlOp derives Schema
+    case class ScrollIntoView(id: String)     extends HtmlOp derives Schema
 
     // Contracts for these imperative ops live on UI.Commands (requestMeasure / command / *ById).
     case class RequestMeasure(path: Seq[String])        extends HtmlOp derives Schema

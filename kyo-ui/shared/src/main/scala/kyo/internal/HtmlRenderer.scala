@@ -238,8 +238,17 @@ private[kyo] object HtmlRenderer:
     private def openSvgRegion(path: Seq[String]): String =
         s"""<g data-kyo-path="${pathAttr(path)}" data-kyo-reactive>"""
 
-    /** Wrap body HTML in a full page with inline JS client. */
+    /** Wrap body HTML in a full page with inline JS client.
+      *
+      * The devtools overlay rides along in a second `<script>` when one is registered, AFTER the client: the
+      * client is what receives the stats frames and hands them over, so the overlay has to be defined by the
+      * time the socket opens. Nothing is emitted when no overlay is registered, which is every page in a build
+      * that does not depend on kyo-ui-devtools.
+      */
     def renderPage(title: String, body: String, css: String, basePath: String): String =
+        val devtools = Devtools.pageScript match
+            case Present(script) => s"\n<script>$script</script>"
+            case Absent          => ""
         s"""<!DOCTYPE html>
            |<html>
            |<head>
@@ -248,9 +257,10 @@ private[kyo] object HtmlRenderer:
            |<style>$baseCss$css</style>
            |</head>
            |<body>$body
-           |<script>${clientJs(jsStr(basePath))}</script>
+           |<script>${clientJs(jsStr(basePath))}</script>$devtools
            |</body>
            |</html>""".stripMargin
+    end renderPage
 
     /** Wrap body HTML in a complete static HTML document with a configurable head (for SSG/SSR).
       *
@@ -1786,6 +1796,10 @@ private[kyo] object HtmlRenderer:
            |    // The removed subtree may have held portal placeholders: retire their body twins.
            |    __kyoPortalSweep(null);
            |    sweepFocusAuto();sweepScrollAuto(true);
+           |  }else if(op.DevtoolsStats){
+           |    // The overlay is only there when the page carried its script; a frame that arrives without it
+           |    // is dropped rather than queued, because the numbers describe a moment that has passed.
+           |    if(window.__kyoDev)window.__kyoDev.push(JSON.parse(op.DevtoolsStats.payload));
            |  }else if(op.InjectCss){
            |    var s=document.createElement("style");
            |    s.textContent=op.InjectCss.css;

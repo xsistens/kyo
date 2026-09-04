@@ -1,5 +1,6 @@
 package kyo
 
+import kyo.internal.Devtools
 import kyo.internal.HtmlRenderer
 import kyo.internal.ReactiveRegion
 import kyo.internal.ReactiveUI
@@ -394,6 +395,98 @@ object UI:
             case Present(sink) => sink(t)
             case Absent        => Log.warn("kyo-ui: notice with no UI.notices sink installed", t)
         }
+
+    /** What kind of update an observed [[kyo.UI.RenderEvent]] was, with the numbers only that kind has.
+      *
+      * The distinction is the whole point of reporting these separately: a `Repaint` renders a subtree and
+      * hands the backend HTML to reconcile, while a `Channel` write is one `setAttribute` and a `Text` write
+      * is one `Text.data` assignment. Counting all three as "a render" would put the expensive case and the
+      * two cheap ones on the same axis, and a reader acting on that would optimize the wrong thing.
+      */
+    enum RenderKind derives CanEqual:
+        /** A reactive region re-rendered its subtree. */
+        case Repaint
+
+        /** A keyed list emission, answered per row: `changedRows` of `totalRows` were actually repainted, the
+          * rest reused wholesale (see the `changed` flag the region reports per row).
+          */
+        case ListPatch(changedRows: Int, totalRows: Int)
+
+        /** One reactive attribute or class patched in place — no region re-render at all. */
+        case Channel(name: String)
+
+        /** A `Signal[String]` bound straight to a text node, bypassing the region fiber entirely. */
+        case Text
+    end RenderKind
+
+    /** Why a region rendered. */
+    enum RenderCause derives CanEqual:
+        /** The region was just created: the initial mount, or a repaint of an enclosing region rebuilt it.
+          * Its own signal has said nothing yet.
+          */
+        case Created
+
+        /** The region's own signal emitted. */
+        case Signal
+    end RenderCause
+
+    /** One update the engine applied, as reported to a [[kyo.UI.devtools]] sink.
+      *
+      * @param path
+      *   the region's render path, the same identity the wire protocol addresses it by and the same string
+      *   the rendered elements carry as `data-kyo-path`
+      * @param regionId
+      *   the id in the region's DOM comment markers (`<!--kyo-rs:ID-->`), `Absent` for an SVG region, which
+      *   is addressed by `path` instead
+      * @param frame
+      *   the source position of the AST node that created the region — file, line, enclosing method and the
+      *   source snippet. Always user code: the `Frame` macro refuses to expand inside the `kyo` package
+      * @param wasted
+      *   the render produced no DOM change. The most actionable number here: work was done and nothing came
+      *   of it
+      * @param durationNanos
+      *   walk plus paint, measured around the render itself; `0` for the two cheap kinds
+      * @param bytes
+      *   size of the rendered payload that reached the DOM; `0` when nothing was sent or not measured
+      */
+    final case class RenderEvent(
+        path: Seq[String],
+        regionId: Maybe[String],
+        frame: Frame,
+        kind: RenderKind,
+        cause: RenderCause,
+        wasted: Boolean,
+        durationNanos: Long,
+        bytes: Int
+    )
+
+    /** Installs a sink that observes every update the engine applies, for render devtools.
+      *
+      * One wrapper at the root turns it on for the whole tree; no component is touched, and there is nothing
+      * to opt into per component, because the engine reports from the only places an update can originate:
+      *
+      * {{{
+      * UI.devtools(store.record)(UI.runMount(shell, "#app"))
+      * }}}
+      *
+      * The sink rides an inheritable `Local` in the same way [[kyo.UI.notices]] does, so it reaches the region
+      * fibers, mount effects and channel callbacks below the installation point. With no sink installed the
+      * engine allocates nothing on any render path — the cost of the feature when off is a `Local` read per
+      * paint.
+      *
+      * It is ALSO recorded as a process-wide fallback, which is what makes the same one line work under
+      * `runHandlers`. There the `Local` does not reach: kyo-http builds its handlers at setup and runs them on
+      * fibers that do not descend from this caller, the context gap [[kyo.UI.notices]] documents and lives
+      * with. A switch that reported nothing under one of the two runners, with nothing to say why, is the kind
+      * of half-working that costs more than the feature is worth. The `Local` still wins wherever it is set.
+      *
+      * The sink is called on the fiber that did the work and must not block: aggregate in memory and let some
+      * other fiber drain it.
+      */
+    def devtools[A, S](sink: RenderEvent => Unit)(v: A < S)(using Frame): A < S =
+        Devtools.installFallback(Present(sink))
+        Devtools.sink.let(Present(sink))(v)
+    end devtools
 
     /** Builder-style modifiers for [[kyo.UI.Ast.Mounted]], following the attrs-API idiom. */
     object MountedOps:

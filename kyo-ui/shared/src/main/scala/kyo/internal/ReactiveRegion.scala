@@ -119,6 +119,14 @@ private[kyo] object ReactiveRegion:
             case Namespace.Html => HtmlRange(htmlId(identity))
             case Namespace.Svg  => SvgElement(identity.path)
 
+    /** The id in a region's DOM comment markers, `Absent` for an SVG region — which has a real `<g>` element
+      * and is addressed by its path instead. What a devtools overlay needs to find a region's node run.
+      */
+    def htmlIdOf(region: ReactiveRegion): Maybe[String] =
+        region match
+            case HtmlRange(id) => Present(id)
+            case _: SvgElement => Absent
+
     def namespace(region: ReactiveRegion): Namespace =
         region match
             case _: HtmlRange  => Namespace.Html

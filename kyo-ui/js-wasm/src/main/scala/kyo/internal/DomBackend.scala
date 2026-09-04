@@ -1018,6 +1018,32 @@ private[kyo] object DomBackend:
 
         private[kyo] def close(using Frame): Unit < Sync = Sync.defer { open = false }
 
+        /** Fingerprint of the HTML each region painted last, kept ONLY while a devtools sink is observing.
+          *
+          * The server transport learns "this render changed nothing" for free, because it compares rendered
+          * bytes against what it last sent in order to decide what to put on the socket. This one has no such
+          * comparison to borrow: it renders the region and morphs, and a morph that finds everything equal is
+          * indistinguishable from the outside. So it is asked here, on the string the paint already produced.
+          *
+          * A fingerprint, not the HTML: keeping the painted bytes of the whole tree alive would double the
+          * page's memory to answer one boolean. Length in the high word, hash in the low, which makes a
+          * collision require both to agree — and the cost of one is a render reported as wasted that was not.
+          */
+        private val paintedFingerprints = scala.collection.mutable.HashMap.empty[String, Long]
+
+        private def noteWasted(path: Seq[String], html: String)(using Frame): Unit < Sync =
+            Devtools.observing.map { observing =>
+                if !observing then Kyo.unit
+                else
+                    Sync.defer {
+                        val key         = path.mkString(".")
+                        val fingerprint = (html.length.toLong << 32) | (html.hashCode() & 0xffffffffL)
+                        val wasted      = paintedFingerprints.get(key).contains(fingerprint)
+                        discard(paintedFingerprints.put(key, fingerprint))
+                        wasted
+                    }.map(Devtools.notePaint(html.length, _))
+            }
+
         // In-process: the update is a DOM write, not bytes on a wire, so this replaces the region whole
         // (morphing where it can) rather than diffing it. `previous` is what the server-side exchange
         // uses to send only what moved.
@@ -1037,9 +1063,10 @@ private[kyo] object DomBackend:
                         else ReactiveRegion.BoundaryMode.Emit
                     HtmlRenderer.renderRegion(ui, path, contentContext, region, parentContext, boundaryMode).flatMap { html =>
                         // Every painted byte passes here, so this is where the optional-feature flags learn about
-                        // an attribute that only a later re-render brings in (see noteMarkers).
+                        // an attribute that only a later re-render brings in (see noteMarkers), and where a
+                        // devtools sink learns whether this render produced anything (see noteWasted).
                         noteMarkers(html)
-                        Sync.defer(open).flatMap { stillOpen =>
+                        noteWasted(path, html).andThen(Sync.defer(open)).flatMap { stillOpen =>
                             if !stillOpen then Kyo.unit
                             else
                                 region match
@@ -1100,7 +1127,9 @@ private[kyo] object DomBackend:
                             if !isOpen then Kyo.unit
                             else
                                 regions.withRegionFragment(regionId, changed)(applyListPatch(_, path, rows)).flatMap {
-                                    applied => if applied then Kyo.unit else repaint
+                                    applied =>
+                                        if applied then Devtools.notePaint(changed.length, wasted = false)
+                                        else repaint
                                 }
                         }
                     }
