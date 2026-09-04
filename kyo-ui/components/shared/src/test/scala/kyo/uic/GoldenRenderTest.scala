@@ -3061,7 +3061,13 @@ class GoldenRenderTest extends UicTest:
         yield
             assert(fixed.contains("p-fieldset"), "base class")
             assert(fixed.contains("p-component"), "p-component class")
-            assert(fixed.contains("""role="group""""), "group role on the div root (no fieldset factory)")
+            // Native elements, not an ARIA stand-in: a <fieldset> is a group already, and its
+            // name comes from the <legend> by structure rather than from an aria-label that
+            // could only ever carry a constant.
+            assert(fixed.contains("<fieldset"), "a real fieldset root")
+            assert(fixed.contains("<legend"), "a real legend")
+            assert(!fixed.contains("""role="group""""), "no role stand-in on a native group")
+            assert(!fixed.contains("""aria-label="Header""""), "no aria-label stand-in for the name")
             assert(fixed.contains("p-fieldset-legend"), "legend element")
             assert(fixed.contains("p-fieldset-legend-label"), "legend label span")
             assert(fixed.contains("Header"), "legend text rendered")
@@ -3078,6 +3084,22 @@ class GoldenRenderTest extends UicTest:
             assert(toggleable.contains("click"), "toggle registers the click")
             assert(collapsed.contains("""data-uic-icon="plus""""), "collapsed fieldset shows the plus glyph")
             assert(collapsed.contains("p-uic-collapsed"), "collapsed ref hides the content container via the collapse grid")
+    }
+
+    // The case the div + role="group" + aria-label shape could not express. An aria-label is an
+    // attribute channel and a channel carries a static string, so a signal-typed legend left the
+    // group with no accessible name at all. A <legend> is an element: its text node is reactive
+    // like any other, and the name follows it.
+    "a Fieldset whose legend is a signal is still a named group" in {
+        for
+            ref  <- Signal.initRef("Local")
+            out  <- UI.runRender(uic.Fieldset().legend(ref)(p("body"))).take(1).run
+            html <- Kyo.lift(out.mkString)
+        yield
+            assert(html.contains("<fieldset"), "a real fieldset root")
+            assert(html.contains("<legend"), "a real legend carries the name")
+            assert(html.contains("Local"), "the signal's current text is in the legend")
+            assert(!html.contains("aria-label"), "no aria-label, and none needed")
     }
 
     "Badge renders Prime anatomy: dot/circle automatics, severity + size suffixes; OverlayBadge wraps child + badge" in {

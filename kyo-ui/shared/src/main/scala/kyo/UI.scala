@@ -143,6 +143,8 @@ object UI:
     def radio(using Frame): Radio                 = Radio()
     def a(using Frame): Anchor                    = Anchor()
     def form(using Frame): Form                   = Form()
+    def fieldset(using Frame): Fieldset           = Fieldset()
+    def legend(using Frame): Legend               = Legend()
     def select(using Frame): Select               = Select()
     def option(using Frame): Opt                  = Opt()
     def input(using Frame): Input                 = Input()
@@ -2248,6 +2250,39 @@ object UI:
             def onSubmit[S](f: MouseEvent => Any < (Abort[Throwable] & Async & S))(using Isolate[S, Sync, S]): Form =
                 copy(onSubmitEvt = Present(eraseHandlerFn(f)))
         end Form
+
+        /** `<fieldset>` — a named group of controls.
+          *
+          * The name comes from a [[Legend]] as the FIRST child; that is a structural relationship, not an
+          * ARIA one, which is why `role="group"` plus an `aria-label` is not a substitute: the label form
+          * can only carry a constant, so a group whose heading is a signal ends up unnamed. A `disabled`
+          * fieldset also disables the controls inside it, which no `div` does.
+          */
+        final case class Fieldset(
+            attrs: Attrs = Attrs(),
+            children: Chunk[UI] = Chunk.empty,
+            disabled: Maybe[Boolean] = Absent
+        )(using val frame: Frame) extends Block with Interactive with HasDisabled:
+            type Self = Fieldset
+            def withAttrs(a: Attrs): Fieldset      = copy(attrs = a)
+            def apply(cs: HtmlChildVal*): Fieldset = copy(children = children ++ Chunk.from(cs.map(_.value)))
+
+            /** Disables every control inside the group. This is the cascade `<fieldset>` has and no other
+              * container does — the descendants say nothing about being disabled and the browser disables
+              * them anyway.
+              */
+            def disabled(v: Boolean): Fieldset = copy(disabled = Present(v))
+        end Fieldset
+
+        /** `<legend>` — the caption of the [[Fieldset]] it is the first child of. An ordinary block
+          * element; all of its meaning comes from that position.
+          */
+        final case class Legend(attrs: Attrs = Attrs(), children: Chunk[UI] = Chunk.empty)(using val frame: Frame) extends Block
+            with Interactive:
+            type Self = Legend
+            def withAttrs(a: Attrs): Legend      = copy(attrs = a)
+            def apply(cs: HtmlChildVal*): Legend = copy(children = children ++ Chunk.from(cs.map(_.value)))
+        end Legend
 
         final case class Textarea(
             attrs: Attrs = Attrs(),

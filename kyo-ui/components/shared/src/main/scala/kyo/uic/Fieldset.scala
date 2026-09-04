@@ -11,10 +11,12 @@ import kyo.UI.*
   * > `.p-fieldset-content`), so the extracted `@primeuix` fieldset CSS applies
   * verbatim.
   *
-  * DEVIATION: kyo-ui ships no `<fieldset>`/`<legend>` element factories, so the
-  * root and legend render as `div`s carrying the exact Prime classes plus
-  * `role="group"` on the root — the class vocabulary and skin match, the native
-  * legend-on-the-border form semantics do not.
+  * The root is a real `<fieldset>` and the legend a real `<legend>`, so the
+  * group's accessible name comes from the legend by STRUCTURE. That matters
+  * beyond tidiness: the `role="group"` + `aria-label` pair this used to render
+  * could only carry a constant, so a fieldset whose legend was a `Signal[String]`
+  * — a locale-driven `I18n.t` leaf, say — announced as an unnamed group. No
+  * `role` is set: `<fieldset>` already has `group` implicitly.
   *
   * A fieldset is fixed by default; `toggleable(true)` renders the legend as
   * Prime's toggle button (plus glyph collapsed, minus expanded) whose state
@@ -58,17 +60,17 @@ final case class Fieldset private (
     def apply(cs: UI*): Fieldset = copy(kids = kids ++ cs)
 
     private[uic] def render(using Frame): UI =
-        // Attribute channels (aria-label) can only carry a static string — there is no
-        // attribute-level reactive patch — so they read the constant legend only; a
-        // reactive (Dyn) legend drives the text node but leaves these attributes unset.
+        // The toggle button's own aria-label is an attribute channel, and a channel can only
+        // carry a static string — there is no attribute-level reactive patch. So it reads the
+        // constant legend, falling back to "Toggle". The GROUP's name does not depend on this:
+        // that comes from the <legend> element, which a reactive legend drives as a text node.
         val legendConst: Maybe[String] = legendV match
             case Present(TextValue.Const(v)) => Present(v)
             case _                           => Absent
 
-        var shell = div.cssClass("p-fieldset").cssClass("p-component").role("group")
+        var shell = fieldset.cssClass("p-fieldset").cssClass("p-component")
         idV.foreach(v => shell = shell.id(v))
         if toggleableFlag then shell = shell.cssClass("p-fieldset-toggleable")
-        legendConst.foreach(l => shell = shell.aria("label", l))
 
         val toggleRefV: Maybe[SignalRef[Boolean]] =
             if toggleableFlag then collapsedRef else Absent
@@ -85,7 +87,9 @@ final case class Fieldset private (
                     // aria-expanded track the state (a DIFFERENT element from the content,
                     // so replacing it never resets the content's collapse transition).
                     List(
-                        div.cssClass("p-fieldset-legend")(
+                        // `UI.legend`, not the bare name: this class has its own `legend` setter,
+                        // which shadows the element factory inside it.
+                        UI.legend.cssClass("p-fieldset-legend")(
                             toChild(ref.render { c =>
                                 button
                                     .cssClass("p-fieldset-toggle-button")
@@ -100,7 +104,7 @@ final case class Fieldset private (
                         )
                     )
                 case Absent if toggleableFlag || legendV.isDefined =>
-                    List(div.cssClass("p-fieldset-legend")(toChild(labelSpan)))
+                    List(UI.legend.cssClass("p-fieldset-legend")(toChild(labelSpan)))
                 case Absent => Nil
 
         val containerBase =
