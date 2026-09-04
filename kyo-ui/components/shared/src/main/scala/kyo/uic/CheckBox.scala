@@ -51,6 +51,9 @@ final case class CheckBox private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): CheckBox = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     def text(v: String): CheckBox = copy(labelText = Present(v))
 
     /** Sets a constant checked state. */

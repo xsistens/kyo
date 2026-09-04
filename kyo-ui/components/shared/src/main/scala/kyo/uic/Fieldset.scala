@@ -41,6 +41,9 @@ final case class Fieldset private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): Fieldset = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Legend text, rendered inside `.p-fieldset-legend`. A `Signal[String]` re-renders it in place on
       * emission, e.g. a locale-driven `I18n.t` leaf.
       */

@@ -29,6 +29,9 @@ final case class Tag private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): Tag = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Semantic accent (`.p-tag-<token>`); unset keeps the primary base skin. A `Signal[Severity]` swaps
       * the class IN PLACE via kyo-ui's class channel on emission (no re-render).
       */

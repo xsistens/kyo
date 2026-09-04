@@ -50,6 +50,9 @@ final case class Slider private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): Slider = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** The slider's value, in any of the three bindings a value slot holds. A constant renders the
       * fill/handle statically. A writable `SignalRef[Double]` binds TWO-WAY: drags and keys write the
       * committed value back, and ref changes move the fill and handle. Any other `Signal[Double]` binds

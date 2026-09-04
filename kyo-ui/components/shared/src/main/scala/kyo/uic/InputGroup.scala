@@ -42,6 +42,9 @@ final case class InputGroup private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): InputGroup = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Appends children (fields and [[InputGroup.addon]]s, in visual order). */
     def apply(cs: UI*): InputGroup = copy(kids = kids ++ cs)
 

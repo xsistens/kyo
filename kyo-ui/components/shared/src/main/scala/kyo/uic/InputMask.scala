@@ -56,6 +56,9 @@ final case class InputMask private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): InputMask = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Disables the field. A `Signal[Boolean]` toggles it IN PLACE via kyo-ui's boolean attribute channel
       * (no re-render).
       */

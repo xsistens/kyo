@@ -120,6 +120,9 @@ final case class Password private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): Password = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     def onChange(f: String => Any < Async): Password = copy(onChangeSF = Present(f))
     def onInput(f: String => Any < Async): Password  = copy(onInputSF = Present(f))
 

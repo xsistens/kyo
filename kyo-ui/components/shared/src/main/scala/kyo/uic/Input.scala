@@ -59,6 +59,9 @@ final case class Input private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): Input = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Seeds focus onto this field when a re-render inserts it into the DOM for the first
       * time, kyo-ui's `focusAuto`. A field that appears in place of something else, a cell
       * that swaps its text for an editor being the case this exists for, is focusable but

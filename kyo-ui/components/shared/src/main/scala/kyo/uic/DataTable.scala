@@ -618,6 +618,9 @@ final case class DataTable[A] private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): DataTable[A] = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Appends data rows. */
     def rows(rs: Seq[A]): DataTable[A] = copy(rowsV = rowsV ++ rs.toList)
 

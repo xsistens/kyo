@@ -49,6 +49,9 @@ final case class SelectButton[A] private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): SelectButton[A] = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Appends typed options with their text projection. */
     def options(is: Seq[A])(label: A => String): SelectButton[A] =
         copy(items = items ++ is.toList, labelF = label)

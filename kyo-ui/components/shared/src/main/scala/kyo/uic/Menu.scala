@@ -53,6 +53,9 @@ final case class Menu private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): Menu = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Popup mode: the menu renders as a floating [[Overlay]] panel bound two-way
       * to `ref` — writes open and close it, outside click/Escape write back.
       */

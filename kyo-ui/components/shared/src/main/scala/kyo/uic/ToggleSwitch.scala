@@ -35,6 +35,9 @@ final case class ToggleSwitch private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): ToggleSwitch = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Sets a constant on/off state. */
     def checked(v: Boolean): ToggleSwitch = copy(checkedBinding = Present(CheckBox.Checked.Const(v)))
 

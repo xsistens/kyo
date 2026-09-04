@@ -114,6 +114,9 @@ final case class ContextMenu private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): ContextMenu = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Paths of the items carrying submenus (one open/closed ref each). */
     private[uic] def submenuPaths: List[List[Int]] = MenuRender.submenuPaths(itemsV)
 

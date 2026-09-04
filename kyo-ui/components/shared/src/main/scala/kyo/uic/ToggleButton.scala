@@ -55,6 +55,9 @@ final case class ToggleButton private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): ToggleButton = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Package-internal content slot: SelectButton's `itemTemplate` replaces the
       * icon+label pair inside `.p-togglebutton-content` with arbitrary UI (the
       * kyo analogue of Prime's default slot).

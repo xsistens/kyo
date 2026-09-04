@@ -115,6 +115,9 @@ final case class Button private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): Button = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Disables the button. A `Signal[Boolean]` enables/disables it in place on emission (e.g. a
       * mutation-in-flight signal).
       */

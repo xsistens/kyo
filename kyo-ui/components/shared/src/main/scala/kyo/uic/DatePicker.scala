@@ -100,6 +100,9 @@ final case class DatePicker private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): DatePicker = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Sets a constant ISO value (`YYYY-MM-DD`; `YYYY-MM` / `YYYY` under
       * `view(Month|Year)`; datetime/time under `showTime`/`timeOnly`).
       */

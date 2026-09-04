@@ -78,6 +78,16 @@ private[uic] trait HasElementId extends Node:
     /** Stores the element id. Implemented as `copy(idV = v)`. */
     private[uic] def withElementId(v: Maybe[String]): Self
 
+    /** Reads it back. Implemented as `idV`.
+      *
+      * The writer's twin, and it exists because "prefer the caller's id" is a rule this trait
+      * already states and only a component could follow: everything else that stamps an id
+      * — `form.bind` is the one — could not see whether the caller had already set one, so it
+      * overwrote and the caller's id vanished with nothing said. A reader is what lets that be
+      * a named error instead.
+      */
+    private[uic] def elementId: Maybe[String]
+
     /** Chosen DOM `id`. See [[HasElementId]] for which element it lands on and how a
       * component's internal parts derive from it.
       */

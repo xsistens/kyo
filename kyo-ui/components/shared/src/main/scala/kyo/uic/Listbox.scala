@@ -100,6 +100,9 @@ final case class Listbox private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): Listbox = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Chords the HOST claims, tried before the list's own machine sees them.
       *
       * [[OrderList]] and [[PickList]] put their move and transfer keys here, because the list is

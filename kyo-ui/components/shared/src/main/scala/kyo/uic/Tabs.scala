@@ -132,6 +132,9 @@ final case class Tabs private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): Tabs = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Header ids derived from a caller-set base — `s"$base-${tab.id}"`, chosen and stable.
       * `Absent` when no base was given, which is what sends [[render]] to the mount to mint
       * them instead.

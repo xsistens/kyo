@@ -44,6 +44,9 @@ final case class TextArea private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): TextArea = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Sets a constant value. */
     def value(v: String): TextArea = copy(valueBinding = Present(Input.Value.Const(v)))
 

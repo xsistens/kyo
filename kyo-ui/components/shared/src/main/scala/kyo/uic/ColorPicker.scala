@@ -74,6 +74,9 @@ final case class ColorPicker private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): ColorPicker = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Sets a constant color (renders the plane/handles/swatch statically). */
     def value(v: String): ColorPicker = copy(valueBinding = Present(Input.Value.Const(v)))
 

@@ -86,6 +86,9 @@ final case class MultiSelect[A] private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): MultiSelect[A] = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Appends typed options with their text projection. */
     def options(is: Seq[A])(label: A => String): MultiSelect[A] =
         copy(optionsV = optionsV ++ is.map(OptionItem.Item(_)), labelF = label)

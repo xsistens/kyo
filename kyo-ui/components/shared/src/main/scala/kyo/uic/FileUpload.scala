@@ -31,7 +31,7 @@ import kyo.UI.*
   * because the payload metadata IS the bound value.
   */
 final case class FileUpload private (
-    inputIdV: String = "p-uic-fileupload",
+    inputIdV: String = FileUpload.defaultInputId,
     chooseLabelV: TextValue = TextValue.Const("Choose"),
     fileLabelV: Maybe[TextValue] = Absent,
     acceptV: List[FileAccept] = Nil,
@@ -63,6 +63,17 @@ final case class FileUpload private (
       */
     private[uic] def withElementId(v: Maybe[String]): FileUpload =
         v.map(inputId).getOrElse(this)
+
+    /** Reads it back — `Absent` while the id is still the untouched default.
+      *
+      * The family's odd one out, because `inputIdV` is a plain `String` that always has a
+      * value ([[inputId]]'s working default, so the native input is addressable unasked).
+      * A reader answering `Present` for that default would tell `form.bind` that every
+      * FileUpload it ever meets already carries a caller's id. What the reader is FOR is
+      * "did someone choose this", and nobody chose the default.
+      */
+    private[uic] def elementId: Maybe[String] =
+        if inputIdV == FileUpload.defaultInputId then Absent else Present(inputIdV)
 
     /** Binds the picked files two-way: a pick writes the [[kyo.UI.FilePayload]] metadata
       * (name, size, MIME type, content) into `ref`, and a ref write of an empty Seq clears
@@ -210,6 +221,11 @@ end FileUpload
 
 object FileUpload:
     def apply(): FileUpload = new FileUpload()
+
+    /** The native input's id when nobody has chosen one. Named rather than inlined because
+      * [[FileUpload.elementId]] has to tell the default apart from a caller's choice.
+      */
+    private[uic] val defaultInputId = "p-uic-fileupload"
 
     /** The label text for a set of picked files: their names joined, or `Absent` for the
       * empty state.

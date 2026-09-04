@@ -41,6 +41,9 @@ final case class Message private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): Message = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Semantic accent (`.p-message-<token>`; Prime's message vocabulary is
       * info/success/warn/error/secondary/contrast, so `Danger` maps to `error` and `Primary`/`Help` fall
       * back to the `info` skin). A `Signal[Severity]` swaps the class IN PLACE via the class channel and

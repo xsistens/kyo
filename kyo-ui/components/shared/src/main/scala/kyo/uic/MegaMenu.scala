@@ -105,6 +105,9 @@ final case class MegaMenu private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): MegaMenu = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Root indices that open a panel (one open/closed ref each). */
     private[uic] def panelPaths: List[List[Int]] =
         itemsV.zipWithIndex.collect { case (it, i) if it.columnsV.nonEmpty => List(i) }

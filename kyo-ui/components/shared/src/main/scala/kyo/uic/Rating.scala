@@ -53,6 +53,9 @@ final case class Rating private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): Rating = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** The star count, in any of the three bindings a value slot holds (0 = nothing selected). A
       * constant renders the stars statically. A writable `SignalRef[Int]` binds TWO-WAY: clicks
       * write the new value back, and ref changes re-render. Any other `Signal[Int]` binds one-way,

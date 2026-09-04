@@ -96,6 +96,9 @@ final case class Select[A] private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): Select[A] = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Package-internal: hosts that already render inside their own subscription
       * supply the resolved selection directly (no nested subscription; writes go
       * through `onChange`).

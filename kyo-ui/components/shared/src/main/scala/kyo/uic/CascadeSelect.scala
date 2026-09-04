@@ -102,6 +102,9 @@ final case class CascadeSelect[A] private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): CascadeSelect[A] = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Appends typed option-tree roots with the leaf text projection. */
     def options(is: Seq[CascadeItem[A]])(label: A => String): CascadeSelect[A] =
         copy(items = items ++ is.toList, labelF = label)

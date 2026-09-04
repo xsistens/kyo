@@ -147,6 +147,9 @@ final case class InputNumber private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): InputNumber = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Restricts entry to whole numbers: the client keystroke filter (`inputFilter("int")`)
       * rejects the decimal separator before it reaches the field, so the bound value stays
       * integral. The form layer turns this on automatically for `Int`/`Long` number fields.

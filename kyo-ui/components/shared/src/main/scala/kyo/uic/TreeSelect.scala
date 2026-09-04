@@ -73,6 +73,9 @@ final case class TreeSelect private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): TreeSelect = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** Appends typed root options in the picker family's shape: `label` projects an
       * `A` to its visible text and `children` to its sub-options, so the tree
       * structure arrives as a projection like every other key. The option key

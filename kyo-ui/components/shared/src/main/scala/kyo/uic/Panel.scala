@@ -87,6 +87,9 @@ final case class Panel private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): Panel = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     private[uic] def render(using Frame): UI =
         var shell = div.cssClass("p-panel").cssClass("p-component").role(accessibleRoleV.roleToken)
         idV.foreach(v => shell = shell.id(v))

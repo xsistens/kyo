@@ -59,6 +59,9 @@ final case class Knob private (
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): Knob = copy(idV = v)
 
+    /** Reads it back. */
+    private[uic] def elementId: Maybe[String] = idV
+
     /** The knob's value, in any of the three bindings a value slot holds. A constant renders the
       * dial statically. A writable `SignalRef[Double]` binds TWO-WAY: drags and keyboard steps
       * write the clamped value back, and ref changes redraw the arc. Any other `Signal[Double]`
