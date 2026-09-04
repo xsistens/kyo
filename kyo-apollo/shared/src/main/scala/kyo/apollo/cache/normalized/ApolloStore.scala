@@ -29,12 +29,15 @@ import kyo.discard
   * @param fieldPolicies     per-field declarative policies (connection
   *                          pagination keys, field read redirects, custom
   *                          merges); defaults to the identity policy
+  * @param diagnostics       development-time warnings about ambiguous writes (see
+  *                          [[CacheDiagnostics]]); silent by default
   */
 final class ApolloStore(
     val cache: NormalizedCache,
     cacheKeyGenerator: CacheKeyGenerator = CacheKeyGenerator.default,
     cacheKeyResolver: CacheKeyResolver = CacheKeyResolver.default,
-    fieldPolicies: FieldPolicies = FieldPolicies.empty
+    fieldPolicies: FieldPolicies = FieldPolicies.empty,
+    diagnostics: CacheDiagnostics = CacheDiagnostics.off
 ):
 
     /** The record-merge policy derived from [[fieldPolicies]]: a per-field merger
@@ -173,12 +176,25 @@ final class ApolloStore(
       * @param cacheHeaders write hints forwarded to the backend (e.g. an expiry
       *                     stamp, or [[CacheHeaders.DoNotStore]])
       */
+    /** Every store write funnels through here, so the positional-conflict diagnostic
+      * ([[CacheDiagnostics]]) cannot be wired into two of the three write paths and
+      * forgotten on the third. While diagnostics are off it costs one boolean read.
+      */
+    private def mergeRecords(records: Iterable[Record], cacheHeaders: CacheHeaders): Set[String] =
+        if diagnostics.enabled then
+            records.foreach { incoming =>
+                cache.loadRecord(incoming.key).foreach(diagnostics.positionalConflicts(_, incoming))
+            }
+        end if
+        cache.merge(records, cacheHeaders, recordMerger)
+    end mergeRecords
+
     def writeOperation[D](
         operation: Operation[D],
         data: D,
         cacheHeaders: CacheHeaders = CacheHeaders.None
     ): Set[String] =
-        val changedKeys = cache.merge(normalize(operation, data).values, cacheHeaders, recordMerger)
+        val changedKeys = mergeRecords(normalize(operation, data).values, cacheHeaders)
         publish(changedKeys)
         changedKeys
     end writeOperation
@@ -246,7 +262,7 @@ final class ApolloStore(
         val records =
             new Normalizer(fragmentVariablesOf(fragment), cacheKey.key, cacheKeyGenerator, fieldPolicies)
                 .normalize(enriched, fragment.rootField)
-        val changedKeys = cache.merge(records.values, cacheHeaders, recordMerger)
+        val changedKeys = mergeRecords(records.values, cacheHeaders)
         publish(changedKeys)
         changedKeys
     end writeFragment
@@ -382,7 +398,7 @@ final class ApolloStore(
         cacheHeaders: CacheHeaders = CacheHeaders.None
     ): Set[String] =
         val optimisticKeys  = optimisticLayers.remove(mutationId).map(_.keySet).getOrElse(Set.empty)
-        val realChangedKeys = cache.merge(normalize(operation, data).values, cacheHeaders, recordMerger)
+        val realChangedKeys = mergeRecords(normalize(operation, data).values, cacheHeaders)
         val changed         = optimisticKeys ++ realChangedKeys
         publish(changed)
         changed

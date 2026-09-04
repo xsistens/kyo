@@ -6,6 +6,7 @@ All breaking API changes to this project will be documented in this file.
 
 ### Added
 
+- [kyo-apollo] `CacheDiagnostics`: an opt-in `ApolloStore` parameter that reports a write merging into a POSITIONALLY-keyed record while contradicting a stored field — the signature of an id-less list whose elements moved, where the fields the write did not mention still belong to the element that used to sit at that index. Silent by default; `CacheDiagnostics.toStdErr` is the Apollo-Client-style console warning.
 - [kyo-apollo] `RefetchPolicy.CacheFirst`: a watcher whose cache re-read MISSES fetches over the network instead of emitting the miss — for a record the LRU evicted, the collector took, or a narrower write left incomplete. `CacheOnly` (the default) is unchanged and still surfaces the miss as a value.
 - [kyo-data] `Glob`: a compiled, platform-independent pattern for matching slash-separated paths, with a `glob"..."` literal interpolator
 - [kyo-data] `OrderedDict[K, V]`: an immutable map that iterates in insertion order

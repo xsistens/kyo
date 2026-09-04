@@ -340,6 +340,46 @@ class CacheSpec extends kyo.test.Test[Any]:
             assert(slot0.map(_.get("alt")) == Present(Present(RecordValue.Scalar(Json.JStr("A")))))
         }
 
+        // --- 7. The positional-merge diagnostic ---------------------------------
+
+        "the diagnostic reports a positional merge that CONTRADICTS a stored field" in {
+            val seen = scala.collection.mutable.ListBuffer.empty[String]
+            val s    = new ApolloStore(MemoryCache(), diagnostics = CacheDiagnostics.to(seen.append(_)))
+            s.writeOperation(WideQuery(), wideAlbum)
+            s.writeOperation(
+                FeaturedQuery(),
+                narrowAlbum.copy(featured = narrowAlbum.featured.copy(covers = List(CoverNarrow("u2"))))
+            )
+            assert(seen.size == 1, s"expected one warning, got: $seen")
+            assert(seen.head.contains("Album:1.covers.0"))
+            assert(seen.head.contains("'url'"))
+            assert(seen.head.contains("'Image'"), s"names the type to give an identity to: ${seen.head}")
+        }
+
+        "the diagnostic stays silent when a disjoint write merely EXTENDS the record" in {
+            // The false-positive guard, and the more important of the two: this is the
+            // ordinary overlapping-selection case, which must not be reported, or the
+            // diagnostic gets muted and then protects nobody.
+            val seen = scala.collection.mutable.ListBuffer.empty[String]
+            val s    = new ApolloStore(MemoryCache(), diagnostics = CacheDiagnostics.to(seen.append(_)))
+            s.writeOperation(WideQuery(), wideAlbum)
+            s.writeOperation(FeaturedQuery(), narrowAlbum)
+            assert(seen.isEmpty, s"expected silence, got: $seen")
+        }
+
+        "the diagnostic stays silent for an identity-keyed record" in {
+            // Only positionally-addressed records carry the hazard: an entity is the same
+            // object whichever write reaches it, so a changed field there is just news.
+            val seen = scala.collection.mutable.ListBuffer.empty[String]
+            val s    = new ApolloStore(MemoryCache(), diagnostics = CacheDiagnostics.to(seen.append(_)))
+            s.writeOperation(LibraryQuery(), sampleLibrary)
+            s.writeOperation(
+                LibraryQuery(),
+                sampleLibrary.copy(library = sampleLibrary.library.copy(name = "Branch"))
+            )
+            assert(seen.isEmpty, s"expected silence, got: $seen")
+        }
+
         // --- 5. Each FetchPolicy's emission sequence over a fake transport -------
 
         "CacheFirst: network on the cold call, cache hit on the second (one fetch)" in {
