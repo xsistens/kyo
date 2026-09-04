@@ -596,25 +596,27 @@ private[kyo] object ReactiveUI:
             // child (no staticHandlers entry at its index) takes the reactive jump.
             val staticChild = childIdx.flatMap(i => Maybe.fromOption(staticHandlers.find(_._1 == i)).map(_._2))
 
+            val isClick   = event.isInstanceOf[UIEvent.Click]
+            val isKeyDown = event.isInstanceOf[UIEvent.KeyDown]
             for
                 // Disabled-target (Form submit suppression), Button-target (only Button clicks submit
-                // forms), and Select-target (Enter on Select must not submit) all resolve through any
-                // Reactive/Foreach boundary wrapping the target, so signal-typed setters do not hide it.
-                targetDisabled <- event match
-                    case _: UIEvent.Click => isTargetDisabled(elem, myPath, targetPath)
-                    case _                => Kyo.lift(false)
-                targetIsButton <- event match
-                    case _: UIEvent.Click => isTargetButton(elem, myPath, targetPath)
-                    case _                => Kyo.lift(false)
-                targetIsSelect <- event match
-                    case _: UIEvent.KeyDown => isTargetSelect(elem, myPath, targetPath)
-                    case _                  => Kyo.lift(false)
+                // forms), Select-target (Enter on Select must not submit) and control-below all resolve
+                // through any Reactive/Foreach boundary wrapping the target, so signal-typed setters do
+                // not hide it — and all four come out of ONE resolution, because they are four questions
+                // about one element rather than four searches for it.
+                facts <-
+                    if isClick || isKeyDown then targetFacts(elem, myPath, targetPath)
+                    else Kyo.lift(TargetFacts.none)
+                // "Is it disabled" is a question about the CURRENT value behind a channel, not about a
+                // field (see boolAttrNow), so it is read from the resolved element rather than carried.
+                targetDisabled <-
+                    if isClick then facts.target.fold(Kyo.lift(false))(isDisabled) else Kyo.lift(false)
+                targetIsButton = isClick && facts.target.exists(_.isInstanceOf[Button])
+                targetIsSelect = isKeyDown && facts.target.exists(_.isInstanceOf[Select])
                 // Whether a control of the reader's own stands between this element and the target,
                 // reported to the handler rather than acted on here: only the handler knows whether
                 // its click means something the control already means (see UI.MouseEvent.onControl).
-                targetOnControl <- event match
-                    case _: UIEvent.Click => isControlBelow(elem, myPath, targetPath)
-                    case _                => Kyo.lift(false)
+                targetOnControl = isClick && facts.controlBelow
                 bubble = dispatchToElement(
                     elem,
                     event,
@@ -765,42 +767,68 @@ private[kyo] object ReactiveUI:
     private def isHidden(elem: Element)(using Frame): Boolean < Sync =
         boolAttrNow(elem, "hidden", elem.attrs.hidden.getOrElse(false))
 
-    /** Resolve the (possibly reactive) node at `targetPath` and test `predicate` against the concrete element there.
+    /** What a bubbling dispatch needs to know about the event's target, resolved once.
+      *
+      * @param target
+      *   the concrete element the path ends at, `Absent` when it does not resolve
+      * @param controlBelow
+      *   whether any element strictly below the dispatching one, the target included, is a control of
+      *   the reader's own
+      */
+    final private case class TargetFacts(target: Maybe[Element], controlBelow: Boolean)
+
+    private object TargetFacts:
+        /** Nothing was asked, so nothing was found — the answer for an event that resolves no target. */
+        val none: TargetFacts = TargetFacts(Absent, false)
+
+    /** Resolve the (possibly reactive) node at `targetPath` to the concrete element there, noting on the way
+      * whether the path passed through a control.
       *
       * Mirrors the renderer's path scheme: element children are index-addressed, a `Reactive`'s rendered content occupies the same path as
       * the boundary, `Foreach` items live at `path :+ key` (or `:+ index`), and `Fragment` children at `path :+ index`. Resolving through
       * these boundaries is what lets an element wrapped by a signal-typed setter (e.g. `.hidden(Signal)`, which wraps it in a `Reactive`)
       * still be recognized by its concrete type, so button-click form submit and disabled detection keep working through such wrappers.
       *
-      * The predicate is effectful because "is it disabled" is a question about the CURRENT value behind a
-      * channel, not about a field (see [[boolAttrNow]]).
+      * ONE walk answers every question a click asks. It used to be one walk per question — disabled,
+      * button, control-below — and a walk is not free: resolving through a `Foreach` renders the target
+      * row to reach it, so three questions rendered the same row three times per click. The questions are
+      * about one element; they are now asked of one resolution.
+      *
+      * `controlBelow` is accumulated rather than tested at the leaf because it is a question about the
+      * whole chain: a click on the icon inside a button targets the icon, and the icon alone cannot say
+      * that a control was involved. `rootDepth` is what makes it STRICTLY below — the dispatching element
+      * never answers for itself, or a button would decline its own click.
       */
-    private def targetSatisfies(
+    private def resolveTarget(
         node: UI,
         nodePath: Seq[String],
         targetPath: Seq[String],
-        predicate: Element => Boolean < Sync,
-        alongPath: Boolean = false
+        rootDepth: Int,
+        controlBelow: Boolean
     )(using
         Frame
-    ): Boolean < Sync =
+    ): TargetFacts < Sync =
+        // A path that stops short still answers the control question: the old per-question walk
+        // short-circuited to `true` the moment it saw a control, so a control ABOVE a boundary the
+        // resolver cannot see through (a mount, a text leaf) counted. Carrying the flag out keeps that.
+        def unresolved(seen: Boolean): TargetFacts = TargetFacts(Absent, seen)
         node match
             case kc: KeyedChild[?] =>
-                targetSatisfies(kc.child, nodePath, targetPath, predicate, alongPath)
+                resolveTarget(kc.child, nodePath, targetPath, rootDepth, controlBelow)
             case r: Reactive[?] =>
-                // A Reactive's rendered content occupies the same path as the boundary, so re-test at nodePath.
-                r.signal.current(using r.frame).map(cur => targetSatisfies(cur, nodePath, targetPath, predicate, alongPath))
+                // A Reactive's rendered content occupies the same path as the boundary, so re-resolve at nodePath.
+                r.signal.current(using r.frame).map(cur => resolveTarget(cur, nodePath, targetPath, rootDepth, controlBelow))
             case Fragment(children) =>
-                if targetPath.size <= nodePath.size then false
+                if targetPath.size <= nodePath.size then unresolved(controlBelow)
                 else
                     val seg = targetPath(nodePath.size)
                     Maybe.fromOption(seg.toIntOption) match
                         case Present(i) if i >= 0 && i < children.size =>
-                            targetSatisfies(children(i), nodePath :+ seg, targetPath, predicate, alongPath)
-                        case _ => false
+                            resolveTarget(children(i), nodePath :+ seg, targetPath, rootDepth, controlBelow)
+                        case _ => unresolved(controlBelow)
                     end match
             case fe: Foreach[?, ?] @unchecked =>
-                if targetPath.size <= nodePath.size then false
+                if targetPath.size <= nodePath.size then unresolved(controlBelow)
                 else
                     val seg = targetPath(nodePath.size)
                     fe.applyTyped {
@@ -811,42 +839,34 @@ private[kyo] object ReactiveUI:
                                         case Present(f) => items.indexWhere(it => f(it) == seg)
                                         case Absent     => Maybe.fromOption(seg.toIntOption).getOrElse(-1)
                                     if idx >= 0 && idx < items.size then
-                                        targetSatisfies(renderFn(idx, items(idx)), nodePath :+ seg, targetPath, predicate, alongPath)
-                                    else false
+                                        resolveTarget(renderFn(idx, items(idx)), nodePath :+ seg, targetPath, rootDepth, controlBelow)
+                                    else unresolved(controlBelow)
                             }
                     }
             case e: Element =>
-                if targetPath.size <= nodePath.size then predicate(e)
+                val seen = controlBelow || (nodePath.size > rootDepth && isOwnControl(e))
+                if targetPath.size <= nodePath.size then TargetFacts(Present(e), seen)
                 else
                     val seg = targetPath(nodePath.size)
-                    def descend: Boolean < Sync =
-                        Maybe.fromOption(seg.toIntOption) match
-                            case Present(i) if i >= 0 && i < e.children.size =>
-                                targetSatisfies(e.children(i), nodePath :+ seg, targetPath, predicate, alongPath)
-                            case _ => false
-                    // `alongPath` asks about the WHOLE chain rather than its last link: an element between
-                    // the dispatching element and the target answers for it. A click on the icon inside a
-                    // button targets the icon, so "was a control involved" is not a question the leaf alone
-                    // can answer.
-                    if alongPath then predicate(e).map(hit => if hit then true else descend)
-                    else descend
-                    end if
+                    Maybe.fromOption(seg.toIntOption) match
+                        case Present(i) if i >= 0 && i < e.children.size =>
+                            resolveTarget(e.children(i), nodePath :+ seg, targetPath, rootDepth, seen)
+                        case _ => unresolved(seen)
+                    end match
+                end if
             // Text and RawHtml are leaf content with no kyo-addressable Element children, so no event
-            // target can resolve through them: neither can satisfy an Element predicate.
-            case _: Text | _: RawHtml => false
-            // Predicates do not resolve THROUGH a mount boundary: the content lives behind a subscribe-time cell this
+            // target can resolve through them.
+            case _: Text | _: RawHtml => unresolved(controlBelow)
+            // The path does not resolve THROUGH a mount boundary: the content lives behind a subscribe-time cell this
             // static resolver cannot reach (v1 limitation: a Button in a mounted subtree does not trigger an OUTER
             // Form's submit-on-bubble refinement). Event dispatch still resolves via the node's handler indirection.
-            case _: Mounted => false
+            case _: Mounted => unresolved(controlBelow)
+        end match
+    end resolveTarget
 
-    private def isTargetDisabled(elem: Element, myPath: Seq[String], targetPath: Seq[String])(using Frame): Boolean < Sync =
-        targetSatisfies(elem, myPath, targetPath, isDisabled)
-
-    private def isTargetButton(elem: Element, myPath: Seq[String], targetPath: Seq[String])(using Frame): Boolean < Sync =
-        targetSatisfies(elem, myPath, targetPath, e => Kyo.lift(e.isInstanceOf[Button]))
-
-    private def isTargetSelect(elem: Element, myPath: Seq[String], targetPath: Seq[String])(using Frame): Boolean < Sync =
-        targetSatisfies(elem, myPath, targetPath, e => Kyo.lift(e.isInstanceOf[Select]))
+    /** The facts a bubbling dispatch reads about its target, in a single resolution. */
+    private def targetFacts(elem: Element, myPath: Seq[String], targetPath: Seq[String])(using Frame): TargetFacts < Sync =
+        resolveTarget(elem, myPath, targetPath, myPath.size, false)
 
     /** Whether an element is a control in its own right — something the reader operates directly, as
       * opposed to markup an ancestor made clickable.
@@ -860,21 +880,6 @@ private[kyo] object ReactiveUI:
         case a: Anchor    => a.href.isDefined || a.attrs.onClick.nonEmpty || a.attrs.onClickEvt.nonEmpty
         case _: Focusable => true
         case _            => false
-
-    /** Whether the click passed through a control on its way from `elem` down to the target.
-      *
-      * Strictly BELOW `elem`: the element being dispatched to never answers for itself, or a button
-      * would decline its own click. See [[kyo.UI.MouseEvent.onControl]] for what reads this.
-      */
-    private def isControlBelow(elem: Element, myPath: Seq[String], targetPath: Seq[String])(using Frame): Boolean < Sync =
-        if targetPath.size <= myPath.size then Kyo.lift(false)
-        else
-            val seg = targetPath(myPath.size)
-            Maybe.fromOption(seg.toIntOption) match
-                case Present(i) if i >= 0 && i < elem.children.size =>
-                    targetSatisfies(elem.children(i), myPath :+ seg, targetPath, e => Kyo.lift(isOwnControl(e)), alongPath = true)
-                case _ => Kyo.lift(false)
-            end match
 
     /** Bubble-continue value after an element handled `event`: `false` (consume) only when the element set
       * `stopPropagation(true)` AND actually declared a handler for this event's type (`declared`). The result flows up the

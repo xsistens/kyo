@@ -130,9 +130,10 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
     "event dispatch on live rows does not re-render the list" in {
         // Registry-first dispatch: an event resolves the target row from the live RowRegistry (cached
         // handler for rows built by an emission, on-demand single-row walk for seeded rows) instead of
-        // re-rendering and re-walking the whole list per event. The per-click budget of 2 renders is the
-        // click-target resolution (isTargetDisabled and isTargetButton each render the SINGLE target row
-        // through the Foreach boundary); a single whole-list dispatch walk would blow the bound (11 > 4).
+        // re-rendering and re-walking the whole list per event. The per-click budget is ONE render — the
+        // single resolution every click-target question is answered from, each of which used to walk
+        // (and so render the target row) on its own. A whole-list dispatch walk would blow the bound
+        // outright (11 > 2), and a second per-click walk creeping back in shows up here as 4 > 2.
         Scope.run {
             for
                 renders <- Sync.defer(new AtomicInteger(0))
@@ -156,7 +157,7 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 _ <- root.handle(Seq("0", "r5"), UIEvent.Click(Seq("0", "r5"), MouseEventData(UI.Modifiers.none, Absent)))
                 _ <- assertEventually(Sync.defer(clicks.get >= 2))
                 delta = renders.get - base
-            yield assert(delta <= 4, s"expected at most 4 target-resolution renders from event dispatch, got $delta")
+            yield assert(delta <= 2, s"expected at most 2 target-resolution renders from event dispatch, got $delta")
         }
     }
 
