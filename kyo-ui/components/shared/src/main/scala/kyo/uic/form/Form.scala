@@ -23,76 +23,46 @@ final class Form private[form] (
     focusField: String => Unit < Async
 ):
 
-    /** Declare a typed field in this scope: allocate its state (value starts at
-      * `initial`, which is also the reset baseline), register it, return the handle.
-      * Bind it onto a matching control with `field.bind(uic.CheckBox()...)`.
+    /** Declare a typed field in this scope, starting from `initial` (which is also the reset
+      * baseline). Returns a [[FieldSpec]] — a pure description with a default for every other
+      * slot — which `.declare` turns into the live handle:
+      * {{{
+      * stock <- form.field(true).declare
+      * name  <- form.field("").rules(Validator.required()).domId("product-name").declare
+      * }}}
+      * Bind the handle onto a matching control with `uic.CheckBox().bind(field)`.
       */
-    def field[A](initial: A, rules: Validator[A], triggers: Activation.Field*)(using Frame, CanEqual[A, A]): FormField[A] < Sync =
-        for
-            domId         <- mintId()
-            valueRef      <- Signal.initRef(initial)
-            baselineRef   <- Signal.initRef(initial)
-            touchedRef    <- Signal.initRef(false)
-            validatingRef <- Signal.initRef(false)
-            clientErrRef  <- Signal.initRef(Absent: Maybe[FieldError])
-            serverErrRef  <- Signal.initRef(Absent: Maybe[ServerError[A]])
-            epoch         <- AtomicInt.init(0)
-            f = new FormField[A](
-                valueRef,
-                initial,
-                baselineRef,
-                domId,
-                touchedRef,
-                validatingRef,
-                clientErrRef,
-                serverErrRef,
-                epoch,
-                rules,
-                triggers.toSet,
-                Duration.Zero,
-                translator,
-                submitCountRef
-            )
-            _ <- fieldsRef.updateAndGet(_ :+ f)
-        yield f
+    def field[A](initial: A)(using CanEqual[A, A]): FieldSpec[A] =
+        FieldSpec.init(this, initial)
 
-    /** Zero-config `String` field (value starts empty) — the common case, so text
-      * forms declare `field(rules, triggers*)` without an initial value.
+    /** Zero-config `String` field, value starting empty — the common case, so text forms
+      * declare `form.field.declare` and say nothing else.
       */
-    def field(rules: Validator[String], triggers: Activation.Field*)(using Frame): FormField[String] < Sync =
-        field("", rules, triggers*)
+    def field: FieldSpec[String] = FieldSpec.init(this, "")
 
     /** Declare a typed, optionally zone-aware date field bound to a `uic.DatePicker`.
-      * The picker's ISO string is the source of truth; `rules` validate the parsed value
-      * (via the given [[DateCodec]]) and are skipped while the picker is empty. `initial`
-      * seeds the value (`Absent` = empty). Returns a [[DateField]] whose `value` is a
-      * `Signal[Maybe[A]]`; bind it with `uic.DatePicker().bind(field)`.
+      * The picker's ISO string is the source of truth; rules stated on the spec validate the
+      * parsed value (via the given [[DateCodec]]) and are skipped while the picker is empty.
+      * `initial` seeds the value (`Absent` = empty). `.declare` yields a [[DateField]] whose
+      * `value` is a `Signal[Maybe[A]]`; bind it with `uic.DatePicker().bind(field)`.
       */
-    def dateField[A](initial: Maybe[A], rules: Validator[A], triggers: Activation.Field*)(using
-        codec: DateCodec[A],
-        frame: Frame
-    ): DateField[A] < Sync =
-        val initialStr = initial.map(codec.toInput).getOrElse("")
-        val adapted: Validator[String] = Validator.async: s =>
-            codec.fromInput(s) match
-                case Present(a) => rules.run(a)
-                case Absent     => (Absent: Maybe[FieldError])
-        field(initialStr, adapted, triggers*).map(f => new DateField[A](f, codec))
-    end dateField
+    def dateField[A](initial: Maybe[A])(using codec: DateCodec[A]): DateFieldSpec[A] =
+        DateFieldSpec(FieldSpec.init(this, initial.map(codec.toInput).getOrElse("")), codec, Validator.none[A])
 
-    /** Declare a typed numeric field (`Int` / `Long` / `Double`) bound to a
-      * `uic.InputNumber`. The bound `Double` is the source of truth; `rules` validate the
-      * typed value (via the given [[NumberCodec]]). Whole-valued types mask decimal entry
-      * automatically at bind time. Returns a [[NumberField]] whose `value` is a
+    /** Declare a typed numeric field (`Int` / `Long` / `Double`) bound to a `uic.InputNumber`.
+      * The bound `Double` is the source of truth; rules stated on the spec validate the typed
+      * value (via the given [[NumberCodec]]). Whole-valued types mask decimal entry
+      * automatically at bind time. `.declare` yields a [[NumberField]] whose `value` is a
       * `Signal[A]`; bind it with `uic.InputNumber().bind(field)`.
       */
-    def numberField[A](initial: A, rules: Validator[A], triggers: Activation.Field*)(using
-        codec: NumberCodec[A],
-        frame: Frame
-    ): NumberField[A] < Sync =
-        val adapted: Validator[Double] = Validator.async(d => rules.run(codec.fromDouble(d)))
-        field(codec.toDouble(initial), adapted, triggers*).map(f => new NumberField[A](f, codec))
-    end numberField
+    def numberField[A](initial: A)(using codec: NumberCodec[A]): NumberFieldSpec[A] =
+        NumberFieldSpec(FieldSpec.init(this, codec.toDouble(initial)), codec, Validator.none[A])
+
+    /** Register a declared field. Declaration order IS the order `focusFirstInvalid` and the
+      * error summary walk, so the append is the whole of what ordering means here.
+      */
+    private[form] def register(f: FormField[?])(using Frame): Unit < Sync =
+        fieldsRef.updateAndGet(_ :+ f).unit
 
     /** Create a nested scope (composable sub-form). Shares the submit/submitting
       * state with the root, so submit-reveal opens every gate at once.

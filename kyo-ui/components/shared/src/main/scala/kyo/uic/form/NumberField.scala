@@ -41,13 +41,6 @@ final class NumberField[A] private[form] (
     /** The gated, translated inline message, delegated to the underlying field. */
     def message(using Frame): Signal[Maybe[String]] = underlying.message
 
-    /** Choose when this field's error is DISPLAYED (delegates to the underlying field).
-      * Chainable — returns this façade.
-      */
-    def revealWhen(mode: Reveal): NumberField[A] =
-        discard(underlying.revealWhen(mode))
-        this
-
     /** Append another rule over the typed value `A` — adapted onto the underlying `Double`
       * field through the [[NumberCodec]]. Chainable.
       */
@@ -72,13 +65,6 @@ final class NumberField[A] private[form] (
       * underlying field.
       */
     def dependsOn(sigs: Signal[?]*)(using Frame): Unit < (Async & Scope) = underlying.dependsOn(sigs*)
-
-    /** Include/exclude the field as a focus-first-invalid target (delegates to the
-      * underlying field). Returns this façade for chaining.
-      */
-    def focusable(v: Boolean): NumberField[A] =
-        discard(underlying.focusable(v))
-        this
 
     /** True while the value differs from the live baseline (compares the underlying Double). */
     def isDirty(using Frame): Signal[Boolean] = underlying.isDirty

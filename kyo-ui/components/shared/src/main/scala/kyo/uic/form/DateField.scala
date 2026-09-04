@@ -38,13 +38,6 @@ final class DateField[A] private[form] (private[form] val underlying: FormField[
     /** The gated, translated inline message, delegated to the underlying field. */
     def message(using Frame): Signal[Maybe[String]] = underlying.message
 
-    /** Choose when this field's error is DISPLAYED (delegates to the underlying field).
-      * Chainable — returns this façade.
-      */
-    def revealWhen(mode: Reveal): DateField[A] =
-        discard(underlying.revealWhen(mode))
-        this
-
     /** Append another rule over the parsed value `A` — adapted onto the underlying `String`
       * field through the [[DateCodec]] (skipped while the picker is empty, like the constructor
       * rules). Chainable.
@@ -74,13 +67,6 @@ final class DateField[A] private[form] (private[form] val underlying: FormField[
       * underlying field.
       */
     def dependsOn(sigs: Signal[?]*)(using Frame): Unit < (Async & Scope) = underlying.dependsOn(sigs*)
-
-    /** Include/exclude the picker as a focus-first-invalid target (delegates to the
-      * underlying field). Returns this façade for chaining.
-      */
-    def focusable(v: Boolean): DateField[A] =
-        discard(underlying.focusable(v))
-        this
 
     /** True while the picked value differs from the live baseline (compares the underlying
       * ISO string).

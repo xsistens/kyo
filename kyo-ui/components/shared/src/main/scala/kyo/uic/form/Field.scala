@@ -28,7 +28,11 @@ import kyo.uic.TextFormControl
   *     submit button (the only way to re-check a server-side rule). Without this the
   *     button that produced the error would be the one it disables: a deadlock.
   *
-  * Constructed by [[Form.field]] — never directly.
+  * Constructed by [[FieldSpec.declare]] — never directly. Everything decided AT declaration
+  * (the rules it starts with, its triggers, its id, its reveal mode, whether submit may focus
+  * it) is a parameter of that spec and arrives here already settled; what stays on this class
+  * is what a caller can only do AFTERWARDS — [[addRule]] and [[matches]], which need a second
+  * field that does not exist yet when the first is declared.
   */
 final class FormField[A] private[form] (
     private[form] val valueRef: SignalRef[A],
@@ -43,6 +47,8 @@ final class FormField[A] private[form] (
     private var rules: Validator[A],
     triggers: Set[Activation.Field],
     debounce: Duration,
+    revealMode: Reveal,
+    private[form] val focusableFlag: Boolean,
     translator: ErrorTranslator,
     submitCount: Signal[Int]
 )(using CanEqual[A, A]) derives CanEqual:
@@ -68,20 +74,6 @@ final class FormField[A] private[form] (
       */
     def error(using Frame): Signal[Maybe[FieldError]] =
         clientErrorRef.combineLatest(serverVisible).map((c, s) => c.orElse(s))
-
-    /** How this field's error is DISPLAYED — see [[revealWhen]]. Defaults to the touched-gate. */
-    private var revealMode: Reveal = Reveal.WhenTouched
-
-    /** Choose when this field's error is DISPLAYED (inline + in a summary), independent of when
-      * it is re-validated (its [[Activation]] triggers): [[Reveal.WhenTouched]] (default — after
-      * this field's first blur/change, or submit), [[Reveal.OnSubmit]] (quiet while editing,
-      * flags only at submit), [[Reveal.Immediate]] (flags an invalid value before any
-      * interaction), or [[Reveal.Manual]] (never auto-shown; still feeds `isValid` / blocks
-      * submit). Pure + chainable, like [[addRule]] / [[focusable]].
-      */
-    def revealWhen(mode: Reveal): FormField[A] =
-        revealMode = mode
-        this
 
     /** The error as it should be DISPLAYED, gated by [[revealMode]]: the client rule error,
       * else the still-current server error, once the reveal condition opens. Feeds both inline
@@ -130,15 +122,6 @@ final class FormField[A] private[form] (
       */
     def satisfy(code: String, args: Map[String, String] = Map.empty)(p: A => Boolean)(using Frame): FormField[A] =
         addRule(Validator.satisfy(code, args)(p))
-
-    /** Include (default) or exclude this field as a focus target for the form's
-      * focus-first-invalid-on-submit behaviour. A hidden or programmatically-managed
-      * field can opt out with `focusable(false)`; it is still validated, just skipped
-      * when submit picks which invalid field to focus. Returns this field for chaining.
-      */
-    def focusable(v: Boolean): FormField[A] =
-        focusableFlag = v
-        this
 
     /** The field's original default value — the baseline it was constructed with (also
       * where [[Form.reset]] lands a never-rebaselined field). The *live* baseline that
@@ -225,11 +208,6 @@ final class FormField[A] private[form] (
       */
     private def changeObserver(seen: AtomicInt)(using Frame): Unit < Async =
         value.observe(v => seen.getAndIncrement.map(n => if n == 0 then revalidate else onEvent(v)))
-
-    /** Whether submit may focus this field when it is the first invalid one — toggled
-      * by [[focusable]], read by `Form.submit`.
-      */
-    private[form] var focusableFlag: Boolean = true
 
     /** A trigger fired: mark touched and validate. */
     private[form] def onEvent(v: A)(using Frame): Unit < Async =

@@ -75,6 +75,8 @@ class FormValidationTest extends UicTest:
                 rules,
                 Set[Activation.Field](Activation.Submit),
                 Duration.Zero,
+                Reveal.WhenTouched,
+                true,
                 ErrorTranslator.default,
                 count
             ),
@@ -113,8 +115,8 @@ class FormValidationTest extends UicTest:
                 for
                     sink <- Signal.initRef(Chunk.empty[String])
                     form <- mkFocusForm(sink)
-                    a    <- form.field(Validator.required(), Activation.Submit) // empty → invalid
-                    _    <- form.field(Validator.required(), Activation.Submit) // also invalid, but later
+                    a    <- form.field.rules(Validator.required()).on(Activation.Submit).declare // empty → invalid
+                    _    <- form.field.rules(Validator.required()).on(Activation.Submit).declare // also invalid, but later
                     _    <- form.submit(Kyo.unit)
                     f    <- sink.get
                 yield (f, a.domId)
@@ -127,8 +129,8 @@ class FormValidationTest extends UicTest:
                 for
                     sink <- Signal.initRef(Chunk.empty[String])
                     form <- mkFocusForm(sink)
-                    _    <- form.field(Validator.required(), Activation.Submit).map(_.focusable(false))
-                    b    <- form.field(Validator.required(), Activation.Submit)
+                    _    <- form.field.rules(Validator.required()).on(Activation.Submit).focusable(false).declare
+                    b    <- form.field.rules(Validator.required()).on(Activation.Submit).declare
                     _    <- form.submit(Kyo.unit)
                     f    <- sink.get
                 yield (f, b.domId)
@@ -141,7 +143,7 @@ class FormValidationTest extends UicTest:
                 for
                     sink <- Signal.initRef(Chunk.empty[String])
                     form <- mkFocusForm(sink, focus = false)
-                    _    <- form.field(Validator.required(), Activation.Submit)
+                    _    <- form.field.rules(Validator.required()).on(Activation.Submit).declare
                     _    <- form.submit(Kyo.unit)
                     f    <- sink.get
                 yield f.isEmpty
@@ -153,7 +155,7 @@ class FormValidationTest extends UicTest:
             (d0, d1, d2, d3, resetVal, d4) <-
                 for
                     form <- mkForm
-                    f    <- form.field("a", Validator.all[String](), Activation.Submit)
+                    f    <- form.field("a").on(Activation.Submit).declare
                     a0   <- f.isDirty.current // clean: value == baseline "a"
                     _    <- f.valueRef.set("b")
                     a1   <- f.isDirty.current // dirty
@@ -179,9 +181,9 @@ class FormValidationTest extends UicTest:
             (clean, dirtyChild, cleanAfterPristine) <-
                 for
                     form  <- mkForm
-                    _     <- form.field("x", Validator.all[String](), Activation.Submit)
+                    _     <- form.field("x").on(Activation.Submit).declare
                     child <- form.child()
-                    cf    <- child.field("y", Validator.all[String](), Activation.Submit)
+                    cf    <- child.field("y").on(Activation.Submit).declare
                     sig   <- form.isDirty // read after fields + child are declared
                     c0    <- sig.current  // false
                     _     <- cf.valueRef.set("z")
@@ -200,13 +202,17 @@ class FormValidationTest extends UicTest:
             (emptyErrs, filledErrs) <-
                 for
                     f1 <- mkForm
-                    _  <- f1.fieldArray(2)((row, _) => row.field(Validator.required(), Activation.Submit).map(_ => (fragment(): UI)))
+                    _ <- f1.fieldArray(2)((row, _) =>
+                        row.field.rules(Validator.required()).on(Activation.Submit).declare.map(_ => (fragment(): UI))
+                    )
                     s1 <- f1.allErrors
                     _  <- f1.submit(Kyo.unit) // reveals: both empty required rows fail
                     e1 <- s1.current
 
                     f2 <- mkForm
-                    _  <- f2.fieldArray(2)((row, _) => row.field("ok", Validator.required(), Activation.Submit).map(_ => (fragment(): UI)))
+                    _ <- f2.fieldArray(2)((row, _) =>
+                        row.field("ok").rules(Validator.required()).on(Activation.Submit).declare.map(_ => (fragment(): UI))
+                    )
                     s2 <- f2.allErrors
                     _  <- f2.submit(Kyo.unit) // both rows already satisfy required
                     e2 <- s2.current
@@ -224,7 +230,7 @@ class FormValidationTest extends UicTest:
                     form     <- mkForm
                     arr <- form.fieldArray(0) { (row, _) =>
                         for
-                            fld <- row.field("x", Validator.required(), Activation.Submit)
+                            fld <- row.field("x").rules(Validator.required()).on(Activation.Submit).declare
                             _   <- captured.updateAndGet(_ :+ fld)
                         yield (fragment(): UI)
                     }
@@ -245,6 +251,76 @@ class FormValidationTest extends UicTest:
             assert(!d3, "removing the dirty row makes the form clean again")
     }
 
+    // ---- what a field DECLARES, and what it declares by saying nothing ----
+    //
+    // Every slot of a declaration has a default, and the defaults are the whole reason the
+    // builder exists: the old constructor form made a caller spell "no rules" as
+    // `Validator.all[String]()` and "no triggers" as `Activation.Submit`, both of which read
+    // as omissions. These pin what saying nothing now means.
+
+    "a field that declares nothing re-checks on blur and on change" in {
+        for
+            form <- mkForm
+            f    <- form.field("").declare
+        yield
+            assert(f.wantsBlur, "the reader leaving the field is a verdict")
+            assert(f.wantsChange, "and so is every edit after that")
+    }
+
+    // The other half of the default is Reveal.WhenTouched, which is what keeps the FIRST
+    // keystroke silent: activation says when a verdict is recomputed, reveal says when it is
+    // shown. Together they are 'reward early, punish late'.
+    "the default keeps an untouched field quiet, and speaks once it has been touched" in {
+        for
+            form   <- mkForm
+            f      <- form.field("").rules(Validator.required()).declare
+            _      <- f.revalidate
+            before <- f.visibleError.current
+            _      <- f.onEvent("")
+            after  <- f.visibleError.current
+        yield
+            assert(before.isEmpty, "invalid from the start, and says nothing about it")
+            assert(after.exists(_.code == "required"), "once touched, the same verdict is shown")
+    }
+
+    "on(Activation.Submit) is how a field opts OUT — it adds no trigger of its own" in {
+        for
+            form <- mkForm
+            f    <- form.field("").rules(Validator.required()).on(Activation.Submit).declare
+            // Submit validates unconditionally whatever the set says, which is why declaring
+            // Submit alone means 'never re-check while the reader is in the field'.
+            v <- f.validateForSubmit
+        yield
+            assert(!f.wantsBlur, "no blur trigger")
+            assert(!f.wantsChange, "no change trigger")
+            assert(v.exists(_.code == "required"), "and submit still checks it")
+    }
+
+    "a field that declares no rules passes every value" in {
+        for
+            form <- mkForm
+            f    <- form.field("").declare
+            v    <- f.validateForSubmit
+        yield assert(v.isEmpty, "Validator.none is the default, so there is nothing to fail")
+    }
+
+    "a chosen domId is the one bind stamps, and the one focus-first-invalid goes to" in {
+        import kyo.uic
+        for
+            sink <- Signal.initRef(Chunk.empty[String])
+            form <- mkFocusForm(sink)
+            f    <- form.field("").rules(Validator.required()).domId("login-username").declare
+            html <- UI.runRender(uic.Input().bind(f)).take(1).run
+            _    <- form.submit(Kyo.unit)
+            went <- sink.get
+        yield
+            assert(f.domId == "login-username", "the mint is skipped when the caller chose")
+            assert(html.mkString.contains("""id="login-username""""), "and bind stamps what the caller chose")
+            // The half the refused workaround (`.id(...)` after bind) broke silently.
+            assert(went.headMaybe.contains("login-username"), "submit can still reach the field")
+        end for
+    }
+
     "the controls that could not join a form now bind end to end" in {
         import kyo.uic
         // Slider over a numeric field: bind wires the value ref, the field's id and the
@@ -253,7 +329,7 @@ class FormValidationTest extends UicTest:
             (beforeSubmit, afterSubmit) <-
                 for
                     form  <- mkForm
-                    field <- form.field(3.0, Validator.satisfy[Double]("min-volume")(_ >= 5.0), Activation.Submit)
+                    field <- form.field(3.0).rules(Validator.satisfy[Double]("min-volume")(_ >= 5.0)).on(Activation.Submit).declare
                     bound = uic.Slider().min(0).max(10).bind(field)
                     pre <- UI.runRender(bound).take(1).run
                     // Marks the field touched AND validates — the same path a real Blur takes,
@@ -267,11 +343,10 @@ class FormValidationTest extends UicTest:
             (small, tooBig) <-
                 for
                     form <- mkForm
-                    field <- form.field(
-                        Seq.empty[UI.FilePayload],
-                        Validator.satisfy[Seq[UI.FilePayload]]("file-too-large")(_.forall(_.size <= 2048)),
-                        Activation.Submit
-                    )
+                    field <- form.field(Seq.empty[UI.FilePayload])
+                        .rules(Validator.satisfy[Seq[UI.FilePayload]]("file-too-large")(_.forall(_.size <= 2048)))
+                        .on(Activation.Submit)
+                        .declare
                     _   <- field.valueRef.set(Seq(UI.FilePayload("cv.pdf", 1024L, "application/pdf", "…")))
                     ok  <- field.validateForSubmit
                     _   <- field.valueRef.set(Seq(UI.FilePayload("huge.pdf", 99999L, "application/pdf", "…")))
@@ -301,7 +376,7 @@ class FormValidationTest extends UicTest:
                     form     <- mkForm
                     arr <- form.fieldArray(0) { (row, _) =>
                         for
-                            fld <- row.field("ok", Validator.required(), Activation.Change)
+                            fld <- row.field("ok").rules(Validator.required()).on(Activation.Change).declare
                             _   <- captured.updateAndGet(_ :+ fld)
                         yield (fragment(): UI)
                     }
@@ -333,7 +408,7 @@ class FormValidationTest extends UicTest:
                     ctls <- AtomicRef.init(Chunk.empty[FieldArray.Row])
                     form <- mkForm
                     arr <- form.fieldArray(0) { (row, ctl) =>
-                        ctls.updateAndGet(_ :+ ctl).andThen(row.field(Validator.all[String](), Activation.Submit).map(_ =>
+                        ctls.updateAndGet(_ :+ ctl).andThen(row.field.on(Activation.Submit).declare.map(_ =>
                             (fragment(): UI)
                         ))
                     }
@@ -357,7 +432,7 @@ class FormValidationTest extends UicTest:
                 for
                     form <- mkForm
                     arr <- form.fieldArrayOf[FormField[String]](2) { (row, _) =>
-                        row.field(Validator.all[String](), Activation.Submit).map(f => ((fragment(): UI), f))
+                        row.field.on(Activation.Submit).declare.map(f => ((fragment(): UI), f))
                     }
                     _ = arr.satisfy("dup") { rows =>
                         for
@@ -424,7 +499,7 @@ class FormValidationTest extends UicTest:
             (invalidWhenBad, validWhenGood) <-
                 for
                     form <- mkForm
-                    f    <- form.field(Validator.all[String](), Activation.Submit)
+                    f    <- form.field.on(Activation.Submit).declare
                     _ = f.satisfy("must-be-ok")(_ == "ok") // pure + chainable, mirrors form.satisfy
                     _  <- f.valueRef.set("nope")
                     e1 <- f.validateForSubmit
@@ -441,8 +516,8 @@ class FormValidationTest extends UicTest:
             (ungatedInvalid, visibleStillValid, ungatedValid, visibleValid) <-
                 for
                     form    <- mkForm
-                    f       <- form.field(Validator.required(), Activation.Submit) // touched=false, submitCount=0
-                    ungated <- form.isValid()                                      // onlyVisible = false
+                    f       <- form.field.rules(Validator.required()).on(Activation.Submit).declare // touched=false, submitCount=0
+                    ungated <- form.isValid()                                                       // onlyVisible = false
                     visible <- form.isValid(onlyVisible = true)
                     _  <- f.validateForSubmit // records the required error, but the field stays untouched / unrevealed
                     u1 <- ungated.current     // raw error present → invalid
@@ -464,15 +539,15 @@ class FormValidationTest extends UicTest:
             (rawAtMount, hiddenAtMount, revealedAfterChange, clearedWhenValid) <-
                 for
                     form <- mkForm
-                    f    <- form.field(Validator.required(), Activation.Change) // touched = false
-                    _    <- f.revalidate                                        // the observer's mount emission → validate SILENTLY
-                    e0   <- f.error.current                                     // raw error computed
-                    v0   <- f.visibleError.current                              // but NOT displayed (untouched, no submit)
-                    _    <- f.onEvent("")                                       // a real change (still empty) → touched + validate
-                    v1   <- f.visibleError.current                              // now revealed inline
-                    _    <- f.valueRef.set("x")
-                    _    <- f.onEvent("x")                                      // change to a valid value → re-validates, clears
-                    v2   <- f.visibleError.current
+                    f    <- form.field.rules(Validator.required()).on(Activation.Change).declare // touched = false
+                    _  <- f.revalidate           // the observer's mount emission → validate SILENTLY
+                    e0 <- f.error.current        // raw error computed
+                    v0 <- f.visibleError.current // but NOT displayed (untouched, no submit)
+                    _  <- f.onEvent("")          // a real change (still empty) → touched + validate
+                    v1 <- f.visibleError.current // now revealed inline
+                    _  <- f.valueRef.set("x")
+                    _  <- f.onEvent("x")         // change to a valid value → re-validates, clears
+                    v2 <- f.visibleError.current
                 yield (e0.isDefined, v0.isEmpty, v1.isDefined, v2.isEmpty)
         yield
             assert(rawAtMount, "mount: raw error is computed")
@@ -486,7 +561,7 @@ class FormValidationTest extends UicTest:
             (fieldTagged, fieldIdMatches, formNoAnchor, formWithAnchor) <-
                 for
                     form <- mkForm
-                    f    <- form.field(Validator.required(), Activation.Submit)
+                    f    <- form.field.rules(Validator.required()).on(Activation.Submit).declare
                     _    <- form.submit(Kyo.unit)               // reveals the field's required error
                     _    <- form.raise(FieldError("no-anchor")) // anchor not set yet → Absent
                     es1  <- form.errorEntries
@@ -515,8 +590,8 @@ class FormValidationTest extends UicTest:
             (invalidWhenOff, validWhenMet, hiddenPreSubmit, shownPostSubmit, immediateShown) <-
                 for
                     form <- mkForm
-                    a    <- form.field(0, Validator.all[Int](), Activation.Submit)
-                    b    <- form.field(0, Validator.all[Int](), Activation.Submit)
+                    a    <- form.field(0).on(Activation.Submit).declare
+                    b    <- form.field(0).on(Activation.Submit).declare
                     _ = form.satisfy("sum-10")(Signal.combineLatestAll(Seq(a.value, b.value)).map(_.sum == 10))
                     validSig <- form.isValid()
                     v0       <- validSig.current      // 0+0 ≠ 10 → invariant fails → invalid
@@ -530,7 +605,7 @@ class FormValidationTest extends UicTest:
                     post     <- es.current            // now revealed
 
                     form2 <- mkForm
-                    x     <- form2.field(0, Validator.all[Int](), Activation.Submit)
+                    x     <- form2.field(0).on(Activation.Submit).declare
                     _ = form2.satisfy("x-pos", Reveal.Immediate)(x.value.map(_ > 0))
                     es2 <- form2.errorEntries
                     imm <- es2.current // Reveal.Immediate + failing → shown at once
@@ -569,7 +644,7 @@ class FormValidationTest extends UicTest:
             disabled <-
                 for
                     form <- mkForm
-                    _    <- form.field(Validator.required(), Activation.Submit)
+                    _    <- form.field.rules(Validator.required()).on(Activation.Submit).declare
                     _    <- form.raise(FieldError("invalid-credentials"))
                     gate <- form.submitDisabled
                     d    <- gate.signal.current
@@ -657,7 +732,7 @@ class FormValidationTest extends UicTest:
             (initial, tooLow, ok, rounded) <-
                 for
                     form <- mkForm
-                    nf   <- form.numberField[Int](1, Validator.satisfy[Int]("min-3")(_ >= 3), Activation.Submit)
+                    nf   <- form.numberField[Int](1).rules(Validator.satisfy[Int]("min-3")(_ >= 3)).on(Activation.Submit).declare
                     v0   <- nf.value.current                // initial 1
                     r0   <- nf.underlying.validateForSubmit // 1 < 3 → fails
                     _    <- nf.underlying.valueRef.set(5.0)
@@ -678,11 +753,10 @@ class FormValidationTest extends UicTest:
             (emptyValue, emptyValid, parsed, pastFails, futureOk) <-
                 for
                     form <- mkForm
-                    df <- form.dateField[LocalDate](
-                        Absent,
-                        Validator.satisfy[LocalDate]("after-2020")(_.isAfter(LocalDate.of(2020, 1, 1))),
-                        Activation.Submit
-                    )
+                    df <- form.dateField[LocalDate](Absent)
+                        .rules(Validator.satisfy[LocalDate]("after-2020")(_.isAfter(LocalDate.of(2020, 1, 1))))
+                        .on(Activation.Submit)
+                        .declare
                     v0 <- df.value.current                // empty → Absent
                     r0 <- df.underlying.validateForSubmit // empty → the date rule is skipped
                     _  <- df.underlying.valueRef.set("2019-06-01")
@@ -707,7 +781,7 @@ class FormValidationTest extends UicTest:
             (rightZone, rightDay, midnight, roundTrips) <-
                 for
                     form <- mkForm
-                    df   <- form.dateField[ZonedDateTime](Absent, Validator.all[ZonedDateTime](), Activation.Submit)
+                    df   <- form.dateField[ZonedDateTime](Absent).on(Activation.Submit).declare
                     _    <- df.underlying.valueRef.set("2026-08-01")
                     v    <- df.value.current
                     iso  <- df.underlying.valueRef.get
