@@ -608,6 +608,14 @@ object Form:
       * after submit (`submitCount > 0`), and each field error is a button that jumps focus to
       * its field; form-level errors render as plain rows.
       *
+      * The jump rows say `type="button"` because the summary is meant to sit inside real
+      * markup, and a `<button>` without a type is a SUBMIT button: put this near the submit
+      * control of a native `<form>` and the browser would submit on a click meant to move
+      * focus, and — being the first submit button in the form — would answer Enter in a text
+      * field as well. A [[Form]] is a validation scope and renders no element of its own, so
+      * whether a `<form>` is there at all is the caller's choice, which is precisely why this
+      * cannot be left to the default.
+      *
       * For anything more bespoke (custom layout, grouping, inline placement), build your own
       * from `scope.errorEntries` — this is just a sensible default.
       */
@@ -623,7 +631,7 @@ object Form:
                                 case Present(id) =>
                                     (button.cssClass(
                                         "p-uic-invalid-message"
-                                    ).cssClass("p-uic-error-link").onClick(scope.focus(id))(msg): UI)
+                                    ).cssClass("p-uic-error-link").jsProp("type", "button").onClick(scope.focus(id))(msg): UI)
                                 case Absent =>
                                     (div.cssClass("p-uic-invalid-message")(msg): UI)
                             end match

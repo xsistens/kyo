@@ -1932,7 +1932,7 @@ A row builder runs with `Async` only and no `Scope`, because rows are added late
 
 A form long enough to scroll pushes its first error off screen, and a rule attached to the whole scope has no field to sit under in the first place. Both want one list at the top. `Form.errorSummary(scope)` is an opinionated default: it appears only after the first submit, renders each field error as a button that jumps focus to its field, and renders form-level errors as plain rows. It is a helper over the data a form already exposes, not a method on the form, because a summary is a view and views are use-case specific.
 
-For anything bespoke, build from `scope.errorEntries`, a `Signal[Chunk[Form.ErrorEntry]]` where each entry carries the error and the id of its field (`Absent` for a form-level error). Pair it with `scope.submitCount` for the display gate and `scope.focus(id)` for the jump.
+For anything bespoke, build from `scope.errorEntries`, a `Signal[Chunk[Form.ErrorEntry]]` where each entry carries the error and the id of its field (`Absent` for a form-level error). Pair it with `scope.submitCount` for the display gate and `scope.focus(id)` for the jump. Give the jump rows `jsProp("type", "button")`, as the built-in summary does: a `<button>` without a type is a *submit* button, so inside a native `<form>` a click meant to move focus submits the form instead, and the first such row answers Enter in a text field as well.
 
 ## Putting it together
 

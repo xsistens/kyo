@@ -150,6 +150,39 @@ class FormValidationTest extends UicTest:
         yield assert(noFocus, "no focus command is emitted when the behaviour is disabled")
     }
 
+    "an errorSummary jump row says type=button, so it cannot submit a form it sits in" in {
+        for
+            (links, linkType, linkIsButton, plainIsButton) <-
+                for
+                    form <- mkForm
+                    _    <- form.field.rules(Validator.required()).on(Activation.Submit).declare
+                    // A failed submit is what opens the summary: it fills the entry AND lifts submitCount off 0.
+                    _   <- form.submit(Kyo.unit)
+                    _   <- form.raise(FieldError("form-level")) // no anchor → a plain row, nothing to jump to
+                    ui  <- Form.errorSummary(form)
+                    els <- elements(ui)
+                yield
+                    val jump = els.filter(_.attrs.cssClasses.contains("p-uic-error-link"))
+                    val plain = els.filter(e =>
+                        e.attrs.cssClasses.contains("p-uic-invalid-message") && !e.attrs.cssClasses.contains("p-uic-error-link")
+                    )
+                    (
+                        jump.size,
+                        jump.headMaybe.map(_.attrs.jsProps.getOrElse("type", "<none>")).getOrElse("<no row>"),
+                        jump.forall(_.isInstanceOf[UI.Ast.Button]),
+                        plain.exists(_.isInstanceOf[UI.Ast.Button])
+                    )
+        yield
+            assert(links == 1, s"one field error → one jump row; got $links")
+            assert(linkIsButton, "the jump row is a <button>")
+            // Without this the browser default applies and the row is a SUBMIT button: inside a native
+            // <form> a click meant to move focus submits instead, and Enter in a text field picks it as
+            // the form's default button.
+            assert(linkType == "button", s"the jump row declares type=button; got $linkType")
+            assert(!plainIsButton, "a form-level row has nothing to jump to and stays a plain element")
+        end for
+    }
+
     "dirty tracking: edit → dirty, markPristine → clean, reset returns to the rebaselined baseline" in {
         for
             (d0, d1, d2, d3, resetVal, d4) <-
