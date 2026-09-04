@@ -413,6 +413,7 @@ lazy val kyoJVM: Project = project
         `kyo-ui`.jvm,
         `kyo-ui-components`.jvm,
         `kyo-ui-components-gen`,
+        `kyo-ui-devtools`.jvm,
         `kyo-apollo`.jvm,
         `kyo-apollo-testing`.jvm,
         `kyo-apollo-ui`.jvm,
@@ -501,6 +502,7 @@ lazy val kyoJS = project
         `kyo-slack`.js,
         `kyo-ui`.js,
         `kyo-ui-components`.js,
+        `kyo-ui-devtools`.js,
         `kyo-apollo`.js,
         `kyo-apollo-testing`.js,
         `kyo-apollo-ui`.js,
@@ -3145,6 +3147,30 @@ lazy val `kyo-ui-components` =
         // `openssl-native-settings` as in kyo-ui: kyo-net's bundled TLS shim compiles into THIS binary,
         // and nativeConfig does not cross a project dependency, so without the system OpenSSL flags the
         // test link dies on undefined SSL_* symbols.
+        .nativeSettings(`native-settings`, `openssl-native-settings`)
+        .jsSettings(
+            `js-settings`,
+            scalaJSLinkerConfig ~= { _.withModuleKind(ModuleKind.CommonJSModule) }
+        )
+        // No ModuleKind here: the Wasm backend requires ESModule, which WasmPlatform pins.
+        .wasmSettings(`wasm-settings`)
+
+// Render devtools: the aggregation and the browser overlay that make a running app's re-render
+// behaviour visible. A SEPARATE artifact on purpose. kyo-ui carries only the reporting SPI, which is
+// a `Local` read per paint and nothing when no sink is installed; the overlay is several hundred
+// lines of DOM code that a production Scala.js bundle has no business linking, and a runtime flag
+// would not let dead-code elimination decide that. So enabling devtools is a dependency plus one
+// line at the app root, and shipping without them is the default rather than a build option.
+lazy val `kyo-ui-devtools` =
+    crossProject(JSPlatform, JVMPlatform, NativePlatform, WasmPlatform)
+        .crossType(CrossType.Full)
+        .in(file("kyo-ui/devtools"))
+        .dependsOn(`kyo-ui`)
+        .withKyoTest
+        .settings(`kyo-settings`)
+        .jvmSettings(mimaCheck(false))
+        // As in kyo-ui and kyo-ui-components: kyo-net's bundled TLS shim compiles into THIS binary and
+        // nativeConfig does not cross a project dependency, so the test link needs the system OpenSSL flags.
         .nativeSettings(`native-settings`, `openssl-native-settings`)
         .jsSettings(
             `js-settings`,
