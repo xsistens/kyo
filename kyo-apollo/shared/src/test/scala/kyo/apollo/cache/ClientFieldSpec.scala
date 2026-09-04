@@ -26,7 +26,9 @@ import scala.collection.mutable.ListBuffer
   *   3. a watcher whose read visited that record re-emits after the write,
   *   4. a server write-back does not clobber the local value,
   *   5. the field is pruned from the printed document,
-  *   6. writing the same value twice publishes nothing the second time,
+  *   6. writing the same value twice publishes nothing the second time, and the
+  *      plural `writeAll` marks N entities in ONE broadcast where a loop makes N
+  *      (asserted as the contrast, since the broadcast count IS the cost),
   *   7. a NETWORK emission carries the default, because the wire has no such
   *      field — pinned as KNOWN, not as correct (see the case's comment).
   *
@@ -214,6 +216,58 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
                 _ = assert(first == Set("Edge:c1"))
                 again <- selected.write(client, "c1", true)
                 _ = assert(again.isEmpty, s"identical re-write reported $again")
+            yield assert(true)
+            end for
+        }
+
+        // --- 6b. the plural write is ONE broadcast ------------------------------
+
+        "writeAll marks many entities in a single broadcast, where a loop makes N" in {
+            // The whole point of the plural form, asserted as the difference it makes
+            // rather than as its result: a broadcast wakes every watcher whose last
+            // read touched one of these records, and each of those re-reads its WHOLE
+            // operation. Counting the broadcasts is counting those re-reads.
+            val (client, _) = cachedClient()
+            val batches     = ListBuffer.empty[Set[String]]
+            for
+                _       <- Sync.defer(discard(client.apolloStore.addChangedKeysListener(ks => discard(batches += ks))))
+                changed <- selected.writeAll(client, Seq("c1" -> true, "c2" -> true, "c3" -> true))
+                _ = assert(changed == Set("Edge:c1", "Edge:c2", "Edge:c3"))
+                _ = assert(batches.size == 1, s"writeAll published ${batches.size} times")
+                _ = assert(batches.head == changed)
+                // The values really landed — a single broadcast of nothing would also
+                // satisfy the count above.
+                values <- Kyo.foreach(Seq("c1", "c2", "c3"))(selected.read(client, _))
+                _ = assert(values == Seq(true, true, true))
+                // The contrast, measured rather than asserted from the docs.
+                _ = batches.clear()
+                _ <- Kyo.foreachDiscard(Seq("c1", "c2", "c3"))(selected.write(client, _, false))
+                _ = assert(batches.size == 3, s"three separate writes published ${batches.size} times")
+            yield assert(true)
+            end for
+        }
+
+        "writeAll of nothing writes nothing and publishes nothing" in {
+            // A broadcast with no change behind it is exactly the cost this exists to
+            // remove, so the empty batch must not make one.
+            val (client, _) = cachedClient()
+            val batches     = ListBuffer.empty[Set[String]]
+            for
+                _       <- Sync.defer(discard(client.apolloStore.addChangedKeysListener(ks => discard(batches += ks))))
+                changed <- selected.writeAll(client, Seq.empty)
+                _ = assert(changed.isEmpty)
+                _ = assert(batches.isEmpty, s"empty writeAll published $batches")
+            yield assert(true)
+            end for
+        }
+
+        "writeAll collapses a repeated id the way one response would, later wins" in {
+            val (client, _) = cachedClient()
+            for
+                changed <- selected.writeAll(client, Seq("c1" -> true, "c1" -> false))
+                _ = assert(changed == Set("Edge:c1"))
+                value <- selected.read(client, "c1")
+                _ = assert(!value, "the later entry won")
             yield assert(true)
             end for
         }

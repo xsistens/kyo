@@ -92,6 +92,25 @@ final class ClientField[Origin, R <: AnyNamedTuple, V] private[apollo] (
     def write(client: ApolloClient, id: String, value: V)(using Frame): Set[String] < Sync =
         Sync.defer(client.apolloStore.writeFragment(fragment, CacheKey(parentType, id), row(value)))
 
+    /** Write the field on many entities at once — one cache merge, one changed-keys
+      * broadcast, and therefore ONE re-read per watcher instead of N.
+      *
+      * [[write]] in a loop is correct and linear in the wrong place: each call
+      * publishes, and every watcher whose last read touched one of those records
+      * re-reads its whole operation. Marking twenty rows of a list that a query
+      * watcher is reading costs that watcher twenty full re-reads of the list. A
+      * caller who knows all N keys before the first write — a range selection, a
+      * "clear all" — should be able to say so, and this is how.
+      *
+      * Same value semantics as N calls to [[write]], including the duplicate rule:
+      * two entries naming one `id` land as one record, later wins.
+      */
+    def writeAll(client: ApolloClient, values: Seq[(String, V)])(using Frame): Set[String] < Sync =
+        Sync.defer(client.apolloStore.writeFragments(
+            fragment,
+            values.map((id, value) => (CacheKey(parentType, id), row(value)))
+        ))
+
     /** Write the field on the `QUERY_ROOT` record — the home for global, non-entity
       * client state (`ClientField.create[RootQuery, …](...)`).
       */

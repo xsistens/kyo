@@ -10,6 +10,7 @@ import kyo.apollo.cache.normalized.internal.Normalizer
 import kyo.apollo.exception.CacheMissException
 import kyo.apollo.json.Json
 import kyo.discard
+import scala.collection.mutable
 
 /** The coordinator that turns typed operation data into cache records and back,
   * over a pluggable [[NormalizedCache]] backend.
@@ -247,6 +248,62 @@ final class ApolloStore(
         data: D,
         cacheHeaders: CacheHeaders = CacheHeaders.None
     ): Set[String] =
+        val changedKeys = mergeRecords(fragmentRecords(fragment, cacheKey, data).values, cacheHeaders)
+        publish(changedKeys)
+        changedKeys
+    end writeFragment
+
+    /** Write `fragment` at MANY cache keys as one store round: every entry is
+      * normalized, the records are merged in a single [[NormalizedCache.merge]], and
+      * the union of the changed keys is [[publish]]ed once.
+      *
+      * The difference from a loop over [[writeFragment]] is not the merge but the
+      * broadcast. Each `publish` wakes every watcher whose last read touched one of
+      * those records, and each of those re-reads its WHOLE operation — so N separate
+      * writes to rows of one list cost a watcher N full re-reads of the list, while
+      * this costs one. That is the shape a caller who knows all N keys up front
+      * should be able to express, and the reason
+      * [[kyo.apollo.ClientField.writeAll]] exists.
+      *
+      * Two entries may normalize to the same record key (the same entity written
+      * twice, or a shared nested object). They are unioned field-wise in argument
+      * order, later wins — the rule [[Normalizer]] already applies to two occurrences
+      * of one key inside a single response, so a batch behaves like the one response
+      * it stands in for.
+      *
+      * An empty `entries` writes nothing and publishes nothing: a broadcast with no
+      * change behind it is the cost this method exists to remove.
+      */
+    def writeFragments[D](
+        fragment: Fragment[D],
+        entries: Seq[(CacheKey, D)],
+        cacheHeaders: CacheHeaders = CacheHeaders.None
+    ): Set[String] =
+        if entries.isEmpty then Set.empty
+        else
+            val merged = mutable.LinkedHashMap.empty[String, Record]
+            entries.foreach { (cacheKey, data) =>
+                fragmentRecords(fragment, cacheKey, data).foreach { (key, record) =>
+                    discard(merged.updateWith(key) {
+                        case Some(existing) => Some(existing.copy(fields = existing.fields ++ record.fields))
+                        case None           => Some(record)
+                    })
+                }
+            }
+            val changedKeys = mergeRecords(merged.values, cacheHeaders)
+            publish(changedKeys)
+            changedKeys
+        end if
+    end writeFragments
+
+    /** Normalize one fragment write into records, without touching the cache — the
+      * step [[writeFragment]] and [[writeFragments]] share.
+      */
+    private def fragmentRecords[D](
+        fragment: Fragment[D],
+        cacheKey: CacheKey,
+        data: D
+    ): Map[String, Record] =
         // `addTypename` semantics for the fragment ROOT: the normalizer stamps a
         // static `__typename` onto NESTED objects (see Normalizer.compositeValue),
         // but the root object lands in `normalizeObject` directly — so a fragment
@@ -259,13 +316,9 @@ final class ApolloStore(
         val enriched =
             if encoded.contains("__typename") then encoded
             else encoded + ("__typename" -> Json.JStr(fragment.rootField.fieldType.leafType.name))
-        val records =
-            new Normalizer(fragmentVariablesOf(fragment), cacheKey.key, cacheKeyGenerator, fieldPolicies)
-                .normalize(enriched, fragment.rootField)
-        val changedKeys = mergeRecords(records.values, cacheHeaders)
-        publish(changedKeys)
-        changedKeys
-    end writeFragment
+        new Normalizer(fragmentVariablesOf(fragment), cacheKey.key, cacheKeyGenerator, fieldPolicies)
+            .normalize(enriched, fragment.rootField)
+    end fragmentRecords
 
     /** Reassemble `fragment`'s typed `data` from the record stored under
       * `cacheKey`.

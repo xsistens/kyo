@@ -118,6 +118,7 @@ widening to `FetchPolicy` would break every call site and collide in the context
 | Feature | Status | Entry point |
 |---|---|---|
 | `@client` fields in the normalized cache (typed, schema-shaped) | **PRESENT** | `ClientField.scala`, `api/ClientFieldStructure.scala` |
+| Batched cache writes with one broadcast (Apollo Client's `cache.batch`) | **PRESENT** | `ApolloStore.writeFragments`, `ClientField.writeAll` — N keys, one merge, one changed-keys publish, so a watcher re-reads once instead of N times |
 | Relay-style connection merge + imperative `fetchMore` | **PRESENT** | `api/FieldPolicy.scala` (`ConnectionFieldPolicy`); `ApolloPagination.scala` |
 | A paginated query carries the same `skip` gate as a plain one | **PRESENT (ahead)** | react has no paginated hook to skip; `Apollo.paginatedQuery(initial, skip, mode)(page)` parks one and keeps its accumulated pages |
 | Codegen: schema types + selectors, no per-operation hooks (the V4-echoed foot-gun) | **PRESENT** | `kyo-apollo-codegen/…/ApolloClientWriter.scala` |
