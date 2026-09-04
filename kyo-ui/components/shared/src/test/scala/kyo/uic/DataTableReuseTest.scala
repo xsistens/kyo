@@ -139,4 +139,43 @@ class DataTableReuseTest extends UicTest:
         }
     }
 
+    "the spotify example's own configuration, one client field written" in {
+        // The shape that motivated all of this, assembled feature for feature: the selection is
+        // derived from the SAME signal as the rows, because it lives in the row's own data, and the
+        // table also carries a sort ref, a context row, a shift anchor and modifier selection.
+        Scope.run {
+            val counted = new Renders
+            def selectedOf(rs: Seq[Item]): Set[String] =
+                rs.collect { case r if r.name.endsWith("*") => r.id }.toSet
+            for
+                rows   <- Signal.initRef[Seq[Item]](items)
+                sort   <- Signal.initRef(List.empty[uic.SortKey])
+                ctx    <- Signal.initRef(Absent: Maybe[String])
+                anchor <- Signal.initRef(Absent: Maybe[String])
+                err    <- Signal.initRef(Absent: Maybe[(CellPath, kyo.uic.form.FieldError)])
+                ui = uic.DataTable[Item]().id("t").rows(rows).rowKey(_.id).sort(sort)
+                    .stripedRows(true).size(uic.Size.Small).contextMenuRow(ctx)
+                    .emptyContent("Nothing to play here.")
+                    .columns(uic.column("Name") { i =>
+                        counted.bump(); i.name
+                    })
+                    .selectionMode(uic.SelectionMode.Multiple)
+                    .metaKeySelection(true)
+                    .selectionAnchor(anchor)
+                    .selected(rows.map(selectedOf))
+                    .onSelectionChange(_ => ())
+                    .wired("t", Map.empty, err, _ => (), anchor = Present(anchor))
+                root <- ReactiveUI.normalize(ui, Seq.empty)
+                _    <- ReactiveUI.subscribe(root, quiet)
+                _    <- Async.sleep(150.millis)
+                _ = counted.reset()
+                // A click writes the client field on one row, and the query re-emits the list.
+                _ <- rows.set(items.updated(5, Item("k5", "row-5*")))
+                _ <- Async.sleep(400.millis)
+                after = counted.get
+            yield assert(after == 1, s"one row was written and $after of $rowCount rendered")
+            end for
+        }
+    }
+
 end DataTableReuseTest

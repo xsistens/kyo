@@ -123,25 +123,76 @@ final case class ContextMenu private (
         // most here: `openRef` IS the mount's state, so resolving one level higher would
         // close the menu on the right-click that opened it — which is the whole reason this
         // slot could not simply be rebuilt per target.
-        MenuRender.resolveDisabled(itemsV) { items =>
-            val self = copy(itemsV = items, idV = if idV.isDefined then idV else Present(base))
-            openRef.render { isOpen =>
-                focus.render { f =>
-                    MenuRender.renderAll(refs) { open =>
-                        self.body(
-                            isOpen,
-                            Present(openRef),
-                            f,
-                            Present(focus),
-                            open.withDefaultValue(false),
-                            Present(refs),
-                            Present(at)
-                        )
+        //
+        // What the regions may NOT contain is the target: the caller's content depends on none
+        // of this, and putting it inside meant that an item reading a signal — a label counting
+        // the selection, a `disabled` following it — rebuilt everything the menu was attached to
+        // whenever that signal moved. Measured on a twenty-row keyed list under a menu whose label
+        // counts the rows: one row changed, eighty-one rendered. So the shell and the right-click
+        // that opens it are built once, out here, and only the panel is placed reactively.
+        val self = copy(idV = if idV.isDefined then idV else Present(base))
+        self.targetShell(Present(self.openHandler(Present(openRef), Present(focus), Present(refs), Present(at)))) {
+            List(MenuRender.resolveDisabled(itemsV) { items =>
+                val resolved = self.copy(itemsV = items)
+                openRef.render { isOpen =>
+                    focus.render { f =>
+                        MenuRender.renderAll(refs) { open =>
+                            UI.fragment(resolved.panelFor(
+                                isOpen,
+                                Present(openRef),
+                                f,
+                                Present(focus),
+                                open.withDefaultValue(false),
+                                Present(refs),
+                                Present(at)
+                            )*)
+                        }
                     }
                 }
-            }
+            })
         }
     end wired
+
+    /** The target region and whatever is asked to hang inside it.
+      *
+      * The children are the caller's own content, and they depend on nothing this component
+      * watches — not the open state, not an item's label, not an item's `disabled`. Which is why
+      * they are assembled HERE, outside every region, and only the panel is placed reactively:
+      * rebuilding them would take with them every keyed list, open editor and scroll position the
+      * caller put under the menu, invisibly, since the same markup comes back out.
+      */
+    private def targetShell(onOpen: Maybe[MouseEvent => Any < Async])(content: List[UI])(using Frame): UI =
+        var target = div
+            .cssClass("p-uic-contextmenu-target")
+            .cssClass("p-uic-overlay-anchor")
+            .aria("haspopup", "menu")
+        // The wrapped region is this component's root, so the element id lands here (HasElementId),
+        // and the panel's derived id hangs off it.
+        idV.foreach(b => target = target.id(b))
+        onOpen.foreach(h => target = target.onContextMenu(h))
+        target((kids ++ content).map(toChild)*)
+    end targetShell
+
+    /** The right-click that opens the menu. Reads only refs, so it is built once. */
+    private def openHandler(
+        openRef: Maybe[SignalRef[Boolean]],
+        focusRef: Maybe[SignalRef[List[Int]]],
+        refs: Maybe[List[(List[Int], SignalRef[Boolean])]],
+        at: Maybe[SignalRef[Maybe[UI.Point]]]
+    )(using Frame): MouseEvent => Any < Async =
+        val resetTree: Any < Async = refs match
+            case Present(rs) => MenuRender.openExactly(rs, Absent)
+            case Absent      => ()
+        val resetFocus: Any < Async = focusRef match
+            case Present(fr) => fr.set(Nil)
+            case Absent      => ()
+        e =>
+            // The point is written BEFORE the open, so the panel never exists without one to be at.
+            (openRef, at) match
+                case (Present(r), Present(pt)) =>
+                    for _ <- resetTree; _ <- resetFocus; _ <- pt.set(e.position); _ <- r.set(true) yield ()
+                case _ => ()
+    end openHandler
 
     private def body(
         isOpen: Boolean,
@@ -152,6 +203,20 @@ final case class ContextMenu private (
         refs: Maybe[List[(List[Int], SignalRef[Boolean])]],
         at: Maybe[SignalRef[Maybe[UI.Point]]]
     )(using Frame): UI =
+        targetShell(if openRef.isDefined then Present(openHandler(openRef, focusRef, refs, at)) else Absent)(
+            panelFor(isOpen, openRef, focus, focusRef, open, refs, at)
+        )
+
+    /** The overlay panel, which is the only part of this component that any of its signals reach. */
+    private def panelFor(
+        isOpen: Boolean,
+        openRef: Maybe[SignalRef[Boolean]],
+        focus: List[Int],
+        focusRef: Maybe[SignalRef[List[Int]]],
+        open: Map[List[Int], Boolean],
+        refs: Maybe[List[(List[Int], SignalRef[Boolean])]],
+        at: Maybe[SignalRef[Maybe[UI.Point]]]
+    )(using Frame): List[UI] =
         def resetTree: Any < Async =
             refs match
                 case Present(rs) => MenuRender.openExactly(rs, Absent)
@@ -168,13 +233,6 @@ final case class ContextMenu private (
             openRef match
                 case Present(r) => for _ <- r.set(false); _ <- resetTree; _ <- resetFocus yield ()
                 case Absent     => ()
-
-        // The point is written BEFORE the open, so the panel never exists without one to be at.
-        val openMenu: MouseEvent => Any < Async = e =>
-            (openRef, at) match
-                case (Present(r), Present(pt)) =>
-                    for _ <- resetTree; _ <- resetFocus; _ <- pt.set(e.position); _ <- r.set(true) yield ()
-                case _ => ()
 
         val keyHandler: KeyboardEvent => Any < Async = e =>
             focusRef match
@@ -240,17 +298,8 @@ final case class ContextMenu private (
                     end match
                     List(ov(listUI).renderOpen)
                 case _ => Nil
-
-        var target = div
-            .cssClass("p-uic-contextmenu-target")
-            .cssClass("p-uic-overlay-anchor")
-            .aria("haspopup", "menu")
-        // The wrapped region is this component's root, so the element id lands here (HasElementId),
-        // and the panel's derived id hangs off it.
-        idV.foreach(b => target = target.id(b))
-        if openRef.isDefined then target = target.onContextMenu(openMenu)
-        target((kids ++ panel).map(toChild)*)
-    end body
+        panel
+    end panelFor
 end ContextMenu
 
 object ContextMenu:
