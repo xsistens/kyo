@@ -91,9 +91,12 @@ end NavState
   * and leaves it where it is, which is what makes widening and narrowing the same range one
   * gesture repeated rather than a walk.
   */
+// The key list a shift-range spans used to live here. It is read from `bodyViewNow` at the
+// moment of the click now, and carrying it as well was not merely redundant: this value goes
+// into every row's spec, so a list that grew by one made all of them unequal and the body
+// rendered every row again for an append.
 final private[uic] case class SelectState(
     metaKey: Boolean = false,
-    keys: IndexedSeq[String] = IndexedSeq.empty,
     anchor: Maybe[SignalRef[Maybe[String]]] = Absent
 )
 
@@ -1460,7 +1463,7 @@ final case class DataTable[A] private (
       * is exactly what the table did before — no gain there yet, and no change either.
       */
     private def rowInputsBelow: Boolean =
-        !checkboxColumn && !frozenRowsOn && !windowOn && !windowedSource && !hasFooter
+        !checkboxColumn && !windowOn && !windowedSource && !hasFooter
 
     /** Whether any column renders a footer, which aggregates over the arranged rows. */
     private def hasFooter: Boolean = leafCols.exists(_.hasFooter)
@@ -2777,7 +2780,7 @@ final case class DataTable[A] private (
             bodyViewOf(here.rows, here.sorted, here.pg, staticInputs.groups)
         lazy val staticNav: NavState[A]    = navFor(staticInputs, here)
         lazy val staticMove: MoveState[A]  = moveFor(staticView)
-        lazy val staticSelect: SelectState = selectIn.copy(keys = staticView.selectKeys)
+        lazy val staticSelect: SelectState = selectIn
 
         /** The `<tr>` stream for one value of the row bindings.
           *
@@ -2788,11 +2791,6 @@ final case class DataTable[A] private (
         def specsFor(in: RowInputs[A]): List[RowSpec[A]] =
             val ar   = arrange(in, Total.Unknown(false))
             val view = bodyViewOf(ar.rows, ar.sorted, ar.pg, in.groups)
-            // The range measures against the same list the select-all header covers — filtered, in
-            // the reader's order, across every page — so the two cannot disagree about what the set
-            // of rows is. Only the rows a range may actually take are listed, since a range that
-            // stepped over a rejected row would still have to report where it stopped.
-            val select = selectIn.copy(keys = view.selectKeys)
             if ar.pg.rows.isEmpty then List(RowSpec.Empty(colCount))
             else
                 groupSegments(
@@ -2809,7 +2807,7 @@ final case class DataTable[A] private (
                     navFor(in, ar),
                     frozen,
                     moveFor(view),
-                    select
+                    selectIn
                 )
             end if
         end specsFor
@@ -2892,36 +2890,53 @@ final case class DataTable[A] private (
           * projection, and the group then sits in flow at the top of the body, which is
           * where it belongs while nothing has scrolled.
           */
-        def frozenGroup(rows: Seq[A], top: Maybe[Int])(using Frame): UI =
-            var group = tbody.cssClass("p-datatable-tbody").cssClass("p-datatable-frozen-tbody")
-            if size.idPrefix.nonEmpty then group = group.id(s"${size.idPrefix}-frozen")
-            top.foreach(px => group = group.style(_.top(px.px)))
-            val specs: List[RowSpec[A]] = rows.toList.zipWithIndex.flatMap { (a, i) =>
+        /** The frozen rows for one value of the row bindings.
+          *
+          * They are drawn like any other row minus the keyboard grid and the drag, so neither the
+          * nav rows nor the move base reach them and none of the arrangement is needed: these rows
+          * are the caller's own list, not a page of it.
+          */
+        def frozenSpecs(rows: Seq[A], in: RowInputs[A]): List[RowSpec[A]] =
+            rows.toList.zipWithIndex.flatMap { (a, i) =>
                 val rowId = keyOf(a)
                 val data: RowSpec[A] = RowSpec.Data(
                     a,
                     i,
-                    staticInputs.sel.contains(rowId),
-                    staticInputs.ctx.contains(rowId),
-                    staticInputs.cells.collect { case c if c.row == rowId => c.column },
-                    staticInputs.exp.contains(rowId),
+                    in.sel.contains(rowId),
+                    in.ctx.contains(rowId),
+                    in.cells.collect { case c if c.row == rowId => c.column },
+                    in.exp.contains(rowId),
                     colCount,
                     Map.empty,
                     edit,
-                    staticNav.copy(on = false),
+                    nav.copy(on = false),
                     frozen,
-                    staticMove.copy(live = false, held = Absent),
-                    staticSelect
+                    moveIn.copy(live = false, held = Absent),
+                    selectIn
                 )
-                if isExpanded(a, staticInputs.exp) then List(data, RowSpec.Expansion(a, colCount))
-                else List(data)
+                if isExpanded(a, in.exp) then List(data, RowSpec.Expansion(a, colCount)) else List(data)
             }
-            group(specs.map(renderTr).map(toChild)*)
+
+        def frozenGroup(rows: Seq[A], top: Maybe[Int])(using Frame): UI =
+            var group = tbody.cssClass("p-datatable-tbody").cssClass("p-datatable-frozen-tbody")
+            if size.idPrefix.nonEmpty then group = group.id(s"${size.idPrefix}-frozen")
+            top.foreach(px => group = group.style(_.top(px.px)))
+            liveInputs match
+                // Its own keyed list, in its own tbody. The two bodies are separate regions, so a
+                // frozen row sharing a key with a body row is two keys in two namespaces rather
+                // than a duplicate — which is a diagnosed state, not a silent one, and stays that.
+                case Present(sig) =>
+                    group(toChild(sig.map(in => Chunk.from(frozenSpecs(rows, in))).foreachKeyed(rowSpecKey)(renderTr)))
+                case Absent => group(frozenSpecs(rows, staticInputs).map(renderTr).map(toChild)*)
+            end match
         end frozenGroup
 
         val frozenBody: List[UI] =
             if !frozenRowsOn then Nil
             else
+                // The offset is a measurement and lands as a style, which is not a channel, so it
+                // stays a region: a scroll rebuilds these rows. A row binding moving does not,
+                // which is the emission that repeats.
                 List(scroll.headTop match
                     case Present(sig) => sig.render(top => frozenGroup(held, top))
                     case Absent       => frozenGroup(held, Absent))

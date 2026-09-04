@@ -178,4 +178,64 @@ class DataTableReuseTest extends UicTest:
         }
     }
 
+    "appending a row costs the row appended" in {
+        // The list grows and nothing else moves, which is what a fetchMore does. It used to cost
+        // every row: the key list a shift-range spans was carried in each row's spec, so a list
+        // one longer made all of them unequal. Nothing reads it there — the range reads it live —
+        // and it is gone.
+        Scope.run {
+            val counted = new Renders
+            for
+                rows <- Signal.initRef[Seq[Item]](items)
+                sel  <- Signal.initRef(Set.empty[String])
+                err  <- Signal.initRef(Absent: Maybe[(CellPath, kyo.uic.form.FieldError)])
+                ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).selected(sel)
+                    .columns(uic.column("Name") { i =>
+                        counted.bump(); i.name
+                    })
+                    .wired("t", Map.empty, err, _ => ())
+                root <- ReactiveUI.normalize(ui, Seq.empty)
+                _    <- ReactiveUI.subscribe(root, quiet)
+                _    <- Async.sleep(100.millis)
+                _ = counted.reset()
+                _ <- rows.set(items :+ Item("k40", "row-40"))
+                _ <- Async.sleep(300.millis)
+                after = counted.get
+            yield assert(after == 1, s"one row was appended to $rowCount and $after rendered")
+            end for
+        }
+    }
+
+    "a frozen row group reuses its own rows" in {
+        // Two bodies, two keyed lists, two key namespaces — a frozen row may share a key with a
+        // body row and that is a diagnosed state, not a silent collision, because the regions are
+        // separate. Here the same rows are in both, which is the worst case for telling them apart.
+        Scope.run {
+            val counted = new Renders
+            for
+                rows <- Signal.initRef[Seq[Item]](items)
+                sel  <- Signal.initRef(Set.empty[String])
+                err  <- Signal.initRef(Absent: Maybe[(CellPath, kyo.uic.form.FieldError)])
+                ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).selected(sel)
+                    .frozenRows(items.take(3))
+                    .columns(uic.column("Name") { i =>
+                        counted.bump(); i.name
+                    })
+                    .wired("t", Map.empty, err, _ => ())
+                root <- ReactiveUI.normalize(ui, Seq.empty)
+                _    <- ReactiveUI.subscribe(root, quiet)
+                _    <- Async.sleep(100.millis)
+                first = counted.get
+                _     = counted.reset()
+                // The row is in BOTH bodies, so both have one row to draw again and no more.
+                _ <- sel.set(Set("k1"))
+                _ <- Async.sleep(300.millis)
+                after = counted.get
+            yield
+                assert(first >= rowCount, s"the first pass renders every row; it rendered $first")
+                assert(after == 2, s"one row of two bodies changed and $after rows were rendered")
+            end for
+        }
+    }
+
 end DataTableReuseTest
