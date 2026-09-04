@@ -58,6 +58,18 @@ final class Form private[form] (
     def numberField[A](initial: A)(using codec: NumberCodec[A]): NumberFieldSpec[A] =
         NumberFieldSpec(FieldSpec.init(this, codec.toDouble(initial)), codec, Validator.none[A])
 
+    /** Every field declared in this scope and its child scopes, in declaration order.
+      *
+      * The STATIC tree only — a field array's rows come and go after the form is built, and
+      * [[FormDiagnostics]], the one caller, reads this once at mount.
+      */
+    private[form] def declaredFields(using Frame): Chunk[FormField[?]] < Sync =
+        for
+            own  <- fieldsRef.get
+            kids <- childrenRef.get
+            more <- Kyo.foreach(kids)(_.declaredFields)
+        yield own ++ more.foldLeft(Chunk.empty[FormField[?]])(_ ++ _)
+
     /** Register a declared field. Declaration order IS the order `focusFirstInvalid` and the
       * error summary walk, so the append is the whole of what ordering means here.
       */
@@ -556,7 +568,10 @@ object Form:
                 form <- create(translator, focusInvalidOnSubmit, cmds)
                 ui   <- build(form)
                 _    <- form.wireChangeActivations // start Activation.Change observers for the declared tree
-            yield ui
+                // What the form can be certain is wrong about its own ids. Empty for every
+                // correct program, so this adds a node only where something is already broken.
+                cards <- FormDiagnostics.cards(form, ui)
+            yield if cards.isEmpty then ui else fragment((cards :+ ui)*)
         }
 
     private def create(translator: ErrorTranslator, focusInvalidOnSubmit: Boolean, cmds: UI.Commands)(using Frame): Form < Sync =

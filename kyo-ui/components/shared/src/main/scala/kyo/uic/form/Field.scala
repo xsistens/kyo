@@ -3,6 +3,7 @@ package kyo.uic.form
 import kyo.*
 import kyo.uic.BooleanFormControl
 import kyo.uic.FileFormControl
+import kyo.uic.FormControl
 import kyo.uic.MultiSelectFormControl
 import kyo.uic.NumberFormControl
 import kyo.uic.TextFormControl
@@ -209,6 +210,19 @@ final class FormField[A] private[form] (
     private def changeObserver(seen: AtomicInt)(using Frame): Unit < Async =
         value.observe(v => seen.getAndIncrement.map(n => if n == 0 then revalidate else onEvent(v)))
 
+    /** An id the control already carried when [[bind]] stamped this field's own over it.
+      *
+      * `bind` is a pure `C => C` with nowhere to log, so it records the fact here and the
+      * form reports it at mount, where an effect and a place to render exist. `Absent` is
+      * every correct program.
+      */
+    private[form] var idConflict: Maybe[String] = Absent
+
+    private[form] def noteIdConflict(previous: String): Unit =
+        // The form's own stamp is not a conflict — a field bound twice would otherwise
+        // report against itself.
+        if previous != domId then idConflict = Present(previous)
+
     /** A trigger fired: mark touched and validate. */
     private[form] def onEvent(v: A)(using Frame): Unit < Async =
         touchedRef.set(true).andThen(runAndSet(v))
@@ -283,15 +297,29 @@ final private[form] case class ServerError[A](err: FieldError, value: A) derives
 /** The `String`-control binding, as a named helper so a wrapping control ([[DateField]]'s
   * `DatePicker`) can reuse it without the `bind` name colliding with its own extension.
   */
+/** Stamps the field's id onto the control — and notices when that displaces one the caller
+  * had already set.
+  *
+  * The slot belongs to the form: `focusFirstInvalid` and the error summary both address the
+  * field through `Commands.focusId(domId)`, so a control answering to something else is a
+  * field they cannot reach. That used to happen in silence. It cannot be refused here — `bind`
+  * is a pure `C => C` — so the fact is recorded on the field and the form reports it at mount.
+  * The way to choose an id is `form.field(...).domId(...)`, which settles it before anything
+  * reads it.
+  */
+private def stampId[C <: FormControl { type Self <: C }](control: C, field: FormField[?]): C =
+    control.elementId.foreach(field.noteIdConflict)
+    control.id(field.domId)
+
 private[form] def wireText[C <: TextFormControl { type Self <: C }](control: C, field: FormField[String])(using Frame): C =
-    var b: C = control.value(field.valueRef).id(field.domId)
+    var b: C = stampId(control.value(field.valueRef), field)
     b = b.invalidMessage(field.message)
     if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
     b
 end wireText
 
 private[form] def wireTextControlOnly[C <: TextFormControl { type Self <: C }](control: C, field: FormField[String])(using Frame): C =
-    var b: C = control.value(field.valueRef).id(field.domId)
+    var b: C = stampId(control.value(field.valueRef), field)
     b = b.invalid(field.visibleError.map(_.isDefined))
     if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
     b
@@ -309,14 +337,14 @@ end extension
 
 extension [C <: BooleanFormControl { type Self <: C }](control: C)
     def bind(field: FormField[Boolean])(using Frame): C =
-        var b: C = control.checked(field.valueRef).id(field.domId)
+        var b: C = stampId(control.checked(field.valueRef), field)
         b = b.invalidMessage(field.message)
         if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
         b
     end bind
 
     def bindControlOnly(field: FormField[Boolean])(using Frame): C =
-        var b: C = control.checked(field.valueRef).id(field.domId)
+        var b: C = stampId(control.checked(field.valueRef), field)
         b = b.invalid(field.visibleError.map(_.isDefined))
         if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
         b
@@ -327,14 +355,14 @@ end extension
   * `InputNumber`) can reuse it without the `bind` name colliding with its own extension.
   */
 private[form] def wireNumber[C <: NumberFormControl { type Self <: C }](control: C, field: FormField[Double])(using Frame): C =
-    var b: C = control.value(field.valueRef).id(field.domId)
+    var b: C = stampId(control.value(field.valueRef), field)
     b = b.invalidMessage(field.message)
     if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
     b
 end wireNumber
 
 private[form] def wireNumberControlOnly[C <: NumberFormControl { type Self <: C }](control: C, field: FormField[Double])(using Frame): C =
-    var b: C = control.value(field.valueRef).id(field.domId)
+    var b: C = stampId(control.value(field.valueRef), field)
     b = b.invalid(field.visibleError.map(_.isDefined))
     if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
     b
@@ -354,14 +382,14 @@ end extension
 
 extension [C <: FileFormControl { type Self <: C }](control: C)
     def bind(field: FormField[Seq[UI.FilePayload]])(using Frame): C =
-        var b: C = control.value(field.valueRef).id(field.domId)
+        var b: C = stampId(control.value(field.valueRef), field)
         b = b.invalidMessage(field.message)
         if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
         b
     end bind
 
     def bindControlOnly(field: FormField[Seq[UI.FilePayload]])(using Frame): C =
-        var b: C = control.value(field.valueRef).id(field.domId)
+        var b: C = stampId(control.value(field.valueRef), field)
         b = b.invalid(field.visibleError.map(_.isDefined))
         if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
         b
@@ -370,14 +398,14 @@ end extension
 
 extension [C <: MultiSelectFormControl { type Self <: C }](control: C)
     def bind(field: FormField[Set[String]])(using Frame): C =
-        var b: C = control.value(field.valueRef).id(field.domId)
+        var b: C = stampId(control.value(field.valueRef), field)
         b = b.invalidMessage(field.message)
         if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
         b
     end bind
 
     def bindControlOnly(field: FormField[Set[String]])(using Frame): C =
-        var b: C = control.value(field.valueRef).id(field.domId)
+        var b: C = stampId(control.value(field.valueRef), field)
         b = b.invalid(field.visibleError.map(_.isDefined))
         if field.wantsBlur then b = b.onBlur(v => field.onEvent(v))
         b
