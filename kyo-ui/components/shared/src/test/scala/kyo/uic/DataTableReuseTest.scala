@@ -106,16 +106,13 @@ class DataTableReuseTest extends UicTest:
         }
     }
 
-    "a rows emission still costs every row, which is the boundary of what is fixed" in {
-        // Not a wish, a MEASUREMENT of where the reuse stops, pinned so the next step knows what it
-        // is moving. `rows` is resolved above the body like sort, filter and page, so an emission
-        // rebuilds the body — and with it the keyed list itself, whose row registry is then new and
-        // empty. Nothing can be retained across it, however equal the rows are.
-        //
-        // It matters more than it looks: a caller whose selection lives in the DATA rather than in
-        // a selection ref — a `@client` field on the row, say, with `selected` derived from the
-        // same signal — writes a row and gets a rows emission. That caller sees none of the reuse
-        // the test above measures.
+    "one changed row in a rows emission costs one rendered row" in {
+        // The case that matters most and was the last to be fixed. A caller whose selection lives
+        // in the DATA rather than in a selection ref — a `@client` field on the row, with
+        // `selected` derived from the same signal — never emits a selection, only rows. While the
+        // rows were resolved above the body like sort, filter and page, an emission rebuilt the
+        // body and the keyed list inside it, whose row registry was then new and empty, and that
+        // caller saw none of the reuse the tests above measure. It was 40 here.
         Scope.run {
             val counted = new Renders
             for
@@ -135,9 +132,8 @@ class DataTableReuseTest extends UicTest:
                 _ <- Async.sleep(300.millis)
                 after = counted.get
             yield assert(
-                after >= rowCount,
-                s"a rows emission rendered $after rows; if this is now 1, the rows binding moved " +
-                    "under the body and this test should say so instead"
+                after == 1,
+                s"one row of $rowCount changed and $after rows were rendered"
             )
             end for
         }

@@ -266,21 +266,36 @@ end FrozenPlan
 /** Where the reader is in the list, and what that leaves on the screen. */
 final private[uic] case class Paging[A](rows: List[A], base: Int, current: Int)
 
-/** The bindings that change the ROWS and nothing else, as one value.
+/** What the ROWS of a table are made of, as one value.
   *
   * The table's other bindings — column order, visibility, sort, filter, page, widths — rebuild
   * every cell when they move, so resolving them around the body is right and costs nothing. These
-  * five do not: a selection, a context row, a picked cell, an expanded row, a collapsed group each
-  * change a handful of `<tr>`s and leave the rest of the table exactly as it was. Held as one
-  * value, they can drive the row list itself instead of the component around it.
+  * do not. A selection, a context row, a picked cell, an expanded row, a collapsed group each
+  * change a handful of `<tr>`s; and the row list itself, when it re-emits, usually carries mostly
+  * the rows it carried before. Held as one value, they can drive the row list rather than the
+  * component around it.
+  *
+  * The rows belong here even though they look like the table's most fundamental input, and that is
+  * the whole point: a caller whose selection lives in the DATA — a client field on the row, with
+  * `selected` derived from the same signal — never emits a selection, only rows. Leaving the rows
+  * outside would have made the reuse unreachable for exactly the callers who need it most.
   */
-final private[uic] case class RowInputs(
+final private[uic] case class RowInputs[A](
+    rows: Seq[A] = Nil,
+    offset: Int = 0,
     sel: Set[String] = Set.empty,
     ctx: Maybe[String] = Absent,
     cells: Set[CellPath] = Set.empty,
     exp: Set[String] = Set.empty,
     groups: Set[GroupPath] = Set.empty
-) derives CanEqual
+)
+
+private[uic] object RowInputs:
+    // Declared rather than derived: deriving would demand a `CanEqual[A, A]` from every caller,
+    // and the comparison that matters here is the case class's own, which compares the rows by
+    // their own equality whatever that is.
+    given canEqual[A]: CanEqual[RowInputs[A], RowInputs[A]] = CanEqual.derived
+end RowInputs
 
 /** The whole-list values a row handler needs, as one value that can be read AT THE MOMENT IT RUNS.
   *
@@ -1444,54 +1459,82 @@ final case class DataTable[A] private (
       * already drives its rows from the scroll. Any of those and they stay where they were, which
       * is exactly what the table did before — no gain there yet, and no change either.
       */
-    private def rowInputsBelow: Boolean = !checkboxColumn && !frozenRowsOn && !windowOn
+    private def rowInputsBelow: Boolean =
+        !checkboxColumn && !frozenRowsOn && !windowOn && !windowedSource && !hasFooter
 
-    /** The five row bindings as one signal, or `Absent` when none of them is one.
+    /** Whether any column renders a footer, which aggregates over the arranged rows. */
+    private def hasFooter: Boolean = leafCols.exists(_.hasFooter)
+
+    /** The row bindings as one signal, or `Absent` when none of them is one.
       *
       * Folded over the bound ones only, so a table binding exactly one of them gets a plain `map`
       * and keeps the ref projection that lets the region bind without a fiber. `combineLatest`
       * rather than `zip`: `zip` waits for BOTH sides to move, and a selection changing while the
       * expansion stands still has to reach the rows.
       */
-    private def rowInputsSignal(using Frame): Maybe[Signal[RowInputs]] =
+    private def rowInputsSignal(using Frame): Maybe[Signal[RowInputs[A]]] =
+        // The rows compare by their own equality, whatever the element type does; the region only
+        // ever asks whether the pair changed, and that question is the case class's to answer.
+        given CanEqual[Seq[A], Seq[A]] = CanEqual.derived
+        // What the UNBOUND bindings read as. A table that binds its selection and states its rows
+        // as a plain list still has to render those rows, so the fold starts from the constants
+        // rather than from the empty value and overwrites only what a signal supplies.
+        val base = RowInputs[A](
+            rows = rowsV,
+            sel = selectedBinding.flatMap(_.const).getOrElse(Set.empty[String])
+        )
         def fold[T](
-            acc: Maybe[Signal[RowInputs]],
+            acc: Maybe[Signal[RowInputs[A]]],
             sig: Maybe[Signal[T]],
-            set: (RowInputs, T) => RowInputs
-        )(using CanEqual[T, T]): Maybe[Signal[RowInputs]] =
+            set: (RowInputs[A], T) => RowInputs[A]
+        )(using CanEqual[T, T]): Maybe[Signal[RowInputs[A]]] =
             sig match
                 case Absent => acc
                 case Present(s) =>
                     acc match
-                        case Absent       => Present(s.map(t => set(RowInputs(), t)))
+                        case Absent       => Present(s.map(t => set(base, t)))
                         case Present(cur) => Present(cur.combineLatest(s).map((r, t) => set(r, t)))
+        val rowsSig: Maybe[Signal[Seq[A]]] = rowsSigV.orElse(rowsRefV.map(r => r: Signal[Seq[A]]))
         val selSig: Maybe[Signal[Set[String]]] = selectedBinding.flatMap {
             case ReactiveValue.Dyn(sig) => Present(sig)
             case ReactiveValue.Const(_) => Absent
         }
-        val a = fold(Absent, selSig, (r, v: Set[String]) => r.copy(sel = v))
-        val b = fold(a, contextRowRef.map(_.asInstanceOf[Signal[Maybe[String]]]), (r, v: Maybe[String]) => r.copy(ctx = v))
-        val c = fold(b, selectedCellsRef.map(_.asInstanceOf[Signal[Set[CellPath]]]), (r, v: Set[CellPath]) => r.copy(cells = v))
-        val d = fold(c, expandedRef.map(_.asInstanceOf[Signal[Set[String]]]), (r, v: Set[String]) => r.copy(exp = v))
-        fold(d, expandedGroupsRef.map(_.asInstanceOf[Signal[Set[GroupPath]]]), (r, v: Set[GroupPath]) => r.copy(groups = v))
+        val r = fold[Seq[A]](Absent, rowsSig, (i, v) => i.copy(rows = v))
+        val a = fold[Set[String]](r, selSig, (i, v) => i.copy(sel = v))
+        val b = fold[Maybe[String]](a, contextRowRef.map(x => x), (i, v) => i.copy(ctx = v))
+        val c = fold[Set[CellPath]](b, selectedCellsRef.map(x => x), (i, v) => i.copy(cells = v))
+        val d = fold[Set[String]](c, expandedRef.map(x => x), (i, v) => i.copy(exp = v))
+        fold[Set[GroupPath]](d, expandedGroupsRef.map(x => x), (i, v) => i.copy(groups = v))
     end rowInputsSignal
 
     /** Resolves the row bindings, below the body where that is allowed and around it otherwise.
       *
-      * On the signal path `k`'s first argument is the empty value and MUST NOT be read: everything
-      * outside the row stream that could read it is exactly what makes [[rowInputsBelow]] false.
+      * On the signal path `k`'s first argument is the empty value and MUST NOT be read for anything
+      * outside the row stream: the four features that would read it there — a select-all header, a
+      * frozen row group, a windowed body, a column footer — are exactly what makes
+      * [[rowInputsBelow]] false. What legitimately needs the rows outside the stream, the
+      * diagnostic cards and the paginator, goes through `chrome`, which resolves them in a region
+      * of its own so a rows emission repaints those and reconciles the rows.
       */
-    private def withRowInputs(k: (RowInputs, Maybe[Signal[RowInputs]]) => UI)(using Frame): UI =
+    private def withRowInputs(
+        k: (RowInputs[A], Total, Maybe[Signal[RowInputs[A]]], ((RowInputs[A], Total) => UI) => UI) => UI
+    )(using Frame): UI =
         val live = if rowInputsBelow then rowInputsSignal else Absent
         live match
-            case Present(_) => k(RowInputs(), live)
+            case Present(sig) =>
+                k(RowInputs[A](), Total.Unknown(false), live, f => sig.render(in => withTotal(t => f(in, t))))
             case Absent =>
-                withValue(selectedBinding, Set.empty[String]) { sel =>
-                    withRef(contextRowRef, Absent: Maybe[String]) { ctx =>
-                        withRef(selectedCellsRef, Set.empty[CellPath]) { cells =>
-                            withRef(expandedRef, Set.empty[String]) { exp =>
-                                withRef(expandedGroupsRef, Set.empty[GroupPath]) { groups =>
-                                    k(RowInputs(sel, ctx, cells, exp, groups), Absent)
+                withRows { (rows, offset) =>
+                    withValue(selectedBinding, Set.empty[String]) { sel =>
+                        withRef(contextRowRef, Absent: Maybe[String]) { ctx =>
+                            withRef(selectedCellsRef, Set.empty[CellPath]) { cells =>
+                                withRef(expandedRef, Set.empty[String]) { exp =>
+                                    withRef(expandedGroupsRef, Set.empty[GroupPath]) { groups =>
+                                        withTotal { total =>
+                                            val in = RowInputs(rows, offset, sel, ctx, cells, exp, groups)
+                                            k(in, total, Absent, f => f(in, total))
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -2303,36 +2346,31 @@ final case class DataTable[A] private (
     )(using Frame): UI =
         withSortableFlags { flags =>
             withFrozenRows { held =>
-                withRows { (rows, offset) =>
-                    withRef(sortRef, List.empty[SortKey]) { sort =>
-                        withRef(filterRef, "") { query =>
-                            withRef(columnFiltersRef, Map.empty[List[String], ColumnFilter]) { specs =>
-                                withRef(columnWidthsRef, Map.empty[List[String], Double]) { widths =>
-                                    withRef(pageRef, 0) { page =>
-                                        withRowInputs { (inputs, live) =>
-                                            withTotal { total =>
-                                                body(
-                                                    rows,
-                                                    offset,
-                                                    held,
-                                                    sort,
-                                                    query,
-                                                    page,
-                                                    total,
-                                                    inputs,
-                                                    live,
-                                                    flags,
-                                                    edit,
-                                                    nav,
-                                                    filter.copy(specs = specs),
-                                                    size.copy(widths = widths),
-                                                    order,
-                                                    scroll,
-                                                    move,
-                                                    select
-                                                )
-                                            }
-                                        }
+                withRef(sortRef, List.empty[SortKey]) { sort =>
+                    withRef(filterRef, "") { query =>
+                        withRef(columnFiltersRef, Map.empty[List[String], ColumnFilter]) { specs =>
+                            withRef(columnWidthsRef, Map.empty[List[String], Double]) { widths =>
+                                withRef(pageRef, 0) { page =>
+                                    withRowInputs { (inputs, total, live, chrome) =>
+                                        body(
+                                            held,
+                                            sort,
+                                            query,
+                                            page,
+                                            total,
+                                            inputs,
+                                            live,
+                                            chrome,
+                                            flags,
+                                            edit,
+                                            nav,
+                                            filter.copy(specs = specs),
+                                            size.copy(widths = widths),
+                                            order,
+                                            scroll,
+                                            move,
+                                            select
+                                        )
                                     }
                                 }
                             }
@@ -2567,15 +2605,14 @@ final case class DataTable[A] private (
         canSortBy(c) && sortableFlag(c, path, flags)
 
     private def body(
-        rowsIn: Seq[A],
-        rowOffset: Int,
         held: Seq[A],
         sort: List[SortKey],
         query: String,
         page: Int,
         total: Total,
-        staticInputs: RowInputs,
-        liveInputs: Maybe[Signal[RowInputs]],
+        staticInputs: RowInputs[A],
+        liveInputs: Maybe[Signal[RowInputs[A]]],
+        chrome: ((RowInputs[A], Total) => UI) => UI,
         flags: Map[List[String], Boolean],
         edit: EditState,
         nav: NavState[A],
@@ -2591,55 +2628,67 @@ final case class DataTable[A] private (
         // all three and renders what it was given, in the order it was given.
         val prepared = lazyOn
 
-        val rows   = rowsIn.toList
         val reads  = if prepared then Nil else filterReads(filterIn.specs)
         val filter = filterIn.copy(unusable = reads.collect { case (p, Absent) => p }.toSet)
-        val sorted = arranged(rows, sort, query, reads)
-        // 3. Paginate: clamp the 0-based page, slice, and embed the standalone Paginator
-        //    (resolved page passed directly, since the table already renders inside its own
-        //    page-ref subscription). A prepared table slices nothing, the rows ARE the page,
-        //    and paginates over the total it was given, which is the one thing it knows
-        //    about the pages it was not given.
-        // A windowed table scrolls instead of paginating: the scrollbar answers the same
-        // question the page list does, and only one of them can be right about which rows
-        // are on the screen.
-        // An unknown total counts the furthest the source has reached, never less
-        // than what is on the screen, and adds one page while anything follows.
-        // Counting the screen alone would shrink the page list on the way back.
-        val pageCount = pageSizeV match
-            case Present(size) if prepared =>
-                total match
-                    case Total.Known(n) => n
-                    case Total.Unknown(more, atLeast) =>
-                        math.max(math.max(page, 0) * size + sorted.size, atLeast) + (if more then 1 else 0)
-            case _ => sorted.size
-        val pg = paging(sorted, page, pageCount)
 
-        val paginatorUI: List[UI] = pageSizeV match
-            case Present(size) if !windowOn =>
-                var pag = paginatorF.getOrElse(identity[Paginator])(Paginator())
-                    .totalRecords(pageCount)
-                    .rows(size)
-                    .currentPage(pg.current)
-                    .hostClass("p-datatable-paginator-bottom")
-                pageRef.foreach(ref => pag = pag.page(ref))
-                List(pag.render)
-            case _ => Nil
+        /** One value of the row bindings, filtered, ordered and sliced.
+          *
+          * The whole of steps 1 to 3 for exactly one emission. It runs per emission rather than
+          * once per render because the rows are now one of the bindings that drives the row list;
+          * what that costs is a sort of the list, against a paint of every row, which is the trade
+          * this component exists to make.
+          *
+          * `forTotal` reaches only `current`, the page number the paginator shows: which rows are
+          * on the screen and where the slice starts never depend on it (a prepared table was handed
+          * its page already), so a caller that does not have a total may pass any.
+          */
+        final case class Arranged(rows: List[A], sorted: List[A], pg: Paging[A], count: Int)
+        def arrange(in: RowInputs[A], forTotal: Total): Arranged =
+            val rows   = in.rows.toList
+            val sorted = arranged(rows, sort, query, reads)
+            // 3. Paginate: clamp the 0-based page and slice. A prepared table slices nothing, the
+            //    rows ARE the page, and paginates over the total it was given, which is the one
+            //    thing it knows about the pages it was not given. A windowed table scrolls instead:
+            //    the scrollbar answers the same question the page list does, and only one of them
+            //    can be right about which rows are on the screen.
+            // An unknown total counts the furthest the source has reached, never less than what is
+            // on the screen, and adds one page while anything follows. Counting the screen alone
+            // would shrink the page list on the way back.
+            val count = pageSizeV match
+                case Present(size) if prepared =>
+                    forTotal match
+                        case Total.Known(n) => n
+                        case Total.Unknown(more, atLeast) =>
+                            math.max(math.max(page, 0) * size + sorted.size, atLeast) + (if more then 1 else 0)
+                case _ => sorted.size
+            Arranged(rows, sorted, paging(sorted, page, count), count)
+        end arrange
 
+        // The static path's own arrangement. On the signal path it is empty AND unread: the only
+        // things below that take it are the select-all header, the footer and the windowed body,
+        // which are exactly what `rowInputsBelow` excludes.
+        val here     = arrange(staticInputs, total)
+        val rows     = here.rows
+        val sorted   = here.sorted
+        val pg       = here.pg
         val paged    = pg.rows
         val pageBase = pg.base
 
-        // The whole-list values, from the same pipeline a handler will re-run when it needs them
-        // live. The render's copy is the one that paints; the handlers below take the live one.
-        // Neither of the two values read off it here depends on which groups are open, so the
-        // static inputs answer for both; the keyboard's rows do, and are taken per emission below.
-        val view = bodyViewOf(rows, sorted, pg, staticInputs.groups)
-
-        // The range measures against the same list the select-all header covers — filtered, in
-        // the reader's order, across every page — so the two cannot disagree about what the set
-        // of rows is. Only the rows a range may actually take are listed, since a range that
-        // stepped over a rejected row would still have to report where it stopped.
-        val select = selectIn.copy(keys = view.selectKeys)
+        /** The paginator, over the rows and the total as they are. */
+        val paginatorUI: List[UI] =
+            if pageSizeV.isEmpty || windowOn then Nil
+            else
+                List(chrome { (in, total) =>
+                    val ar   = arrange(in, total)
+                    val size = pageSizeV.get
+                    var pag = paginatorF.getOrElse(identity[Paginator])(Paginator())
+                        .totalRecords(ar.count)
+                        .rows(size)
+                        .currentPage(ar.pg.current)
+                        .hostClass("p-datatable-paginator-bottom")
+                    pageRef.foreach(ref => pag = pag.page(ref))
+                    pag.render
+                })
 
         // The paths whose headers the reader can actually click, which is what both click
         // transitions may clear. Everything else in the spec is the caller's to keep.
@@ -2657,9 +2706,10 @@ final case class DataTable[A] private (
         // on the screen have to be the rows in the list, in that order, and the list has to
         // be somewhere the table can write. Anything else and the column still renders,
         // since it is part of the anatomy, with nothing behind it and a card saying which.
-        val move =
-            if handleColumn && rowMoveWritable && rowOrderOwners(sort, query, filterIn.specs).isEmpty then
-                moveIn.copy(all = view.moveAll, base = view.moveBase, count = view.moveCount)
+        val moveOffered =
+            handleColumn && rowMoveWritable && rowOrderOwners(sort, query, filterIn.specs).isEmpty
+        def moveFor(view: BodyView[A]): MoveState[A] =
+            if moveOffered then moveIn.copy(all = view.moveAll, base = view.moveBase, count = view.moveCount)
             else moveIn.copy(live = false, held = Absent)
 
         // One tr per header level. The leading expander and checkbox cells belong to the
@@ -2715,20 +2765,38 @@ final case class DataTable[A] private (
         // The rows the keyboard moves over are the ones on the SCREEN: a collapsed group
         // renders none of its own, so stepping by the paged index would land on a row
         // nobody can see. Which groups are open is a row binding, so this is per emission.
-        def navFor(in: RowInputs): NavState[A] =
+        def navFor(in: RowInputs[A], ar: Arranged): NavState[A] =
             if !nav.on then nav
             else
-                val v = bodyViewOf(rows, sorted, pg, in.groups)
+                val v = bodyViewOf(ar.rows, ar.sorted, ar.pg, in.groups)
                 nav.copy(rows = v.navRows, page = v.navPage)
 
-        /** The `<tr>` stream for one value of the row bindings. The only thing under the body that
-          * they reach, which is what lets them drive the row list instead of the whole component.
+        // The same three, off the static arrangement, for the two bodies that are only ever built
+        // on the static path: the windowed one and the frozen row group.
+        lazy val staticView: BodyView[A] =
+            bodyViewOf(here.rows, here.sorted, here.pg, staticInputs.groups)
+        lazy val staticNav: NavState[A]    = navFor(staticInputs, here)
+        lazy val staticMove: MoveState[A]  = moveFor(staticView)
+        lazy val staticSelect: SelectState = selectIn.copy(keys = staticView.selectKeys)
+
+        /** The `<tr>` stream for one value of the row bindings.
+          *
+          * Everything the rows depend on is computed HERE, from `in`, and nothing is taken from the
+          * enclosing render — which is what makes the stream a function of the bindings rather than
+          * of the pass that happened to build it.
           */
-        def specsFor(in: RowInputs): List[RowSpec[A]] =
-            if paged.isEmpty then List(RowSpec.Empty(colCount))
+        def specsFor(in: RowInputs[A]): List[RowSpec[A]] =
+            val ar   = arrange(in, Total.Unknown(false))
+            val view = bodyViewOf(ar.rows, ar.sorted, ar.pg, in.groups)
+            // The range measures against the same list the select-all header covers — filtered, in
+            // the reader's order, across every page — so the two cannot disagree about what the set
+            // of rows is. Only the rows a range may actually take are listed, since a range that
+            // stepped over a rejected row would still have to report where it stopped.
+            val select = selectIn.copy(keys = view.selectKeys)
+            if ar.pg.rows.isEmpty then List(RowSpec.Empty(colCount))
             else
                 groupSegments(
-                    paged.zipWithIndex,
+                    ar.pg.rows.zipWithIndex,
                     groupsV,
                     Nil,
                     in.sel,
@@ -2738,17 +2806,19 @@ final case class DataTable[A] private (
                     in.groups,
                     colCount,
                     edit,
-                    navFor(in),
+                    navFor(in, ar),
                     frozen,
-                    move,
+                    moveFor(view),
                     select
                 )
+            end if
+        end specsFor
 
         /** How many rows there are to scroll over, which does not depend on where the
           * reader is: the rows themselves locally, and how far the source reaches over one.
           */
         lazy val windowCount: Int =
-            if windowedSource then viewport.extent(total, rowOffset + paged.size) else paged.size
+            if windowedSource then viewport.extent(total, staticInputs.offset + paged.size) else paged.size
 
         /** The rows of the window at `scrollTop`, between the two spacers.
           *
@@ -2761,30 +2831,30 @@ final case class DataTable[A] private (
         def windowSpecs(scrollTop: Double): List[RowSpec[A]] =
             val vp        = viewport
             val held      = paged.toVector
-            val loadedEnd = rowOffset + held.size
+            val loadedEnd = staticInputs.offset + held.size
             val count     = windowCount
             if count <= 0 then List(RowSpec.Empty(colCount))
             else
                 val (from, reach) = vp.span(vp.clamp(scrollTop, count))
                 val until         = math.min(count, reach)
                 val drawn: List[RowSpec[A]] = (from until until).toList.map { i =>
-                    if i >= rowOffset && i < loadedEnd then
+                    if i >= staticInputs.offset && i < loadedEnd then
                         RowSpec.Data(
-                            held(i - rowOffset),
+                            held(i - staticInputs.offset),
                             i,
-                            staticInputs.sel.contains(keyOf(held(i - rowOffset))),
-                            staticInputs.ctx.contains(keyOf(held(i - rowOffset))),
+                            staticInputs.sel.contains(keyOf(held(i - staticInputs.offset))),
+                            staticInputs.ctx.contains(keyOf(held(i - staticInputs.offset))),
                             staticInputs.cells.collect {
-                                case c if c.row == keyOf(held(i - rowOffset)) => c.column
+                                case c if c.row == keyOf(held(i - staticInputs.offset)) => c.column
                             },
-                            staticInputs.exp.contains(keyOf(held(i - rowOffset))),
+                            staticInputs.exp.contains(keyOf(held(i - staticInputs.offset))),
                             colCount,
                             Map.empty,
                             edit,
-                            navFor(staticInputs),
+                            staticNav,
                             frozen,
-                            move,
-                            select,
+                            staticMove,
+                            staticSelect,
                             rowHeightV
                         )
                     else
@@ -2838,10 +2908,10 @@ final case class DataTable[A] private (
                     colCount,
                     Map.empty,
                     edit,
-                    navFor(staticInputs).copy(on = false),
+                    staticNav.copy(on = false),
                     frozen,
-                    move.copy(live = false, held = Absent),
-                    select
+                    staticMove.copy(live = false, held = Absent),
+                    staticSelect
                 )
                 if isExpanded(a, staticInputs.exp) then List(data, RowSpec.Expansion(a, colCount))
                 else List(data)
@@ -3000,20 +3070,26 @@ final case class DataTable[A] private (
             case Size.Normal => ()
         end match
         root(
-            (rowKeyCard(paged) ++ headerCards(
+            // Three of the cards read the rows — a repeated rowKey, a frozen group taller than the
+            // page, a lazy total that does not add up — so they answer for the rows the reader is
+            // looking at and go through `chrome`, which is transparent unless the rows drive the
+            // body themselves. Two calls rather than one, so the cards keep the order they had.
+            // The rest are about the table's declaration and never move.
+            (List(chrome((in, t) => UI.fragment(rowKeyCard(arrange(in, t).pg.rows)*))) ++ headerCards(
                 sort,
                 flags
             ) ++ editCards ++ filterCards(filter) ++ sizeCards(
                 size
             ) ++ frozenCards(size) ++ orderCards(
                 order
-            ) ++ rowsCards ++ selectionCards ++ scrollCards ++ moveCards(sort, query, filter.specs) ++ windowCards ++ frozenRowCards(
-                paged,
-                held
-            ) ++ lazyCards(
-                rows,
-                total
-            ) ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
+            ) ++ rowsCards ++ selectionCards ++ scrollCards ++ moveCards(
+                sort,
+                query,
+                filter.specs
+            ) ++ windowCards ++ List(chrome { (in, t) =>
+                val ar = arrange(in, t)
+                UI.fragment((frozenRowCards(ar.pg.rows, held) ++ lazyCards(ar.rows, t))*)
+            }) ++ loadingMask ++ headerSlot ++ (containerEl :: paginatorUI) ++ footerSlot).map(toChild)*
         )
     end body
 
