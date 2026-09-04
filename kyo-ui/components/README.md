@@ -1683,16 +1683,18 @@ val layoutChrome: UI =
 
 ## Validated forms
 
-Validation is a separate, opt-in layer in `kyo.uic.form`. Nothing above this section knows it exists: the controls already carry `invalid` and `invalidMessage`, and the form layer is a thing that computes them for you and coordinates submit. Three ideas carry it. Errors are data, never text. *When a rule re-computes* and *when its failure is shown* are independent knobs. And binding a field onto a control preserves the control's concrete type, so the form layer never hands you back an opaque wrapper.
+Validation is a separate, opt-in layer in `kyo.uic.form`. Nothing above this section knows it exists: the controls already carry `invalid` and `invalidMessage`, and the form layer is a thing that computes them for you and coordinates submit. Four ideas carry it. Errors are data, never text. *When a rule re-computes* and *when its failure is shown* are independent knobs. A field is declared by a spec with a default for every slot, so the common declaration says nothing but the starting value. And binding a field onto a control preserves the control's concrete type, so the form layer never hands you back an opaque wrapper.
 
 A form is a mount region: `Form.mountedWith` allocates the state, runs your builder with the live `Form` scope, and returns an ordinary `UI`.
+
+`scope.field(initial)` returns a `FieldSpec`, and `.declare` turns it into the live handle. Everything decided at declaration lives on that spec — `rules`, `on`, `domId`, `debounce`, `revealWhen`, `focusable` — each with the default most fields want, so `scope.field(true).declare` is a complete declaration. What stays on the handle is what can only be done afterwards: `addRule` and `matches`, which need a second field that does not exist yet when the first is declared.
 
 ```scala
 import kyo.uic.form.*
 
 val nameForm: UI =
     Form.mountedWith(ErrorTranslator.default) { scope =>
-        for name <- scope.field(Validator.required() and Validator.minLength(2), Activation.Blur)
+        for name <- scope.field.rules(Validator.required() and Validator.minLength(2)).declare
         yield div(
             uic.Label("Product name").forId(name.domId).required(true),
             uic.Input().bind(name).placeholder("Bamboo Watch"),
@@ -1706,7 +1708,7 @@ val nameForm: UI =
 ```scala
 val translated: UI < Env[ErrorTranslator] =
     Form.mounted() { scope =>
-        for name <- scope.field(Validator.required(), Activation.Blur)
+        for name <- scope.field.rules(Validator.required()).declare
         yield div(uic.Input().bind(name))
     }
 
@@ -1752,14 +1754,18 @@ def skuAvailable(check: String => Boolean < Async): Validator[String] =
 
 `Activation` says when a rule is re-computed. `Reveal` says when a failure is displayed. They are orthogonal, and conflating them is the usual source of forms that either nag while you type or stay silent until it is too late.
 
-`Activation.Field` values combine, and a field validates on the union of the ones it declares. `Change` re-checks on every value change, `Blur` on focus loss, `Submit` at submit. `Reveal` picks the display gate: `WhenTouched` (the field default, so an untouched field is quiet), `OnSubmit`, `Immediate`, or `Manual` (never auto-shown, but still feeding `isValid` and still blocking submit).
+`Activation.Field` values combine, and a field validates on the union of the ones it declares. `Change` re-checks on every value change, `Blur` on focus loss. `Reveal` picks the display gate: `WhenTouched` (the default, so an untouched field is quiet), `OnSubmit`, `Immediate`, or `Manual` (never auto-shown, but still feeding `isValid` and still blocking submit).
+
+The defaults are `Blur + Change` with `WhenTouched`, which is why the examples above declare neither: nothing is said while the reader first types, the verdict appears when they leave the field, and it stays live from then on. `Activation.Submit` is the opt-*out* rather than a third trigger — every field is validated at submit whatever it declares, so declaring `Submit` alone means "never re-check while the reader is in the field", which is what an expensive async rule wants.
 
 ```scala
 val quietUntilSubmit: UI =
     Form.mountedWith(ErrorTranslator.default) { scope =>
         for
-            name <- scope.field(Validator.required() and Validator.minLength(2), Activation.Change, Activation.Blur)
-            _ = name.revealWhen(Reveal.OnSubmit)
+            name <- scope.field
+                .rules(Validator.required() and Validator.minLength(2))
+                .revealWhen(Reveal.OnSubmit)
+                .declare
         yield div(uic.Input().bind(name))
     }
 ```
@@ -1768,14 +1774,16 @@ That form re-validates as the user types (so a submit gate can open the instant 
 
 ### Binding a field onto a control
 
-`.bind(field)` wires the field's value ref, its minted DOM id, its gated message, and its blur trigger onto a control, and returns the same concrete control type. `uic.Input().bind(f)` is an `Input`, so setters keep chaining on either side of the call.
+`.bind(field)` wires the field's value ref, its DOM id, its gated message, and its blur trigger onto a control, and returns the same concrete control type. `uic.Input().bind(f)` is an `Input`, so setters keep chaining on either side of the call.
+
+The id is the form's slot, not the control's: `focusFirstInvalid` and the error summary both reach a field through it, so `bind` stamps the field's own and a `.id(...)` already on the control is replaced. Choose it at declaration instead — `scope.field.domId("login-username")` — which is also what makes a field addressable from outside the form at all: a hand-written `<label for>`, an `aria-describedby` on a sibling hint, a deep link like `/settings#email`, an end-to-end selector. Left alone, the id is minted (`kyo-uic-7`), unique and stable within a render and referenceable only from inside via `field.domId`. A form reports what it can be certain of here — an id `bind` displaced, two fields claiming one id, a `<label for>` pointing at nothing — as an inline card at mount, because every one of those used to fail by moving focus nowhere and saying nothing.
 
 ```scala
 val bound: UI =
     Form.mountedWith(ErrorTranslator.default) { scope =>
         for
-            name  <- scope.field(Validator.required() and Validator.minLength(2), Activation.Blur)
-            stock <- scope.field(true, Validator.all[Boolean](), Activation.Change)
+            name  <- scope.field.rules(Validator.required() and Validator.minLength(2)).declare
+            stock <- scope.field(true).declare
         yield div(
             uic.Input().bind(name).placeholder("Bamboo Watch").fluid(true),
             uic.CheckBox("In stock").bind(stock)
@@ -1799,12 +1807,10 @@ import java.time.LocalDate
 val typedFields: UI =
     Form.mountedWith(ErrorTranslator.default) { scope =>
         for
-            price <- scope.numberField(0.0, Validator.min(0.0) and Validator.max(10000.0), Activation.Blur)
-            restock <- scope.dateField[LocalDate](
-                Absent,
-                Validator.satisfy[LocalDate]("too-early")(_.isAfter(LocalDate.of(2020, 1, 1))),
-                Activation.Blur
-            )
+            price <- scope.numberField(0.0).rules(Validator.min(0.0) and Validator.max(10000.0)).declare
+            restock <- scope.dateField[LocalDate](Absent)
+                .rules(Validator.satisfy[LocalDate]("too-early")(_.isAfter(LocalDate.of(2020, 1, 1))))
+                .declare
         yield div(
             uic.InputNumber().bind(price).suffix(" EUR"),
             uic.DatePicker().bind(restock).placeholder("YYYY-MM-DD")
@@ -1822,7 +1828,7 @@ Submit is the moment every field stops being quiet, including the ones the user 
 val gated: UI =
     Form.mountedWith(ErrorTranslator.default) { scope =>
         for
-            name  <- scope.field(Validator.required() and Validator.minLength(2), Activation.Change, Activation.Blur)
+            name  <- scope.field.rules(Validator.required() and Validator.minLength(2)).declare
             gate  <- scope.submitDisabled
             dirty <- scope.isDirty
         yield div(
@@ -1868,8 +1874,8 @@ Three shapes cover the cases, and which one you reach for follows from what the 
 val crossField: UI =
     Form.mountedWith(ErrorTranslator.default) { scope =>
         for
-            listPrice <- scope.numberField(0.0, Validator.min(0.0), Activation.Blur)
-            salePrice <- scope.numberField(0.0, Validator.min(0.0), Activation.Blur)
+            listPrice <- scope.numberField(0.0).rules(Validator.min(0.0)).declare
+            salePrice <- scope.numberField(0.0).rules(Validator.min(0.0)).declare
             _ = scope.satisfy("sale-above-list")(
                 listPrice.value.combineLatest(salePrice.value).map((list, sale) => sale <= list)
             )
@@ -1896,7 +1902,7 @@ val lineItems: UI =
     Form.mountedWith(ErrorTranslator.default) { scope =>
         for
             rows <- scope.fieldArrayOf[FormField[String]](1) { (rowScope, row) =>
-                for sku <- rowScope.field(Validator.required() and Validator.pattern("[a-z0-9-]+".r), Activation.Blur)
+                for sku <- rowScope.field.rules(Validator.required() and Validator.pattern("[a-z0-9-]+".r)).declare
                 yield (
                     div(
                         uic.Input().bind(sku).placeholder("SKU"),
@@ -1946,9 +1952,9 @@ val productEditor: UI < Async =
             .end(uic.Button("Delete").severity(uic.Severity.Danger).icon(uic.Icons.trash).onClick(confirmDelete.set(true))),
         Form.mountedWith(ErrorTranslator.default) { scope =>
             for
-                name    <- scope.field(Validator.required() and Validator.minLength(2), Activation.Blur)
-                price   <- scope.numberField(0.0, Validator.min(0.0), Activation.Blur)
-                inStock <- scope.field(true, Validator.all[Boolean](), Activation.Change)
+                name    <- scope.field.rules(Validator.required() and Validator.minLength(2)).declare
+                price   <- scope.numberField(0.0).rules(Validator.min(0.0)).declare
+                inStock <- scope.field(true).declare
                 gate    <- scope.submitDisabled
                 summary <- Form.errorSummary(scope)
             yield uic.Card().title("Details")(
