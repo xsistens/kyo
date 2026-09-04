@@ -102,3 +102,8 @@ which knows it per region and cannot be threaded away.
   `HtmlRenderer.clientJs`.
 - Under server-push there is no channel from the overlay back to the server, so the panel's **Pause** freezes
   the display locally and **Reset** is only offered under the browser mount, where it can reach the store.
+- Render **durations are not usable under the browser mount**. The engine times a paint with
+  `Clock.nowMonotonic`, whose resolution in the browser is a millisecond, so a repaint faster than that
+  measures as zero and the window stays empty. The panel says so rather than reporting `0 ns`. The counts,
+  the rate, the wasted share and the patch sizes are unaffected; a higher-resolution clock on the Scala.js
+  target would fix it.

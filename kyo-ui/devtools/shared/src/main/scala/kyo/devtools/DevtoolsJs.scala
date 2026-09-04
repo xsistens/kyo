@@ -40,15 +40,25 @@ object DevtoolsJs:
           |var TIERS={idle:"#9ca3af",active:"#60a5fa",warm:"#f59e0b",hot:"#ef4444",wasted:"#f43f5e"};
           |var opts={badges:true,flash:true,threshold:0,onlyWasted:false,maxBadges:200};
           |var rows=[],meta={o:false,h:[]},byKey={},prevTotals={},flashUntil={},labels={},frozen=false;
-          |var host,root,layer,panel,pill,popover,pinned=null,frame=0,markers={},markersFresh=false;
+          |var host,root,layer,panel,pill,popover,pinned=null,frame=0,markers={},markersFresh=false,nodes={};
           |
           |function css(){return ""+
           |":host{all:initial}"+
           |"*{box-sizing:border-box;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}"+
-          |".badge{position:fixed;pointer-events:auto;cursor:pointer;font-size:10px;line-height:1;"+
-          |"padding:2px 4px;border-radius:3px;background:rgba(15,23,42,.86);border:1px solid;"+
-          |"white-space:nowrap;transition:opacity .25s linear;letter-spacing:.02em}"+
-          |".ring{position:fixed;pointer-events:none;border-radius:2px;border:1px solid transparent}"+
+          |".badge{position:fixed;pointer-events:auto;cursor:pointer;font-size:11px;line-height:1;"+
+          |"font-weight:600;padding:2px 5px;border-radius:3px;background:#0b0f17;border:1px solid;"+
+          |"white-space:nowrap;transition:opacity .15s linear;letter-spacing:.02em;"+
+          |// Two rings, not one: the inner dark line separates the chip from a dark app, the outer shadow
+          |// from a light one. A chip that is only legible against the theme it was designed on is legible
+          |// by accident, and a number nobody can read is worse than no number.
+          |"box-shadow:0 0 0 1px rgba(0,0,0,.7),0 1px 4px rgba(0,0,0,.55)}"+
+          |".badge:hover{opacity:1!important;background:#141c2b}"+
+          |".ring{position:fixed;pointer-events:none;border-radius:2px;border-style:none;border-width:1px;"+
+          |"border-color:transparent}"+
+          |// Hovering the count outlines what it counts, and the outline stays while the details are open.
+          |// The sibling selector is why the ring is painted immediately after its badge: it makes the
+          |// pointer, not a timer or a repaint, decide when the box is shown.
+          |".badge:hover + .ring,.ring.pin{border-style:solid!important;opacity:1!important}"+
           |".ring.flash{animation:kf .4s ease-out 1}"+
           |"@keyframes kf{from{opacity:1}to{opacity:.15}}"+
           |".pulse{animation:kp 2s ease-in-out infinite}"+
@@ -165,8 +175,11 @@ object DevtoolsJs:
           |  if(row.r>=ACTIVE)return "active";
           |  return "idle";
           |}
-          |var ALPHA={idle:.25,active:.55,warm:.85,hot:1,wasted:1};
-          |var RING={idle:"none",active:"1px dashed",warm:"1px solid",hot:"2px solid",wasted:"2px solid"};
+          |// Quiet, not invisible. The tier is carried by COLOUR first; opacity only trims the idle end,
+          |// and trimming it as far as it once went made the common case unreadable over a dark app.
+          |var ALPHA={idle:.82,active:.92,warm:1,hot:1,wasted:1};
+          |var RING={idle:{style:"none",width:1},active:{style:"dashed",width:1},warm:{style:"solid",width:1},
+          |  hot:{style:"solid",width:2},wasted:{style:"solid",width:2}};
           |function fmtRate(r){return r<10?r.toFixed(1):String(Math.round(r));}
           |function fmtMs(ns){return ns>=1e6?(ns/1e6).toFixed(1)+" ms":ns>=1e3?(ns/1e3).toFixed(1)+" \u00b5s":ns+" ns";}
           |function fmtBytes(b){return b>=1048576?(b/1048576).toFixed(1)+" MB":b>=1024?(b/1024).toFixed(1)+" kB":b+" B";}
@@ -206,24 +219,45 @@ object DevtoolsJs:
           |  }
           |  return out;
           |}
+          |// Nodes are REUSED across paints, one pair per region, never rebuilt from a string.
+          |//
+          |// That is not an optimization, it is what makes hovering work at all. Replacing the markup twice a
+          |// second takes the element out from under the pointer, and with it `:hover` — the outline would
+          |// blink off on exactly the badge the reader is resting on. A badge and its ring are also adjacent
+          |// siblings on purpose: `.badge:hover + .ring` is the whole hover mechanism, and it needs them so.
           |function paintBadges(){
-          |  if(!opts.badges){layer.textContent="";return;}
+          |  if(!opts.badges){dropBadges(function(){return true;});return;}
           |  // Every rect is read before a single style is written. Interleaving them would invalidate layout
           |  // between reads and turn one pass into one per badge.
-          |  var groups=cluster(visible()),html=[],i;
+          |  var groups=cluster(visible()),seen={},i;
           |  for(i=0;i<groups.length;i++){
           |    var g=groups[i],row=g.item.row,b=g.item.rect,tier=tierOf(row),color=TIERS[tier];
-          |    var count=g.hidden.length?"\u22ef "+(g.hidden.length+1):String(row.t);
-          |    var flashing=opts.flash&&flashUntil[row.k]>frame;
-          |    var ringStyle=RING[tier];
-          |    if(ringStyle!=="none")html.push('<div class="ring'+(flashing?" flash":"")+(tier==="wasted"?" pulse":"")+
-          |      '" style="left:'+b.left+'px;top:'+b.top+'px;width:'+b.width+'px;height:'+b.height+
-          |      'px;border:'+ringStyle+' '+color+';opacity:'+(flashing?1:ALPHA[tier]*.6)+'"></div>');
-          |    html.push('<div class="badge" data-k="'+cssEscape(row.k)+'" style="left:'+b.left+'px;top:'+
-          |      Math.max(0,b.top-2)+'px;color:'+color+';border-color:'+color+';opacity:'+ALPHA[tier]+
-          |      '">'+count+(tier==="wasted"?" \u26a0":"")+'</div>');
+          |    var pair=nodes[row.k];
+          |    if(!pair){
+          |      pair={badge:document.createElement("div"),ring:document.createElement("div")};
+          |      pair.badge.className="badge";
+          |      pair.badge.setAttribute("data-k",row.k);
+          |      layer.appendChild(pair.badge);layer.appendChild(pair.ring);
+          |      nodes[row.k]=pair;
+          |    }
+          |    seen[row.k]=true;
+          |    var flashing=opts.flash&&flashUntil[row.k]>frame,ring=RING[tier];
+          |    var text=(g.hidden.length?"\u22ef "+(g.hidden.length+1):String(row.t))+(tier==="wasted"?" \u26a0":"");
+          |    if(pair.badge.textContent!==text)pair.badge.textContent=text;
+          |    pair.badge.style.cssText="left:"+b.left+"px;top:"+Math.max(0,b.top-2)+"px;color:"+color+
+          |      ";border-color:"+color+";opacity:"+ALPHA[tier];
+          |    pair.ring.className="ring"+(flashing?" flash":"")+(tier==="wasted"?" pulse":"")+
+          |      (pinned&&pinned.key===row.k?" pin":"");
+          |    pair.ring.style.cssText="left:"+b.left+"px;top:"+b.top+"px;width:"+b.width+"px;height:"+
+          |      b.height+"px;border-color:"+color+";border-width:"+ring.width+"px;border-style:"+ring.style+
+          |      ";opacity:"+(flashing?1:ALPHA[tier]*.6);
           |  }
-          |  layer.innerHTML=html.join("");
+          |  dropBadges(function(k){return !seen[k];});
+          |}
+          |function dropBadges(gone){
+          |  for(var k in nodes)if(gone(k)){
+          |    layer.removeChild(nodes[k].badge);layer.removeChild(nodes[k].ring);delete nodes[k];
+          |  }
           |}
           |
           |// ---- detail ---------------------------------------------------------------------------------
@@ -242,7 +276,10 @@ object DevtoolsJs:
           |      line("&nbsp;&nbsp;verschwendet",row.w+" ("+Math.round(share*100)+"%)",share>WASTED_RATIO?"warn":"")+
           |      (row.ch?line("Attribut-Writes",row.ch):"")+
           |      (row.tx?line("Text-Writes",row.tx):"")+
-          |      line("Dauer","avg "+fmtMs(row.a)+"  \u00b7  p95 "+fmtMs(row.p))+
+          |      // A zero here would be read as "this render was free". It is not: under the browser mount the
+          |      // engine measures with `Clock.nowMonotonic`, whose resolution there is a millisecond, and a
+          |      // repaint faster than that measures as nothing. Saying so is the only honest reading.
+          |      line("Dauer",row.a||row.p?"avg "+fmtMs(row.a)+"  \u00b7  p95 "+fmtMs(row.p):"unter der Uhraufl\u00f6sung")+
           |      line("Gesendet",fmtBytes(row.b))+
           |      rowsInfo+
           |      line("Zuletzt",row.i<0.05?"gerade eben":"vor "+row.i.toFixed(1)+" s")+
@@ -262,6 +299,14 @@ object DevtoolsJs:
           |  popover.style.top=(anchor.bottom+6+pr.height>innerHeight?Math.max(8,anchor.top-pr.height-6):anchor.bottom+6)+"px";
           |}
           |function hidePopover(){popover.style.display="none";}
+          |// The popover is anchored to the badge as it is NOW, not to where it was when it was opened: the
+          |// page scrolls and the region moves, and a detail card left behind at the old coordinates points at
+          |// whatever happens to be there.
+          |function followPinned(){
+          |  var pair=nodes[pinned.key];
+          |  if(pair)showPopover(pinned.key,pair.badge.getBoundingClientRect());
+          |  else hidePopover();
+          |}
           |
           |// ---- panel ----------------------------------------------------------------------------------
           |
@@ -304,7 +349,7 @@ object DevtoolsJs:
           |  // Half the display rate. The numbers change ten times a second at most and the geometry pass is the
           |  // only per-frame cost worth having; spending every frame on it would be the tool taxing the app it
           |  // is there to measure.
-          |  if(frame%2===0){markersFresh=false;paintBadges();if(pinned)showPopover(pinned.key,pinned.anchor);}
+          |  if(frame%2===0){markersFresh=false;paintBadges();if(pinned)followPinned();}
           |  requestAnimationFrame(tick);
           |}
           |
@@ -329,7 +374,10 @@ object DevtoolsJs:
           |  root.appendChild(panel);
           |  pill.addEventListener("click",function(){panel.style.display="block";pill.style.display="none";paintPanel();});
           |  root.addEventListener("click",onClick);
-          |  root.addEventListener("mouseover",onHover);
+          |  // A click anywhere in the page closes an open card. It has to be on the document, because a click
+          |  // in the app never reaches the overlay's own root — and it is passive: nothing is prevented,
+          |  // nothing is stopped, the app sees the click exactly as it would have.
+          |  document.addEventListener("click",onDocClick,true);
           |  // Appended to <html>, not <body>. `UI.runMount(ui)` without a selector mounts by assigning
           |  // body.innerHTML, which would delete an overlay parked there — and the mount runs after this, so
           |  // the overlay would vanish on the very first paint of exactly the app it is there to watch. A
@@ -337,10 +385,16 @@ object DevtoolsJs:
           |  document.documentElement.appendChild(host);
           |  requestAnimationFrame(tick);
           |}
-          |function onHover(e){
-          |  var badge=e.target.closest&&e.target.closest(".badge");
-          |  if(badge&&!pinned)showPopover(badge.getAttribute("data-k"),badge.getBoundingClientRect());
-          |  else if(!badge&&!pinned&&!(e.target.closest&&e.target.closest(".pop")))hidePopover();
+          |// Opening on hover meant the card was never dismissed on purpose, only replaced by the next one it
+          |// happened over — so it sat on top of the app until the pointer found another badge. A click opens
+          |// it, the same click closes it, and any click elsewhere closes it too.
+          |function onDocClick(e){
+          |  if(!pinned)return;
+          |  // The click that OPENS a card also reaches here. `composedPath` is what sees through the shadow
+          |  // boundary and can tell that one apart from a click in the page.
+          |  var path=e.composedPath?e.composedPath():[],i;
+          |  for(i=0;i<path.length;i++)if(path[i]===host)return;
+          |  pinned=null;hidePopover();paintBadges();
           |}
           |function onClick(e){
           |  var t=e.target;
@@ -352,14 +406,15 @@ object DevtoolsJs:
           |  if(opt){opts[opt]=!opts[opt];paintPanel();return;}
           |  var badge=t.closest&&t.closest(".badge");
           |  if(badge){var k=badge.getAttribute("data-k");
-          |    pinned=pinned&&pinned.key===k?null:{key:k,anchor:badge.getBoundingClientRect()};
-          |    if(pinned)showPopover(k,pinned.anchor);else hidePopover();return;}
+          |    pinned=pinned&&pinned.key===k?null:{key:k};
+          |    if(pinned)showPopover(k,badge.getBoundingClientRect());else hidePopover();
+          |    paintBadges();return;}
           |  var item=t.closest&&t.closest(".rowitem");
           |  if(item){var key=item.getAttribute("data-k"),row=byKey[key];
           |    if(row){var b=rectOf(row);if(b){scrollTo({top:scrollY+b.top-innerHeight/3,behavior:"smooth"});
           |      flashUntil[key]=frame+60;}}
           |    return;}
-          |  if(!(t.closest&&t.closest(".pop"))){pinned=null;hidePopover();}
+          |  if(!(t.closest&&t.closest(".pop"))){pinned=null;hidePopover();paintBadges();}
           |}
           |
           |function push(snapshot){
@@ -380,8 +435,9 @@ object DevtoolsJs:
           |
           |function uninstall(){
           |  if(!host)return;
+          |  document.removeEventListener("click",onDocClick,true);
           |  host.parentNode&&host.parentNode.removeChild(host);
-          |  host=root=layer=panel=pill=popover=null;rows=[];byKey={};labels={};
+          |  host=root=layer=panel=pill=popover=null;rows=[];byKey={};labels={};nodes={};pinned=null;
           |}
           |
           |window.__kyoDev={install:install,push:push,uninstall:uninstall,onCommand:null,
