@@ -639,6 +639,28 @@ object ShowcaseCompile:
                 .onClose(notify)(p("Drawer content"))
         )
 
+    /** A right-click menu on a table row — the composition [[uic.ContextMenu]] cannot wrap.
+      *
+      * Everything the menu keeps is allocated in the CALLER's mount and handed back as a
+      * `ContextMenu.State`: the menu itself mounts nothing, so it has no instance for a
+      * re-render around it to reset. The row gets `state.openAt` on the TYPED `onContextMenu`
+      * (the payload-free overload would drop the position and open the panel wherever the last
+      * one was), and the panel renders as a sibling of the table, where a `div` is legal.
+      */
+    def rowContextMenu(using Frame): UI =
+        val menu = uic.ContextMenu(Seq(uic.MenuItem("Play").onSelect(()), uic.MenuItem("Queue").onSelect(())))
+        UI.mounted {
+            for st <- menu.state
+            yield fragment(
+                UI.table(UI.tbody(
+                    UI.tr.onContextMenu(st.openAt)(UI.td("Kind of Blue")),
+                    UI.tr.onContextMenu(st.openAt)(UI.td("A Love Supreme"))
+                )),
+                menu.targetless(st)
+            )
+        }
+    end rowContextMenu
+
     // ---- ContextMenu / ToastService / ConfirmDialog ----
     def overlayServicePage(
         svc: uic.ToastService,
@@ -654,6 +676,11 @@ object ShowcaseCompile:
                     uic.MenuItem("Share").items(uic.MenuItem("Email").onSelect(notify))
                 )
             )(div(span("Right-click this region"))),
+
+            // the targetless form: a menu on a TABLE ROW, which the wrapping form cannot have
+            // (its target is a div, and a div between <table> and <tr> is hoisted out by the
+            // parser). The listener goes on the <tr>, the panel beside the table.
+            rowContextMenu,
 
             // toast service resolved at build time; handlers close over the instance
             uic.Button("Toast").onClick(svc.add(uic.Severity.Success, "Saved", "Changes stored.")),

@@ -16,6 +16,21 @@ import kyo.UI.*
   * menu). Escape or an outside click closes it; picking a leaf item runs its
   * `onSelect` and closes everything.
   *
+  * WHAT THE WRAPPER IS, and what that rules out: a `div`
+  * (`div.p-uic-contextmenu-target`). So the wrapping form can only go where a
+  * `div` may go, and the placement it most often wants is the one place a `div`
+  * may not: between a `<table>`/`<tbody>` and its `<tr>`. The HTML parser hoists
+  * such a `div` clean out of the table, so a per-ROW menu cannot be had by
+  * wrapping the row. Two ways round it, in order of preference:
+  *   1. Wrap the TABLE and identify the row yourself — what [[DataTable]] does
+  *      for the tables it owns ([[DataTable.contextMenuRow]] plus
+  *      [[DataTable.onRowContextMenu]]), and what a hand-built table has to do
+  *      by hand: a ref written from each row's own `onContextMenu`, which fires
+  *      first by bubbling and leaves the menu reading a settled target.
+  *   2. [[targetless]] — the panel alone, opened by a handler you put on
+  *      whatever element you already have. That is the form for a `<tr>`, a
+  *      `<canvas>` region, or a grid this library did not render.
+  *
   * The panel opens AT THE POINTER, which is what a context menu is: the
   * `contextmenu` event carries its viewport position ([[kyo.UI.MouseEvent.position]]),
   * the component keeps it in a ref, and [[Overlay.pointerAnchor]] places the panel
@@ -48,7 +63,8 @@ import kyo.UI.*
 final case class ContextMenu private (
     itemsV: List[MenuItem] = Nil,
     kids: List[UI] = Nil,
-    idV: Maybe[String] = Absent
+    idV: Maybe[String] = Absent,
+    stateV: Maybe[ContextMenu.State] = Absent
 ) extends Node, HasElementId:
     type Self = ContextMenu
 
@@ -60,6 +76,41 @@ final case class ContextMenu private (
     /** Adds target children — the region whose right-click opens the menu. */
     def apply(cs: UI*): ContextMenu = copy(kids = kids ++ cs)
 
+    /** Allocates the state a [[targetless]] menu keeps, for these items.
+      *
+      * Runs in the caller's own `UI.mounted`, which is where the menu's lifetime now sits: a
+      * targetless menu mounts nothing of its own, so it has no instance to lose and nothing for a
+      * re-render around it to reset. Build it from the SAME value you later render — the submenu
+      * refs are allocated per submenu path, and a state built from a different item tree would
+      * leave the tree's open/closed slots unaddressed.
+      */
+    def state(using Frame): ContextMenu.State < (Sync & Env[UI.Commands]) =
+        for
+            open  <- Signal.initRef(false)
+            focus <- Signal.initRef(List.empty[Int])
+            at    <- Signal.initRef(Absent: Maybe[UI.Point])
+            refs  <- Kyo.foreach(submenuPaths)(p => Signal.initRef(false).map(p -> _))
+            cmds  <- UI.commands
+            base  <- cmds.freshId
+        yield new ContextMenu.State(open, at, focus, refs.toList, base)
+
+    /** The panel WITHOUT a target region: no wrapper `div`, no mount, no right-click listener of
+      * its own — only the floating panel, gated on the state's open flag.
+      *
+      * This is the form for a target the wrapping `div` cannot reach: a `<tr>`, a `<canvas>`
+      * region, a grid this library did not render. The listener and the panel come apart, so each
+      * goes where it is legal: `ContextMenu.State.openAt` onto the element you already have, and
+      * this render OUTSIDE the table (a sibling of it) — the panel portals to `document.body`
+      * once it opens, but the markup it is written into still has to be markup a `div` may live
+      * in.
+      *
+      * What you give up against the wrapping form: it cannot suppress the browser's native menu
+      * for you, because it does not own the element the right-click lands on. `openAt` on a typed
+      * `onContextMenu` is what does that — the kyo client suppresses the native menu for any
+      * element with a context-menu handler in its ancestor chain.
+      */
+    def targetless(state: ContextMenu.State): ContextMenu = copy(stateV = Present(state))
+
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): ContextMenu = copy(idV = v)
 
@@ -67,6 +118,19 @@ final case class ContextMenu private (
     private[uic] def submenuPaths: List[List[Int]] = MenuRender.submenuPaths(itemsV)
 
     private[uic] def render(using Frame): UI =
+        stateV match
+            case Present(st) => panelOnly(st)
+            case Absent      => wrapping
+
+    /** [[targetless]]: the panel alone, over refs the caller allocated. Nothing is mounted here —
+      * the state came from the caller's own mount — so this render is pure, and the whole of
+      * F-27 (a keyless mount reset by every enclosing emission) cannot arise in this form.
+      */
+    private def panelOnly(st: ContextMenu.State)(using Frame): UI =
+        val self = copy(idV = if idV.isDefined then idV else Present(st.base))
+        self.panelRegion(st.open, st.focus, st.at, st.submenus)
+
+    private def wrapping(using Frame): UI =
         // Open state, keyboard focus path, and one signal per submenu are allocated
         // by this effectful mount; static projections (SSG, the SSR page HTML)
         // render the closed target region inert.
@@ -103,7 +167,7 @@ final case class ContextMenu private (
             case Present(id) => mount.keyed(ContextMenu -> id)
             case Absent      => mount
         end match
-    end render
+    end wrapping
 
     /** The subscription tree the mount publishes (golden-test seam).
       *
@@ -132,26 +196,39 @@ final case class ContextMenu private (
         // that opens it are built once, out here, and only the panel is placed reactively.
         val self = copy(idV = if idV.isDefined then idV else Present(base))
         self.targetShell(Present(self.openHandler(Present(openRef), Present(focus), Present(refs), Present(at)))) {
-            List(MenuRender.resolveDisabled(itemsV) { items =>
-                val resolved = self.copy(itemsV = items)
-                openRef.render { isOpen =>
-                    focus.render { f =>
-                        MenuRender.renderAll(refs) { open =>
-                            UI.fragment(resolved.panelFor(
-                                isOpen,
-                                Present(openRef),
-                                f,
-                                Present(focus),
-                                open.withDefaultValue(false),
-                                Present(refs),
-                                Present(at)
-                            )*)
-                        }
-                    }
-                }
-            })
+            List(self.panelRegion(openRef, focus, at, refs))
         }
     end wired
+
+    /** The reactive half, and the ONLY half: every signal this component watches reaches the
+      * panel and nothing else. Shared by both forms, which is what makes [[targetless]] a
+      * placement choice rather than a second implementation.
+      */
+    private def panelRegion(
+        openRef: SignalRef[Boolean],
+        focus: SignalRef[List[Int]],
+        at: SignalRef[Maybe[UI.Point]],
+        refs: List[(List[Int], SignalRef[Boolean])]
+    )(using Frame): UI =
+        MenuRender.resolveDisabled(itemsV) { items =>
+            val resolved = copy(itemsV = items)
+            openRef.render { isOpen =>
+                focus.render { f =>
+                    MenuRender.renderAll(refs) { open =>
+                        UI.fragment(resolved.panelFor(
+                            isOpen,
+                            Present(openRef),
+                            f,
+                            Present(focus),
+                            open.withDefaultValue(false),
+                            Present(refs),
+                            Present(at)
+                        )*)
+                    }
+                }
+            }
+        }
+    end panelRegion
 
     /** The target region and whatever is asked to hang inside it.
       *
@@ -312,4 +389,48 @@ object ContextMenu:
       * children via `apply(...)`.
       */
     def apply(): ContextMenu = new ContextMenu()
+
+    /** What a [[ContextMenu.targetless]] menu keeps between right-clicks, held by the caller
+      * because the panel has no mount of its own. Allocate it with [[ContextMenu.state]].
+      *
+      * The fields are the component's, not the caller's: what a caller does with this value is
+      * [[openAt]] on its own element and [[close]] when something else should shut the menu. That
+      * boundary is the point. Opening is four writes in one order — collapse the submenu tree,
+      * clear the highlight, write the point, THEN set open — and the ordering is not decorative:
+      * the panel is placed from the point, so a panel that exists before there is a point to be
+      * at renders at wherever the last one was. Handing out `openAt` instead of the refs is what
+      * keeps that from being the caller's problem to get right.
+      */
+    final class State private[uic] (
+        private[uic] val open: SignalRef[Boolean],
+        private[uic] val at: SignalRef[Maybe[UI.Point]],
+        private[uic] val focus: SignalRef[List[Int]],
+        private[uic] val submenus: List[(List[Int], SignalRef[Boolean])],
+        private[uic] val base: String
+    ):
+        /** The right-click handler for the caller's own element: `tr.onContextMenu(state.openAt)`.
+          *
+          * Bind it to the TYPED `onContextMenu` overload — the payload-free one registers the
+          * event and drops the position, which still opens a menu, just not at the pointer.
+          */
+        def openAt(using Frame): MouseEvent => Any < Async =
+            e =>
+                for
+                    _ <- MenuRender.openExactly(submenus, Absent)
+                    _ <- focus.set(Nil)
+                    _ <- at.set(e.position)
+                    _ <- open.set(true)
+                yield ()
+
+        /** Closes the menu and forgets where it was, for the closes the panel cannot see: the
+          * row it was opened on going away, a navigation, a caller's own Escape. Escape on the
+          * panel, an outside click and a leaf activation already close it themselves.
+          */
+        def close(using Frame): Any < Async =
+            for
+                _ <- open.set(false)
+                _ <- MenuRender.openExactly(submenus, Absent)
+                _ <- focus.set(Nil)
+            yield ()
+    end State
 end ContextMenu

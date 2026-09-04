@@ -1580,6 +1580,18 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheckFailure(preamble + """def x = uic.ContextMenu().placeholder("p")""")
     }
 
+    // The targetless form is a placement choice, not a second open-state API: the caller holds the
+    // state because the panel has no mount to hold it, and the only two things that value offers
+    // are a right-click handler and a close. Anything looser — a raw Boolean, the caller's own
+    // refs — would put the open ordering (point BEFORE open) back where it can be got wrong.
+    "ContextMenu.targetless takes the state the component allocated, not a bare open ref" in {
+        typeCheck(
+            preamble + """def x(using Frame): UI = UI.mounted { val m = uic.ContextMenu(Seq(uic.MenuItem("Play"))); m.state.map(st => fragment(tr.onContextMenu(st.openAt)(td("row")), m.targetless(st))) }"""
+        )
+        typeCheckFailure(preamble + """def x(o: SignalRef[Boolean]) = uic.ContextMenu().targetless(o)""")
+        typeCheckFailure(preamble + """def x = uic.ContextMenu().targetless(true)""")
+    }
+
     "ToastService is an Env service: typed messages in, Env-typed region out; no visibility ref" in {
         typeCheck(
             preamble + """def x(svc: uic.ToastService)(using Frame): Unit < Async = svc.add(uic.ToastMessage(uic.Severity.Success, Present("S"), Present("D"), Present(3.seconds)))"""
