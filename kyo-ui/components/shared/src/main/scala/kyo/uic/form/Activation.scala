@@ -25,12 +25,22 @@ object Activation:
     /** A field's re-check schedule: the DOM events it validates on. Combinable — a field
       * validates on the union of the values it is declared with.
       *
+      * The DEFAULT, for a field that declares none, is [[Blur]] + [[Change]]: quiet until the
+      * reader leaves the field, live from then on. That pairing is only half the story — what
+      * a reader SEES is gated separately by [[Reveal]], whose own default (`WhenTouched`) is
+      * what keeps the first keystroke silent. Together they are "reward early, punish late".
+      *
       *   - [[Change]] — every value change (an observer on the bound value; the error surfaces
       *     inline as the user types, RHF `onChange` mode). Works the same on field-array rows:
       *     a row has no ambient `Scope`, so its observer is unscoped and the array owns it,
       *     cancelling it when the row is removed or the form unmounts.
       *   - [[Blur]]   — focus loss (wired to the field's `onBlur`), even without an edit.
-      *   - [[Submit]] — form submit (driven by `Form.submit`).
+      *   - [[Submit]] — submit ONLY, and it is how you opt OUT of the default rather than a
+      *     trigger that adds anything: every field is validated at submit whatever it declares
+      *     (`FormField.validateForSubmit` ignores the set). Declaring it alone therefore means
+      *     "never re-check while the reader is in the field", which is a real choice for an
+      *     expensive async rule — and reads as one, where an empty declaration would read as
+      *     an omission.
       */
     sealed trait Field extends Activation
 

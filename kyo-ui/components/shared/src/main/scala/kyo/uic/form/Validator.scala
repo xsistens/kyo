@@ -42,9 +42,18 @@ object Validator:
                 }
     end extension
 
+    /** No rules: every value passes. The default of a field that only holds a value —
+      * `Form.field` starts every spec here, so a caller declaring no rules writes nothing.
+      *
+      * It is also the identity of [[and]], which is what `all()` over an empty sequence
+      * already returned; that spelling was the only way to say "no rules" and read as an
+      * accident. Needs no `Frame`, so it can be the default of a PURE field spec.
+      */
+    def none[A]: Validator[A] = _ => (Absent: Maybe[FieldError])
+
     /** Chains validators left-to-right with the ordered short-circuit of [[and]]. */
     def all[A](vs: Validator[A]*)(using Frame): Validator[A] =
-        if vs.isEmpty then (_ => (Absent: Maybe[FieldError])) else vs.reduce(_ and _)
+        if vs.isEmpty then none[A] else vs.reduce(_ and _)
 
     /** A rule that applies only when `cond` holds — the escape hatch for
       * "rule depends on a condition / on other form state".
