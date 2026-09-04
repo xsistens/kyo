@@ -23,9 +23,20 @@ import kyo.apollo.network.ExecutionContext
   *     response back into the store), and emit the networked value. Use when a
   *     dependent-key change should trigger a genuine refetch (e.g. a list whose
   *     membership only the server can recompute).
+  *   - `CacheFirst` — re-read, and on a MISS go to the network instead of emitting
+  *     the miss. The re-read leg of `FetchPolicy.CacheFirst`, for a watcher that
+  *     should recover from an incomplete cache rather than hand its consumer a
+  *     failed query: a record evicted by the LRU, garbage-collected, or written by
+  *     an operation that selected less than this one reads.
+  *
+  * apollo-kotlin's `refetchPolicy` takes the whole `FetchPolicy`, so `NetworkFirst`,
+  * `CacheAndNetwork`, `NoCache` and `Standby` are refetch legs there too. Only the
+  * three that a watcher has a distinct meaning for are modelled here; widening this
+  * to `FetchPolicy` would be a breaking change to every `.refetchPolicy(...)` call
+  * site and to the context bag both policies ride in.
   */
 enum RefetchPolicy extends ExecutionContext.Element derives CanEqual:
-    case CacheOnly, NetworkOnly
+    case CacheOnly, NetworkOnly, CacheFirst
 
     /** Every case is keyed by the [[RefetchPolicy]] companion in the context bag. */
     override def key: ExecutionContext.Key[RefetchPolicy] = RefetchPolicy

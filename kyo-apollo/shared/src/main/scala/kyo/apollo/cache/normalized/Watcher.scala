@@ -130,19 +130,24 @@ extension [D](call: ApolloCall[D])
                         offer(response)
                         establishFrom(response)
 
-                // CacheOnly update: re-read through the same denormalization path as the
-                // first read, so a re-emitted value equals a fresh read. A read that now
-                // misses (the watched record was removed) surfaces the miss as a value —
-                // but the watch set is KEPT, so a later write restoring the data revives
-                // the watcher (Apollo Client watchers stay registered across incomplete
-                // reads). A watch that never established a set stays silent.
-                def reread(): Unit =
+                // Re-read through the same denormalization path as the first read, so a
+                // re-emitted value equals a fresh read. What a read that now MISSES means is
+                // the caller's policy, which is why the miss leg is a parameter: `CacheOnly`
+                // surfaces it as a value, `CacheFirst` goes to the network for it.
+                //
+                // Either way the watch set is KEPT, so a later write restoring the data
+                // revives the watcher (Apollo Client watchers stay registered across
+                // incomplete reads). A watch that never established a set stays silent.
+                def reread(onMiss: Throwable => Unit): Unit =
                     Try(store.readOperationWithKeys(request.operation)) match
                         case Success((data, keys)) =>
                             watchSet = keys
                             if active then offer(CacheResponses.hit(request, data, keys))
-                        case Failure(cause) =>
-                            if active && watchSet.nonEmpty then offer(CacheResponses.miss(request, cause))
+                        case Failure(cause) => onMiss(cause)
+
+                /** [[RefetchPolicy.CacheOnly]]'s miss leg: the miss IS the value. */
+                def emitMiss(cause: Throwable): Unit =
+                    if active && watchSet.nonEmpty then offer(CacheResponses.miss(request, cause))
 
                 // NetworkOnly update: re-run the operation over the network (which writes
                 // the response back into the store) and emit the networked value.
@@ -156,8 +161,9 @@ extension [D](call: ApolloCall[D])
                 def onChangedKeys(changedKeys: Set[String]): Unit =
                     if active && changedKeys.intersect(watchSet).nonEmpty then
                         refetchPolicy match
-                            case RefetchPolicy.CacheOnly   => reread()
+                            case RefetchPolicy.CacheOnly   => reread(emitMiss)
                             case RefetchPolicy.NetworkOnly => refetchOverNetwork()
+                            case RefetchPolicy.CacheFirst  => reread(_ => refetchOverNetwork())
 
                 // Subscribe to the store *before* the initial fetch so a write landing
                 // during the fetch is never missed; the empty `watchSet` guards against

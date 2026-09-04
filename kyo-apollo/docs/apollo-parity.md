@@ -88,8 +88,10 @@ Paths are relative to the repository root; the modules are `kyo-apollo` (core, s
 ## 5. Fetch policies & fetching behaviors
 
 `enum FetchPolicy { CacheFirst, NetworkOnly, CacheOnly, NetworkFirst, CacheAndNetwork, NoCache,
-Standby }` · `FetchPolicy.scala`; watchers add `RefetchPolicy { CacheOnly, NetworkOnly }` (the
-`nextFetchPolicy` equivalent). All V3/V4 policies **PRESENT**.
+Standby }` · `FetchPolicy.scala`; watchers add `RefetchPolicy { CacheOnly, NetworkOnly, CacheFirst }`
+(the `nextFetchPolicy` equivalent). All V3/V4 policies **PRESENT**. apollo-kotlin's `refetchPolicy`
+takes the whole `FetchPolicy`; these three are the ones a watcher has a distinct meaning for, and
+widening to `FetchPolicy` would break every call site and collide in the context bag.
 
 | Feature | Status | Note |
 |---|---|---|

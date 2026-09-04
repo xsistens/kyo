@@ -196,6 +196,31 @@ class WatcherSpec extends kyo.test.Test[Any]:
             }
         }
 
+        "CacheFirst refetch: a vanished record goes to the network instead of emitting the miss" in {
+            // The twin of the test above, and the whole of RefetchPolicy.CacheFirst: the same
+            // eviction, answered by a fetch rather than by handing the consumer a failed query.
+            // apollo-kotlin reaches this by passing the full FetchPolicy to refetchPolicy.
+            val engine = CountingEngine()
+            val client = cachedClient(engine)
+            for
+                _ <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                pull <- StreamProbe.Pull.open(
+                    query(client)
+                        .fetchPolicy(FetchPolicy.CacheOnly)
+                        .refetchPolicy(RefetchPolicy.CacheFirst)
+                        .watch()
+                )
+                first <- pull.next
+                _ = assert(first.data == Present(userData("Alice")))
+                _      <- Sync.defer(client.apolloStore.remove("User:1"))
+                second <- pull.next
+            yield
+                assert(second.error.isEmpty, s"the miss must not reach the consumer: ${second.error}")
+                assert(second.data == Present(userData("Alice")))
+                assert(engine.calls == 2, s"expected a refetch, got ${engine.calls} call(s)")
+            end for
+        }
+
         "a second watcher is independent — one cancel does not silence the other" in {
             watching { (client, pull) =>
                 for

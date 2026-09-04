@@ -6,6 +6,7 @@ All breaking API changes to this project will be documented in this file.
 
 ### Added
 
+- [kyo-apollo] `RefetchPolicy.CacheFirst`: a watcher whose cache re-read MISSES fetches over the network instead of emitting the miss — for a record the LRU evicted, the collector took, or a narrower write left incomplete. `CacheOnly` (the default) is unchanged and still surfaces the miss as a value.
 - [kyo-data] `Glob`: a compiled, platform-independent pattern for matching slash-separated paths, with a `glob"..."` literal interpolator
 - [kyo-data] `OrderedDict[K, V]`: an immutable map that iterates in insertion order
 - [kyo-data] `OrderedDictBuilder[K, V]`: build an `OrderedDict` from repeated adds
