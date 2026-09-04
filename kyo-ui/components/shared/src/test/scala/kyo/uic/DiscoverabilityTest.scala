@@ -229,6 +229,35 @@ class DiscoverabilityTest extends UicTest:
         typeCheckFailure(preamble + """def x = uic.Rating().variant(uic.FieldVariant.Filled)""")
     }
 
+    // A field is DECLARED by a spec with a default for every slot, and the spec is where every
+    // declaration-time decision lives. One spelling per slot is the point: the same knob on the
+    // spec and on the live field would be two ways to say one thing, differing only in whether
+    // anything had read it yet.
+    "a field is declared through a spec, and the spec is chainable to a terminal" in {
+        val form = "import kyo.uic.form.*\ndef f: Form = ???\n"
+        typeCheck(preamble + form + """def x(using Frame): FormField[String] < Sync = f.field("a").declare""")
+        typeCheck(preamble + form + """def x(using Frame): FormField[String] < Sync = f.field.declare""")
+        typeCheck(
+            preamble + form +
+                """def x(using Frame): FormField[String] < Sync = f.field("a").rules(Validator.required()).on(Activation.Blur).domId("i").debounce(1.second).revealWhen(Reveal.OnSubmit).focusable(false).declare"""
+        )
+        typeCheck(preamble + form + """def x(using Frame): NumberField[Int] < Sync = f.numberField[Int](1).on(Activation.Blur).declare""")
+        // The old constructor form: rules and triggers were positional and mandatory.
+        typeCheckFailure(preamble + form + """def x(using Frame) = f.field("a", Validator.required(), Activation.Blur)""")
+        // A spec is not a field — the terminal is what registers it, so forgetting it cannot
+        // silently produce a field the form does not know about.
+        typeCheckFailure(preamble + form + """def x(using Frame): FormField[String] < Sync = f.field("a")""")
+    }
+
+    "the declaration-time slots live on the spec only, so there is one spelling of each" in {
+        val form = "import kyo.uic.form.*\ndef g(using Frame): FormField[String] = ???\n"
+        typeCheckFailure(preamble + form + """def x(using Frame) = g.revealWhen(Reveal.OnSubmit)""")
+        typeCheckFailure(preamble + form + """def x(using Frame) = g.focusable(false)""")
+        // What genuinely cannot be decided at declaration stays on the field: a cross-field rule
+        // needs the other field, which does not exist yet when the first one is declared.
+        typeCheck(preamble + form + """def x(using Frame): FormField[String] = g.addRule(Validator.required())""")
+    }
+
     "the seven controls that could not join a form now bind like the rest" in {
         val bindable = "import kyo.uic.form.*\n"
         // NumberFormControl: Slider, Knob, Rating alongside InputNumber.
