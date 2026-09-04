@@ -383,6 +383,43 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
         }
     }
 
+    "an anchor that also runs a handler keeps the browser's default on a MODIFIED click" in {
+        // The dispatcher claims an anchor's click when the anchor carries a kyo handler, so the
+        // handler rather than the href drives the action. A ctrl/cmd/shift/alt click is not that
+        // case: it is the user asking the browser for a new tab, and preventDefault removes the one
+        // capability a link has over a button. The handler runs either way — the gate is on the
+        // browser default alone — so both clicks release the latch. Same test `UILocation`'s own
+        // anchor interceptor applies to the same click.
+        for
+            ready   <- Sync.defer(new DomTestEnv.MountReady)
+            clicked <- Latch.init(2)
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(
+                UI.div(UI.a.href(UI.Href.Path("/target")).id("modified-click").onClick(clicked.release)("Link")),
+                ready
+            )))
+            _ <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("modified-click") != null))
+            prevented <- Sync.defer {
+                val target = dom.document.getElementById("modified-click")
+                def click(ctrl: Boolean): Boolean =
+                    val event = scalajs.Dynamic.newInstance(dom.window.asInstanceOf[scalajs.Dynamic].MouseEvent)(
+                        "click",
+                        scalajs.Dynamic.literal(bubbles = true, cancelable = true, ctrlKey = ctrl)
+                    )
+                    discard(target.asInstanceOf[scalajs.Dynamic].dispatchEvent(event))
+                    event.defaultPrevented.asInstanceOf[Boolean]
+                end click
+                (click(false), click(true))
+            }
+            // Both clicks reached the handler; only the plain one had its default taken.
+            _ <- clicked.await
+            _ <- fiber.interrupt
+            _ <- fiber.getResult
+        yield
+            assert(prevented._1)
+            assert(!prevented._2)
+        end for
+    }
+
     "suppresses a scroll key on a target whose isContentEditable the DOM does not define" in {
         // `scrollKeyPrevented` consults `isContentEditable`, which is an HTMLElement member: an SVG target does not
         // carry it, and jsdom implements contentEditable on no element at all, so it reads as undefined. Reading it

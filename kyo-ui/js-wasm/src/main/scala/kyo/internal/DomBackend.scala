@@ -1691,7 +1691,23 @@ private[kyo] object DomBackend:
                         // keeps native behavior: an in-page `#anchor` scrolls, and a cross-document route
                         // is handled by UILocation's interceptor. Prevent-defaulting every anchor here
                         // would also kill those.
-                        if target.tagName.toLowerCase == "a" && evTypes.contains("click") then e.preventDefault()
+                        //
+                        // A MODIFIED click is never "let the handler drive the action": it is the user
+                        // asking the browser, explicitly, for a new tab or window, so the default stays
+                        // theirs. The handler still runs — the effect (analytics, closing a menu,
+                        // notifying a parent) is wanted either way, and only the navigation belongs to
+                        // the browser. This is the test `UILocation`'s anchor interceptor already
+                        // applies to the same click; without it here, an anchor that also runs an effect
+                        // silently loses the one capability it has over a button.
+                        //
+                        // `button != 0` carries no weight on a current browser — the middle button fires
+                        // `auxclick`, which kyo listens for nowhere, so it never reaches this branch. It
+                        // is kept for the browsers that still route a non-primary click through `click`,
+                        // and to read identically to `UILocation`.
+                        val modifiedClick =
+                            me.ctrlKey || me.metaKey || me.shiftKey || me.altKey || me.button != 0
+                        if !modifiedClick && target.tagName.toLowerCase == "a" && evTypes.contains("click") then
+                            e.preventDefault()
                         clickSubmitGuard = true
                         discard(dom.window.setTimeout(() => clickSubmitGuard = false, 0))
                         Present(UIEvent.Click(path, mouse))

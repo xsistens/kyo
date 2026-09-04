@@ -868,6 +868,20 @@ class HtmlRendererTest extends UITest:
             assert(page.contains("ws.readyState===1"))
         }
 
+        "a modified anchor click keeps the browser's default, and the handler still runs" in {
+            // Twin of the guard in `DomBackend`'s click branch: without the modifier test an anchor
+            // that also carries a kyo handler cannot be ctrl-clicked into a new tab. The second
+            // assertion is the load-bearing one — `post({Click:` sits OUTSIDE the `if`, so the
+            // effect is dispatched on a modified click too and only the navigation is left to the
+            // browser. Fixing one backend and not the other would make SSR and SPA disagree about
+            // the same click.
+            val page = kyo.internal.HtmlRenderer.renderPage("t", "<div></div>", "", "/app")
+            assert(page.contains("var kmod=e.ctrlKey||e.metaKey||e.shiftKey||e.altKey||e.button!==0;"))
+            assert(page.contains(
+                """if(!kmod&&el.tagName&&el.tagName.toLowerCase()==='a'&&he(el,"click"))e.preventDefault();post({Click:"""
+            ))
+        }
+
         "rendered page boots one live range registry and parses replacements in parent context" in {
             val page = kyo.internal.HtmlRenderer.renderPage(
                 "t",
