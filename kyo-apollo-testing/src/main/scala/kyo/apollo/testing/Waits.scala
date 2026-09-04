@@ -45,10 +45,21 @@ import kyo.*
   */
 object Waits:
 
-    /** How long [[eventually]] keeps trying. Generous on purpose: the budget is
-      * only spent by a test that is about to fail anyway.
+    /** How long [[eventually]] keeps trying.
+      *
+      * Deliberately far past anything a healthy run needs, because the budget is
+      * only ever SPENT by a test that is about to fail: a passing assertion
+      * returns the moment its condition holds and never sees this number. So the
+      * trade is thirty extra seconds on a genuine failure against a false red,
+      * and a false red costs a person an afternoon.
+      *
+      * Three seconds was the first value here and it was still a bet — it lost
+      * one, on a machine held at load 29 by twenty-two busy loops, where an
+      * optimistic cache overlay took longer than that to be scheduled. A budget
+      * this size is not "how long I think this takes"; it is how long to stay
+      * patient before concluding the thing is genuinely broken.
       */
-    val defaultWithin: Duration = 3.seconds
+    val defaultWithin: Duration = 30.seconds
 
     /** [[eventually]]'s poll cadence. */
     val defaultEvery: Duration = 10.millis

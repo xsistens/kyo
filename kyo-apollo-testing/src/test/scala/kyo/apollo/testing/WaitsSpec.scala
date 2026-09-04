@@ -42,11 +42,12 @@ class WaitsSpec extends kyo.test.Test[Any]:
                 for
                     ref          <- Signal.initRef(0)
                     _            <- Fiber.init(Async.sleep(100L.millis).andThen(ref.set(1)))
-                    (seen, took) <- elapsedOf(eventually(ref.current, within = 5.seconds)(_ == 1))
+                    (seen, took) <- elapsedOf(eventually(ref.current)(_ == 1))
                 yield
                     assert(seen == 1)
-                    // The budget is fifty times the wait; spending it would mean the
-                    // helper polls to the end regardless of the condition.
+                    // Against the 30s default: a helper that polled to the end of
+                    // its budget regardless of the condition would blow this by two
+                    // orders of magnitude. The budget is only spent by a failure.
                     assert(took < 2.seconds, s"took $took")
             }
         }
