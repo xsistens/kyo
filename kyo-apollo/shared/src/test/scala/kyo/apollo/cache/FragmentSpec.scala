@@ -66,6 +66,44 @@ class FragmentSpec extends kyo.test.Test[Any]:
     private val ada     = UserFields("User", "1", "Ada")
     private val userKey = CacheKey("User:1")
 
+    // A user holding an id-less child, reachable both as a fragment root and through a
+    // query. The two write paths root their normalizer differently — the fragment at the
+    // entity key, the operation at QUERY_ROOT — so before the path was rerooted at every
+    // keyed object they disagreed about where that child lives.
+    final case class Avatar(url: String) derives Schema
+    final case class ProfileFields(__typename: String, id: String, avatar: Avatar) derives Schema
+    final case class ProfileData(user: ProfileFields) derives Schema
+
+    private def avatarSelections: List[CompiledSelection] =
+        List(
+            CompiledField("__typename", CompiledNamedType("String")),
+            CompiledField("id", CompiledNamedType("String")),
+            CompiledField(
+                "avatar",
+                CompiledNamedType("Avatar"),
+                selections = List(CompiledField("url", CompiledNamedType("String")))
+            )
+        )
+
+    object ProfileFragment extends Fragment[ProfileFields]:
+        def dataSchema: Schema[ProfileFields] = summon[Schema[ProfileFields]]
+        def rootField: CompiledField =
+            CompiledField("user", CompiledNamedType("User"), selections = avatarSelections)
+    end ProfileFragment
+
+    final case class ProfileQuery() extends Query[ProfileData]:
+        def name                            = "Profile"
+        def document                        = "query Profile { user { __typename id avatar { url } } }"
+        def dataSchema: Schema[ProfileData] = summon[Schema[ProfileData]]
+        def rootField: CompiledField =
+            CompiledField(
+                "data",
+                CompiledNamedType("Query"),
+                selections = List(ProfileFragment.rootField)
+            )
+        def variables: Json = Json.JObj(VectorMap.empty)
+    end ProfileQuery
+
     "Fragment cache access" - {
 
         // --- tests ------------------------------------------------------------------
@@ -117,6 +155,21 @@ class FragmentSpec extends kyo.test.Test[Any]:
             assert(changed.contains("User:1"))
             // The full operation read now reflects the fragment's change.
             assert(s.readOperation(CurrentUserQuery()).user.name == "Bob")
+        }
+
+        "writeFragment and writeOperation key an entity's id-less child identically" in {
+            // Found while closing GAPS.md F-18, and closed by the same line. `writeFragment`
+            // roots its normalizer at the entity key and `writeOperation` at QUERY_ROOT, so
+            // while the path was carried down verbatim the same avatar landed under
+            // `User:1.avatar` from one writer and `QUERY_ROOT.user.avatar` from the other —
+            // two records for one object, and whichever wrote last owned the pointer.
+            val s       = store()
+            val profile = ProfileFields("User", "1", Avatar("u"))
+            s.writeOperation(ProfileQuery(), ProfileData(profile))
+            s.writeFragment(ProfileFragment, userKey, profile)
+
+            assert(s.cache.allRecords().keySet.filter(_.contains("avatar")) == Set("User:1.avatar"))
+            assert(s.readOperation(ProfileQuery()) == ProfileData(profile))
         }
 
         "a fragment write of identical data reports no changed keys and publishes nothing" in {

@@ -16,9 +16,13 @@ import kyo.apollo.json.Json
   * @param field     the [[CompiledField]] whose selection produced this object
   * @param variables the operation's variables (name → already-encoded JSON), as
   *                  produced by `Operation.variables`
-  * @param path      the response path to this object from the root record,
-  *                  already rooted (e.g. `List("QUERY_ROOT", "countries", "0")`);
-  *                  used only for the id-less path fallback
+  * @param path      the path to this object from its NEAREST KEYED ANCESTOR,
+  *                  that ancestor's key first: `List("QUERY_ROOT", "countries", "0")`
+  *                  under the root, `List("Album:1", "images", "0")` under an
+  *                  identified album. Rooting it at the entity rather than at the
+  *                  operation is what makes the fallback key the same no matter
+  *                  which operation wrote the object (GAPS.md F-18). Used only for
+  *                  the id-less path fallback.
   */
 final case class CacheKeyGeneratorContext(
     field: CompiledField,
@@ -81,7 +85,7 @@ final class IdCacheKeyGenerator(
             )
         yield CacheKey(typename, id)
 
-    /** The rooted response path as a key, when one is available. */
+    /** The path below the nearest keyed ancestor as a key, when one is available. */
     private def pathKey(context: CacheKeyGeneratorContext): Maybe[CacheKey] =
         if context.path.nonEmpty then Present(CacheKey.fromPath(context.path)) else Absent
 end IdCacheKeyGenerator

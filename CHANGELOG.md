@@ -30,6 +30,7 @@ All breaking API changes to this project will be documented in this file.
 
 ### Changed
 
+- [kyo-apollo] Normalizer: an object that HAS a cache key now roots its id-less descendants' path keys at that key (`Album:1.images.0`, not `QUERY_ROOT.album.images.0`), so two operations reaching the same entity by different routes write one record instead of two and a narrower write no longer strips fields the wider reader selected. Matches apollo-kotlin, and makes `writeFragment` and `writeOperation` agree about where an entity's id-less child lives. BREAKING for a persisted cache: keys under an entity change shape and the old records become unreachable garbage until `garbageCollect()`; the shipped `MemoryCache` is unaffected.
 - [kyo-schema] `Schema.dictSchema`: non-String-key `Dict` now serializes each entry as a two-field `key`/`value` record (the same form `mapSchema` uses) instead of a bare two-element array. BREAKING: previously-serialized MsgPack bytes for a non-String-key `Dict` cannot be read by the new code. MsgPack was the only codec that decoded the old form; the other six failed to decode and Protobuf silently emitted corrupt bytes.
 - [kyo-schema] `Schema.dictSchema` and `Schema.stringDictSchema`: a case class field holding an empty `Dict` now decodes on Protobuf instead of failing with `MissingFieldException`, matching the `Map` givens
 - [kyo-core] `Fiber.init`: use `Scope` effect to guarantee termination of forked fiber

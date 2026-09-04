@@ -208,6 +208,62 @@ class NormalizerSpec extends kyo.test.Test[Any]:
             assert(records("QUERY_ROOT.items.1").get("label") == Present(RecordValue.Scalar(jstr("y"))))
         }
 
+        // --- Where an id-less object's path is rooted -----------------------------
+
+        "an id-less child of an identified parent is keyed under the parent, not the operation root" in {
+            // The whole of F-18: were the key `QUERY_ROOT.album.cover`, a second operation
+            // reaching the same album by another route would mint a SECOND record for one
+            // logical field, and the narrower of the two writers would win the parent's
+            // pointer while missing the other's fields.
+            val cover = obj("cover", "Image", List(leaf("url")))
+            val album = obj("album", "Album", List(leaf("__typename"), leaf("id"), cover))
+            val records = normalize(
+                selections = List(album),
+                data = Map(
+                    "album" -> Json.JObj(Map(
+                        "__typename" -> jstr("Album"),
+                        "id"         -> jstr("1"),
+                        "cover"      -> Json.JObj(Map("url" -> jstr("u")))
+                    ))
+                )
+            )
+            assert(records.keySet == Set("QUERY_ROOT", "Album:1", "Album:1.cover"))
+            assert(records("Album:1").get("cover") == Present(RecordValue.Reference(CacheReference("Album:1.cover"))))
+        }
+
+        "an id-less list under an identified parent indexes below the parent's key" in {
+            val images = listOf(obj("images", "Image", List(leaf("url"))))
+            val album  = obj("album", "Album", List(leaf("__typename"), leaf("id"), images))
+            val records = normalize(
+                selections = List(album),
+                data = Map(
+                    "album" -> Json.JObj(Map(
+                        "__typename" -> jstr("Album"),
+                        "id"         -> jstr("1"),
+                        "images" -> Json.JArr(
+                            Chunk(Json.JObj(Map("url" -> jstr("a"))), Json.JObj(Map("url" -> jstr("b"))))
+                        )
+                    ))
+                )
+            )
+            assert(records.keySet == Set("QUERY_ROOT", "Album:1", "Album:1.images.0", "Album:1.images.1"))
+        }
+
+        "a path-keyed object's own children keep their flat path key" in {
+            // The idempotence half of the rule, and the reason rerooting changed no existing
+            // expectation: with no identity anywhere, restarting the path at the child's own
+            // path key renders the identical string.
+            val breakdown = obj("breakdown", "Breakdown", List(leaf("views")))
+            val stats     = obj("stats", "Stats", List(breakdown))
+            val records = normalize(
+                selections = List(stats),
+                data = Map(
+                    "stats" -> Json.JObj(Map("breakdown" -> Json.JObj(Map("views" -> jnum(3)))))
+                )
+            )
+            assert(records.keySet == Set("QUERY_ROOT", "QUERY_ROOT.stats", "QUERY_ROOT.stats.breakdown"))
+        }
+
         // --- Deduplication / merge within one response ----------------------------
 
         "the same entity referenced twice merges into one record with unioned fields" in {

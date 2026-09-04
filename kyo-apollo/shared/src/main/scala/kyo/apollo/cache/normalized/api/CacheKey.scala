@@ -47,9 +47,13 @@ object CacheKey:
     def apply(typename: String, id: String): CacheKey =
         if id.isEmpty then CacheKey(typename) else CacheKey(s"$typename:$id")
 
-    /** Build a position-based key from a rooted response `path`, e.g.
-      * `List("QUERY_ROOT", "countries", "0")` becomes `QUERY_ROOT.countries.0`.
-      * The fallback [[CacheKeyGenerator]] uses when an object carries no id.
+    /** Build a position-based key from a `path`, e.g. `List("QUERY_ROOT",
+      * "countries", "0")` becomes `QUERY_ROOT.countries.0`. The fallback
+      * [[CacheKeyGenerator]] uses when an object carries no id.
+      *
+      * The path starts at the object's nearest keyed ancestor, so under an
+      * identified parent the key is `Album:1.images.0` rather than the path the
+      * response happened to take to get there.
       */
     def fromPath(path: List[String]): CacheKey = CacheKey(path.mkString("."))
 end CacheKey

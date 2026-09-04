@@ -32,8 +32,8 @@ final case class TypePolicy(typename: String, keyFields: List[String])
   *
   * For an object whose `__typename` has a registered [[TypePolicy]], the key is
   * `Typename:<v1>+<v2>+…` over the policy's key fields; when a key field is
-  * absent it falls back to the object's response path (so a partially-selected
-  * object still gets a stable key). Objects of unpolicied types are keyed by the
+  * absent it falls back to the object's path below its nearest keyed ancestor (so a
+  * partially-selected object still gets a stable key). Objects of unpolicied types are keyed by the
   * supplied [[fallback]] (the default id-based generator), so this generalizes
   * [[IdCacheKeyGenerator]] rather than replacing it. Mirrors apollo-kotlin's
   * `TypePolicyCacheKeyGenerator`.
@@ -69,7 +69,7 @@ final class TypePolicyCacheKeyGenerator(
         else Absent
     end keyFromFields
 
-    /** The rooted response path as a key, when one is available. */
+    /** The path below the nearest keyed ancestor as a key, when one is available. */
     private def pathKey(context: CacheKeyGeneratorContext): Maybe[CacheKey] =
         if context.path.nonEmpty then Present(CacheKey.fromPath(context.path)) else Absent
 

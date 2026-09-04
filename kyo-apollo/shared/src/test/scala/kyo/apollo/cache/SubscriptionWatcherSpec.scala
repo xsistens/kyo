@@ -123,6 +123,65 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
         sel.toSubscription()
     end lobbySubscription
 
+    // --- an ID-LESS child list under the same entity (GAPS.md F-18) -------------
+    //
+    // `badges` carries no id, so its elements are keyed by position under their parent.
+    // The query selects two of their fields and the subscription one, which is the whole
+    // of the bug: while the position was counted from the WRITING OPERATION's root, the
+    // subscription's narrower write repointed `LobbyView:L1.badges` at records that had
+    // never carried `tone`, and the query watcher's next re-read missed on it.
+
+    sealed trait LobbyBadgeT
+    object LobbyBadgeT:
+        given TypeName[LobbyBadgeT] = TypeName("LobbyBadge")
+
+    object GBadge:
+        def label: SelectionBuilder[LobbyBadgeT, (label: String)] =
+            SelectionBuilder.scalar("label", CompiledNamedType("String").notNull, ScalarCodec.string)
+        def tone: SelectionBuilder[LobbyBadgeT, (tone: String)] =
+            SelectionBuilder.scalar("tone", CompiledNamedType("String").notNull, ScalarCodec.string)
+    end GBadge
+
+    private def badgesSel[A](
+        sel: SelectionBuilder[LobbyBadgeT, A]
+    ): SelectionBuilder[LobbyViewT, (badges: List[A])] =
+        SelectionBuilder.obj(
+            "badges",
+            CompiledNamedType("LobbyBadge").notNull.list.notNull,
+            Nil,
+            sel,
+            SelectionBuilder.Nesting.Listed(SelectionBuilder.Nesting.Leaf)
+        )
+
+    final case class BadgeWide(label: String, tone: String) derives Schema
+    final case class BadgeNarrow(label: String) derives Schema
+    final case class LobbyWide(id: String, badges: List[BadgeWide]) derives Schema
+    final case class LobbyNarrow(id: String, badges: List[BadgeNarrow]) derives Schema
+
+    private def wideBadgeQuery(id: String): Query[(lobby: LobbyWide)] =
+        SelectionBuilder.obj(
+            "lobby",
+            CompiledNamedType("LobbyView").notNull,
+            lobbyArg(id),
+            (GLobby.id ~ badgesSel((GBadge.label ~ GBadge.tone).mapInto[BadgeWide])).mapInto[LobbyWide],
+            SelectionBuilder.Nesting.Leaf
+        ).toQuery()
+
+    private def narrowBadgeSubscription(id: String): Subscription[(lobbyUpdates: Option[LobbyNarrow])] =
+        SelectionBuilder.obj(
+            "lobbyUpdates",
+            CompiledNamedType("LobbyView"),
+            lobbyArg(id),
+            (GLobby.id ~ badgesSel(GBadge.label.mapInto[BadgeNarrow])).mapInto[LobbyNarrow],
+            SelectionBuilder.Nesting.Nullable(SelectionBuilder.Nesting.Leaf)
+        ).toSubscription()
+
+    private val wideLobby = LobbyWide("L1", List(BadgeWide("Host", "gold")))
+    // A different label, so the write genuinely changes a watched record: writing the same
+    // value back changes no field, publishes no key, and a watcher would rightly stay silent.
+    private val narrowLobby = LobbyNarrow("L1", List(BadgeNarrow("Co-host")))
+    private val mergedLobby = LobbyWide("L1", List(BadgeWide("Co-host", "gold")))
+
     private val p1                      = Player("p1", "Red")
     private val p2                      = Player("p2", "Blue")
     private def lobby(players: Player*) = Lobby("L1", "Alpha", players.toList, None)
@@ -257,6 +316,31 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
                     second <- pull.next
                 yield assert(second.data.map(_.lobby) == Present(lobby(p1, p2)))
             }
+        }
+
+        "a subscription narrowing an entity's id-less children does not blank a wider query watcher" in {
+            // The end of the F-18 chain, in one test: narrower write → watcher re-read →
+            // what the reader sees. Deliberately on the DEFAULT refetch policy (CacheOnly),
+            // so a later `RefetchPolicy.CacheFirst` cannot satisfy this by going to the
+            // network instead of reading what is there.
+            val client = cachedClient()
+            val store  = client.apolloStore
+            val _      = store.writeOperation(wideBadgeQuery("L1"), (lobby = wideLobby))
+            for
+                pull <- StreamProbe.Pull.open(
+                    client.query(wideBadgeQuery("L1")).fetchPolicy(FetchPolicy.CacheOnly).watch()
+                )
+                first <- pull.next
+                _ = assert(first.data == Present((lobby = wideLobby)))
+                _ <- Sync.defer(
+                    store.writeOperation(narrowBadgeSubscription("L1"), (lobbyUpdates = Some(narrowLobby)))
+                )
+                second <- pull.next
+            yield
+                assert(second.error.isEmpty, s"the re-read must not miss: ${second.error}")
+                // The new label, and the tone the narrower writer never mentioned.
+                assert(second.data == Present((lobby = mergedLobby)))
+            end for
         }
 
         "constructing a call effect fires no request — effects are inert until run" in {

@@ -128,6 +128,68 @@ class CacheSpec extends kyo.test.Test[Any]:
         def variables: Json = Json.JObj(VectorMap.empty)
     end StatsQuery
 
+    // An IDENTIFIED parent holding an id-less child list, reached by two operations that
+    // select different subfields of it — the F-18 shape. Two plain queries rather than a
+    // query and a subscription: what matters is only that the two response paths differ
+    // (`QUERY_ROOT.album...` vs `QUERY_ROOT.featured...`), which is what used to give the
+    // same logical field two records. Both subfields are SERVER fields on purpose — a
+    // `@client` field is never normalized and reads back as null, so it would make the
+    // regression pass for the wrong reason.
+
+    final case class CoverWide(url: String, alt: String) derives Schema
+    final case class AlbumWide(__typename: String, id: String, covers: List[CoverWide]) derives Schema
+    final case class WideData(album: AlbumWide) derives Schema
+
+    final case class CoverNarrow(url: String) derives Schema
+    final case class AlbumNarrow(__typename: String, id: String, covers: List[CoverNarrow])
+        derives Schema
+    final case class FeaturedData(featured: AlbumNarrow) derives Schema
+
+    private def coversField(subfields: List[CompiledSelection]): CompiledField =
+        CompiledField("covers", CompiledListType(CompiledNamedType("Image")), selections = subfields)
+
+    final case class WideQuery() extends Query[WideData]:
+        def name = "WideQuery"
+        def document =
+            "query WideQuery { album { __typename id covers { url alt } } }"
+        def dataSchema: Schema[WideData] = summon[Schema[WideData]]
+        def rootField: CompiledField =
+            obj(
+                "data",
+                "Query",
+                List(obj(
+                    "album",
+                    "Album",
+                    List(leaf("__typename"), leaf("id"), coversField(List(leaf("url"), leaf("alt"))))
+                ))
+            )
+        def variables: Json = Json.JObj(VectorMap.empty)
+    end WideQuery
+
+    final case class FeaturedQuery() extends Query[FeaturedData]:
+        def name = "FeaturedQuery"
+        def document =
+            "query FeaturedQuery { featured { __typename id covers { url } } }"
+        def dataSchema: Schema[FeaturedData] = summon[Schema[FeaturedData]]
+        def rootField: CompiledField =
+            obj(
+                "data",
+                "Query",
+                List(obj(
+                    "featured",
+                    "Album",
+                    List(leaf("__typename"), leaf("id"), coversField(List(leaf("url"))))
+                ))
+            )
+        def variables: Json = Json.JObj(VectorMap.empty)
+    end FeaturedQuery
+
+    private val wideAlbum =
+        WideData(AlbumWide("Album", "1", List(CoverWide("u1", "A"), CoverWide("u2", "B"))))
+
+    private val narrowAlbum =
+        FeaturedData(AlbumNarrow("Album", "1", List(CoverNarrow("u1"), CoverNarrow("u2"))))
+
     /** A fake engine that counts calls and returns the deep body; `status` is
       * mutable so a test can flip the network to an error mid-run.
       */
@@ -232,6 +294,50 @@ class CacheSpec extends kyo.test.Test[Any]:
         "readOperation on an empty store raises CacheMissException at the root" in {
             val miss = intercept[CacheMissException](store().readOperation(LibraryQuery()))
             assert(miss.key == "QUERY_ROOT")
+        }
+
+        // --- 6. Two operations converging on one entity's id-less children -------
+
+        "two operations writing the same entity share its id-less children, and neither loses a field" in {
+            // GAPS.md F-18. The two operations reach Album:1 by different response paths and
+            // select different subfields of its id-less `covers`. Keyed by the response path,
+            // the narrower write repointed `Album:1.covers` at records that had never carried
+            // `alt`, and the wider read then missed on data nobody had contradicted.
+            val s = store()
+            s.writeOperation(WideQuery(), wideAlbum)
+            s.writeOperation(FeaturedQuery(), narrowAlbum)
+
+            assert(s.readOperation(WideQuery()) == wideAlbum)
+            assert(
+                s.cache.loadRecord("Album:1.covers.0").map(_.fieldKeys) ==
+                    Present(Set("__typename", "url", "alt"))
+            )
+            // Two records for two covers — not four. Before the fix each writer minted its own
+            // pair under its own response path, and the parent pointed at whichever came last.
+            assert(
+                s.cache.allRecords().keySet.filter(_.contains("covers")) ==
+                    Set("Album:1.covers.0", "Album:1.covers.1")
+            )
+        }
+
+        "a reordered id-less list merges positionally, keeping the previous occupant's fields" in {
+            // The hazard the fix trades the hard failure for, pinned rather than left implicit:
+            // an id-less element is addressed by its INDEX under the parent, so a shorter or
+            // reordered write merges into the slot the previous element occupied. apollo-kotlin
+            // behaves the same way; the remedy is to give the element type a cache identity.
+            val s = store()
+            s.writeOperation(WideQuery(), wideAlbum) // covers = [c1(alt=A), c2(alt=B)]
+            s.writeOperation(
+                FeaturedQuery(),
+                narrowAlbum.copy(featured = // covers = [c2] only
+                    narrowAlbum.featured.copy(covers = List(CoverNarrow("u2")))
+                )
+            )
+
+            // Slot 0 now holds c2's url beside c1's alt. Structurally valid, semantically wrong.
+            val slot0 = s.cache.loadRecord("Album:1.covers.0")
+            assert(slot0.map(_.get("url")) == Present(Present(RecordValue.Scalar(Json.JStr("u2")))))
+            assert(slot0.map(_.get("alt")) == Present(Present(RecordValue.Scalar(Json.JStr("A")))))
         }
 
         // --- 5. Each FetchPolicy's emission sequence over a fake transport -------

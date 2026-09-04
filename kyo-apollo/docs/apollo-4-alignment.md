@@ -151,16 +151,33 @@ explicit rather than borrowed.
 
 ### 2.3 Entity vs embedded, and why path keys are rejected
 
-There is no keyless case in the normalizer: `Normalizer.scala:155-157` ends in
-`.getOrElse(CacheKey.fromPath(path))`. Every object gets a key, of one of two kinds.
+There is no keyless case in the normalizer: `Normalizer.scala:162-164` ends in
+`.getOrElse(CacheKey.fromPath(path))`, and both shipped generators fall back the same way. Every
+object gets a key, of one of two kinds.
 
 - **Entity key** (`Country:DE`) — identity-stable. Any query, any order, any list index resolves to
   the same record.
-- **Path key** (`QUERY_ROOT.countries.3`) — positional, *including the list index*
-  (`Normalizer.scala:140`). Harmless today because reads always traverse from the root and follow
-  `CacheReference`s (`CacheBatchReader.scala:144`). A `FragmentRef` would **capture** such a key and
-  read it independently later — at which point a list insertion silently repoints it at a different
-  entity.
+- **Path key** (`Album:1.images.0`) — positional, *including the list index*
+  (`Normalizer.scala:146-148`), and rooted at the object's **nearest keyed ancestor**
+  (`Normalizer.scala:190`), the way `normalize` roots the tree at `rootKey` (`:90`) and
+  `ApolloStore.writeFragment` roots a fragment write at its entity key.
+
+That rooting is not cosmetic. An earlier revision of this section claimed path keys were *"harmless
+today because reads always traverse from the root and follow `CacheReference`s"*. That was true only
+within ONE operation. The path was counted from the writing operation's root, so two operations
+reaching the same entity by different routes minted two records for one logical field; whichever
+wrote last owned the parent's pointer, and if it had selected fewer subfields the other reader
+missed on data nobody had contradicted — a blank page, tracked as F-18 in the spotify-showcase
+register and fixed by rooting the path at the keyed ancestor. apollo-kotlin's `Normalizer` does the
+same thing, handing each record's children `base = key` rather than the accumulated response path.
+
+What remains positional is the index *within its parent*: a reordered or shortened list merges
+element-wise into the slot the previous element held, so a field the new occupant did not mention
+survives from the old one. apollo-kotlin carries the identical hazard; the remedy in both is to give
+the element type an identity.
+
+A `FragmentRef` would additionally **capture** such a key and read it independently later — at which
+point a list insertion silently repoints it at a different entity.
 
 The original draft offered `CountryEdge` as a live instance of this hazard. It is not: every demo
 configuration that fetches a connection registers `TypePolicy("CountryEdge", List("cursor"))`, and
@@ -223,11 +240,12 @@ Covered by existing tests: `StoreSpec.scala:76` (union with mixed disjoint/overl
 overlapping fragments cause no spurious re-emits), `WatcherSpec.scala:137,165` (watcher re-emits on
 dependent change, stays silent otherwise).
 
-**Not covered — must be added in P3:** the cross-operation composition. Query A writes
-`Country:DE {code,name}`, query B then writes `Country:DE {code,capital}`, and a fragment selecting
-`{name,capital}` reads successfully from the accumulated record while A's watcher survives B's
-write. Every ingredient is tested in isolation; the composition is not, and it is precisely the path
-masked components live on.
+The union holds **transitively** as well, but only since the path rooting of §2.3: a record's
+fields survive a disjoint write, and so now do the fields of its id-less children, because both
+writers address one record instead of two. `CacheSpec` — "two operations writing the same entity
+share its id-less children, and neither loses a field" — is the pin, with `FragmentSpec` covering
+the `writeFragment`/`writeOperation` pair and `SubscriptionWatcherSpec` the watcher that used to go
+blank.
 
 ### 2.6 Named-tuple duplicates
 

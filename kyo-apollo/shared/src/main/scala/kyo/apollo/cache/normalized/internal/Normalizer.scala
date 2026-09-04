@@ -28,6 +28,14 @@ import scala.collection.mutable
   * same key within one response are merged into a single record before the map
   * is returned. Mirrors apollo-kotlin's `Normalizer`.
   *
+  * That fallback path is rooted at the NEAREST KEYED ANCESTOR, not at the
+  * operation root: below `Album:1` an id-less image is `Album:1.images.0`, never
+  * `QUERY_ROOT.album.images.0`. Otherwise the same entity's id-less children get a
+  * different key per writing operation, and the narrower writer repoints the
+  * parent's field at records the wider reader's fields are missing from — a cache
+  * miss on data nobody contradicted. Same rule as apollo-kotlin's `buildRecord`,
+  * which hands its children `base = key` rather than the accumulated path.
+  *
   * `__typename` is collected implicitly: every composite selection set is walked
   * as if it also requested `__typename`, so when the server includes it the value
   * is stored on the record (letting keys be computed and fragments re-resolved on
@@ -86,7 +94,8 @@ final class Normalizer(
 
     /** Build (and record) the [[Record]] for one object, recursing into its
       * composite fields. `key` is the object's already-decided cache key and
-      * `path` its rooted response path (used for id-less child keys).
+      * `path` the prefix its id-less descendants are keyed under — which is this
+      * object's own key, not the response path that led here.
       */
     private def normalizeObject(
         obj: Map[String, Json],
@@ -112,8 +121,8 @@ final class Normalizer(
 
     /** Convert a single response value into its stored [[RecordValue]]. A field
       * with sub-selections is composite (object / list of objects); a field with
-      * none is a leaf (scalar / list of scalars). `path` is the rooted path to
-      * this value, used to key id-less nested objects.
+      * none is a leaf (scalar / list of scalars). `path` is this value's path
+      * BELOW its nearest keyed ancestor, used to key id-less nested objects.
       */
     private def buildFieldValue(
         value: Json,
@@ -167,7 +176,18 @@ final class Normalizer(
                 selections = field.selections,
                 parentType = field.fieldType.leafType.name,
                 key = childKey.key,
-                path = path
+                // The path RESTARTS at this object's key, the way `normalize` starts it at
+                // `rootKey` (:82) and `ApolloStore.writeFragment` starts it at the fragment's
+                // entity key. Carrying the response path down instead gave the same entity's
+                // id-less children a different key per writing operation, so a write selecting
+                // fewer subfields repointed the parent's field at records that were missing the
+                // other writer's fields (GAPS.md F-18).
+                //
+                // A no-op wherever the key came from the path fallback: `CacheKey.fromPath` is
+                // `path.mkString(".")`, so `List(childKey.key)` renders the identical string and
+                // every deeper append is unchanged. It only bites where an identity exists,
+                // which is exactly where it should.
+                path = List(childKey.key)
             )
             RecordValue.Reference(CacheReference(childKey.key))
         case scalar =>
