@@ -61,7 +61,7 @@ final case class TieredMenu private (
     private[uic] def submenuPaths: List[List[Int]] = MenuRender.submenuPaths(itemsV)
 
     private[uic] def render(using Frame): UI =
-        val stat: UI = body(Map.empty.withDefaultValue(false), Absent, Nil, Absent)
+        val stat: UI = body(Map.empty.withDefaultValue(false), Absent, Nil, Absent, idV)
         UI.mounted {
             for
                 refs  <- Kyo.foreach(submenuPaths)(p => Signal.initRef(false).map(p -> _))
@@ -86,10 +86,10 @@ final case class TieredMenu private (
     )(using Frame): UI =
         // See Menu.wired for why the resolution sits inside the mount's content.
         MenuRender.resolveDisabled(itemsV) { items =>
-            val self = copy(itemsV = items, idV = if idV.isDefined then idV else Present(base))
+            val self = copy(itemsV = items)
             focus.render { f =>
                 MenuRender.renderAll(refs)(open =>
-                    self.body(open.withDefaultValue(false), Present(refs), f, Present(focus))
+                    self.body(open.withDefaultValue(false), Present(refs), f, Present(focus), Present(idV.getOrElse(base)))
                 )
             }
         }
@@ -99,7 +99,10 @@ final case class TieredMenu private (
         open: Map[List[Int], Boolean],
         refs: Maybe[List[(List[Int], SignalRef[Boolean])]],
         focus: List[Int],
-        focusRef: Maybe[SignalRef[List[Int]]]
+        focusRef: Maybe[SignalRef[List[Int]]],
+        // What internal parts derive from: the caller's id when there is one, else the mount's
+        // mint. Kept apart from `idV`, which is only ever the caller's — see Menu.wired.
+        partBase: Maybe[String]
     )(using Frame): UI =
         val keyHandler: KeyboardEvent => Any < Async = e =>
             focusRef match
@@ -119,10 +122,13 @@ final case class TieredMenu private (
             rootAnchor = OverlayAnchor.RightStart,
             focused = if focus.isEmpty then Absent else Present(focus),
             roving = true,
-            idBase = idV
+            idBase = partBase
         )
         var list = ul.cssClass("p-tieredmenu-root-list").role("menu")
-        if focus.nonEmpty then idV.foreach(b => list = list.aria("activedescendant", s"$b-active"))
+        if focus.nonEmpty then partBase.foreach(b => list = list.aria("activedescendant", s"$b-active"))
+        // In a popup the component's root is the overlay panel, which this does not own, so the
+        // caller's id lands on the `ul[role=menu]` — see Menu.body for the same split.
+        if popupRefV.isDefined then idV.foreach(v => list = list.id(v))
         popupRefV match
             case Present(openRef) =>
                 // The LIST is what focus goes to, not the panel around it: the list is the
@@ -147,7 +153,9 @@ final case class TieredMenu private (
                     .render
             case Absent =>
                 if focusRef.isDefined then list = list.tabIndex(0).preventScrollKeys.onKeyDown(keyHandler)
-                div.cssClass("p-tieredmenu").cssClass("p-component")(toChild(list(rowsUI.map(toChild)*)))
+                var root = div.cssClass("p-tieredmenu").cssClass("p-component")
+                idV.foreach(v => root = root.id(v))
+                root(toChild(list(rowsUI.map(toChild)*)))
         end match
     end body
 end TieredMenu

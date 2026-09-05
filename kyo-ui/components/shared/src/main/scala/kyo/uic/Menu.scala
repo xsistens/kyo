@@ -78,7 +78,7 @@ final case class Menu private (
         // The keyboard highlight lives in a signal allocated by this effectful
         // mount; static projections (SSG, the SSR page HTML) render the same
         // anatomy inert until the client transport attaches.
-        val stat: UI = body(-1, Absent)
+        val stat: UI = body(-1, Absent, idV)
         UI.mounted {
             for
                 cmds <- UI.commands
@@ -96,6 +96,12 @@ final case class Menu private (
       * `id(...)` still wins, but the announcement no longer waits for one: `aria-activedescendant`
       * is the whole of what a screen reader hears about the highlighted row, and a menu that had
       * to be given an id to say it said nothing in most of the pages that use one.
+      *
+      * The minted base is passed DOWN rather than written into `idV`, so the two questions stay
+      * apart: `idV` is "the id the caller asked for", which lands on the element, and the base is
+      * "what internal parts derive from", which may be machine-made. Writing the mint into `idV`
+      * (as this did) makes them one value, and then either the caller's id never reaches the DOM
+      * or a machine name does. Same split `AutoComplete` makes at its own mount.
       */
     private[uic] def wired(hi: SignalRef[Int], base: String)(using Frame): UI =
         // Resolved HERE and not in `render`: the resolution is a reactive region, and one
@@ -103,12 +109,16 @@ final case class Menu private (
         // open state with it. Inside the mount's content it re-renders the rows and nothing
         // else.
         MenuRender.resolveDisabled(itemsV) { items =>
-            val self = copy(itemsV = items, idV = if idV.isDefined then idV else Present(base))
-            hi.render(h => self.body(h, Present(hi)))
+            val self = copy(itemsV = items)
+            hi.render(h => self.body(h, Present(hi), Present(idV.getOrElse(base))))
         }
     end wired
 
-    private def body(h: Int, hiRef: Maybe[SignalRef[Int]])(using Frame): UI =
+    /** @param partBase what internal parts derive from (`s"$partBase-active"`) — the caller's id
+      *                 when there is one, else the id the mount minted. Distinct from `idV`,
+      *                 which is only ever the caller's and is what lands on the element.
+      */
+    private def body(h: Int, hiRef: Maybe[SignalRef[Int]], partBase: Maybe[String])(using Frame): UI =
         val rows = flatRows
         // Positions (into `rows`) of the keyboard-navigable rows.
         val navigable: List[Int] = rows.zipWithIndex.collect {
@@ -168,14 +178,20 @@ final case class Menu private (
                 if it.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
                 if i == hiRow then
                     row = row.cssClass("p-focus").scrollAuto(true)
-                    idV.foreach(base => row = row.id(s"$base-active"))
+                    partBase.foreach(base => row = row.id(s"$base-active"))
                 val act: Maybe[Any < Async] =
                     if hiRef.isDefined && !it.disabledFlag.constTrue then Present(activate(it)) else Absent
                 row(toChild(MenuRender.itemContent("menu", it, act, Absent, roving = true)))
         }
 
         var list = ul.cssClass("p-menu-list").role("menu")
-        if hiRow >= 0 then idV.foreach(base => list = list.aria("activedescendant", s"$base-active"))
+        if hiRow >= 0 then partBase.foreach(base => list = list.aria("activedescendant", s"$base-active"))
+        // The caller's id goes on the ELEMENT, the way `HasElementId` says a container puts it on
+        // its own root — inline that root is the `div.p-menu` below; in a popup the component's
+        // root is the overlay's panel, which the menu does not own, so it lands on the
+        // `ul[role=menu]`, the element that IS the menu to a reader. Either way `#<id>` exists
+        // and contains the rows, which is what a page addressing a menu by name is reaching for.
+        if popupRefV.isDefined then idV.foreach(v => list = list.id(v))
         popupRefV match
             case Present(openRef) =>
                 // The LIST is what focus goes to, not the panel around it: the list is the
@@ -222,9 +238,9 @@ final case class Menu private (
                 if hiRef.isDefined then
                     list = list.tabIndex(0).preventScrollKeys.onKeyDown(keyHandler).onFocus(seedFocus)
                     hiRef.foreach(hi => list = list.onBlur(hi.set(-1)))
-                div.cssClass("p-menu").cssClass("p-component")(
-                    toChild(list(rowUIs.map(toChild)*))
-                )
+                var root = div.cssClass("p-menu").cssClass("p-component")
+                idV.foreach(v => root = root.id(v))
+                root(toChild(list(rowUIs.map(toChild)*)))
         end match
     end body
 end Menu

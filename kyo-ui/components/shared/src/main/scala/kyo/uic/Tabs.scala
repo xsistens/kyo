@@ -303,7 +303,12 @@ final case class Tabs private (
                 toChild(div.cssClass("p-tabpanel").role("tabpanel")(toChild(panelContent)))
             )
 
-        div.cssClass("p-tabs").cssClass("p-component")(toChild(tablist), toChild(panels))
+        // The caller's id on the component's own root, as HasElementId requires of a container.
+        // The headers derive `s"$id-${tab.id}"` from the same value; the two do not collide,
+        // because a derived name is a different string (GAPS.md F-34).
+        var root = div.cssClass("p-tabs").cssClass("p-component")
+        idV.foreach(v => root = root.id(v))
+        root(toChild(tablist), toChild(panels))
     end bodyWith
 
     /** Selecting a tab writes its id into the bound ref (only a two-way binding has

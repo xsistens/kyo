@@ -68,7 +68,7 @@ final case class Menubar private (
     private[uic] def render(using Frame): UI =
         // One open/closed signal per submenu plus the keyboard focus path, allocated
         // by this effectful mount; static projections render the closed anatomy inert.
-        val stat: UI = body(Map.empty.withDefaultValue(false), Absent, Nil, Absent)
+        val stat: UI = body(Map.empty.withDefaultValue(false), Absent, Nil, Absent, idV)
         UI.mounted {
             for
                 refs  <- Kyo.foreach(submenuPaths)(p => Signal.initRef(false).map(p -> _))
@@ -93,10 +93,10 @@ final case class Menubar private (
     )(using Frame): UI =
         // See Menu.wired for why the resolution sits inside the mount's content.
         MenuRender.resolveDisabled(itemsV) { items =>
-            val self = copy(itemsV = items, idV = if idV.isDefined then idV else Present(base))
+            val self = copy(itemsV = items)
             focus.render { f =>
                 MenuRender.renderAll(refs)(open =>
-                    self.body(open.withDefaultValue(false), Present(refs), f, Present(focus))
+                    self.body(open.withDefaultValue(false), Present(refs), f, Present(focus), Present(idV.getOrElse(base)))
                 )
             }
         }
@@ -106,7 +106,10 @@ final case class Menubar private (
         open: Map[List[Int], Boolean],
         refs: Maybe[List[(List[Int], SignalRef[Boolean])]],
         focus: List[Int],
-        focusRef: Maybe[SignalRef[List[Int]]]
+        focusRef: Maybe[SignalRef[List[Int]]],
+        // What internal parts derive from: the caller's id when there is one, else the mount's
+        // mint. Kept apart from `idV`, which is only ever the caller's — see Menu.wired.
+        partBase: Maybe[String]
     )(using Frame): UI =
         val keyHandler: KeyboardEvent => Any < Async = e =>
             focusRef match
@@ -126,17 +129,18 @@ final case class Menubar private (
             rootAnchor = OverlayAnchor.BottomStart,
             focused = if focus.isEmpty then Absent else Present(focus),
             roving = true,
-            idBase = idV
+            idBase = partBase
         )
         val startUI: List[UI] = startV.toList.map(u => div.cssClass("p-menubar-start")(toChild(u)))
         val endUI: List[UI]   = endV.toList.map(u => div.cssClass("p-menubar-end")(toChild(u)))
         var list              = ul.cssClass("p-menubar-root-list").role("menubar")
         if focusRef.isDefined then list = list.tabIndex(0).preventScrollKeys.onKeyDown(keyHandler)
-        if focus.nonEmpty then idV.foreach(b => list = list.aria("activedescendant", s"$b-active"))
+        if focus.nonEmpty then partBase.foreach(b => list = list.aria("activedescendant", s"$b-active"))
         val listUI: UI = list(rowsUI.map(toChild)*)
-        div.cssClass("p-menubar").cssClass("p-component")(
-            ((startUI :+ listUI) ++ endUI).map(toChild)*
-        )
+        // The caller's id on the component's own root, as HasElementId requires of a container.
+        var root = div.cssClass("p-menubar").cssClass("p-component")
+        idV.foreach(v => root = root.id(v))
+        root(((startUI :+ listUI) ++ endUI).map(toChild)*)
     end body
 end Menubar
 

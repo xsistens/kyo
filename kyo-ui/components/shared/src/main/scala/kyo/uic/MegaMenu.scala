@@ -113,7 +113,7 @@ final case class MegaMenu private (
         itemsV.zipWithIndex.collect { case (it, i) if it.columnsV.nonEmpty => List(i) }
 
     private[uic] def render(using Frame): UI =
-        val stat: UI = body(Map.empty.withDefaultValue(false), Absent, Nil, Absent)
+        val stat: UI = body(Map.empty.withDefaultValue(false), Absent, Nil, Absent, idV)
         UI.mounted {
             for
                 refs  <- Kyo.foreach(panelPaths)(p => Signal.initRef(false).map(p -> _))
@@ -138,10 +138,10 @@ final case class MegaMenu private (
     )(using Frame): UI =
         // See Menu.wired for why the resolution sits inside the mount's content.
         MenuRender.resolveMegaDisabled(itemsV) { items =>
-            val self = copy(itemsV = items, idV = if idV.isDefined then idV else Present(base))
+            val self = copy(itemsV = items)
             focus.render { f =>
                 MenuRender.renderAll(refs)(open =>
-                    self.body(open.withDefaultValue(false), Present(refs), f, Present(focus))
+                    self.body(open.withDefaultValue(false), Present(refs), f, Present(focus), Present(idV.getOrElse(base)))
                 )
             }
         }
@@ -162,7 +162,10 @@ final case class MegaMenu private (
         open: Map[List[Int], Boolean],
         refs: Maybe[List[(List[Int], SignalRef[Boolean])]],
         focus: List[Int],
-        focusRef: Maybe[SignalRef[List[Int]]]
+        focusRef: Maybe[SignalRef[List[Int]]],
+        // What internal parts derive from: the caller's id when there is one, else the mount's
+        // mint. Kept apart from `idV`, which is only ever the caller's — see Menu.wired.
+        partBase: Maybe[String]
     )(using Frame): UI =
         def closeAll: Any < Async =
             refs match
@@ -237,7 +240,7 @@ final case class MegaMenu private (
                         if it.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
                         else if focus == List(r, c, myIdx) then
                             row = row.cssClass("p-focus").scrollAuto(true)
-                            idV.foreach(b => row = row.id(s"$b-active"))
+                            partBase.foreach(b => row = row.id(s"$b-active"))
                         end if
                         def activate: Any < Async =
                             for
@@ -271,7 +274,7 @@ final case class MegaMenu private (
                 if isOpen then row = row.cssClass("p-megamenu-item-active")
                 if focus == p then
                     row = row.cssClass("p-focus").scrollAuto(true)
-                    idV.foreach(b => row = row.id(s"$b-active"))
+                    partBase.foreach(b => row = row.id(s"$b-active"))
                 if it.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
                 val act: Maybe[Any < Async] =
                     if refs.isDefined && !it.disabledFlag then Present(toggle) else Absent
@@ -308,7 +311,7 @@ final case class MegaMenu private (
                 var row = li.cssClass("p-megamenu-item").role("menuitem")
                 if focus == p then
                     row = row.cssClass("p-focus").scrollAuto(true)
-                    idV.foreach(b => row = row.id(s"$b-active"))
+                    partBase.foreach(b => row = row.id(s"$b-active"))
                 if it.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
                 val plain = it.asMenuItem
                 def activate: Any < Async =
@@ -328,14 +331,15 @@ final case class MegaMenu private (
         val endUI: List[UI]   = endV.toList.map(u => div.cssClass("p-megamenu-end")(toChild(u)))
         var list              = ul.cssClass("p-megamenu-root-list").role("menubar")
         if focusRef.isDefined then list = list.tabIndex(0).preventScrollKeys.onKeyDown(keyHandler)
-        if focus.nonEmpty then idV.foreach(b => list = list.aria("activedescendant", s"$b-active"))
+        if focus.nonEmpty then partBase.foreach(b => list = list.aria("activedescendant", s"$b-active"))
         val listUI: UI = list(rowUIs.map(toChild)*)
-        div
+        // The caller's id on the component's own root, as HasElementId requires of a container.
+        var root = div
             .cssClass("p-megamenu")
             .cssClass("p-component")
-            .cssClass(s"p-megamenu-${orientationV.token}")(
-                ((startUI :+ listUI) ++ endUI).map(toChild)*
-            )
+            .cssClass(s"p-megamenu-${orientationV.token}")
+        idV.foreach(v => root = root.id(v))
+        root(((startUI :+ listUI) ++ endUI).map(toChild)*)
     end body
 end MegaMenu
 
