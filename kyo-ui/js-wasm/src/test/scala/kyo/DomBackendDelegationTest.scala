@@ -107,23 +107,42 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
             call.options.asInstanceOf[scalajs.Dynamic].capture.asInstanceOf[Boolean] &&
             !call.options.asInstanceOf[scalajs.Dynamic].passive.asInstanceOf[Boolean]
 
-    final private class LifecycleChronology(events: ArrayBuffer[String]) extends DomBackend.MountDiagnostics:
-        def channelClosed(): Unit     = events += "channel-close"
-        def drainInterrupting(): Unit = events += "drain-interrupt"
-        def drainJoined(): Unit       = events += "drain-joined"
+    private def scrollOptions(call: ListenerCall): Boolean =
+        scalajs.typeOf(call.options) == "object" &&
+            call.options.asInstanceOf[scalajs.Dynamic].capture.asInstanceOf[Boolean] &&
+            call.options.asInstanceOf[scalajs.Dynamic].passive.asInstanceOf[Boolean]
+
+    /** The two listeners registered with an options object rather than a bare `capture` boolean. */
+    private val optionObjectTypes = Set("wheel", "scroll")
+
+    /** [[DomTestEnv.MountReady]]'s installation barrier plus a transcript of the teardown hooks.
+      *
+      * The lifecycle tests below wait on `installed`, inherited from `MountReady`, rather than on a listener COUNT
+      * (`added.size == 28`) as they used to. A count is not a completion signal — it is a second copy of the
+      * registration list, and it went stale three times in six weeks (`contextmenu`, the pointer listeners, the
+      * input-masking listeners). Each time, four leaves turned into two-minute timeouts that read like flakiness
+      * rather than drift (GAPS.md F-35). `MountReady` already existed for exactly this; keeping a second copy of
+      * the signal here would have been the same mistake one size down.
+      */
+    final private class LifecycleChronology(events: ArrayBuffer[String] = ArrayBuffer.empty) extends DomTestEnv.MountReady:
+        override def channelClosed(): Unit     = events += "channel-close"
+        override def drainInterrupting(): Unit = events += "drain-interrupt"
+        override def drainJoined(): Unit       = events += "drain-joined"
     end LifecycleChronology
 
-    private def mountAndStop(tracker: ListenerTracker, expectedAdded: Int = 28)(using
-        Frame,
-        kyo.test.AssertScope
-    ): Unit < Async =
+    /** Budget for a signal the mount reaches in milliseconds when it reaches it at all. */
+    private val installBudget = 10.seconds
+
+    private def mountAndStop(tracker: ListenerTracker)(using Frame, kyo.test.AssertScope): Unit < Async =
+        val diagnostics = new LifecycleChronology()
         for
-            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(UI.div("mounted"))))
-            _     <- assertEventually(Sync.defer(tracker.added.size == expectedAdded))
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(UI.div("mounted"), diagnostics)))
+            _     <- assertEventually(Sync.defer(diagnostics.installed), installBudget)
             _     <- fiber.interrupt
             _     <- fiber.getResult
-            _     <- assertEventually(Sync.defer(tracker.removed.size == tracker.added.size))
+            _     <- assertEventually(Sync.defer(tracker.removed.size == tracker.added.size), installBudget)
         yield ()
+        end for
     end mountAndStop
 
     "forwards when the target itself declares the type" in {
@@ -174,8 +193,13 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
     "removes every delegated body listener when the mount scope closes" in {
         Scope.acquireRelease(Sync.defer(new ListenerTracker().install()))(tracker => Sync.defer(tracker.restore())).map { tracker =>
             mountAndStop(tracker).map { _ =>
+                // In registration order, grouped by the installer that owns each group. This is the ONE place a new
+                // delegated event has to be declared; every other test below derives from what was actually added, so
+                // adding a listener without touching this list fails here with a readable diff and nowhere else.
                 val expected = Seq(
+                    // setupEventDelegation
                     "click",
+                    "contextmenu",
                     "input",
                     "change",
                     "submit",
@@ -185,6 +209,16 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
                     "blur",
                     "mouseover",
                     "mouseout",
+                    "wheel",
+                    "scroll",
+                    // setupPointerDelegation
+                    "pointerdown",
+                    "pointermove",
+                    "pointerup",
+                    // setupInputMasking
+                    "beforeinput",
+                    "compositionend",
+                    // DomDragRuntime.install
                     "dragstart",
                     "dragenter",
                     "dragover",
@@ -199,22 +233,22 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
                     "touchmove",
                     "touchend",
                     "touchcancel",
-                    "keydown",
-                    "wheel",
-                    "beforeinput",
-                    "compositionend"
+                    "keydown"
                 )
-                assert(tracker.added.map(_.eventType).sorted == expected.sorted)
-                val nonWheel = tracker.added.filterNot(_.eventType == "wheel")
-                assert(nonWheel.size == 27)
-                assert(nonWheel.forall(captureTrue))
+                assert(tracker.added.map(_.eventType) == expected)
+                val plain = tracker.added.filterNot(call => optionObjectTypes.contains(call.eventType))
+                assert(plain.size == expected.count(t => !optionObjectTypes.contains(t)))
+                assert(plain.forall(captureTrue))
                 val wheel = tracker.added.filter(_.eventType == "wheel")
                 assert(wheel.size == 1)
                 assert(wheel.forall(wheelOptions))
-                assert(tracker.added.filter(c => c.eventType == "beforeinput" || c.eventType == "compositionend").forall(captureTrue))
+                val scroll = tracker.added.filter(_.eventType == "scroll")
+                assert(scroll.size == 1)
+                assert(scroll.forall(scrollOptions))
                 assert(tracker.removed.size == tracker.added.size)
-                assert(tracker.removed.filterNot(_.eventType == "wheel").forall(captureTrue))
+                assert(tracker.removed.filterNot(call => optionObjectTypes.contains(call.eventType)).forall(captureTrue))
                 assert(tracker.removed.filter(_.eventType == "wheel").forall(wheelOptions))
+                assert(tracker.removed.filter(_.eventType == "scroll").forall(scrollOptions))
                 assert(tracker.removed.zip(tracker.added.reverse).forall((removal, addition) => sameCall(removal, addition)))
                 tracker.added.foreach { addition =>
                     assert(tracker.removed.count(removal => sameCall(addition, removal)) == 1)
@@ -236,17 +270,19 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
                 for
                     result <- Fiber.initUnscoped(Scope.run(DomBackend.mount(UI.div("mounted"), new LifecycleChronology(chronology))))
                         .map(_.getResult)
-                    _ <- assertEventually(Sync.defer(chronology.contains("drain-joined")))
+                    _ <- assertEventually(Sync.defer(chronology.contains("drain-joined")), installBudget)
                 yield
                     assert(result.isPanic)
-                    assert(tracker.attempts == Seq("click", "input", "change", "submit"))
-                    assert(tracker.added.map(_.eventType) == Seq("click", "input", "change"))
-                    assert(tracker.removed.map(_.eventType) == Seq("change", "input", "click"))
-                    assert(tracker.removed.size == tracker.added.size)
-                    assert(chronology == Seq(
-                        "remove:change",
-                        "remove:input",
-                        "remove:click",
+                    // The property, not a transcript: installation stops AT the failing type, everything attempted
+                    // before it went in, and every one of those came back out in reverse. Spelling the sequence out
+                    // instead pinned `submit` to a fixed position in the delegation list, so inserting `contextmenu`
+                    // ahead of it broke a test that has nothing to do with context menus (GAPS.md F-35).
+                    assert(tracker.attempts.last == "submit")
+                    assert(!tracker.attempts.init.contains("submit"))
+                    assert(tracker.added.map(_.eventType) == tracker.attempts.init)
+                    assert(tracker.removed.map(_.eventType) == tracker.added.map(_.eventType).reverse)
+                    assert(tracker.removed.zip(tracker.added.reverse).forall((removal, addition) => sameCall(removal, addition)))
+                    assert(chronology == tracker.added.map(call => s"remove:${call.eventType}").reverse ++ Seq(
                         "channel-close",
                         "drain-interrupt",
                         "drain-joined"
@@ -260,22 +296,26 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
             Sync.defer(tracker.restore())
         ).map {
             tracker =>
+                val diagnostics = new LifecycleChronology(chronology)
                 for
-                    fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(UI.div("mounted"), new LifecycleChronology(chronology))))
-                    _     <- assertEventually(Sync.defer(tracker.added.size == 28))
+                    fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(UI.div("mounted"), diagnostics)))
+                    _     <- assertEventually(Sync.defer(diagnostics.installed), installBudget)
                     _     <- fiber.interrupt
                     _     <- fiber.getResult
-                    _     <- assertEventually(Sync.defer(chronology.contains("drain-joined")))
+                    _     <- assertEventually(Sync.defer(chronology.contains("drain-joined")), installBudget)
                 yield
                     val channelClose = chronology.indexOf("channel-close")
                     val interrupt    = chronology.indexOf("drain-interrupt")
                     val joined       = chronology.indexOf("drain-joined")
-                    assert(chronology.take(channelClose).size == 30)
+                    // Everything torn down before the channel closes: the drag runtime's interval, its document
+                    // listener, then one removal per body listener that was added.
+                    assert(chronology.take(channelClose).size == tracker.added.size + 2)
                     assert(chronology.take(channelClose).head == "clear-interval")
                     assert(chronology.take(channelClose)(1) == "remove-document:kyo:resolve-drag")
                     assert(chronology.take(channelClose).drop(2).forall(_.startsWith("remove:")))
                     assert(channelClose < interrupt)
                     assert(interrupt < joined)
+                end for
         }
     }
 
@@ -288,12 +328,13 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
                 entered   <- Latch.init(1)
                 blocker   <- Latch.init(1)
                 finalized <- Latch.init(1)
-                handler = Sync.ensure(finalized.release)(entered.release.andThen(blocker.await))
+                handler     = Sync.ensure(finalized.release)(entered.release.andThen(blocker.await))
+                diagnostics = new LifecycleChronology(chronology)
                 fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(
                     UI.button("active").id("active-handler").onClick(handler),
-                    new LifecycleChronology(chronology)
+                    diagnostics
                 )))
-                _ <- assertEventually(Sync.defer(tracker.added.size == 28))
+                _ <- assertEventually(Sync.defer(diagnostics.installed), installBudget)
                 _ <- Sync.defer {
                     val button = dom.document.getElementById("active-handler")
                     val event = scalajs.Dynamic.newInstance(dom.window.asInstanceOf[scalajs.Dynamic].MouseEvent)(
@@ -310,8 +351,8 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
                 val channelClose = chronology.indexOf("channel-close")
                 val interrupt    = chronology.indexOf("drain-interrupt")
                 val joined       = chronology.indexOf("drain-joined")
-                assert(tracker.removed.size == 28)
-                assert(chronology.take(channelClose).size == 30)
+                assert(tracker.removed.size == tracker.added.size)
+                assert(chronology.take(channelClose).size == tracker.added.size + 2)
                 assert(chronology.take(channelClose).head == "clear-interval")
                 assert(chronology.take(channelClose)(1) == "remove-document:kyo:resolve-drag")
                 assert(chronology.take(channelClose).drop(2).forall(_.startsWith("remove:")))
@@ -322,13 +363,23 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
 
     "returns delegated body listeners to baseline after every mount cycle" in {
         Scope.acquireRelease(Sync.defer(new ListenerTracker().install()))(tracker => Sync.defer(tracker.restore())).map { tracker =>
+            // The regression this guards is a listener that outlives its mount: three unscoped body listeners once
+            // survived every teardown, so a page that mounted twice dispatched pointer events into the FIRST mount's
+            // closed event channel. Counting per cycle rather than against a fixed total is what makes that visible
+            // without also having to know the total (GAPS.md F-35).
+            var firstCycle = Seq.empty[String]
             Kyo.foreachDiscard(1 to 3) { cycle =>
-                mountAndStop(tracker, cycle * 28).map { _ =>
-                    assert(tracker.added.size == cycle * 28)
-                    assert(tracker.removed.size == cycle * 28)
-                    val offset       = (cycle - 1) * 28
-                    val cycleAdded   = tracker.added.slice(offset, cycle * 28)
-                    val cycleRemoved = tracker.removed.slice(offset, cycle * 28)
+                val addedBefore   = tracker.added.size
+                val removedBefore = tracker.removed.size
+                mountAndStop(tracker).map { _ =>
+                    val cycleAdded   = tracker.added.drop(addedBefore)
+                    val cycleRemoved = tracker.removed.drop(removedBefore)
+                    assert(cycleAdded.nonEmpty)
+                    assert(cycleRemoved.size == cycleAdded.size)
+                    // Nothing is left behind, so the cumulative totals stay equal cycle after cycle.
+                    assert(tracker.removed.size == tracker.added.size)
+                    if cycle == 1 then firstCycle = cycleAdded.map(_.eventType).toSeq
+                    else assert(cycleAdded.map(_.eventType).toSeq == firstCycle)
                     assert(cycleRemoved.zip(cycleAdded.reverse).forall((removal, addition) => sameCall(removal, addition)))
                     cycleAdded.foreach { addition =>
                         assert(cycleRemoved.count(removal => sameCall(addition, removal)) == 1)
@@ -346,11 +397,14 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
             for
                 result <- Fiber.initUnscoped(Scope.run(DomBackend.mount(UI.div("mounted"), new LifecycleChronology(chronology))))
                     .map(_.getResult)
-                _ <- assertEventually(Sync.defer(chronology.contains("drain-joined")))
+                _ <- assertEventually(Sync.defer(chronology.contains("drain-joined")), installBudget)
             yield
                 assert(result.isPanic)
                 assert(tracker.attempts.takeRight(5) == Seq("dragstart", "dragenter", "dragover", "dragleave", "drop"))
-                assert(tracker.added.size == 17)
+                // Everything attempted before `drop` was installed, and the rollback reaches back past the drag
+                // runtime's own listeners into the ones the earlier installers had already put on the body.
+                assert(tracker.added.map(_.eventType) == tracker.attempts.init)
+                assert(tracker.added.map(_.eventType).contains("click"))
                 assert(tracker.removed.size == tracker.added.size)
                 assert(tracker.removed.zip(tracker.added.reverse).forall((removal, addition) => sameCall(removal, addition)))
                 assert(tracker.documentAdded.isEmpty)
@@ -368,17 +422,19 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
             for
                 result <- Fiber.initUnscoped(Scope.run(DomBackend.mount(UI.div("mounted"), new LifecycleChronology(chronology))))
                     .map(_.getResult)
-                _ <- assertEventually(Sync.defer(chronology.contains("drain-joined")))
+                _ <- assertEventually(Sync.defer(chronology.contains("drain-joined")), installBudget)
             yield
                 assert(result.isPanic)
-                assert(tracker.added.size == 28)
+                // The document listener is the last thing installed, so every body add had already succeeded: the
+                // rollback has to undo the complete set, not a prefix of it.
+                assert(tracker.added.map(_.eventType) == tracker.attempts)
                 assert(tracker.removed.size == tracker.added.size)
                 assert(tracker.removed.zip(tracker.added.reverse).forall((removal, addition) => sameCall(removal, addition)))
                 assert(tracker.documentAdded.isEmpty)
                 assert(tracker.documentRemoved.isEmpty)
                 assert(tracker.activeTimers == 0)
                 val channelClose = chronology.indexOf("channel-close")
-                assert(chronology.take(channelClose).size == 28)
+                assert(chronology.take(channelClose).size == tracker.added.size)
                 assert(chronology.take(channelClose).forall(_.startsWith("remove:")))
         }
     }
@@ -397,7 +453,7 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
                 UI.div(UI.a.href(UI.Href.Path("/target")).id("modified-click").onClick(clicked.release)("Link")),
                 ready
             )))
-            _ <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("modified-click") != null))
+            _ <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("modified-click") != null), installBudget)
             prevented <- Sync.defer {
                 val target = dom.document.getElementById("modified-click")
                 def click(ctrl: Boolean): Boolean =
@@ -431,7 +487,7 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
                 UI.div(UI.button("nav").id("scroll-key-target").tabIndex(0).preventScrollKeys),
                 ready
             )))
-            _ <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("scroll-key-target") != null))
+            _ <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("scroll-key-target") != null), installBudget)
             prevented <- Sync.defer {
                 val target = dom.document.getElementById("scroll-key-target")
                 assert(scalajs.isUndefined(target.asInstanceOf[scalajs.Dynamic].isContentEditable))

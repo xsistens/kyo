@@ -445,18 +445,28 @@ abstract class TestBase[S] extends KyoTestReflect with TypeCheck:
       * failing attempt the retry catches and discards that throwable, so its stale record must be removed (mirroring `intercept`); otherwise
       * the runner would flip a leaf that eventually passes to Failed. Removal is by the exact caught instance, never a blanket drain, so
       * records made by other fibers are untouched.
+      *
+      * `within` bounds the retry to its own budget instead of letting it run to the per-test timeout. Pass it whenever the condition is a
+      * value the code under test is EXPECTED to reach quickly, so a condition that will never hold reports in that budget rather than
+      * costing the full timeout — a suite whose leaves each burn two minutes to say "still false" is one nobody runs. The default keeps
+      * the historical behaviour, and `Duration.Infinity` is a no-op on the schedule.
       */
-    protected def assertEventually[S1](cond: => Boolean < S1)(using f: Frame, as: kyo.test.AssertScope): Unit < (Async & S1) =
+    protected def assertEventually[S1](cond: => Boolean < S1, within: Duration = Duration.Infinity)(using
+        f: Frame,
+        as: kyo.test.AssertScope
+    ): Unit < (Async & S1) =
         as.recordEvaluated()
         Abort.run[AssertionError] {
-            Retry[AssertionError](Schedule.fixed(10.millis)) {
+            Retry[AssertionError](Schedule.fixed(10.millis).maxDuration(within)) {
                 // Run only the AssertionError channel here so the thrown assertion outcomes are observable for the un-record/retry
                 // handling below, while any OTHER failure (an Abort[Closed] from `cond`, an arbitrary Abort[Throwable] value)
                 // flows straight through unhandled and propagates out of assertEventually with its original effect/semantics.
                 Abort.run[AssertionError] {
                     cond.map {
-                        case false => throw new AssertionError("assertEventually: condition not met")
-                        case true  =>
+                        case false =>
+                            val budget = if within.isFinite then s" within ${within.show}" else ""
+                            throw new AssertionError(s"assertEventually: condition not met$budget")
+                        case true =>
                     }
                 }.map {
                     case kyo.Result.Success(_) => ()

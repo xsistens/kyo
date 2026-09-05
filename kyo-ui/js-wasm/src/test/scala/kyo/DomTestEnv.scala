@@ -64,7 +64,7 @@ private[kyo] object DomTestEnv:
       * listener and is lost, and a test waiting for its effect waits forever. `dragRuntimeInstalled` is the last hook
       * `mountInto` calls before it parks, so it is the barrier a test must clear before dispatching anything.
       */
-    final class MountReady extends kyo.internal.DomBackend.MountDiagnostics:
+    class MountReady extends kyo.internal.DomBackend.MountDiagnostics:
         private var ready                                                                    = false
         def installed: Boolean                                                               = ready
         def channelClosed(): Unit                                                            = ()

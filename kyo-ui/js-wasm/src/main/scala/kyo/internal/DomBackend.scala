@@ -2372,7 +2372,7 @@ private[kyo] object DomBackend:
     private def setupPointerDelegation(
         dispatch: (Seq[String], UIEvent) => Boolean < Async,
         events: Channel[Unit < Async]
-    )(using Frame): Unit < Sync = Sync.defer {
+    )(using Frame): Unit < (Scope & Sync) =
         val down: scalajs.js.Function1[dom.Event, Unit] = (e0: dom.Event) =>
             val e = e0.asInstanceOf[dom.PointerEvent]
             findPathElement(e.target.asInstanceOf[dom.Element]).foreach { el =>
@@ -2423,10 +2423,15 @@ private[kyo] object DomBackend:
                 ptrPath = Seq.empty
                 fireFromJs(events, dispatch(path, UIEvent.PointerUp(path, pointerPayload(el, e))).unit)
 
-        document.body.addEventListener("pointerdown", down, true)
-        document.body.addEventListener("pointermove", move, true)
-        document.body.addEventListener("pointerup", up, true)
-    }
+        // Scoped like every other listener this mount installs. Registering them unscoped left three
+        // capture-phase listeners on the body per mount cycle, each closing over the torn-down mount's
+        // event channel.
+        for
+            _ <- addScopedListener("pointerdown", down, true)
+            _ <- addScopedListener("pointermove", move, true)
+            _ <- addScopedListener("pointerup", up, true)
+        yield ()
+        end for
     end setupPointerDelegation
 
 end DomBackend
