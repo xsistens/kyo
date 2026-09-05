@@ -2282,18 +2282,21 @@ private[kyo] object HtmlRenderer:
            |    // by the browser, once by the dispatcher, which emulates that activation where no browser
            |    // does it. Suppress the browser's, so it acts once and its own onKeyDown still sees the key.
            |    // A button takes Enter and Space, an anchor Enter alone (Space scrolls with a link focused).
-           |    if(e.target&&(e.target.tagName==="BUTTON"||e.target.tagName==="A")){
-           |      // The type is read from the prop channel first: this render writes type="submit" on
-           |      // every button and carries the intended one in data-kyo-prop-type, so the attribute
-           |      // alone answers differently here than in the client-rendered tree. Submitting a form
-           |      // is the one thing the dispatcher's emulation does not carry, so leave that case be.
-           |      var __pt=e.target.getAttribute("data-kyo-prop-type"),__at=e.target.getAttribute("type");
-           |      var __et=(__pt!==null?__pt:(__at!==null?__at:"")).toLowerCase();
-           |      var __sub=!!(${ButtonActivation.jsSubmits("__et")}&&e.target.closest&&e.target.closest("form"));
+           |    // The dispatcher answers a keydown by synthesizing the click it stands for — at the
+           |    // button for keyboard activation, at the form's default button for implicit submission
+           |    // — so the browser's own would be the second one. Twin of KeyPolicy.doubleActivates;
+           |    // FormActivationTest holds this script against it.
+           |    if(e.target&&e.target.tagName&&he(e.target,"keydown")){
            |      var __own=e.target.getAttribute("data-kyo-ev");
            |      var __ck=!!(__own&&__own.split(",").indexOf("click")>=0);
-           |      var __act=(e.target.tagName==="BUTTON")?(($jsButtonActivation)&&!__sub):($jsLinkActivation);
-           |      if(__act&&__ck&&he(e.target,"keydown"))e.preventDefault();
+           |      var __tg=e.target.tagName;
+           |      var __inf=!!(e.target.closest&&e.target.closest("form"));
+           |      // An anchor keeps the click-handler gate: suppressing Enter on a plain link would take
+           |      // its navigation with it, and navigation is the one thing the dispatcher does not carry.
+           |      var __act=(__tg==="BUTTON")?($jsButtonActivation)
+           |               :(__tg==="A")?(__ck&&($jsLinkActivation))
+           |               :(__inf&&e.key==="Enter");
+           |      if(__act)e.preventDefault();
            |    }
            |    // Focus-trap: when Tab is pressed inside a [data-kyo-focus-trap="1"] container,
            |    // wrap focus within the trap's focusable children instead of escaping to the page.

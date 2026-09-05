@@ -71,23 +71,40 @@ private[kyo] object KeyPolicy:
       * again. The browser's is the one to suppress, since the dispatcher's runs after the element's
       * own `onKeyDown` and keeps the two in a defined order.
       *
-      * Only an element that carries a kyo click handler qualifies, and only where the emulation
-      * carries the whole of what the browser would do. It does not carry a form submit, so a
-      * submitting button is left alone; it does not carry navigation either, but an anchor with a
-      * click handler already has its navigation suppressed on the click path, so the two agree.
+      * The three branches differ because what the dispatcher emulates differs.
+      *
+      *   - A '''button''' is suppressed whenever a keydown is posted at all. The dispatcher answers a
+      *     keydown on a button by SYNTHESIZING a click at it, which is what a browser does and what
+      *     HTML means by activation behaviour, so the browser's own activation would be the second
+      *     one whether or not the button carries a kyo handler. `declaresClick` used to gate this and
+      *     could not: a submitting button with no click handler still submits.
+      *   - An '''anchor''' keeps that gate. Suppressing Enter on a plain link would take its
+      *     navigation with it, and navigation is the one thing the emulation does not carry. An
+      *     anchor that DOES carry a click handler already has its navigation suppressed on the click
+      *     path, so the two agree.
+      *   - '''Anything else''' inside a form is HTML's implicit submission: Enter's default is to
+      *     click the form's default button. The dispatcher synthesizes that click too, so the
+      *     browser's must go, or the form hears both.
+      *
+      * A SUBMITTING button used to be exempted here altogether, on the grounds that the emulation did
+      * not carry a form submit. That was the shape of the bug rather than a reason: the emulation did
+      * not carry it because activation was emulated as a direct `onClick` call at the target, which
+      * does not bubble, so a form never saw it and needed a keydown rule of its own. Two rules for one
+      * platform behaviour, and they disagreed — `onSubmit` ran twice on both DOM transports. Now the
+      * dispatcher produces a real click and this is the only rule.
       */
     def doubleActivates(
         key: String,
         tag: String,
-        submits: Boolean,
         declaresClick: Boolean,
-        declaresKeyDown: Boolean
+        declaresKeyDown: Boolean,
+        insideForm: Boolean
     ): Boolean =
-        declaresClick && declaresKeyDown && {
+        declaresKeyDown && {
             tag match
-                case "BUTTON" => activatesButton(key) && !submits
-                case "A"      => activatesLink(key)
-                case _        => false
+                case "BUTTON" => activatesButton(key)
+                case "A"      => declaresClick && activatesLink(key)
+                case _        => insideForm && key == "Enter"
         }
     end doubleActivates
 

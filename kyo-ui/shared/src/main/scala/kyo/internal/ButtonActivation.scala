@@ -2,14 +2,18 @@ package kyo.internal
 
 /** Whether activating a button submits its form.
   *
-  * Three places decide this and they have to agree, because they answer for the same
-  * markup: the SPA event dispatcher ([[kyo.internal.ReactiveUI]]), the SPA DOM client
-  * ([[kyo.internal.DomBackend]]) and the server-push client, which ships its copy as
+  * Three places used to decide this and they had to agree, because they answer for the
+  * same markup: the SPA event dispatcher ([[kyo.internal.ReactiveUI]]), the SPA DOM client
+  * ([[kyo.internal.DomBackend]]) and the server-push client, which shipped its copy as
   * JavaScript text ([[kyo.internal.HtmlRenderer]]). They did not agree — the dispatcher
   * never read the type at all, and the two clients compared it against `"submit"`, which
-  * gets an invalid value backwards. Same arrangement [[KeyPolicy]] uses for the keyboard
-  * rules: the rule lives here, the Scala callers call it, the JavaScript is built from
-  * it, and a test holds the emitted script against these values.
+  * gets an invalid value backwards.
+  *
+  * One place decides it now, and that is the point: the clients asked only so they could
+  * exempt a submitting button from [[KeyPolicy.doubleActivates]], and that exemption is
+  * gone — it bought a doubled submit rather than avoiding one. Neither client reads a
+  * button's `type` any more, so there is nothing left to keep in step and no JavaScript
+  * copy of this rule to emit.
   *
   * ==The rule, and where it comes from==
   *
@@ -53,12 +57,5 @@ private[kyo] object ButtonActivation:
         val declared = if rawType == null then "" else rawType
         !nonSubmitTypes.exists(_.equalsIgnoreCase(declared))
     end submits
-
-    /** The same test as a JavaScript expression over `value`, which the caller must have
-      * lower-cased already (JS `toLowerCase` is Unicode-aware; the Scala side compares
-      * case-insensitively instead, which needs no locale).
-      */
-    def jsSubmits(value: String): String =
-        nonSubmitTypes.map(t => s"""$value!=="$t"""").mkString("&&")
 
 end ButtonActivation

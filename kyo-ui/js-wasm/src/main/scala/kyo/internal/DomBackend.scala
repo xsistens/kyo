@@ -2216,37 +2216,20 @@ private[kyo] object DomBackend:
     /** Whether the browser's own activation of `target` would run a handler the dispatcher runs again.
       *
       * The rule itself is [[KeyPolicy.doubleActivates]], shared with the server-push client; this
-      * reads the three facts it needs off the DOM.
+      * reads the facts it needs off the DOM. The button's `type` is not among them any more: the
+      * dispatcher answers a keydown by synthesizing the click, so the browser's activation is the
+      * second one whatever the type says — see the rule's own scaladoc.
       */
     private def doubleActivation(key: String, target: dom.Element): Boolean =
         val declared = target.getAttribute("data-kyo-ev")
         KeyPolicy.doubleActivates(
             key = key,
             tag = target.tagName,
-            submits = submits(target),
             declaresClick = declared != null && declared.split(",").contains("click"),
-            declaresKeyDown = declaredInChain(target, "keydown")
+            declaresKeyDown = declaredInChain(target, "keydown"),
+            insideForm = target.closest("form") != null
         )
     end doubleActivation
-
-    /** Whether this button's native activation would submit a form, which is the one thing the
-      * dispatcher's emulation does not carry and so the one case to leave alone.
-      *
-      * The type is read from the prop channel first: the server render writes `type="submit"`
-      * on every button and carries the intended one in `data-kyo-prop-type` for the client to
-      * apply, so the attribute alone answers differently on the two transports for the same
-      * component. A button outside a form submits nothing whatever its type says.
-      */
-    private def submits(target: dom.Element): Boolean =
-        val declaredType = target.getAttribute("data-kyo-prop-type")
-        val attrType     = target.getAttribute("type")
-        // An absent type is "" and submits, because that is what a browser does with it — the
-        // rule and its measurements live in ButtonActivation, which the dispatcher and the
-        // server-push client apply to the same markup. Comparing against "submit" instead (as
-        // this did) gets `type="bogus"` and `type=""` backwards: both submit.
-        val effective = if declaredType != null then declaredType else if attrType != null then attrType else ""
-        ButtonActivation.submits(effective) && target.closest("form") != null
-    end submits
 
     /** Whether a `preventScrollKeys` region should suppress the browser's page scroll for `key` on
       * `target`. The rule itself is [[KeyPolicy.preventsPageScroll]], shared with the server-push

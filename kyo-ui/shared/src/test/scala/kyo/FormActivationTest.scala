@@ -69,6 +69,9 @@ class FormActivationTest extends kyo.test.Test[Any]:
     private def enter(path: Seq[String]): UIEvent =
         UIEvent.KeyDown(path, KeyboardEventData("Enter", UI.Modifiers.none, Absent))
 
+    private def space(path: Seq[String]): UIEvent =
+        UIEvent.KeyDown(path, KeyboardEventData(" ", UI.Modifiers.none, Absent))
+
     // The measured table, as data: (declared type, does activating it submit?)
     private val measured: Seq[(String, Boolean)] = Seq(
         (null, true), // missing value default
@@ -122,31 +125,71 @@ class FormActivationTest extends kyo.test.Test[Any]:
         end for
     }
 
-    "KNOWN: a browser's Enter delivers keydown AND a click, and the form hears both" in {
-        // Not fixed here, and not a regression: this is what the two DOM transports have always
-        // delivered for Enter on a SUBMITTING button. `KeyPolicy.doubleActivates` leaves the
-        // browser's native activation alone in exactly that case (`!submits`), so the browser
-        // fires its own click, which is posted alongside the keydown — and the dispatcher answers
-        // both. The pure transport (this harness, and the TUI) sends only the keydown and submits
-        // once. Pinned as KNOWN so a change in it is a failing test rather than a surprise;
-        // GAPS.md F-36 carries the decision.
+    "Space on a submitting button submits, since the clients suppress the browser's own activation" in {
+        // Space is on the keydown path only because of that suppression. A browser activates a
+        // submitting button with Enter AND Space; once the clients preventDefault on both, this
+        // path is the only one that submits, so it has to answer both or Space would silently
+        // stop submitting (GAPS.md F-36).
         for
             submits <- AtomicInt.init(0)
             button = UI.button("go").jsProp("type", "submit")
             _ <- withDispatch(UI.form.onSubmit(submits.getAndUpdate(_ + 1).unit)(button)) { dispatch =>
-                dispatch(Seq("0"), enter(Seq("0"))).andThen(dispatch(Seq("0"), click(Seq("0"))))
+                dispatch(Seq("0"), space(Seq("0")))
             }
             s <- submits.get
-        yield assert(s == 2, s"expected the known double, got $s")
+        yield assert(s == 1)
         end for
     }
 
-    "the server-push client script is built from the same rule" in {
-        // The KeyPolicy arrangement: neither transport can drift without failing here.
+    "Space anywhere else does not submit, because a space is a character there" in {
+        for
+            submits <- AtomicInt.init(0)
+            _ <- withDispatch(UI.form.onSubmit(submits.getAndUpdate(_ + 1).unit)(UI.input.id("t"))) { dispatch =>
+                dispatch(Seq("0"), space(Seq("0")))
+            }
+            s <- submits.get
+        yield assert(s == 0)
+        end for
+    }
+
+    "Space on a NON-submitting button does not submit either" in {
+        for
+            submits <- AtomicInt.init(0)
+            button = UI.button("go").jsProp("type", "button")
+            _ <- withDispatch(UI.form.onSubmit(submits.getAndUpdate(_ + 1).unit)(button)) { dispatch =>
+                dispatch(Seq("0"), space(Seq("0")))
+            }
+            s <- submits.get
+        yield assert(s == 0)
+        end for
+    }
+
+    "the browser's Enter no longer delivers a twin, so the form hears it once" in {
+        // This was pinned as a KNOWN double at 2. Both DOM transports used to leave the browser's
+        // native activation of a SUBMITTING button alone, so the browser fired its own click
+        // alongside the keydown and the dispatcher answered both. Now the dispatcher synthesizes the
+        // click itself and the clients preventDefault, which the script assertions below hold them
+        // to. The pure transport, which never had a twin, is unchanged.
+        for
+            submits <- AtomicInt.init(0)
+            button = UI.button("go").jsProp("type", "submit")
+            _ <- withDispatch(UI.form.onSubmit(submits.getAndUpdate(_ + 1).unit)(button)) { dispatch =>
+                dispatch(Seq("0"), enter(Seq("0")))
+            }
+            s <- submits.get
+        yield assert(s == 1, s"expected one submit, got $s")
+        end for
+    }
+
+    "the server-push client suppresses the browser's activation without asking for a type" in {
+        // The client script used to read the button's type here and skip the preventDefault when it
+        // submitted. Both the read and the exemption must be gone: the type it produced is what made
+        // the two transports disagree, and it is the one thing the dispatcher does not need told.
         val page = HtmlRenderer.renderPage("t", "<div></div>", "", "/app")
-        assert(page.contains(ButtonActivation.jsSubmits("__et")))
-        assert(page.contains("""var __et=(__pt!==null?__pt:(__at!==null?__at:"")).toLowerCase();"""))
-        // The old comparison must be gone: it called `type="bogus"` non-submitting.
-        assert(!page.contains("""__et==="submit""""))
+        assert(page.contains("""var __act=(__tg==="BUTTON")?("""))
+        assert(page.contains("""var __inf=!!(e.target.closest&&e.target.closest("form"));"""))
+        assert(page.contains("""if(__act)e.preventDefault();"""))
+        assert(!page.contains("__sub"))
+        assert(!page.contains("__et"))
     }
 end FormActivationTest

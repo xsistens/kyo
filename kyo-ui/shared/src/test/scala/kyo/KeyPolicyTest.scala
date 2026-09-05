@@ -64,17 +64,33 @@ class KeyPolicyTest extends kyo.test.Test[Any]:
 
     // ---- double activation ----
 
-    private def doubles(key: String, tag: String, submits: Boolean = false): Boolean =
-        KeyPolicy.doubleActivates(key, tag, submits, declaresClick = true, declaresKeyDown = true)
+    private def doubles(key: String, tag: String, declaresClick: Boolean = true, insideForm: Boolean = false): Boolean =
+        KeyPolicy.doubleActivates(key, tag, declaresClick, declaresKeyDown = true, insideForm)
 
-    "a button with a click handler is activated twice by Enter and by Space" in {
+    "a button is activated twice by Enter and by Space, submitting or not, handler or not" in {
+        // A SUBMITTING button used to be exempted, on the grounds that the dispatcher's emulation
+        // did not carry a form submit. It does now — as a synthesized click — so the browser's own
+        // activation is the second one whatever the type says (GAPS.md F-36). `declaresClick` does
+        // not gate a button either: a submitting button with no click handler still submits, so
+        // there would still be two of everything.
         assert(doubles("Enter", "BUTTON"))
         assert(doubles(" ", "BUTTON"))
+        assert(doubles("Enter", "BUTTON", declaresClick = false))
+        assert(doubles(" ", "BUTTON", declaresClick = false))
     }
 
-    "a submitting button is left alone, since the emulation does not carry the submit" in {
-        assert(!doubles("Enter", "BUTTON", submits = true))
-        assert(!doubles(" ", "BUTTON", submits = true))
+    "Enter inside a form is implicit submission, which the dispatcher also answers with a click" in {
+        assert(doubles("Enter", "INPUT", declaresClick = false, insideForm = true))
+        assert(doubles("Enter", "DIV", declaresClick = false, insideForm = true))
+    }
+
+    "Enter outside a form activates nothing, so there is nothing to suppress" in {
+        assert(!doubles("Enter", "INPUT"))
+        assert(!doubles("Enter", "DIV"))
+    }
+
+    "Space in a field types a space; only Enter submits implicitly" in {
+        assert(!doubles(" ", "INPUT", insideForm = true))
     }
 
     "an anchor with a click handler is activated twice by Enter" in {
@@ -87,12 +103,16 @@ class KeyPolicyTest extends kyo.test.Test[Any]:
         assert(!doubles(" ", "A"))
     }
 
-    "an element with no click handler, or none in the chain declaring a keydown, is left alone" in {
-        assert(!KeyPolicy.doubleActivates("Enter", "BUTTON", false, declaresClick = false, declaresKeyDown = true))
-        assert(!KeyPolicy.doubleActivates("Enter", "BUTTON", false, declaresClick = true, declaresKeyDown = false))
+    "an anchor without a click handler keeps its navigation, which the dispatcher does not carry" in {
+        assert(!doubles("Enter", "A", declaresClick = false))
     }
 
-    "an element the browser does not activate is left alone" in {
+    "nothing in the chain declaring a keydown means no keydown is posted, so nothing is emulated" in {
+        assert(!KeyPolicy.doubleActivates("Enter", "BUTTON", declaresClick = true, declaresKeyDown = false, insideForm = true))
+        assert(!KeyPolicy.doubleActivates("Enter", "INPUT", declaresClick = false, declaresKeyDown = false, insideForm = true))
+    }
+
+    "an element the browser does not activate, outside a form, is left alone" in {
         assert(!doubles("Enter", "DIV"))
         assert(!doubles(" ", "SPAN"))
     }
