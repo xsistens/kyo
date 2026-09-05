@@ -619,7 +619,15 @@ private[kyo] object ReactiveUI:
                 // field (see boolAttrNow), so it is read from the resolved element rather than carried.
                 targetDisabled <-
                     if isClick then facts.target.fold(Kyo.lift(false))(isDisabled) else Kyo.lift(false)
-                targetIsButton = isClick && facts.target.exists(_.isInstanceOf[Button])
+                // A button's TYPE decides whether activating it submits, not its element kind:
+                // `type="button"` — which is `uic.Button`'s default — submits nothing in a
+                // browser, and both DOM clients already read it. `Absent` here means the target
+                // is no button at all, which the Enter path below needs to tell apart from "a
+                // button that does not submit": one still submits (implicit submission from a
+                // text field), the other must not.
+                targetButtonSubmits = facts.target match
+                    case Present(b: Button) => Present(ButtonActivation.submits(b.attrs.jsProps.getOrElse("type", "")))
+                    case _                  => Absent
                 targetIsSelect = isKeyDown && facts.target.exists(_.isInstanceOf[Select])
                 // Whether a control of the reader's own stands between this element and the target,
                 // reported to the handler rather than acted on here: only the handler knows whether
@@ -630,8 +638,9 @@ private[kyo] object ReactiveUI:
                     event,
                     isTarget = false,
                     disabledTarget = targetDisabled,
-                    submitOrigin = targetIsButton,
+                    submitOrigin = isClick && targetButtonSubmits.getOrElse(false),
                     selectTarget = targetIsSelect,
+                    nonSubmitButton = targetButtonSubmits.exists(!_),
                     controlTarget = targetOnControl
                 )
                 result <- staticChild match
@@ -898,6 +907,11 @@ private[kyo] object ReactiveUI:
 
     /** Dispatch event to element. isTarget=true when element is the click target, false on bubble. disabledTarget=true when the original
       * click target was disabled (prevents Form onSubmit on bubble).
+      *
+      * `submitOrigin` and `nonSubmitButton` are the two halves of one question — does the button under
+      * the event submit — kept apart because the two activation paths need different halves: a click
+      * submits only FROM a submitting button, while Enter submits from anything except a select or a
+      * button that does not submit (a text field's Enter is implicit submission and has no button).
       */
     private def dispatchToElement(
         elem: Element,
@@ -906,6 +920,7 @@ private[kyo] object ReactiveUI:
         disabledTarget: Boolean = false,
         submitOrigin: Boolean = false,
         selectTarget: Boolean = false,
+        nonSubmitButton: Boolean = false,
         controlTarget: Boolean = false
     )(
         using Frame
@@ -922,8 +937,10 @@ private[kyo] object ReactiveUI:
                     // Checkbox/radio toggle is handled by UIControlSession.click() which dispatches
                     // ChangeChecked after Click. Don't toggle here to avoid double-toggle.
                     val activateToggle = Kyo.lift(())
-                    // When a Click on a Button bubbles to a Form, trigger onSubmit (browser behavior)
-                    // Only Button clicks submit forms (not radio, checkbox, or input clicks)
+                    // When a Click on a SUBMITTING Button bubbles to a Form, trigger onSubmit (browser
+                    // behavior). Not every Button: `type="button"` and `type="reset"` activate without
+                    // submitting, and `uic.Button` defaults to the former — see ButtonActivation, whose
+                    // rule both DOM clients apply to the same markup.
                     val formSubmit = if !isTarget && !disabledTarget && submitOrigin then
                         elem match
                             case f: Form =>
@@ -1007,12 +1024,18 @@ private[kyo] object ReactiveUI:
                                 case _           => Kyo.lift(())
                         else Kyo.lift(())
                     // Enter key bubbling to Form triggers onSubmit (browser behavior)
-                    // Enter on Select should NOT submit; it interacts with the dropdown
-                    val formSubmit = if !isTarget && e.keyboard.key == "Enter" && !selectTarget then
-                        elem match
-                            case f: Form => invoke(f.onSubmit)
-                            case _       => Kyo.lift(())
-                    else Kyo.lift(())
+                    // Enter on Select should NOT submit; it interacts with the dropdown.
+                    // Enter on a NON-SUBMITTING button should not either: a browser activates that
+                    // button (its click fires) and the activation behaviour of `type="button"` is to do
+                    // nothing. Enter from anything else stays implicit submission, which is what a text
+                    // field's Enter is.
+                    val formSubmit =
+                        if !isTarget && e.keyboard.key == "Enter" && !selectTarget && !nonSubmitButton
+                        then
+                            elem match
+                                case f: Form => invoke(f.onSubmit)
+                                case _       => Kyo.lift(())
+                        else Kyo.lift(())
                     keyHandler.andThen(activateClick).andThen(activateToggle).andThen(selectCycle).andThen(formSubmit)
                         .andThen(keepBubbling(elem, attrs.onKeyDown.nonEmpty))
                 }

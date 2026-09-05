@@ -2240,8 +2240,12 @@ private[kyo] object DomBackend:
     private def submits(target: dom.Element): Boolean =
         val declaredType = target.getAttribute("data-kyo-prop-type")
         val attrType     = target.getAttribute("type")
-        val effective    = if declaredType != null then declaredType else if attrType != null then attrType else "submit"
-        effective == "submit" && target.closest("form") != null
+        // An absent type is "" and submits, because that is what a browser does with it — the
+        // rule and its measurements live in ButtonActivation, which the dispatcher and the
+        // server-push client apply to the same markup. Comparing against "submit" instead (as
+        // this did) gets `type="bogus"` and `type=""` backwards: both submit.
+        val effective = if declaredType != null then declaredType else if attrType != null then attrType else ""
+        ButtonActivation.submits(effective) && target.closest("form") != null
     end submits
 
     /** Whether a `preventScrollKeys` region should suppress the browser's page scroll for `key` on

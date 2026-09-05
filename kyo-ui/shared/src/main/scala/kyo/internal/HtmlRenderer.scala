@@ -2288,8 +2288,8 @@ private[kyo] object HtmlRenderer:
            |      // alone answers differently here than in the client-rendered tree. Submitting a form
            |      // is the one thing the dispatcher's emulation does not carry, so leave that case be.
            |      var __pt=e.target.getAttribute("data-kyo-prop-type"),__at=e.target.getAttribute("type");
-           |      var __et=__pt?__pt:(__at?__at:"submit");
-           |      var __sub=!!(__et==="submit"&&e.target.closest&&e.target.closest("form"));
+           |      var __et=(__pt!==null?__pt:(__at!==null?__at:"")).toLowerCase();
+           |      var __sub=!!(${ButtonActivation.jsSubmits("__et")}&&e.target.closest&&e.target.closest("form"));
            |      var __own=e.target.getAttribute("data-kyo-ev");
            |      var __ck=!!(__own&&__own.split(",").indexOf("click")>=0);
            |      var __act=(e.target.tagName==="BUTTON")?(($jsButtonActivation)&&!__sub):($jsLinkActivation);
