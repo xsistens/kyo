@@ -122,6 +122,31 @@ class WebSocketNetworkTransportSpec extends kyo.test.Test[Any]:
                 end for
         }
 
+        "a next, complete and the socket's clean close in one burst still deliver both frames, then end cleanly" in Clock
+            .withTimeControl { control =>
+                val f = new Fixture
+                for
+                    doneA <- Fiber.init(Scope.run(StreamProbe.collect(f.transport.subscribe(request()))))
+                    _     <- settle(control)
+                    _     <- Sync.defer(f.conn.server(ack))
+                    _     <- settle(control)
+                    // The ordinary end of a finite subscription: the server's last `next`,
+                    // its `complete` and its close frame arrive back-to-back, before the
+                    // transport's drain has taken any of them. Both frames must still
+                    // reach the subscriber, and the socket's clean close must not turn
+                    // into an ApolloWebSocketClosedException value after the `complete`.
+                    _ <- Sync.defer {
+                        f.conn.server(next("0", 1))
+                        f.conn.server(complete("0"))
+                        f.conn.serverClose()
+                    }
+                    a <- doneA.get
+                yield
+                    assert(a.flatMap(_.data) == List(1))
+                    assert(a.forall(_.error.isEmpty), s"expected a clean end after complete, got $a")
+                end for
+            }
+
         "a server ping is answered with a pong" in Clock.withTimeControl { control =>
             val f = new Fixture
             for

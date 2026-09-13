@@ -101,6 +101,28 @@ class JsWebSocketConnectionSpec extends kyo.test.Test[Any]:
             end for
         }
 
+        "frames received in the same burst as the close are all delivered, then the stream ends" in {
+            val fake = new FakeSocket
+            for
+                conn <- open(fake)
+                // The ordinary end of a finite subscription: the server's last `next`, its
+                // `complete` and its close frame land in ONE synchronous burst, so the
+                // `message` and `close` listeners all run before any fiber drains — on JS's
+                // single carrier there is no other interleaving point. A hard `close` of the
+                // frame channel here hands both frames to the closer and `run` sees none.
+                _ <- Sync.defer {
+                    fake.message("next")
+                    fake.message("complete")
+                    fake.closeEvent(WebSocketConnection.NormalClosure)
+                }
+                seen   <- conn.incoming.run.map(_.toList)
+                closed <- Abort.run[ApolloWebSocketClosedException](conn.closed)
+            yield
+                assert(seen == List("next", "complete"))
+                assert(closed.isSuccess, s"expected a clean close, got $closed")
+            end for
+        }
+
         "send forwards text; a send after termination is dropped" in {
             val fake = new FakeSocket
             for
