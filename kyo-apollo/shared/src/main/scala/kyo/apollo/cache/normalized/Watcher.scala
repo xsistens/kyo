@@ -82,6 +82,13 @@ extension [D](call: ApolloCall[D])
       * transport and `kyo-ui`'s reactive bridge. Those fetch streams are finite, so
       * they complete on their own; teardown only flips `active`, unsubscribes, and
       * closes the channel.
+      *
+      * The callbacks run on three different contexts — the detached fetch fibers,
+      * whichever fiber writes to the store (its synchronous `publish` invokes
+      * `onChangedKeys`), and the `Scope` teardown — so the watch's mutable state
+      * lives in one [[AtomicRef]] over a [[WatchState]]: "still active?" and "which
+      * keys?" are read together, and teardown's `active = false` is visible to every
+      * later callback through the CAS.
       */
     def watch()(using
         Frame,
@@ -97,12 +104,16 @@ extension [D](call: ApolloCall[D])
             Channel.initUnscoped[ApolloResponse[D]](Int.MaxValue).map { channel =>
                 given AllowUnsafe = AllowUnsafe.embrace.danger
 
-                // Single-threaded (JS) mutable state captured by the callbacks below.
-                var active                = true
-                var watchSet: Set[String] = Set.empty
+                val state = AtomicRef.Unsafe.init(WatchState.initial)
+
+                // The one CAS path for the key set: every transition is a `copy`, so a
+                // later field (a store generation, a refetch-in-flight flag) joins the
+                // same compare-and-set instead of adding a second cell.
+                def setKeys(keys: Set[String]): Unit =
+                    discard(state.updateAndGet(_.copy(keys = keys)))
 
                 def offer(response: ApolloResponse[D]): Unit =
-                    val _ = channel.unsafe.offer(response)
+                    if state.get().active then discard(channel.unsafe.offer(response))
 
                 // Launch a finite response stream (initial fetch / network refetch) as a
                 // detached fiber that pushes each emission through `emitFresh`.
@@ -117,16 +128,16 @@ extension [D](call: ApolloCall[D])
                 // cannot be satisfied, so a watcher is never born dead.
                 def establishFrom(response: ApolloResponse[D]): Unit =
                     val stamped = response.cacheInfo.map(_.dependentKeys).getOrElse(Set.empty)
-                    if response.cacheInfo.exists(_.isCacheHit) && stamped.nonEmpty then watchSet = stamped
+                    if response.cacheInfo.exists(_.isCacheHit) && stamped.nonEmpty then setKeys(stamped)
                     else
                         Try(store.readOperationWithKeys(request.operation)) match
-                            case Success((_, keys)) => watchSet = keys
-                            case Failure(_)         => if stamped.nonEmpty then watchSet = stamped
+                            case Success((_, keys)) => setKeys(keys)
+                            case Failure(_)         => if stamped.nonEmpty then setKeys(stamped)
                     end if
                 end establishFrom
 
                 def emitFresh(response: ApolloResponse[D]): Unit =
-                    if active then
+                    if state.get().active then
                         offer(response)
                         establishFrom(response)
 
@@ -141,13 +152,14 @@ extension [D](call: ApolloCall[D])
                 def reread(onMiss: Throwable => Unit): Unit =
                     Try(store.readOperationWithKeys(request.operation)) match
                         case Success((data, keys)) =>
-                            watchSet = keys
-                            if active then offer(CacheResponses.hit(request, data, keys))
+                            setKeys(keys)
+                            offer(CacheResponses.hit(request, data, keys))
                         case Failure(cause) => onMiss(cause)
 
                 /** [[RefetchPolicy.CacheOnly]]'s miss leg: the miss IS the value. */
                 def emitMiss(cause: Throwable): Unit =
-                    if active && watchSet.nonEmpty then offer(CacheResponses.miss(request, cause))
+                    val s = state.get()
+                    if s.active && s.keys.nonEmpty then offer(CacheResponses.miss(request, cause))
 
                 // NetworkOnly update: re-run the operation over the network (which writes
                 // the response back into the store) and emit the networked value.
@@ -159,28 +171,46 @@ extension [D](call: ApolloCall[D])
                 end refetchOverNetwork
 
                 def onChangedKeys(changedKeys: Set[String]): Unit =
-                    if active && changedKeys.intersect(watchSet).nonEmpty then
+                    val s = state.get() // one read: `active` and `keys` belong together
+                    if s.active && changedKeys.intersect(s.keys).nonEmpty then
                         refetchPolicy match
                             case RefetchPolicy.CacheOnly   => reread(emitMiss)
                             case RefetchPolicy.NetworkOnly => refetchOverNetwork()
                             case RefetchPolicy.CacheFirst  => reread(_ => refetchOverNetwork())
+                    end if
+                end onChangedKeys
 
                 // Subscribe to the store *before* the initial fetch so a write landing
-                // during the fetch is never missed; the empty `watchSet` guards against
-                // re-emitting for the initial fetch's own write-back (nothing intersects
-                // the empty set).
+                // during the fetch is never missed; the initially empty key set guards
+                // against re-emitting for the initial fetch's own write-back (nothing
+                // intersects the empty set).
                 val unsubscribe = store.changedKeys.subscribe(onChangedKeys)
                 spawn(call.stream)
 
                 Scope
                     .ensure(Sync.defer {
                         given AllowUnsafe = AllowUnsafe.embrace.danger
-                        active = false
+                        discard(state.updateAndGet(_.copy(active = false)))
                         unsubscribe()
-                        val _ = channel.unsafe.close()
+                        discard(channel.unsafe.close())
                     })
                     .andThen(channel.streamUntilClosed())
             }
         }
     end watch
 end extension
+
+/** The whole mutable state of one `watch()`, held in a single [[AtomicRef]] so a
+  * callback reads "still active?" and "which keys?" as one snapshot and every
+  * transition is one compare-and-set. `active` is cleared once by the `Scope`
+  * teardown and never set again; `keys` is the dependent-key set of the last
+  * established read — empty until the initial fetch has landed.
+  *
+  * Transitions go through `copy`, so further per-watch facts (the store
+  * generation a read was taken at, whether a network refetch is in flight) are
+  * added as fields here and ride the same CAS rather than a second cell.
+  */
+final private[normalized] case class WatchState(active: Boolean, keys: Set[String])
+
+private[normalized] object WatchState:
+    val initial: WatchState = WatchState(active = true, keys = Set.empty)
