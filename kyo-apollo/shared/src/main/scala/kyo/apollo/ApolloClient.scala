@@ -132,7 +132,8 @@ final class ApolloClient private (
       * (each live query registers on setup and de-registers on `Scope` teardown).
       * The seam for imperative `refetchQueries` / `resetStore`.
       */
-    private[apollo] val activeQueries: ActiveQueryRegistry = new ActiveQueryRegistry()
+    private[apollo] val activeQueries: ActiveQueryRegistry =
+        ActiveQueryRegistry.Unsafe.init()(using AllowUnsafe.embrace.danger)
 
     /** Prepare a call for `query` — the read path. Nothing runs until the returned
       * [[ApolloCall]] is executed.
