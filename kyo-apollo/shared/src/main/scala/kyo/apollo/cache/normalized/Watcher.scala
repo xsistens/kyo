@@ -6,6 +6,7 @@ import kyo.apollo.ApolloClient
 import kyo.apollo.network.ApolloResponse
 import kyo.apollo.network.ExecutionContext
 import kyo.apollo.runtime.ResponseStream
+import scala.annotation.tailrec
 import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
@@ -89,6 +90,14 @@ extension [D](call: ApolloCall[D])
       * lives in one [[AtomicRef]] over a [[WatchState]]: "still active?" and "which
       * keys?" are read together, and teardown's `active = false` is visible to every
       * later callback through the CAS.
+      *
+      * A key set is adopted together with the [[ApolloStore.currentGeneration]] its
+      * read was current at. A write published between that read and the adoption
+      * was intersected against the previous set — and possibly dropped — but it
+      * moved the store's generation past the read's stamp, which the watch checks
+      * right after adopting and answers with the reaction the dropped publish would
+      * have caused. A watch therefore never settles on a value that a write in its
+      * own dependency set has already overtaken.
       */
     def watch()(using
         Frame,
@@ -106,11 +115,29 @@ extension [D](call: ApolloCall[D])
 
                 val state = AtomicRef.Unsafe.init(WatchState.initial)
 
-                // The one CAS path for the key set: every transition is a `copy`, so a
-                // later field (a store generation, a refetch-in-flight flag) joins the
-                // same compare-and-set instead of adding a second cell.
-                def setKeys(keys: Set[String]): Unit =
-                    discard(state.updateAndGet(_.copy(keys = keys)))
+                // The one CAS path for the key set: adopt `keys` together with the store
+                // generation `gen` their read was current at, unless the set already held
+                // comes from a younger read (an older read must not roll it back; its
+                // datum is then not offered either). Every transition is a `copy`, so a
+                // later field (a refetch-in-flight flag) joins the same compare-and-set
+                // instead of adding a second cell.
+                @tailrec def adopt(keys: Set[String], gen: Long): Boolean =
+                    val s = state.get()
+                    if gen < s.gen then false
+                    else if state.compareAndSet(s, s.copy(keys = keys, gen = gen)) then true
+                    else adopt(keys, gen)
+                end adopt
+
+                // Close the window between a read and the adoption of its key set. A
+                // write published in between was intersected against the PREVIOUS set
+                // and may have been dropped, but it left `currentGeneration` above the
+                // stamp the read carried — so react to it exactly as `onChangedKeys`
+                // would have. Terminates: each pass adopts the generation of its own
+                // read, and a network refetch publishes BEFORE the read that establishes
+                // it, so only a genuinely concurrent write drives another pass.
+                def closeWindow(): Unit =
+                    val s = state.get()
+                    if s.active && s.gen < store.currentGeneration then react()
 
                 def offer(response: ApolloResponse[D]): Unit =
                     if state.get().active then discard(channel.unsafe.offer(response))
@@ -121,18 +148,26 @@ extension [D](call: ApolloCall[D])
                     val _ = Fiber.Unsafe.init[Throwable, Unit](Scope.run(src.foreach(emitFresh)))
 
                 // Refresh the watch set from a just-emitted response. A cache hit already
-                // carries the `dependentKeys` its read touched; a networked response
-                // derives them by reading the records it just wrote back out of the
-                // store — falling back to the write-back's own changed keys (stamped on
-                // `CacheInfo.dependentKeys` by the cache interceptor) when that re-read
-                // cannot be satisfied, so a watcher is never born dead.
+                // carries the `dependentKeys` its read touched and the generation it was
+                // read at; a networked response derives them by reading the records it
+                // just wrote back out of the store — falling back to the write-back's own
+                // changed keys (stamped on `CacheInfo.dependentKeys` by the cache
+                // interceptor) when that re-read cannot be satisfied, so a watcher is
+                // never born dead. The fallback carries generation 0: it only ever seeds
+                // a watch that has no read behind its set yet, and never rolls back one
+                // that has. Only a set backed by a real read closes its window.
                 def establishFrom(response: ApolloResponse[D]): Unit =
-                    val stamped = response.cacheInfo.map(_.dependentKeys).getOrElse(Set.empty)
-                    if response.cacheInfo.exists(_.isCacheHit) && stamped.nonEmpty then setKeys(stamped)
+                    val info    = response.cacheInfo
+                    val stamped = info.map(_.dependentKeys).getOrElse(Set.empty)
+                    if info.exists(_.isCacheHit) && stamped.nonEmpty then
+                        discard(adopt(stamped, info.map(_.generation).getOrElse(0L)))
+                        closeWindow()
                     else
-                        Try(store.readOperationWithKeys(request.operation)) match
-                            case Success((_, keys)) => setKeys(keys)
-                            case Failure(_)         => if stamped.nonEmpty then setKeys(stamped)
+                        Try(store.readOperationStamped(request.operation)) match
+                            case Success((_, keys, gen)) =>
+                                discard(adopt(keys, gen))
+                                closeWindow()
+                            case Failure(_) => if stamped.nonEmpty then discard(adopt(stamped, 0L))
                     end if
                 end establishFrom
 
@@ -150,10 +185,10 @@ extension [D](call: ApolloCall[D])
                 // revives the watcher (Apollo Client watchers stay registered across
                 // incomplete reads). A watch that never established a set stays silent.
                 def reread(onMiss: Throwable => Unit): Unit =
-                    Try(store.readOperationWithKeys(request.operation)) match
-                        case Success((data, keys)) =>
-                            setKeys(keys)
-                            offer(CacheResponses.hit(request, data, keys))
+                    Try(store.readOperationStamped(request.operation)) match
+                        case Success((data, keys, gen)) =>
+                            if adopt(keys, gen) then offer(CacheResponses.hit(request, data, keys, gen))
+                            closeWindow()
                         case Failure(cause) => onMiss(cause)
 
                 /** [[RefetchPolicy.CacheOnly]]'s miss leg: the miss IS the value. */
@@ -170,15 +205,18 @@ extension [D](call: ApolloCall[D])
                     spawn(client.executeAsStream(networked))
                 end refetchOverNetwork
 
+                // The reaction a change in the watch set calls for, by policy — shared by
+                // the changed-keys callback and by `closeWindow`, so a write that slipped
+                // past the callback is answered the same way it would have been.
+                def react(): Unit =
+                    refetchPolicy match
+                        case RefetchPolicy.CacheOnly   => reread(emitMiss)
+                        case RefetchPolicy.NetworkOnly => refetchOverNetwork()
+                        case RefetchPolicy.CacheFirst  => reread(_ => refetchOverNetwork())
+
                 def onChangedKeys(changedKeys: Set[String]): Unit =
                     val s = state.get() // one read: `active` and `keys` belong together
-                    if s.active && changedKeys.intersect(s.keys).nonEmpty then
-                        refetchPolicy match
-                            case RefetchPolicy.CacheOnly   => reread(emitMiss)
-                            case RefetchPolicy.NetworkOnly => refetchOverNetwork()
-                            case RefetchPolicy.CacheFirst  => reread(_ => refetchOverNetwork())
-                    end if
-                end onChangedKeys
+                    if s.active && changedKeys.intersect(s.keys).nonEmpty then react()
 
                 // Subscribe to the store *before* the initial fetch so a write landing
                 // during the fetch is never missed; the initially empty key set guards
@@ -204,13 +242,16 @@ end extension
   * callback reads "still active?" and "which keys?" as one snapshot and every
   * transition is one compare-and-set. `active` is cleared once by the `Scope`
   * teardown and never set again; `keys` is the dependent-key set of the last
-  * established read — empty until the initial fetch has landed.
+  * established read — empty until the initial fetch has landed — and `gen` the
+  * [[ApolloStore.currentGeneration]] that read was current at (0 for a set that
+  * no store read stands behind, i.e. the initial state and the write-back
+  * fallback).
   *
-  * Transitions go through `copy`, so further per-watch facts (the store
-  * generation a read was taken at, whether a network refetch is in flight) are
-  * added as fields here and ride the same CAS rather than a second cell.
+  * Transitions go through `copy`, so further per-watch facts (whether a network
+  * refetch is in flight) are added as fields here and ride the same CAS rather
+  * than a second cell.
   */
-final private[normalized] case class WatchState(active: Boolean, keys: Set[String])
+final private[normalized] case class WatchState(active: Boolean, keys: Set[String], gen: Long)
 
 private[normalized] object WatchState:
-    val initial: WatchState = WatchState(active = true, keys = Set.empty)
+    val initial: WatchState = WatchState(active = true, keys = Set.empty, gen = 0L)
