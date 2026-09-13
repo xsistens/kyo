@@ -1,5 +1,6 @@
 package kyo.apollo.cache.normalized
 
+import kyo.Chunk
 import kyo.Maybe
 import kyo.Present
 import kyo.apollo.api.JsonCodec
@@ -456,6 +457,14 @@ final class ApolloStore(
         publish(changed)
         changed
     end rollbackAndWrite
+
+    /** The mutation ids of every optimistic layer currently overlaid, in stacking
+      * order — a diagnostic view. A layer lives exactly as long as the `Scope` its
+      * mutation stream is consumed in (see [[CacheInterceptor]]), so outside a
+      * running optimistic mutation this is empty; a non-empty result after all
+      * mutations have settled is the symptom of a leaked layer.
+      */
+    def optimisticLayerIds: Chunk[String] = Chunk.from(optimisticLayers.keys)
 
     /** Remove the record stored under `key` from the cache and, if a record was
       * actually present, [[publish]] `Set(key)` so watchers depending on it react.

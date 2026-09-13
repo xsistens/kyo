@@ -148,6 +148,14 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
       * ([[ApolloStore.rollbackAndWrite]]), so a watcher converges straight onto server
       * truth with no intermediate flicker. Errored/empty responses roll the layer back
       * without a merge, mirroring [[writeBack]]'s "only persist a clean success" rule.
+      *
+      * The layer is owned by the `Scope` the stream is consumed in: it is acquired
+      * when consumption starts (never when the stream is merely built) and released
+      * — rolled back — when that Scope closes, whether by interrupt, timeout, a
+      * raised exception below this interceptor, or the consumer dropping the stream.
+      * The success path drops the layer itself through `rollbackAndWrite`, so the
+      * Scope release then finds nothing and publishes nothing; the reply is the only
+      * publication a settled mutation makes.
       */
     private def optimisticMutation[D](
         request: ApolloRequest[D],
@@ -155,16 +163,21 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
         optimistic: OptimisticData
     )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
         val mutationId = optimistic.mutationId
-        discard(store.writeOptimisticUpdates(request.operation, optimistic.data.asInstanceOf[D], mutationId))
-        chain.proceed(request).mapPure { response =>
-            discard {
-                if !response.hasTransportError then
-                    response.data match
-                        case Present(data) => store.rollbackAndWrite(request.operation, data, mutationId)
-                        case Absent        => store.rollbackOptimisticUpdates(mutationId)
-                else store.rollbackOptimisticUpdates(mutationId)
+        Stream.unwrap {
+            Scope.acquireRelease(
+                Sync.defer(store.writeOptimisticUpdates(request.operation, optimistic.data.asInstanceOf[D], mutationId))
+            )(_ => Sync.defer(discard(store.rollbackOptimisticUpdates(mutationId)))).andThen {
+                chain.proceed(request).mapPure { response =>
+                    discard {
+                        if !response.hasTransportError then
+                            response.data match
+                                case Present(data) => store.rollbackAndWrite(request.operation, data, mutationId)
+                                case Absent        => store.rollbackOptimisticUpdates(mutationId)
+                        else store.rollbackOptimisticUpdates(mutationId)
+                    }
+                    response.copy(cacheInfo = Present(CacheInfo.network))
+                }
             }
-            response.copy(cacheInfo = Present(CacheInfo.network))
         }
     end optimisticMutation
 
