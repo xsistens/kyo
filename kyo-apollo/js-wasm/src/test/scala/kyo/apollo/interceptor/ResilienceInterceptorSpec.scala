@@ -13,9 +13,6 @@ import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.ApolloResponse
 import kyo.apollo.network.Uuid
-import kyo.apollo.network.http.HttpEngine
-import kyo.apollo.network.http.HttpRequest
-import kyo.apollo.network.http.HttpResponse
 import kyo.apollo.network.ws.WsBackoff
 import kyo.apollo.network.ws.WsScheduler
 import kyo.apollo.runtime.ResponseStream
@@ -23,10 +20,11 @@ import scala.collection.immutable.VectorMap
 import scala.concurrent.Future
 
 /** Tests the Phase 07 resilience interceptors: [[RetryOnErrorInterceptor]]
-  * (backoff + attempt cap, transport-vs-GraphQL classification),
-  * [[AutoPersistedQueryInterceptor]] (hash-only probe → document fallback), and
-  * [[BatchingHttpInterceptor]] (coalesce → array → split). All timing is
-  * deterministic via an auto-firing scheduler; no real clocks or network.
+  * (backoff + attempt cap, transport-vs-GraphQL classification) and
+  * [[AutoPersistedQueryInterceptor]] (hash-only probe → document fallback). All
+  * timing is deterministic via an auto-firing scheduler; no real clocks or
+  * network. [[BatchingHttpInterceptor]] is covered by the shared
+  * `BatchingHttpInterceptorSpec` under `Clock.withTimeControl`.
   */
 class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
 
@@ -62,22 +60,6 @@ class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
             () => ()
         end schedule
     end AutoScheduler
-
-    /** Like [[AutoScheduler]] but fires the task on a *macrotask* (`setTimeout(0)`)
-      * rather than a microtask. Under the effect pivot the batcher enqueues each
-      * request inside a kyo fiber (a macrotask); a microtask flush would fire
-      * between two fiber-scheduled enqueues and split the window. Deferring the
-      * flush one macrotask lets both concurrently-forked proceeds enqueue first —
-      * the same "coalesce within the window" behaviour, adapted to fiber timing.
-      */
-    final class MacrotaskScheduler extends WsScheduler:
-        var delays: List[Long] = Nil
-        def schedule(delayMillis: Long)(task: () => Unit): () => Unit =
-            delays = delays :+ delayMillis
-            val handle = scala.scalajs.js.timers.setTimeout(0.0)(task())
-            () => scala.scalajs.js.timers.clearTimeout(handle)
-        end schedule
-    end MacrotaskScheduler
 
     /** A terminal [[ApolloInterceptor]] that records every request it receives and
       * answers each `proceed` with the next scripted response (repeating the last
@@ -139,25 +121,6 @@ class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
         val chain = DefaultApolloInterceptorChain(Chunk(interceptor, terminal), 0)
         (terminal, chain.proceed(ApolloRequest(ValueQuery())))
     end retry
-
-    /** An [[HttpEngine]] that records every request and answers via `respond`. */
-    final class RecordingEngine(respond: HttpRequest => HttpResponse) extends HttpEngine:
-        var seen: List[HttpRequest] = Nil
-        def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
-            seen = seen :+ request
-            respond(request)
-    end RecordingEngine
-
-    private def post(body: String): HttpRequest =
-        HttpRequest(kyo.apollo.network.HttpMethod.Post, "https://example.com/graphql", Nil, Some(body))
-
-    private def batchAwareEngine: RecordingEngine =
-        RecordingEngine { req =>
-            req.body match
-                case Some(b) if b.startsWith("[") =>
-                    HttpResponse(200, Nil, """[{"data":{"value":1}},{"data":{"value":2}}]""")
-                case _ => HttpResponse(200, Nil, """{"data":{"value":9}}""")
-        }
 
     private def apqChain(
         script: List[Uuid => ApolloResponse[Any]]
@@ -275,68 +238,6 @@ class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
             StreamProbe.collect(chain.proceed(ApolloRequest(ValueQuery()))).map { responses =>
                 assert(responses.map(_.data) == List(Present(1), Present(2)))
                 assert(terminal.seen.length == 1) // registered hit — single round trip
-            }
-        }
-
-        // --- BatchingHttpInterceptor -------------------------------------------
-
-        "batching: two requests in a window coalesce into one array and split back" in {
-            val engine   = batchAwareEngine
-            val batching = BatchingHttpInterceptor(scheduler = MacrotaskScheduler())
-            // Drive through the chain so the interceptor is handed the position *past*
-            // itself (index 1) — exactly how the client wires it — so the batched send
-            // reaches the engine rather than re-entering the batcher.
-            val chain = DefaultHttpInterceptorChain(Chunk(batching), 0, engine)
-            // Fork both proceeds together so both enqueue into the batch window before the
-            // (fake-scheduler) flush fires — mirroring the original eager-Future enqueue.
-            Async
-                .zip(chain.proceed(post("""{"query":"a"}""")), chain.proceed(post("""{"query":"b"}""")))
-                .map { (ra, rb) =>
-                    assert(engine.seen.length == 1) // one batched round trip
-                    assert(engine.seen.head.body == Some("""[{"query":"a"},{"query":"b"}]"""))
-                    assert(ra.body == """{"data":{"value":1}}""")
-                    assert(rb.body == """{"data":{"value":2}}""")
-                }
-        }
-
-        "batching: reaching maxBatchSize flushes eagerly without waiting" in {
-            val engine = batchAwareEngine
-            // A scheduler that never fires — proves the flush came from the size cap.
-            val neverFires = new WsScheduler:
-                def schedule(delayMillis: Long)(task: () => Unit): () => Unit = () => ()
-            val batching = BatchingHttpInterceptor(maxBatchSize = 2, scheduler = neverFires)
-            val chain    = DefaultHttpInterceptorChain(Chunk(batching), 0, engine)
-            // Fork both proceeds together so both enqueue before the size cap trips the
-            // flush — the original ran two eager Futures concurrently for the same effect.
-            Async
-                .zip(chain.proceed(post("""{"query":"a"}""")), chain.proceed(post("""{"query":"b"}""")))
-                .map { (ra, rb) =>
-                    assert(engine.seen.length == 1)
-                    assert(ra.body == """{"data":{"value":1}}""")
-                    assert(rb.body == """{"data":{"value":2}}""")
-                }
-        }
-
-        "batching: a single request is sent unwrapped, not as an array" in {
-            val engine   = batchAwareEngine
-            val batching = BatchingHttpInterceptor(scheduler = AutoScheduler())
-            val chain    = DefaultHttpInterceptorChain(Chunk(batching), 0, engine)
-            chain.proceed(post("""{"query":"solo"}""")).map { response =>
-                assert(engine.seen.length == 1)
-                assert(engine.seen.head.body == Some("""{"query":"solo"}""")) // no [ ]
-                assert(response.body == """{"data":{"value":9}}""")
-            }
-        }
-
-        "batching: a bodiless GET is forwarded immediately, never batched" in {
-            val engine   = batchAwareEngine
-            val batching = BatchingHttpInterceptor(scheduler = AutoScheduler())
-            val chain    = DefaultHttpInterceptorChain(Chunk(batching), 0, engine)
-            val get =
-                HttpRequest(kyo.apollo.network.HttpMethod.Get, "https://example.com/graphql?query=x")
-            chain.proceed(get).map { response =>
-                assert(engine.seen == List(get)) // passed straight through, alone
-                assert(response.body == """{"data":{"value":9}}""")
             }
         }
     }
