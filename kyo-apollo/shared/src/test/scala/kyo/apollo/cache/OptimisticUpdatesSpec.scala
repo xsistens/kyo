@@ -6,6 +6,7 @@ import kyo.apollo.StreamProbe
 import kyo.apollo.api.*
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.IdCacheKeyGenerator
+import kyo.apollo.cache.normalized.api.Record
 import kyo.apollo.cache.normalized.api.RecordValue
 import kyo.apollo.interceptor.ApolloInterceptor
 import kyo.apollo.interceptor.ApolloInterceptorChain
@@ -75,6 +76,27 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
             )
         def variables: Json = Json.JObj(VectorMap("name" -> SchemaJson.encode(newName)))
     end UpdateUserNameMutation
+
+    final case class TwoUsersData(first: User, second: User) derives Schema
+
+    /** Two entity fields off the root, read in declaration order (`User:1`, then
+      * `User:2`) — the shape whose two loads can straddle a layer change.
+      */
+    final case class TwoUsersQuery() extends Query[TwoUsersData]:
+        def name                             = "TwoUsers"
+        def document                         = "query TwoUsers { first { __typename id name } second { __typename id name } }"
+        def dataSchema: Schema[TwoUsersData] = summon[Schema[TwoUsersData]]
+        def rootField: CompiledField =
+            CompiledField(
+                "data",
+                CompiledNamedType("Query"),
+                selections = List(userField("first"), userField("second"))
+            )
+        def variables: Json = Json.JObj(VectorMap.empty)
+    end TwoUsersQuery
+
+    private def twoUsers(first: String, second: String): TwoUsersData =
+        TwoUsersData(User("User", "1", first), User("User", "2", second))
 
     private def userData(name: String): UserData         = UserData(User("User", "1", name))
     private def updateData(name: String): UpdateUserData = UpdateUserData(User("User", "1", name))
@@ -150,6 +172,27 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
             // Drop the last layer: back to the persisted value.
             s.rollbackOptimisticUpdates("m1")
             assert(s.readOperation(CurrentUserQuery()) == userData("Alice"))
+        }
+
+        "a read sees one consistent layer stack even when a layer is dropped mid-read" in {
+            // One layer overlays both users. The trap fires the rollback of that layer
+            // right after the read has loaded `User:1` and before it loads `User:2` —
+            // the interleaving of a mutation settling while a watcher re-reads. The
+            // read must answer from ONE stack: both users optimistic (the stack as of
+            // the read's entry) or both persisted, never one of each.
+            val cache = new TrapCache(MemoryCache())
+            val s     = new ApolloStore(cache, cacheKeyGenerator = IdCacheKeyGenerator(List("id")))
+            s.writeOperation(TwoUsersQuery(), twoUsers("Alice", "Ann"))
+            s.writeOptimisticUpdates(TwoUsersQuery(), twoUsers("Bob", "Ben"), "m1")
+            cache.arm("User:1")(discard(s.rollbackOptimisticUpdates("m1")))
+            val read = s.readOperation(TwoUsersQuery())
+            assert(
+                read == twoUsers("Bob", "Ben") || read == twoUsers("Alice", "Ann"),
+                s"the read mixed two layer stacks: $read"
+            )
+            assert(s.optimisticLayerIds.isEmpty)
+            // The next read starts from the stack after the rollback.
+            assert(s.readOperation(TwoUsersQuery()) == twoUsers("Alice", "Ann"))
         }
 
         // --- end-to-end through the interceptor chain + watch() -------------------
@@ -293,6 +336,29 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
             end for
         }
     }
+
+    /** A cache whose `loadRecord(key)` for the armed `key` loads the record and
+      * THEN runs the armed action once, re-entrantly — so an action that changes
+      * the store's optimistic stack lands deterministically between two loads of
+      * the same read, on one thread, on every platform.
+      */
+    final private class TrapCache(delegate: NormalizedCache) extends NormalizedCacheDecorator(delegate):
+        private given AllowUnsafe = AllowUnsafe.embrace.danger
+        private val trap          = AtomicRef.Unsafe.init(Maybe.empty[(String, () => Unit)])
+
+        def arm(key: String)(action: => Unit): Unit = discard(trap.getAndSet(Present((key, () => action))))
+
+        override def loadRecord(key: String): Maybe[Record] =
+            val record = delegate.loadRecord(key)
+            trap.get() match
+                case Present((armed, action)) if armed == key =>
+                    discard(trap.getAndSet(Absent))
+                    action()
+                case _ => ()
+            end match
+            record
+        end loadRecord
+    end TrapCache
 
     // --- end-to-end fixtures ----------------------------------------------------
 
