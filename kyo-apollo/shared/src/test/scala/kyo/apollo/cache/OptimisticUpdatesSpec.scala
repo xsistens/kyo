@@ -7,9 +7,14 @@ import kyo.apollo.api.*
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.IdCacheKeyGenerator
 import kyo.apollo.cache.normalized.api.RecordValue
+import kyo.apollo.interceptor.ApolloInterceptor
+import kyo.apollo.interceptor.ApolloInterceptorChain
 import kyo.apollo.json.Json
 import kyo.apollo.json.SchemaJson
+import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.ApolloResponse
+import kyo.apollo.network.ExecutionContext
+import kyo.apollo.runtime.ResponseStream
 import scala.collection.immutable.VectorMap
 
 /** Phase 07 Task 2: optimistic updates.
@@ -184,7 +189,7 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
         }
 
         "optimistic mutation failure: the watcher reverts to the pre-optimistic value" in {
-            val client = cachedClient(mutationFails = true)
+            val client = cachedClient(ScriptedEngine(mutationFails = true))
             for
                 _ <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
                 pull <- StreamProbe.Pull.open(
@@ -211,6 +216,80 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
                 _ = assert(name(reverted) == Some("Alice"))
                 _ = assert(client.apolloStore.readOperation(CurrentUserQuery()) == userData("Alice"))
             yield ()
+            end for
+        }
+
+        // --- lifecycle: the layer lives exactly as long as the consuming Scope ------
+
+        "an interrupted optimistic mutation leaves no layer" in {
+            // The layer is acquired inside the Scope the mutation stream is consumed in;
+            // interrupting that consumer closes the Scope, and the close must drop the
+            // layer — otherwise the optimistic value wins every later read for good.
+            for
+                arrived  <- Latch.init(1)
+                gate     <- Latch.init(1)
+                tornDown <- Latch.init(1)
+                client = cachedClient(GatedEngine(arrived, gate))
+                store  = client.apolloStore
+                _ <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                // Scope finalizers run last-registered-first, so `tornDown` is released
+                // only after the mutation's own layer release has completed.
+                fib <- Fiber.init(Scope.run(
+                    Scope.ensure(tornDown.release).andThen(
+                        client
+                            .mutation(UpdateUserNameMutation("Bob"))
+                            .optimisticUpdates(updateData("BobOptimistic"))
+                            .fetchPolicy(FetchPolicy.NetworkOnly)
+                            .execute
+                    )
+                ))
+                _ <- arrived.await // the mutation is on the wire, parked on `gate`
+                layersInFlight = store.optimisticLayerIds
+                readInFlight   = store.readOperation(CurrentUserQuery())
+                _ <- fib.interrupt
+                _ <- tornDown.await
+                _ <- gate.release
+            yield
+                assert(layersInFlight.size == 1, s"the layer must be overlaid while in flight: $layersInFlight")
+                assert(readInFlight == userData("BobOptimistic"))
+                assert(store.optimisticLayerIds.isEmpty, s"interrupt leaked a layer: ${store.optimisticLayerIds}")
+                assert(store.readOperation(CurrentUserQuery()) == userData("Alice"))
+            end for
+        }
+
+        "a never-consumed optimistic stream writes no layer" in {
+            // Building the stream must not touch the store: the layer is acquired only
+            // when the stream is consumed, so a stream that is dropped unconsumed can
+            // never leave one behind.
+            val store       = seededStore()
+            val interceptor = new CacheInterceptor(store)
+            val request = ApolloRequest
+                .builder(UpdateUserNameMutation("Bob"))
+                .addExecutionContext(ExecutionContext.Empty + OptimisticData(updateData("BobOptimistic"), "m1"))
+                .build()
+            discard(interceptor.intercept(request, InertChain))
+            assert(store.optimisticLayerIds.isEmpty, s"building the stream wrote a layer: ${store.optimisticLayerIds}")
+            assert(store.readOperation(CurrentUserQuery()) == userData("Alice"))
+        }
+
+        "an exception raised below the cache interceptor rolls the layer back" in {
+            // A transport that raises instead of answering with an `ApolloResponse`
+            // value never reaches the response mapping; the Scope release still runs.
+            val client = cachedClient(ScriptedEngine(mutationFails = false), belowCache = List(RaisingInterceptor))
+            val store  = client.apolloStore
+            for
+                _ <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                result <- Abort.run[Throwable](Scope.run(
+                    client
+                        .mutation(UpdateUserNameMutation("Bob"))
+                        .optimisticUpdates(updateData("BobOptimistic"))
+                        .fetchPolicy(FetchPolicy.NetworkOnly)
+                        .execute
+                ))
+            yield
+                assert(!result.isSuccess, s"the raised exception must surface: $result")
+                assert(store.optimisticLayerIds.isEmpty, s"the exception leaked a layer: ${store.optimisticLayerIds}")
+                assert(store.readOperation(CurrentUserQuery()) == userData("Alice"))
             end for
         }
     }
@@ -246,13 +325,71 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
         end execute
     end ScriptedEngine
 
-    private def cachedClient(mutationFails: Boolean = false): ApolloClient =
-        ApolloClient
+    /** An engine whose mutation call signals `arrived` and then parks on `gate`, so
+      * an optimistic mutation can be held in flight — layer overlaid, reply pending —
+      * while the consumer is interrupted. The seeding query answers Alice at once.
+      */
+    final private class GatedEngine(arrived: Latch, gate: Latch)
+        extends kyo.apollo.network.http.HttpEngine:
+        def execute(
+            request: kyo.apollo.network.http.HttpRequest
+        )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
+            if request.body.getOrElse("").contains("UpdateUserName") then
+                arrived.release.andThen(gate.await).andThen(
+                    kyo.apollo.network.http.HttpResponse(
+                        200,
+                        Nil,
+                        """{"data":{"updateUser":{"__typename":"User","id":"1","name":"Bob"}}}"""
+                    )
+                )
+            else
+                kyo.apollo.network.http.HttpResponse(
+                    200,
+                    Nil,
+                    """{"data":{"user":{"__typename":"User","id":"1","name":"Alice"}}}"""
+                )
+    end GatedEngine
+
+    /** A chain whose continuation answers with an empty stream — a stand-in for the
+      * network leg when only the interceptor's build-time behaviour is under test.
+      */
+    private object InertChain extends ApolloInterceptorChain:
+        def proceed[D](request: ApolloRequest[D])(using
+            Frame,
+            Tag[Emit[Chunk[ApolloResponse[D]]]]
+        ): ResponseStream[D] =
+            Stream.empty[ApolloResponse[D]]
+    end InertChain
+
+    /** An interceptor placed below the cache whose mutation stream raises when
+      * consumed — an exception instead of an `ApolloResponse` value, as a transport
+      * wiring failure would. Queries pass through, so the cache can still be seeded.
+      */
+    private object RaisingInterceptor extends ApolloInterceptor:
+        def intercept[D](
+            request: ApolloRequest[D],
+            chain: ApolloInterceptorChain
+        )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
+            request.operation match
+                case _: Mutation[?] =>
+                    Stream.unwrap[ApolloResponse[D], Async & Scope, Sync](
+                        Sync.defer(throw new IllegalStateException("transport raised"))
+                    )
+                case _ => chain.proceed(request)
+    end RaisingInterceptor
+
+    private def cachedClient(
+        engine: kyo.apollo.network.http.HttpEngine = ScriptedEngine(mutationFails = false),
+        belowCache: List[ApolloInterceptor] = Nil
+    ): ApolloClient =
+        val builder = ApolloClient
             .builder()
             .serverUrl("https://example.com/graphql")
-            .httpEngine(ScriptedEngine(mutationFails))
+            .httpEngine(engine)
             .normalizedCache(MemoryCache(), IdCacheKeyGenerator(List("id")))
-            .build()
+        belowCache.foreach(builder.addInterceptor)
+        builder.build()
+    end cachedClient
 
     private def name(response: ApolloResponse[UserData]): Option[String] =
         response.data.map(_.user.name).toOption
