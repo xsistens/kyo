@@ -1,0 +1,13 @@
+# Mutation carrying an input-object variable ($input: UpdateCountryInput!). Its
+# payload shares `__typename`/`code` with the query above, so a generated
+# mutation's result normalizes into the same cache record.
+mutation UpdateCountry($input: UpdateCountryInput!) {
+  updateCountry(input: $input) {
+    __typename
+    code
+    name
+    capital
+    emoji
+    updatedAt
+  }
+}

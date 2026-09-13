@@ -1,0 +1,100 @@
+# Reference schema for Phase 08 codegen fixtures.
+#
+# A small "countries" domain (inspired by the public countries.trevorblades.com
+# API) extended with a Mutation and a Subscription so the generator's fixtures
+# cover ALL three GraphQL operation kinds. It also intentionally exercises the
+# features later codegen tasks must handle: a custom scalar (`DateTime`), an
+# `enum` (`Continent`), input object types (`CountryFilter`, `UpdateCountryInput`),
+# list/non-null wrappers, and nullable fields.
+#
+# Consumed by the operation documents in this same folder and, from Task 6
+# onward, by the `codegenGenerate` task (see docs/architecture/codegen-strategy.md).
+
+"An ISO-8601 timestamp — a custom scalar, mapped to a Scala type via scalarMapping."
+scalar DateTime
+
+"The seven continents; maps to a Scala 3 `enum` with adapters (codegen Task 4)."
+enum Continent {
+  AFRICA
+  ANTARCTICA
+  ASIA
+  EUROPE
+  NORTH_AMERICA
+  OCEANIA
+  SOUTH_AMERICA
+}
+
+"A single country record."
+type Country {
+  "ISO 3166-1 alpha-2 code, e.g. `DE` — used as the cache key."
+  code: ID!
+  name: String!
+  native: String!
+  capital: String
+  emoji: String!
+  continent: Continent!
+  currencies: [String!]!
+  "When this record last changed; a nullable custom-scalar field."
+  updatedAt: DateTime
+}
+
+"Filter passed to the `countries` query as an input object."
+input CountryFilter {
+  continent: Continent
+  search: String
+}
+
+"Payload for the `updateCountry` mutation."
+input UpdateCountryInput {
+  code: ID!
+  capital: String
+  emoji: String
+}
+
+"Relay-style page metadata for a connection."
+type PageInfo {
+  "Opaque cursor of the last edge on this page, or null when the page is empty."
+  endCursor: String
+  "Whether a further page exists after this one."
+  hasNextPage: Boolean!
+}
+
+"One edge of a `CountryConnection` — a country node plus its pagination cursor."
+type CountryEdge {
+  node: Country!
+  "Opaque cursor identifying this edge's position; the edge's cache key."
+  cursor: String!
+}
+
+"A Relay-style paginated connection over countries."
+type CountryConnection {
+  edges: [CountryEdge!]!
+  pageInfo: PageInfo!
+}
+
+type Query {
+  "All countries, optionally filtered."
+  countries(filter: CountryFilter): [Country!]!
+  "One country by ISO code, or null if unknown."
+  country(code: ID!): Country
+  "Countries as a Relay-style connection, paginated by `first`/`after`."
+  countriesConnection(first: Int, after: String): CountryConnection!
+  "A second countries connection (same shape) — lets one query hold two independently-paginated connections, exercising unique variable naming."
+  moreCountries(first: Int, after: String): CountryConnection!
+}
+
+type Mutation {
+  "Mutate a country and return the updated record."
+  updateCountry(input: UpdateCountryInput!): Country!
+}
+
+type Subscription {
+  "Emits whenever a country changes, optionally scoped to a continent."
+  countryUpdated(continent: Continent): Country!
+}
+
+schema {
+  query: Query
+  mutation: Mutation
+  subscription: Subscription
+}
