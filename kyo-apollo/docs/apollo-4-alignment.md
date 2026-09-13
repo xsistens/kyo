@@ -39,7 +39,7 @@ system dissolves several of the React-specific concerns outright.
 | --- | --- | --- |
 | Granular error types; stop wrapping every failure in `ApolloError` | Aligned | `exception/ApolloException.scala` — sealed subtypes; `ApolloGraphQLException` follows the JS `CombinedGraphQLErrors` message contract verbatim |
 | All links class-based (`new`), no class/function split | Aligned | every interceptor in `interceptor/` is a `final class` |
-| Stop tracking unsubscribed `ObservableQuery` (leaks, surprise refetches) | Aligned | `ActiveQueryRegistry.register` returns a dispose thunk; `ApolloQuery.scala:358` disposes via `Scope.ensure` |
+| Stop tracking unsubscribed `ObservableQuery` (leaks, surprise refetches) | Aligned | `ActiveQueryRegistry.register` is a `Scope.acquireRelease` pair; the live query's `Scope` removes the entry on teardown |
 | React APIs moved out of the top-level entry (`/react`) | Aligned | `kyo-apollo` core carries no UI dependency; the binding is the separate `kyo-apollo-ui` module |
 | Stricter `variables` typing | Ahead | arguments are typed parameters on generated selectors — a missing required variable is a compile error, not an overload heuristic |
 | `dataState` narrowing so `data` is not `T \| undefined` | Ahead (structurally) | `QueryState.Success(data: D, …)` — data is non-optional in the success arm; the enum narrows |
