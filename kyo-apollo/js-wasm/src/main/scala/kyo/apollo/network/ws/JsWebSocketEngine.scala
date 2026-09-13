@@ -58,7 +58,7 @@ end JsWebSocket
   */
 final private[ws] class JsWebSocketConnection private (
     socket: JsWebSocket,
-    incomingCh: Channel[String],
+    incomingCh: Channel[Maybe[String]],
     donePromise: Fiber.Promise[Unit, Abort[ApolloWebSocketClosedException]]
 ) extends WebSocketConnection:
 
@@ -70,7 +70,7 @@ final private[ws] class JsWebSocketConnection private (
         Sync.defer(if !terminated then socket.send(text) else ())
 
     def incoming(using Frame): Stream[String, Async] =
-        incomingCh.streamUntilClosed()
+        WebSocketConnection.untilEnd(incomingCh)
 
     def closed(using Frame): Unit < (Async & Abort[ApolloWebSocketClosedException]) =
         donePromise.get
@@ -107,7 +107,10 @@ private[ws] object JsWebSocketConnection:
         socket: JsWebSocket
     )(using Frame): JsWebSocketConnection < (Async & Scope & Abort[ApolloWebSocketClosedException]) =
         for
-            incomingCh <- Channel.initUnscoped[String](Int.MaxValue)
+            // Unbounded and never closed: frames are `Present`, the socket's end is one
+            // `Absent` marker (see `WebSocketConnection.untilEnd`), so the channel simply
+            // becomes unreachable with the connection.
+            incomingCh <- Channel.initUnscoped[Maybe[String]](Int.MaxValue)
             done       <- Fiber.Promise.init[Unit, Abort[ApolloWebSocketClosedException]]
             opened     <- Fiber.Promise.init[Unit, Abort[ApolloWebSocketClosedException]]
             connection <- Sync.defer {
@@ -126,7 +129,7 @@ private[ws] object JsWebSocketConnection:
     private def wire(
         socket: JsWebSocket,
         conn: JsWebSocketConnection,
-        incomingCh: Channel[String],
+        incomingCh: Channel[Maybe[String]],
         done: Fiber.Promise[Unit, Abort[ApolloWebSocketClosedException]],
         opened: Fiber.Promise[Unit, Abort[ApolloWebSocketClosedException]]
     )(using AllowUnsafe, Frame): Unit =
@@ -135,7 +138,7 @@ private[ws] object JsWebSocketConnection:
             socket.addEventListener(event, listener)
 
         on("open")(_ => discard(opened.unsafe.completeUnitDiscard()))
-        on("message")(e => discard(incomingCh.unsafe.offer(messageText(e))))
+        on("message")(e => discard(incomingCh.unsafe.offer(Present(messageText(e)))))
         on("error")(_ =>
             val ex = ApolloWebSocketClosedException(
                 WebSocketConnection.NormalClosure + 6, // 1006 — abnormal, no close frame
@@ -155,7 +158,7 @@ private[ws] object JsWebSocketConnection:
 
     private def terminate(
         conn: JsWebSocketConnection,
-        incomingCh: Channel[String],
+        incomingCh: Channel[Maybe[String]],
         done: Fiber.Promise[Unit, Abort[ApolloWebSocketClosedException]],
         opened: Fiber.Promise[Unit, Abort[ApolloWebSocketClosedException]],
         failure: Maybe[ApolloWebSocketClosedException]
@@ -170,7 +173,11 @@ private[ws] object JsWebSocketConnection:
                 discard(opened.unsafe.completeDiscard(Result.fail(ex)))
                 discard(done.unsafe.completeDiscard(Result.fail(ex)))
         end match
-        discard(incomingCh.unsafe.close())
+        // The end-marker, never `close`: `on("message")` and this `on("close")` fire in
+        // the same synchronous burst, before any fiber drains, and a `close` would hand
+        // the frames still buffered to this closer instead of to `incoming`. An `error`
+        // followed by `close` leaves a second marker behind the first; harmless.
+        discard(incomingCh.unsafe.offer(Absent))
     end terminate
 
     private def messageText(event: js.Dynamic): String =

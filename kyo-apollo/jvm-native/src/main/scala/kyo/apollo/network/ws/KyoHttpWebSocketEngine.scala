@@ -27,7 +27,7 @@ end KyoHttpWebSocketEngine
 
 final private[ws] class KyoHttpWebSocketConnection private (
     ws: HttpWebSocket,
-    incomingCh: Channel[String],
+    incomingCh: Channel[Maybe[String]],
     donePromise: Fiber.Promise[Unit, Abort[ApolloWebSocketClosedException]]
 ) extends WebSocketConnection:
 
@@ -36,7 +36,7 @@ final private[ws] class KyoHttpWebSocketConnection private (
         Abort.run[Closed](ws.put(HttpWebSocket.Payload.Text(text))).unit
 
     def incoming(using Frame): Stream[String, Async] =
-        incomingCh.streamUntilClosed()
+        WebSocketConnection.untilEnd(incomingCh)
 
     def closed(using Frame): Unit < (Async & Abort[ApolloWebSocketClosedException]) =
         donePromise.get
@@ -55,7 +55,10 @@ private[ws] object KyoHttpWebSocketConnection:
         protocol: Option[String]
     )(using Frame): WebSocketConnection < (Async & Scope & Abort[ApolloException]) =
         for
-            incomingCh <- Channel.initUnscoped[String](Int.MaxValue)
+            // Unbounded and never closed: frames are `Present`, the socket's end is one
+            // `Absent` marker (see `WebSocketConnection.untilEnd`), so the channel simply
+            // becomes unreachable with the connection.
+            incomingCh <- Channel.initUnscoped[Maybe[String]](Int.MaxValue)
             done       <- Fiber.Promise.init[Unit, Abort[ApolloWebSocketClosedException]]
             opened     <- Fiber.Promise.init[HttpWebSocket, Abort[ApolloException]]
             // The connection lives on this scoped fiber; interrupting it (on discard)
@@ -68,7 +71,7 @@ private[ws] object KyoHttpWebSocketConnection:
     private def runConnection(
         url: String,
         protocol: Option[String],
-        incomingCh: Channel[String],
+        incomingCh: Channel[Maybe[String]],
         done: Fiber.Promise[Unit, Abort[ApolloWebSocketClosedException]],
         opened: Fiber.Promise[HttpWebSocket, Abort[ApolloException]]
     )(using Frame): Unit < (Async & Scope) =
@@ -92,15 +95,21 @@ private[ws] object KyoHttpWebSocketConnection:
       * TCP reset / EOF): an abnormal drop, settled as 1006 so the transport
       * reconnects, matching the JS engine's browser-1006 mapping. Treating that
       * `Absent` as a clean close would silently disable reconnection on JVM/Native.
+      *
+      * The channel ends with the `Absent` marker, never `close`: `ws.stream` ends and
+      * this fiber settles `closed` in one go, while the transport's drain of
+      * `incoming` is a separate fiber that may not have taken the last frames yet — a
+      * `close` here would hand them to this closer and lose a `next` + `complete` sent
+      * right before the server's close frame.
       */
     private def drain(
         ws: HttpWebSocket,
-        incomingCh: Channel[String],
+        incomingCh: Channel[Maybe[String]],
         done: Fiber.Promise[Unit, Abort[ApolloWebSocketClosedException]]
     )(using Frame): Unit < Async =
         ws.stream.foreach {
             // Drop a frame if the intermediate channel has closed (Abort[Closed] swallowed).
-            case HttpWebSocket.Payload.Text(t)   => Abort.run[Closed](incomingCh.put(t)).unit
+            case HttpWebSocket.Payload.Text(t)   => Abort.run[Closed](incomingCh.put(Present(t))).unit
             case HttpWebSocket.Payload.Binary(_) => ()
         }.andThen {
             ws.closeReason.map { reason =>
@@ -116,7 +125,7 @@ private[ws] object KyoHttpWebSocketConnection:
                             done.completeDiscard(
                                 Result.fail(ApolloWebSocketClosedException(WebSocketConnection.NormalClosure + 6, None))
                             )
-                settle.andThen(incomingCh.close.unit)
+                settle.andThen(offerEnd(incomingCh))
             }
         }
     end drain
@@ -125,7 +134,7 @@ private[ws] object KyoHttpWebSocketConnection:
         cause: Throwable,
         done: Fiber.Promise[Unit, Abort[ApolloWebSocketClosedException]],
         opened: Fiber.Promise[HttpWebSocket, Abort[ApolloException]],
-        incomingCh: Channel[String]
+        incomingCh: Channel[Maybe[String]]
     )(using Frame): Unit < Async =
         val apollo = cause match
             case e: ApolloException => e
@@ -133,6 +142,10 @@ private[ws] object KyoHttpWebSocketConnection:
         val wsClosed = ApolloWebSocketClosedException(WebSocketConnection.NormalClosure + 6, Some(apollo.getMessage))
         opened.completeDiscard(Result.fail(apollo))
             .andThen(done.completeDiscard(Result.fail(wsClosed)))
-            .andThen(incomingCh.close.unit)
+            .andThen(offerEnd(incomingCh))
     end failHandshake
+
+    /** Put the end-of-stream marker (see [[drain]] for why a marker, not `close`). */
+    private def offerEnd(incomingCh: Channel[Maybe[String]])(using Frame): Unit < Async =
+        Abort.run[Closed](incomingCh.put(Absent)).unit
 end KyoHttpWebSocketConnection

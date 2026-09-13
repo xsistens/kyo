@@ -139,7 +139,10 @@ end WsFrames
 /** A [[WebSocketConnection]] the test scripts directly: it records effectful sends
   * and the close call, and pushes server frames into the incoming channel (buffered
   * until the transport drains it). Its `unsafe` primitives are created eagerly so
-  * the plain `server` / `drop` driving methods can offer/complete synchronously.
+  * the plain `server` / `serverClose` / `drop` driving methods can offer/complete
+  * synchronously. The incoming channel ends with the same `Absent` marker the
+  * platform engines put (see [[WebSocketConnection.untilEnd]]), so frames scripted
+  * right before a close are delivered exactly as a real socket would deliver them.
   * Promoted from `core`'s `FakeWebSocket.scala` (native-kyo seam).
   */
 final class FakeWebSocketConnection extends WebSocketConnection:
@@ -148,8 +151,8 @@ final class FakeWebSocketConnection extends WebSocketConnection:
 
     private val sentRef                                      = new AtomicReference[Vector[String]](Vector.empty)
     @volatile private var closedState: Option[(Int, String)] = None
-    private val incomingCh: Channel[String] =
-        Sync.Unsafe.evalOrThrow(Channel.initUnscoped[String](Int.MaxValue))
+    private val incomingCh: Channel[Maybe[String]] =
+        Sync.Unsafe.evalOrThrow(Channel.initUnscoped[Maybe[String]](Int.MaxValue))
     private val donePromise: Fiber.Promise[Unit, Abort[ApolloWebSocketClosedException]] =
         Sync.Unsafe.evalOrThrow(Fiber.Promise.init[Unit, Abort[ApolloWebSocketClosedException]])
 
@@ -162,7 +165,7 @@ final class FakeWebSocketConnection extends WebSocketConnection:
     def send(text: String)(using Frame): Unit < Async =
         Sync.defer(discard(sentRef.updateAndGet(_ :+ text)))
 
-    def incoming(using Frame): Stream[String, Async] = incomingCh.streamUntilClosed()
+    def incoming(using Frame): Stream[String, Async] = WebSocketConnection.untilEnd(incomingCh)
 
     def closed(using Frame): Unit < (Async & Abort[ApolloWebSocketClosedException]) = donePromise.get
 
@@ -180,14 +183,23 @@ final class FakeWebSocketConnection extends WebSocketConnection:
                         Result.fail(ApolloWebSocketClosedException(code, Option(reason).filter(_.nonEmpty)))
                     ))
                 end if
-                discard(incomingCh.unsafe.close())
+                discard(incomingCh.unsafe.offer(Absent))
             end if
         }
 
     /** Push a server frame to the incoming stream (buffered until it drains). */
     def server(text: String): Unit =
         given AllowUnsafe = AllowUnsafe.embrace.danger
-        discard(incomingCh.unsafe.offer(text))
+        discard(incomingCh.unsafe.offer(Present(text)))
+
+    /** Simulate the server closing cleanly (a `1000` close frame): the liveness
+      * signal succeeds and the incoming stream ends after the frames already pushed.
+      */
+    def serverClose(): Unit =
+        given AllowUnsafe = AllowUnsafe.embrace.danger
+        discard(donePromise.unsafe.completeUnitDiscard())
+        discard(incomingCh.unsafe.offer(Absent))
+    end serverClose
 
     /** Simulate an abnormal server-side drop (aborts the liveness signal). */
     def drop(code: Int, reason: String): Unit =
@@ -195,7 +207,7 @@ final class FakeWebSocketConnection extends WebSocketConnection:
         discard(donePromise.unsafe.completeDiscard(
             Result.fail(ApolloWebSocketClosedException(code, Option(reason).filter(_.nonEmpty)))
         ))
-        discard(incomingCh.unsafe.close())
+        discard(incomingCh.unsafe.offer(Absent))
     end drop
 end FakeWebSocketConnection
 
