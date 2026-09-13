@@ -90,7 +90,24 @@ class WatcherSpec extends kyo.test.Test[Any]:
         end execute
     end CountingEngine
 
-    private def cachedClient(engine: CountingEngine): ApolloClient =
+    /** An engine whose second and later calls park on `gate` before answering and
+      * signal `arrived` as they start — so a `NetworkOnly` refetch can be held in
+      * flight across the watch's teardown. The first call (the cache-populating
+      * fetch) answers at once.
+      */
+    final private class GatedEngine(calls: AtomicInt, arrived: Latch, gate: Latch)
+        extends kyo.apollo.network.http.HttpEngine:
+        def execute(
+            request: kyo.apollo.network.http.HttpRequest
+        )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
+            calls.incrementAndGet.map { n =>
+                val response = kyo.apollo.network.http.HttpResponse(200, Nil, aliceBody)
+                if n == 1 then response
+                else arrived.release.andThen(gate.await).andThen(response)
+            }
+    end GatedEngine
+
+    private def cachedClient(engine: kyo.apollo.network.http.HttpEngine): ApolloClient =
         ApolloClient
             .builder()
             .serverUrl("https://example.com/graphql")
@@ -182,6 +199,50 @@ class WatcherSpec extends kyo.test.Test[Any]:
                     maybeSecond <- pull.tryNext
                 yield assert(maybeSecond == Absent) // nothing after cancel
             }
+        }
+
+        "no emission reaches the channel after the scope closed" in {
+            // The interleaving P2-32 is about: a NetworkOnly refetch is on the wire when
+            // the watch's Scope closes. The late response arrives on a detached fetch
+            // fiber and must find the watch inactive — one CAS flips `active`, and the
+            // store's publisher no longer reaches the (unsubscribed) watcher either.
+            for
+                calls    <- AtomicInt.init(0)
+                arrived  <- Latch.init(1)
+                gate     <- Latch.init(1)
+                tornDown <- Latch.init(1)
+                client = cachedClient(GatedEngine(calls, arrived, gate))
+                _     <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                probe <- Channel.init[ApolloResponse[UserData]](Int.MaxValue)
+                // Scope finalizers run last-registered-first, so `tornDown` is released
+                // only after the watch's own teardown has completed.
+                drain <- Fiber.init(Scope.run(
+                    Scope.ensure(tornDown.release).andThen(
+                        query(client)
+                            .fetchPolicy(FetchPolicy.CacheOnly)
+                            .refetchPolicy(RefetchPolicy.NetworkOnly)
+                            .watch()
+                            .foreach(probe.put)
+                    )
+                ))
+                first <- probe.take
+                _ = assert(first.data == Present(userData("Alice")))
+                _ <- Sync.defer(client.apolloStore.writeOperation(CurrentUserQuery(), userData("Bob")))
+                _ <- arrived.await // the refetch is in flight, parked on `gate`
+                // Close the watch's Scope and wait for its teardown to have run.
+                _ <- drain.interrupt
+                _ <- tornDown.await
+                subscribersAfterClose = client.apolloStore.changedKeys.subscriberCount
+                // Let the late network response through; its write-back publishes User:1.
+                _        <- gate.release
+                _        <- Sync.defer(client.apolloStore.writeOperation(CurrentUserQuery(), userData("Carol")))
+                late     <- probe.poll
+                callsNow <- calls.get
+            yield
+                assert(subscribersAfterClose == 0, "teardown must unsubscribe the watcher")
+                assert(late == Absent, s"an emission reached the consumer after teardown: $late")
+                assert(callsNow == 2, s"a closed watch must not refetch again, got $callsNow call(s)")
+            end for
         }
 
         "removing a watched record re-emits a cache miss" in {
