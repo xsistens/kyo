@@ -8,6 +8,7 @@ import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.cache.normalized.api.Fragment
 import kyo.apollo.cache.normalized.api.IdCacheKeyGenerator
+import kyo.apollo.cache.normalized.api.Record
 import kyo.apollo.exception.CacheMissException
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloResponse
@@ -107,12 +108,40 @@ class WatcherSpec extends kyo.test.Test[Any]:
             }
     end GatedEngine
 
-    private def cachedClient(engine: kyo.apollo.network.http.HttpEngine): ApolloClient =
+    /** A cache whose `loadRecord` can be armed once: the first load of `key` after
+      * arming completes normally and THEN runs `write` — so the write lands, on the
+      * reading fiber itself, between a read's record loads and the moment the read's
+      * key set is adopted by the watch. That is the P2-33 window, reproduced
+      * single-threaded and without a thread block (the re-read runs synchronously
+      * inside the publisher's `publish`, so a latch there would park a fiber).
+      */
+    final private class TrapCache(delegate: NormalizedCache) extends NormalizedCacheDecorator(delegate):
+        private given AllowUnsafe = AllowUnsafe.embrace.danger
+        private val trap          = AtomicRef.Unsafe.init(Maybe.empty[(String, () => Unit)])
+
+        def arm(key: String)(write: => Unit): Unit = discard(trap.getAndSet(Present((key, () => write))))
+
+        override def loadRecord(key: String): Maybe[Record] =
+            val record = delegate.loadRecord(key)
+            trap.get() match
+                case Present((armed, write)) if armed == key =>
+                    discard(trap.getAndSet(Absent))
+                    write()
+                case _ => ()
+            end match
+            record
+        end loadRecord
+    end TrapCache
+
+    private def cachedClient(
+        engine: kyo.apollo.network.http.HttpEngine,
+        cache: NormalizedCache = MemoryCache()
+    ): ApolloClient =
         ApolloClient
             .builder()
             .serverUrl("https://example.com/graphql")
             .httpEngine(engine)
-            .normalizedCache(MemoryCache(), IdCacheKeyGenerator(List("id")))
+            .normalizedCache(cache, IdCacheKeyGenerator(List("id")))
             .build()
 
     private def query(client: ApolloClient) = client.query(CurrentUserQuery())
@@ -242,6 +271,67 @@ class WatcherSpec extends kyo.test.Test[Any]:
                 assert(subscribersAfterClose == 0, "teardown must unsubscribe the watcher")
                 assert(late == Absent, s"an emission reached the consumer after teardown: $late")
                 assert(callsNow == 2, s"a closed watch must not refetch again, got $callsNow call(s)")
+            end for
+        }
+
+        "a write landing between the re-read and the key-set adoption is not lost" in {
+            // P2-33, the re-read window. The watch depends on {QUERY_ROOT, User:1}. A
+            // write re-points the root at User:2, whose changed keys hit QUERY_ROOT and
+            // start the re-read; while that re-read has already loaded User:2 (as "Bob")
+            // but not yet adopted {QUERY_ROOT, User:2}, a second write renames User:2 to
+            // "Zoe". Its changed key {User:2} is intersected against the OLD set and
+            // dropped. Without a store generation the watch shows Bob for good; with it
+            // the re-read notices the store moved past its stamp and reads again. The
+            // closing write ("Zed") makes the missing emission observable without a
+            // hang: it is the second emission only when Zoe was never emitted.
+            val cache  = TrapCache(MemoryCache())
+            val client = cachedClient(CountingEngine(), cache)
+            for
+                _     <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                pull  <- StreamProbe.Pull.open(query(client).fetchPolicy(FetchPolicy.CacheOnly).watch())
+                first <- pull.next
+                _ = assert(first.data == Present(userData("Alice")))
+                _ <- Sync.defer {
+                    cache.arm("User:2") {
+                        discard(client.apolloStore.writeFragment(UserFragment, CacheKey("User:2"), User("User", "2", "Zoe")))
+                    }
+                    discard(client.apolloStore.writeOperation(CurrentUserQuery(), UserData(User("User", "2", "Bob"))))
+                    discard(client.apolloStore.writeFragment(UserFragment, CacheKey("User:2"), User("User", "2", "Zed")))
+                }
+                second <- pull.next
+                third  <- pull.next
+                // Asserted before the last pull: without the fix the third emission IS
+                // the closing write, and a further pull would wait forever.
+                _ = assert(second.data == Present(UserData(User("User", "2", "Bob"))), s"stale re-read first: $second")
+                _ = assert(third.data == Present(UserData(User("User", "2", "Zoe"))), s"the slipped write must be re-read: $third")
+                _ = assert(third.cacheInfo.exists(_.generation == 3L), s"the re-read is stamped past the slipped write: $third")
+                fourth <- pull.next
+            yield assert(fourth.data == Present(UserData(User("User", "2", "Zed"))))
+            end for
+        }
+
+        "establishFrom stamps the generation of its own read" in {
+            // P2-33, the establishing window: the interceptor's initial CacheOnly read
+            // has loaded User:1 ("Alice") when a fragment write renames it to "Bob". The
+            // watch's key set is still empty, so the publish reaches nobody; the response
+            // carries Alice and the generation its read was current at. Adopting that
+            // stamp shows the store has moved on, and the watch re-reads to Bob — the
+            // second emission a watch without generations never produces.
+            val cache  = TrapCache(MemoryCache())
+            val client = cachedClient(CountingEngine(), cache)
+            for
+                _ <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                _ <- Sync.defer(cache.arm("User:1") {
+                    discard(client.apolloStore.writeFragment(UserFragment, CacheKey("User:1"), User("User", "1", "Bob")))
+                })
+                pull   <- StreamProbe.Pull.open(query(client).fetchPolicy(FetchPolicy.CacheOnly).watch())
+                first  <- pull.next
+                second <- pull.next
+            yield
+                assert(first.data == Present(userData("Alice")))
+                assert(first.cacheInfo.exists(_.generation == 1L), s"the hit is stamped with the pre-write generation: $first")
+                assert(second.data == Present(userData("Bob")), s"the write during the establishing read must be re-read: $second")
+                assert(second.cacheInfo.exists(_.generation == 2L))
             end for
         }
 

@@ -15,19 +15,22 @@ import kyo.apollo.network.CacheInfo
   */
 private[normalized] object CacheResponses:
 
-    /** A cache-served success response carrying `data` and the `dependentKeys` the
-      * read touched (stamped onto [[CacheInfo]] so a watcher knows what to watch).
+    /** A cache-served success response carrying `data`, the `dependentKeys` the
+      * read touched and the store `generation` it was read at (both stamped onto
+      * [[CacheInfo]] so a watcher knows what to watch and whether the store has
+      * moved on since).
       */
     def hit[D](
         request: ApolloRequest[D],
         data: D,
-        dependentKeys: Set[String]
+        dependentKeys: Set[String],
+        generation: Long
     ): ApolloResponse[D] =
         ApolloResponse(
             requestUuid = request.requestUuid,
             data = Present(data),
             executionContext = request.executionContext,
-            cacheInfo = Present(CacheInfo.hit(dependentKeys))
+            cacheInfo = Present(CacheInfo.hit(dependentKeys, generation))
         )
 
     /** A cache-miss response carrying the miss on its `error` channel. Any

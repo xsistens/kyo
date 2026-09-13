@@ -1,5 +1,7 @@
 package kyo.apollo.cache.normalized
 
+import kyo.AllowUnsafe
+import kyo.AtomicLong
 import kyo.Chunk
 import kyo.Maybe
 import kyo.Present
@@ -56,6 +58,24 @@ final class ApolloStore(
       * directly. Empty of subscribers until a caller opts in.
       */
     val changedKeys: ChangedKeysSubject = new ChangedKeysSubject
+
+    /** The store's write generation: incremented by every [[publish]] that carries
+      * at least one changed key, *after* the write has landed in the backend and
+      * *before* the changed keys fan out. A read that observed generation `g`
+      * before it started is therefore current with respect to every write of
+      * generation `<= g`; a write it may have raced lands as `> g`. A watcher keeps
+      * the generation of the read behind its key set and compares it against
+      * [[currentGeneration]] once that set is adopted — that is what turns "a write
+      * slipped in between my read and my registration" from a lost notification
+      * into a re-read.
+      */
+    private val generation = AtomicLong.Unsafe.init(0L)(using AllowUnsafe.embrace.danger)
+
+    /** The generation of the latest published write (0 while nothing has been
+      * published). Monotone; see [[readOperationStamped]] for how a read is
+      * compared against it.
+      */
+    def currentGeneration: Long = generation.get()(using AllowUnsafe.embrace.danger)
 
     /** Optimistic record layers, keyed by mutation id and stacked in application
       * order. Each layer is the set of records (by key) a mutation wrote
@@ -229,6 +249,21 @@ final class ApolloStore(
             fieldPolicies
         )
 
+    /** [[readOperationWithKeys]] plus the store generation the read is current
+      * at — sampled *before* the records are loaded, so the stamp is conservative:
+      * a write published while the read was in flight has a higher generation and
+      * shows up as `currentGeneration > stamp`. A watcher adopts the key set together
+      * with this stamp and re-reads when the store has moved past it.
+      *
+      * @throws kyo.apollo.exception.CacheMissException if the cache cannot satisfy
+      *         every selected field
+      */
+    def readOperationStamped[D](operation: Operation[D]): (D, Set[String], Long) =
+        val stamp        = currentGeneration
+        val (data, keys) = readOperationWithKeys(operation)
+        (data, keys, stamp)
+    end readOperationStamped
+
     /** Normalize and merge `fragment`'s typed `data` into the record stored under
       * `cacheKey`, returning the set of record keys whose stored value changed and
       * [[publish]]ing them so watchers react.
@@ -391,8 +426,15 @@ final class ApolloStore(
       * paths ([[writeOperation]], [[remove]]) and manual/external invalidation go
       * through here — call it directly to notify watchers of a change made outside
       * the normal write paths (e.g. an optimistic update).
+      *
+      * A non-empty publish advances [[currentGeneration]] before the fan-out, so a
+      * listener re-reading during delivery already stamps the new generation and
+      * needs no follow-up read; an empty publish moves nothing and stamps nothing.
       */
-    def publish(keys: Set[String]): Unit = changedKeys.publish(keys)
+    def publish(keys: Set[String]): Unit =
+        if keys.nonEmpty then
+            discard(generation.incrementAndGet()(using AllowUnsafe.embrace.danger))
+            changedKeys.publish(keys)
 
     /** Overlay `operation`'s optimistic `data` as a layer tagged by `mutationId`,
       * returning (and [[publish]]ing) the record keys it touches so watchers show
