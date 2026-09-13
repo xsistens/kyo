@@ -98,7 +98,7 @@ widening to `FetchPolicy` would break every call site and collide in the context
 | `refetch`, `skip` (Freeze/Unsubscribe), polling (declarative + imperative), `subscribeToMore` | **PRESENT** | `ApolloQuery.scala`, `ApolloSignal.scala` |
 | `errorPolicy` (`none`/`ignore`/`all`) | **PRESENT** | GraphQL errors only, on `.data` — transport failures never suppressed (deviation register) · `ErrorPolicy.scala` |
 | `notifyOnNetworkStatusChange` default ON (V4) | **PRESENT** | `QueryHandle.networkStatus` always overlays `Refetch`/`Poll` |
-| no `ObservableQuery` tracking of unsubscribed queries (V4) | **PRESENT** | `ActiveQueryRegistry.register` returns a dispose thunk; disposed via `Scope.ensure` |
+| no `ObservableQuery` tracking of unsubscribed queries (V4) | **PRESENT** | `ActiveQueryRegistry.register` is a `Scope.acquireRelease` pair; the enclosing `Scope` removes the entry |
 
 ## 6. Subscriptions & network
 
