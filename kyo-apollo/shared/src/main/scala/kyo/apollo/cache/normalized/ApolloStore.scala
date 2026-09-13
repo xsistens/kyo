@@ -2,6 +2,7 @@ package kyo.apollo.cache.normalized
 
 import kyo.AllowUnsafe
 import kyo.AtomicLong
+import kyo.AtomicRef
 import kyo.Chunk
 import kyo.Maybe
 import kyo.Present
@@ -77,32 +78,48 @@ final class ApolloStore(
       */
     def currentGeneration: Long = generation.get()(using AllowUnsafe.embrace.danger)
 
-    /** Optimistic record layers, keyed by mutation id and stacked in application
-      * order. Each layer is the set of records (by key) a mutation wrote
-      * *optimistically* before its network round-trip; reads overlay these on top
-      * of the persisted cache (latest layer winning per field) so watchers see the
-      * optimistic state immediately, while the backing [[NormalizedCache]] stays
-      * pristine — which is what makes rollback nothing more than dropping a layer.
-      * A `LinkedHashMap` because the *order* of layers is the stacking order:
-      * concurrent optimistic mutations must resolve latest-wins at read time.
+    /** One optimistic layer: the records (by key) a mutation wrote *optimistically*
+      * before its network round-trip, tagged by the mutation's id.
+      */
+    final private case class Layer(mutationId: String, records: Map[String, Record])
+
+    /** Optimistic record layers, stacked in application order (the `Chunk`'s
+      * order *is* the stacking order: concurrent optimistic mutations resolve
+      * latest-wins at read time). Reads overlay these on top of the persisted
+      * cache so watchers see the optimistic state immediately, while the backing
+      * [[NormalizedCache]] stays pristine — which is what makes rollback nothing
+      * more than dropping a layer.
+      *
+      * Held as an immutable stack behind an atomic reference: a write swaps in a
+      * new stack, and a read takes ONE snapshot ([[layerSnapshot]]) at entry and
+      * overlays every record it loads against that same stack. A layer dropped or
+      * added while the read is in flight is therefore either seen by all of the
+      * read's loads or by none — never by some, and never as a torn traversal.
       */
     private val optimisticLayers =
-        scala.collection.mutable.LinkedHashMap.empty[String, Map[String, Record]]
+        AtomicRef.Unsafe.init(Chunk.empty[Layer])(using AllowUnsafe.embrace.danger)
 
-    /** Resolve `key` as the persisted record with every optimistic layer that
-      * defines it merged on top, in application (stacking) order — the latest
-      * optimistic write wins on a field conflict, falling back through the stack to
-      * the persisted record. Returns `None` only when neither the cache nor any
-      * optimistic layer holds the key.
+    /** The optimistic stack as of now — the single read of [[optimisticLayers]] a
+      * store read performs, passed through to every [[loadRecordOverlay]] it makes.
+      */
+    private def layerSnapshot: Chunk[Layer] =
+        optimisticLayers.get()(using AllowUnsafe.embrace.danger)
+
+    /** Resolve `key` as the persisted record with every optimistic layer of
+      * `layers` that defines it merged on top, in application (stacking) order —
+      * the latest optimistic write wins on a field conflict, falling back through
+      * the stack to the persisted record. Returns `Absent` only when neither the
+      * cache nor any optimistic layer holds the key.
       *
       * This is the read-time overlay every store read funnels through (in place of
       * a bare `cache.loadRecord`), so a `readOperation`/`readFragment` — and hence a
       * Phase 05 watcher re-reading through it — reflects pending optimistic
-      * mutations without the cache itself ever being mutated.
+      * mutations without the cache itself ever being mutated. `layers` is the
+      * read's [[layerSnapshot]]: every load of one read overlays the SAME stack.
       */
-    private def loadRecordOverlay(key: String): Maybe[Record] =
-        optimisticLayers.valuesIterator.foldLeft(cache.loadRecord(key)) { (base, layer) =>
-            layer.get(key) match
+    private def loadRecordOverlay(layers: Chunk[Layer], key: String): Maybe[Record] =
+        layers.foldLeft(cache.loadRecord(key)) { (base, layer) =>
+            layer.records.get(key) match
                 case None             => base
                 case Some(optimistic) => Present(NormalizedCache.mergeRecords(base, optimistic)._1)
         }
@@ -145,9 +162,10 @@ final class ApolloStore(
         val records: Map[String, Record] =
             if !includeOptimistic then base
             else
-                val keys = base.keySet ++ optimisticLayers.valuesIterator.flatMap(_.keySet)
+                val layers = layerSnapshot
+                val keys   = base.keySet ++ layers.iterator.flatMap(_.records.keySet)
                 keys.iterator.flatMap { key =>
-                    loadRecordOverlay(key) match
+                    loadRecordOverlay(layers, key) match
                         case Present(record) => Some(key -> record)
                         case _               => None
                 }.toMap
@@ -241,13 +259,15 @@ final class ApolloStore(
       *         every selected field
       */
     def readOperationWithKeys[D](operation: Operation[D]): (D, Set[String]) =
+        val layers = layerSnapshot
         CacheBatchReader.readWithDependentKeys(
             operation,
-            loadRecordOverlay,
+            loadRecordOverlay(layers, _),
             variablesOf(operation),
             cacheKeyResolver,
             fieldPolicies
         )
+    end readOperationWithKeys
 
     /** [[readOperationWithKeys]] plus the store generation the read is current
       * at — sampled *before* the records are loaded, so the stamp is conservative:
@@ -379,9 +399,10 @@ final class ApolloStore(
       *         field the fragment selects
       */
     def readFragmentWithKeys[D](fragment: Fragment[D], cacheKey: CacheKey): (D, Set[String]) =
+        val layers = layerSnapshot
         val reader =
             new CacheBatchReader(
-                loadRecordOverlay,
+                loadRecordOverlay(layers, _),
                 fragmentVariablesOf(fragment),
                 cacheKey.key,
                 cacheKeyResolver,
@@ -455,11 +476,32 @@ final class ApolloStore(
         mutationId: String
     ): Set[String] =
         val records = normalize(operation, data)
-        optimisticLayers.update(mutationId, records)
+        val layer   = Layer(mutationId, records)
+        // A re-write under an id already on the stack replaces that layer in place
+        // (its stacking position is the mutation's, not the write's); a new id
+        // goes on top.
+        discard(optimisticLayers.updateAndGet { layers =>
+            if layers.exists(_.mutationId == mutationId) then
+                layers.map(l => if l.mutationId == mutationId then layer else l)
+            else layers.append(layer)
+        }(using AllowUnsafe.embrace.danger))
         val changed = records.keySet
         publish(changed)
         changed
     end writeOptimisticUpdates
+
+    /** Drop the layer tagged by `mutationId` from the stack, returning the record
+      * keys it held (empty if no such layer was on the stack). The one swap both
+      * rollback paths share; the caller decides what to [[publish]].
+      */
+    private def dropLayer(mutationId: String): Set[String] =
+        val before = optimisticLayers.getAndUpdate(_.filter(_.mutationId != mutationId))(using
+            AllowUnsafe.embrace.danger
+        )
+        before.foldLeft(Set.empty[String]) { (keys, layer) =>
+            if layer.mutationId == mutationId then keys ++ layer.records.keySet else keys
+        }
+    end dropLayer
 
     /** Drop the optimistic layer tagged by `mutationId` and [[publish]] the keys it
       * held so watchers re-read and revert to the persisted (or lower optimistic
@@ -468,12 +510,10 @@ final class ApolloStore(
       * apollo-kotlin's `ApolloStore.rollbackOptimisticUpdates`.
       */
     def rollbackOptimisticUpdates(mutationId: String): Set[String] =
-        optimisticLayers.remove(mutationId) match
-            case Some(records) =>
-                val changed = records.keySet
-                publish(changed)
-                changed
-            case None => Set.empty
+        val changed = dropLayer(mutationId)
+        publish(changed)
+        changed
+    end rollbackOptimisticUpdates
 
     /** Complete a *successful* optimistic mutation: drop its optimistic layer and
       * merge the real `data` into the cache, [[publish]]ing the union of the
@@ -493,7 +533,7 @@ final class ApolloStore(
         mutationId: String,
         cacheHeaders: CacheHeaders = CacheHeaders.None
     ): Set[String] =
-        val optimisticKeys  = optimisticLayers.remove(mutationId).map(_.keySet).getOrElse(Set.empty)
+        val optimisticKeys  = dropLayer(mutationId)
         val realChangedKeys = mergeRecords(normalize(operation, data).values, cacheHeaders)
         val changed         = optimisticKeys ++ realChangedKeys
         publish(changed)
@@ -506,7 +546,7 @@ final class ApolloStore(
       * running optimistic mutation this is empty; a non-empty result after all
       * mutations have settled is the symptom of a leaked layer.
       */
-    def optimisticLayerIds: Chunk[String] = Chunk.from(optimisticLayers.keys)
+    def optimisticLayerIds: Chunk[String] = layerSnapshot.map(_.mutationId)
 
     /** Remove the record stored under `key` from the cache and, if a record was
       * actually present, [[publish]] `Set(key)` so watchers depending on it react.
@@ -562,10 +602,10 @@ final class ApolloStore(
       * their referents, transitively closed through [[Record.references]].
       * Optimistic records live outside the backing cache, so their keys *and* the
       * keys they point at are seeded directly rather than discovered by walking
-      * `all`.
+      * `all` — off one [[layerSnapshot]], like a read.
       */
     private def reachableKeys(all: Map[String, Record]): Set[String] =
-        val optimisticRecords = optimisticLayers.valuesIterator.flatMap(_.values).toList
+        val optimisticRecords = layerSnapshot.iterator.flatMap(_.records.values).toList
         val seeds =
             Set(CacheKey.QueryRoot.key, CacheKey.MutationRoot.key, CacheKey.SubscriptionRoot.key) ++
                 optimisticRecords.iterator.map(_.key) ++
