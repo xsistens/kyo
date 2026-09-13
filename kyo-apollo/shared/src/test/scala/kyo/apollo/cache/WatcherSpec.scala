@@ -108,6 +108,42 @@ class WatcherSpec extends kyo.test.Test[Any]:
             }
     end GatedEngine
 
+    /** An engine whose every answer differs (`Alice-<n>`, a volatile field in each
+      * response) and whose second and later calls sleep one second on `clock` before
+      * answering. The controlled clock is passed in explicitly: a watch's fetch fibers
+      * are detached (`Fiber.Unsafe.init`, empty context) and would not see the
+      * `Clock.withTimeControl` local, so `control.advance` releases exactly the
+      * responses parked on this clock.
+      */
+    final private class SleepingEngine(clock: Clock, calls: AtomicInt) extends kyo.apollo.network.http.HttpEngine:
+        def execute(
+            request: kyo.apollo.network.http.HttpRequest
+        )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
+            calls.incrementAndGet.map { n =>
+                val body     = s"""{"data":{"user":{"__typename":"User","id":"1","name":"Alice-$n"}}}"""
+                val response = kyo.apollo.network.http.HttpResponse(200, Nil, body)
+                if n == 1 then response
+                else clock.sleep(1.second).map(_.get).andThen(response)
+            }
+    end SleepingEngine
+
+    /** A cache that can hide one record from every read while writes to it still
+      * land (and still report changed keys): the permanent miss of P2-34 — a record
+      * the write-back keeps touching but the watched read can never be satisfied by.
+      */
+    final private class HoleCache(delegate: NormalizedCache) extends NormalizedCacheDecorator(delegate):
+        private given AllowUnsafe = AllowUnsafe.embrace.danger
+        private val hole          = AtomicRef.Unsafe.init(Maybe.empty[String])
+
+        def hide(key: String): Unit = discard(hole.getAndSet(Present(key)))
+
+        override def loadRecord(key: String): Maybe[Record] =
+            if hole.get().contains(key) then Absent else delegate.loadRecord(key)
+
+        override def loadRecords(keys: Iterable[String]): Map[String, Record] =
+            delegate.loadRecords(keys).filterNot((key, _) => hole.get().contains(key))
+    end HoleCache
+
     /** A cache whose `loadRecord` can be armed once: the first load of `key` after
       * arming completes normally and THEN runs `write` — so the write lands, on the
       * reading fiber itself, between a read's record loads and the moment the read's
@@ -369,6 +405,124 @@ class WatcherSpec extends kyo.test.Test[Any]:
                 assert(second.error.isEmpty, s"the miss must not reach the consumer: ${second.error}")
                 assert(second.data == Present(userData("Alice")))
                 assert(engine.calls == 2, s"expected a refetch, got ${engine.calls} call(s)")
+            end for
+        }
+
+        "CacheFirst does not loop on a permanent miss" in {
+            // P2-34. User:1 is removed AND hidden from every read, so the watched read
+            // misses for good, while each network answer differs (a volatile field) and
+            // its write-back publishes User:1 — which the watch depends on. Without the
+            // once-per-cause rule that is an endless chain: write-back → re-read misses →
+            // refetch → write-back … one network request per advance of the clock. With
+            // it the miss goes to the network exactly once; the next miss is the value.
+            Clock.withTimeControl { control =>
+                val cache = HoleCache(MemoryCache())
+                for
+                    clock <- Clock.get
+                    calls <- AtomicInt.init(0)
+                    client = cachedClient(SleepingEngine(clock, calls), cache)
+                    _ <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                    pull <- StreamProbe.Pull.open(
+                        query(client)
+                            .fetchPolicy(FetchPolicy.CacheOnly)
+                            .refetchPolicy(RefetchPolicy.CacheFirst)
+                            .watch()
+                    )
+                    first <- pull.next
+                    _ = assert(first.data == Present(userData("Alice-1")))
+                    _ <- Sync.defer {
+                        cache.hide("User:1")
+                        discard(client.apolloStore.remove("User:1"))
+                    }
+                    // The miss went to the network once; that response is parked on the clock.
+                    _      <- control.awaitPendingSleepers(1)
+                    _      <- control.advance(1.second)
+                    second <- pull.next
+                    _ = assert(second.data == Present(userData("Alice-2")), s"the networked value is still emitted: $second")
+                    // With the fix the miss is already in the channel and this advance finds
+                    // no sleeper; a looping watch has parked its next request here instead,
+                    // and the advance lets that response through as the third emission.
+                    _     <- control.advance(1.second)
+                    third <- pull.next
+                    _ = assert(
+                        third.error.exists(_.isInstanceOf[CacheMissException]),
+                        s"a miss the write-back did not cure is the value: $third"
+                    )
+                    _        <- control.advance(1.second)
+                    _        <- control.advance(1.second)
+                    callsNow <- calls.get
+                    more     <- pull.tryNext
+                yield
+                    assert(callsNow == 2, s"one refetch per miss cause, got $callsNow call(s)")
+                    assert(more == Absent, s"nothing follows the miss: $more")
+                end for
+            }
+        }
+
+        "CacheFirst refetches again for a new miss once a read has succeeded in between" in {
+            // The other half of the once-per-cause rule: the refetch's write-back restores
+            // User:1, the re-read hits and settles the cause, so a later eviction is a new
+            // cause and goes to the network again — the watch does not go dead.
+            val engine = CountingEngine()
+            val client = cachedClient(engine)
+            for
+                _ <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                pull <- StreamProbe.Pull.open(
+                    query(client)
+                        .fetchPolicy(FetchPolicy.CacheOnly)
+                        .refetchPolicy(RefetchPolicy.CacheFirst)
+                        .watch()
+                )
+                _      <- pull.next
+                _      <- Sync.defer(client.apolloStore.remove("User:1"))
+                second <- pull.next // the write-back's re-read hit
+                third  <- pull.next // the networked value
+                _      <- Sync.defer(client.apolloStore.remove("User:1"))
+                fourth <- pull.next
+                fifth  <- pull.next
+                more   <- pull.tryNext
+            yield
+                assert(Chunk(second, third, fourth, fifth).forall(_.error.isEmpty), "no miss reaches the consumer")
+                assert(fifth.data == Present(userData("Alice")))
+                assert(engine.calls == 3, s"each eviction is answered by one refetch, got ${engine.calls} call(s)")
+                assert(more == Absent)
+            end for
+        }
+
+        "notifications during an in-flight refetch coalesce into one rerun" in {
+            // The in-flight guard: while a NetworkOnly refetch is parked on the gate, three
+            // more writes to a watched key arrive. They book one rerun, not three fibers;
+            // the rerun starts after all of them, so its response covers them all.
+            for
+                calls   <- AtomicInt.init(0)
+                arrived <- Latch.init(1)
+                gate    <- Latch.init(1)
+                client = cachedClient(GatedEngine(calls, arrived, gate))
+                _ <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                pull <- StreamProbe.Pull.open(
+                    query(client)
+                        .fetchPolicy(FetchPolicy.CacheOnly)
+                        .refetchPolicy(RefetchPolicy.NetworkOnly)
+                        .watch()
+                )
+                _ <- pull.next
+                _ <- Sync.defer(client.apolloStore.writeOperation(CurrentUserQuery(), userData("Bob")))
+                _ <- arrived.await // the refetch is in flight, parked on `gate`
+                _ <- Sync.defer {
+                    discard(client.apolloStore.writeOperation(CurrentUserQuery(), userData("Carol")))
+                    discard(client.apolloStore.writeOperation(CurrentUserQuery(), userData("Dave")))
+                    discard(client.apolloStore.writeOperation(CurrentUserQuery(), userData("Eve")))
+                }
+                _        <- gate.release
+                second   <- pull.next // the in-flight response
+                third    <- pull.next // the one rerun
+                callsNow <- calls.get
+                more     <- pull.tryNext
+            yield
+                assert(second.data == Present(userData("Alice")))
+                assert(third.data == Present(userData("Alice")))
+                assert(callsNow == 3, s"one in flight plus one rerun, got $callsNow call(s)")
+                assert(more == Absent, s"no further refetch: $more")
             end for
         }
 
