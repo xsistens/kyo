@@ -98,6 +98,14 @@ extension [D](call: ApolloCall[D])
       * right after adopting and answers with the reaction the dropped publish would
       * have caused. A watch therefore never settles on a value that a write in its
       * own dependency set has already overtaken.
+      *
+      * A network refetch (`RefetchPolicy.NetworkOnly`, or `CacheFirst` answering a
+      * miss) runs at most one fiber at a time; requests during that flight book a
+      * single rerun. Under `CacheFirst` a miss is sent to the network once per
+      * cause: if no read has succeeded by the end of that flight, the miss is
+      * emitted as the value, as `CacheOnly` would, and so is any later miss until a
+      * read succeeds again — a read the write-back cannot satisfy never becomes an
+      * endless chain of requests.
       */
     def watch()(using
         Frame,
@@ -118,15 +126,23 @@ extension [D](call: ApolloCall[D])
                 // The one CAS path for the key set: adopt `keys` together with the store
                 // generation `gen` their read was current at, unless the set already held
                 // comes from a younger read (an older read must not roll it back; its
-                // datum is then not offered either). Every transition is a `copy`, so a
-                // later field (a refetch-in-flight flag) joins the same compare-and-set
-                // instead of adding a second cell.
+                // datum is then not offered either). Every caller stands behind a read
+                // that SUCCEEDED, which settles the miss a `CacheFirst` refetch may have
+                // been asked for: `refetched` is cleared in the same compare-and-set.
                 @tailrec def adopt(keys: Set[String], gen: Long): Boolean =
                     val s = state.get()
                     if gen < s.gen then false
-                    else if state.compareAndSet(s, s.copy(keys = keys, gen = gen)) then true
+                    else if state.compareAndSet(s, s.copy(keys = keys, gen = gen, refetched = false)) then true
                     else adopt(keys, gen)
                 end adopt
+
+                // The write-back fallback for a networked response the store cannot read
+                // back: seeds a watch that has no read behind its set yet (generation 0)
+                // and never rolls back one that has. No read succeeded here, so the miss
+                // a refetch was asked for stays unsettled.
+                @tailrec def seed(keys: Set[String]): Unit =
+                    val s = state.get()
+                    if s.gen == 0L && !state.compareAndSet(s, s.copy(keys = keys)) then seed(keys)
 
                 // Close the window between a read and the adoption of its key set. A
                 // write published in between was intersected against the PREVIOUS set
@@ -142,8 +158,8 @@ extension [D](call: ApolloCall[D])
                 def offer(response: ApolloResponse[D]): Unit =
                     if state.get().active then discard(channel.unsafe.offer(response))
 
-                // Launch a finite response stream (initial fetch / network refetch) as a
-                // detached fiber that pushes each emission through `emitFresh`.
+                // Launch the initial fetch as a detached fiber that pushes each emission
+                // through `emitFresh`. Network refetches go through `requestRefetch`.
                 def spawn(src: ResponseStream[D]): Unit =
                     val _ = Fiber.Unsafe.init[Throwable, Unit](Scope.run(src.foreach(emitFresh)))
 
@@ -167,7 +183,7 @@ extension [D](call: ApolloCall[D])
                             case Success((_, keys, gen)) =>
                                 discard(adopt(keys, gen))
                                 closeWindow()
-                            case Failure(_) => if stamped.nonEmpty then discard(adopt(stamped, 0L))
+                            case Failure(_) => if stamped.nonEmpty then seed(stamped)
                     end if
                 end establishFrom
 
@@ -196,14 +212,62 @@ extension [D](call: ApolloCall[D])
                     val s = state.get()
                     if s.active && s.keys.nonEmpty then offer(CacheResponses.miss(request, cause))
 
-                // NetworkOnly update: re-run the operation over the network (which writes
-                // the response back into the store) and emit the networked value.
-                def refetchOverNetwork(): Unit =
-                    val networked = request.newBuilder
-                        .addExecutionContext(ExecutionContext.Empty + FetchPolicy.NetworkOnly)
-                        .build()
-                    spawn(client.executeAsStream(networked))
-                end refetchOverNetwork
+                // Re-run the operation over the network (which writes the response back
+                // into the store) and emit the networked value — at most one such fiber
+                // at a time. A request that arrives while one is in flight books a single
+                // rerun instead of a second fiber: the rerun starts after the writes that
+                // asked for it, so its response covers all of them, and the in-flight
+                // response is emitted regardless. n writes in a row cost at most two
+                // network requests (the running one and the rerun).
+                @tailrec def requestRefetch(): Unit =
+                    val s = state.get()
+                    if !s.active then ()
+                    else if s.inflight then
+                        if !state.compareAndSet(s, s.copy(rerun = true)) then requestRefetch()
+                    else if state.compareAndSet(s, s.copy(inflight = true, rerun = false)) then
+                        val networked = request.newBuilder
+                            .addExecutionContext(ExecutionContext.Empty + FetchPolicy.NetworkOnly)
+                            .build()
+                        discard(Fiber.Unsafe.init[Throwable, Unit](
+                            Scope.run(
+                                Sync.ensure(Sync.defer(finishRefetch()))(
+                                    client.executeAsStream(networked).foreach(emitFresh)
+                                )
+                            )
+                        ))
+                    else requestRefetch()
+                    end if
+                end requestRefetch
+
+                // Runs when the refetch fiber ends, however it ends: hand the flight back
+                // and run the one booked rerun, if any. Otherwise, if a `CacheFirst` miss
+                // is still unsettled — no read succeeded during the flight, so the
+                // write-back did not cure it — the miss is now the value: one re-read,
+                // which emits the miss (or a hit, if a concurrent write cured it meanwhile).
+                def finishRefetch(): Unit =
+                    val before = state.getAndUpdate(_.copy(inflight = false, rerun = false))
+                    if before.rerun then requestRefetch()
+                    else if before.refetched then reread(emitMiss)
+                end finishRefetch
+
+                // CacheFirst's miss leg: the first miss for a cause goes to the network,
+                // once. A miss with no successful read since that request is the value,
+                // exactly as under CacheOnly: emitted right away, or — while the refetch
+                // is still in flight — settled once at the end of that flight, because
+                // the refetch's own write-back publishes (and so re-reads) while its fiber
+                // is still running. Without this rule a permanent miss plus a volatile
+                // field in every response (each write-back publishes a watched key, each
+                // re-read misses again) is an endless chain of network requests out of a
+                // single watch.
+                @tailrec def refetchOnce(cause: Throwable): Unit =
+                    val s = state.get()
+                    if !s.active then ()
+                    else if s.refetched && s.inflight then () // settled once, at the end of the flight
+                    else if s.refetched then emitMiss(cause)
+                    else if state.compareAndSet(s, s.copy(refetched = true)) then requestRefetch()
+                    else refetchOnce(cause)
+                    end if
+                end refetchOnce
 
                 // The reaction a change in the watch set calls for, by policy — shared by
                 // the changed-keys callback and by `closeWindow`, so a write that slipped
@@ -211,8 +275,8 @@ extension [D](call: ApolloCall[D])
                 def react(): Unit =
                     refetchPolicy match
                         case RefetchPolicy.CacheOnly   => reread(emitMiss)
-                        case RefetchPolicy.NetworkOnly => refetchOverNetwork()
-                        case RefetchPolicy.CacheFirst  => reread(_ => refetchOverNetwork())
+                        case RefetchPolicy.NetworkOnly => requestRefetch()
+                        case RefetchPolicy.CacheFirst  => reread(refetchOnce)
 
                 def onChangedKeys(changedKeys: Set[String]): Unit =
                     val s = state.get() // one read: `active` and `keys` belong together
@@ -247,11 +311,24 @@ end extension
   * no store read stands behind, i.e. the initial state and the write-back
   * fallback).
   *
-  * Transitions go through `copy`, so further per-watch facts (whether a network
-  * refetch is in flight) are added as fields here and ride the same CAS rather
-  * than a second cell.
+  * The network refetch is guarded by the same cell: `inflight` while its fiber
+  * runs, `rerun` when a further request arrived during that flight (at most one
+  * is booked; it runs once the fiber ends), and `refetched` once a `CacheFirst`
+  * miss has been answered with a refetch and no read has succeeded since — a
+  * miss is then emitted (once the flight has ended) instead of refetched again.
+  *
+  * Transitions go through `copy`, so a further per-watch fact is added as a
+  * field here and rides the same CAS rather than a second cell.
   */
-final private[normalized] case class WatchState(active: Boolean, keys: Set[String], gen: Long)
+final private[normalized] case class WatchState(
+    active: Boolean,
+    keys: Set[String],
+    gen: Long,
+    inflight: Boolean,
+    rerun: Boolean,
+    refetched: Boolean
+)
 
 private[normalized] object WatchState:
-    val initial: WatchState = WatchState(active = true, keys = Set.empty, gen = 0L)
+    val initial: WatchState =
+        WatchState(active = true, keys = Set.empty, gen = 0L, inflight = false, rerun = false, refetched = false)
