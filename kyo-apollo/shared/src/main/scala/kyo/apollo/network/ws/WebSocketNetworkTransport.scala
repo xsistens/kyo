@@ -155,7 +155,10 @@ final class WebSocketNetworkTransport(
                     // `terminate` (a server `complete` right after the last `next`) before
                     // the consumer drains, so a hard close would drop that final response.
                     // `closeAwaitEmpty` instead closes only once the consumer has drained
-                    // the buffer, cooperating with `streamUntilClosed`'s own drain.
+                    // the buffer, cooperating with `streamUntilClosed`'s own drain. One
+                    // layer down, the engines' socket channels sidestep the same trap with
+                    // an `Absent` end-marker (`WebSocketConnection.untilEnd`), so every
+                    // frame the socket received before its close reaches `openLoop`'s drain.
                     terminate = () => discard(channel.unsafe.closeAwaitEmpty())
                 )
                 // Install the teardown finalizer BEFORE registering the route, then register.
@@ -329,8 +332,8 @@ final class WebSocketNetworkTransport(
     // ---- connection lifecycle -------------------------------------------------
 
     /** Open a socket in a dedicated fiber and drive its handshake. The fiber holds
-      * the connection's `Scope` open (via `Async.never`) plus the incoming-drain
-      * and close-watcher fibers; interrupting it (on discard) tears all three down.
+      * the connection's `Scope` open (via `Async.never`) plus the drain-then-watch
+      * fiber; interrupting it (on discard) tears both down.
       */
     private def connect(s: State): Unit < Async =
         val gen = s.generation + 1
@@ -351,15 +354,23 @@ final class WebSocketNetworkTransport(
         Scope.run {
             Abort.run[Throwable](engine.open(serverUrl, Some(protocol.name))).map {
                 case Result.Success(conn) =>
-                    Fiber.init(conn.incoming.foreach(text => offer(Msg.Frame(gen, text)))).andThen {
-                        Fiber.init(watchClosed(gen, conn)).andThen {
-                            offer(Msg.Opened(gen, conn)).andThen(Async.never)
-                        }
+                    // Drain `incoming` to its end, THEN watch `closed` — in one fiber, so
+                    // `SocketClosed` is enqueued strictly after every `Frame` the socket
+                    // delivered. `incoming` ends exactly when the socket closes (the
+                    // engines put an end-marker after their last frame), so nothing is
+                    // lost by waiting. Two independent fibers would race: a `SocketClosed`
+                    // that overtakes the last `next` + `complete` terminates the routes
+                    // and bumps the generation, fencing those frames out as stale.
+                    Fiber.init(drainThenWatchClosed(gen, conn)).andThen {
+                        offer(Msg.Opened(gen, conn)).andThen(Async.never)
                     }
                 case Result.Failure(cause) => offer(Msg.OpenFailed(gen, toApolloException(cause)))
                 case Result.Panic(cause)   => offer(Msg.OpenFailed(gen, toApolloException(cause)))
             }
         }
+
+    private def drainThenWatchClosed(gen: Long, conn: WebSocketConnection): Unit < Async =
+        conn.incoming.foreach(text => offer(Msg.Frame(gen, text))).andThen(watchClosed(gen, conn))
 
     private def watchClosed(gen: Long, conn: WebSocketConnection): Unit < Async =
         Abort.run[ApolloWebSocketClosedException](conn.closed).map {

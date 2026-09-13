@@ -61,6 +61,29 @@ object WebSocketConnection:
       * code is treated as an abnormal drop and *aborts*.
       */
     val NormalClosure: Int = 1000
+
+    /** The consumer side every platform engine shares for [[WebSocketConnection.incoming]]:
+      * frames are `Present(text)`, the socket's end is one `Absent` marker the producer
+      * puts after its last frame. Deliberately `take`-based, never `streamUntilClosed`
+      * over a `close`d channel: `Channel.close` hands the channel's backlog to the
+      * *closer*, so a producer that pushes `next`, `complete` and the close in one burst
+      * (the ordinary end of a finite subscription) would drop both frames for a consumer
+      * that has not drained yet — the same trap `HttpClientEngine.bodyStream` documents
+      * for HTTP bodies. With the marker, every frame put before the end reaches the
+      * stream, and the stream then ends regularly. A `Closed` channel ends it too, so a
+      * consumer never hangs on a channel that was torn down underneath it. Public so the
+      * promoted `kyo-apollo-testing` double drives the same contract as the engines.
+      */
+    def untilEnd(frames: Channel[Maybe[String]])(using Frame): Stream[String, Async] =
+        // One frame per emit, on purpose: `Stream.repeatPresent` rechunks to its default
+        // chunk size and would hold a `connection_ack` back until thousands of frames
+        // followed it. A live socket needs every frame the moment it is taken.
+        Stream[String, Async]:
+            Loop.foreach:
+                Abort.run[Closed](frames.take).map {
+                    case Result.Success(Present(text)) => Emit.valueWith(Chunk(text))(Loop.continue)
+                    case _                             => Loop.done
+                }
 end WebSocketConnection
 
 /** Opens [[WebSocketConnection]]s — the injectable factory the transport depends
