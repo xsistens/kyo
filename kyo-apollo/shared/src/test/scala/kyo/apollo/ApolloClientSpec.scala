@@ -27,9 +27,9 @@ import scala.collection.immutable.VectorMap
 /** Tests the top-level [[ApolloClient]] facade end to end through a fake
   * [[HttpEngine]] (no network): typed query/mutation execution, client defaults
   * and per-call fluent overrides reaching the composed [[HttpRequest]], both
-  * interceptor tiers running, failures arriving as values, and `close()`. On
+  * interceptor tiers running, failures arriving as values, and `close`. On
   * kyo-test each leaf body IS the effect; subscription frames are scripted with
-  * `Sync.defer` and a short `Async.sleep` (`settle`) between them.
+  * `Sync.defer`, and each step waits for the frame the transport sends in reply.
   */
 class ApolloClientSpec extends kyo.test.Test[Any]:
 
@@ -86,12 +86,6 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
                 .serverUrl("https://example.com/graphql")
                 .httpEngine(engine)
         ).build()
-
-    /** Yield to kyo's scheduler so the subscription's background fiber dispatches
-      * the frames scripted just before — the effect-native form of the old
-      * macrotask `flush`.
-      */
-    private def settle(using Frame): Unit < Async = Async.sleep(30L.millis)
 
     private def ack: String = """{"type":"connection_ack"}"""
     private def next(id: String, value: Int): String =
@@ -238,11 +232,10 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
             }
         }
 
-        "close() leaves the query path usable (no active subscription socket)" in {
+        "close leaves the query path usable (no active subscription socket)" in {
             val engine = CapturingEngine("""{"data":{"value":11}}""")
             val client = clientReturning(engine)
-            client.close()
-            client.query(ValueQuery()).execute.map { response =>
+            client.close.andThen(client.query(ValueQuery()).execute).map { response =>
                 assert(response.data == Present(11))
             }
         }
@@ -257,24 +250,21 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
                 .serverUrl("https://example.com/graphql")
                 .webSocketServerUrl("wss://example.com/subscriptions")
                 .webSocketEngine(engine).build()
-            var seen = List.empty[Int]
             for
-                _ <- StreamProbe.drain(client.subscription(ValueSubscription()).stream)(r =>
-                    r.data.foreach(v => seen = seen :+ v)
-                )
-                _ <- settle
+                pull  <- StreamProbe.Pull.open(client.subscription(ValueSubscription()).stream)
+                first <- conn.nextSent
                 // Opened at the ws URL with the modern subprotocol; sent connection_init.
                 _ = assert(
                     engine.opens == List(("wss://example.com/subscriptions", Some("graphql-transport-ws")))
                 )
-                _ = assert(conn.sent.head == """{"type":"connection_init"}""")
+                _ = assert(first == """{"type":"connection_init"}""")
                 _ <- Sync.defer(conn.server(ack))
-                _ <- settle
+                _ <- conn.awaitSent(_.contains("\"type\":\"subscribe\""))
                 _ <- Sync.defer { conn.server(next("0", 7)); conn.server(next("0", 8)) }
-                _ <- settle
-                _ <- Sync.defer(client.close())
-                _ <- settle
-            yield assert(seen == List(7, 8))
+                a <- pull.next
+                b <- pull.next
+                _ <- client.close
+            yield assert(List(a, b).flatMap(_.data) == List(7, 8))
             end for
         }
 
@@ -288,10 +278,9 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
                 .wsProtocol(SubscriptionWsProtocol)
                 .webSocketEngine(engine).build()
             for
-                _ <- StreamProbe.drain(client.subscription(ValueSubscription()).stream)(_ => ())
-                _ <- settle
-                _ <- Sync.defer(client.close())
-                _ <- settle
+                _ <- StreamProbe.Pull.open(client.subscription(ValueSubscription()).stream)
+                _ <- conn.nextSent // connection_init: the socket is open
+                _ <- client.close
             yield assert(engine.opens.map(_._2) == List(Some("graphql-ws")))
             end for
         }
@@ -304,10 +293,9 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
                 .serverUrl("wss://example.com/graphql")
                 .webSocketEngine(engine).build()
             for
-                _ <- StreamProbe.drain(client.subscription(ValueSubscription()).stream)(_ => ())
-                _ <- settle
-                _ <- Sync.defer(client.close())
-                _ <- settle
+                _ <- StreamProbe.Pull.open(client.subscription(ValueSubscription()).stream)
+                _ <- conn.nextSent // connection_init: the socket is open
+                _ <- client.close
             yield assert(engine.opens.map(_._1) == List("wss://example.com/graphql"))
             end for
         }
@@ -326,17 +314,16 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
             }
         }
 
-        "close() closes the shared subscription socket cleanly" in {
+        "close closes the shared subscription socket cleanly" in {
             val conn   = new FakeWebSocketConnection
             val client = wsClient(conn)
             for
-                _ <- StreamProbe.drain(client.subscription(ValueSubscription()).stream)(_ => ())
-                _ <- settle
+                _ <- StreamProbe.Pull.open(client.subscription(ValueSubscription()).stream)
+                _ <- conn.nextSent
                 _ <- Sync.defer(conn.server(ack))
-                _ <- settle
+                _ <- conn.awaitSent(_.contains("\"type\":\"subscribe\""))
                 _ = assert(conn.closedWith == None) // still open while streaming
-                _ <- Sync.defer(client.close())
-                _ <- settle // close() is async (enqueues Shutdown); let the owner fiber process it
+                _ <- client.close // returns once the socket is closed
             yield assert(conn.closedWith.map(_._1) == Some(WebSocketConnection.NormalClosure))
             end for
         }

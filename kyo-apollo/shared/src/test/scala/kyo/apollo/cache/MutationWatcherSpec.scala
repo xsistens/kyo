@@ -209,16 +209,16 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
                 _ = assert(first.data == Present(userData("Alice")))
                 // Open a subscription that streams an updated `User:1` (fire-and-forget drain).
                 _ <- Fiber.init(Scope.run(client.subscription(UserUpdatedSubscription()).stream.discard))
-                _ <- Async.sleep(30L.millis)
+                _ <- conn.awaitSent(_.contains("connection_init"))
                 _ <- Sync.defer(conn.server("""{"type":"connection_ack"}"""))
-                _ <- Async.sleep(30L.millis)
+                _ <- conn.awaitSent(_.contains("\"type\":\"subscribe\""))
                 // The CacheInterceptor write-back normalizes `userUpdated` into `User:1`
                 // and publishes the changed key, so the watcher re-reads.
                 _ <- Sync.defer(
                     conn.server(s"""{"id":"0","type":"next","payload":${body("userUpdated", "Dana")}}""")
                 )
                 second <- pull.next
-                _      <- Sync.defer(client.close())
+                _      <- client.close
             yield assert(second.data == Present(userData("Dana")))
             end for
         }
