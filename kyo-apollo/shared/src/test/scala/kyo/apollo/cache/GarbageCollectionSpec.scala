@@ -1,6 +1,8 @@
 package kyo.apollo.cache
 
 import kyo.*
+import kyo.apollo.ApolloClient
+import kyo.apollo.StreamProbe
 import kyo.apollo.api.*
 import kyo.apollo.cache.TestKeys.*
 import kyo.apollo.cache.normalized.*
@@ -8,6 +10,7 @@ import kyo.apollo.cache.normalized.api.*
 import kyo.apollo.cache.normalized.api.Record
 import kyo.apollo.json.Json
 import kyo.apollo.json.SchemaJson
+import kyo.apollo.network.ApolloResponse
 import scala.collection.immutable.VectorMap
 
 /** Garbage collection, eviction, and TTL/expiration.
@@ -16,7 +19,8 @@ import scala.collection.immutable.VectorMap
   *   - **Reachability GC** on [[ApolloStore]] — `garbageCollect` /
   *     `removeUnreachableRecords` sweeping records unreachable from the operation
   *     roots (following references, including through lists), while an optimistic
-  *     layer *pins* records it points at.
+  *     layer, a live watch or an explicit `retain` *pins* the records it depends on,
+  *     and the removed keys are published.
   *   - **Eviction** — `evict(cacheKey)` dropping a record (and, with `cascade`,
   *     its referenced subtree) and publishing the removed keys.
   *   - **Per-field TTL** on [[MemoryCache]] — `maxAge` expiring individual fields,
@@ -80,6 +84,55 @@ class GarbageCollectionSpec extends kyo.test.Test[Any]:
         def variables: Json = Json.JObj(VectorMap("name" -> SchemaJson.encode(newName)))
     end UpdateUserNameMutation
 
+    // --- watched records --------------------------------------------------------
+
+    final case class UserData(user: User) derives Schema
+
+    /** `{ user { __typename id name } }` — QUERY_ROOT, then `User:<id>`. */
+    final case class UserQuery() extends Query[UserData]:
+        def name                         = "User"
+        def document                     = "query User { user { __typename id name } }"
+        def dataSchema: Schema[UserData] = summon[Schema[UserData]]
+        def rootField: CompiledField =
+            CompiledField("data", CompiledNamedType("Query"), selections = Chunk(userField("user")))
+        def variables: Json = Json.JObj(VectorMap.empty)
+    end UserQuery
+
+    private def userData(id: String, name: String): UserData = UserData(User("User", id, name))
+
+    /** A cache whose next read, once armed, first runs `action` on the reading fiber and
+      * only then reads. `read` is an effect, so the action — a garbage collection, a
+      * write — lands in place inside the store operation that reads (a watcher's
+      * re-read), on every platform.
+      */
+    final private class ReadTrap(delegate: NormalizedCache) extends NormalizedCacheDecorator(delegate):
+        private given AllowUnsafe = AllowUnsafe.embrace.danger
+        private val armed         = AtomicRef.Unsafe.init(Maybe.empty[Unit < Sync])
+
+        def arm(action: => Unit < Sync)(using Frame): Unit < Sync =
+            Sync.defer(discard(armed.getAndSet(Present(Sync.defer(action)))))
+
+        override def read[A](f: RecordLoader => A)(using Frame): A < Sync =
+            Sync.defer(armed.getAndSet(Absent)).map {
+                case Present(action) => action.andThen(delegate.read(f))
+                case Absent          => delegate.read(f)
+            }
+    end ReadTrap
+
+    /** A client over `cache` for `CacheOnly` watches: nothing here reaches the network. */
+    private def clientOver(cache: NormalizedCache): ApolloClient =
+        ApolloClient
+            .builder()
+            .serverUrl("https://example.com/graphql")
+            .httpEngine(new kyo.apollo.network.http.HttpEngine:
+                def execute(request: kyo.apollo.network.http.HttpRequest)(using Frame) =
+                    Abort.panic(IllegalStateException("GarbageCollectionSpec does not reach the network")))
+            .normalizedCache(cache, IdCacheKeyGenerator(List("id")))
+            .build()
+
+    private def watchUser(client: ApolloClient)(using Frame) =
+        client.query(UserQuery()).fetchPolicy(FetchPolicy.CacheOnly).watch()
+
     "garbageCollect / evict / MemoryCache TTL / NormalizedCacheDecorator" - {
 
         "garbageCollect removes records unreachable from a root, transitively keeping the rest" in {
@@ -128,13 +181,20 @@ class GarbageCollectionSpec extends kyo.test.Test[Any]:
             s.garbageCollect.map(removed => assert(removed == Set.empty[CacheKey]))
         }
 
-        "garbageCollect does not publish (unreachable records have no watchers)" in {
-            var published = false
+        "garbageCollect publishes the keys it removed, and a sweep that removes nothing publishes nothing" in {
+            // A watcher between two reads holds no retain on a record it is about to
+            // depend on; the publish is what makes it read again instead of going silent.
             for
-                s <- graphStore()
-                _ <- s.addChangedKeysListener(_ => published = true)
-                _ <- s.garbageCollect
-            yield assert(published == false)
+                s         <- graphStore()
+                seen      <- AtomicRef.init(Chunk.empty[Set[CacheKey]])
+                _         <- s.addChangedKeysListener(keys => seen.updateAndGet(_.append(keys)).unit)
+                removed   <- s.garbageCollect
+                again     <- s.garbageCollect
+                published <- seen.get
+            yield
+                assert(removed == Set(CacheKey("Orphan", "1")))
+                assert(again == Set.empty[CacheKey])
+                assert(published == Chunk(Set(CacheKey("Orphan", "1"))), s"a subscriber must see what GC removed: $published")
             end for
         }
 
@@ -168,6 +228,102 @@ class GarbageCollectionSpec extends kyo.test.Test[Any]:
                 assert(pinned == Set.empty[CacheKey])
                 assert(kept.isDefined)
                 assert(released == Set(CacheKey("User", "1")))
+            end for
+        }
+
+        // --- watched and retained records -------------------------------------------
+
+        "a live watcher's dependencies survive GC after its root was rebound, until it has re-read" in {
+            // The watch depends on {QUERY_ROOT, User:1}. A write re-points the root at
+            // User:2 and publishes, so the watcher re-reads — and a GC runs inside that
+            // re-read, before its load. No root reaches User:1 any more, but the watcher
+            // still depends on it: it must survive until the watcher has adopted
+            // {QUERY_ROOT, User:2}. A GC after that removes it.
+            val cache  = ReadTrap(MemoryCache())
+            val client = clientOver(cache)
+            val store  = client.apolloStore
+            for
+                _         <- store.writeOperation(UserQuery(), userData("1", "Alice"))
+                pull      <- StreamProbe.Pull.open(watchUser(client))
+                first     <- pull.next
+                during    <- AtomicRef.init(Maybe.empty[Set[CacheKey]])
+                _         <- cache.arm(store.garbageCollect.map(removed => during.set(Present(removed))))
+                _         <- store.writeOperation(UserQuery(), userData("2", "Bob"))
+                second    <- pull.next // offered only after the re-read adopted its key set
+                collected <- during.get
+                after     <- store.garbageCollect
+                user1     <- store.cache.loadRecord(CacheKey("User", "1"))
+            yield
+                assert(first.data == Present(userData("1", "Alice")))
+                assert(collected == Present(Set.empty[CacheKey]), s"GC removed a record a live watcher depends on: $collected")
+                assert(second.data == Present(userData("2", "Bob")))
+                assert(after == Set(CacheKey("User", "1")), s"once the watcher moved on, its old record is garbage: $after")
+                assert(user1 == Absent)
+            end for
+        }
+
+        "a retain pins a record no root reaches for its Scope, counting every open retain" in {
+            // The fragment-read case without a UI: Orphan:1 is reachable from no root. Two
+            // nested retains on it; closing the inner one leaves it pinned by the outer,
+            // closing both frees it.
+            val orphan = CacheKey("Orphan", "1")
+            for
+                s <- graphStore()
+                sweeps <- Scope.run {
+                    s.retain(Set(orphan)).andThen {
+                        Scope.run(s.retain(Set(orphan)).andThen(s.garbageCollect)).map(inner => s.garbageCollect.map((inner, _)))
+                    }
+                }
+                released <- s.garbageCollect
+            yield
+                assert(sweeps._1 == Set.empty[CacheKey], s"GC removed a retained record: ${sweeps._1}")
+                assert(sweeps._2 == Set.empty[CacheKey], s"closing one retain released a key another still holds: ${sweeps._2}")
+                assert(released == Set(orphan), s"a closed retain still pins its key: $released")
+            end for
+        }
+
+        "a retained record keeps the records it references reachable" in {
+            val s      = new ApolloStore(MemoryCache())
+            val book   = CacheKey("Book", "2")
+            val author = CacheKey("Author", "2")
+            for
+                _ <- s.cache.merge(
+                    Chunk(rec(book, fk("author") -> ref(author)), rec(author, fk("name") -> scalar("Le Guin")))
+                )
+                pinned   <- Scope.run(s.retain(Set(book)).andThen(s.garbageCollect))
+                released <- s.garbageCollect
+            yield
+                assert(pinned == Set.empty[CacheKey])
+                assert(released == Set(book, author))
+            end for
+        }
+
+        "a watch that has ended no longer pins what it depended on" in {
+            // The watch's own first read is trapped: a rename lands inside it, so the watch
+            // re-reads once on its fetch fiber and emits a second time. That emission is
+            // offered after the re-read adopted its key set, and it leaves the fetch fiber
+            // nothing more to adopt — so once the watch's Scope has closed, nothing holds
+            // User:1 but a retain the teardown failed to release.
+            val cache  = ReadTrap(MemoryCache())
+            val client = clientOver(cache)
+            val store  = client.apolloStore
+            for
+                _        <- store.writeOperation(UserQuery(), userData("1", "Alice"))
+                _        <- cache.arm(store.writeOperation(UserQuery(), userData("1", "Bob")).unit)
+                tornDown <- Latch.init(1)
+                probe    <- Channel.init[ApolloResponse[UserData]](Int.MaxValue)
+                // Scope finalizers run last-registered-first: `tornDown` is released only
+                // after the watch's own teardown has run.
+                drain  <- Fiber.init(Scope.run(Scope.ensure(tornDown.release).andThen(watchUser(client).foreach(probe.put))))
+                _      <- probe.take
+                second <- probe.take
+                _      <- drain.interrupt
+                _      <- tornDown.await
+                _      <- store.writeOperation(UserQuery(), userData("2", "Carol")) // no root reaches User:1 now
+                freed  <- store.garbageCollect
+            yield
+                assert(second.data == Present(userData("1", "Bob")))
+                assert(freed == Set(CacheKey("User", "1")), s"a closed watch still pins its records: $freed")
             end for
         }
 

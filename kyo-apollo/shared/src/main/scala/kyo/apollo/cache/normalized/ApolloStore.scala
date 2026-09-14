@@ -25,6 +25,7 @@ import kyo.apollo.exception.CacheMissException
 import kyo.apollo.exception.CacheReadFailure
 import kyo.apollo.exception.NoCacheIdentityException
 import kyo.apollo.json.Json
+import kyo.discard
 import scala.collection.mutable
 
 /** The coordinator that turns typed operation data into cache records and back,
@@ -124,6 +125,77 @@ final class ApolloStore(
       */
     private val optimisticLayers: AtomicRef[Chunk[Layer]] =
         AtomicRef.Unsafe.init(Chunk.empty[Layer])(using AllowUnsafe.embrace.danger).safe
+
+    /** The retain set: for every key some holder keeps reachable for
+      * [[garbageCollect]], how many holders keep it — a live `watch()` for the key set
+      * of its last read, an open [[retain]] for the keys it names. A key is in the map
+      * exactly while its count is above zero.
+      */
+    private val retained: AtomicRef[Map[CacheKey, Int]] =
+        AtomicRef.Unsafe.init(Map.empty[CacheKey, Int])(using AllowUnsafe.embrace.danger).safe
+
+    /** `counts` with `delta` added to the count of every key in `keys`, dropping a key
+      * whose count reaches zero.
+      */
+    private def counted(counts: Map[CacheKey, Int], keys: Set[CacheKey], delta: Int): Map[CacheKey, Int] =
+        keys.foldLeft(counts) { (acc, key) =>
+            val count = acc.getOrElse(key, 0) + delta
+            if count == 0 then acc - key else acc.updated(key, count)
+        }
+
+    /** Keep the records under `keys` reachable for [[garbageCollect]] until the
+      * enclosing `Scope` closes — and, through their references, every record they
+      * point at.
+      *
+      * The operation roots do not cover every read. A fragment read starts at any key,
+      * so an entity that only a fragment reads is reachable from no root; and between
+      * [[writeFragment]] of a new entity and the write that splices it into a list,
+      * nothing references it at all. Retain those keys for as long as they are needed:
+      * `store.retain(Set(key)).andThen(store.writeFragment(...)).andThen(store.updateOperation(...))`
+      * inside one `Scope`. A live `watch()` retains the keys of its last read by itself.
+      *
+      * Retains count: a key stays pinned while any retain on it is open, and each ends
+      * with its own `Scope`. Retaining creates no record and brings back none that is
+      * already gone.
+      */
+    def retain(keys: Set[CacheKey])(using Frame): Unit < (Sync & Scope) =
+        if keys.isEmpty then Kyo.unit
+        else
+            Scope.acquireRelease(retained.updateAndGet(counted(_, keys, 1)))(_ =>
+                retained.updateAndGet(counted(_, keys, -1))
+            ).unit
+
+    /** Move a holder's retain onto `next`, hand over hand: `next` is retained first,
+      * then `install` runs — the holder's own compare-and-set, answering the set it
+      * replaced (`Present`) or `Absent` when it declines `next` — and only then is the
+      * set that lost released: the replaced one, or `next` itself. Returns whether
+      * `next` was installed.
+      *
+      * Every increment precedes the compare-and-set that installs its set, and every
+      * decrement follows the one that replaces it. However two transitions of one
+      * holder interleave, a key's count therefore never falls below the number of
+      * holders whose installed set contains it: there is no moment at which a key a
+      * holder has installed counts as unretained. It runs synchronously, so nothing interrupts it between the
+      * increment and the release. A holder that ends calls [[releaseRetained]] with
+      * the set it held last.
+      */
+    private[apollo] def swapRetained(next: Set[CacheKey])(install: => Maybe[Set[CacheKey]])(using AllowUnsafe): Boolean =
+        adjustRetained(next, 1)
+        install match
+            case Present(replaced) =>
+                adjustRetained(replaced, -1)
+                true
+            case Absent =>
+                adjustRetained(next, -1)
+                false
+        end match
+    end swapRetained
+
+    /** Release the set a holder of [[swapRetained]] held last, when it ends. */
+    private[apollo] def releaseRetained(keys: Set[CacheKey])(using AllowUnsafe): Unit = adjustRetained(keys, -1)
+
+    private def adjustRetained(keys: Set[CacheKey], delta: Int)(using AllowUnsafe): Unit =
+        if keys.nonEmpty then discard(retained.unsafe.updateAndGet(counted(_, keys, delta)))
 
     /** Resolve `key` as the persisted record `base` with every optimistic layer of
       * `layers` that defines it merged on top, in application (stacking) order —
@@ -689,30 +761,41 @@ final class ApolloStore(
         }
 
     /** Sweep the cache for records unreachable from any root and remove them,
-      * returning the set of removed keys.
+      * returning — and [[publish]]ing — the set of removed keys.
       *
       * A reachability mark-and-sweep, seeded from the well-known operation roots
       * ([[CacheKey.QueryRoot]] / [[CacheKey.MutationRoot]] /
-      * [[CacheKey.SubscriptionRoot]]) plus every record any live optimistic layer
-      * holds or points at — so a record kept alive *only* by a pending optimistic
-      * mutation survives GC and reappears if that mutation rolls back. Reachability
-      * is transitively followed through [[Record.references]] (which already walks
+      * [[CacheKey.SubscriptionRoot]]), every record any live optimistic layer holds
+      * or points at — so a record kept alive *only* by a pending optimistic mutation
+      * survives GC and reappears if that mutation rolls back — and the retain set:
+      * the key set of every live `watch()`'s last read and every key of an open
+      * [[retain]]. Not every read starts at an operation root: a fragment read starts
+      * at any key, and a watch whose root field was re-pointed still depends on the
+      * records its last read reached until it has read again. Reachability is
+      * transitively followed through [[Record.references]] (which already walks
       * lists), and every stored key not reached is dropped via `cache.remove`.
       *
-      * No [[publish]] is issued: an unreachable record is by definition depended on
-      * by no live read, so removing it cannot change any watcher's result. Mirrors
-      * apollo-kotlin's `ApolloStore.garbageCollect`. This is the sweep helper the
-      * public [[garbageCollect]] delegates to.
+      * The removed keys are published, because a record can be depended on without
+      * being retained: a watcher between a read and the adoption of that read's key
+      * set, or a fragment read that took no [[retain]]. The publish (and the
+      * [[currentGeneration]] it advances) makes such a watcher read again and see the
+      * record gone, instead of finding out on some later read. Mirrors apollo-kotlin's
+      * `ApolloStore.garbageCollect`. This is the sweep helper the public
+      * [[garbageCollect]] delegates to.
       */
     def removeUnreachableRecords(using Frame): Set[CacheKey] < Sync =
         cache.allRecords.map { all =>
             optimisticLayers.get.map { layers =>
-                val unreachable = all.keySet.diff(reachableKeys(all, layers))
-                cache.remove(Chunk.from(unreachable))
+                retained.get.map { pinned =>
+                    val unreachable = all.keySet.diff(reachableKeys(all, layers, pinned.keySet))
+                    cache.remove(Chunk.from(unreachable)).map(removed => publish(removed).andThen(removed))
+                }
             }
         }
 
-    /** Reclaim every record unreachable from a root, returning the removed keys.
+    /** Reclaim every record unreachable from a root — the operation roots, the
+      * optimistic layers and the retain set — returning and [[publish]]ing the
+      * removed keys.
       *
       * The public garbage-collection entry point; delegates to
       * [[removeUnreachableRecords]]. Run it after bulk invalidations (e.g. an
@@ -721,18 +804,19 @@ final class ApolloStore(
     def garbageCollect(using Frame): Set[CacheKey] < Sync = removeUnreachableRecords
 
     /** The set of record keys reachable from a root, over the `all`-records
-      * snapshot: the operation roots and every live optimistic layer's records and
-      * their referents, transitively closed through [[Record.references]].
-      * Optimistic records live outside the backing cache, so their keys *and* the
-      * keys they point at are seeded directly rather than discovered by walking
-      * `all` — off one snapshot of the stack, like a read.
+      * snapshot: the operation roots, every live optimistic layer's records and
+      * their referents, and the `pinned` keys of the retain set, transitively closed
+      * through [[Record.references]]. Optimistic records live outside the backing
+      * cache, so their keys *and* the keys they point at are seeded directly rather
+      * than discovered by walking `all` — off one snapshot of the stack, like a read.
       */
-    private def reachableKeys(all: Map[CacheKey, Record], layers: Chunk[Layer]): Set[CacheKey] =
+    private def reachableKeys(all: Map[CacheKey, Record], layers: Chunk[Layer], pinned: Set[CacheKey]): Set[CacheKey] =
         val optimisticRecords = layers.iterator.flatMap(_.records.values).toList
         val seeds =
             Set(CacheKey.QueryRoot, CacheKey.MutationRoot, CacheKey.SubscriptionRoot) ++
                 optimisticRecords.iterator.map(_.key) ++
-                optimisticRecords.iterator.flatMap(_.references.iterator.map(_.key))
+                optimisticRecords.iterator.flatMap(_.references.iterator.map(_.key)) ++
+                pinned
         val reachable = mutable.Set.empty[CacheKey]
         val frontier  = mutable.Queue.from(seeds)
         while frontier.nonEmpty do
