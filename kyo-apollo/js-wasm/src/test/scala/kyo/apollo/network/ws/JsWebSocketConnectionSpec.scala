@@ -22,7 +22,9 @@ class JsWebSocketConnectionSpec extends kyo.test.Test[Any]:
     given CanEqual[Any, Any] = CanEqual.derived
 
     /** A fake platform socket: records listeners, sends, and the close call, and
-      * lets the test fire open/message/error/close events at will.
+      * lets the test fire open/message/error/close events at will. Its state is
+      * plain fields: JS runs every fiber on one thread, and each field has a single
+      * writer (the listener registration, the connection's `send`/`close`).
       */
     final private class FakeSocket:
         private val listeners =
@@ -30,8 +32,18 @@ class JsWebSocketConnectionSpec extends kyo.test.Test[Any]:
         var sent: List[String]                = List.empty
         var closedWith: Option[(Int, String)] = None
 
+        private val wiredPromise = Fiber.Promise.Unsafe.init[Unit, Any]()(using AllowUnsafe.embrace.danger)
+
+        /** Completes once the connection has attached all four listeners — the barrier
+          * before firing an event, instead of a pause.
+          */
+        def wired(using Frame): Unit < Async = wiredPromise.safe.get
+
         private val addFn: sjs.Function2[String, sjs.Function1[sjs.Dynamic, Unit], Unit] =
-            (event, listener) => listeners(event) = listener
+            (event, listener) =>
+                listeners(event) = listener
+                if Set("open", "message", "error", "close").forall(listeners.contains) then
+                    discard(wiredPromise.completeUnitDiscard()(using AllowUnsafe.embrace.danger))
         private val sendFn: sjs.Function1[String, Unit] =
             data => sent = sent :+ data
         private val closeFn: sjs.Function2[Int, String, Unit] =
@@ -51,15 +63,15 @@ class JsWebSocketConnectionSpec extends kyo.test.Test[Any]:
             fire("close", sjs.Dynamic.literal(code = code, reason = reason))
     end FakeSocket
 
-    /** Fork `openWith` (it suspends on the socket's `open` event), let it attach its
-      * listeners, then fire `open` so it resolves to the live connection.
+    /** Fork `openWith` (it suspends on the socket's `open` event), wait until it has
+      * attached its listeners, then fire `open` so it resolves to the live connection.
       */
     private def open(fake: FakeSocket)(using
         Frame
     ): JsWebSocketConnection < (Async & Scope & Abort[ApolloException]) =
         for
             fiber <- Fiber.init(JsWebSocketConnection.openWith(fake.asJs))
-            _     <- Async.sleep(10.millis)
+            _     <- fake.wired
             _     <- Sync.defer(fake.open())
             conn  <- fiber.get
         yield conn
@@ -69,9 +81,10 @@ class JsWebSocketConnectionSpec extends kyo.test.Test[Any]:
         "a normal (1000) close makes the liveness signal succeed" in {
             val fake = new FakeSocket
             for
-                conn   <- open(fake)
+                conn <- open(fake)
+                // The liveness signal is a promise: whether the watcher reads it before or
+                // after the event fires, it sees the outcome, so no ordering is needed here.
                 watch  <- Fiber.init(Abort.run[ApolloWebSocketClosedException](conn.closed))
-                _      <- Async.sleep(10.millis)
                 _      <- Sync.defer(fake.closeEvent(WebSocketConnection.NormalClosure))
                 result <- watch.get
             yield assert(result.isSuccess)
@@ -83,7 +96,6 @@ class JsWebSocketConnectionSpec extends kyo.test.Test[Any]:
             for
                 conn   <- open(fake)
                 watch  <- Fiber.init(Abort.run[ApolloWebSocketClosedException](conn.closed))
-                _      <- Async.sleep(10.millis)
                 _      <- Sync.defer(fake.closeEvent(1011, "server error"))
                 result <- watch.get
             yield result match
@@ -149,7 +161,7 @@ class JsWebSocketConnectionSpec extends kyo.test.Test[Any]:
             val fake = new FakeSocket
             for
                 fiber  <- Fiber.init(JsWebSocketConnection.openWith(fake.asJs))
-                _      <- Async.sleep(10.millis)
+                _      <- fake.wired
                 _      <- Sync.defer(fake.closeEvent(4401, "unauthorized"))
                 result <- fiber.getResult
             yield result match

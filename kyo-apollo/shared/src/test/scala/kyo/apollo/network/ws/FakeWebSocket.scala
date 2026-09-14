@@ -82,10 +82,10 @@ final class FakeWebSocketConnection extends WebSocketConnection:
         closedRef.compareAndSet(Absent, Present((code, reason))).map { first =>
             if !first then Kyo.unit
             else
-                val settle =
+                val endLiveness =
                     if code == WebSocketConnection.NormalClosure then donePromise.completeUnitDiscard
                     else donePromise.completeDiscard(Result.fail(closedException(code, reason)))
-                settle.andThen(Abort.run[Closed](incomingCh.offer(Absent)).unit)
+                endLiveness.andThen(Abort.run[Closed](incomingCh.offer(Absent)).unit)
         }
 
     /** Push a server frame to the incoming stream (buffered until it drains). */

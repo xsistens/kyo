@@ -122,12 +122,12 @@ class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
                         terminal
                     )
                     _        <- control.awaitPendingSleepers(1) // attempt 1 failed; its retry waits
-                    _        <- control.advance(999.millis)
+                    _        <- control.advance(999.millis, Duration.Zero)
                     at999ms  <- terminal.calls
-                    _        <- control.advance(1.milli)
+                    _        <- control.advance(1.milli, Duration.Zero)
                     _        <- control.awaitPendingSleepers(1) // attempt 2 failed; the next retry waits
                     at1s     <- terminal.calls
-                    _        <- control.advance(1.second)
+                    _        <- control.advance(1.second, Duration.Zero)
                     response <- fiber.get
                     at2s     <- terminal.calls
                     arrivals <- terminal.arrivals
@@ -146,13 +146,13 @@ class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
                     terminal <- RecordingTerminal.scripted(networkFail)
                     fiber    <- consume(RetryOnErrorInterceptor(jitter = 0.0), terminal)
                     _        <- control.awaitPendingSleepers(1)
-                    _        <- control.advance(999.millis)
+                    _        <- control.advance(999.millis, Duration.Zero)
                     before1s <- terminal.calls
-                    _        <- control.advance(1.milli)
+                    _        <- control.advance(1.milli, Duration.Zero)
                     _        <- control.awaitPendingSleepers(1)
-                    _        <- control.advance(1999.millis)
+                    _        <- control.advance(1999.millis, Duration.Zero)
                     before3s <- terminal.calls
-                    _        <- control.advance(1.milli)
+                    _        <- control.advance(1.milli, Duration.Zero)
                     response <- fiber.get
                     arrivals <- terminal.arrivals
                 yield
@@ -174,7 +174,7 @@ class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
                     _ <- fiber.interrupt
                     // The retry would run in this fiber; once it has ended, nothing is left to run it.
                     result <- fiber.getResult
-                    _      <- control.advance(10.seconds)
+                    _      <- control.advance(10.seconds, Duration.Zero)
                     calls  <- terminal.calls
                 yield
                     assert(!result.isSuccess, s"the caller was interrupted: $result")
@@ -198,13 +198,13 @@ class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
                                 terminal <- RecordingTerminal.scripted(networkFail, networkFail, data(42))
                                 fiber    <- consume(RetryOnErrorInterceptor(schedule = schedule, jitter = 0.5), terminal)
                                 _        <- control.awaitPendingSleepers(1)
-                                _        <- control.advance(wait1 - 1.milli)
+                                _        <- control.advance(wait1 - 1.milli, Duration.Zero)
                                 early1   <- terminal.calls
-                                _        <- control.advance(1.milli)
+                                _        <- control.advance(1.milli, Duration.Zero)
                                 _        <- control.awaitPendingSleepers(1)
-                                _        <- control.advance(wait2 - 1.milli)
+                                _        <- control.advance(wait2 - 1.milli, Duration.Zero)
                                 early2   <- terminal.calls
-                                _        <- control.advance(1.milli)
+                                _        <- control.advance(1.milli, Duration.Zero)
                                 _        <- fiber.get
                                 arrivals <- terminal.arrivals
                             yield
