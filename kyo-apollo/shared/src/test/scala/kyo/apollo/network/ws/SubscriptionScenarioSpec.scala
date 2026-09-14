@@ -29,15 +29,15 @@ class SubscriptionScenarioSpec extends kyo.test.Test[Any]:
 
     private val init = """{"type":"connection_init"}"""
 
-    final private class Fixture(protocol: WsProtocol = GraphQLWsProtocol):
+    final private case class Fixture(conn: FakeWebSocketConnection, engine: FakeWebSocketEngine, transport: WebSocketNetworkTransport)
+
+    /** A transport over one scripted connection, owned by the enclosing `Scope`. */
+    private def fixture(protocol: WsProtocol = GraphQLWsProtocol)(using Frame): Fixture < (Sync & Scope) =
         val conn   = new FakeWebSocketConnection
         val engine = new FakeWebSocketEngine(conn)
-        val transport = new WebSocketNetworkTransport(
-            serverUrl = "wss://example.com/graphql",
-            protocol = protocol,
-            engine = engine
-        )
-    end Fixture
+        WebSocketNetworkTransport.init(serverUrl = "wss://example.com/graphql", protocol = protocol, engine = engine)
+            .map(Fixture(conn, engine, _))
+    end fixture
 
     private def startFrame(kind: String)(frame: String): Boolean = frame.contains(s"\"type\":\"$kind\"")
 
@@ -65,8 +65,8 @@ class SubscriptionScenarioSpec extends kyo.test.Test[Any]:
 
         "handshake — legacy protocol negotiates the graphql-ws subprotocol and starts only after ack" in Clock
             .withTimeControl { _ =>
-                val f = new Fixture(SubscriptionWsProtocol)
                 for
+                    f     <- fixture(SubscriptionWsProtocol)
                     _     <- StreamProbe.Pull.open(f.transport.subscribe(request()))
                     first <- f.conn.nextSent
                     _ = assert(f.engine.opens == List(("wss://example.com/graphql", Some("graphql-ws"))))
@@ -80,84 +80,87 @@ class SubscriptionScenarioSpec extends kyo.test.Test[Any]:
 
         "routing — interleaved Data frames reach only their owning subscriber (three-way)" in Clock
             .withTimeControl { _ =>
-                val f  = new Fixture
-                val sa = f.transport.subscribe(request())
-                val sb = f.transport.subscribe(request())
-                val sc = f.transport.subscribe(request())
-                for
-                    a <- StreamProbe.Pull.open(sa)
-                    b <- StreamProbe.Pull.open(sb)
-                    c <- StreamProbe.Pull.open(sc)
-                    _ <- established(f.conn, 3)
-                    _ = assert(f.engine.opens.size == 1)
-                    _ <- Sync.defer {
-                        f.conn.server(next("1", 10))
-                        f.conn.server(next("0", 20))
-                        f.conn.server(next("2", 30))
-                        f.conn.server(next("1", 11))
-                        f.conn.server(next("0", 21))
-                    }
-                    seenA <- data(a, 2)
-                    seenB <- data(b, 2)
-                    seenC <- data(c, 1)
-                yield
-                    assert(seenA == Chunk(20, 21))
-                    assert(seenB == Chunk(10, 11))
-                    assert(seenC == Chunk(30))
-                end for
+                fixture().map { f =>
+                    val sa = f.transport.subscribe(request())
+                    val sb = f.transport.subscribe(request())
+                    val sc = f.transport.subscribe(request())
+                    for
+                        a <- StreamProbe.Pull.open(sa)
+                        b <- StreamProbe.Pull.open(sb)
+                        c <- StreamProbe.Pull.open(sc)
+                        _ <- established(f.conn, 3)
+                        _ = assert(f.engine.opens.size == 1)
+                        _ <- Sync.defer {
+                            f.conn.server(next("1", 10))
+                            f.conn.server(next("0", 20))
+                            f.conn.server(next("2", 30))
+                            f.conn.server(next("1", 11))
+                            f.conn.server(next("0", 21))
+                        }
+                        seenA <- data(a, 2)
+                        seenB <- data(b, 2)
+                        seenC <- data(c, 1)
+                    yield
+                        assert(seenA == Chunk(20, 21))
+                        assert(seenB == Chunk(10, 11))
+                        assert(seenC == Chunk(30))
+                    end for
+                }
             }
 
         "complete — ending the middle of three multiplexed subscriptions leaves the others streaming" in Clock
             .withTimeControl { _ =>
-                val f  = new Fixture
+                fixture().map { f =>
+                    val sa = f.transport.subscribe(request())
+                    val sb = f.transport.subscribe(request())
+                    val sc = f.transport.subscribe(request())
+                    for
+                        a     <- StreamProbe.Pull.open(sa)
+                        doneB <- Fiber.init(Scope.run(StreamProbe.collect(sb)))
+                        c     <- StreamProbe.Pull.open(sc)
+                        _     <- established(f.conn, 3)
+                        _ <- Sync.defer {
+                            f.conn.server(next("0", 1))
+                            f.conn.server(next("1", 2))
+                            f.conn.server(next("2", 3))
+                            f.conn.server(complete("1"))
+                            f.conn.server(next("0", 4))
+                            f.conn.server(next("2", 5))
+                        }
+                        seenB <- doneB.get
+                        seenA <- data(a, 2)
+                        seenC <- data(c, 2)
+                    yield
+                        assert(seenB.flatMap(_.data) == List(2))
+                        assert(seenA == Chunk(1, 4))
+                        assert(seenC == Chunk(3, 5))
+                    end for
+                }
+            }
+
+        "multiplex — three subscriptions share one socket with distinct operation ids" in Clock.withTimeControl { _ =>
+            fixture().map { f =>
                 val sa = f.transport.subscribe(request())
                 val sb = f.transport.subscribe(request())
                 val sc = f.transport.subscribe(request())
                 for
-                    a     <- StreamProbe.Pull.open(sa)
-                    doneB <- Fiber.init(Scope.run(StreamProbe.collect(sb)))
-                    c     <- StreamProbe.Pull.open(sc)
-                    _     <- established(f.conn, 3)
-                    _ <- Sync.defer {
-                        f.conn.server(next("0", 1))
-                        f.conn.server(next("1", 2))
-                        f.conn.server(next("2", 3))
-                        f.conn.server(complete("1"))
-                        f.conn.server(next("0", 4))
-                        f.conn.server(next("2", 5))
-                    }
-                    seenB <- doneB.get
-                    seenA <- data(a, 2)
-                    seenC <- data(c, 2)
+                    _      <- StreamProbe.Pull.open(sa)
+                    _      <- StreamProbe.Pull.open(sb)
+                    _      <- StreamProbe.Pull.open(sc)
+                    starts <- established(f.conn, 3)
                 yield
-                    assert(seenB.flatMap(_.data) == List(2))
-                    assert(seenA == Chunk(1, 4))
-                    assert(seenC == Chunk(3, 5))
+                    assert(f.engine.opens.size == 1)
+                    assert(starts.exists(_.contains("\"id\":\"0\"")))
+                    assert(starts.exists(_.contains("\"id\":\"1\"")))
+                    assert(starts.exists(_.contains("\"id\":\"2\"")))
                 end for
             }
-
-        "multiplex — three subscriptions share one socket with distinct operation ids" in Clock.withTimeControl { _ =>
-            val f  = new Fixture
-            val sa = f.transport.subscribe(request())
-            val sb = f.transport.subscribe(request())
-            val sc = f.transport.subscribe(request())
-            for
-                _      <- StreamProbe.Pull.open(sa)
-                _      <- StreamProbe.Pull.open(sb)
-                _      <- StreamProbe.Pull.open(sc)
-                starts <- established(f.conn, 3)
-            yield
-                assert(f.engine.opens.size == 1)
-                assert(starts.exists(_.contains("\"id\":\"0\"")))
-                assert(starts.exists(_.contains("\"id\":\"1\"")))
-                assert(starts.exists(_.contains("\"id\":\"2\"")))
-            end for
         }
 
         "keepalive — a legacy server 'ka' interleaved mid-stream draws no reply and passes the surrounding data through in order" in Clock
             .withTimeControl { _ =>
-                val f = new Fixture(SubscriptionWsProtocol)
                 for
+                    f    <- fixture(SubscriptionWsProtocol)
                     pull <- StreamProbe.Pull.open(f.transport.subscribe(request()))
                     _    <- established(f.conn, 1, WsTestSupport.legacy.ack, kind = "start")
                     // A `ka` *between* two data frames, not in isolation: this is how a real
@@ -181,8 +184,8 @@ class SubscriptionScenarioSpec extends kyo.test.Test[Any]:
             }
 
         "keepalive — a modern server ping is answered with a pong and streaming continues" in Clock.withTimeControl { _ =>
-            val f = new Fixture
             for
+                f     <- fixture()
                 pull  <- StreamProbe.Pull.open(f.transport.subscribe(request()))
                 _     <- established(f.conn, 1)
                 _     <- Sync.defer(f.conn.server(WsTestSupport.modern.ping))
@@ -198,17 +201,15 @@ class SubscriptionScenarioSpec extends kyo.test.Test[Any]:
         "reconnect — a scripted drop resubscribes both active subscriptions, which stream again" in Clock
             .withTimeControl { control =>
                 val engine = new FreshWebSocketEngine
-                val transport = new WebSocketNetworkTransport(
-                    serverUrl = "wss://example.com/graphql",
-                    engine = engine,
-                    reconnectWhen = WebSocketNetworkTransport.reconnectAlways,
-                    backoff = Schedule.fixed(1.second)
-                )
-                val sa = transport.subscribe(request())
-                val sb = transport.subscribe(request())
                 for
-                    a      <- StreamProbe.Pull.open(sa)
-                    b      <- StreamProbe.Pull.open(sb)
+                    transport <- WebSocketNetworkTransport.init(
+                        serverUrl = "wss://example.com/graphql",
+                        engine = engine,
+                        reconnectWhen = WebSocketNetworkTransport.reconnectAlways,
+                        backoff = Schedule.fixed(1.second)
+                    )
+                    a      <- StreamProbe.Pull.open(transport.subscribe(request()))
+                    b      <- StreamProbe.Pull.open(transport.subscribe(request()))
                     c0     <- engine.nextConnection
                     _      <- established(c0, 2)
                     _      <- Sync.defer { c0.server(next("0", 1)); c0.server(next("1", 2)) }
