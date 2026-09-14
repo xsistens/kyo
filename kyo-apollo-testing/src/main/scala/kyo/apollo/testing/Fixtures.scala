@@ -1,7 +1,10 @@
 package kyo.apollo.testing
 
+import kyo.<
 import kyo.Chunk
+import kyo.Frame
 import kyo.Schema
+import kyo.Sync
 import kyo.apollo.api.*
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloRequest
@@ -59,9 +62,9 @@ object Fixtures:
     end ValueSubscription
 
     /** An [[ApolloRequest]] for the `value` subscription (mirrors the promoted
-      * `WsTestSupport.request()` convenience).
+      * `WsTestSupport.request()` convenience), with a fresh id minted when it runs.
       */
-    def valueRequest(): ApolloRequest[Int] = ApolloRequest(ValueSubscription())
+    def valueRequest(using Frame): ApolloRequest[Int] < Sync = ApolloRequest.builder(ValueSubscription()).build
 
     // --- the `User:1` record family -------------------------------------------
 

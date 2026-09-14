@@ -8,6 +8,7 @@ import kyo.apollo.api.Query
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.ApolloResponse
+import kyo.apollo.network.TestIds
 import kyo.apollo.network.http.HttpEngine
 import kyo.apollo.network.http.HttpNetworkTransport
 import kyo.apollo.network.http.HttpRequest
@@ -53,7 +54,7 @@ class ApolloInterceptorChainSpec extends kyo.test.Test[Any]:
                 Chunk(new NetworkInterceptor(transportReturning("""{"data":{"value":42}}"""))),
                 0
             )
-            StreamProbe.first(chain.proceed(ApolloRequest(ValueQuery()))).map { response =>
+            StreamProbe.first(chain.proceed(ApolloRequest(ValueQuery(), TestIds.requestUuid))).map { response =>
                 assert(response.data == Present(42))
                 assert(response.error == Absent)
             }
@@ -73,7 +74,7 @@ class ApolloInterceptorChainSpec extends kyo.test.Test[Any]:
                 end intercept
             val terminal = new NetworkInterceptor(transportReturning("""{"data":{"value":1}}"""))
             val chain    = DefaultApolloInterceptorChain(Chunk(tap, terminal), 0)
-            StreamProbe.first(chain.proceed(ApolloRequest(ValueQuery()))).map { response =>
+            StreamProbe.first(chain.proceed(ApolloRequest(ValueQuery(), TestIds.requestUuid))).map { response =>
                 assert(response.data == Present(1))
                 assert(order == List("tap-before", "tap-after"))
             }
@@ -88,7 +89,7 @@ class ApolloInterceptorChainSpec extends kyo.test.Test[Any]:
                     Stream.init(Seq(ApolloResponse[D](request.requestUuid)))
             // No terminal needed: `short` never proceeds, so the chain never runs off end.
             val chain   = DefaultApolloInterceptorChain(Chunk(short), 0)
-            val request = ApolloRequest(ValueQuery())
+            val request = ApolloRequest(ValueQuery(), TestIds.requestUuid)
             StreamProbe.first(chain.proceed(request)).map { response =>
                 assert(response.requestUuid == request.requestUuid)
                 assert(response.data == Absent)
@@ -98,7 +99,7 @@ class ApolloInterceptorChainSpec extends kyo.test.Test[Any]:
         "proceeding past the terminal interceptor is a wiring error" in {
             val chain = DefaultApolloInterceptorChain(Chunk.empty, 0)
             val _ = intercept[IllegalStateException] {
-                chain.proceed(ApolloRequest(ValueQuery()))
+                chain.proceed(ApolloRequest(ValueQuery(), TestIds.requestUuid))
             }
         }
     }
