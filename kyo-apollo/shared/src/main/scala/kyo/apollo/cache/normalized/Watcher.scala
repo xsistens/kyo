@@ -114,6 +114,14 @@ extension [D](call: ApolloCall[D])
       * have caused. A watch therefore never settles on a value that a write in its
       * own dependency set has already overtaken.
       *
+      * A networked response has no read behind it: the watch derives its key set by
+      * reading the records back after it has offered the response. That set is
+      * adopted with the generation current when the response was offered, not with
+      * the later read's own stamp, so a write landing between the offer and that read
+      * — one a consumer makes in answer to the emission, say — is seen as newer than
+      * the emitted value and read again, instead of vanishing into a key set that
+      * already reflects it while the consumer still holds the older value.
+      *
       * The adopted key set is retained in the store (see [[ApolloStore.retain]]) until
       * the next set replaces it or the `Scope` closes: a garbage collection keeps the
       * records the watch's last read depended on even when no operation root reaches
@@ -135,6 +143,15 @@ extension [D](call: ApolloCall[D])
       * network refetch is an execution of its own and mints its own id.
       */
     def watch()(using
+        Frame,
+        Tag[Emit[Chunk[ApolloResponse[D]]]]
+    ): ResponseStream[D] =
+        observedWatch(WatchObserver.none)
+
+    /** [[watch]] with `observer` told where the watch's own fibers stand — for suites
+      * that wait on those points instead of guessing with time.
+      */
+    private[apollo] def observedWatch(observer: WatchObserver)(using
         Frame,
         Tag[Emit[Chunk[ApolloResponse[D]]]]
     ): ResponseStream[D] =
@@ -261,8 +278,10 @@ extension [D](call: ApolloCall[D])
                 // interceptor) when that re-read cannot be satisfied, so a watcher is
                 // never born dead. The fallback carries generation 0: it only ever seeds
                 // a watch that has no read behind its set yet, and never rolls back one
-                // that has. Only a set backed by a real read closes its window.
-                def establishFrom(response: ApolloResponse[D]): Unit < Sync =
+                // that has. Only a set backed by a real read closes its window. The read
+                // behind a networked response runs after the offer, so its set is adopted
+                // with `offeredAt`, the generation current when the response was offered.
+                def establishFrom(response: ApolloResponse[D], offeredAt: Long): Unit < Sync =
                     val info    = response.cacheInfo
                     val stamped = info.map(_.dependentKeys).getOrElse(Set.empty)
                     if info.exists(_.isCacheHit) && stamped.nonEmpty then
@@ -270,8 +289,12 @@ extension [D](call: ApolloCall[D])
                             .andThen(closeWindow())
                     else
                         readStamped(
-                            hit = (_, keys, gen) =>
-                                discard(adopt(keys, gen))
+                            // Adopted with the generation of the offer, not the read's own
+                            // stamp: the consumer holds the value as of the offer, so a write
+                            // since then must look newer than the set, even though this read
+                            // has already seen it.
+                            hit = (_, keys, _) =>
+                                discard(adopt(keys, offeredAt))
                                 closeWindow()
                             ,
                             miss = _ => Sync.Unsafe.defer(if stamped.nonEmpty then seed(stamped))
@@ -283,8 +306,12 @@ extension [D](call: ApolloCall[D])
                     Sync.Unsafe.defer {
                         if !state.get().active then Kyo.unit
                         else
-                            offer(response)
-                            establishFrom(response)
+                            store.currentGeneration.map { offeredAt =>
+                                offer(response)
+                                observer.offered(response)
+                                    .andThen(establishFrom(response, offeredAt))
+                                    .andThen(observer.established(response))
+                            }
                     }
 
                 // Re-read through the same denormalization path as the first read, so a
@@ -355,9 +382,11 @@ extension [D](call: ApolloCall[D])
                 def finishRefetch(): Unit < Sync =
                     Sync.Unsafe.defer {
                         val before = state.getAndUpdate(_.copy(inflight = false, rerun = false))
-                        if before.rerun then requestRefetch()
-                        else if before.refetched then reread(emitMiss)
-                        else Kyo.unit
+                        val followUp =
+                            if before.rerun then requestRefetch()
+                            else if before.refetched then reread(emitMiss)
+                            else Kyo.unit
+                        followUp.andThen(observer.refetchEnded(before.rerun))
                     }
 
                 // CacheFirst's miss leg: the first miss for a cause goes to the network,
@@ -421,8 +450,32 @@ extension [D](call: ApolloCall[D])
                     .andThen(channel.streamUntilClosed())
             }
         }
-    end watch
+    end observedWatch
 end extension
+
+/** Points inside one `watch()` a suite can wait on, each called on the fiber that
+  * reaches it:
+  *
+  *   - `offered` — a fetched response has been offered to the consumer and its key
+  *     set is not established yet;
+  *   - `established` — that response's key set is established, its window is closed,
+  *     and every reaction that ran on the fetching fiber meanwhile is done;
+  *   - `refetchEnded` — a network refetch flight has ended and its follow-up (a rerun
+  *     booking or the settling re-read of a `CacheFirst` miss) is done; the argument
+  *     says whether a rerun was booked.
+  *
+  * Only for tests: a callback runs inside the watch, so a slow or failing one slows
+  * or fails the watch.
+  */
+final private[apollo] case class WatchObserver(
+    offered: ApolloResponse[?] => Unit < Sync,
+    established: ApolloResponse[?] => Unit < Sync,
+    refetchEnded: Boolean => Unit < Sync
+)
+
+private[apollo] object WatchObserver:
+    val none: WatchObserver = WatchObserver(_ => Kyo.unit, _ => Kyo.unit, _ => Kyo.unit)
+end WatchObserver
 
 /** The whole mutable state of one `watch()`, held in a single [[AtomicRef]] so a
   * callback reads "still active?" and "which keys?" as one snapshot and every

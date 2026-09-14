@@ -85,11 +85,9 @@ class ReactivitySpec extends kyo.test.Test[Any]:
       * engine is only ever hit once per scenario.
       */
     final private class AliceEngine extends kyo.apollo.network.http.HttpEngine:
-        var calls = 0
         def execute(
             request: kyo.apollo.network.http.HttpRequest
         )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
-            calls += 1
             kyo.apollo.network.http.HttpResponse(200, Nil, aliceBody)
         end execute
     end AliceEngine
@@ -104,20 +102,20 @@ class ReactivitySpec extends kyo.test.Test[Any]:
     end cachedClient
 
     /** Warm the cache with `Alice` (one network round-trip), then hand `body` a
-      * client and a [[StreamProbe.Pull]] handle over a `CacheOnly` watch —
-      * `pull.next` awaits exactly the next emission, so a test can interleave
-      * synchronous store writes (via `Sync.defer`) between exact, ordered pulls.
+      * client and an [[ObservedWatch]] over a `CacheOnly` watch whose initial read
+      * is established — `watch.pull.next` awaits exactly the next emission, so a test
+      * can interleave synchronous store writes (via `Sync.defer`) between exact,
+      * ordered pulls without racing the watch's own follow-up.
       */
     private def watching(
-        body: (ApolloClient, StreamProbe.Pull[ApolloResponse[UserData]]) => Unit < (Async & Scope)
+        body: (ApolloClient, ObservedWatch[UserData]) => Unit < (Async & Scope)
     )(using Frame): Unit < (Async & Scope) =
         for
             (client, _) <- cachedClient()
             _           <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
-            pull <- StreamProbe.Pull.open(
-                client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly).watch()
-            )
-            _ <- body(client, pull)
+            watch       <- ObservedWatch.open(client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly))
+            _           <- watch.awaitEstablished
+            _           <- body(client, watch)
         yield ()
         end for
     end watching
@@ -140,8 +138,8 @@ class ReactivitySpec extends kyo.test.Test[Any]:
         }
 
         "a watch stamps its dependent keys onto the first emission's cacheInfo" in {
-            watching { (_, pull) =>
-                for first <- pull.next
+            watching { (_, watch) =>
+                for first <- watch.pull.next
                 yield
                     val info = first.cacheInfo
                     assert(info.exists(_.isCacheHit), "initial emission should be a cache hit")
@@ -201,8 +199,9 @@ class ReactivitySpec extends kyo.test.Test[Any]:
 
         // --- 3-5. one watcher, the whole reactive lifecycle ---------------------
 
-        "end-to-end: watch → mutation re-emit → unrelated silence → writeFragment re-emit → cancel silence" in {
-            watching { (client, pull) =>
+        "end-to-end: watch → mutation re-emit → unrelated silence → writeFragment re-emit → close unsubscribes" in {
+            watching { (client, watch) =>
+                val pull = watch.pull
                 for
                     // (1) initial cache value, with its dependent keys stamped.
                     first <- pull.next
@@ -213,10 +212,10 @@ class ReactivitySpec extends kyo.test.Test[Any]:
                     _      <- Sync.defer(client.apolloStore.writeOperation(CurrentUserQuery(), userData("Bob")))
                     second <- pull.next
                     _ = assert(second.data == Present(userData("Bob")))
-                    // (3b) a change to a key OUTSIDE the watch set is ignored — no emission.
-                    _      <- Sync.defer(client.apolloStore.publish(Set(CacheKey("Post", "99"))))
-                    silent <- pull.tryNext
-                    _ = assert(silent == Absent)
+                    // (3b) a change to a key OUTSIDE the watch set is ignored — no emission. Both
+                    //      this publish and the next write react on this fiber, in order, so a
+                    //      re-emission for Post:99 would be the next emission, ahead of Carol.
+                    _ <- Sync.defer(client.apolloStore.publish(Set(CacheKey("Post", "99"))))
                     // (5) an imperative writeFragment onto the watched User:1 re-emits.
                     changed <- Sync.defer(
                         client.apolloStore
@@ -224,46 +223,49 @@ class ReactivitySpec extends kyo.test.Test[Any]:
                     )
                     _ = assert(changed.contains(CacheKey("User", "1")))
                     third <- pull.next
-                    _ = assert(third.data == Present(userData("Carol")))
-                    // (4) after cancellation, no further write reaches the watcher.
-                    _ <- pull.cancel
-                    _ <- Sync.defer(client.apolloStore.writeOperation(CurrentUserQuery(), userData("Dave")))
-                    _ <- Sync.defer(
-                        client.apolloStore
-                            .writeFragment(UserFragment, CacheKey("User", "1"), User("User", "1", "Erin"))
-                    )
-                    afterCancel <- pull.tryNext
-                yield assert(afterCancel == Absent)
+                    _ = assert(third.data == Present(userData("Carol")), s"the unrelated publish re-emitted: $third")
+                    silent <- pull.tryNext
+                    _ = assert(silent == Absent)
+                    // (4) once the watch's Scope has closed, it is no longer subscribed, so no
+                    //     further write can reach it.
+                    subscribed <- client.apolloStore.changedKeys.subscriberCount
+                    _          <- watch.close
+                    remaining  <- client.apolloStore.changedKeys.subscriberCount
+                yield
+                    assert(subscribed == 1)
+                    assert(remaining == 0, s"the closed watch is still subscribed: $remaining")
+                end for
             }
         }
 
-        "two watchers over the same record both react; cancelling one leaves the other live" in {
+        "two watchers over the same record both react; closing one leaves the other live" in {
             watching { (client, first) =>
                 for
-                    _ <- first.next
-                    second <- StreamProbe.Pull.open(
-                        client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly).watch()
+                    _ <- first.pull.next
+                    second <- ObservedWatch.open(
+                        client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly)
                     )
-                    _ <- second.next
+                    _ <- second.pull.next
+                    _ <- second.awaitEstablished
                     // A shared-record write fans out to both.
                     _ <- Sync.defer(
                         client.apolloStore
                             .writeFragment(UserFragment, CacheKey("User", "1"), User("User", "1", "Bob"))
                     )
-                    firstBob  <- first.next
-                    secondBob <- second.next
+                    firstBob  <- first.pull.next
+                    secondBob <- second.pull.next
                     _ = assert(firstBob.data == Present(userData("Bob")))
                     _ = assert(secondBob.data == Present(userData("Bob")))
-                    // Cancel only the first; the second still re-emits.
-                    _ <- first.cancel
+                    // Close only the first; the second still re-emits.
+                    _    <- first.close
+                    left <- client.apolloStore.changedKeys.subscriberCount
                     _ <- Sync.defer(
                         client.apolloStore
                             .writeFragment(UserFragment, CacheKey("User", "1"), User("User", "1", "Carol"))
                     )
-                    firstAfter  <- first.tryNext
-                    secondAfter <- second.next
+                    secondAfter <- second.pull.next
                 yield
-                    assert(firstAfter == Absent) // frozen at Bob
+                    assert(left == 1, s"closing the first watch must leave only the second subscribed: $left")
                     assert(secondAfter.data == Present(userData("Carol")))
             }
         }
