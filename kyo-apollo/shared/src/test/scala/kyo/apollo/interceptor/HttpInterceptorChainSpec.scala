@@ -9,7 +9,8 @@ import kyo.apollo.network.http.HttpRequest
 import kyo.apollo.network.http.HttpResponse
 
 /** Tests the HTTP-layer interceptor chain: order of invocation, terminal-engine
-  * delegation, the two concrete example interceptors, and the `asEngine` adapter.
+  * delegation, the concrete `AuthorizationHeaderInterceptor`, and the `asEngine`
+  * adapter. The `LoggingInterceptor` has its own [[LoggingInterceptorSpec]].
   */
 class HttpInterceptorChainSpec extends kyo.test.Test[Any]:
 
@@ -89,20 +90,6 @@ class HttpInterceptorChainSpec extends kyo.test.Test[Any]:
             )
             chain.proceed(request).map { _ =>
                 assert(order == List("a-before", "b-before", "engine", "b-after", "a-after"))
-            }
-        }
-
-        "LoggingInterceptor logs request and response without altering the response" in {
-            var logs = List.empty[String]
-            val chain = DefaultHttpInterceptorChain(
-                Chunk(new LoggingInterceptor(l => logs = logs :+ l)),
-                0,
-                recordingEngine(_ => ())
-            )
-            chain.proceed(request).map { response =>
-                assert(response.statusCode == 200)
-                assert(logs.exists(_.contains("Post")), s"no request line in $logs")
-                assert(logs.exists(_.contains("200")), s"no response line in $logs")
             }
         }
 

@@ -12,6 +12,7 @@ import kyo.apollo.exception.ApolloNetworkException
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.ApolloResponse
+import kyo.apollo.network.TestIds
 import kyo.apollo.network.Uuid
 import kyo.apollo.network.ws.WsBackoff
 import kyo.apollo.network.ws.WsScheduler
@@ -119,7 +120,7 @@ class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
             scheduler = scheduler
         )
         val chain = DefaultApolloInterceptorChain(Chunk(interceptor, terminal), 0)
-        (terminal, chain.proceed(ApolloRequest(ValueQuery())))
+        (terminal, chain.proceed(ApolloRequest(ValueQuery(), TestIds.requestUuid)))
     end retry
 
     private def apqChain(
@@ -128,7 +129,7 @@ class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
         val terminal = ScriptedApollo(script)
         val chain =
             DefaultApolloInterceptorChain(Chunk(AutoPersistedQueryInterceptor(), terminal), 0)
-        (terminal, chain.proceed(ApolloRequest(ValueQuery())))
+        (terminal, chain.proceed(ApolloRequest(ValueQuery(), TestIds.requestUuid)))
     end apqChain
 
     "resilience interceptors" - {
@@ -188,7 +189,7 @@ class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
             val terminal    = MultiEmitApollo(List(data(1), data(2), data(3)))
             val interceptor = RetryOnErrorInterceptor(scheduler = AutoScheduler())
             val chain       = DefaultApolloInterceptorChain(Chunk(interceptor, terminal), 0)
-            StreamProbe.collect(chain.proceed(ApolloRequest(ValueQuery()))).map { responses =>
+            StreamProbe.collect(chain.proceed(ApolloRequest(ValueQuery(), TestIds.requestUuid))).map { responses =>
                 assert(responses.map(_.data) == List(Present(1), Present(2), Present(3)))
                 assert(terminal.seen.length == 1) // happy path — no retry, one round trip
             }
@@ -235,7 +236,7 @@ class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
             // rides the first response — later patches must not be dropped.
             val terminal = MultiEmitApollo(List(data(1), data(2)))
             val chain    = DefaultApolloInterceptorChain(Chunk(AutoPersistedQueryInterceptor(), terminal), 0)
-            StreamProbe.collect(chain.proceed(ApolloRequest(ValueQuery()))).map { responses =>
+            StreamProbe.collect(chain.proceed(ApolloRequest(ValueQuery(), TestIds.requestUuid))).map { responses =>
                 assert(responses.map(_.data) == List(Present(1), Present(2)))
                 assert(terminal.seen.length == 1) // registered hit — single round trip
             }

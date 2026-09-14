@@ -70,7 +70,10 @@ class HttpClientEngineStreamingSpec extends kyo.test.Test[Any]:
         // failure rather than a wedged suite.
         val transport = new HttpNetworkTransport("", new HttpClientEngine)
         Abort.run[Timeout](Async.timeout(15.seconds)(
-            StreamProbe.collect(transport.executeStreaming(kyo.apollo.network.ApolloRequest(Ping())))
+            StreamProbe.collect(transport.executeStreaming(kyo.apollo.network.ApolloRequest(
+                Ping(),
+                kyo.apollo.network.TestIds.requestUuid
+            )))
         )).map {
             case Result.Failure(_) =>
                 fail("executeStreaming hung on a malformed URL — the parse failure was not routed through head")

@@ -1,8 +1,14 @@
 package kyo.apollo.testing
 
-import kyo.*
+import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
 import kyo.apollo.cache.normalized.FetchPolicy
+import kyo.apollo.interceptor.ApolloInterceptorChain
+import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.ApolloResponse
+import kyo.apollo.network.HttpMethod
+import kyo.apollo.network.Uuid
+import kyo.apollo.network.http.HttpRequest
+import kyo.apollo.runtime.ResponseStream
 
 /** Validates the promoted `kyo.apollo.testing` doubles behave as the specs that once
   * declared them inline relied on: the unified [[TestHttpEngine]], the
@@ -27,66 +33,120 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
         // --- TestHttpEngine + cacheless client ---------------------------------
 
         "TestHttpEngine.returning answers a query and records the request" in {
-            val engine = TestHttpEngine.returning("""{"data":{"value":7}}""")
-            val client = TestApolloClient.cacheless(engine)
-            client.query(Fixtures.ValueQuery()).execute.map { response =>
+            for
+                engine <- TestHttpEngine.returning("""{"data":{"value":7}}""")
+                client = TestApolloClient.cacheless(engine)
+                response <- client.query(Fixtures.ValueQuery()).execute
+                calls    <- engine.calls
+                last     <- engine.lastRequest
+            yield
                 assert(response.data == Present(7))
-                assert(engine.calls == 1)
-                assert(engine.lastRequest.exists(_.body.exists(_.contains("Value"))))
-            }
+                assert(calls == 1)
+                assert(last.exists(_.body.exists(_.contains("Value"))))
+            end for
         }
 
         "TestHttpEngine.failing surfaces as an ApolloResponse.error value" in {
-            val engine = TestHttpEngine.failing(new RuntimeException("down"))
-            val client = TestApolloClient.cacheless(engine)
-            client.query(Fixtures.ValueQuery()).execute.map { response =>
+            for
+                engine <- TestHttpEngine.failing(new RuntimeException("down"))
+                client = TestApolloClient.cacheless(engine)
+                response <- client.query(Fixtures.ValueQuery()).execute
+            yield
                 assert(response.data == Absent)
                 assert(response.error.isDefined)
-            }
+            end for
+        }
+
+        // --- the doubles count what ran, not what was built -------------------
+
+        "a round-trip that is built but never run is neither counted nor answered" in {
+            val request = HttpRequest(HttpMethod.Post, TestApolloClient.DefaultServerUrl, Nil, Some("{}"))
+            for
+                engine    <- TestHttpEngine.returning("{}")
+                server    <- MockServer.init
+                transport <- QueueTestNetworkTransport.init
+                _         <- server.enqueue("""{"data":{"value":1}}""")
+                _         <- transport.enqueueData(1)
+                _ = discard(engine.execute(request))
+                _ = discard(server.execute(request))
+                _ = discard(transport.intercept(ApolloRequest(Fixtures.ValueQuery(), requestId), InertChain))
+                calls    <- engine.calls
+                received <- server.requestCount
+                answered <- transport.requests
+                // The queued answers are still there for the executions that do run.
+                client = TestApolloClient.cacheless(server)
+                first <- client.query(Fixtures.ValueQuery()).execute
+                seen  <- transport.intercept(ApolloRequest(Fixtures.ValueQuery(), requestId), InertChain).run
+            yield
+                assert(calls == 0, s"TestHttpEngine counted a request that never ran: $calls")
+                assert(received == 0, s"MockServer counted a request that never ran: $received")
+                assert(answered.isEmpty, s"the transport recorded a request whose stream was never consumed: $answered")
+                assert(first.data == Present(1))
+                assert(seen.map(_.data) == Chunk(Present(1)))
+            end for
+        }
+
+        "concurrent round-trips are all counted" in {
+            val request = HttpRequest(HttpMethod.Post, TestApolloClient.DefaultServerUrl, Nil, Some("{}"))
+            for
+                engine <- TestHttpEngine.returning("{}")
+                start  <- Latch.init(1)
+                fibers <- Kyo.fill(64)(Fiber.init(start.await.andThen(engine.execute(request))))
+                _      <- start.release
+                _      <- Kyo.foreachDiscard(fibers)(_.get)
+                calls  <- engine.calls
+            yield assert(calls == 64)
+            end for
         }
 
         // --- MockServer --------------------------------------------------------
 
         "MockServer serves enqueued responses FIFO and records requests" in {
-            val server = new MockServer
-            server.enqueue("""{"data":{"value":1}}""").enqueue("""{"data":{"value":2}}""")
-            val client = TestApolloClient.cacheless(server)
             for
+                server <- MockServer.init
+                _      <- server.enqueue("""{"data":{"value":1}}""")
+                _      <- server.enqueue("""{"data":{"value":2}}""")
+                client = TestApolloClient.cacheless(server)
                 first  <- client.query(Fixtures.ValueQuery()).execute
                 second <- client.query(Fixtures.ValueQuery()).execute
+                count  <- server.requestCount
+                taken  <- server.takeRequest
+                more   <- server.hasNoMoreRequests
             yield
                 assert(first.data == Present(1))
                 assert(second.data == Present(2))
-                assert(server.requestCount == 2)
-                assert(server.takeRequest().body.exists(_.contains("Value")))
+                assert(count == 2)
+                assert(taken.body.exists(_.contains("Value")))
+                assert(!more)
             end for
         }
 
         // --- QueueTestNetworkTransport -----------------------------------------
 
         "QueueTestNetworkTransport answers operation-layer, in order" in {
-            val transport = new QueueTestNetworkTransport
-            transport.enqueueData(41).enqueueData(42)
-            val client = TestApolloClient.withTransport(transport)
             for
-                a <- client.query(Fixtures.ValueQuery()).execute
-                b <- client.query(Fixtures.ValueQuery()).execute
+                transport <- QueueTestNetworkTransport.init
+                _         <- transport.enqueueData(41)
+                _         <- transport.enqueueData(42)
+                client = TestApolloClient.withTransport(transport)
+                a     <- client.query(Fixtures.ValueQuery()).execute
+                b     <- client.query(Fixtures.ValueQuery()).execute
+                names <- transport.operationNames
             yield
                 assert(a.data == Present(41))
                 assert(b.data == Present(42))
-                assert(transport.operationNames == List("Value", "Value"))
+                assert(names == Chunk("Value", "Value"))
             end for
         }
 
         // --- MapTestNetworkTransport -------------------------------------------
 
         "MapTestNetworkTransport routes each operation to its registered response" in {
-            val transport = new MapTestNetworkTransport
-            transport
-                .registerData(Fixtures.ValueQuery(), 99)
-                .registerData(Fixtures.CurrentUserQuery(), Fixtures.userData("Alice"))
-            val client = TestApolloClient.withTransport(transport)
             for
+                transport <- MapTestNetworkTransport.init
+                _         <- transport.registerData(Fixtures.ValueQuery(), 99)
+                _         <- transport.registerData(Fixtures.CurrentUserQuery(), Fixtures.userData("Alice"))
+                client = TestApolloClient.withTransport(transport)
                 value <- client.query(Fixtures.ValueQuery()).execute
                 user  <- client.query(Fixtures.CurrentUserQuery()).execute
             yield
@@ -98,23 +158,24 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
         // --- TestApolloClient.cached (cache integration) -----------------------
 
         "cached: a CacheFirst re-read is served from the cache, not the engine" in {
-            val engine = TestHttpEngine.returning(Fixtures.body("Alice"))
-            val client = TestApolloClient.cached(engine)
             for
+                engine <- TestHttpEngine.returning(Fixtures.body("Alice"))
+                client = TestApolloClient.cached(engine)
                 first  <- client.query(Fixtures.CurrentUserQuery()).execute
                 second <- client.query(Fixtures.CurrentUserQuery()).execute
+                calls  <- engine.calls
             yield
                 assert(first.data.exists(_.user.name == "Alice"))
                 assert(second.data.exists(_.user.name == "Alice"))
-                assert(engine.calls == 1) // second read hit the normalized cache
+                assert(calls == 1) // second read hit the normalized cache
             end for
         }
 
         "cachedWithTransport wires a cache above a canned transport" in {
-            val transport = new MapTestNetworkTransport
-            transport.registerData(Fixtures.CurrentUserQuery(), Fixtures.userData("Bob"))
-            val client = TestApolloClient.cachedWithTransport(transport)
             for
+                transport <- MapTestNetworkTransport.init
+                _         <- transport.registerData(Fixtures.CurrentUserQuery(), Fixtures.userData("Bob"))
+                client = TestApolloClient.cachedWithTransport(transport)
                 _ <- client.query(Fixtures.CurrentUserQuery()).execute
                 cached <- client
                     .query(Fixtures.CurrentUserQuery())
@@ -196,4 +257,12 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
             assert(WsFrames.legacy.keepAlive == """{"type":"ka"}""")
         }
     }
+
+    private val requestId = Uuid("00000000-0000-4000-8000-000000000001")
+
+    /** A chain whose continuation answers nothing: a terminal transport never calls it. */
+    private object InertChain extends ApolloInterceptorChain:
+        def proceed[D](request: ApolloRequest[D])(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
+            Stream.empty[ApolloResponse[D]]
+    end InertChain
 end TestingModuleSpec

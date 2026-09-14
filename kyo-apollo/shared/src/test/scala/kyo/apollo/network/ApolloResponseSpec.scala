@@ -27,7 +27,7 @@ class ApolloResponseSpec extends kyo.test.Test[Any]:
     "ApolloResponse" - {
 
         "fromGraphQLResponse copies data/extensions and attaches the uuid" in {
-            val id = Uuid.random()
+            val id = TestIds.requestUuid
             val gql = GraphQLResponse(
                 data = Present(Hero("Luke")),
                 errors = Chunk.empty,
@@ -43,7 +43,7 @@ class ApolloResponseSpec extends kyo.test.Test[Any]:
         }
 
         "defaults: no data, no error, no extensions, empty context" in {
-            val response = ApolloResponse[Hero](Uuid.random())
+            val response = ApolloResponse[Hero](TestIds.requestUuid)
             assert(response.data == Absent)
             assert(response.error == Absent)
             assert(response.errors == Chunk.empty)
@@ -55,7 +55,7 @@ class ApolloResponseSpec extends kyo.test.Test[Any]:
 
         "GraphQL errors become an ApolloGraphQLException on the error channel" in {
             val response = ApolloResponse.fromGraphQLResponse(
-                Uuid.random(),
+                TestIds.requestUuid,
                 GraphQLResponse[Hero](data = Absent, errors = Chunk(GraphQLError("boom")))
             )
             assert(response.hasErrors)
@@ -65,7 +65,7 @@ class ApolloResponseSpec extends kyo.test.Test[Any]:
 
         "partial data keeps both the data and the errors" in {
             val response = ApolloResponse.fromGraphQLResponse(
-                Uuid.random(),
+                TestIds.requestUuid,
                 GraphQLResponse(data = Present(Hero("Luke")), errors = Chunk(GraphQLError("partial")))
             )
             assert(response.data == Present(Hero("Luke")))
@@ -75,7 +75,7 @@ class ApolloResponseSpec extends kyo.test.Test[Any]:
 
         "a transport failure carries the exception itself and projects no errors" in {
             val boom     = new ApolloNetworkException("dropped")
-            val response = ApolloResponse.fromException[Hero](Uuid.random(), boom)
+            val response = ApolloResponse.fromException[Hero](TestIds.requestUuid, boom)
             assert(response.data == Absent)
             assert(response.error == Present(boom))
             assert(response.hasErrors)
@@ -83,13 +83,13 @@ class ApolloResponseSpec extends kyo.test.Test[Any]:
         }
 
         "hasTransportError separates a transport failure from the server's errors" in {
-            val dropped = ApolloResponse.fromException[Hero](Uuid.random(), new ApolloNetworkException("dropped"))
+            val dropped = ApolloResponse.fromException[Hero](TestIds.requestUuid, new ApolloNetworkException("dropped"))
             val answered = ApolloResponse.fromGraphQLResponse(
-                Uuid.random(),
+                TestIds.requestUuid,
                 GraphQLResponse(data = Present(Hero("Luke")), errors = Chunk(GraphQLError("partial")))
             )
             val clean = ApolloResponse.fromGraphQLResponse(
-                Uuid.random(),
+                TestIds.requestUuid,
                 GraphQLResponse(data = Present(Hero("Luke")), errors = Chunk.empty)
             )
 

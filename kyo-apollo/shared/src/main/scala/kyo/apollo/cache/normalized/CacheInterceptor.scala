@@ -10,6 +10,7 @@ import kyo.apollo.interceptor.ApolloInterceptorChain
 import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.ApolloResponse
 import kyo.apollo.network.CacheInfo
+import kyo.apollo.network.Uuid
 import kyo.apollo.runtime.ResponseStream
 
 /** The [[ApolloInterceptor]] that plugs the normalized cache into the operation
@@ -49,7 +50,7 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
                 // cache hit under CacheFirst and silently never reach the server.
                 // With optimistic data the store is additionally overlaid before the
                 // network call and reconciled against the reply.
-                request.executionContext.get(OptimisticData) match
+                request.optimisticData match
                     case Present(optimistic) => optimisticMutation(request, chain, optimistic)
                     case Absent              => network(request, chain)
             case _ =>
@@ -157,25 +158,31 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
       * Scope release then finds nothing and publishes nothing; the reply is the only
       * publication a settled mutation makes. `rollbackAndWrite` drops the layer only
       * once the reply is committed, so a commit that fails leaves it to the release.
+      *
+      * The layer's mutation id is minted in the same step, when consumption starts:
+      * the id belongs to this execution, not to the request value or the call it was
+      * built from, so two executions of one call hold two layers.
       */
     private def optimisticMutation[D](
         request: ApolloRequest[D],
         chain: ApolloInterceptorChain,
-        optimistic: OptimisticData
+        optimistic: D
     )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
-        val mutationId = optimistic.mutationId
         Stream.unwrap {
-            Scope.acquireRelease(
-                store.writeOptimisticUpdates(request.operation, optimistic.data.asInstanceOf[D], mutationId)
-            )(_ => store.rollbackOptimisticUpdates(mutationId).unit).andThen {
-                chain.proceed(request).map { response =>
-                    val settle =
-                        if !response.hasTransportError then
-                            response.data match
-                                case Present(data) => store.rollbackAndWrite(request.operation, data, mutationId)
-                                case Absent        => store.rollbackOptimisticUpdates(mutationId)
-                        else store.rollbackOptimisticUpdates(mutationId)
-                    settle.andThen(response.copy(cacheInfo = Present(CacheInfo.network)))
+            Uuid.random.map { id =>
+                val mutationId = id.value
+                Scope.acquireRelease(
+                    store.writeOptimisticUpdates(request.operation, optimistic, mutationId)
+                )(_ => store.rollbackOptimisticUpdates(mutationId).unit).andThen {
+                    chain.proceed(request).map { response =>
+                        val settle =
+                            if !response.hasTransportError then
+                                response.data match
+                                    case Present(data) => store.rollbackAndWrite(request.operation, data, mutationId)
+                                    case Absent        => store.rollbackOptimisticUpdates(mutationId)
+                            else store.rollbackOptimisticUpdates(mutationId)
+                        settle.andThen(response.copy(cacheInfo = Present(CacheInfo.network)))
+                    }
                 }
             }
         }

@@ -11,6 +11,7 @@ import kyo.apollo.json.Json
 import kyo.apollo.json.JsonParser
 import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.ApolloResponse
+import kyo.apollo.network.TestIds
 import kyo.apollo.network.http.MultipartPart
 import scala.collection.immutable.VectorMap
 
@@ -61,7 +62,7 @@ class IncrementalAssemblerSpec extends kyo.test.Test[Any]:
                     )
                 )
             )
-            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q()), parts)).map { responses =>
+            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q(), TestIds.requestUuid), parts)).map { responses =>
                 assert(responses.size == 2)
                 assert(responses(0).data == Present(Data(Some(Loc("DE", None)))))
                 assert(responses(1).data == Present(Data(Some(Loc("DE", Some("Berlin"))))))
@@ -75,7 +76,7 @@ class IncrementalAssemblerSpec extends kyo.test.Test[Any]:
                     part("""{"data":{"capital":"Paris"},"path":["country"],"hasNext":false}""")
                 )
             )
-            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q()), parts)).map { responses =>
+            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q(), TestIds.requestUuid), parts)).map { responses =>
                 assert(responses.size == 2)
                 assert(responses(1).data == Present(Data(Some(Loc("FR", Some("Paris"))))))
             }
@@ -88,7 +89,7 @@ class IncrementalAssemblerSpec extends kyo.test.Test[Any]:
                     part("""{"hasNext":false}""")
                 )
             )
-            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q()), parts)).map { responses =>
+            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q(), TestIds.requestUuid), parts)).map { responses =>
                 assert(responses.size == 1)
                 assert(responses(0).data == Present(Data(Some(Loc("US", None)))))
             }
@@ -102,7 +103,7 @@ class IncrementalAssemblerSpec extends kyo.test.Test[Any]:
                     part("""{"incremental":[{"items":[{"id":"c"}],"path":["items",2]}],"hasNext":false}""")
                 )
             )
-            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(ListQ()), parts)).map {
+            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(ListQ(), TestIds.requestUuid), parts)).map {
                 responses =>
                     assert(responses.size == 3)
                     assert(responses(0).data == Present(ListData(List(Item("a")))))
@@ -120,7 +121,7 @@ class IncrementalAssemblerSpec extends kyo.test.Test[Any]:
                     )
                 )
             )
-            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(ListQ()), parts)).map {
+            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(ListQ(), TestIds.requestUuid), parts)).map {
                 responses =>
                     assert(responses.size == 2)
                     assert(responses(1).errors.nonEmpty)
@@ -136,7 +137,7 @@ class IncrementalAssemblerSpec extends kyo.test.Test[Any]:
                     )
                 )
             )
-            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(ListQ()), parts)).map {
+            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(ListQ(), TestIds.requestUuid), parts)).map {
                 responses =>
                     assert(responses.size == 2)
                     assert(responses(1).data == Present(ListData(List(Item("a"), Item("b"), Item("c")))))
@@ -145,7 +146,7 @@ class IncrementalAssemblerSpec extends kyo.test.Test[Any]:
 
         "a stream ending after hasNext:true surfaces a truncation error" in {
             val parts = Stream.init(Seq(part("""{"data":{"country":{"code":"DE"}},"hasNext":true}""")))
-            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q()), parts)).map { responses =>
+            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q(), TestIds.requestUuid), parts)).map { responses =>
                 assert(responses.size == 2)
                 assert(responses(0).complete == false)
                 assert(responses(1).error.exists(_.isInstanceOf[ApolloNetworkException]))
@@ -162,7 +163,7 @@ class IncrementalAssemblerSpec extends kyo.test.Test[Any]:
                     )
                 )
             )
-            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q()), parts)).map { responses =>
+            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q(), TestIds.requestUuid), parts)).map { responses =>
                 assert(responses.size == 2)
                 assert(responses(0).complete == false && responses(1).complete == true)
             }
@@ -177,7 +178,7 @@ class IncrementalAssemblerSpec extends kyo.test.Test[Any]:
                     part("""{"incremental":[{"data":{"capital":"Berlin"},"path":["country"]}],"hasNext":false}""")
                 )
             )
-            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q()), parts)).map { responses =>
+            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q(), TestIds.requestUuid), parts)).map { responses =>
                 assert(responses.size == 2, s"got $responses")
                 assert(isParseFailure(responses.last))
                 assert(responses.forall(_.complete == false))
@@ -191,7 +192,7 @@ class IncrementalAssemblerSpec extends kyo.test.Test[Any]:
                     part("""{"incremental":[{"data":{"country":{"code":"XX"}}}],"hasNext":false}""")
                 )
             )
-            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q()), parts)).map { responses =>
+            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q(), TestIds.requestUuid), parts)).map { responses =>
                 assert(responses.size == 2, s"got $responses")
                 assert(responses(0).data == Present(Data(Some(Loc("DE", None)))))
                 assert(isParseFailure(responses.last))
@@ -206,7 +207,7 @@ class IncrementalAssemblerSpec extends kyo.test.Test[Any]:
                     part("""{"incremental":[{"data":{"capital":"Berlin"},"path":["country",true]}],"hasNext":false}""")
                 )
             )
-            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q()), parts)).map { responses =>
+            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q(), TestIds.requestUuid), parts)).map { responses =>
                 assert(responses.size == 2, s"got $responses")
                 assert(isParseFailure(responses.last))
             }
@@ -221,7 +222,7 @@ class IncrementalAssemblerSpec extends kyo.test.Test[Any]:
                     part("""{"incremental":[{"data":{"capital":"Berlin"},"path":["country"]}],"hasNext":false}""")
                 )
             )
-            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q()), parts)).map { responses =>
+            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q(), TestIds.requestUuid), parts)).map { responses =>
                 assert(responses.size == 2, s"got $responses")
                 assert(responses(1).error.exists(_ eq broken))
                 assert(responses(1).complete == false)
@@ -235,7 +236,7 @@ class IncrementalAssemblerSpec extends kyo.test.Test[Any]:
                     part("""{"incremental":[{"items":[{"id":"c"}],"path":["items",2]}],"hasNext":false}""")
                 )
             )
-            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(ListQ()), parts)).map { responses =>
+            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(ListQ(), TestIds.requestUuid), parts)).map { responses =>
                 assert(responses.size == 2, s"got $responses")
                 assert(isParseFailure(responses.last))
             }
