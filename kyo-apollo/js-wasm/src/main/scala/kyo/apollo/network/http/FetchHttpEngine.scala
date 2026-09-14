@@ -21,6 +21,12 @@ import scala.scalajs.js.typedarray.*
   * the `fetch` body reader. A rejected `fetch` (or body read) becomes the engine's
   * `Abort[HttpEngineFailure]`, an [[ApolloNetworkException]] carrying the JS error
   * as its `cause`.
+  *
+  * Every request gets its own `AbortController`, whose signal the `fetch` carries.
+  * Interrupting [[execute]] aborts the request, so the browser drops the connection;
+  * a streamed request is aborted when the `Scope` it was issued in closes (the
+  * consumer is done or was interrupted). A rejection with `AbortError` is therefore
+  * an interrupt, not a network failure, and reaches kyo as `Interrupted`.
   */
 final class FetchHttpEngine extends HttpEngine:
 
@@ -40,50 +46,76 @@ final class FetchHttpEngine extends HttpEngine:
         // holds a `refetch` effect would fire a phantom request per construction).
         // `Fiber.fromFuture` is by-name and defers into `Sync`, so the fetch starts
         // only when the effect actually runs.
-        Fiber
-            .fromFuture {
-                // The `: Future[…]` ascriptions force the implicit Thenable→Future bridge on
-                // the Promise-based `fetch` / `text()` results.
-                for
-                    response <- dom.fetch(request.url.full, requestInit(request)): Future[dom.Response]
-                    text     <- response.text(): Future[String]
-                yield HttpEngine.response(HttpStatus(response.status), text, readHeaders(response.headers))
+        //
+        // The finalizer runs on interrupt and on completion; after the body text has
+        // been read, `abort()` has nothing left to cancel.
+        Sync.defer(new dom.AbortController()).map { controller =>
+            Sync.ensure(Sync.defer(controller.abort())) {
+                Fiber
+                    .fromFuture {
+                        // The `: Future[…]` ascriptions force the implicit Thenable→Future bridge on
+                        // the Promise-based `fetch` / `text()` results.
+                        for
+                            response <- dom.fetch(request.url.full, requestInit(request, controller.signal)): Future[dom.Response]
+                            text     <- response.text(): Future[String]
+                        yield HttpEngine.response(HttpStatus(response.status), text, readHeaders(response.headers))
+                    }
+                    .map(fiber => fetched(fiber.get))
             }
-            .map(fiber => fetched(fiber.get))
+        }
 
     override def executeStreaming(
         request: HttpEngine.Request
     )(using Frame): HttpEngine.StreamResponse < (Async & Scope & Abort[HttpEngineFailure]) =
-        // By-name `Fiber.fromFuture` for the same laziness reason as [[execute]].
-        Fiber
-            .fromFuture {
-                dom.fetch(request.url.full, requestInit(request)).flatMap { response =>
-                    val status  = HttpStatus(response.status)
-                    val headers = readHeaders(response.headers)
-                    if isMultipart(Option(response.headers.get("Content-Type"))) then
-                        Future.successful(HttpEngine.streamResponse(status, HttpStreamBody.Chunked(bodyStream(response)), headers))
-                    else
-                        response.text().map(text => HttpEngine.streamResponse(status, HttpStreamBody.Buffered(text), headers))
-                    end if
-                }
+        // By-name `Fiber.fromFuture` for the same laziness reason as [[execute]]. The
+        // controller is aborted when the caller's `Scope` closes, not when the head
+        // arrives: the body is still being read after that.
+        Sync.defer(new dom.AbortController()).map { controller =>
+            Scope.ensure(Sync.defer(controller.abort())).andThen {
+                Fiber
+                    .fromFuture {
+                        dom.fetch(request.url.full, requestInit(request, controller.signal)).flatMap { response =>
+                            val status  = HttpStatus(response.status)
+                            val headers = readHeaders(response.headers)
+                            if isMultipart(Option(response.headers.get("Content-Type"))) then
+                                Future.successful(
+                                    HttpEngine.streamResponse(status, HttpStreamBody.Chunked(bodyStream(response)), headers)
+                                )
+                            else
+                                response.text().map(text => HttpEngine.streamResponse(status, HttpStreamBody.Buffered(text), headers))
+                            end if
+                        }
+                    }
+                    .map(fiber => fetched(fiber.get))
             }
-            .map(fiber => fetched(fiber.get))
+        }
 
     /** The `fetch` boundary: a rejected promise reaches kyo as a panic of the bridged
-      * fiber and becomes the engine failure; an interrupt stays an interrupt.
+      * fiber and becomes the engine failure. An interrupt stays an interrupt, and so
+      * does a rejection with `AbortError`: only this engine's own controller aborts a
+      * request, and it does so because the request's fiber was interrupted.
       */
     private def fetched[A](result: A < Async)(using Frame): A < (Async & Abort[HttpEngineFailure]) =
         Abort.run[Throwable](result).map {
             case Result.Success(value)                => value
             case Result.Panic(interrupt: Interrupted) => Abort.panic(interrupt)
-            case Result.Error(rejection)              => Abort.fail(ApolloNetworkException(cause = rejection))
+            case Result.Panic(e: js.JavaScriptException) if isAbortError(e.exception) =>
+                Abort.panic(Interrupted(summon[Frame], Present("the fetch was aborted")))
+            case Result.Error(rejection) => Abort.fail(ApolloNetworkException(cause = rejection))
         }
 
-    /** The shared `fetch` `RequestInit` for a request. */
-    private[http] def requestInit(request: HttpEngine.Request): dom.RequestInit =
+    /** Whether a `fetch` rejection value is the platform's `AbortError`. */
+    private def isAbortError(rejection: Any): Boolean =
+        js.typeOf(rejection) == "object" && !js.isUndefined(rejection) && (rejection.asInstanceOf[AnyRef] ne null) &&
+            js.typeOf(rejection.asInstanceOf[js.Dynamic].name) == "string" &&
+            rejection.asInstanceOf[js.Dynamic].name.asInstanceOf[String] == "AbortError"
+
+    /** The shared `fetch` `RequestInit` for a request, carrying `signal`. */
+    private[http] def requestInit(request: HttpEngine.Request, signal: js.UndefOr[dom.AbortSignal] = js.undefined): dom.RequestInit =
         val init      = new dom.RequestInit {}
         val multipart = request.fields.body.isInstanceOf[HttpRequestBody.Multipart]
         init.method = request.method.name.asInstanceOf[dom.HttpMethod]
+        init.signal = signal
         val headers = new dom.Headers()
         request.headers.foreach { (name, value) =>
             // For a multipart upload the platform must set `Content-Type` itself (with
