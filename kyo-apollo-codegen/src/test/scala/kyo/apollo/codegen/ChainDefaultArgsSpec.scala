@@ -37,7 +37,7 @@ class ChainDefaultArgsSpec extends kyo.test.Test[Any]:
             assert(src.contains("final class `tracks$chain`"), src)
             assert(
                 src.contains(
-                    "def apply[B](first: Option[Int] = None, after: Option[String] = None)"
+                    "def apply[B](first: Maybe[Int] = Absent, after: Maybe[String] = Absent)"
                 ),
                 src
             )
@@ -55,6 +55,19 @@ class ChainDefaultArgsSpec extends kyo.test.Test[Any]:
             val src = albumSrc
             assert(!src.contains("`name$chain`"), src)
             assert(src.contains("def name: SelectionBuilder[Album"), src)
+        }
+
+        "generated selectors speak kyo types and import them (never Option/List/None/Nil)" in {
+            val src = albumSrc
+            assert(src.contains("import kyo.Absent"), src)
+            assert(src.contains("import kyo.Chunk"), src)
+            assert(src.contains("import kyo.Maybe"), src)
+            assert(src.contains("selArgs: Chunk[SelectionBuilder.Arg]"), src)
+            assert(src.contains("ScalarCodec.maybe(ScalarCodec.int).encode(first)"), src)
+            assert(!src.contains("Option["), src)
+            assert(!src.contains("List["), src)
+            assert(!src.contains("= None"), src)
+            assert(!src.contains("Nil"), src)
         }
     }
 end ChainDefaultArgsSpec

@@ -28,7 +28,7 @@ class DeferReservationSpec extends kyo.test.Test[Any]:
 
             // Scala accessor aliased to `deferred$`, and the result named-tuple field too.
             assert(src.contains("def deferred$"), src)
-            assert(src.contains("(deferred$: Option[String])"), src)
+            assert(src.contains("(deferred$: Maybe[String])"), src)
             // The wire name stays `deferred` — only the Scala accessor is aliased.
             assert(src.contains("SelectionBuilder.scalar(\"deferred\""), src)
             // A sibling field is untouched.

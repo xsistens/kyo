@@ -9,7 +9,7 @@ object DemoClientFields extends ClientFieldDsl:
     val fields: List[ClientFieldDecl] = declare(
         onType("Country")(
             field("isFavorite", "Boolean", default = "false"),
-            field("tags", "List[String]", default = "Nil")
+            field("tags", "Chunk[String]", default = "Chunk.empty")
         ),
         onType("Query")(
             field("cartOpen", "Boolean", default = "false")
