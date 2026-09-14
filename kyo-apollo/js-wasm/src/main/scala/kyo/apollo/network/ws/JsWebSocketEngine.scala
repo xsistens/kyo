@@ -2,6 +2,7 @@ package kyo.apollo.network.ws
 
 import kyo.*
 import kyo.apollo.exception.ApolloException
+import kyo.apollo.exception.ApolloNetworkException
 import kyo.apollo.exception.ApolloWebSocketClosedException
 import scala.scalajs.js
 import scala.scalajs.js.annotation.JSGlobal
@@ -15,17 +16,24 @@ import scala.util.Try
   * otherwise the [`ws`](https://www.npmjs.com/package/ws) npm package `require`d
   * lazily. `ws` is therefore an optional dependency, only touched when the global
   * is undefined, so it is intentionally not declared in `build.sbt`.
+  *
+  * @param connectTimeout how long a socket may take to fire `open`; a platform
+  *                       socket has no bound of its own for a server that accepts
+  *                       the connection but never completes the upgrade
   */
-final class JsWebSocketEngine extends WebSocketEngine:
+final class JsWebSocketEngine(connectTimeout: Duration = JsWebSocketEngine.defaultConnectTimeout) extends WebSocketEngine:
 
     def open(
         url: String,
         protocol: Option[String] = None
     )(using Frame): WebSocketConnection < (Async & Scope & Abort[ApolloException]) =
-        JsWebSocketConnection.open(url, protocol)
+        JsWebSocketConnection.open(url, protocol, connectTimeout)
 end JsWebSocketEngine
 
 object JsWebSocketEngine:
+
+    /** The default bound on opening a socket. */
+    val defaultConnectTimeout: Duration = 10.seconds
 
     /** Node's CommonJS `require`, faceted so the `ws` fallback can be pulled in
       * lazily. Only ever called when the global `WebSocket` is missing.
@@ -87,25 +95,30 @@ end JsWebSocketConnection
 private[ws] object JsWebSocketConnection:
 
     /** Open a socket and complete once it fires `open`; abort if it errors or
-      * closes first. The connection's `Scope` closes the socket on teardown.
+      * closes first, or does not open within `connectTimeout`. The connection's
+      * `Scope` closes the socket on teardown.
       */
     def open(
         url: String,
-        protocol: Option[String]
+        protocol: Option[String],
+        connectTimeout: Duration
     )(using Frame): WebSocketConnection < (Async & Scope & Abort[ApolloException]) =
         Sync.defer {
             protocol match
                 case Some(p) => js.Dynamic.newInstance(JsWebSocketEngine.constructor)(url, p)
                 case None    => js.Dynamic.newInstance(JsWebSocketEngine.constructor)(url)
-        }.map(socket => openWith(socket.asInstanceOf[JsWebSocket]))
+        }.map(socket => openWith(socket.asInstanceOf[JsWebSocket], connectTimeout))
 
     /** Wire a connection over an already-constructed socket and await its `open`
-      * event. Split out from [[open]] so the connection state machine can be driven
-      * by a scripted fake socket in tests without a real platform `WebSocket`.
+      * event, for at most `connectTimeout` (then the open fails with an
+      * [[ApolloNetworkException]] and the `Scope` closes the socket). Split out from
+      * [[open]] so the connection state machine can be driven by a scripted fake
+      * socket in tests without a real platform `WebSocket`.
       */
     private[ws] def openWith(
-        socket: JsWebSocket
-    )(using Frame): JsWebSocketConnection < (Async & Scope & Abort[ApolloWebSocketClosedException]) =
+        socket: JsWebSocket,
+        connectTimeout: Duration = JsWebSocketEngine.defaultConnectTimeout
+    )(using Frame): JsWebSocketConnection < (Async & Scope & Abort[ApolloException]) =
         for
             // Unbounded and never closed: frames are `Present`, the socket's end is one
             // `Absent` marker (see `WebSocketConnection.untilEnd`), so the channel simply
@@ -120,7 +133,11 @@ private[ws] object JsWebSocketConnection:
                 conn
             }
             _ <- Scope.ensure(connection.close())
-            _ <- opened.get
+            _ <- Abort.run[Timeout](Async.timeout(connectTimeout)(opened.get)).map {
+                case Result.Success(_) => Kyo.unit
+                case Result.Failure(_) => Abort.fail(ApolloNetworkException(s"The WebSocket did not open within ${connectTimeout.show}"))
+                case Result.Panic(e)   => Abort.panic(e)
+            }
         yield connection
 
     /** Attach the socket's event listeners, translating each event into an
