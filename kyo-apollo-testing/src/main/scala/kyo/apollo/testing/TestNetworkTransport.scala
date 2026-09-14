@@ -138,15 +138,15 @@ object TestResponses:
         uuid => ApolloResponse[Any](uuid, data = Present(payload))
 
     /** A transport failure (a connection error). */
-    def networkError(message: String = "network error"): Uuid => ApolloResponse[Any] =
+    def networkError(message: String = "network error")(using Frame): Uuid => ApolloResponse[Any] =
         uuid => ApolloResponse.fromException(uuid, ApolloNetworkException(message))
 
     /** A non-2xx HTTP failure. */
-    def httpError(status: Int): Uuid => ApolloResponse[Any] =
+    def httpError(status: Int)(using Frame): Uuid => ApolloResponse[Any] =
         uuid => ApolloResponse.fromException(uuid, ApolloHttpException(status, Nil, s"HTTP $status"))
 
     /** A response carrying a single GraphQL `errors` entry (not a transport fault). */
-    def graphqlError(message: String): Uuid => ApolloResponse[Any] =
+    def graphqlError(message: String)(using Frame): Uuid => ApolloResponse[Any] =
         uuid => ApolloResponse[Any](uuid, error = Present(ApolloGraphQLException(Chunk(GraphQLError(message)))))
 
     /** A response carrying an arbitrary transport [[ApolloException]]. */
@@ -170,7 +170,7 @@ object TestApolloClient:
     /** A client with no cache over `engine` — `.execute()` runs the engine through
       * the HTTP transport straight through.
       */
-    def cacheless(engine: HttpEngine, serverUrl: String = DefaultServerUrl): ApolloClient =
+    def cacheless(engine: HttpEngine, serverUrl: String = DefaultServerUrl)(using Frame): ApolloClient =
         ApolloClient
             .builder()
             .serverUrl(serverUrl)
@@ -185,7 +185,7 @@ object TestApolloClient:
         engine: HttpEngine,
         keyFields: List[String] = List("id"),
         serverUrl: String = DefaultServerUrl
-    ): ApolloClient =
+    )(using Frame): ApolloClient =
         ApolloClient
             .builder()
             .serverUrl(serverUrl)
@@ -199,7 +199,7 @@ object TestApolloClient:
     def withTransport(
         transport: TestNetworkTransport,
         serverUrl: String = DefaultServerUrl
-    ): ApolloClient =
+    )(using Frame): ApolloClient =
         ApolloClient
             .builder()
             .serverUrl(serverUrl)
@@ -214,7 +214,7 @@ object TestApolloClient:
         transport: TestNetworkTransport,
         keyFields: List[String] = List("id"),
         serverUrl: String = DefaultServerUrl
-    ): ApolloClient =
+    )(using Frame): ApolloClient =
         ApolloClient
             .builder()
             .serverUrl(serverUrl)

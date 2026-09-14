@@ -194,7 +194,7 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
       * depended on, and the store generation it was current at — capturing a miss
       * as a `Failure`.
       */
-    private def readFromCache[D](request: ApolloRequest[D]): Try[(D, Set[String], Long)] =
+    private def readFromCache[D](request: ApolloRequest[D])(using Frame): Try[(D, Set[String], Long)] =
         Try(store.readOperationStamped(request.operation))
 
     /** Persist a successful network `response` (data present, no exception) and tag
@@ -235,6 +235,6 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
     private def cacheMiss[D](
         request: ApolloRequest[D],
         cause: Throwable
-    ): ApolloResponse[D] =
+    )(using Frame): ApolloResponse[D] =
         CacheResponses.miss(request, cause)
 end CacheInterceptor

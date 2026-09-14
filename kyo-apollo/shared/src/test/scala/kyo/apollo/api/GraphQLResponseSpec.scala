@@ -3,7 +3,9 @@ package kyo.apollo.api
 import kyo.Absent
 import kyo.Chunk
 import kyo.Present
+import kyo.Result
 import kyo.Schema
+import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.json.Json
 import kyo.apollo.json.JsonParser
 import scala.collection.immutable.VectorMap
@@ -30,8 +32,21 @@ class GraphQLResponseSpec extends kyo.test.Test[Any]:
         def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
         def variables: Json          = Json.JObj(VectorMap.empty)
 
-    private def parse(text: String): GraphQLResponse[Hero] =
+    /** Same operation, but its codec has a defect: decoding throws a non-decode exception. */
+    private val defectiveOp: Query[Hero] = new Query[Hero]:
+        def name: String             = "Hero"
+        def document: String         = "query Hero { name }"
+        def dataSchema: Schema[Hero] = summon[Schema[Hero]]
+        def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
+        def variables: Json          = Json.JObj(VectorMap.empty)
+        override def dataCodec: JsonCodec[Hero] = new JsonCodec[Hero]:
+            def decode(json: Json): Hero  = throw new ClassCastException("defective codec")
+            def encode(value: Hero): Json = Json.JNull
+
+    private def parseResult(text: String): Result[ApolloParseException, GraphQLResponse[Hero]] =
         GraphQLResponse.parse(JsonParser.parse(text), heroOp)
+
+    private def parse(text: String): GraphQLResponse[Hero] = parseResult(text).getOrThrow
 
     "GraphQLResponse.parse / GraphQLError.parse" - {
 
@@ -87,8 +102,34 @@ class GraphQLResponseSpec extends kyo.test.Test[Any]:
             assert(response.extensions == Map[String, Json]("cost" -> Json.JNum(3.0)))
         }
 
-        "a non-object envelope throws GraphQLResponseException" in {
-            val _ = intercept[GraphQLResponseException](parse("""[1, 2, 3]"""))
+        "a non-object envelope is a parse failure value carrying what was read" in {
+            parseResult("""[1, 2, 3]""") match
+                case Result.Failure(e) =>
+                    assert(e.expected == "a GraphQL response object")
+                    assert(e.actual == JsonParser.parse("""[1, 2, 3]"""))
+                case other => fail(s"expected a parse failure, got $other")
+        }
+
+        "a non-object errors entry is a parse failure value" in {
+            parseResult("""{ "data": null, "errors": ["boom"] }""") match
+                case Result.Failure(e) =>
+                    assert(e.expected == "a GraphQL error object")
+                    assert(e.actual == Json.JStr("boom"))
+                case other => fail(s"expected a parse failure, got $other")
+        }
+
+        "data the schema rejects is a parse failure value with the decode error as cause" in {
+            parseResult("""{ "data": { "name": 42 } }""") match
+                case Result.Failure(e) =>
+                    assert(e.expected.contains("Hero"))
+                    assert(e.getCause.isInstanceOf[kyo.DecodeException])
+                case other => fail(s"expected a parse failure, got $other")
+        }
+
+        "a codec defect is a panic, not a parse failure" in {
+            GraphQLResponse.parse(JsonParser.parse("""{ "data": { "name": "Luke" } }"""), defectiveOp) match
+                case Result.Panic(e) => assert(e.isInstanceOf[ClassCastException])
+                case other           => fail(s"expected a panic, got $other")
         }
 
         "GraphQLError.parse tolerates a missing message and malformed segments" in {
@@ -96,7 +137,7 @@ class GraphQLResponseSpec extends kyo.test.Test[Any]:
                 JsonParser.parse(
                     """{ "path": ["ok", true, 2], "locations": [{ "line": 1 }, { "line": 1, "column": 4 }] }"""
                 )
-            )
+            ).getOrThrow
             assert(error.message == "")
             // `true` is not a valid path segment and is skipped; strings and ints stay.
             assert(error.path == Chunk[String | Int]("ok", 2))

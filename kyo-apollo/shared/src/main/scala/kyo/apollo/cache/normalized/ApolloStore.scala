@@ -4,6 +4,7 @@ import kyo.AllowUnsafe
 import kyo.AtomicLong
 import kyo.AtomicRef
 import kyo.Chunk
+import kyo.Frame
 import kyo.Maybe
 import kyo.Present
 import kyo.apollo.api.JsonCodec
@@ -245,7 +246,7 @@ final class ApolloStore(
       *         every selected field (so the caller can fall through to the network
       *         or surface the miss as a response value).
       */
-    def readOperation[D](operation: Operation[D]): D =
+    def readOperation[D](operation: Operation[D])(using Frame): D =
         readOperationWithKeys(operation)._1
 
     /** Reassemble `operation`'s typed `data` from the cache *and* the set of record
@@ -258,7 +259,7 @@ final class ApolloStore(
       * @throws kyo.apollo.exception.CacheMissException if the cache cannot satisfy
       *         every selected field
       */
-    def readOperationWithKeys[D](operation: Operation[D]): (D, Set[String]) =
+    def readOperationWithKeys[D](operation: Operation[D])(using Frame): (D, Set[String]) =
         val layers = layerSnapshot
         CacheBatchReader.readWithDependentKeys(
             operation,
@@ -278,7 +279,7 @@ final class ApolloStore(
       * @throws kyo.apollo.exception.CacheMissException if the cache cannot satisfy
       *         every selected field
       */
-    def readOperationStamped[D](operation: Operation[D]): (D, Set[String], Long) =
+    def readOperationStamped[D](operation: Operation[D])(using Frame): (D, Set[String], Long) =
         val stamp        = currentGeneration
         val (data, keys) = readOperationWithKeys(operation)
         (data, keys, stamp)
@@ -387,7 +388,7 @@ final class ApolloStore(
       * @throws kyo.apollo.exception.CacheMissException if the cache cannot satisfy every
       *         field the fragment selects
       */
-    def readFragment[D](fragment: Fragment[D], cacheKey: CacheKey): D =
+    def readFragment[D](fragment: Fragment[D], cacheKey: CacheKey)(using Frame): D =
         readFragmentWithKeys(fragment, cacheKey)._1
 
     /** Reassemble `fragment`'s typed `data` from `cacheKey` *and* the set of record
@@ -398,7 +399,7 @@ final class ApolloStore(
       * @throws kyo.apollo.exception.CacheMissException if the cache cannot satisfy every
       *         field the fragment selects
       */
-    def readFragmentWithKeys[D](fragment: Fragment[D], cacheKey: CacheKey): (D, Set[String]) =
+    def readFragmentWithKeys[D](fragment: Fragment[D], cacheKey: CacheKey)(using Frame): (D, Set[String]) =
         val layers = layerSnapshot
         val reader =
             new CacheBatchReader(
@@ -419,7 +420,7 @@ final class ApolloStore(
       * cached list (the idiomatic alternative to `refetchQueries` for the common
       * case) without a network round-trip.
       */
-    def updateOperation[D](operation: Operation[D])(update: D => D): Set[String] =
+    def updateOperation[D](operation: Operation[D])(update: D => D)(using Frame): Set[String] =
         val current =
             try Present(readOperation(operation))
             catch case _: CacheMissException => Maybe.empty[D]
@@ -433,7 +434,7 @@ final class ApolloStore(
       * **cache miss is a no-op**. Returns the changed keys (re-emitting dependent
       * watchers). To delete a record instead, use [[evict]].
       */
-    def updateFragment[D](fragment: Fragment[D], cacheKey: CacheKey)(update: D => D): Set[String] =
+    def updateFragment[D](fragment: Fragment[D], cacheKey: CacheKey)(update: D => D)(using Frame): Set[String] =
         val current =
             try Present(readFragment(fragment, cacheKey))
             catch case _: CacheMissException => Maybe.empty[D]

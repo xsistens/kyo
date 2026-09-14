@@ -16,7 +16,6 @@ import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.ApolloResponse
 import kyo.apollo.runtime.ResponseStream
 import scala.collection.immutable.VectorMap
-import scala.util.control.NonFatal
 
 /** The terminal transport for **subscription** operations: multiplexes many
   * long-lived subscriptions over a single shared [[WebSocketConnection]].
@@ -549,30 +548,33 @@ final class WebSocketNetworkTransport(
 
     // ---- response decoding (pure; per-subscription D captured at subscribe) ----
 
+    // Decoding runs inside the owner fiber's routing closures, which every subscription
+    // on the socket shares: a decoder defect is folded into this subscription's value
+    // (with the defect as `cause`) rather than raised, so it cannot stop the owner loop.
     private def decodeData[D](request: ApolloRequest[D], payload: Json): ApolloResponse[D] =
-        try
-            val response = GraphQLResponse.parse(payload, request.operation)
-            ApolloResponse.fromGraphQLResponse(request.requestUuid, response, request.executionContext)
-        catch
-            case NonFatal(cause) =>
-                ApolloResponse.fromException(
-                    request.requestUuid,
-                    ApolloParseException(cause = cause),
-                    request.executionContext
-                )
-
-    private def errorResponse[D](request: ApolloRequest[D], payload: Json): ApolloResponse[D] =
-        ApolloResponse(
-            requestUuid = request.requestUuid,
-            data = Absent,
-            error = Present(ApolloGraphQLException(parseErrors(payload))),
-            executionContext = request.executionContext
+        GraphQLResponse.parse(payload, request.operation).fold(
+            response => ApolloResponse.fromGraphQLResponse(request.requestUuid, response, request.executionContext),
+            parseFailure => exceptionResponse(request, parseFailure),
+            defect => exceptionResponse(request, ApolloParseException(payload, "a GraphQL response payload", defect))
         )
 
-    private def parseErrors(payload: Json): Chunk[GraphQLError] = payload match
-        case Json.JArr(items) => items.map(GraphQLError.parse)
-        case obj: Json.JObj   => Chunk(GraphQLError.parse(obj))
-        case _                => Chunk.empty
+    private def errorResponse[D](request: ApolloRequest[D], payload: Json): ApolloResponse[D] =
+        parseErrors(payload).fold(
+            errors =>
+                ApolloResponse(
+                    requestUuid = request.requestUuid,
+                    data = Absent,
+                    error = Present(ApolloGraphQLException(errors)),
+                    executionContext = request.executionContext
+                ),
+            parseFailure => exceptionResponse(request, parseFailure),
+            defect => exceptionResponse(request, ApolloParseException(payload, "GraphQL error objects", defect))
+        )
+
+    private def parseErrors(payload: Json): Result[ApolloParseException, Chunk[GraphQLError]] = payload match
+        case Json.JArr(items) => Result.collect(items.map(GraphQLError.parse)).map(Chunk.from)
+        case obj: Json.JObj   => GraphQLError.parse(obj).map(Chunk(_))
+        case _                => Result.succeed(Chunk.empty)
 
     private def exceptionResponse[D](request: ApolloRequest[D], exception: ApolloException): ApolloResponse[D] =
         ApolloResponse.fromException(request.requestUuid, exception, request.executionContext)
@@ -595,7 +597,7 @@ object WebSocketNetworkTransport:
       */
     val reconnectAlways: (ApolloException, Long) => Boolean = (_, _) => true
 
-    private def normalClose: ApolloWebSocketClosedException =
+    private def normalClose(using Frame): ApolloWebSocketClosedException =
         ApolloWebSocketClosedException(WebSocketConnection.NormalClosure)
 
     private def ackTimeoutException(using Frame): ApolloNetworkException =

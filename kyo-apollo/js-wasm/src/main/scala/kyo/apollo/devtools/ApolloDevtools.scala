@@ -1,6 +1,7 @@
 package kyo.apollo.devtools
 
 import kyo.Absent
+import kyo.Frame
 import kyo.Maybe
 import kyo.apollo.ApolloClient
 import kyo.apollo.cache.normalized.apolloStore
@@ -61,7 +62,7 @@ object ApolloDevtools:
         builder: ApolloClient.Builder,
         name: String,
         parse: String => js.Any = graphqlParse
-    ): ApolloClient =
+    )(using Frame): ApolloClient =
         val ops = new DevtoolsOperationStore()
         builder.prependInterceptor(new DevtoolsInterceptor(ops))
         val client = builder.build()
@@ -301,11 +302,11 @@ end ApolloDevtools
   * replaces the terminal `.build()` and wires the client to the browser devtools.
   */
 extension (builder: ApolloClient.Builder)
-    def connectToDevtools(name: String): ApolloClient = ApolloDevtools.connect(builder, name)
+    def connectToDevtools(name: String)(using Frame): ApolloClient = ApolloDevtools.connect(builder, name)
 
     /** As [[connectToDevtools]], injecting the app's bundled graphql-js `parse`
       * (so the browser bundle carries a real AST parser for the Queries/Mutations tabs).
       */
-    def connectToDevtools(name: String, parse: String => js.Any): ApolloClient =
+    def connectToDevtools(name: String, parse: String => js.Any)(using Frame): ApolloClient =
         ApolloDevtools.connect(builder, name, parse)
 end extension

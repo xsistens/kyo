@@ -70,7 +70,7 @@ class ApolloResponseSpec extends kyo.test.Test[Any]:
             )
             assert(response.data == Present(Hero("Luke")))
             assert(response.errors.map(_.message) == Chunk("partial"))
-            assert(response.error.exists(_.getMessage == "partial"))
+            assert(response.error.exists(_.message == "partial"))
         }
 
         "a transport failure carries the exception itself and projects no errors" in {

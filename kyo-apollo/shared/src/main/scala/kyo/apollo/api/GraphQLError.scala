@@ -1,6 +1,9 @@
 package kyo.apollo.api
 
 import kyo.Chunk
+import kyo.Frame
+import kyo.Result
+import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.json.Json
 
 /** A single error entry from a GraphQL response's `errors` array.
@@ -37,9 +40,9 @@ object GraphQLError:
       * missing/malformed `locations`, `path`, or `extensions` degrade to their
       * empty values rather than throwing. Individual malformed `locations`/`path`
       * segments are skipped so one bad entry does not sink the whole error. A
-      * non-object entry is a genuinely broken payload and does throw.
+      * non-object entry is a genuinely broken payload: `Result.Failure(ApolloParseException)`.
       */
-    def parse(json: Json): GraphQLError = json match
+    def parse(json: Json)(using Frame): Result[ApolloParseException, GraphQLError] = json match
         case Json.JObj(fields) =>
             val message = fields.get("message") match
                 case Some(Json.JStr(m)) => m
@@ -53,11 +56,9 @@ object GraphQLError:
             val extensions = fields.get("extensions") match
                 case Some(Json.JObj(ext)) => ext
                 case _                    => Map.empty
-            GraphQLError(message, path, extensions, locations)
+            Result.succeed(GraphQLError(message, path, extensions, locations))
         case other =>
-            throw GraphQLResponseException(
-                s"Expected a GraphQL error object but got: ${other.render}"
-            )
+            Result.fail(ApolloParseException(other, "a GraphQL error object"))
 
     private def parseLocation(json: Json): Option[Location] = json match
         case Json.JObj(fields) =>
