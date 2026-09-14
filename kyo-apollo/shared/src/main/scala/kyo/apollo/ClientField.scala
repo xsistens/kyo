@@ -5,7 +5,7 @@ import kyo.apollo.api.*
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.cache.normalized.api.Fragment
-import kyo.apollo.exception.CacheMissException
+import kyo.apollo.exception.CacheReadFailure
 import kyo.apollo.json.Json
 import kyo.apollo.json.SchemaJson
 import scala.NamedTuple.AnyNamedTuple
@@ -81,11 +81,9 @@ final class ClientField[Origin, R <: AnyNamedTuple, V] private[apollo] (
     private def row(value: V): R = Tuple1(value).asInstanceOf[R]
     private def unrow(r: R): V   = r.asInstanceOf[Tuple].productElement(0).asInstanceOf[V]
     private def readAt(client: ApolloClient, key: CacheKey)(using Frame): V < Sync =
-        Abort.run[CacheMissException](Sync.defer(client.apolloStore.readFragment(fragment, key))).map {
-            case Result.Success(r)   => unrow(r)
-            case Result.Failure(_)   => default
-            case Result.Panic(cause) => Abort.panic(cause)
-        }
+        Abort.recover[CacheReadFailure](_ => default)(
+            Sync.defer(client.apolloStore.readFragment(fragment, key)).map(unrow)
+        )
 
     /** Write the field on entity `id` (record `TypeName:id`) and re-emit every
       * watcher whose read visited that record. Returns the changed record keys.

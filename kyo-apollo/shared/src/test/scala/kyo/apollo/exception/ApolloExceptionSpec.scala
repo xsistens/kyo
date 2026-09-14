@@ -4,6 +4,10 @@ import kyo.Absent
 import kyo.Chunk
 import kyo.KyoException
 import kyo.Present
+import kyo.apollo.api.CompiledField
+import kyo.apollo.api.CompiledNamedType
+import kyo.apollo.cache.normalized.api.CacheKey
+import kyo.apollo.cache.normalized.api.FieldKey
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloResponse
 import kyo.apollo.network.HttpHeader
@@ -29,7 +33,8 @@ class ApolloExceptionSpec extends kyo.test.Test[Any]:
                 ApolloGraphQLException(Chunk.empty),
                 DefaultApolloException(),
                 ApolloConfigException("no serverUrl"),
-                CacheMissException("User:1")
+                CacheMissException(CacheKey("User", "1")),
+                NoCacheIdentityException("Country")
             )
             leaves.foreach { ex =>
                 assert(ex.isInstanceOf[KyoException])
@@ -87,6 +92,22 @@ class ApolloExceptionSpec extends kyo.test.Test[Any]:
             assert(ex.getMessage.contains("WebSocket closed with code 1011: internal error"))
         }
 
+        "cache miss: a whole-record miss names the record, a field miss the record and the field's storage key" in {
+            val name   = FieldKey(CompiledField("name", CompiledNamedType("String")))
+            val record = CacheMissException(CacheKey("User", "1"))
+            val field  = CacheMissException(CacheKey("User", "1"), name)
+            assert(record.key == CacheKey("User", "1") && record.fieldKey == Absent)
+            assert(record.message == "Object 'User:1' not found in the cache")
+            assert(field.fieldKey == Present(name))
+            assert(field.message == "Object 'User:1' has no field named 'name' in the cache")
+        }
+
+        "no cache identity: names the type the key generator does not identify" in {
+            val ex = NoCacheIdentityException("Country")
+            assert(ex.typeName == "Country")
+            assert(ex.message.contains("no identity for an object of type 'Country'"))
+        }
+
         "default exception: catch-all message" in {
             assert(DefaultApolloException().getMessage.contains("Apollo operation failed"))
         }
@@ -114,11 +135,23 @@ class ApolloExceptionSpec extends kyo.test.Test[Any]:
                 typeCheckFailure("""val e: HttpEngineFailure = ApolloParseException(Json.JNull, "x")""")("HttpEngineFailure")
             }
 
-            "the parse row holds only the parse leaf, the cache-read row only the miss" in {
+            "the parse row holds only the parse leaf, the cache-read row only the miss and the missing identity" in {
                 typeCheck("""val e: ApolloParseFailure = ApolloParseException(Json.JNull, "x")""")
                 typeCheckFailure("""val e: ApolloParseFailure = ApolloNetworkException()""")("ApolloParseFailure")
-                typeCheck("""val e: CacheReadFailure = CacheMissException("User:1")""")
+                typeCheck("""val e: CacheReadFailure = CacheMissException(CacheKey("User", "1"))""")
+                typeCheck("""val e: CacheReadFailure = NoCacheIdentityException("Country")""")
                 typeCheckFailure("""val e: CacheReadFailure = ApolloNetworkException()""")("CacheReadFailure")
+                typeCheckFailure("""val e: ApolloExecuteFailure = CacheMissException(CacheKey("User", "1"))""")(
+                    "ApolloExecuteFailure"
+                )
+            }
+
+            "a cache-read failure matches exhaustively on its two leaves" in {
+                def describe(failure: CacheReadFailure): String = failure match
+                    case e: CacheMissException       => e.key.render
+                    case e: NoCacheIdentityException => e.typeName
+                assert(describe(CacheMissException(CacheKey("User", "1"))) == "User:1")
+                assert(describe(NoCacheIdentityException("Country")) == "Country")
             }
 
             "an engine failure matches exhaustively on its single leaf" in {

@@ -187,7 +187,7 @@ final class ApolloClient private (
 
     /** The Apollo-tier interceptors registered on this client (the internal
       * terminal network step excluded). Exposed package-privately so the cache
-      * layer's `apolloStore` accessor can locate an installed
+      * layer's `normalizedStore` accessor can locate an installed
       * `kyo.apollo.cache.normalized.CacheInterceptor` and hand its store back — without
       * the core client type ever depending on the cache package. The dependency
       * still runs cache → client, mirroring apollo-kotlin's `apolloStore`.

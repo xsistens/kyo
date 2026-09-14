@@ -1,6 +1,7 @@
 package kyo.apollo
 
 import kyo.*
+import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.exception.ApolloException
 import kyo.apollo.exception.CacheMissException
 
@@ -19,7 +20,7 @@ class MaybeOpsSpec extends kyo.test.Test[Any]:
             var evaluated = false
             def ex: CacheMissException =
                 evaluated = true
-                CacheMissException("should not be built")
+                CacheMissException(CacheKey("Unbuilt", "1"))
             Abort.run[CacheMissException](Present("ok").orFailWith(ex)).map { r =>
                 assert(r == Result.succeed("ok"))
                 assert(!evaluated, "by-name exception was evaluated on the Present path")
@@ -27,8 +28,8 @@ class MaybeOpsSpec extends kyo.test.Test[Any]:
         }
 
         "Absent aborts with the given typed exception" in {
-            Abort.run[CacheMissException]((Absent: Maybe[Int]).orFailWith(CacheMissException("User:1"))).map {
-                case Result.Failure(ex) => assert(ex.key == "User:1")
+            Abort.run[CacheMissException]((Absent: Maybe[Int]).orFailWith(CacheMissException(CacheKey("User", "1")))).map {
+                case Result.Failure(ex) => assert(ex.key == CacheKey("User", "1"))
                 case other              => fail(s"expected CacheMissException, got $other")
             }
         }
@@ -38,14 +39,14 @@ class MaybeOpsSpec extends kyo.test.Test[Any]:
             // to handle, so the result is a plain `Result` (compiles only if the row
             // is exactly `Abort[CacheMissException]`).
             val pure: Result[CacheMissException, Int] < Any =
-                Abort.run[CacheMissException](Present(1).orFailWith(CacheMissException("x")))
+                Abort.run[CacheMissException](Present(1).orFailWith(CacheMissException(CacheKey("X", "1"))))
             pure.map(r => assert(r == Result.succeed(1)))
         }
 
         "the leaf type is bounded by ApolloException" in {
             typeCheckFailure("""Present(1).orFailWith(new RuntimeException("not an ApolloException"))""")
             // A widened leaf still works when the caller names it.
-            val widened: Int < Abort[ApolloException] = Present(1).orFailWith[ApolloException](CacheMissException("x"))
+            val widened: Int < Abort[ApolloException] = Present(1).orFailWith[ApolloException](CacheMissException(CacheKey("X", "1")))
             Abort.run[ApolloException](widened).map(r => assert(r == Result.succeed(1)))
         }
     }

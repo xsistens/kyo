@@ -9,6 +9,7 @@ import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.cache.normalized.api.Fragment
 import kyo.apollo.cache.normalized.api.IdCacheKeyGenerator
 import kyo.apollo.cache.normalized.api.Record
+import kyo.apollo.exception.ApolloConfigException
 import kyo.apollo.exception.CacheMissException
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloResponse
@@ -541,13 +542,25 @@ class WatcherSpec extends kyo.test.Test[Any]:
             }
         }
 
-        "apolloStore throws a clear error when no cache is installed" in {
+        "whether a client has a cache is a total question: normalizedStore" in {
+            val bare = ApolloClient
+                .builder()
+                .serverUrl("https://example.com/graphql")
+                .httpEngine(CountingEngine())
+                .build()
+            val cached = cachedClient(CountingEngine())
+            assert(bare.normalizedStore == Absent)
+            assert(cached.normalizedStore.exists(_ eq cached.apolloStore))
+        }
+
+        "apolloStore on a client without a cache is a misuse panic naming the fix, not an IllegalStateException" in {
             val client = ApolloClient
                 .builder()
                 .serverUrl("https://example.com/graphql")
                 .httpEngine(CountingEngine())
                 .build()
-            val _ = intercept[IllegalStateException](client.apolloStore)
+            val misuse = intercept[ApolloConfigException](client.apolloStore)
+            assert(misuse.message.contains("normalizedCache"))
         }
     }
 end WatcherSpec

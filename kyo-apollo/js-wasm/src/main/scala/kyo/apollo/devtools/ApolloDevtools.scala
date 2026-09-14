@@ -7,7 +7,7 @@ import kyo.Frame
 import kyo.Maybe
 import kyo.Sync
 import kyo.apollo.ApolloClient
-import kyo.apollo.cache.normalized.apolloStore
+import kyo.apollo.cache.normalized.normalizedStore
 import kyo.apollo.devtools.DevtoolsOperationStore.MutationRecord
 import kyo.apollo.devtools.DevtoolsOperationStore.QueryRecord
 import kyo.apollo.json.Json
@@ -114,8 +114,7 @@ object ApolloDevtools:
       * normalized cache is installed (so the Cache tab stays empty, not broken).
       */
     private def extractOf(client: ApolloClient, includeOptimistic: Boolean)(using Frame): Json =
-        try evalNow(client.apolloStore.extract(includeOptimistic))
-        catch case _: Throwable => Json.JObj(Map.empty)
+        client.normalizedStore.fold(Json.JObj(Map.empty))(store => evalNow(store.extract(includeOptimistic)))
 
     /** Run a store effect to completion inside a devtools getter. The extension polls
       * plain synchronous JS functions, so this is the boundary where the store's
@@ -250,12 +249,9 @@ object ApolloDevtools:
         astSize: Int,
         astCap: Int
     )(using Frame): js.Any =
-        val recordCount =
-            try evalNow(client.apolloStore.cache.allRecords).size
-            catch case _: Throwable => 0
-        val cacheLimit: Maybe[Int] =
-            try client.apolloStore.cache.sizeLimit
-            catch case _: Throwable => Absent
+        val store                  = client.normalizedStore
+        val recordCount            = store.fold(0)(s => evalNow(s.cache.allRecords).size)
+        val cacheLimit: Maybe[Int] = store.flatMap(_.cache.sizeLimit)
 
         val sizes = js.Dynamic.literal()
         sizes.updateDynamic("print")(astSize)
