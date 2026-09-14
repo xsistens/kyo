@@ -3,7 +3,7 @@ package kyo.apollo.network
 import kyo.Maybe
 import kyo.Present
 import kyo.apollo.cache.normalized.api.CacheKey
-import kyo.apollo.exception.CacheMissException
+import kyo.apollo.exception.CacheReadFailure
 
 /** Per-response metadata describing how the normalized cache participated in
   * producing an [[ApolloResponse]].
@@ -20,7 +20,7 @@ import kyo.apollo.exception.CacheMissException
   * @param fromCache           whether this response was served from the cache
   *                            (as opposed to the network)
   * @param isCacheHit          whether a cache read satisfied the operation
-  * @param cacheMissException  the miss that occurred, when a cache read failed
+  * @param cacheReadFailure    why the cache read failed (a miss), when it did
   * @param dependentKeys       the record keys this response is tied to in the
   *                            store: for a cache hit, the keys the read touched
   *                            (root plus every reference/redirect target); for
@@ -38,7 +38,7 @@ import kyo.apollo.exception.CacheMissException
 final case class CacheInfo(
     fromCache: Boolean,
     isCacheHit: Boolean,
-    cacheMissException: Maybe[CacheMissException] = Maybe.empty,
+    cacheReadFailure: Maybe[CacheReadFailure] = Maybe.empty,
     dependentKeys: Set[CacheKey] = Set.empty,
     generation: Long = 0L
 )
@@ -64,7 +64,7 @@ object CacheInfo:
     def network(dependentKeys: Set[CacheKey]): CacheInfo =
         CacheInfo(fromCache = false, isCacheHit = false, dependentKeys = dependentKeys)
 
-    /** A response representing a cache read that missed, carrying the `miss`. */
-    def miss(miss: CacheMissException): CacheInfo =
-        CacheInfo(fromCache = true, isCacheHit = false, cacheMissException = Present(miss))
+    /** A response representing a cache read that missed, carrying its `failure`. */
+    def miss(failure: CacheReadFailure): CacheInfo =
+        CacheInfo(fromCache = true, isCacheHit = false, cacheReadFailure = Present(failure))
 end CacheInfo

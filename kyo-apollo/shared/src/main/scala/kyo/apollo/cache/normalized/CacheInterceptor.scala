@@ -4,6 +4,7 @@ import kyo.*
 import kyo.apollo.api.Mutation
 import kyo.apollo.api.Subscription
 import kyo.apollo.cache.normalized.api.CacheKey
+import kyo.apollo.exception.CacheReadFailure
 import kyo.apollo.interceptor.ApolloInterceptor
 import kyo.apollo.interceptor.ApolloInterceptorChain
 import kyo.apollo.network.ApolloRequest
@@ -68,10 +69,10 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
         request: ApolloRequest[D],
         chain: ApolloInterceptorChain
     )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
-        Stream.unwrap(readFromCache(request).map {
-            case Result.Success((data, keys, gen)) => Stream.init(Seq(cacheHit(request, data, keys, gen)))
-            case _                                 => network(request, chain)
-        })
+        Stream.unwrap(readFromCache[D, ResponseStream[D]](request)(
+            hit = response => Stream.init(Seq(response)),
+            miss = _ => network(request, chain)
+        ))
 
     /** Never read the cache; run the network and always write it back. */
     private def networkOnly[D](
@@ -80,16 +81,15 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
     )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
         network(request, chain)
 
-    /** Cache only: a hit is served, a miss becomes a `CacheMissException` value. */
+    /** Cache only: a hit is served, a miss becomes a [[CacheReadFailure]] value. */
     private def cacheOnly[D](request: ApolloRequest[D])(using
         Frame,
         Tag[Emit[Chunk[ApolloResponse[D]]]]
     ): ResponseStream[D] =
-        Stream.unwrap(readFromCache(request).map {
-            case Result.Success((data, keys, gen)) => Stream.init(Seq(cacheHit(request, data, keys, gen)))
-            case Result.Failure(cause)             => Stream.init(Seq(cacheMiss(request, cause)))
-            case Result.Panic(cause)               => Stream.init(Seq(cacheMiss(request, cause)))
-        })
+        Stream.unwrap(readFromCache[D, ResponseStream[D]](request)(
+            hit = response => Stream.init(Seq(response)),
+            miss = failure => Stream.init(Seq(CacheResponses.miss(request, failure)))
+        ))
 
     /** Network first; on a network error fall back to the cache, else re-emit the
       * network error.
@@ -101,10 +101,10 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
         chain.proceed(request).map { response =>
             if !response.hasTransportError then writeBack(request, response)
             else
-                readFromCache(request).map {
-                    case Result.Success((data, keys, gen)) => cacheHit(request, data, keys, gen)
-                    case _                                 => response.copy(cacheInfo = Present(CacheInfo.network))
-                }
+                readFromCache[D, ApolloResponse[D]](request)(
+                    hit = identity,
+                    miss = _ => response.copy(cacheInfo = Present(CacheInfo.network))
+                )
         }
 
     /** No cache: run the network and pass the response straight through — the cache
@@ -126,21 +126,20 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
         Frame,
         Tag[Emit[Chunk[ApolloResponse[D]]]]
     ): ResponseStream[D] =
-        Stream.unwrap(readFromCache(request).map {
-            case Result.Success((data, keys, gen)) => Stream.init(Seq(cacheHit(request, data, keys, gen)))
-            case _                                 => Stream.init(Seq.empty[ApolloResponse[D]])
-        })
+        Stream.unwrap(readFromCache[D, ResponseStream[D]](request)(
+            hit = response => Stream.init(Seq(response)),
+            miss = _ => Stream.init(Seq.empty[ApolloResponse[D]])
+        ))
 
     /** A cache response (when hit) then the network response, in that order. */
     private def cacheAndNetwork[D](
         request: ApolloRequest[D],
         chain: ApolloInterceptorChain
     )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
-        Stream.unwrap(readFromCache(request).map {
-            case Result.Success((data, keys, gen)) =>
-                Stream.init(Seq(cacheHit(request, data, keys, gen))).concat(network(request, chain))
-            case _ => network(request, chain)
-        })
+        Stream.unwrap(readFromCache[D, ResponseStream[D]](request)(
+            hit = response => Stream.init(Seq(response)).concat(network(request, chain)),
+            miss = _ => network(request, chain)
+        ))
 
     /** Run a mutation carrying optimistic data: overlay it into the store before the
       * network call (so watchers show it at once), then on the network reply drop the
@@ -190,14 +189,20 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
     )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
         chain.proceed(request).map(writeBack(request, _))
 
-    /** Read `request`'s operation from the store — data, the record keys the read
-      * depended on, and the store generation it was current at — capturing a miss
-      * (raised inside the read) as the result's error.
+    /** Read `request`'s operation from the store and continue with `hit` — given the
+      * cache-served response, stamped with the record keys the read depended on and
+      * the store generation it was current at — or, when the cache cannot satisfy
+      * the operation, with `miss`. Only a [[CacheReadFailure]] reaches `miss`: a
+      * decode defect or a reader bug is a panic that propagates out of the policy,
+      * never a miss answered with the network or reported as a miss value.
       */
-    private def readFromCache[D](request: ApolloRequest[D])(using
-        Frame
-    ): Result[Throwable, (D, Set[CacheKey], Long)] < Sync =
-        Abort.run[Throwable](store.readOperationStamped(request.operation))
+    private def readFromCache[D, A](request: ApolloRequest[D])(
+        hit: ApolloResponse[D] => A < Sync,
+        miss: CacheReadFailure => A < Sync
+    )(using Frame): A < Sync =
+        Abort.recover[CacheReadFailure](miss)(
+            store.readOperationStamped(request.operation).map((data, keys, gen) => hit(cacheHit(request, data, keys, gen)))
+        )
 
     /** Persist a successful network `response` (data present, no exception) and tag
       * it as network-sourced, stamping the record keys the write-back changed onto
@@ -230,13 +235,4 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
         generation: Long
     ): ApolloResponse[D] =
         CacheResponses.hit(request, data, dependentKeys, generation)
-
-    /** A cache-miss response carrying the miss as an `exception` value (see
-      * [[CacheResponses.miss]]).
-      */
-    private def cacheMiss[D](
-        request: ApolloRequest[D],
-        cause: Throwable
-    )(using Frame): ApolloResponse[D] =
-        CacheResponses.miss(request, cause)
 end CacheInterceptor
