@@ -1,13 +1,11 @@
 package kyo.apollo.cache
 
-import kyo.Absent
-import kyo.Chunk
-import kyo.Present
-import kyo.Schema
+import kyo.*
 import kyo.apollo.api.*
 import kyo.apollo.cache.TestKeys.*
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.*
+import kyo.apollo.cache.normalized.api.Fragment
 import kyo.apollo.exception.CacheMissException
 import kyo.apollo.json.Json
 import scala.collection.immutable.VectorMap
@@ -112,51 +110,65 @@ class FragmentSpec extends kyo.test.Test[Any]:
 
         "writeFragment then readFragment returns typed data equal to the original" in {
             val s = store()
-            s.writeFragment(UserFragment, userKey, ada)
-            assert(s.readFragment(UserFragment, userKey) == ada)
+            for
+                _    <- s.writeFragment(UserFragment, userKey, ada)
+                read <- s.readFragment(UserFragment, userKey)
+            yield assert(read == ada)
+            end for
         }
 
         "writeFragment normalizes into the CacheKey's record and reports it changed" in {
-            val s       = store()
-            val changed = s.writeFragment(UserFragment, userKey, ada)
-            assert(changed == Set(CacheKey("User", "1")))
-            assert(
-                s.cache.loadRecord(CacheKey("User", "1")).flatMap(_.get(fk("name"))) ==
-                    Present(RecordValue.Scalar(kyo.apollo.json.Json.JStr("Ada")))
-            )
+            val s = store()
+            for
+                changed <- s.writeFragment(UserFragment, userKey, ada)
+                record  <- s.cache.loadRecord(CacheKey("User", "1"))
+            yield
+                assert(changed == Set(CacheKey("User", "1")))
+                assert(record.flatMap(_.get(fk("name"))) == Present(RecordValue.Scalar(kyo.apollo.json.Json.JStr("Ada"))))
+            end for
         }
 
         "writeFragment publishes its changed keys to a registered listener" in {
             val s    = store()
-            var seen = Option.empty[Set[CacheKey]]
-            s.addChangedKeysListener(keys => seen = Some(keys))
-            s.writeFragment(UserFragment, userKey, ada)
-            assert(seen == Some(Set(CacheKey("User", "1"))))
+            var seen = Maybe.empty[Set[CacheKey]]
+            for
+                _ <- s.addChangedKeysListener(keys => seen = Present(keys))
+                _ <- s.writeFragment(UserFragment, userKey, ada)
+            yield assert(seen == Present(Set(CacheKey("User", "1"))))
+            end for
         }
 
         "readFragmentWithKeys reports the CacheKey as the dependent key" in {
             val s = store()
-            s.writeFragment(UserFragment, userKey, ada)
-            val (data, keys) = s.readFragmentWithKeys(UserFragment, userKey)
-            assert(data == ada)
-            assert(keys == Set(CacheKey("User", "1")))
+            for
+                _            <- s.writeFragment(UserFragment, userKey, ada)
+                (data, keys) <- s.readFragmentWithKeys(UserFragment, userKey)
+            yield
+                assert(data == ada)
+                assert(keys == Set(CacheKey("User", "1")))
+            end for
         }
 
         "readFragment on an empty store raises CacheMissException" in {
             val s = store()
-            val _ = intercept[CacheMissException](s.readFragment(UserFragment, userKey))
+            Abort.run[CacheMissException](s.readFragment(UserFragment, userKey)).map(result => assert(result.isFailure))
         }
 
         "a fragment write updates the very record a full operation reads" in {
             val s = store()
-            // Seed User:1 = Ada through a full query write.
-            s.writeOperation(CurrentUserQuery(), UserData(ada))
-            assert(s.readOperation(CurrentUserQuery()).user.name == "Ada")
-            // Imperatively update only the name via the fragment on User:1.
-            val changed = s.writeFragment(UserFragment, userKey, ada.copy(name = "Bob"))
-            assert(changed.contains(CacheKey("User", "1")))
-            // The full operation read now reflects the fragment's change.
-            assert(s.readOperation(CurrentUserQuery()).user.name == "Bob")
+            for
+                // Seed User:1 = Ada through a full query write.
+                _      <- s.writeOperation(CurrentUserQuery(), UserData(ada))
+                before <- s.readOperation(CurrentUserQuery())
+                // Imperatively update only the name via the fragment on User:1.
+                changed <- s.writeFragment(UserFragment, userKey, ada.copy(name = "Bob"))
+                // The full operation read now reflects the fragment's change.
+                after <- s.readOperation(CurrentUserQuery())
+            yield
+                assert(before.user.name == "Ada")
+                assert(changed.contains(CacheKey("User", "1")))
+                assert(after.user.name == "Bob")
+            end for
         }
 
         "writeFragment and writeOperation key an entity's id-less child identically" in {
@@ -167,21 +179,28 @@ class FragmentSpec extends kyo.test.Test[Any]:
             // two records for one object, and whichever wrote last owned the pointer.
             val s       = store()
             val profile = ProfileFields("User", "1", Avatar("u"))
-            s.writeOperation(ProfileQuery(), ProfileData(profile))
-            s.writeFragment(ProfileFragment, userKey, profile)
-
-            assert(s.cache.allRecords().keySet.filter(_.render.contains("avatar")) == Set(pathKey("User:1", "avatar")))
-            assert(s.readOperation(ProfileQuery()) == ProfileData(profile))
+            for
+                _    <- s.writeOperation(ProfileQuery(), ProfileData(profile))
+                _    <- s.writeFragment(ProfileFragment, userKey, profile)
+                all  <- s.cache.allRecords
+                read <- s.readOperation(ProfileQuery())
+            yield
+                assert(all.keySet.filter(_.render.contains("avatar")) == Set(pathKey("User:1", "avatar")))
+                assert(read == ProfileData(profile))
+            end for
         }
 
         "a fragment write of identical data reports no changed keys and publishes nothing" in {
-            val s = store()
-            s.writeFragment(UserFragment, userKey, ada)
-            var seen = Option.empty[Set[CacheKey]]
-            s.addChangedKeysListener(keys => seen = Some(keys))
-            val changed = s.writeFragment(UserFragment, userKey, ada)
-            assert(changed == Set.empty[String])
-            assert(seen == None)
+            val s    = store()
+            var seen = Maybe.empty[Set[CacheKey]]
+            for
+                _       <- s.writeFragment(UserFragment, userKey, ada)
+                _       <- s.addChangedKeysListener(keys => seen = Present(keys))
+                changed <- s.writeFragment(UserFragment, userKey, ada)
+            yield
+                assert(changed == Set.empty[String])
+                assert(seen == Absent)
+            end for
         }
     }
 end FragmentSpec

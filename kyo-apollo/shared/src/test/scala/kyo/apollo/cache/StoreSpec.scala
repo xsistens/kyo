@@ -1,21 +1,18 @@
 package kyo.apollo.cache
 
-import kyo.Absent
-import kyo.Chunk
-import kyo.Present
-import kyo.Schema
+import kyo.*
 import kyo.apollo.api.*
 import kyo.apollo.cache.TestKeys.*
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.*
+import kyo.apollo.cache.normalized.api.Record
 import kyo.apollo.exception.CacheMissException
 import kyo.apollo.json.Json
 import scala.collection.immutable.VectorMap
 
-/** Unit tests for the Phase 04 store backends: the [[NormalizedCache]] merge
-  * policy, the [[MemoryCache]] backend (LRU + expiration), and the
-  * [[ApolloStore]] coordinator's `writeOperation` → `readOperation` round-trip
-  * and `publish` hook.
+/** Unit tests for the store backends: the [[NormalizedCache]] merge policy, the
+  * [[MemoryCache]] backend (LRU + expiration), and the [[ApolloStore]]
+  * coordinator's `writeOperation` → `readOperation` round-trip and `publish` hook.
   */
 class StoreSpec extends kyo.test.Test[Any]:
 
@@ -100,70 +97,108 @@ class StoreSpec extends kyo.test.Test[Any]:
         "merge stores a record and reports its key as changed; loadRecord returns it" in {
             val cache  = MemoryCache()
             val record = rec(CacheKey("Book", "1"), fk("id") -> scalar("1"))
-            assert(cache.merge(List(record)) == Set(CacheKey("Book", "1")))
-            assert(cache.loadRecord(CacheKey("Book", "1")) == Present(record))
+            for
+                changed <- cache.merge(Chunk(record))
+                loaded  <- cache.loadRecord(CacheKey("Book", "1"))
+            yield
+                assert(changed == Set(CacheKey("Book", "1")))
+                assert(loaded == Present(record))
+            end for
         }
 
         "re-merging identical data reports no changed keys" in {
             val cache  = MemoryCache()
             val record = rec(CacheKey("Book", "1"), fk("id") -> scalar("1"))
-            cache.merge(List(record))
-            assert(cache.merge(List(record)) == Set.empty[CacheKey])
+            for
+                _       <- cache.merge(Chunk(record))
+                changed <- cache.merge(Chunk(record))
+            yield assert(changed == Set.empty[CacheKey])
+            end for
         }
 
         "loadRecords returns only the present subset" in {
             val cache = MemoryCache()
-            cache.merge(List(rec(key("A"), fk("x") -> scalar("1")), rec(key("B"), fk("y") -> scalar("2"))))
-            assert(cache.loadRecords(List(key("A"), key("missing"))).keySet == Set(key("A")))
+            for
+                _      <- cache.merge(Chunk(rec(key("A"), fk("x") -> scalar("1")), rec(key("B"), fk("y") -> scalar("2"))))
+                loaded <- cache.loadRecords(Chunk(key("A"), key("missing")))
+            yield assert(loaded.keySet == Set(key("A")))
+            end for
         }
 
         "remove deletes a present record and reports absence otherwise" in {
             val cache = MemoryCache()
-            cache.merge(List(rec(key("A"), fk("x") -> scalar("1"))))
-            assert(cache.remove(key("A")) == true)
-            assert(cache.remove(key("A")) == false)
-            assert(cache.loadRecord(key("A")) == Absent)
+            for
+                _      <- cache.merge(Chunk(rec(key("A"), fk("x") -> scalar("1"))))
+                first  <- cache.remove(Chunk(key("A")))
+                second <- cache.remove(Chunk(key("A")))
+                loaded <- cache.loadRecord(key("A"))
+            yield
+                assert(first == Set(key("A")))
+                assert(second == Set.empty[CacheKey])
+                assert(loaded == Absent)
+            end for
         }
 
         "clearAll empties the store" in {
             val cache = MemoryCache()
-            cache.merge(List(rec(key("A"), fk("x") -> scalar("1")), rec(key("B"), fk("y") -> scalar("2"))))
-            cache.clearAll()
-            assert(cache.loadRecord(key("A")) == Absent)
-            assert(cache.loadRecord(key("B")) == Absent)
+            for
+                _ <- cache.merge(Chunk(rec(key("A"), fk("x") -> scalar("1")), rec(key("B"), fk("y") -> scalar("2"))))
+                _ <- cache.clearAll
+                a <- cache.loadRecord(key("A"))
+                b <- cache.loadRecord(key("B"))
+            yield
+                assert(a == Absent)
+                assert(b == Absent)
+            end for
         }
 
         "DoNotStore header makes merge a no-op" in {
             val cache = MemoryCache()
-            val changed = cache.merge(
-                List(rec(key("A"), fk("x") -> scalar("1"))),
-                CacheHeaders.of(CacheHeaders.DoNotStore -> "true")
-            )
-            assert(changed == Set.empty[CacheKey])
-            assert(cache.loadRecord(key("A")) == Absent)
+            for
+                changed <- cache.merge(
+                    Chunk(rec(key("A"), fk("x") -> scalar("1"))),
+                    CacheHeaders.of(CacheHeaders.DoNotStore -> "true")
+                )
+                loaded <- cache.loadRecord(key("A"))
+            yield
+                assert(changed == Set.empty[CacheKey])
+                assert(loaded == Absent)
+            end for
         }
 
         // --- MemoryCache: LRU eviction --------------------------------------------
 
         "exceeding maxSize evicts the least-recently-used record" in {
             val cache = MemoryCache(maxSize = 2)
-            cache.merge(List(rec(key("A"), fk("x") -> scalar("1"))))
-            cache.merge(List(rec(key("B"), fk("x") -> scalar("2"))))
-            cache.merge(List(rec(key("C"), fk("x") -> scalar("3")))) // evicts A (oldest)
-            assert(cache.loadRecord(key("A")) == Absent)
-            assert(cache.loadRecord(key("B")).isDefined)
-            assert(cache.loadRecord(key("C")).isDefined)
+            for
+                _ <- cache.merge(Chunk(rec(key("A"), fk("x") -> scalar("1"))))
+                _ <- cache.merge(Chunk(rec(key("B"), fk("x") -> scalar("2"))))
+                _ <- cache.merge(Chunk(rec(key("C"), fk("x") -> scalar("3")))) // evicts A (oldest)
+                a <- cache.loadRecord(key("A"))
+                b <- cache.loadRecord(key("B"))
+                c <- cache.loadRecord(key("C"))
+            yield
+                assert(a == Absent)
+                assert(b.isDefined)
+                assert(c.isDefined)
+            end for
         }
 
         "a load refreshes recency so a later write evicts a colder record" in {
             val cache = MemoryCache(maxSize = 2)
-            cache.merge(List(rec(key("A"), fk("x") -> scalar("1"))))
-            cache.merge(List(rec(key("B"), fk("x") -> scalar("2"))))
-            cache.loadRecord(key("A")) // A is now most-recently-used
-            cache.merge(List(rec(key("C"), fk("x") -> scalar("3")))) // evicts B, not A
-            assert(cache.loadRecord(key("A")).isDefined)
-            assert(cache.loadRecord(key("B")) == Absent)
-            assert(cache.loadRecord(key("C")).isDefined)
+            for
+                _ <- cache.merge(Chunk(rec(key("A"), fk("x") -> scalar("1"))))
+                _ <- cache.merge(Chunk(rec(key("B"), fk("x") -> scalar("2"))))
+                _ <- cache.loadRecord(key("A"))                                // A is now most-recently-used
+                _ <- cache.merge(Chunk(rec(key("C"), fk("x") -> scalar("3")))) // evicts B, not A
+                a <- cache.loadRecord(key("A"))
+                b <- cache.loadRecord(key("B"))
+                c <- cache.loadRecord(key("C"))
+            yield
+                assert(a.isDefined)
+                assert(b == Absent)
+                assert(c.isDefined)
+            end for
         }
 
         // --- MemoryCache: expiration ----------------------------------------------
@@ -171,119 +206,168 @@ class StoreSpec extends kyo.test.Test[Any]:
         "a record older than the TTL reads back as a miss" in {
             var now   = 1000L
             val cache = MemoryCache(expireAfterMillis = 100L, nowMillis = () => now)
-            cache.merge(List(rec(key("A"), fk("x") -> scalar("1"))))
-            now = 1050L // within TTL
-            assert(cache.loadRecord(key("A")).isDefined)
-            now = 1200L // past TTL (200 > 100)
-            assert(cache.loadRecord(key("A")) == Absent)
+            for
+                _      <- cache.merge(Chunk(rec(key("A"), fk("x") -> scalar("1"))))
+                _      <- Sync.defer { now = 1050L } // within TTL
+                within <- cache.loadRecord(key("A"))
+                _      <- Sync.defer { now = 1200L } // past TTL (200 > 100)
+                past   <- cache.loadRecord(key("A"))
+            yield
+                assert(within.isDefined)
+                assert(past == Absent)
+            end for
         }
 
         "the Date cache header overrides the clock for the expiry stamp" in {
-            var now   = 5000L
+            val now   = 5000L
             val cache = MemoryCache(expireAfterMillis = 100L, nowMillis = () => now)
             // Stamp the record as received at t=1000 even though the clock reads 5000.
-            cache.merge(List(rec(key("A"), fk("x") -> scalar("1"))), CacheHeaders.of(CacheHeaders.Date -> "1000"))
-            assert(cache.loadRecord(key("A")) == Absent) // 5000 - 1000 = 4000 > 100
+            for
+                _      <- cache.merge(Chunk(rec(key("A"), fk("x") -> scalar("1"))), CacheHeaders.of(CacheHeaders.Date -> "1000"))
+                loaded <- cache.loadRecord(key("A"))
+            yield assert(loaded == Absent) // 5000 - 1000 = 4000 > 100
+            end for
         }
 
         "writeOperation normalizes into id-keyed records and reports the changed keys" in {
-            val s       = store()
-            val changed = s.writeOperation(CountriesQuery(), sampleData)
-            assert(changed == Set(CacheKey.QueryRoot, CacheKey("Country", "DE"), CacheKey("Country", "FR")))
-            assert(
-                s.cache.loadRecord(CacheKey("Country", "DE")).flatMap(_.get(fk("name"))) == Present(
-                    RecordValue.Scalar(jstr("Germany"))
-                )
-            )
+            val s = store()
+            for
+                changed <- s.writeOperation(CountriesQuery(), sampleData)
+                de      <- s.cache.loadRecord(CacheKey("Country", "DE"))
+            yield
+                assert(changed == Set(CacheKey.QueryRoot, CacheKey("Country", "DE"), CacheKey("Country", "FR")))
+                assert(de.flatMap(_.get(fk("name"))) == Present(RecordValue.Scalar(jstr("Germany"))))
+            end for
         }
 
         "writeOperation then readOperation returns typed data equal to the original" in {
             val s = store()
-            s.writeOperation(CountriesQuery(), sampleData)
-            assert(s.readOperation(CountriesQuery()) == sampleData)
+            for
+                _    <- s.writeOperation(CountriesQuery(), sampleData)
+                read <- s.readOperation(CountriesQuery())
+            yield assert(read == sampleData)
+            end for
         }
 
         "readOperation on an empty store raises CacheMissException" in {
             val s = store()
-            val _ = intercept[CacheMissException](s.readOperation(CountriesQuery()))
+            Abort.run[CacheMissException](s.readOperation(CountriesQuery())).map(result => assert(result.isFailure))
         }
 
         "readOperation on a partial store (a record removed) raises CacheMissException" in {
             val s = store()
-            s.writeOperation(CountriesQuery(), sampleData)
-            s.cache.remove(CacheKey("Country", "FR"))
-            val _ = intercept[CacheMissException](s.readOperation(CountriesQuery()))
+            for
+                _      <- s.writeOperation(CountriesQuery(), sampleData)
+                _      <- s.cache.remove(Chunk(CacheKey("Country", "FR")))
+                result <- Abort.run[CacheMissException](s.readOperation(CountriesQuery()))
+            yield assert(result.isFailure)
+            end for
         }
 
         "publish notifies a registered listener with the changed keys of a write" in {
             val s    = store()
             var seen = Set.empty[CacheKey]
-            s.addChangedKeysListener(keys => seen = keys)
-            s.writeOperation(CountriesQuery(), sampleData)
-            assert(seen == Set(CacheKey.QueryRoot, CacheKey("Country", "DE"), CacheKey("Country", "FR")))
+            for
+                _ <- s.addChangedKeysListener(keys => seen = keys)
+                _ <- s.writeOperation(CountriesQuery(), sampleData)
+            yield assert(seen == Set(CacheKey.QueryRoot, CacheKey("Country", "DE"), CacheKey("Country", "FR")))
+            end for
         }
 
         "a second identical writeOperation publishes nothing (no changed keys)" in {
-            val s = store()
-            s.writeOperation(CountriesQuery(), sampleData)
-            var seen = Option.empty[Set[CacheKey]]
-            s.addChangedKeysListener(keys => seen = Some(keys))
-            val changed = s.writeOperation(CountriesQuery(), sampleData)
-            assert(changed == Set.empty[CacheKey])
-            assert(seen == None) // publish is a no-op on an empty changed set
+            val s    = store()
+            var seen = Maybe.empty[Set[CacheKey]]
+            for
+                _       <- s.writeOperation(CountriesQuery(), sampleData)
+                _       <- s.addChangedKeysListener(keys => seen = Present(keys))
+                changed <- s.writeOperation(CountriesQuery(), sampleData)
+            yield
+                assert(changed == Set.empty[CacheKey])
+                assert(seen == Absent) // publish is a no-op on an empty changed set
+            end for
         }
 
         "remove deletes a present record and publishes its key" in {
-            val s = store()
-            s.writeOperation(CountriesQuery(), sampleData)
-            var seen = Option.empty[Set[CacheKey]]
-            s.addChangedKeysListener(keys => seen = Some(keys))
-            assert(s.remove(CacheKey("Country", "FR")) == true)
-            assert(seen == Some(Set(CacheKey("Country", "FR"))))
-            assert(s.cache.loadRecord(CacheKey("Country", "FR")) == Absent)
+            val s    = store()
+            var seen = Maybe.empty[Set[CacheKey]]
+            for
+                _       <- s.writeOperation(CountriesQuery(), sampleData)
+                _       <- s.addChangedKeysListener(keys => seen = Present(keys))
+                removed <- s.remove(CacheKey("Country", "FR"))
+                loaded  <- s.cache.loadRecord(CacheKey("Country", "FR"))
+            yield
+                assert(removed == true)
+                assert(seen == Present(Set(CacheKey("Country", "FR"))))
+                assert(loaded == Absent)
+            end for
         }
 
         "remove of an absent record publishes nothing" in {
             val s    = store()
-            var seen = Option.empty[Set[CacheKey]]
-            s.addChangedKeysListener(keys => seen = Some(keys))
-            assert(s.remove(CacheKey("Country", "XX")) == false)
-            assert(seen == None)
+            var seen = Maybe.empty[Set[CacheKey]]
+            for
+                _       <- s.addChangedKeysListener(keys => seen = Present(keys))
+                removed <- s.remove(CacheKey("Country", "XX"))
+            yield
+                assert(removed == false)
+                assert(seen == Absent)
+            end for
         }
 
         "remove takes the record's CacheKey" in {
             val s = store()
-            s.writeOperation(CountriesQuery(), sampleData)
-            assert(s.remove(CacheKey("Country", "DE")) == true)
-            assert(s.cache.loadRecord(CacheKey("Country", "DE")) == Absent)
+            for
+                _       <- s.writeOperation(CountriesQuery(), sampleData)
+                removed <- s.remove(CacheKey("Country", "DE"))
+                loaded  <- s.cache.loadRecord(CacheKey("Country", "DE"))
+            yield
+                assert(removed == true)
+                assert(loaded == Absent)
+            end for
         }
 
-        "the cancel thunk from addChangedKeysListener unsubscribes the listener" in {
-            val s      = store()
-            var calls  = 0
-            val handle = s.addChangedKeysListener(_ => calls += 1)
-            s.writeOperation(CountriesQuery(), sampleData)
-            handle()
-            s.remove(CacheKey("Country", "DE"))
-            assert(calls == 1) // only the write before close was delivered
+        "a listener registered in a Scope stops receiving once that Scope closes" in {
+            val s     = store()
+            var calls = 0
+            for
+                _ <- Scope.run(s.addChangedKeysListener(_ => calls += 1).andThen(s.writeOperation(CountriesQuery(), sampleData)))
+                _ <- s.remove(CacheKey("Country", "DE"))
+            yield assert(calls == 1) // only the write before the Scope closed was delivered
+            end for
         }
 
         "removeChangedKeysListener unsubscribes by callback identity" in {
-            val s                               = store()
-            var calls                           = 0
-            val listener: Set[CacheKey] => Unit = _ => calls += 1
-            s.addChangedKeysListener(listener)
-            s.removeChangedKeysListener(listener)
-            s.writeOperation(CountriesQuery(), sampleData)
-            assert(calls == 0)
+            val s                                      = store()
+            var calls                                  = 0
+            val listener: Set[CacheKey] => Unit < Sync = _ => calls += 1
+            for
+                _ <- s.addChangedKeysListener(listener)
+                _ <- s.removeChangedKeysListener(listener)
+                _ <- s.writeOperation(CountriesQuery(), sampleData)
+            yield assert(calls == 0)
+            end for
         }
 
         "manual publish reaches listeners for external invalidation" in {
             val s    = store()
-            var seen = Option.empty[Set[CacheKey]]
-            s.addChangedKeysListener(keys => seen = Some(keys))
-            s.publish(Set(CacheKey("User", "1")))
-            assert(seen == Some(Set(CacheKey("User", "1"))))
+            var seen = Maybe.empty[Set[CacheKey]]
+            for
+                _ <- s.addChangedKeysListener(keys => seen = Present(keys))
+                _ <- s.publish(Set(CacheKey("User", "1")))
+            yield assert(seen == Present(Set(CacheKey("User", "1"))))
+            end for
+        }
+
+        "a cache read has no synchronous form" in {
+            typeCheckFailure("""
+                val cache                  = kyo.apollo.cache.normalized.MemoryCache()
+                val loaded: kyo.Maybe[kyo.apollo.cache.normalized.api.Record] =
+                    cache.loadRecord(kyo.apollo.cache.normalized.api.CacheKey("A", "1"))(using kyo.Frame.internal)
+            """)("Required: kyo.Maybe[kyo.apollo.cache.normalized.api.Record]")
+            typeCheckFailure("""
+                val store = new kyo.apollo.cache.normalized.ApolloStore(kyo.apollo.cache.normalized.MemoryCache())
+                val generation: Long = store.currentGeneration(using kyo.Frame.internal)
+            """)("Required: Long")
         }
     }
 end StoreSpec

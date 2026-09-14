@@ -8,9 +8,6 @@ import kyo.apollo.network.ApolloResponse
 import kyo.apollo.network.ExecutionContext
 import kyo.apollo.runtime.ResponseStream
 import scala.annotation.tailrec
-import scala.util.Failure
-import scala.util.Success
-import scala.util.Try
 
 /** Reactive `watch()` — the Phase 05 payload that turns a one-shot operation into
   * a live stream.
@@ -75,19 +72,19 @@ extension [D](call: ApolloCall[D])
       * ==How the effect pivot (Schritt 2.2) implements it==
       *
       * A per-watch unbounded [[Channel]] backs the stream; its `streamUntilClosed`
-      * is the stream body. The synchronous change-notification machine is preserved
-      * verbatim — `changedKeys.subscribe` is a plain callback, and cache re-reads
-      * push into the channel via `channel.unsafe.offer`. The two *async* legs (the
-      * initial fetch and a `NetworkOnly` refetch) run as detached fibers
-      * (`Fiber.Unsafe.init`) that drive `call.stream` / `client.executeAsStream`
-      * into the same channel — the idiomatic callback→Kyo interop, mirroring the WS
-      * transport and `kyo-ui`'s reactive bridge. Those fetch streams are finite, so
-      * they complete on their own; teardown only flips `active`, unsubscribes, and
-      * closes the channel.
+      * is the stream body. The change notification is an effect the store runs on
+      * the publishing fiber — `changedKeys.subscribe` registers it for the stream's
+      * `Scope` — and cache re-reads push into the channel via `channel.unsafe.offer`.
+      * The two *async* legs (the initial fetch and a network refetch) run as
+      * detached fibers (`Fiber.Unsafe.init`) that drive `call.stream` /
+      * `client.executeAsStream` into the same channel — the idiomatic callback→Kyo
+      * interop, mirroring the WS transport and `kyo-ui`'s reactive bridge. Those
+      * fetch streams are finite, so they complete on their own; teardown only flips
+      * `active`, closes the channel, and ends the subscription.
       *
-      * The callbacks run on three different contexts — the detached fetch fibers,
-      * whichever fiber writes to the store (its synchronous `publish` invokes
-      * `onChangedKeys`), and the `Scope` teardown — so the watch's mutable state
+      * The reactions run on three different contexts — the detached fetch fibers,
+      * whichever fiber writes to the store (its `publish` runs `onChangedKeys`
+      * before the write returns), and the `Scope` teardown — so the watch's mutable state
       * lives in one [[AtomicRef]] over a [[WatchState]]: "still active?" and "which
       * keys?" are read together, and teardown's `active = false` is visible to every
       * later callback through the CAS.
@@ -152,12 +149,23 @@ extension [D](call: ApolloCall[D])
                 // would have. Terminates: each pass adopts the generation of its own
                 // read, and a network refetch publishes BEFORE the read that establishes
                 // it, so only a genuinely concurrent write drives another pass.
-                def closeWindow(): Unit =
-                    val s = state.get()
-                    if s.active && s.gen < store.currentGeneration then react()
+                def closeWindow(): Unit < Sync =
+                    Sync.Unsafe.defer {
+                        val s = state.get()
+                        if !s.active then Kyo.unit
+                        else store.currentGeneration.map(current => if s.gen < current then react() else Kyo.unit)
+                    }
 
+                // Only ever called from inside a running reaction, so the unsafe read and
+                // offer happen when the reaction runs, not when it is built.
                 def offer(response: ApolloResponse[D]): Unit =
                     if state.get().active then discard(channel.unsafe.offer(response))
+
+                // The store read behind every reaction. A miss is raised inside the read and
+                // arrives here as the result's failure; a panic (an interrupt) is not a miss
+                // and is passed on.
+                def readStamped: Result[Throwable, (D, Set[CacheKey], Long)] < Sync =
+                    Abort.run[Throwable](store.readOperationStamped(request.operation))
 
                 // Launch the initial fetch as a detached fiber that pushes each emission
                 // through `emitFresh`. Network refetches go through `requestRefetch`.
@@ -173,25 +181,30 @@ extension [D](call: ApolloCall[D])
                 // never born dead. The fallback carries generation 0: it only ever seeds
                 // a watch that has no read behind its set yet, and never rolls back one
                 // that has. Only a set backed by a real read closes its window.
-                def establishFrom(response: ApolloResponse[D]): Unit =
+                def establishFrom(response: ApolloResponse[D]): Unit < Sync =
                     val info    = response.cacheInfo
                     val stamped = info.map(_.dependentKeys).getOrElse(Set.empty)
                     if info.exists(_.isCacheHit) && stamped.nonEmpty then
-                        discard(adopt(stamped, info.map(_.generation).getOrElse(0L)))
-                        closeWindow()
+                        Sync.Unsafe.defer(discard(adopt(stamped, info.map(_.generation).getOrElse(0L))))
+                            .andThen(closeWindow())
                     else
-                        Try(store.readOperationStamped(request.operation)) match
-                            case Success((_, keys, gen)) =>
+                        readStamped.map {
+                            case Result.Success((_, keys, gen)) =>
                                 discard(adopt(keys, gen))
                                 closeWindow()
-                            case Failure(_) => if stamped.nonEmpty then seed(stamped)
+                            case Result.Failure(_)   => if stamped.nonEmpty then seed(stamped)
+                            case Result.Panic(cause) => Abort.panic(cause)
+                        }
                     end if
                 end establishFrom
 
-                def emitFresh(response: ApolloResponse[D]): Unit =
-                    if state.get().active then
-                        offer(response)
-                        establishFrom(response)
+                def emitFresh(response: ApolloResponse[D]): Unit < Sync =
+                    Sync.Unsafe.defer {
+                        if !state.get().active then Kyo.unit
+                        else
+                            offer(response)
+                            establishFrom(response)
+                    }
 
                 // Re-read through the same denormalization path as the first read, so a
                 // re-emitted value equals a fresh read. What a read that now MISSES means is
@@ -201,17 +214,21 @@ extension [D](call: ApolloCall[D])
                 // Either way the watch set is KEPT, so a later write restoring the data
                 // revives the watcher (Apollo Client watchers stay registered across
                 // incomplete reads). A watch that never established a set stays silent.
-                def reread(onMiss: Throwable => Unit): Unit =
-                    Try(store.readOperationStamped(request.operation)) match
-                        case Success((data, keys, gen)) =>
+                def reread(onMiss: Throwable => Unit < Sync): Unit < Sync =
+                    readStamped.map {
+                        case Result.Success((data, keys, gen)) =>
                             if adopt(keys, gen) then offer(CacheResponses.hit(request, data, keys, gen))
                             closeWindow()
-                        case Failure(cause) => onMiss(cause)
+                        case Result.Failure(cause) => onMiss(cause)
+                        case Result.Panic(cause)   => Abort.panic(cause)
+                    }
 
                 /** [[RefetchPolicy.CacheOnly]]'s miss leg: the miss IS the value. */
-                def emitMiss(cause: Throwable): Unit =
-                    val s = state.get()
-                    if s.active && s.keys.nonEmpty then offer(CacheResponses.miss(request, cause))
+                def emitMiss(cause: Throwable): Unit < Sync =
+                    Sync.Unsafe.defer {
+                        val s = state.get()
+                        if s.active && s.keys.nonEmpty then offer(CacheResponses.miss(request, cause))
+                    }
 
                 // Re-run the operation over the network (which writes the response back
                 // into the store) and emit the networked value — at most one such fiber
@@ -220,36 +237,40 @@ extension [D](call: ApolloCall[D])
                 // asked for it, so its response covers all of them, and the in-flight
                 // response is emitted regardless. n writes in a row cost at most two
                 // network requests (the running one and the rerun).
-                @tailrec def requestRefetch(): Unit =
+                def requestRefetch(): Unit < Sync = Sync.Unsafe.defer(bookRefetch())
+
+                @tailrec def bookRefetch(): Unit =
                     val s = state.get()
                     if !s.active then ()
                     else if s.inflight then
-                        if !state.compareAndSet(s, s.copy(rerun = true)) then requestRefetch()
+                        if !state.compareAndSet(s, s.copy(rerun = true)) then bookRefetch()
                     else if state.compareAndSet(s, s.copy(inflight = true, rerun = false)) then
                         val networked = request.newBuilder
                             .addExecutionContext(ExecutionContext.Empty + FetchPolicy.NetworkOnly)
                             .build()
                         discard(Fiber.Unsafe.init[Throwable, Unit](
                             Scope.run(
-                                Sync.ensure(Sync.defer(finishRefetch()))(
+                                Sync.ensure(finishRefetch())(
                                     client.executeAsStream(networked).foreach(emitFresh)
                                 )
                             )
                         ))
-                    else requestRefetch()
+                    else bookRefetch()
                     end if
-                end requestRefetch
+                end bookRefetch
 
                 // Runs when the refetch fiber ends, however it ends: hand the flight back
                 // and run the one booked rerun, if any. Otherwise, if a `CacheFirst` miss
                 // is still unsettled — no read succeeded during the flight, so the
                 // write-back did not cure it — the miss is now the value: one re-read,
                 // which emits the miss (or a hit, if a concurrent write cured it meanwhile).
-                def finishRefetch(): Unit =
-                    val before = state.getAndUpdate(_.copy(inflight = false, rerun = false))
-                    if before.rerun then requestRefetch()
-                    else if before.refetched then reread(emitMiss)
-                end finishRefetch
+                def finishRefetch(): Unit < Sync =
+                    Sync.Unsafe.defer {
+                        val before = state.getAndUpdate(_.copy(inflight = false, rerun = false))
+                        if before.rerun then requestRefetch()
+                        else if before.refetched then reread(emitMiss)
+                        else Kyo.unit
+                    }
 
                 // CacheFirst's miss leg: the first miss for a cause goes to the network,
                 // once. A miss with no successful read since that request is the value,
@@ -260,43 +281,46 @@ extension [D](call: ApolloCall[D])
                 // field in every response (each write-back publishes a watched key, each
                 // re-read misses again) is an endless chain of network requests out of a
                 // single watch.
-                @tailrec def refetchOnce(cause: Throwable): Unit =
+                def refetchOnce(cause: Throwable): Unit < Sync = Sync.Unsafe.defer(settleMiss(cause))
+
+                @tailrec def settleMiss(cause: Throwable): Unit < Sync =
                     val s = state.get()
-                    if !s.active then ()
-                    else if s.refetched && s.inflight then () // settled once, at the end of the flight
+                    if !s.active then Kyo.unit
+                    else if s.refetched && s.inflight then Kyo.unit // settled once, at the end of the flight
                     else if s.refetched then emitMiss(cause)
                     else if state.compareAndSet(s, s.copy(refetched = true)) then requestRefetch()
-                    else refetchOnce(cause)
+                    else settleMiss(cause)
                     end if
-                end refetchOnce
+                end settleMiss
 
                 // The reaction a change in the watch set calls for, by policy — shared by
                 // the changed-keys callback and by `closeWindow`, so a write that slipped
                 // past the callback is answered the same way it would have been.
-                def react(): Unit =
+                def react(): Unit < Sync =
                     refetchPolicy match
                         case RefetchPolicy.CacheOnly   => reread(emitMiss)
                         case RefetchPolicy.NetworkOnly => requestRefetch()
                         case RefetchPolicy.CacheFirst  => reread(refetchOnce)
 
-                def onChangedKeys(changedKeys: Set[CacheKey]): Unit =
-                    val s = state.get() // one read: `active` and `keys` belong together
-                    if s.active && changedKeys.intersect(s.keys).nonEmpty then react()
+                // Runs on the publishing fiber, before that write returns.
+                def onChangedKeys(changedKeys: Set[CacheKey]): Unit < Sync =
+                    Sync.Unsafe.defer {
+                        val s = state.get() // one read: `active` and `keys` belong together
+                        if s.active && changedKeys.intersect(s.keys).nonEmpty then react() else Kyo.unit
+                    }
 
                 // Subscribe to the store *before* the initial fetch so a write landing
                 // during the fetch is never missed; the initially empty key set guards
                 // against re-emitting for the initial fetch's own write-back (nothing
-                // intersects the empty set).
-                val unsubscribe = store.changedKeys.subscribe(onChangedKeys)
-                spawn(call.stream)
-
-                Scope
-                    .ensure(Sync.defer {
-                        given AllowUnsafe = AllowUnsafe.embrace.danger
+                // intersects the empty set). The subscription ends with the stream's
+                // Scope; the teardown registered after it runs first and flips `active`,
+                // so no reaction offers anything once the Scope is closing.
+                store.changedKeys.subscribe(onChangedKeys)
+                    .andThen(Scope.ensure(Sync.Unsafe.defer {
                         discard(state.updateAndGet(_.copy(active = false)))
-                        unsubscribe()
                         discard(channel.unsafe.close())
-                    })
+                    }))
+                    .andThen(Sync.Unsafe.defer(spawn(call.stream)))
                     .andThen(channel.streamUntilClosed())
             }
         }

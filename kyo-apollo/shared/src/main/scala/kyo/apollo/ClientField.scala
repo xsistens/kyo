@@ -81,9 +81,10 @@ final class ClientField[Origin, R <: AnyNamedTuple, V] private[apollo] (
     private def row(value: V): R = Tuple1(value).asInstanceOf[R]
     private def unrow(r: R): V   = r.asInstanceOf[Tuple].productElement(0).asInstanceOf[V]
     private def readAt(client: ApolloClient, key: CacheKey)(using Frame): V < Sync =
-        Sync.defer {
-            try unrow(client.apolloStore.readFragment(fragment, key))
-            catch case _: CacheMissException => default
+        Abort.run[CacheMissException](Sync.defer(client.apolloStore.readFragment(fragment, key))).map {
+            case Result.Success(r)   => unrow(r)
+            case Result.Failure(_)   => default
+            case Result.Panic(cause) => Abort.panic(cause)
         }
 
     /** Write the field on entity `id` (record `TypeName:id`) and re-emit every

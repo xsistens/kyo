@@ -223,12 +223,16 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
                 MemoryCache(),
                 cacheKeyGenerator = TypePolicyCacheKeyGenerator.of(TypePolicy("Player", Nil))
             )
-            store.writeOperation(PlayerQuery(), PlayerData(Player("Player", isPlaying = true)))
-            assert(store.cache.loadRecord(CacheKey("Player", "")).isDefined)
-
-            val changed = store.writeOperation(PauseMutation(), PauseData(Player("Player", isPlaying = false)))
-            assert(changed.contains(CacheKey("Player", "")))
-            assert(!store.readOperation(PlayerQuery()).playbackState.isPlaying)
+            for
+                _       <- store.writeOperation(PlayerQuery(), PlayerData(Player("Player", isPlaying = true)))
+                player  <- store.cache.loadRecord(CacheKey("Player", ""))
+                changed <- store.writeOperation(PauseMutation(), PauseData(Player("Player", isPlaying = false)))
+                read    <- store.readOperation(PlayerQuery())
+            yield
+                assert(player.isDefined)
+                assert(changed.contains(CacheKey("Player", "")))
+                assert(!read.playbackState.isPlaying)
+            end for
         }
 
         "keyArgs restricts a field key to the named arguments" in {
@@ -430,43 +434,43 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
 
         "ConnectionFieldPolicy merges paginated pages into one logical list" in {
             val store = connectionStore()
-            store.writeOperation(
-                FeedQuery(Absent),
-                page(List("c1" -> "1", "c2" -> "2"), "c2", hasNext = true)
-            )
-            store.writeOperation(
-                FeedQuery(Present("c2")),
-                page(List("c3" -> "3", "c4" -> "4"), "c4", hasNext = false)
-            )
-
-            // Both pages collapsed onto the single connection field key `feed`
-            // (next to the root's stamped `__typename`).
-            assert(
-                store.cache.loadRecord(CacheKey.QueryRoot).map(_.fieldKeys) ==
-                    Present(Set(FieldKey.Typename, fk("feed")))
-            )
-
-            val merged = store.readOperation(FeedQuery(Absent))
-            assert(merged.feed.edges.map(_.cursor) == List("c1", "c2", "c3", "c4"))
-            assert(merged.feed.edges.map(_.node.id) == List("1", "2", "3", "4"))
-            // The latest page's pageInfo wins.
-            assert(merged.feed.pageInfo == PageInfo("c4", hasNextPage = false))
+            for
+                _ <- store.writeOperation(
+                    FeedQuery(Absent),
+                    page(List("c1" -> "1", "c2" -> "2"), "c2", hasNext = true)
+                )
+                _ <- store.writeOperation(
+                    FeedQuery(Present("c2")),
+                    page(List("c3" -> "3", "c4" -> "4"), "c4", hasNext = false)
+                )
+                root   <- store.cache.loadRecord(CacheKey.QueryRoot)
+                merged <- store.readOperation(FeedQuery(Absent))
+            yield
+                // Both pages collapsed onto the single connection field key `feed`
+                // (next to the root's stamped `__typename`).
+                assert(root.map(_.fieldKeys) == Present(Set(FieldKey.Typename, fk("feed"))))
+                assert(merged.feed.edges.map(_.cursor) == List("c1", "c2", "c3", "c4"))
+                assert(merged.feed.edges.map(_.node.id) == List("1", "2", "3", "4"))
+                // The latest page's pageInfo wins.
+                assert(merged.feed.pageInfo == PageInfo("c4", hasNextPage = false))
+            end for
         }
 
         "re-fetching an overlapping page does not duplicate edges" in {
             val store = connectionStore()
-            store.writeOperation(
-                FeedQuery(Absent),
-                page(List("c1" -> "1", "c2" -> "2"), "c2", hasNext = true)
-            )
-            // Page 2 overlaps c2, then adds c3.
-            store.writeOperation(
-                FeedQuery(Present("c1")),
-                page(List("c2" -> "2", "c3" -> "3"), "c3", hasNext = false)
-            )
-
-            val merged = store.readOperation(FeedQuery(Absent))
-            assert(merged.feed.edges.map(_.cursor) == List("c1", "c2", "c3"))
+            for
+                _ <- store.writeOperation(
+                    FeedQuery(Absent),
+                    page(List("c1" -> "1", "c2" -> "2"), "c2", hasNext = true)
+                )
+                // Page 2 overlaps c2, then adds c3.
+                _ <- store.writeOperation(
+                    FeedQuery(Present("c1")),
+                    page(List("c2" -> "2", "c3" -> "3"), "c3", hasNext = false)
+                )
+                merged <- store.readOperation(FeedQuery(Absent))
+            yield assert(merged.feed.edges.map(_.cursor) == List("c1", "c2", "c3"))
+            end for
         }
 
         "without a ConnectionFieldPolicy pages are stored under distinct keys and do not merge" in {
@@ -476,22 +480,25 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
                 MemoryCache(),
                 cacheKeyGenerator = TypePolicyCacheKeyGenerator.of(TypePolicy("PostEdge", List("cursor")))
             )
-            store.writeOperation(
-                FeedQuery(Absent),
-                page(List("c1" -> "1", "c2" -> "2"), "c2", hasNext = true)
-            )
-            store.writeOperation(
-                FeedQuery(Present("c2")),
-                page(List("c3" -> "3", "c4" -> "4"), "c4", hasNext = false)
-            )
-
-            // Two distinct field keys on the root (plus the stamped `__typename`) —
-            // the pages are isolated.
-            assert(store.cache.loadRecord(CacheKey.QueryRoot).map(_.fieldKeys.size) == Present(3))
-            assert(store.readOperation(FeedQuery(Absent)).feed.edges.map(_.cursor) == List("c1", "c2"))
-            assert(
-                store.readOperation(FeedQuery(Present("c2"))).feed.edges.map(_.cursor) == List("c3", "c4")
-            )
+            for
+                _ <- store.writeOperation(
+                    FeedQuery(Absent),
+                    page(List("c1" -> "1", "c2" -> "2"), "c2", hasNext = true)
+                )
+                _ <- store.writeOperation(
+                    FeedQuery(Present("c2")),
+                    page(List("c3" -> "3", "c4" -> "4"), "c4", hasNext = false)
+                )
+                root   <- store.cache.loadRecord(CacheKey.QueryRoot)
+                first  <- store.readOperation(FeedQuery(Absent))
+                second <- store.readOperation(FeedQuery(Present("c2")))
+            yield
+                // Two distinct field keys on the root (plus the stamped `__typename`) —
+                // the pages are isolated.
+                assert(root.map(_.fieldKeys.size) == Present(3))
+                assert(first.feed.edges.map(_.cursor) == List("c1", "c2"))
+                assert(second.feed.edges.map(_.cursor) == List("c3", "c4"))
+            end for
         }
     }
 end DeclarativeCacheConfigSpec

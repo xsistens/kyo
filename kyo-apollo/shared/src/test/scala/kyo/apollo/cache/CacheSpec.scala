@@ -272,36 +272,42 @@ class CacheSpec extends kyo.test.Test[Any]:
         // --- 2. Cache-key generation with and without ids -----------------------
 
         "with ids: every object is keyed Typename:id via the default id generator" in {
-            val changed = store().writeOperation(LibraryQuery(), sampleLibrary)
-            assert(changed == allKeys)
+            store().writeOperation(LibraryQuery(), sampleLibrary).map(changed => assert(changed == allKeys))
         }
 
         "without ids: an object with no id falls back to a response-path key" in {
-            val changed = store().writeOperation(StatsQuery(), StatsData(Stats("ok")))
-            assert(changed == Set(CacheKey.QueryRoot, pathKey("QUERY_ROOT", "stats")))
+            store().writeOperation(StatsQuery(), StatsData(Stats("ok"))).map { changed =>
+                assert(changed == Set(CacheKey.QueryRoot, pathKey("QUERY_ROOT", "stats")))
+            }
         }
 
         // --- 3. Denormalization round-trip: write then read returns equal data --
 
         "writeOperation then readOperation returns typed data equal to the deep input" in {
             val s = store()
-            s.writeOperation(LibraryQuery(), sampleLibrary)
-            assert(s.readOperation(LibraryQuery()) == sampleLibrary)
+            for
+                _    <- s.writeOperation(LibraryQuery(), sampleLibrary)
+                read <- s.readOperation(LibraryQuery())
+            yield assert(read == sampleLibrary)
+            end for
         }
 
         // --- 4. CacheMissException on a partial store ---------------------------
 
         "readOperation raises CacheMissException when a record deep in the graph is gone" in {
             val s = store()
-            s.writeOperation(LibraryQuery(), sampleLibrary)
-            s.cache.remove(CacheKey("Author", "a1")) // a leaf entity two levels down
-            val miss = intercept[CacheMissException](s.readOperation(LibraryQuery()))
-            assert(miss.key == CacheKey("Author", "a1"))
+            for
+                _    <- s.writeOperation(LibraryQuery(), sampleLibrary)
+                _    <- s.cache.remove(Chunk(CacheKey("Author", "a1"))) // a leaf entity two levels down
+                read <- Abort.run[CacheMissException](s.readOperation(LibraryQuery()))
+            yield assert(read.failure.map(_.key) == Present(CacheKey("Author", "a1").render))
+            end for
         }
 
         "readOperation on an empty store raises CacheMissException at the root" in {
-            val miss = intercept[CacheMissException](store().readOperation(LibraryQuery()))
-            assert(miss.key == CacheKey.QueryRoot)
+            Abort.run[CacheMissException](store().readOperation(LibraryQuery())).map { read =>
+                assert(read.failure.map(_.key) == Present(CacheKey.QueryRoot.render))
+            }
         }
 
         // --- 6. Two operations converging on one entity's id-less children -------
@@ -312,20 +318,22 @@ class CacheSpec extends kyo.test.Test[Any]:
             // the narrower write repointed `Album:1.covers` at records that had never carried
             // `alt`, and the wider read then missed on data nobody had contradicted.
             val s = store()
-            s.writeOperation(WideQuery(), wideAlbum)
-            s.writeOperation(FeaturedQuery(), narrowAlbum)
-
-            assert(s.readOperation(WideQuery()) == wideAlbum)
-            assert(
-                s.cache.loadRecord(pathKey("Album:1", "covers", "0")).map(_.fieldKeys) ==
-                    Present(Set(fk("__typename"), fk("url"), fk("alt")))
-            )
-            // Two records for two covers — not four. Before the fix each writer minted its own
-            // pair under its own response path, and the parent pointed at whichever came last.
-            assert(
-                s.cache.allRecords().keySet.filter(_.render.contains("covers")) ==
-                    Set(pathKey("Album:1", "covers", "0"), pathKey("Album:1", "covers", "1"))
-            )
+            for
+                _     <- s.writeOperation(WideQuery(), wideAlbum)
+                _     <- s.writeOperation(FeaturedQuery(), narrowAlbum)
+                read  <- s.readOperation(WideQuery())
+                slot0 <- s.cache.loadRecord(pathKey("Album:1", "covers", "0"))
+                all   <- s.cache.allRecords
+            yield
+                assert(read == wideAlbum)
+                assert(slot0.map(_.fieldKeys) == Present(Set(fk("__typename"), fk("url"), fk("alt"))))
+                // Two records for two covers — not four. Before the fix each writer minted its own
+                // pair under its own response path, and the parent pointed at whichever came last.
+                assert(
+                    all.keySet.filter(_.render.contains("covers")) ==
+                        Set(pathKey("Album:1", "covers", "0"), pathKey("Album:1", "covers", "1"))
+                )
+            end for
         }
 
         "a reordered id-less list merges positionally, keeping the previous occupant's fields" in {
@@ -334,18 +342,20 @@ class CacheSpec extends kyo.test.Test[Any]:
             // reordered write merges into the slot the previous element occupied. apollo-kotlin
             // behaves the same way; the remedy is to give the element type a cache identity.
             val s = store()
-            s.writeOperation(WideQuery(), wideAlbum) // covers = [c1(alt=A), c2(alt=B)]
-            s.writeOperation(
-                FeaturedQuery(),
-                narrowAlbum.copy(featured = // covers = [c2] only
-                    narrowAlbum.featured.copy(covers = List(CoverNarrow("u2")))
+            for
+                _ <- s.writeOperation(WideQuery(), wideAlbum) // covers = [c1(alt=A), c2(alt=B)]
+                _ <- s.writeOperation(
+                    FeaturedQuery(),
+                    narrowAlbum.copy(featured = // covers = [c2] only
+                        narrowAlbum.featured.copy(covers = List(CoverNarrow("u2")))
+                    )
                 )
-            )
-
-            // Slot 0 now holds c2's url beside c1's alt. Structurally valid, semantically wrong.
-            val slot0 = s.cache.loadRecord(pathKey("Album:1", "covers", "0"))
-            assert(slot0.map(_.get(fk("url"))) == Present(Present(RecordValue.Scalar(Json.JStr("u2")))))
-            assert(slot0.map(_.get(fk("alt"))) == Present(Present(RecordValue.Scalar(Json.JStr("A")))))
+                slot0 <- s.cache.loadRecord(pathKey("Album:1", "covers", "0"))
+            yield
+                // Slot 0 now holds c2's url beside c1's alt. Structurally valid, semantically wrong.
+                assert(slot0.map(_.get(fk("url"))) == Present(Present(RecordValue.Scalar(Json.JStr("u2")))))
+                assert(slot0.map(_.get(fk("alt"))) == Present(Present(RecordValue.Scalar(Json.JStr("A")))))
+            end for
         }
 
         // --- 7. The positional-merge diagnostic ---------------------------------
@@ -353,15 +363,18 @@ class CacheSpec extends kyo.test.Test[Any]:
         "the diagnostic reports a positional merge that CONTRADICTS a stored field" in {
             val seen = scala.collection.mutable.ListBuffer.empty[String]
             val s    = new ApolloStore(MemoryCache(), diagnostics = CacheDiagnostics.to(seen.append(_)))
-            s.writeOperation(WideQuery(), wideAlbum)
-            s.writeOperation(
-                FeaturedQuery(),
-                narrowAlbum.copy(featured = narrowAlbum.featured.copy(covers = List(CoverNarrow("u2"))))
-            )
-            assert(seen.size == 1, s"expected one warning, got: $seen")
-            assert(seen.head.contains("Album:1.covers.0"))
-            assert(seen.head.contains("'url'"))
-            assert(seen.head.contains("'Image'"), s"names the type to give an identity to: ${seen.head}")
+            for
+                _ <- s.writeOperation(WideQuery(), wideAlbum)
+                _ <- s.writeOperation(
+                    FeaturedQuery(),
+                    narrowAlbum.copy(featured = narrowAlbum.featured.copy(covers = List(CoverNarrow("u2"))))
+                )
+            yield
+                assert(seen.size == 1, s"expected one warning, got: $seen")
+                assert(seen.head.contains("Album:1.covers.0"))
+                assert(seen.head.contains("'url'"))
+                assert(seen.head.contains("'Image'"), s"names the type to give an identity to: ${seen.head}")
+            end for
         }
 
         "the diagnostic stays silent when a disjoint write merely EXTENDS the record" in {
@@ -370,9 +383,11 @@ class CacheSpec extends kyo.test.Test[Any]:
             // diagnostic gets muted and then protects nobody.
             val seen = scala.collection.mutable.ListBuffer.empty[String]
             val s    = new ApolloStore(MemoryCache(), diagnostics = CacheDiagnostics.to(seen.append(_)))
-            s.writeOperation(WideQuery(), wideAlbum)
-            s.writeOperation(FeaturedQuery(), narrowAlbum)
-            assert(seen.isEmpty, s"expected silence, got: $seen")
+            for
+                _ <- s.writeOperation(WideQuery(), wideAlbum)
+                _ <- s.writeOperation(FeaturedQuery(), narrowAlbum)
+            yield assert(seen.isEmpty, s"expected silence, got: $seen")
+            end for
         }
 
         "the diagnostic stays silent for an identity-keyed record" in {
@@ -380,12 +395,14 @@ class CacheSpec extends kyo.test.Test[Any]:
             // object whichever write reaches it, so a changed field there is just news.
             val seen = scala.collection.mutable.ListBuffer.empty[String]
             val s    = new ApolloStore(MemoryCache(), diagnostics = CacheDiagnostics.to(seen.append(_)))
-            s.writeOperation(LibraryQuery(), sampleLibrary)
-            s.writeOperation(
-                LibraryQuery(),
-                sampleLibrary.copy(library = sampleLibrary.library.copy(name = "Branch"))
-            )
-            assert(seen.isEmpty, s"expected silence, got: $seen")
+            for
+                _ <- s.writeOperation(LibraryQuery(), sampleLibrary)
+                _ <- s.writeOperation(
+                    LibraryQuery(),
+                    sampleLibrary.copy(library = sampleLibrary.library.copy(name = "Branch"))
+                )
+            yield assert(seen.isEmpty, s"expected silence, got: $seen")
+            end for
         }
 
         // --- 5. Each FetchPolicy's emission sequence over a fake transport -------

@@ -140,8 +140,8 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
                 // What the NORMALIZER keyed the edge as, read off the cache itself
                 // rather than assumed: `TypePolicy("Edge", List("cursor"))` composes
                 // `Edge:<cursor>`.
-                normalized = client.apolloStore.cache.allRecords().keySet.filter(_.render.startsWith("Edge"))
-                _          = assert(normalized == Set(CacheKey("Edge", "c1")), s"normalizer keyed the edge as $normalized")
+                normalized <- client.apolloStore.cache.allRecords.map(_.keySet.filter(_.render.startsWith("Edge")))
+                _ = assert(normalized == Set(CacheKey("Edge", "c1")), s"normalizer keyed the edge as $normalized")
                 // What the WRITE says it changed. These two agreeing is the whole
                 // assertion: a mismatch would write to a record nothing reads, and
                 // nothing anywhere would report it.
@@ -231,7 +231,7 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
             val (client, _) = cachedClient()
             val batches     = ListBuffer.empty[Set[CacheKey]]
             for
-                _       <- Sync.defer(discard(client.apolloStore.addChangedKeysListener(ks => discard(batches += ks))))
+                _       <- client.apolloStore.addChangedKeysListener(ks => discard(batches += ks))
                 changed <- selected.writeAll(client, Seq("c1" -> true, "c2" -> true, "c3" -> true))
                 _ = assert(changed == Set(CacheKey("Edge", "c1"), CacheKey("Edge", "c2"), CacheKey("Edge", "c3")))
                 _ = assert(batches.size == 1, s"writeAll published ${batches.size} times")
@@ -254,7 +254,7 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
             val (client, _) = cachedClient()
             val batches     = ListBuffer.empty[Set[CacheKey]]
             for
-                _       <- Sync.defer(discard(client.apolloStore.addChangedKeysListener(ks => discard(batches += ks))))
+                _       <- client.apolloStore.addChangedKeysListener(ks => discard(batches += ks))
                 changed <- selected.writeAll(client, Seq.empty)
                 _ = assert(changed.isEmpty)
                 _ = assert(batches.isEmpty, s"empty writeAll published $batches")
@@ -316,9 +316,9 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
             for
                 _    <- tree.writeRoot(client, value)
                 back <- tree.readRoot(client)
-                _           = assert(back == value, s"read back $back")
-                treeRecords = client.apolloStore.cache.allRecords().keySet.filter(_.render.contains("tree"))
-                _           = assert(treeRecords.size == 1, s"exactly the first level is a record: $treeRecords")
+                _ = assert(back == value, s"read back $back")
+                treeRecords <- client.apolloStore.cache.allRecords.map(_.keySet.filter(_.render.contains("tree")))
+                _ = assert(treeRecords.size == 1, s"exactly the first level is a record: $treeRecords")
             yield assert(true)
             end for
         }
