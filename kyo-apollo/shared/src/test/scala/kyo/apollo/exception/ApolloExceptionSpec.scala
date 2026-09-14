@@ -67,15 +67,31 @@ class ApolloExceptionSpec extends kyo.test.Test[Any]:
             val ex     = ApolloParseException(actual, "a GraphQL response object", cause)
             assert(ex.actual == actual)
             assert(ex.expected == "a GraphQL response object")
-            assert(ex.getMessage.contains("Expected a GraphQL response object but got: [1]"))
+            assert(ex.message == "Expected a GraphQL response object but got an array")
+            assert(ex.getMessage.contains("Expected a GraphQL response object but got an array"))
+            assert(ex.getMessage.contains("IllegalStateException"))
             assert(ex.getCause == cause)
         }
 
-        "parse exception: a large actual value is cut in the message, kept whole in the field" in {
-            val body = "x" * 10000
-            val ex   = ApolloParseException(Json.JStr(body), "a JSON document")
-            assert(ex.actual == Json.JStr(body))
-            assert(!ex.getMessage.contains("x" * 1000))
+        "parse exception: no text of it renders a value of actual or the cause's message, the field keeps it whole" in {
+            // The values live in `ParseLeak`, away from these lines: a development-mode
+            // `getMessage` quotes the source around the construction site.
+            import ParseLeak.*
+            val cases = Chunk(
+                ApolloParseException(text, "a JSON document"),
+                ApolloParseException(text, "a JSON document", cause),
+                ApolloParseException(row, "an object", cause),
+                ApolloParseException(numbers, "an object", cause)
+            )
+            cases.foreach { ex =>
+                Chunk(ex.message, ex.getMessage, ex.toString).foreach { rendered =>
+                    markers.foreach(marker => assert(!rendered.contains(marker), rendered))
+                }
+            }
+            assert(cases.head.actual == text)
+            assert(cases(1).getCause == cause)
+            assert(ApolloParseException(Json.JNull, "x").message == "Expected x but got null")
+            assert(ApolloParseException(Json.JDec(BigDecimal("1.5")), "x").message == "Expected x but got a number")
         }
 
         "websocket-closed exception: code without a reason" in {
@@ -179,3 +195,16 @@ class ApolloExceptionSpec extends kyo.test.Test[Any]:
         }
     }
 end ApolloExceptionSpec
+
+/** Payloads whose values must never reach a parse exception's text. */
+private object ParseLeak:
+    val markers: Chunk[String] = Chunk("secret-token-123", "4711", "true")
+
+    val text: Json = Json.JStr("secret-token-123" * 100)
+
+    val row: Json = Json.JObj(Map("token" -> Json.JStr("secret-token-123")))
+
+    val numbers: Json = Json.JArr(Chunk(Json.JInt(4711L), Json.JBool(true)))
+
+    val cause: Throwable = new IllegalArgumentException("rejected secret-token-123")
+end ParseLeak
