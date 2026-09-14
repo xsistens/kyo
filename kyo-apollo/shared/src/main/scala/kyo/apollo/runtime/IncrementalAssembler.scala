@@ -3,13 +3,11 @@ package kyo.apollo.runtime
 import kyo.*
 import kyo.apollo.api.GraphQLResponse
 import kyo.apollo.exception.ApolloNetworkException
-import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.json.Json
 import kyo.apollo.json.JsonPath
 import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.ApolloResponse
 import kyo.apollo.network.http.MultipartPart
-import scala.util.control.NonFatal
 
 /** Folds a stream of `multipart/mixed` incremental-delivery parts into a stream of
   * [[ApolloResponse]] — one per part that changes the data, each carrying the
@@ -19,8 +17,9 @@ import scala.util.control.NonFatal
   * into the retained JSON tree (both the `deferSpec=20220824` `incremental: [{data,
   * path}]` shape and the older single `{data, path}` shape), which is then
   * re-decoded through [[GraphQLResponse.parse]] — deferred fields being `Maybe`,
-  * the partial tree decodes at every stage. Failures stay values (a decode error
-  * on a part becomes an `exception` response, not a throw).
+  * the partial tree decodes at every stage. Failures stay values (a part whose
+  * accumulated tree does not decode becomes an `ApolloParseException` response, not a
+  * throw); a decoder defect panics.
   */
 object IncrementalAssembler:
 
@@ -92,30 +91,29 @@ object IncrementalAssembler:
                         changed
                     case _ => false
 
-                def response(): ApolloResponse[D] =
+                // The accumulated state is read when `response()` is called, so each result
+                // is computed eagerly right after its part is applied; only a decoder
+                // defect is a suspended panic.
+                def response(): ApolloResponse[D] < Sync =
                     val env = Map.newBuilder[String, Json]
                     env += "data"                                   -> data
                     if errors.nonEmpty then env += "errors"         -> Json.JArr(Chunk.from(errors))
                     if extensions.nonEmpty then env += "extensions" -> Json.JObj(extensions)
-                    try
-                        val gql = GraphQLResponse.parse(Json.JObj(env.result()), request.operation)
-                        ApolloResponse
-                            .fromGraphQLResponse(request.requestUuid, gql, request.executionContext)
-                            // Still growing while the wire has announced more payloads.
-                            .copy(complete = !awaitingMore)
-                    catch
-                        case NonFatal(cause) =>
-                            ApolloResponse.fromException(
-                                request.requestUuid,
-                                ApolloParseException(cause = cause),
-                                request.executionContext
-                            )
-                    end try
+                    GraphQLResponse.parse(Json.JObj(env.result()), request.operation) match
+                        case Result.Success(gql) =>
+                            ApolloResponse
+                                .fromGraphQLResponse(request.requestUuid, gql, request.executionContext)
+                                // Still growing while the wire has announced more payloads.
+                                .copy(complete = !awaitingMore)
+                        case Result.Failure(parseFailure) =>
+                            ApolloResponse.fromException(request.requestUuid, parseFailure, request.executionContext)
+                        case Result.Panic(cause) => Abort.panic(cause)
+                    end match
                 end response
 
                 val mapped =
-                    parts.mapChunkPure { partChunk =>
-                        partChunk.toList.flatMap(part => if applyPart(part.json) then Seq(response()) else Nil)
+                    parts.mapChunk { partChunk =>
+                        Kyo.collectAll(partChunk.toList.flatMap(part => if applyPart(part.json) then Seq(response()) else Nil))
                     }
                 // If the stream ended while a `hasNext: true` was still outstanding, the
                 // incremental delivery was truncated — surface a terminal exception value
