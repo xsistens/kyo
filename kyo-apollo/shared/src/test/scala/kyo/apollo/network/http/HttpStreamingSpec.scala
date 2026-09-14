@@ -1,12 +1,10 @@
 package kyo.apollo.network.http
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.StreamProbe
-import kyo.apollo.network.HttpHeader
-import kyo.apollo.network.HttpMethod
 
 /** Tests the streaming `HttpEngine` seam ([[HttpEngine.executeStreaming]] +
-  * [[HttpStreamResponse]] / [[HttpStreamBody]]): the default buffers a
+  * [[HttpEngine.StreamResponse]] / [[HttpStreamBody]]): the default buffers a
   * non-streaming engine's body, and a `Chunked` body streams its text chunks in
   * order with a `Scope`-bound teardown. `FetchHttpEngine`'s real `ReadableStream`
   * reader needs a live `fetch` + multipart server, so it is exercised in the
@@ -16,18 +14,24 @@ class HttpStreamingSpec extends kyo.test.Test[Any]:
 
     given CanEqual[Any, Any] = CanEqual.derived
 
-    private val request = HttpRequest(HttpMethod.Post, "https://x/graphql", Nil, None)
+    private val request =
+        HttpEngine.request(
+            HttpMethod.POST,
+            HttpUrl(Present("https"), "x", 443, "/graphql", Absent),
+            HttpHeaders.empty,
+            HttpRequestBody.Empty
+        )
 
     "HttpEngine.executeStreaming" - {
 
         "the default buffers a non-streaming engine's body into Buffered" in {
             val engine = new HttpEngine:
-                def execute(r: HttpRequest)(using Frame): HttpResponse < Async =
-                    HttpResponse(200, List(HttpHeader("Content-Type", "application/json")), "hello")
+                def execute(r: HttpEngine.Request)(using Frame): HttpEngine.Response < Async =
+                    HttpEngine.response(HttpStatus.OK, "hello", HttpHeaders.empty.add("Content-Type", "application/json"))
             engine.executeStreaming(request).map { resp =>
-                assert(resp.statusCode == 200)
-                assert(resp.isSuccessful)
-                assert(resp.body == HttpStreamBody.Buffered("hello"))
+                assert(resp.status == HttpStatus.OK)
+                assert(resp.headers.get("Content-Type") == Present("application/json"))
+                assert(resp.fields.body == HttpStreamBody.Buffered("hello"))
             }
         }
 

@@ -1,6 +1,6 @@
 package kyo.apollo.interceptor
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
@@ -12,8 +12,6 @@ import kyo.apollo.network.ApolloResponse
 import kyo.apollo.network.TestIds
 import kyo.apollo.network.http.HttpEngine
 import kyo.apollo.network.http.HttpNetworkTransport
-import kyo.apollo.network.http.HttpRequest
-import kyo.apollo.network.http.HttpResponse
 import kyo.apollo.runtime.ResponseStream
 import scala.collection.immutable.VectorMap
 
@@ -43,8 +41,8 @@ class ApolloInterceptorChainSpec extends kyo.test.Test[Any]:
     /** A transport whose fake engine always returns `body` with a 200 status. */
     private def transportReturning(body: String): HttpNetworkTransport =
         val engine: HttpEngine = new HttpEngine:
-            def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
-                HttpResponse(200, Nil, body)
+            def execute(request: HttpEngine.Request)(using Frame): HttpEngine.Response < Async =
+                HttpEngine.response(HttpStatus.OK, body)
         HttpNetworkTransport("https://example.com/graphql", engine)
     end transportReturning
 

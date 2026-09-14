@@ -1,6 +1,6 @@
 package kyo.apollo.cache
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.ApolloClient
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.*
@@ -103,10 +103,10 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
         extends kyo.apollo.network.http.HttpEngine:
         var calls = 0
         def execute(
-            request: kyo.apollo.network.http.HttpRequest
-        )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
+            request: kyo.apollo.network.http.HttpEngine.Request
+        )(using Frame): kyo.apollo.network.http.HttpEngine.Response < Async =
             calls += 1
-            kyo.apollo.network.http.HttpResponse(status, Nil, body)
+            kyo.apollo.network.http.HttpEngine.response(HttpStatus(status), body)
         end execute
     end CountingEngine
 
@@ -340,14 +340,14 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
     final private class MutationRoutingEngine extends kyo.apollo.network.http.HttpEngine:
         var calls = 0
         def execute(
-            request: kyo.apollo.network.http.HttpRequest
-        )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
+            request: kyo.apollo.network.http.HttpEngine.Request
+        )(using Frame): kyo.apollo.network.http.HttpEngine.Response < Async =
             calls += 1
             val payload =
-                if request.body.exists(_.contains("DeleteCountry")) then
+                if request.fields.body.text.exists(_.contains("DeleteCountry")) then
                     """{"data":{"deleteCountry":{"__typename":"Country","code":"DE","name":"Germany"}}}"""
                 else body
-            kyo.apollo.network.http.HttpResponse(200, Nil, payload)
+            kyo.apollo.network.http.HttpEngine.response(HttpStatus.OK, payload)
         end execute
     end MutationRoutingEngine
 

@@ -1,6 +1,6 @@
 package kyo.apollo.cache
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.ApolloClient
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.*
@@ -200,9 +200,9 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
         private val counter = AtomicInt.Unsafe.init(0)(using AllowUnsafe.embrace.danger)
         def calls: Int      = counter.get()(using AllowUnsafe.embrace.danger)
         def execute(
-            request: kyo.apollo.network.http.HttpRequest
-        )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
-            counter.safe.incrementAndGet.andThen(kyo.apollo.network.http.HttpResponse(200, Nil, onePlayerBody))
+            request: kyo.apollo.network.http.HttpEngine.Request
+        )(using Frame): kyo.apollo.network.http.HttpEngine.Response < Async =
+            counter.safe.incrementAndGet.andThen(kyo.apollo.network.http.HttpEngine.response(HttpStatus.OK, onePlayerBody))
         end execute
     end LobbyEngine
 
