@@ -6,10 +6,12 @@ import kyo.apollo.StreamProbe
 import kyo.apollo.api.*
 import kyo.apollo.cache.TestKeys.*
 import kyo.apollo.cache.normalized.*
+import kyo.apollo.cache.normalized.api.CacheHeaders
 import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.cache.normalized.api.IdCacheKeyGenerator
 import kyo.apollo.cache.normalized.api.Record
 import kyo.apollo.cache.normalized.api.RecordValue
+import kyo.apollo.exception.CacheReadFailure
 import kyo.apollo.interceptor.ApolloInterceptor
 import kyo.apollo.interceptor.ApolloInterceptorChain
 import kyo.apollo.json.Json
@@ -182,6 +184,41 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
                 // The layer is gone and the persisted cache now holds the real value.
                 assert(read == userData("Carol"))
                 assert(record.flatMap(_.get(fk("name"))) == Present(scalar("Carol")))
+            end for
+        }
+
+        "a read while rollbackAndWrite settles sees the optimistic or the real value, never the one from before" in {
+            // Settling touches two cells: the optimistic stack in the store and the record
+            // in the backend. The trap reads the store right before and right after the
+            // backend commit of the real response — the points a concurrent read can fall
+            // between the two steps. Each read must answer with the optimistic value (the
+            // layer still over the backend) or the server's; one that sees the value the
+            // mutation started from is the flicker the single publish exists to prevent.
+            val cache = new CommitTrap(MemoryCache())
+            val s     = new ApolloStore(cache, cacheKeyGenerator = IdCacheKeyGenerator(List("id")))
+            for
+                seen      <- AtomicRef.init(Chunk.empty[String])
+                published <- AtomicRef.init(Chunk.empty[Set[CacheKey]])
+                probe = Abort.run[CacheReadFailure](s.readOperation(CurrentUserQuery()))
+                    .map(read => seen.updateAndGet(_.append(read.map(_.user.name).getOrElse("<miss>"))).unit)
+                _         <- s.writeOperation(CurrentUserQuery(), userData("Alice"))
+                _         <- s.writeOptimisticUpdates(UpdateUserNameMutation("Bob"), updateData("Bob"), "m1")
+                _         <- Sync.defer(cache.arm(before = probe, after = probe))
+                _         <- s.addChangedKeysListener(keys => published.updateAndGet(_.append(keys)).unit)
+                changed   <- s.rollbackAndWrite(UpdateUserNameMutation("Carol"), updateData("Carol"), "m1")
+                names     <- seen.get
+                publishes <- published.get
+                layers    <- s.optimisticLayerIds
+                after     <- s.readOperation(CurrentUserQuery())
+            yield
+                assert(names.size == 2, s"the trap must read before and after the commit: $names")
+                assert(
+                    names.forall(name => name == "Bob" || name == "Carol"),
+                    s"a read during the settle stepped back to the value before the mutation: $names"
+                )
+                assert(publishes == Chunk(changed), s"the settle publishes once: $publishes")
+                assert(layers.isEmpty)
+                assert(after == userData("Carol"))
             end for
         }
 
@@ -384,6 +421,76 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
                 assert(read == userData("Alice"))
             end for
         }
+
+        "a settled optimistic mutation publishes once, and the Scope release finds nothing" in {
+            // The reply settles the layer itself (commit, drop, one publish); the release
+            // that follows when the Scope closes must neither find a layer nor publish.
+            val client = cachedClient()
+            val store  = client.apolloStore
+            for
+                _         <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                published <- AtomicRef.init(Chunk.empty[Set[CacheKey]])
+                _         <- store.addChangedKeysListener(keys => published.updateAndGet(_.append(keys)).unit)
+                response <- Scope.run(
+                    client
+                        .mutation(UpdateUserNameMutation("Bob"))
+                        .optimisticUpdates(updateData("BobOptimistic"))
+                        .fetchPolicy(FetchPolicy.NetworkOnly)
+                        .execute
+                )
+                publishes <- published.get
+                layers    <- store.optimisticLayerIds
+                read      <- store.readOperation(CurrentUserQuery())
+            yield
+                assert(response.error.isEmpty)
+                // One publish for the optimistic write, one for the settle — none from the release.
+                assert(publishes.size == 2, s"expected the optimistic write and the settle only: $publishes")
+                assert(layers.isEmpty)
+                assert(read == userData("Bob"))
+            end for
+        }
+
+        "a commit that fails leaves the layer to the Scope release, which reverts and publishes it" in {
+            // The server answered, but committing its response fails. At that point the layer
+            // must still be on the stack: dropping it before the commit would leave watchers
+            // on the optimistic value with nothing published. The Scope release then drops
+            // it and publishes the revert.
+            val cache  = new CommitTrap(MemoryCache())
+            val client = cachedClient(cache = cache)
+            val store  = client.apolloStore
+            for
+                _               <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                layersAtFailure <- AtomicRef.init(Chunk.empty[String])
+                published       <- AtomicRef.init(Chunk.empty[Set[CacheKey]])
+                _               <- store.addChangedKeysListener(keys => published.updateAndGet(_.append(keys)).unit)
+                _ <- Sync.defer(cache.arm(
+                    before = store.optimisticLayerIds
+                        .map(ids => layersAtFailure.set(ids))
+                        .andThen(Abort.panic(new IllegalStateException("the backend refused the commit"))),
+                    after = Kyo.unit
+                ))
+                result <- Abort.run[Throwable](Scope.run(
+                    client
+                        .mutation(UpdateUserNameMutation("Bob"))
+                        .optimisticUpdates(updateData("BobOptimistic"))
+                        .fetchPolicy(FetchPolicy.NetworkOnly)
+                        .execute
+                ))
+                failing   <- layersAtFailure.get
+                layers    <- store.optimisticLayerIds
+                publishes <- published.get
+                read      <- store.readOperation(CurrentUserQuery())
+            yield
+                assert(result.isPanic, s"the failed commit must surface: $result")
+                assert(failing.size == 1, s"the layer was already dropped when the commit failed: $failing")
+                assert(layers.isEmpty, s"the release left the layer behind: $layers")
+                assert(
+                    publishes.size == 2 && publishes.last.contains(CacheKey("User", "1")),
+                    s"the revert was never published: $publishes"
+                )
+                assert(read == userData("Alice"))
+            end for
+        }
     }
 
     /** A cache whose read, once armed for `key`, runs the armed action right after the
@@ -418,6 +525,31 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
                 }
             }
     end TrapCache
+
+    /** A cache whose next transaction, once armed, runs `before` ahead of the delegate's
+      * commit and `after` once that commit has landed. `transact` is an effect, so the
+      * actions — a store read, a panic — run in place on the committing fiber: that is
+      * what puts a read (or a failure) exactly between the steps of a store operation
+      * that commits, on every platform.
+      */
+    final private class CommitTrap(delegate: NormalizedCache) extends NormalizedCacheDecorator(delegate):
+        private given AllowUnsafe = AllowUnsafe.embrace.danger
+        private val armed         = AtomicRef.Unsafe.init(Maybe.empty[(Unit < Sync, Unit < Sync)])
+
+        def arm(before: => Unit < Sync, after: => Unit < Sync)(using Frame): Unit =
+            discard(armed.getAndSet(Present((Sync.defer(before), Sync.defer(after)))))
+
+        override def transact[A](
+            f: RecordLoader => (Chunk[Record], A),
+            cacheHeaders: CacheHeaders,
+            merger: RecordMerger
+        )(using Frame): (Set[CacheKey], A) < Sync =
+            Sync.defer(armed.getAndSet(Absent)).map {
+                case Present((before, after)) =>
+                    before.andThen(delegate.transact(f, cacheHeaders, merger)).map(committed => after.andThen(committed))
+                case Absent => delegate.transact(f, cacheHeaders, merger)
+            }
+    end CommitTrap
 
     // --- end-to-end fixtures ----------------------------------------------------
 
@@ -505,13 +637,14 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
 
     private def cachedClient(
         engine: kyo.apollo.network.http.HttpEngine = ScriptedEngine(mutationFails = false),
-        belowCache: List[ApolloInterceptor] = Nil
+        belowCache: List[ApolloInterceptor] = Nil,
+        cache: NormalizedCache = MemoryCache()
     ): ApolloClient =
         val builder = ApolloClient
             .builder()
             .serverUrl("https://example.com/graphql")
             .httpEngine(engine)
-            .normalizedCache(MemoryCache(), IdCacheKeyGenerator(List("id")))
+            .normalizedCache(cache, IdCacheKeyGenerator(List("id")))
         belowCache.foreach(builder.addInterceptor)
         builder.build()
     end cachedClient
