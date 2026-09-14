@@ -66,7 +66,7 @@ class HttpTransportRoundTripSpec extends kyo.test.Test[Any]:
 
         "default POST sends the JSON body the composer produced" in {
             val engine = CapturingEngine(HttpResponse(200, Nil, """{"data":{"value":1}}"""))
-            transportWith(engine).execute(ApolloRequest(ValueQuery())).map { _ =>
+            transportWith(engine).execute(ApolloRequest(ValueQuery(), TestIds.requestUuid)).map { _ =>
                 val sent = engine.lastRequest.getOrElse(fail("engine never called"))
                 assert(sent.method == HttpMethod.Post)
                 assert(sent.url == url)
@@ -81,7 +81,7 @@ class HttpTransportRoundTripSpec extends kyo.test.Test[Any]:
 
         "a GET request carries no body and encodes the query in the URL" in {
             val engine  = CapturingEngine(HttpResponse(200, Nil, """{"data":{"value":1}}"""))
-            val request = ApolloRequest.builder(ValueQuery()).httpMethod(HttpMethod.Get).build()
+            val request = ApolloRequest(ValueQuery(), TestIds.requestUuid, httpMethod = Some(HttpMethod.Get))
             transportWith(engine).execute(request).map { _ =>
                 val sent = engine.lastRequest.getOrElse(fail("engine never called"))
                 assert(sent.method == HttpMethod.Get)
@@ -92,10 +92,8 @@ class HttpTransportRoundTripSpec extends kyo.test.Test[Any]:
 
         "a per-request header rides through to the wire request" in {
             val engine = CapturingEngine(HttpResponse(200, Nil, """{"data":{"value":1}}"""))
-            val request = ApolloRequest
-                .builder(ValueQuery())
-                .addHttpHeader("Authorization", "Bearer t")
-                .build()
+            val request =
+                ApolloRequest(ValueQuery(), TestIds.requestUuid, httpHeaders = List(HttpHeader("Authorization", "Bearer t")))
             transportWith(engine).execute(request).map { _ =>
                 val sent = engine.lastRequest.getOrElse(fail("engine never called"))
                 assert(sent.headers.contains(HttpHeader("Authorization", "Bearer t")))
@@ -106,7 +104,7 @@ class HttpTransportRoundTripSpec extends kyo.test.Test[Any]:
 
         "success: a 200 envelope decodes to typed data with no errors/exception" in {
             val engine = CapturingEngine(HttpResponse(200, Nil, """{"data":{"value":42}}"""))
-            transportWith(engine).execute(ApolloRequest(ValueQuery())).map { response =>
+            transportWith(engine).execute(ApolloRequest(ValueQuery(), TestIds.requestUuid)).map { response =>
                 assert(response.data == Present(42))
                 assert(response.errors == Chunk.empty)
                 assert(response.error == Absent)
@@ -121,7 +119,7 @@ class HttpTransportRoundTripSpec extends kyo.test.Test[Any]:
             val engine = CapturingEngine(
                 HttpResponse(200, Nil, """{"data":null,"errors":[{"message":"boom"}]}""")
             )
-            transportWith(engine).execute(ApolloRequest(ValueQuery())).map { response =>
+            transportWith(engine).execute(ApolloRequest(ValueQuery(), TestIds.requestUuid)).map { response =>
                 assert(response.data == Absent)
                 assert(response.errors.map(_.message) == Chunk("boom"))
                 assert(response.error.exists(_.isInstanceOf[ApolloGraphQLException]))
@@ -134,7 +132,7 @@ class HttpTransportRoundTripSpec extends kyo.test.Test[Any]:
             val engine = CapturingEngine(
                 HttpResponse(200, Nil, """{"data":{"value":7},"errors":[{"message":"partial"}]}""")
             )
-            transportWith(engine).execute(ApolloRequest(ValueQuery())).map { response =>
+            transportWith(engine).execute(ApolloRequest(ValueQuery(), TestIds.requestUuid)).map { response =>
                 assert(response.data == Present(7))
                 assert(response.errors.map(_.message) == Chunk("partial"))
                 assert(!response.hasTransportError)
@@ -145,7 +143,7 @@ class HttpTransportRoundTripSpec extends kyo.test.Test[Any]:
             val engine = CapturingEngine(
                 HttpResponse(200, Nil, """{"data":{"value":1},"extensions":{"cost":3}}""")
             )
-            transportWith(engine).execute(ApolloRequest(ValueQuery())).map { response =>
+            transportWith(engine).execute(ApolloRequest(ValueQuery(), TestIds.requestUuid)).map { response =>
                 assert(response.extensions == Map[String, Json]("cost" -> Json.JInt(3)))
             }
         }
@@ -161,7 +159,7 @@ class HttpTransportRoundTripSpec extends kyo.test.Test[Any]:
                     """{"data":null,"errors":[{"message":"unknown field `nope`"}]}"""
                 )
             )
-            transportWith(engine).execute(ApolloRequest(ValueQuery())).map { response =>
+            transportWith(engine).execute(ApolloRequest(ValueQuery(), TestIds.requestUuid)).map { response =>
                 assert(response.errors.map(_.message) == Chunk("unknown field `nope`"))
                 assert(response.error.exists(_.isInstanceOf[ApolloGraphQLException]))
                 assert(!response.hasTransportError)
@@ -176,7 +174,7 @@ class HttpTransportRoundTripSpec extends kyo.test.Test[Any]:
                     "<html>gateway down</html>"
                 )
             )
-            transportWith(engine).execute(ApolloRequest(ValueQuery())).map { response =>
+            transportWith(engine).execute(ApolloRequest(ValueQuery(), TestIds.requestUuid)).map { response =>
                 assert(response.error.exists(_.isInstanceOf[ApolloHttpException]))
                 assert(response.hasTransportError)
             }
@@ -190,7 +188,7 @@ class HttpTransportRoundTripSpec extends kyo.test.Test[Any]:
                     """{"data":null,"errors":[{"message":"legacy"}]}"""
                 )
             )
-            transportWith(engine).execute(ApolloRequest(ValueQuery())).map { response =>
+            transportWith(engine).execute(ApolloRequest(ValueQuery(), TestIds.requestUuid)).map { response =>
                 assert(response.error.exists(_.isInstanceOf[ApolloHttpException]))
                 assert(response.errors.isEmpty)
             }
@@ -199,7 +197,7 @@ class HttpTransportRoundTripSpec extends kyo.test.Test[Any]:
         "HTTP error: a non-2xx status folds into an ApolloHttpException value" in {
             val headers = List(HttpHeader("Retry-After", "5"))
             val engine  = CapturingEngine(HttpResponse(500, headers, "internal error"))
-            transportWith(engine).execute(ApolloRequest(ValueQuery())).map { response =>
+            transportWith(engine).execute(ApolloRequest(ValueQuery(), TestIds.requestUuid)).map { response =>
                 assert(response.data == Absent)
                 response.error match
                     case Present(e: ApolloHttpException) =>
@@ -213,7 +211,7 @@ class HttpTransportRoundTripSpec extends kyo.test.Test[Any]:
 
         "malformed body: a parse failure folds into an ApolloParseException value" in {
             val engine = CapturingEngine(HttpResponse(200, Nil, "not json at all"))
-            transportWith(engine).execute(ApolloRequest(ValueQuery())).map { response =>
+            transportWith(engine).execute(ApolloRequest(ValueQuery(), TestIds.requestUuid)).map { response =>
                 assert(response.data == Absent)
                 assert(response.error.exists(_.isInstanceOf[ApolloParseException]))
                 // A parse failure is a value — the effect completed successfully.
@@ -222,7 +220,7 @@ class HttpTransportRoundTripSpec extends kyo.test.Test[Any]:
         }
 
         "the originating request uuid is echoed onto the response" in {
-            val request = ApolloRequest(ValueQuery())
+            val request = ApolloRequest(ValueQuery(), TestIds.requestUuid)
             val engine  = CapturingEngine(HttpResponse(200, Nil, """{"data":{"value":1}}"""))
             transportWith(engine).execute(request).map { response =>
                 assert(response.requestUuid == request.requestUuid)

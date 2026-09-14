@@ -17,8 +17,10 @@ import kyo.apollo.network.http.HttpResponse
   * "counting" flavors are just this one type read two ways; the response is
   * decided by the responder the factory installs.
   *
-  * Construct via the [[TestHttpEngine$]] factories rather than the private
-  * constructor:
+  * A request is recorded when [[execute]] runs, in the same effect that produces
+  * the reply — an execution that is built but never run is not counted, and
+  * concurrent executions are all counted. Construct via the [[TestHttpEngine$]]
+  * factories rather than the private constructor:
   *
   *   - [[TestHttpEngine.returning]] — always the same `(status, body)` (static /
   *     counting).
@@ -34,23 +36,22 @@ import kyo.apollo.network.http.HttpResponse
   * response), use [[GatedHttpEngine]] instead — the one gate-on-a-`Promise`
   * engine promoted as-is from `KyoTestSupport`.
   */
-final class TestHttpEngine private (responder: HttpRequest => HttpResponse < (Async & Abort[HttpEngineFailure]))
-    extends HttpEngine:
+final class TestHttpEngine private (
+    responder: HttpRequest => HttpResponse < (Async & Abort[HttpEngineFailure]),
+    received: AtomicRef[Chunk[HttpRequest]]
+) extends HttpEngine:
 
-    private var _requests: List[HttpRequest] = Nil
+    /** Every request executed, oldest first. */
+    def requests(using Frame): Chunk[HttpRequest] < Sync = received.get
 
-    /** Every request received, oldest first. */
-    def requests: List[HttpRequest] = _requests
-
-    /** How many times [[execute]] has been called. */
-    def calls: Int = _requests.length
+    /** How many times [[execute]] has run. */
+    def calls(using Frame): Int < Sync = received.get.map(_.size)
 
     /** The most recent request, if any. */
-    def lastRequest: Option[HttpRequest] = _requests.lastOption
+    def lastRequest(using Frame): Maybe[HttpRequest] < Sync = received.get.map(_.lastMaybe)
 
     def execute(request: HttpRequest)(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) =
-        _requests = _requests :+ request
-        responder(request)
+        received.updateAndGet(_.append(request)).andThen(responder(request))
 end TestHttpEngine
 
 object TestHttpEngine:
@@ -58,25 +59,30 @@ object TestHttpEngine:
     /** Answers every request with the same `(status, body)`. A non-2xx status is
       * folded by the transport into an `ApolloResponse.error` value.
       */
-    def returning(body: String, status: Int = 200): TestHttpEngine =
-        new TestHttpEngine(_ => HttpResponse(status, Nil, body))
+    def returning(body: String, status: Int = 200)(using Frame): TestHttpEngine < Sync =
+        init(_ => HttpResponse(status, Nil, body))
 
     /** Answers each request with `respond(request)` — the recording-with-callback
       * and document-routing flavors (route on `request.body`/`url`).
       */
-    def respondWith(respond: HttpRequest => HttpResponse): TestHttpEngine =
-        new TestHttpEngine(request => respond(request))
+    def respondWith(respond: HttpRequest => HttpResponse)(using Frame): TestHttpEngine < Sync =
+        init(request => respond(request))
 
     /** Answers each request with an effectful `respond` (e.g. a deferred value). */
-    def async(respond: HttpRequest => HttpResponse < (Async & Abort[HttpEngineFailure])): TestHttpEngine =
-        new TestHttpEngine(respond)
+    def async(respond: HttpRequest => HttpResponse < (Async & Abort[HttpEngineFailure]))(using Frame): TestHttpEngine < Sync =
+        init(respond)
 
     /** Aborts every round-trip with an `ApolloNetworkException` carrying `cause` — a
       * simulated connection error (no response received), as the production engines
       * report one. The transport folds it into an `ApolloResponse.error` value.
       */
-    def failing(cause: Throwable)(using Frame): TestHttpEngine =
-        new TestHttpEngine(_ => Abort.fail(ApolloNetworkException(cause = cause)))
+    def failing(cause: Throwable)(using Frame): TestHttpEngine < Sync =
+        init(_ => Abort.fail(ApolloNetworkException(cause = cause)))
+
+    private def init(responder: HttpRequest => HttpResponse < (Async & Abort[HttpEngineFailure]))(using
+        Frame
+    ): TestHttpEngine < Sync =
+        AtomicRef.init(Chunk.empty[HttpRequest]).map(new TestHttpEngine(responder, _))
 end TestHttpEngine
 
 /** An [[HttpEngine]] that parks every reply on a gate until [[release]] is

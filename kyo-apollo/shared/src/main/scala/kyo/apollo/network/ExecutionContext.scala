@@ -17,7 +17,17 @@ import kyo.Maybe
   */
 final class ExecutionContext private (
     private val elements: Map[ExecutionContext.Key[?], ExecutionContext.Element]
-):
+) derives CanEqual:
+
+    /** Two contexts are equal when they hold equal elements under the same keys, so a
+      * request carrying context stays comparable as a value.
+      */
+    override def equals(other: Any): Boolean =
+        other match
+            case that: ExecutionContext => elements.equals(that.elements)
+            case _                      => false
+
+    override def hashCode: Int = elements.hashCode
 
     /** The element registered under `key`, typed as its element type. */
     def get[E <: ExecutionContext.Element](key: ExecutionContext.Key[E]): Maybe[E] =
