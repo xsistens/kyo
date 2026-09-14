@@ -3,6 +3,7 @@ package kyo.apollo.cache.normalized
 import kyo.Absent
 import kyo.Maybe
 import kyo.Present
+import kyo.apollo.cache.normalized.api.FieldKey
 import kyo.apollo.cache.normalized.api.FieldPolicies
 import kyo.apollo.cache.normalized.api.Record
 import kyo.apollo.cache.normalized.api.RecordValue
@@ -25,7 +26,7 @@ trait RecordMerger:
       * returning the merged record and the set of field keys whose value changed
       * (a brand-new record reports all of its own fields).
       */
-    def merge(existing: Maybe[Record], incoming: Record): (Record, Set[String])
+    def merge(existing: Maybe[Record], incoming: Record): (Record, Set[FieldKey])
 end RecordMerger
 
 object RecordMerger:
@@ -53,16 +54,16 @@ end RecordMerger
   */
 final private class FieldPolicyRecordMerger(policies: FieldPolicies) extends RecordMerger:
 
-    def merge(existing: Maybe[Record], incoming: Record): (Record, Set[String]) =
+    def merge(existing: Maybe[Record], incoming: Record): (Record, Set[FieldKey]) =
         existing match
             case Absent => (incoming, incoming.fieldKeys)
             case Present(old) =>
                 val typename = recordTypename(incoming).orElse(recordTypename(old))
-                var changed  = Set.empty[String]
+                var changed  = Set.empty[FieldKey]
                 val mergedIncoming = incoming.fields.map { case (fieldKey, incomingValue) =>
                     val oldValue = old.get(fieldKey)
                     val newValue = typename
-                        .flatMap(t => policies.fieldMerge(t, baseName(fieldKey)))
+                        .flatMap(t => policies.fieldMerge(t, fieldKey.baseName))
                         .map(mergeFn => mergeFn(oldValue, incomingValue))
                         .getOrElse(incomingValue)
                     if !oldValue.contains(newValue) then changed += fieldKey
@@ -72,12 +73,7 @@ final private class FieldPolicyRecordMerger(policies: FieldPolicies) extends Rec
                     Record(incoming.key, old.fields ++ mergedIncoming, old.metadata ++ incoming.metadata)
                 (merged, changed)
 
-    /** The field name without its normalized `(args)` suffix, so a policy keyed by
-      * field name matches whether or not the stored field carries arguments.
-      */
-    private def baseName(fieldKey: String): String = fieldKey.takeWhile(_ != '(')
-
     /** The record's stored `__typename`, when present as a string scalar. */
     private def recordTypename(record: Record): Maybe[String] =
-        record.get("__typename").collect { case RecordValue.Scalar(Json.JStr(t)) => t }
+        record.get(FieldKey.Typename).collect { case RecordValue.Scalar(Json.JStr(t)) => t }
 end FieldPolicyRecordMerger
