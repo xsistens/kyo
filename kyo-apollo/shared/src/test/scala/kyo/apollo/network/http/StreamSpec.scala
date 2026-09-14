@@ -34,12 +34,12 @@ class StreamSpec extends kyo.test.Test[Any]:
         def rootField: CompiledField = CompiledField(
             "data",
             CompiledNamedType("Query"),
-            selections = List(
+            selections = Chunk(
                 CompiledField(
                     "items",
                     CompiledNamedType("Item").notNull.list.notNull,
-                    selections = List(CompiledField("id", CompiledNamedType("ID").notNull)),
-                    stream = Some(StreamDirective("items", 1))
+                    selections = Chunk(CompiledField("id", CompiledNamedType("ID").notNull)),
+                    stream = Present(StreamDirective("items", 1))
                 )
             )
         )

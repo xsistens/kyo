@@ -65,7 +65,7 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
             .obj[RootQuery, EdgeData, EdgeRow](
                 "edge",
                 CompiledNamedType("Edge").notNull,
-                Nil,
+                Chunk.empty,
                 edgeSelection,
                 SelectionBuilder.Nesting.Leaf
             )

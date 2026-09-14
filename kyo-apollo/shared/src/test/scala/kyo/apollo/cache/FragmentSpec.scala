@@ -1,6 +1,7 @@
 package kyo.apollo.cache
 
 import kyo.Absent
+import kyo.Chunk
 import kyo.Present
 import kyo.Schema
 import kyo.apollo.api.*
@@ -35,7 +36,7 @@ class FragmentSpec extends kyo.test.Test[Any]:
             CompiledField(
                 "user",
                 CompiledNamedType("User"),
-                selections = List(
+                selections = Chunk(
                     CompiledField("__typename", CompiledNamedType("String")),
                     CompiledField("id", CompiledNamedType("String")),
                     CompiledField("name", CompiledNamedType("String"))
@@ -55,7 +56,7 @@ class FragmentSpec extends kyo.test.Test[Any]:
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
-                selections = List(UserFragment.rootField)
+                selections = Chunk(UserFragment.rootField)
             )
         def variables: Json = Json.JObj(VectorMap.empty)
     end CurrentUserQuery
@@ -74,14 +75,14 @@ class FragmentSpec extends kyo.test.Test[Any]:
     final case class ProfileFields(__typename: String, id: String, avatar: Avatar) derives Schema
     final case class ProfileData(user: ProfileFields) derives Schema
 
-    private def avatarSelections: List[CompiledSelection] =
-        List(
+    private def avatarSelections: Chunk[CompiledSelection] =
+        Chunk(
             CompiledField("__typename", CompiledNamedType("String")),
             CompiledField("id", CompiledNamedType("String")),
             CompiledField(
                 "avatar",
                 CompiledNamedType("Avatar"),
-                selections = List(CompiledField("url", CompiledNamedType("String")))
+                selections = Chunk(CompiledField("url", CompiledNamedType("String")))
             )
         )
 
@@ -99,7 +100,7 @@ class FragmentSpec extends kyo.test.Test[Any]:
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
-                selections = List(ProfileFragment.rootField)
+                selections = Chunk(ProfileFragment.rootField)
             )
         def variables: Json = Json.JObj(VectorMap.empty)
     end ProfileQuery

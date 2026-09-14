@@ -1,5 +1,7 @@
 package kyo.apollo.api
 
+import kyo.Chunk
+import kyo.Maybe
 import kyo.Schema
 import kyo.apollo.ApolloCall
 import kyo.apollo.ApolloClient
@@ -44,11 +46,11 @@ extension [Origin, A](sb: SelectionBuilder[Origin, A])
     /** Project the result into a `derives Schema` case class `B` whose field names
       * match the selection. Bidirectional (decodes responses *and* encodes for the
       * cache), reusing kyo-schema directly on the response shape — with one
-      * write-side repair: kyo-schema omits `None` fields, but the cache stores the
-      * RESPONSE shape, so selected nullable fields the codec dropped are restored
-      * as explicit `null`s (see [[SelectionBuilder.fillAbsentNullables]]). Without
-      * this, a write → read round-trip of any `Option = None` field would abort
-      * with a cache miss.
+      * write-side repair: kyo-schema omits empty `Maybe`/`Option` fields, but the
+      * cache stores the RESPONSE shape, so selected nullable fields the codec
+      * dropped are restored as explicit `null`s (see
+      * [[SelectionBuilder.fillAbsentNullables]]). Without this, a write → read
+      * round-trip of any `Absent` field would abort with a cache miss.
       */
     def mapInto[B](using Schema[B]): SelectionBuilder[Origin, B] =
         val schemaCodec = JsonCodec.fromSchema[B]
@@ -83,9 +85,9 @@ end extension
 
 extension [A <: AnyNamedTuple](sb: SelectionBuilder[RootQuery, A])
     /** Turn a single-connection query into a *page builder* — the seam the kyo-ui
-      * `.paginated` sugar sits on. Yields `Option[String] => Query[A]`: the same
+      * `.paginated` sugar sits on. Yields `Maybe[String] => Query[A]`: the same
       * document on every call, with only the pagination cursor argument's value
-      * swapped (`None` → `null` for the first page, `Some(c)` → that cursor).
+      * swapped (`Absent` → `null` for the first page, `Present(c)` → that cursor).
       *
       * Since the [[SelectionBuilder]] binds an argument to a variable, only the
       * variable's *value* changes across pages — the document (and its APQ hash) is
@@ -98,7 +100,7 @@ extension [A <: AnyNamedTuple](sb: SelectionBuilder[RootQuery, A])
     def pagedBy(
         cursorArg: String = "after",
         operationName: String = deriveOperationName(sb.selections)
-    ): Option[String] => Query[A] =
+    ): Maybe[String] => Query[A] =
         require(
             sb.argEntries.exists(_.name == cursorArg),
             s"pagedBy: no `$cursorArg` argument on this query — add it (e.g. after = ...)"
@@ -179,7 +181,7 @@ end extension
   * degenerate empty case falls back to `Operation`. The name is a label only
   * (observability / APQ readability), so cross-document collisions are harmless.
   */
-private def deriveOperationName(selections: List[CompiledSelection]): String =
+private def deriveOperationName(selections: Chunk[CompiledSelection]): String =
     val parts = selections.collect { case f: CompiledField => capitalize(f.name) }
     if parts.isEmpty then "Operation" else parts.mkString
 
@@ -192,7 +194,7 @@ private def codecOf[A](sb: SelectionBuilder[?, A]): JsonCodec[A] =
         def decode(json: Json): A  = sb.decode(json)
         def encode(value: A): Json = sb.encode(value)
 
-private def variablesOf(args: List[SelectionBuilder.Arg]): Json =
+private def variablesOf(args: Chunk[SelectionBuilder.Arg]): Json =
     Json.JObj(VectorMap.from(args.map(a => a.name -> a.value)))
 
 /** Give every operation variable a unique name so a document that repeats a
@@ -216,11 +218,11 @@ private def variablesOf(args: List[SelectionBuilder.Arg]): Json =
   * existing single-variable document is unchanged.
   */
 private def uniquifyVariables(
-    sels: List[CompiledSelection],
-    args: List[SelectionBuilder.Arg]
-): (List[CompiledSelection], List[SelectionBuilder.Arg]) =
+    sels: Chunk[CompiledSelection],
+    args: Chunk[SelectionBuilder.Arg]
+): (Chunk[CompiledSelection], Chunk[SelectionBuilder.Arg]) =
     val used    = scala.collection.mutable.HashSet.empty[String]
-    val renamed = scala.collection.mutable.ListBuffer.empty[SelectionBuilder.Arg]
+    val renamed = Chunk.newBuilder[SelectionBuilder.Arg]
     val argIter = args.iterator
 
     def fresh(base: String): String =
@@ -247,13 +249,13 @@ private def uniquifyVariables(
         case frag: CompiledFragment =>
             frag.copy(selections = frag.selections.map(rewriteSel))
 
-    (sels.map(rewriteSel), renamed.toList)
+    (sels.map(rewriteSel), renamed.result())
 end uniquifyVariables
 
 private def buildQuery[D](
     opName: String,
-    sels: List[CompiledSelection],
-    args: List[SelectionBuilder.Arg],
+    sels: Chunk[CompiledSelection],
+    args: Chunk[SelectionBuilder.Arg],
     dc: JsonCodec[D]
 ): Query[D] =
     val (usels, uargs) = uniquifyVariables(sels, args)
@@ -270,8 +272,8 @@ end buildQuery
 
 private def buildMutation[D](
     opName: String,
-    sels: List[CompiledSelection],
-    args: List[SelectionBuilder.Arg],
+    sels: Chunk[CompiledSelection],
+    args: Chunk[SelectionBuilder.Arg],
     dc: JsonCodec[D]
 ): Mutation[D] =
     val (usels, uargs) = uniquifyVariables(sels, args)
@@ -288,8 +290,8 @@ end buildMutation
 
 private def buildSubscription[D](
     opName: String,
-    sels: List[CompiledSelection],
-    args: List[SelectionBuilder.Arg],
+    sels: Chunk[CompiledSelection],
+    args: Chunk[SelectionBuilder.Arg],
     dc: JsonCodec[D]
 ): Subscription[D] =
     val (usels, uargs) = uniquifyVariables(sels, args)

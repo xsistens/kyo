@@ -1,6 +1,9 @@
 package kyo.apollo.cache.normalized.api
 
+import kyo.Absent
+import kyo.Chunk
 import kyo.Maybe
+import kyo.Present
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.FieldSelector
 import kyo.apollo.api.TypeName
@@ -9,12 +12,13 @@ import kyo.discard
 import scala.annotation.implicitNotFound
 
 /** How two stored values of the *same* field key merge when a new write lands on
-  * an existing record: given the value already stored (`existing`, `None` if the
-  * field is new) and the incoming value, produce the value to keep. The default
-  * everywhere is "incoming wins"; a [[FieldPolicy]] overrides that for one field
-  * — e.g. a connection field unions paginated edges instead of replacing them.
+  * an existing record: given the value already stored (`existing`, `Absent` if
+  * the field is new) and the incoming value, produce the value to keep. The
+  * default everywhere is "incoming wins"; a [[FieldPolicy]] overrides that for
+  * one field — e.g. a connection field unions paginated edges instead of
+  * replacing them.
   */
-type FieldValueMerger = (existing: Option[RecordValue], incoming: RecordValue) => RecordValue
+type FieldValueMerger = (existing: Maybe[RecordValue], incoming: RecordValue) => RecordValue
 
 /** What a [[FieldPolicy]] read resolver is handed about the field being read. */
 final case class FieldPolicyReadContext(
@@ -28,10 +32,11 @@ final case class FieldPolicyReadContext(
   *
   *   - **[[keyArgs]]** — restrict which of the field's arguments form its storage
   *     [[FieldKey]]. A connection field paginated by `first`/`after` sets
-  *     `keyArgs = Some(Nil)` so every page collapses onto one logical slot;
-  *     a field filtered by `category` sets `keyArgs = Some(List("category"))` so
-  *     each category paginates independently. `None` keeps all arguments (the
-  *     default field-key behaviour).
+  *     `keyArgs = Present(Chunk.empty)` so every page collapses onto one logical
+  *     slot; a field filtered by `category` sets
+  *     `keyArgs = Present(Chunk("category"))` so each category paginates
+  *     independently. `Absent` keeps all arguments (the default field-key
+  *     behaviour).
   *   - **[[read]]** — a cache redirect: resolve the field to another record at
   *     read time (the per-field analogue of a [[CacheKeyResolver]]).
   *   - **[[merge]]** — a [[FieldValueMerger]] overriding the default
@@ -46,16 +51,16 @@ final case class FieldPolicyReadContext(
   *                  applies to this type's field, never to a same-named field on
   *                  another type
   * @param fieldName the field's schema name
-  * @param keyArgs   the argument names that form the field key, or `None` for all
+  * @param keyArgs   the argument names that form the field key, or `Absent` for all
   * @param read      an optional read redirect
   * @param merge     an optional custom merge for this field's value
   */
 final case class FieldPolicy(
     typeName: String,
     fieldName: String,
-    keyArgs: Option[List[String]] = None,
-    read: Option[FieldPolicyReadContext => Maybe[CacheKey]] = None,
-    merge: Option[FieldValueMerger] = None
+    keyArgs: Maybe[Chunk[String]] = Absent,
+    read: Maybe[FieldPolicyReadContext => Maybe[CacheKey]] = Absent,
+    merge: Maybe[FieldValueMerger] = Absent
 )
 
 /** Builds the [[FieldPolicy]]s for a Relay-style paginated connection field so
@@ -106,12 +111,12 @@ object ConnectionFieldPolicy:
         typeName: String,
         fieldName: String,
         connectionTypeName: String,
-        filterArgs: List[String] = Nil,
+        filterArgs: Chunk[String] = Chunk.empty,
         edgesField: String = "edges"
-    ): List[FieldPolicy] =
-        List(
-            FieldPolicy(typeName, fieldName, keyArgs = Some(filterArgs)),
-            FieldPolicy(connectionTypeName, edgesField, merge = Some(unionByReference))
+    ): Chunk[FieldPolicy] =
+        Chunk(
+            FieldPolicy(typeName, fieldName, keyArgs = Present(filterArgs)),
+            FieldPolicy(connectionTypeName, edgesField, merge = Present(unionByReference))
         )
 
     /** The typed form of [[apply]]: the connection field and its edges field are
@@ -145,7 +150,7 @@ object ConnectionFieldPolicy:
     def of[Origin, Conn, Edge](
         connection: FieldSelector[Origin, Conn],
         edges: FieldSelector[Conn, Edge],
-        filterArgs: List[String] = Nil
+        filterArgs: Chunk[String] = Chunk.empty
     )(using
         origin: TypeName[Origin],
         conn: TypeName[Conn],
@@ -156,7 +161,7 @@ object ConnectionFieldPolicy:
                 "`given CacheIdentity[${Edge}] = CacheIdentity.by(_.cursor)` (or key by the node id) " +
                 "where your other identities live, and make sure the query selects the key field."
         ) edgeIdentity: CacheIdentity[Edge]
-    ): List[FieldPolicy] =
+    ): Chunk[FieldPolicy] =
         discard(edgeIdentity)
         apply(origin.name, connection.fieldName, conn.name, filterArgs, edges.fieldName)
     end of
@@ -167,7 +172,7 @@ object ConnectionFieldPolicy:
       */
     val unionByReference: FieldValueMerger = (existing, incoming) =>
         (existing, incoming) match
-            case (Some(RecordValue.RList(current)), RecordValue.RList(next)) =>
+            case (Present(RecordValue.RList(current)), RecordValue.RList(next)) =>
                 RecordValue.RList(dedupeByReference(current ++ next))
             case _ => incoming
 
@@ -175,8 +180,8 @@ object ConnectionFieldPolicy:
       * items through unchanged (they cannot be de-duplicated by key).
       */
     private def dedupeByReference(
-        items: kyo.Chunk[RecordValue]
-    ): kyo.Chunk[RecordValue] =
+        items: Chunk[RecordValue]
+    ): Chunk[RecordValue] =
         val seen = scala.collection.mutable.HashSet.empty[String]
         items.filter {
             case RecordValue.Reference(ref) => seen.add(ref.key)

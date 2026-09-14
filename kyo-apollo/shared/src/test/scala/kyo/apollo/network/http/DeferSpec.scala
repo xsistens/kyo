@@ -37,17 +37,17 @@ class DeferSpec extends kyo.test.Test[Any]:
         def rootField: CompiledField = CompiledField(
             "data",
             CompiledNamedType("Query"),
-            selections = List(
+            selections = Chunk(
                 CompiledField(
                     "country",
                     CompiledNamedType("Loc"),
-                    selections = List(
+                    selections = Chunk(
                         CompiledField("code", CompiledNamedType("String").notNull),
                         CompiledFragment(
                             "",
-                            Nil,
-                            List(CompiledField("capital", CompiledNamedType("String"))),
-                            defer = Some(DeferDirective("capital"))
+                            Chunk.empty,
+                            Chunk(CompiledField("capital", CompiledNamedType("String"))),
+                            defer = Present(DeferDirective("capital"))
                         )
                     )
                 )

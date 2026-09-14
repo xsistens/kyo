@@ -56,7 +56,7 @@ class GarbageCollectionSpec extends kyo.test.Test[Any]:
         CompiledField(
             field,
             CompiledNamedType("User"),
-            selections = List(
+            selections = Chunk(
                 CompiledField("__typename", CompiledNamedType("String")),
                 CompiledField("id", CompiledNamedType("String")),
                 CompiledField("name", CompiledNamedType("String"))
@@ -74,7 +74,7 @@ class GarbageCollectionSpec extends kyo.test.Test[Any]:
             CompiledField(
                 "data",
                 CompiledNamedType("Mutation"),
-                selections = List(userField("updateUser"))
+                selections = Chunk(userField("updateUser"))
             )
         def variables: Json = Json.JObj(VectorMap("name" -> SchemaJson.encode(newName)))
     end UpdateUserNameMutation

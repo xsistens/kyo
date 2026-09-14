@@ -1,6 +1,7 @@
 package kyo.apollo.cache
 
 import kyo.Absent
+import kyo.Chunk
 import kyo.Present
 import kyo.apollo.api.*
 import kyo.apollo.cache.normalized.api.*
@@ -16,7 +17,7 @@ class CacheKeyGenerationSpec extends kyo.test.Test[Any]:
     private def field(
         name: String,
         typeName: String = "X",
-        args: List[CompiledArgument] = Nil
+        args: Chunk[CompiledArgument] = Chunk.empty
     ): CompiledField =
         CompiledField(name, CompiledNamedType(typeName), arguments = args)
 
@@ -106,17 +107,17 @@ class CacheKeyGenerationSpec extends kyo.test.Test[Any]:
         // --- CacheKeyResolver: default (no redirect) ------------------------------
 
         "the default resolver never redirects" in {
-            val f = field("book", "Book", List(CompiledArgument.literal("id", Json.JStr("42"))))
+            val f = field("book", "Book", Chunk(CompiledArgument.literal("id", Json.JStr("42"))))
             assert(CacheKeyResolver.default.cacheKeyForField(f, Map.empty) == Absent)
         }
 
         "byIdArgument redirects book(id:) to the Book:id record" in {
-            val f = field("book", "Book", List(CompiledArgument.literal("id", Json.JStr("42"))))
+            val f = field("book", "Book", Chunk(CompiledArgument.literal("id", Json.JStr("42"))))
             assert(redirect.cacheKeyForField(f, Map.empty) == Present(CacheKey("Book", "42")))
         }
 
         "byIdArgument resolves a variable id argument against variables" in {
-            val f = field("book", "Book", List(CompiledArgument.variable("id", "bookId")))
+            val f = field("book", "Book", Chunk(CompiledArgument.variable("id", "bookId")))
             assert(
                 redirect.cacheKeyForField(f, Map("bookId" -> Json.JStr("99"))) ==
                     Present(CacheKey("Book", "99"))
@@ -124,18 +125,18 @@ class CacheKeyGenerationSpec extends kyo.test.Test[Any]:
         }
 
         "byIdArgument uses the field's own return type as the typename" in {
-            val f = field("favouriteAuthor", "Author", List(CompiledArgument.literal("id", Json.JNum(7))))
+            val f = field("favouriteAuthor", "Author", Chunk(CompiledArgument.literal("id", Json.JNum(7))))
             assert(redirect.cacheKeyForField(f, Map.empty) == Present(CacheKey("Author", "7")))
         }
 
         "byIdArgument does not redirect a field without the id argument" in {
-            val f = field("books", "Book", List(CompiledArgument.literal("limit", Json.JNum(10))))
+            val f = field("books", "Book", Chunk(CompiledArgument.literal("limit", Json.JNum(10))))
             assert(redirect.cacheKeyForField(f, Map.empty) == Absent)
         }
 
         "byIdArgument honours a custom id argument name" in {
             val resolver = CacheKeyResolver.byIdArgument("code")
-            val f        = field("country", "Country", List(CompiledArgument.literal("code", Json.JStr("FR"))))
+            val f        = field("country", "Country", Chunk(CompiledArgument.literal("code", Json.JStr("FR"))))
             assert(resolver.cacheKeyForField(f, Map.empty) == Present(CacheKey("Country", "FR")))
         }
     }

@@ -36,11 +36,11 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
-                selections = List(
+                selections = Chunk(
                     CompiledField(
                         "countries",
                         CompiledListType(CompiledNamedType("Country")),
-                        selections = List(
+                        selections = Chunk(
                             CompiledField("__typename", CompiledNamedType("String")),
                             CompiledField("code", CompiledNamedType("String")),
                             CompiledField("name", CompiledNamedType("String"))
@@ -223,14 +223,14 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
             CompiledField(
                 "data",
                 CompiledNamedType("Mutation"),
-                selections = List(
+                selections = Chunk(
                     CompiledField(
                         "deleteCountry",
                         CompiledNamedType("Country"),
-                        arguments = List(
+                        arguments = Chunk(
                             CompiledArgument("id", CompiledArgumentValue.Literal(Json.JStr(code)))
                         ),
-                        selections = List(
+                        selections = Chunk(
                             CompiledField("__typename", CompiledNamedType("String")),
                             CompiledField("code", CompiledNamedType("String")),
                             CompiledField("name", CompiledNamedType("String"))

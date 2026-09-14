@@ -1,5 +1,6 @@
 package kyo.apollo.cache.normalized.internal
 
+import kyo.Chunk
 import kyo.apollo.api.*
 import kyo.discard
 import scala.collection.mutable
@@ -34,10 +35,10 @@ private[internal] object FieldCollector:
       *                       selected are required from the cache.
       */
     def collect(
-        selections: List[CompiledSelection],
+        selections: Chunk[CompiledSelection],
         typename: String,
         injectTypename: Boolean
-    ): List[CompiledField] =
+    ): Chunk[CompiledField] =
         val collected = mutable.LinkedHashMap.empty[String, CompiledField]
 
         def add(field: CompiledField): Unit =
@@ -47,7 +48,7 @@ private[internal] object FieldCollector:
                 case None => Some(field)
             })
 
-        def go(sels: List[CompiledSelection]): Unit = sels.foreach {
+        def go(sels: Chunk[CompiledSelection]): Unit = sels.foreach {
             case field: CompiledField => add(field)
             case fragment: CompiledFragment =>
                 if fragment.possibleTypes.isEmpty || fragment.possibleTypes.contains(typename) then
@@ -56,6 +57,6 @@ private[internal] object FieldCollector:
 
         go(selections)
         if injectTypename && !collected.contains(TypenameField.responseName) then add(TypenameField)
-        collected.values.toList
+        Chunk.from(collected.values)
     end collect
 end FieldCollector

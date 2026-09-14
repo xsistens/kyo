@@ -1,5 +1,6 @@
 package kyo.apollo.cache
 
+import kyo.Chunk
 import kyo.Schema
 import kyo.apollo.api.*
 import kyo.apollo.cache.normalized.*
@@ -31,11 +32,11 @@ class ExtractSpec extends kyo.test.Test[Any]:
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
-                selections = List(
+                selections = Chunk(
                     CompiledField(
                         "countries",
                         CompiledListType(CompiledNamedType("Country")),
-                        selections = List(
+                        selections = Chunk(
                             CompiledField("__typename", CompiledNamedType("String")),
                             CompiledField("code", CompiledNamedType("String")),
                             CompiledField("name", CompiledNamedType("String"))
@@ -53,7 +54,7 @@ class ExtractSpec extends kyo.test.Test[Any]:
         CompiledField(
             field,
             CompiledNamedType("User"),
-            selections = List(
+            selections = Chunk(
                 CompiledField("__typename", CompiledNamedType("String")),
                 CompiledField("id", CompiledNamedType("String")),
                 CompiledField("name", CompiledNamedType("String"))
@@ -65,7 +66,7 @@ class ExtractSpec extends kyo.test.Test[Any]:
         def document                     = "query CurrentUser { user { __typename id name } }"
         def dataSchema: Schema[UserData] = summon[Schema[UserData]]
         def rootField: CompiledField =
-            CompiledField("data", CompiledNamedType("Query"), selections = List(userField("user")))
+            CompiledField("data", CompiledNamedType("Query"), selections = Chunk(userField("user")))
         def variables: Json = Json.JObj(VectorMap.empty)
     end CurrentUserQuery
 
@@ -80,7 +81,7 @@ class ExtractSpec extends kyo.test.Test[Any]:
             CompiledField(
                 "data",
                 CompiledNamedType("Mutation"),
-                selections = List(userField("updateUser"))
+                selections = Chunk(userField("updateUser"))
             )
         def variables: Json = Json.JObj(VectorMap("name" -> SchemaJson.encode(newName)))
     end RenameMutation

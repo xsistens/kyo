@@ -1,5 +1,6 @@
 package kyo.apollo.api
 
+import kyo.Chunk
 import kyo.apollo.json.Json
 
 /** Renders a GraphQL document string from a compiled selection tree — the runtime
@@ -18,8 +19,8 @@ object DocumentPrinter:
     def render(
         keyword: String,
         operationName: String,
-        args: List[SelectionBuilder.Arg],
-        selections: List[CompiledSelection]
+        args: Chunk[SelectionBuilder.Arg],
+        selections: Chunk[CompiledSelection]
     ): String =
         val header =
             if args.isEmpty then ""
@@ -32,15 +33,15 @@ object DocumentPrinter:
       * nesting depth is removed. The variable header needs no adjustment: client
       * fields carry no arguments, so they contribute nothing to `args`.
       */
-    private def pruneClient(selections: List[CompiledSelection]): List[CompiledSelection] =
+    private def pruneClient(selections: Chunk[CompiledSelection]): Chunk[CompiledSelection] =
         selections.flatMap {
-            case field: CompiledField if field.client => Nil
-            case field: CompiledField                 => List(field.copy(selections = pruneClient(field.selections)))
+            case field: CompiledField if field.client => Chunk.empty
+            case field: CompiledField                 => Chunk(field.copy(selections = pruneClient(field.selections)))
             case fragment: CompiledFragment =>
-                List(fragment.copy(selections = pruneClient(fragment.selections)))
+                Chunk(fragment.copy(selections = pruneClient(fragment.selections)))
         }
 
-    private def renderSelectionSet(selections: List[CompiledSelection]): String =
+    private def renderSelectionSet(selections: Chunk[CompiledSelection]): String =
         s"{ ${selections.map(renderSelection).mkString(" ")} }"
 
     private def renderSelection(selection: CompiledSelection): String = selection match
@@ -63,10 +64,8 @@ object DocumentPrinter:
 
     /** Render a `@defer(label: "…"[, if: $var])` directive on a fragment. */
     private def renderDefer(directive: DeferDirective): String =
-        val args = List(
-            Some(s"label: ${Json.JStr(directive.label).render}"),
-            directive.`if`.map(v => s"if: $$$v")
-        ).flatten
+        val args =
+            s"label: ${Json.JStr(directive.label).render}" +: directive.`if`.map(v => s"if: $$$v").toChunk
         s" @defer(${args.mkString(", ")})"
     end renderDefer
 
@@ -75,11 +74,9 @@ object DocumentPrinter:
       * ordering convention.
       */
     private def renderStream(directive: StreamDirective): String =
-        val args = List(
-            Some(s"initialCount: ${directive.initialCount}"),
-            Some(s"label: ${Json.JStr(directive.label).render}"),
-            directive.`if`.map(v => s"if: $$$v")
-        ).flatten
+        val args =
+            Chunk(s"initialCount: ${directive.initialCount}", s"label: ${Json.JStr(directive.label).render}") ++
+                directive.`if`.map(v => s"if: $$$v").toChunk
         s" @stream(${args.mkString(", ")})"
     end renderStream
 

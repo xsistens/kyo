@@ -1,5 +1,6 @@
 package kyo.apollo.api
 
+import kyo.Chunk
 import kyo.Schema
 import kyo.apollo.json.Json
 import kyo.apollo.json.SchemaJson
@@ -32,41 +33,41 @@ class ClientFieldStructureSpec extends kyo.test.Test[Any]:
 
     given CanEqual[Any, Any] = CanEqual.derived
 
-    private def fieldNamed(sels: List[CompiledSelection], name: String): CompiledField =
+    private def fieldNamed(sels: Chunk[CompiledSelection], name: String): CompiledField =
         sels.collectFirst { case f: CompiledField if f.name == name => f }
             .getOrElse(throw new NoSuchElementException(s"no field '$name' in $sels"))
 
-    private def names(sels: List[CompiledSelection]): List[String] =
+    private def names(sels: Chunk[CompiledSelection]): Chunk[String] =
         sels.collect { case f: CompiledField => f.name }
 
     "ClientFieldStructure.selections" - {
 
         "a self-referential product terminates and normalizes one level" in {
             val sels = ClientFieldStructure.selections(summon[Schema[CfsNode]].structure)
-            assert(names(sels) == List("__typename", "name", "children"))
+            assert(names(sels) == Chunk("__typename", "name", "children"))
             val children = fieldNamed(sels, "children")
             assert(children.fieldType == CompiledNamedType("CfsNode"))
-            assert(children.selections == Nil, "the recursive tail is a leaf blob")
+            assert(children.selections.isEmpty, "the recursive tail is a leaf blob")
         }
 
         "mutual recursion A -> B -> A cuts where A re-enters" in {
             val sels = ClientFieldStructure.selections(summon[Schema[CfsA]].structure)
-            assert(names(sels) == List("__typename", "name", "b"))
+            assert(names(sels) == Chunk("__typename", "name", "b"))
             val b = fieldNamed(sels, "b")
             // B is new on this path: it normalizes with its own fields ...
-            assert(names(b.selections) == List("__typename", "name", "as"))
+            assert(names(b.selections) == Chunk("__typename", "name", "as"))
             // ... and its `as: List[A]` re-enters A, so it is the leaf blob.
-            assert(fieldNamed(b.selections, "as").selections == Nil)
+            assert(fieldNamed(b.selections, "as").selections.isEmpty)
         }
 
         "recursion through a polymorphic Sum cuts at the Sum's re-entry" in {
             val sels = ClientFieldStructure.selections(summon[Schema[CfsTree]].structure)
-            assert(names(sels) == List("__typename"))
+            assert(names(sels) == Chunk("__typename"))
             val fragments = sels.collect { case f: CompiledFragment => f }
-            assert(fragments.map(_.typeCondition) == List("CfsLeaf", "CfsBranch"))
+            assert(fragments.map(_.typeCondition) == Chunk("CfsLeaf", "CfsBranch"))
             val branch = fragments.find(_.typeCondition == "CfsBranch").get
-            assert(names(branch.selections) == List("left", "right"))
-            assert(branch.selections.collect { case f: CompiledField => f.selections } == List(Nil, Nil))
+            assert(names(branch.selections) == Chunk("left", "right"))
+            assert(branch.selections.collect { case f: CompiledField => f.selections } == Chunk(Chunk.empty, Chunk.empty))
         }
     }
 

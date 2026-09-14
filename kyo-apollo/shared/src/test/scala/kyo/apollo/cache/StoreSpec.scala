@@ -1,6 +1,7 @@
 package kyo.apollo.cache
 
 import kyo.Absent
+import kyo.Chunk
 import kyo.Present
 import kyo.Schema
 import kyo.apollo.api.*
@@ -40,11 +41,11 @@ class StoreSpec extends kyo.test.Test[Any]:
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
-                selections = List(
+                selections = Chunk(
                     CompiledField(
                         "countries",
                         CompiledListType(CompiledNamedType("Country")),
-                        selections = List(
+                        selections = Chunk(
                             CompiledField("__typename", CompiledNamedType("String")),
                             CompiledField("code", CompiledNamedType("String")),
                             CompiledField("name", CompiledNamedType("String"))

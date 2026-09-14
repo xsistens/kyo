@@ -41,7 +41,7 @@ class RecordModelSpec extends kyo.test.Test[Any]:
 
     // --- FieldKey -------------------------------------------------------------
 
-    private def field(name: String, args: List[CompiledArgument]): CompiledField =
+    private def field(name: String, args: Chunk[CompiledArgument]): CompiledField =
         CompiledField(name, CompiledNamedType("X"), arguments = args)
 
     "record model" - {
@@ -116,42 +116,42 @@ class RecordModelSpec extends kyo.test.Test[Any]:
         }
 
         "FieldKey with no arguments is just the field name" in {
-            assert(FieldKey(field("countries", Nil)) == "countries")
+            assert(FieldKey(field("countries", Chunk.empty)) == "countries")
         }
 
         "FieldKey uses the schema name, not the alias" in {
             val aliased = CompiledField(
                 "country",
                 CompiledNamedType("Country"),
-                alias = Some("de")
+                alias = Present("de")
             )
             assert(FieldKey(aliased) == "country")
         }
 
         "distinct literal argument values yield distinct field keys" in {
-            val one = field("user", List(CompiledArgument.literal("id", Json.JNum(1))))
-            val two = field("user", List(CompiledArgument.literal("id", Json.JNum(2))))
+            val one = field("user", Chunk(CompiledArgument.literal("id", Json.JNum(1))))
+            val two = field("user", Chunk(CompiledArgument.literal("id", Json.JNum(2))))
             assert(FieldKey(one) == """user({"id":1})""")
             assert(FieldKey(two) == """user({"id":2})""")
             assert(FieldKey(one) != FieldKey(two))
         }
 
         "FieldKey resolves variable arguments against the variables map" in {
-            val f = field("user", List(CompiledArgument.variable("id", "userId")))
+            val f = field("user", Chunk(CompiledArgument.variable("id", "userId")))
             assert(FieldKey(f, Map("userId" -> Json.JNum(7))) == """user({"id":7})""")
         }
 
         "FieldKey is canonical: argument order does not change the key" in {
             val ab = field(
                 "search",
-                List(
+                Chunk(
                     CompiledArgument.literal("a", Json.JNum(1)),
                     CompiledArgument.literal("b", Json.JNum(2))
                 )
             )
             val ba = field(
                 "search",
-                List(
+                Chunk(
                     CompiledArgument.literal("b", Json.JNum(2)),
                     CompiledArgument.literal("a", Json.JNum(1))
                 )
@@ -163,7 +163,7 @@ class RecordModelSpec extends kyo.test.Test[Any]:
         "FieldKey sorts nested object argument keys recursively" in {
             val f = field(
                 "search",
-                List(
+                Chunk(
                     CompiledArgument.literal(
                         "filter",
                         Json.JObj(Map("z" -> Json.JNum(1), "a" -> Json.JStr("x")))

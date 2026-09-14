@@ -20,8 +20,9 @@ import scala.collection.immutable.VectorMap
   * codegen: a query is written as ordinary Scala against generated schema
   * selector objects (`Queries.country(code)(Country.name ~ Country.capital)`), so
   * the IDE autocompletes every field while you write it, and the result type is
-  * the named tuple `(name: String, capital: Option[String])` — inferred, not
-  * hand-written.
+  * the named tuple `(name: String, capital: Maybe[String])` — inferred, not
+  * hand-written. Nullable fields decode to `Maybe`, list fields to `Chunk`; the
+  * stdlib `Option`/`List` never appear in a result type.
   *
   *   - `Origin` is a phantom scoping type (one empty marker per GraphQL object
   *     type, plus `RootQuery`/`RootMutation`/`RootSubscription` from `core`). It
@@ -42,10 +43,10 @@ sealed trait SelectionBuilder[Origin, A]:
       * [[CompiledFragment]] — hence the widened element type. Doubles as the
       * `rootField`-tree source.
       */
-    def selections: List[CompiledSelection]
+    def selections: Chunk[CompiledSelection]
 
     /** Every argument in this selection subtree, in encounter order. */
-    private[api] def argEntries: List[SelectionBuilder.Arg]
+    private[api] def argEntries: Chunk[SelectionBuilder.Arg]
 
     /** Decode a GraphQL response object into the result `A`. */
     def decode(json: Json): A
@@ -63,7 +64,7 @@ object SelectionBuilder:
 
     /** How a nested object field wraps its child selection's result. Recursive, so
       * it models arbitrarily deep list/nullable structures, e.g. `[Country!]`
-      * decodes as `Nullable(Listed(Leaf))` → `Option[List[A]]`.
+      * decodes as `Nullable(Listed(Leaf))` → `Maybe[Chunk[A]]`.
       */
     enum Nesting derives CanEqual:
         case Leaf
@@ -74,21 +75,21 @@ object SelectionBuilder:
             case Leaf => child(json)
             case Nullable(inner) =>
                 json match
-                    case Json.JNull => None
-                    case other      => Some(inner.decode(other, child))
+                    case Json.JNull => Absent
+                    case other      => Present(inner.decode(other, child))
             case Listed(inner) =>
                 json match
-                    case Json.JArr(items) => items.toList.map(inner.decode(_, child))
+                    case Json.JArr(items) => items.map(inner.decode(_, child))
                     case other            => throw SelectionDecodeException(other)
 
         private[api] def encode(value: Any, child: Any => Json): Json = this match
             case Leaf => child(value)
             case Nullable(inner) =>
-                value.asInstanceOf[Option[Any]] match
-                    case None    => Json.JNull
-                    case Some(v) => inner.encode(v, child)
+                value.asInstanceOf[Maybe[Any]] match
+                    case Absent     => Json.JNull
+                    case Present(v) => inner.encode(v, child)
             case Listed(inner) =>
-                Json.JArr(Chunk.from(value.asInstanceOf[List[Any]].map(inner.encode(_, child))))
+                Json.JArr(value.asInstanceOf[Chunk[Any]].map(inner.encode(_, child)))
     end Nesting
 
     /** A named-tuple-shaped selection: the composable form. Only these support `~`
@@ -97,7 +98,7 @@ object SelectionBuilder:
     sealed trait Tuples[Origin, A <: AnyNamedTuple] extends SelectionBuilder[Origin, A]:
         private[api] def arity: Int
         private[api] def decodeRaw(row: Map[String, Json]): Tuple
-        private[api] def encodeRaw(value: Tuple): List[(String, Json)]
+        private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)]
 
         /** Wrap this selection's LAST-added field in an anonymous `@defer` group,
           * auto-labelled by that field's response name — the runtime of `.deferred`.
@@ -108,10 +109,10 @@ object SelectionBuilder:
 
         /** Mark this selection's LAST-added field with `@stream`, auto-labelled by that
           * field's response name — the runtime of `.streamed`. Unlike [[deferLast]],
-          * the result type is unchanged (`@stream` grows a `List[T]` in place, no
+          * the result type is unchanged (`@stream` grows a `Chunk[T]` in place, no
           * wrapper), so the return type stays `Tuples[Origin, A]`.
           */
-        private[api] def streamLast(initialCount: Int, condition: Option[String]): Tuples[Origin, A]
+        private[api] def streamLast(initialCount: Int, condition: Maybe[String]): Tuples[Origin, A]
 
         final def decode(json: Json): A = json match
             case Json.JObj(row) => decodeRaw(row).asInstanceOf[A]
@@ -124,20 +125,20 @@ object SelectionBuilder:
     /** A single selected field: its compiled metadata + arguments + a value codec. */
     final private class Field[Origin, A <: AnyNamedTuple](
         compiled: CompiledField,
-        ownArgs: List[Arg],
-        childArgs: List[Arg],
+        ownArgs: Chunk[Arg],
+        childArgs: Chunk[Arg],
         decodeValue: Json => Any,
         encodeValue: Any => Json
     ) extends Tuples[Origin, A]:
-        private[api] def arity: Int             = 1
-        def selections: List[CompiledSelection] = List(compiled)
-        private[api] def argEntries: List[Arg]  = ownArgs ++ childArgs
+        private[api] def arity: Int              = 1
+        def selections: Chunk[CompiledSelection] = Chunk(compiled)
+        private[api] def argEntries: Chunk[Arg]  = ownArgs ++ childArgs
         private[api] def deferLast: Tuples[Origin, ? <: AnyNamedTuple] =
-            Deferred(compiled.responseName, None, this, single = true)
-        private[api] def streamLast(initialCount: Int, condition: Option[String]): Tuples[Origin, A] =
+            Deferred(compiled.responseName, Absent, this, single = true)
+        private[api] def streamLast(initialCount: Int, condition: Maybe[String]): Tuples[Origin, A] =
             Field[Origin, A](
                 compiled.copy(stream =
-                    Some(StreamDirective(compiled.responseName, initialCount, condition))
+                    Present(StreamDirective(compiled.responseName, initialCount, condition))
                 ),
                 ownArgs,
                 childArgs,
@@ -146,8 +147,8 @@ object SelectionBuilder:
             )
         private[api] def decodeRaw(row: Map[String, Json]): Tuple =
             Tuple1(decodeValue(row.getOrElse(compiled.responseName, Json.JNull)))
-        private[api] def encodeRaw(value: Tuple): List[(String, Json)] =
-            List(compiled.responseName -> encodeValue(value.productElement(0)))
+        private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)] =
+            Chunk(compiled.responseName -> encodeValue(value.productElement(0)))
     end Field
 
     /** Two selections combined; splits the tuple by left arity when encoding. */
@@ -155,9 +156,9 @@ object SelectionBuilder:
         left: Tuples[Origin, A],
         right: Tuples[Origin, B]
     ) extends Tuples[Origin, Concat[A, B]]:
-        private[api] def arity: Int             = left.arity + right.arity
-        def selections: List[CompiledSelection] = left.selections ++ right.selections
-        private[api] def argEntries: List[Arg]  = left.argEntries ++ right.argEntries
+        private[api] def arity: Int              = left.arity + right.arity
+        def selections: Chunk[CompiledSelection] = left.selections ++ right.selections
+        private[api] def argEntries: Chunk[Arg]  = left.argEntries ++ right.argEntries
         // Defer only the last-added field: recurse into the right operand, leaving
         // `left` untouched. The `B` cast is erased-safe (runtime tuples carry no names).
         private[api] def deferLast: Tuples[Origin, ? <: AnyNamedTuple] =
@@ -166,12 +167,12 @@ object SelectionBuilder:
         // `left` untouched. Type-preserving, so the `Combine` type is unchanged.
         private[api] def streamLast(
             initialCount: Int,
-            condition: Option[String]
+            condition: Maybe[String]
         ): Tuples[Origin, Concat[A, B]] =
             Combine(left, right.streamLast(initialCount, condition))
         private[api] def decodeRaw(row: Map[String, Json]): Tuple =
             left.decodeRaw(row) ++ right.decodeRaw(row)
-        private[api] def encodeRaw(value: Tuple): List[(String, Json)] =
+        private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)] =
             val (l, r) = value.toArray.splitAt(left.arity)
             left.encodeRaw(Tuple.fromArray(l)) ++ right.encodeRaw(Tuple.fromArray(r))
     end Combine
@@ -182,16 +183,16 @@ object SelectionBuilder:
       * `EmptyTuple ++ row =:= row` at runtime — leaving exactly the chained field.
       */
     final private class EmptySel[Origin] extends Tuples[Origin, Empty]:
-        private[api] def arity: Int                                    = 0
-        def selections: List[CompiledSelection]                        = Nil
-        private[api] def argEntries: List[Arg]                         = Nil
-        private[api] def decodeRaw(row: Map[String, Json]): Tuple      = EmptyTuple
-        private[api] def encodeRaw(value: Tuple): List[(String, Json)] = Nil
+        private[api] def arity: Int                                     = 0
+        def selections: Chunk[CompiledSelection]                        = Chunk.empty
+        private[api] def argEntries: Chunk[Arg]                         = Chunk.empty
+        private[api] def decodeRaw(row: Map[String, Json]): Tuple       = EmptyTuple
+        private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)] = Chunk.empty
         private[api] def deferLast: Tuples[Origin, ? <: AnyNamedTuple] =
             throw IllegalStateException("`.deferred` requires at least one selected field to defer")
         private[api] def streamLast(
             initialCount: Int,
-            condition: Option[String]
+            condition: Maybe[String]
         ): Tuples[Origin, Empty] =
             throw IllegalStateException("`.streamed` requires a selected list field to stream")
     end EmptySel
@@ -207,19 +208,19 @@ object SelectionBuilder:
       */
     final private class Deferred[Origin, S <: AnyNamedTuple, R <: AnyNamedTuple](
         label: String,
-        condition: Option[String],
+        condition: Maybe[String],
         child: Tuples[Origin, S],
         single: Boolean
     ) extends Tuples[Origin, R]:
         private[api] def arity: Int                                    = 1
         private[api] def deferLast: Tuples[Origin, ? <: AnyNamedTuple] = this
-        private[api] def streamLast(initialCount: Int, condition: Option[String]): Tuples[Origin, R] =
+        private[api] def streamLast(initialCount: Int, condition: Maybe[String]): Tuples[Origin, R] =
             throw IllegalStateException("`.streamed` cannot be applied to a `@defer` group")
-        def selections: List[CompiledSelection] =
-            List(
-                CompiledFragment("", Nil, child.selections, defer = Some(DeferDirective(label, condition)))
+        def selections: Chunk[CompiledSelection] =
+            Chunk(
+                CompiledFragment("", Chunk.empty, child.selections, defer = Present(DeferDirective(label, condition)))
             )
-        private[api] def argEntries: List[Arg] = child.argEntries
+        private[api] def argEntries: Chunk[Arg] = child.argEntries
         // `single` (from `.deferred`) exposes the sole field's *value* as `Maybe[V]`;
         // a `defer` group exposes the whole child tuple as `Maybe[S]`.
         private[api] def decodeRaw(row: Map[String, Json]): Tuple =
@@ -233,11 +234,11 @@ object SelectionBuilder:
                 Tuple1(Present(if single then decoded.productElement(0) else decoded))
             end if
         end decodeRaw
-        private[api] def encodeRaw(value: Tuple): List[(String, Json)] =
+        private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)] =
             value.productElement(0).asInstanceOf[Maybe[Any]] match
                 case Present(v) =>
                     child.encodeRaw(if single then Tuple1(v) else v.asInstanceOf[Tuple])
-                case Absent => Nil
+                case Absent => Chunk.empty
     end Deferred
 
     /** A selection whose result has been projected to an arbitrary `B` (via `map` /
@@ -248,14 +249,14 @@ object SelectionBuilder:
         under: SelectionBuilder[Origin, ?],
         codec: JsonCodec[B]
     ) extends SelectionBuilder[Origin, B]:
-        def selections: List[CompiledSelection] = under.selections
-        private[api] def argEntries: List[Arg]  = under.argEntries
-        def decode(json: Json): B               = codec.decode(json)
-        def encode(value: B): Json              = codec.encode(value)
+        def selections: Chunk[CompiledSelection] = under.selections
+        private[api] def argEntries: Chunk[Arg]  = under.argEntries
+        def decode(json: Json): B                = codec.decode(json)
+        def encode(value: B): Json               = codec.encode(value)
     end Mapped
 
     /** Bind a field's captured arguments to same-named operation variables. */
-    private def bind(args: List[Arg]): List[CompiledArgument] =
+    private def bind(args: Chunk[Arg]): Chunk[CompiledArgument] =
         args.map(a => CompiledArgument.variable(a.name))
 
     /** The implicit `__typename` every object selection carries — requested in the
@@ -274,18 +275,18 @@ object SelectionBuilder:
     /** Restore the RESPONSE shape of a Schema-encoded projection: a selected
       * nullable field the codec omitted is written back as an explicit `null`.
       *
-      * kyo-schema encodes `Option` fields as *absent* when `None`, but the wire
-      * response (and therefore the normalized cache, whose reader treats a
-      * selected-but-absent field as a cache miss) carries an explicit `null` —
-      * Apollo Client normalizes the raw response JSON, so the two never diverge
-      * there. A `mapInto` value is deterministically complete (absence can only
-      * mean `None`), so the fill is always sound. Composite fields recurse
-      * (through lists) with their sub-selections; fragments are left untouched —
-      * a deferred group's fields legitimately stay absent until the payload
-      * arrives, and an inline fragment's applicability depends on the concrete
-      * runtime type this static walk cannot know.
+      * kyo-schema encodes optional (`Maybe`/`Option`) fields as *absent* when
+      * empty, but the wire response (and therefore the normalized cache, whose
+      * reader treats a selected-but-absent field as a cache miss) carries an
+      * explicit `null` — Apollo Client normalizes the raw response JSON, so the two
+      * never diverge there. A `mapInto` value is deterministically complete
+      * (absence can only mean "empty"), so the fill is always sound. Composite
+      * fields recurse (through lists) with their sub-selections; fragments are
+      * left untouched — a deferred group's fields legitimately stay absent until
+      * the payload arrives, and an inline fragment's applicability depends on the
+      * concrete runtime type this static walk cannot know.
       */
-    private[api] def fillAbsentNullables(json: Json, selections: List[CompiledSelection]): Json =
+    private[api] def fillAbsentNullables(json: Json, selections: Chunk[CompiledSelection]): Json =
         json match
             case Json.JObj(fields) =>
                 val out = selections.foldLeft(fields) {
@@ -307,7 +308,7 @@ object SelectionBuilder:
       * are filled against the field's sub-selections, lists element-wise; scalars
       * and `null` pass through.
       */
-    private def fillNested(value: Json, selections: List[CompiledSelection]): Json = value match
+    private def fillNested(value: Json, selections: Chunk[CompiledSelection]): Json = value match
         case obj: Json.JObj   => fillAbsentNullables(obj, selections)
         case Json.JArr(items) => Json.JArr(items.map(fillNested(_, selections)))
         case other            => other
@@ -319,24 +320,24 @@ object SelectionBuilder:
         name: String,
         fieldType: CompiledType,
         codec: ScalarCodec[V],
-        arguments: List[Arg] = Nil
+        arguments: Chunk[Arg] = Chunk.empty
     ): SelectionBuilder[Origin, R] =
         Field[Origin, R](
             CompiledField(name = name, fieldType = fieldType, arguments = bind(arguments)),
             arguments,
-            Nil,
+            Chunk.empty,
             json => codec.decode(json),
             value => codec.encode(value.asInstanceOf[V])
         )
 
     /** Build a nested-object selector, wrapping the child selection's result per
-      * `nesting` (identity / `Option` / `List`, arbitrarily deep). The child may be
+      * `nesting` (identity / `Maybe` / `Chunk`, arbitrarily deep). The child may be
       * any selection — a named-tuple one or a `map`/`mapInto` projection.
       */
     def obj[Origin, R <: AnyNamedTuple, A](
         name: String,
         fieldType: CompiledType,
-        arguments: List[Arg],
+        arguments: Chunk[Arg],
         child: SelectionBuilder[?, A],
         nesting: Nesting
     ): SelectionBuilder[Origin, R] =
@@ -346,7 +347,7 @@ object SelectionBuilder:
                 name = name,
                 fieldType = fieldType,
                 arguments = bind(arguments),
-                selections = TypenameField :: child.selections
+                selections = TypenameField +: child.selections
             ),
             arguments,
             child.argEntries,
@@ -362,20 +363,20 @@ object SelectionBuilder:
       * `default` instead of throwing. `selections` — derived from the value's
       * `Schema` structure by [[kyo.apollo.ClientField]] — is empty for a scalar leaf
       * (blob) or a composite object tree (`__typename` + fields) that normalizes;
-      * `codec` is the whole-value codec (which already handles `Option`/`List`
+      * `codec` is the whole-value codec (which already handles `Maybe`/`Chunk`
       * wrapping). `R` is the 1-ary named tuple the caller ascribes, e.g. `(count: Int)`.
       */
     def clientField[Origin, R <: AnyNamedTuple, V](
         name: String,
         fieldType: CompiledType,
-        selections: List[CompiledSelection],
+        selections: Chunk[CompiledSelection],
         codec: ScalarCodec[V],
         default: V
     ): SelectionBuilder[Origin, R] =
         Field[Origin, R](
             CompiledField(name = name, fieldType = fieldType, selections = selections, client = true),
-            Nil,
-            Nil,
+            Chunk.empty,
+            Chunk.empty,
             {
                 case Json.JNull => default
                 case other      => codec.decode(other)
@@ -386,12 +387,12 @@ object SelectionBuilder:
     /** Build an inline-fragment branch of a union (or interface) selection:
       * `... on <typeName> { <child> }`. The branch contributes a typed
       * [[CompiledFragment]] to the parent selection set and decodes to
-      * `Option[A]` — `Some` when the object's `__typename` matches `typeName`
-      * (the parent object selector always requests `__typename`), `None`
+      * `Maybe[A]` — `Present` when the object's `__typename` matches `typeName`
+      * (the parent object selector always requests `__typename`), `Absent`
       * otherwise. Branches compose with `~` like any field, so a full union
       * read is `PlayableItem.onTrack(…) ~ PlayableItem.onEpisode(…)` with the
-      * result `(onTrack: Option[…], onEpisode: Option[…])`, exactly one of
-      * which is `Some`. `R` is the 1-ary named tuple the caller (generated
+      * result `(onTrack: Maybe[…], onEpisode: Maybe[…])`, exactly one of
+      * which is `Present`. `R` is the 1-ary named tuple the caller (generated
       * union selector) ascribes.
       */
     def onType[Origin, R <: AnyNamedTuple, A](
@@ -400,27 +401,27 @@ object SelectionBuilder:
     ): SelectionBuilder[Origin, R] =
         new Tuples[Origin, R]:
             private[api] def arity: Int = 1
-            def selections: List[CompiledSelection] =
-                List(CompiledFragment(typeName, List(typeName), child.selections))
-            private[api] def argEntries: List[Arg] = child.argEntries
+            def selections: Chunk[CompiledSelection] =
+                Chunk(CompiledFragment(typeName, Chunk(typeName), child.selections))
+            private[api] def argEntries: Chunk[Arg] = child.argEntries
             private[api] def decodeRaw(row: Map[String, Json]): Tuple =
                 row.get("__typename") match
-                    case Some(Json.JStr(`typeName`)) => Tuple1(Some(child.decode(Json.JObj(row))))
-                    case _                           => Tuple1(None)
-            private[api] def encodeRaw(value: Tuple): List[(String, Json)] =
-                value.productElement(0).asInstanceOf[Option[A]] match
-                    case None => Nil
-                    case Some(v) =>
+                    case Some(Json.JStr(`typeName`)) => Tuple1(Present(child.decode(Json.JObj(row))))
+                    case _                           => Tuple1(Absent)
+            private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)] =
+                value.productElement(0).asInstanceOf[Maybe[A]] match
+                    case Absent => Chunk.empty
+                    case Present(v) =>
                         withTypename(child.encode(v), typeName) match
-                            case Json.JObj(fields) => fields.toList
+                            case Json.JObj(fields) => Chunk.from(fields)
                             // A non-object projection cannot be spliced back into the
                             // parent row; the branch's fields simply stay absent.
-                            case _ => Nil
+                            case _ => Chunk.empty
             private[api] def deferLast: Tuples[Origin, ? <: AnyNamedTuple] =
                 throw IllegalStateException(
                     "`.deferred` cannot be applied to an inline-fragment branch"
                 )
-            private[api] def streamLast(initialCount: Int, condition: Option[String]): Tuples[Origin, R] =
+            private[api] def streamLast(initialCount: Int, condition: Maybe[String]): Tuples[Origin, R] =
                 throw IllegalStateException(
                     "`.streamed` cannot be applied to an inline-fragment branch"
                 )
@@ -442,22 +443,22 @@ object SelectionBuilder:
       * `argsFrom` (the underlying child selection).
       */
     private[apollo] def rawLeaf[Origin, R <: AnyNamedTuple](
-        compiled: List[CompiledSelection],
+        compiled: Chunk[CompiledSelection],
         argsFrom: SelectionBuilder[?, ?],
         decodeRow: Map[String, Json] => Any,
-        encodeValue: Any => List[(String, Json)]
+        encodeValue: Any => Chunk[(String, Json)]
     ): SelectionBuilder[Origin, R] =
         new Tuples[Origin, R]:
-            private[api] def arity: Int             = 1
-            def selections: List[CompiledSelection] = compiled
-            private[api] def argEntries: List[Arg]  = argsFrom.argEntries
+            private[api] def arity: Int              = 1
+            def selections: Chunk[CompiledSelection] = compiled
+            private[api] def argEntries: Chunk[Arg]  = argsFrom.argEntries
             private[api] def decodeRaw(row: Map[String, Json]): Tuple =
                 Tuple1(decodeRow(row))
-            private[api] def encodeRaw(value: Tuple): List[(String, Json)] =
+            private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)] =
                 encodeValue(value.productElement(0))
             private[api] def deferLast: Tuples[Origin, ? <: AnyNamedTuple] =
                 throw IllegalStateException("`.deferred` cannot be applied to a fragment spread")
-            private[api] def streamLast(initialCount: Int, condition: Option[String]): Tuples[Origin, R] =
+            private[api] def streamLast(initialCount: Int, condition: Maybe[String]): Tuples[Origin, R] =
                 throw IllegalStateException("`.streamed` cannot be applied to a fragment spread")
 
     /** The empty selection for `Origin`: selects nothing, and is the neutral
@@ -477,7 +478,7 @@ object SelectionBuilder:
     /** Wrap a child selection in a `@defer` group (backs the `defer` function). */
     private[api] def deferGroup[Origin, S <: AnyNamedTuple, R <: AnyNamedTuple](
         label: String,
-        condition: Option[String],
+        condition: Maybe[String],
         child: SelectionBuilder[Origin, S]
     ): SelectionBuilder[Origin, R] =
         Deferred(label, condition, child.asInstanceOf[Tuples[Origin, S]], single = false)
@@ -485,7 +486,7 @@ end SelectionBuilder
 
 /** Combine two selections on the same `Origin`, concatenating their result named
   * tuples: `Country.name ~ Country.capital` is
-  * `SelectionBuilder[Country, (name: String, capital: Option[String])]`.
+  * `SelectionBuilder[Country, (name: String, capital: Maybe[String])]`.
   */
 extension [Origin, A <: AnyNamedTuple](sb: SelectionBuilder[Origin, A])
     infix def ~[B <: AnyNamedTuple](
@@ -503,7 +504,7 @@ end extension
 def defer[Origin, S <: AnyNamedTuple, L <: String & Singleton](
     label: L,
     child: SelectionBuilder[Origin, S],
-    `if`: Option[String] = None
+    `if`: Maybe[String] = Absent
 ): SelectionBuilder[Origin, NamedTuple[L *: EmptyTuple, Maybe[S] *: EmptyTuple]] =
     SelectionBuilder.deferGroup(label, `if`, child)
 
@@ -530,13 +531,13 @@ end extension
 /** Mark the last-added *list* field of a selection with `@stream(initialCount:)`:
   * the server delivers the first `initialCount` items in the initial response and
   * appends the rest over `multipart/mixed`, so the list grows across emissions. The
-  * result type is UNCHANGED (`List[T]` stays `List[T]` — no wrapper, unlike
+  * result type is UNCHANGED (`Chunk[T]` stays `Chunk[T]` — no wrapper, unlike
   * `.deferred`); the label rides the document auto-derived from the field's response
   * name. No string needed. `Country.code ~ Continent.countries(_.name).streamed(2)`.
   * Applies to field/chain selections (not `map`/`mapInto` projections).
   */
 extension [Origin, A <: AnyNamedTuple](sb: SelectionBuilder[Origin, A])
-    def streamed(initialCount: Int, `if`: Option[String] = None): SelectionBuilder[Origin, A] =
+    def streamed(initialCount: Int, `if`: Maybe[String] = Absent): SelectionBuilder[Origin, A] =
         sb.asInstanceOf[SelectionBuilder.Tuples[Origin, A]].streamLast(initialCount, `if`)
 
 /** Phantom `Origin` markers for the three operation roots. Universal (not
