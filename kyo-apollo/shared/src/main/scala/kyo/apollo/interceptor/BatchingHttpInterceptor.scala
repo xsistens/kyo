@@ -178,7 +178,7 @@ final class BatchingHttpInterceptor private (
     private def split(n: Int, response: HttpResponse)(using Frame): Chunk[Result[HttpEngineFailure, HttpResponse]] =
         if !response.isSuccessful then Chunk.from(Seq.fill(n)(Result.succeed(response)))
         else
-            Result.catching[Throwable](JsonParser.parse(response.body)) match
+            JsonParser.parse(response.body) match
                 case Result.Success(Json.JArr(items)) if items.length == n =>
                     items.map(json => Result.succeed(HttpResponse(response.statusCode, response.headers, json.render)))
                 case _ =>

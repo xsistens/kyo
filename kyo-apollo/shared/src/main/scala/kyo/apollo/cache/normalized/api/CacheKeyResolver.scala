@@ -66,10 +66,10 @@ object CacheKeyResolver:
             case CompiledArgumentValue.Literal(j)     => j
             case CompiledArgumentValue.Variable(name) => variables.getOrElse(name, Json.JNull)
         json match
-            case Json.JStr(s)  => Present(s)
-            case Json.JNum(_)  => Present(json.render)
-            case Json.JBool(b) => Present(b.toString)
-            case _             => Absent
+            case Json.JStr(s)                               => Present(s)
+            case Json.JInt(_) | Json.JDec(_) | Json.JNum(_) => Present(json.render)
+            case Json.JBool(b)                              => Present(b.toString)
+            case _                                          => Absent
         end match
     end argumentString
 end CacheKeyResolver

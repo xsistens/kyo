@@ -7,7 +7,7 @@ class JsonPathSpec extends kyo.test.Test[Any]:
 
     given CanEqual[Any, Any] = CanEqual.derived
 
-    private def j(s: String): Json = JsonParser.parse(s)
+    private def j(s: String): Json = JsonParser.parse(s).getOrThrow
 
     "JsonPath.parse" - {
         "parses mixed field-name / list-index segments" in {
