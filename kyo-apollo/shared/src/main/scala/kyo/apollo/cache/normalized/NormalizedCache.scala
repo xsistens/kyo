@@ -34,14 +34,16 @@ import kyo.apollo.cache.normalized.api.Record
   *     exactly the state that function saw. Under contention the function is run
   *     again on the newer state, so it must be pure.
   *
-  * [[loadRecord]], [[loadRecords]] and [[merge]] are conveniences expressed through
-  * those two, so a decorating backend overrides [[read]] and [[transact]] and
-  * reaches every read and write the store makes.
+  * [[loadRecord]], [[loadRecords]] and [[merge]] are `final` conveniences expressed
+  * through those two, so a decorating backend overrides [[read]] and [[transact]]
+  * and reaches every read and write the store makes — there is no second write
+  * entry it could override and have the store call past.
   *
-  * Records are merged, never blindly replaced: a commit unions an incoming record's
-  * fields onto whatever is already stored (through the [[RecordMerger]] the store
-  * hands in) and reports which keys actually changed, so a re-fetch that returns
-  * identical data touches nothing.
+  * Records are merged, never blindly replaced: a commit merges an incoming record
+  * onto whatever is already stored through the [[RecordMerger]] the store hands in
+  * — the same merger the store's normalizer applied to two occurrences of one key
+  * inside a response — and reports which keys actually changed, so a re-fetch that
+  * returns identical data touches nothing.
   */
 trait NormalizedCache:
 
