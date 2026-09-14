@@ -6,17 +6,16 @@ import kyo.apollo.exception.ApolloException
 import kyo.apollo.exception.ApolloWebSocketClosedException
 import kyo.apollo.network.ws.WebSocketConnection
 import kyo.apollo.network.ws.WebSocketEngine
-import kyo.apollo.network.ws.WsScheduler
-import scala.collection.mutable
 
 /** A scripted, in-memory WebSocket server for subscription tests, promoted from
-  * `core`'s `FakeWebSocket.scala` (the connection/engine/scheduler triple) and
+  * `core`'s `FakeWebSocket.scala` (the connection/engine pair) and
   * `WsTestSupport.scala` (the dual-protocol server-frame builders) — ADR §2a/§5.
   *
   * It plays the role of the server below the [[WebSocketConnection]] seam: a test
-  * injects it as the client's `webSocketEngine` (and its [[scheduler]] as the
-  * `webSocketScheduler`), then scripts the handshake and events by hand
-  * ([[ack]] / [[next]] / [[complete]] / …) with no real socket and no wall clock.
+  * injects it as the client's `webSocketEngine`, then scripts the handshake and
+  * events by hand ([[ack]] / [[next]] / [[complete]] / …) with no real socket; the
+  * transport's ack, idle and reconnect timers run on the `Clock`, so a test inside
+  * `Clock.withTimeControl` fires them with `advance`.
   * Client → server frames are recorded in [[sent]] for assertion; frames pushed
   * before the transport attaches its sink are buffered and replayed in order.
   *
@@ -34,11 +33,6 @@ final class MockWebSocketServer(
 
     /** The single scripted connection this server hands back on every `open`. */
     val connection: FakeWebSocketConnection = new FakeWebSocketConnection
-
-    /** The manual timer seam — inject as the client's `webSocketScheduler` and
-      * fire the ack/idle/backoff timers by hand with [[ManualWsScheduler.fireAll]].
-      */
-    val scheduler: ManualWsScheduler = new ManualWsScheduler
 
     private val opensRef = new AtomicReference[Vector[(String, Option[String])]](Vector.empty)
 
@@ -242,27 +236,3 @@ final class FreshWebSocketEngine extends WebSocketEngine:
             c
         }
 end FreshWebSocketEngine
-
-/** A scheduler that records timers instead of arming real ones; the test fires
-  * them by hand. Cancelling drops the pending timer. Retained for HTTP
-  * interceptor specs that still inject a [[WsScheduler]]; the WebSocket transport
-  * now drives its timers through `Clock` and is tested with `Clock.withTimeControl`.
-  * Promoted from `core`'s `FakeWebSocket.scala`.
-  */
-final class ManualWsScheduler extends WsScheduler:
-    private val tasks = mutable.Map.empty[Long, () => Unit]
-    private var seq   = 0L
-    def schedule(delayMillis: Long)(task: () => Unit): () => Unit =
-        val id = seq
-        seq += 1
-        tasks(id) = task
-        () =>
-            tasks.remove(id): Unit
-    end schedule
-    def pending: Int = tasks.size
-    def fireAll(): Unit =
-        val snapshot = tasks.values.toList
-        tasks.clear()
-        snapshot.foreach(_())
-    end fireAll
-end ManualWsScheduler

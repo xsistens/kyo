@@ -224,7 +224,7 @@ class WebSocketNetworkTransportSpec extends kyo.test.Test[Any]:
                     serverUrl = "wss://example.com/graphql",
                     engine = engine,
                     reconnectWhen = WebSocketNetworkTransport.reconnectAlways,
-                    backoff = WsBackoff.constant(1000)
+                    backoff = Schedule.fixed(1.second)
                 )
                 var seen = List.empty[ApolloResponse[Int]]
                 for
@@ -260,7 +260,7 @@ class WebSocketNetworkTransportSpec extends kyo.test.Test[Any]:
                 serverUrl = "wss://example.com/graphql",
                 engine = engine,
                 reconnectWhen = WebSocketNetworkTransport.reconnectAlways,
-                backoff = WsBackoff.constant(1000)
+                backoff = Schedule.fixed(1.second)
             )
             for
                 _  <- StreamProbe.drain(transport.subscribe(request()))(_ => ())
@@ -278,6 +278,69 @@ class WebSocketNetworkTransportSpec extends kyo.test.Test[Any]:
                 _ <- control.advance(1.second)                       // backoff -> reconnect attempt 2 opens c2
                 _ <- settle(control)
             yield assert(engine.conns.size == 3)
+            end for
+        }
+
+        "a reconnect schedule with no delay left terminates the subscription with the drop" in Clock.withTimeControl {
+            control =>
+                val engine = new FreshWebSocketEngine
+                val transport = new WebSocketNetworkTransport(
+                    serverUrl = "wss://example.com/graphql",
+                    engine = engine,
+                    reconnectWhen = WebSocketNetworkTransport.reconnectAlways,
+                    backoff = Schedule.fixed(1.second).take(1)
+                )
+                for
+                    done <- Fiber.init(Scope.run(StreamProbe.collect(transport.subscribe(request()))))
+                    _    <- settle(control)
+                    c0   <- Sync.defer(engine.conns.head)
+                    _    <- Sync.defer(c0.server(ack))
+                    _    <- settle(control)
+                    _    <- Sync.defer(c0.drop(1011, "boom"))
+                    _    <- settle(control)
+                    _    <- control.advance(1.second) // the schedule's one delay -> attempt 1 opens c1
+                    _    <- settle(control)
+                    _ = assert(engine.conns.size == 2)
+                    _    <- Sync.defer(engine.conns(1).drop(1012, "again")) // drops before its ack; no delay left
+                    seen <- done.get
+                    _    <- control.advance(5.seconds)
+                    _    <- settle(control)
+                yield
+                    assert(seen.exists(wsClosed(_, 1012)), s"the subscription ends with the last drop: $seen")
+                    assert(engine.conns.size == 2, "no attempt beyond the schedule")
+                end for
+        }
+
+        "the reconnect schedule starts over once a reconnection is acknowledged" in Clock.withTimeControl { control =>
+            val engine = new FreshWebSocketEngine
+            val transport = new WebSocketNetworkTransport(
+                serverUrl = "wss://example.com/graphql",
+                engine = engine,
+                reconnectWhen = WebSocketNetworkTransport.reconnectAlways,
+                backoff = Schedule.exponential(1.second, 2.0)
+            )
+            for
+                _  <- StreamProbe.drain(transport.subscribe(request()))(_ => ())
+                _  <- settle(control)
+                c0 <- Sync.defer(engine.conns.head)
+                _  <- Sync.defer(c0.server(ack))
+                _  <- settle(control)
+                _  <- Sync.defer(c0.drop(1011, "boom"))
+                _  <- settle(control)
+                _  <- control.advance(1.second) // the first delay -> attempt 1 opens c1
+                _  <- settle(control)
+                _ = assert(engine.conns.size == 2)
+                c1 <- Sync.defer(engine.conns(1))
+                _  <- Sync.defer(c1.server(ack)) // re-established
+                _  <- settle(control)
+                _  <- Sync.defer(c1.drop(1011, "boom again"))
+                _  <- settle(control)
+                _  <- control.advance(999.millis)
+                _  <- settle(control)
+                _ = assert(engine.conns.size == 2, "no reopen before the first delay has passed")
+                _ <- control.advance(1.milli) // 1s again, not the 2s a continued schedule would wait
+                _ <- settle(control)
+            yield assert(engine.conns.size == 3, s"the schedule must start over after an ack, got ${engine.conns.size} sockets")
             end for
         }
 
@@ -312,7 +375,7 @@ class WebSocketNetworkTransportSpec extends kyo.test.Test[Any]:
                     serverUrl = "wss://example.com/graphql",
                     engine = engine,
                     reconnectWhen = WebSocketNetworkTransport.reconnectAlways,
-                    backoff = WsBackoff.constant(1000)
+                    backoff = Schedule.fixed(1.second)
                 )
                 var seen = List.empty[ApolloResponse[Int]]
                 for
