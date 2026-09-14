@@ -330,30 +330,32 @@ final class ApolloStore(
         plan: RecordLoader => Chunk[Record],
         cacheHeaders: CacheHeaders
     )(using Frame): Set[CacheKey] < Sync =
-        commitWith(loader => (plan(loader), ()), cacheHeaders).map(_._1)
+        commitWith(state => (RecordChanges.merge(plan(state)), ()), cacheHeaders).map(_._1)
 
-    /** Commit the records `plan` computes against the backend's current state,
+    /** Commit the changes `plan` computes against the backend's current state,
       * together with a result of `plan`'s own from the attempt that landed, and
       * report the positional-conflict warnings ([[CacheDiagnostics]]) of that
       * attempt. Every store write funnels through here — the one call of
-      * [[NormalizedCache.transact]] — so the diagnostic cannot be wired into some
-      * write paths and forgotten on others; while diagnostics are off it costs one
-      * boolean read per record. `plan` may run more than once.
+      * [[NormalizedCache.transact]], merges and removals alike — so the diagnostic
+      * cannot be wired into some write paths and forgotten on others; while
+      * diagnostics are off it costs one boolean read per record. `plan` may run more
+      * than once.
       */
     private def commitWith[A](
-        plan: RecordLoader => (Chunk[Record], A),
+        plan: RecordState => (RecordChanges, A),
         cacheHeaders: CacheHeaders
     )(using Frame): (Set[CacheKey], A) < Sync =
-        def planned(loader: RecordLoader): (Chunk[Record], (Chunk[String], A)) =
-            val (records, result) = plan(loader)
+        def planned(state: RecordState): (RecordChanges, (Chunk[String], A)) =
+            val (changes, result) = plan(state)
+            val records           = changes.merge
             val warnings =
                 if !diagnostics.enabled || records.isEmpty then Chunk.empty[String]
                 else
-                    val stored = loader.load(records.map(_.key))
+                    val stored = state.load(records.map(_.key))
                     records.flatMap(incoming =>
                         Chunk.from(stored.get(incoming.key)).flatMap(diagnostics.positionalConflicts(_, incoming))
                     )
-            (records, (warnings, result))
+            (changes, (warnings, result))
         end planned
         cache.transact(planned, cacheHeaders, recordMerger)
             .map { case (changed, (warnings, result)) => diagnostics.report(warnings).andThen((changed, result)) }
@@ -623,11 +625,11 @@ final class ApolloStore(
         Frame
     ): Set[CacheKey] < Sync =
         optimisticLayers.get.map { layers =>
-            def planned(base: RecordLoader): (Chunk[Record], Result[Nothing, Unit]) =
+            def planned(base: RecordState): (RecordChanges, Result[Nothing, Unit]) =
                 plan(overlayLoader(layers, base)) match
-                    case Result.Success(records) => (records, Result.unit)
-                    case Result.Failure(_)       => (Chunk.empty[Record], Result.unit)
-                    case Result.Panic(defect)    => (Chunk.empty[Record], Result.panic[Nothing, Unit](defect))
+                    case Result.Success(records) => (RecordChanges.merge(records), Result.unit)
+                    case Result.Failure(_)       => (RecordChanges.merge(Chunk.empty), Result.unit)
+                    case Result.Panic(defect)    => (RecordChanges.merge(Chunk.empty), Result.panic[Nothing, Unit](defect))
             commitWith(planned, CacheHeaders.None).map { (changed, outcome) =>
                 Abort.get(outcome).andThen(publish(changed)).andThen(changed)
             }
@@ -753,12 +755,10 @@ final class ApolloStore(
       * actually present, [[publish]] `Set(key)` so watchers depending on it react.
       * Returns whether a record was removed. The imperative-invalidation path that
       * — unlike the bare `cache.remove` — does not drop the changed key on the
-      * floor.
+      * floor: [[evict]] without cascade, answered as a `Boolean`.
       */
     def remove(key: CacheKey)(using Frame): Boolean < Sync =
-        cache.remove(Chunk(key)).map { removed =>
-            if removed.isEmpty then false else publish(removed).andThen(true)
-        }
+        evict(key).map(_.nonEmpty)
 
     /** Sweep the cache for records unreachable from any root and remove them,
       * returning — and [[publish]]ing — the set of removed keys.
@@ -773,7 +773,15 @@ final class ApolloStore(
       * at any key, and a watch whose root field was re-pointed still depends on the
       * records its last read reached until it has read again. Reachability is
       * transitively followed through [[Record.references]] (which already walks
-      * lists), and every stored key not reached is dropped via `cache.remove`.
+      * lists), and every stored key not reached is dropped.
+      *
+      * Marking and sweeping are one [[NormalizedCache.transact]]: the unreachable set
+      * is computed on the state it is removed from, so a write that references such a
+      * record again before the removal lands makes the sweep run again on the newer
+      * state instead of deleting a record a root now points at. The roots outside the
+      * backend — the optimistic layers and the retain set — are read once, before
+      * that transaction: a retain taken or a layer added while a sweep is under way
+      * protects from the next sweep on.
       *
       * The removed keys are published, because a record can be depended on without
       * being retained: a watcher between a read and the adoption of that read's key
@@ -784,14 +792,23 @@ final class ApolloStore(
       * [[garbageCollect]] delegates to.
       */
     def removeUnreachableRecords(using Frame): Set[CacheKey] < Sync =
-        cache.allRecords.map { all =>
-            optimisticLayers.get.map { layers =>
-                retained.get.map { pinned =>
-                    val unreachable = all.keySet.diff(reachableKeys(all, layers, pinned.keySet))
-                    cache.remove(Chunk.from(unreachable)).map(removed => publish(removed).andThen(removed))
+        optimisticLayers.get.map { layers =>
+            retained.get.map { pinned =>
+                sweep { state =>
+                    val all = state.allRecords
+                    all.keySet.diff(reachableKeys(all, layers, pinned.keySet))
                 }
             }
         }
+
+    /** Remove the keys `select` picks from the backend's current state — picked and
+      * removed in one [[commitWith]], so on one state — and [[publish]] the keys that
+      * were actually removed. The shared step of [[garbageCollect]] and [[evict]];
+      * `select` may run more than once.
+      */
+    private def sweep(select: RecordState => Set[CacheKey])(using Frame): Set[CacheKey] < Sync =
+        commitWith(state => (RecordChanges.remove(select(state)), ()), CacheHeaders.None)
+            .map((removed, _) => publish(removed).andThen(removed))
 
     /** Reclaim every record unreachable from a root — the operation roots, the
       * optimistic layers and the retain set — returning and [[publish]]ing the
@@ -838,15 +855,16 @@ final class ApolloStore(
       * cascade)`). Returns the empty set (and publishes nothing) when `cacheKey`
       * was already absent.
       *
+      * A cascade collects the subtree on the state it removes it from (one
+      * [[NormalizedCache.transact]]): a write that re-points the subtree while the
+      * evict runs makes it collect again, so it removes the subtree as it is, not a
+      * record the write has moved out of it.
+      *
       * @param cacheKey the record to evict
       * @param cascade  whether to also evict the records `cacheKey` references
       */
     def evict(cacheKey: CacheKey, cascade: Boolean = false)(using Frame): Set[CacheKey] < Sync =
-        val removal =
-            if !cascade then cache.remove(Chunk(cacheKey))
-            else cache.allRecords.map(all => cache.remove(Chunk.from(subtree(all, cacheKey))))
-        removal.map(removed => publish(removed).andThen(removed))
-    end evict
+        sweep(state => if cascade then subtree(state.allRecords, cacheKey) else Set(cacheKey))
 
     /** `start` and every record transitively reachable from it over the `all`
       * snapshot — the keys a cascading [[evict]] removes. The traversal walks

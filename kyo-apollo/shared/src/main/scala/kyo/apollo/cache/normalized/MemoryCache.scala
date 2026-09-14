@@ -40,7 +40,7 @@ import scala.collection.immutable.TreeMap
   *
   * Concurrency: a [[read]] takes one state and loads every record from it, so a
   * read never observes half of a concurrent write; reads never wait for writers. A
-  * write ([[transact]], [[remove]], [[removeExpiredRecords]]) computes the next
+  * write ([[transact]], [[removeExpiredRecords]]) computes the next
   * state from the current one and commits it with a compare-and-set, running again
   * on the newer state if another write committed first. Recency and the physical
   * removal of records a read found expired are recorded after the read in one
@@ -100,18 +100,19 @@ final class MemoryCache(
         }
 
     def transact[A](
-        f: RecordLoader => (Chunk[Record], A),
+        f: RecordState => (RecordChanges, A),
         cacheHeaders: CacheHeaders,
         merger: RecordMerger
     )(using Frame): (Set[CacheKey], A) < Sync =
         val doNotStore = cacheHeaders.headerValue(CacheHeaders.DoNotStore).contains("true")
         modify { before =>
             val now          = nowMillis()
-            val (records, a) = f(keys => before.load(keys, live(_, now)))
-            if doNotStore || records.isEmpty then (before, (Set.empty[CacheKey], a))
+            val (changes, a) = f(before.asRecordState(live(_, now)))
+            if doNotStore || (changes.merge.isEmpty && changes.remove.isEmpty) then (before, (Set.empty[CacheKey], a))
             else
-                val date = writeDate(cacheHeaders, now)
-                val (merged, changed) = records.foldLeft((before, Set.empty[CacheKey])) {
+                val removed = changes.remove.filter(before.entries.contains)
+                val date    = writeDate(cacheHeaders, now)
+                val (merged, changed) = changes.merge.foldLeft((before.removeAll(removed), removed)) {
                     case ((s, changedKeys), incoming) =>
                         val existing                = Maybe.fromOption(s.entries.get(incoming.key)).map(_.record)
                         val stamped                 = stamp(incoming, existing, date)
@@ -123,18 +124,10 @@ final class MemoryCache(
         }
     end transact
 
-    def remove(keys: Chunk[CacheKey])(using Frame): Set[CacheKey] < Sync =
-        if keys.isEmpty then Set.empty[CacheKey]
-        else
-            modify { before =>
-                val present = keys.iterator.filter(before.entries.contains).toSet
-                if present.isEmpty then (before, present) else (before.removeAll(present), present)
-            }
-
     def clearAll(using Frame): Unit < Sync = state.set(State.empty)
 
     def allRecords(using Frame): Map[CacheKey, Record] < Sync =
-        state.get.map(_.entries.map((key, entry) => key -> entry.record))
+        state.get.map(_.records)
 
     /** Proactively drop every record and field that has outlived its TTL, in a
       * single commit, returning the keys of records removed *whole* (either the
@@ -285,6 +278,17 @@ object MemoryCache:
                     case Some(record) => loaded.updated(key, record)
                     case None         => loaded
             }
+
+        /** Every stored record, expired ones included. */
+        def records: Map[CacheKey, Record] = entries.map((key, entry) => key -> entry.record)
+
+        /** This state as a transaction sees it: loads through `live`, and every record
+          * as stored — built only if the transaction asks for it.
+          */
+        def asRecordState(live: Record => Maybe[Record]): RecordState =
+            new RecordState:
+                def load(keys: Chunk[CacheKey]): Map[CacheKey, Record] = State.this.load(keys, live)
+                lazy val allRecords: Map[CacheKey, Record]             = records
 
         /** Store `record` under its key as the most recently used entry. */
         def put(record: Record): State =

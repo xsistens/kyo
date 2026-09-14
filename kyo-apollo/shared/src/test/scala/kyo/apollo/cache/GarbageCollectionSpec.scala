@@ -41,8 +41,10 @@ class GarbageCollectionSpec extends kyo.test.Test[Any]:
 
     // --- reachability GC --------------------------------------------------------
 
-    private def graphStore()(using Frame): ApolloStore < Sync =
-        val s = new ApolloStore(MemoryCache())
+    private def graphStore()(using Frame): ApolloStore < Sync = graphStoreOver(MemoryCache())
+
+    private def graphStoreOver(cache: NormalizedCache)(using Frame): ApolloStore < Sync =
+        val s = new ApolloStore(cache)
         s.cache.merge(
             Chunk(
                 rec(CacheKey.QueryRoot, fk("book")      -> ref(CacheKey("Book", "1"))),
@@ -51,7 +53,7 @@ class GarbageCollectionSpec extends kyo.test.Test[Any]:
                 rec(CacheKey("Orphan", "1"), fk("x")    -> scalar("1"))
             )
         ).andThen(s)
-    end graphStore
+    end graphStoreOver
 
     // --- optimistic pinning -----------------------------------------------------
 
@@ -118,6 +120,44 @@ class GarbageCollectionSpec extends kyo.test.Test[Any]:
                 case Absent          => delegate.read(f)
             }
     end ReadTrap
+
+    /** A cache that, once armed, lets `write` commit between the moment a sweep has
+      * worked out what to remove and the moment it removes it — whichever way the
+      * store sweeps: right after the `allRecords` snapshot a two-step sweep computes
+      * from, or inside a transaction, after its plan has run and before its commit.
+      * The plan is pure, so there the write is evaluated in place; it commits first,
+      * and a one-step sweep has to plan again on the state the write left.
+      */
+    final private class SweepTrap(delegate: NormalizedCache) extends NormalizedCacheDecorator(delegate):
+        private given AllowUnsafe = AllowUnsafe.embrace.danger
+        private val armed         = AtomicRef.Unsafe.init(Maybe.empty[Unit < Sync])
+
+        def arm(write: => Unit < Sync)(using Frame): Unit < Sync =
+            Sync.defer(discard(armed.getAndSet(Present(Sync.defer(write)))))
+
+        override def allRecords(using Frame): Map[CacheKey, Record] < Sync =
+            delegate.allRecords.map { snapshot =>
+                Sync.defer(armed.getAndSet(Absent)).map {
+                    case Present(write) => write.andThen(snapshot)
+                    case Absent         => snapshot
+                }
+            }
+
+        override def transact[A](
+            f: RecordState => (RecordChanges, A),
+            cacheHeaders: CacheHeaders,
+            merger: RecordMerger
+        )(using Frame): (Set[CacheKey], A) < Sync =
+            delegate.transact(
+                state =>
+                    val planned = f(state)
+                    armed.getAndSet(Absent).foreach(write => Sync.Unsafe.evalOrThrow(write))
+                    planned
+                ,
+                cacheHeaders,
+                merger
+            )
+    end SweepTrap
 
     /** A client over `cache` for `CacheOnly` watches: nothing here reaches the network. */
     private def clientOver(cache: NormalizedCache): ApolloClient =
@@ -206,6 +246,50 @@ class GarbageCollectionSpec extends kyo.test.Test[Any]:
             yield
                 assert(first == Set(CacheKey("Orphan", "1")))
                 assert(second == Set.empty[CacheKey])
+            end for
+        }
+
+        "a write that makes a record reachable again while GC is sweeping keeps that record" in {
+            // Orphan:1 is unreachable when the sweep works out what to remove; before the
+            // removal lands, a write points the root at it. Computing the set on one state
+            // and removing on another deletes a record the root now references.
+            val cache  = SweepTrap(MemoryCache())
+            val orphan = CacheKey("Orphan", "1")
+            for
+                s       <- graphStoreOver(cache)
+                _       <- cache.arm(s.cache.merge(Chunk(rec(CacheKey.QueryRoot, fk("adopted") -> ref(orphan)))).unit)
+                removed <- s.garbageCollect
+                kept    <- s.cache.loadRecord(orphan)
+            yield
+                assert(removed == Set.empty[CacheKey], s"the sweep removed a record the root references by now: $removed")
+                assert(kept.isDefined)
+            end for
+        }
+
+        "a write that moves a subtree while a cascading evict runs keeps the record it moved away from" in {
+            // Book:1 -> Author:1. While the cascade is under way, a write re-points Book:1 at
+            // Author:2 and gives the root its own reference to Author:1. The evict lands
+            // after that write: it removes Book:1 and its subtree as it is NOW
+            // (Author:2), and leaves Author:1, which the root references.
+            val cache = SweepTrap(MemoryCache())
+            for
+                s <- graphStoreOver(cache)
+                _ <- cache.arm(
+                    s.cache.merge(
+                        Chunk(
+                            rec(CacheKey("Book", "1"), fk("author") -> ref(CacheKey("Author", "2"))),
+                            rec(CacheKey("Author", "2"), fk("name") -> scalar("Le Guin")),
+                            rec(CacheKey.QueryRoot, fk("favorite")  -> ref(CacheKey("Author", "1")))
+                        )
+                    ).unit
+                )
+                evicted <- s.evict(CacheKey("Book", "1"), cascade = true)
+                author1 <- s.cache.loadRecord(CacheKey("Author", "1"))
+                author2 <- s.cache.loadRecord(CacheKey("Author", "2"))
+            yield
+                assert(author1.isDefined, s"the evict removed a record the root references by now (evicted $evicted)")
+                assert(evicted == Set(CacheKey("Book", "1"), CacheKey("Author", "2")))
+                assert(author2 == Absent)
             end for
         }
 
@@ -480,8 +564,8 @@ class GarbageCollectionSpec extends kyo.test.Test[Any]:
         // --- NormalizedCacheDecorator persistence seam ------------------------------
 
         "a bare decorator forwards every operation to its delegate" in {
-            // All six members of the backend contract: read (as one batch of two keys),
-            // transact (through merge), remove, clearAll, allRecords and sizeLimit.
+            // Every member of the backend contract: read (as one batch of two keys),
+            // transact (through merge and remove), clearAll, allRecords and sizeLimit.
             val backing = MemoryCache(maxSize = 3)
             val deco    = new NormalizedCacheDecorator(backing) {}
             for
@@ -515,7 +599,7 @@ class GarbageCollectionSpec extends kyo.test.Test[Any]:
             class PersistingCache(d: NormalizedCache, persisted: AtomicRef[Set[CacheKey]])
                 extends NormalizedCacheDecorator(d):
                 override def transact[A](
-                    f: RecordLoader => (Chunk[Record], A),
+                    f: RecordState => (RecordChanges, A),
                     cacheHeaders: CacheHeaders,
                     merger: RecordMerger
                 )(using Frame): (Set[CacheKey], A) < Sync =
