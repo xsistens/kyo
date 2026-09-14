@@ -157,18 +157,17 @@ class DevtoolsInterceptorSpec extends kyo.test.Test[Any]:
             val engine: HttpEngine = new HttpEngine:
                 def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
                     HttpResponse(200, Nil, """{"data":{"login":true}}""")
-            val client = ApolloClient
-                .builder()
-                .serverUrl("https://example.com/graphql")
+            val clientConfig = ApolloClient.Config("https://example.com/graphql")
                 .httpEngine(engine)
                 .prependInterceptor(new DevtoolsInterceptor(store))
-                .build()
-            val call = client.mutation(LoginMutation())
-            assert(store.mutationsSnapshot.isEmpty)
-            call.execute.andThen(call.execute).map { _ =>
-                val recorded = store.mutationsSnapshot
-                assert(recorded.size == 2)
-                assert(recorded.forall(m => !m.loading && m.variables == redactedLoginVariables))
+            ApolloClient.init(clientConfig).map { client =>
+                val call = client.mutation(LoginMutation())
+                assert(store.mutationsSnapshot.isEmpty)
+                call.execute.andThen(call.execute).map { _ =>
+                    val recorded = store.mutationsSnapshot
+                    assert(recorded.size == 2)
+                    assert(recorded.forall(m => !m.loading && m.variables == redactedLoginVariables))
+                }
             }
         }
     }

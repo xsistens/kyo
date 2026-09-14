@@ -6,7 +6,6 @@ import kyo.apollo.api.Operation
 import kyo.apollo.api.Query
 import kyo.apollo.api.Subscription
 import kyo.apollo.cache.normalized.FetchPolicy
-import kyo.apollo.exception.ApolloConfigException
 import kyo.apollo.exception.ApolloException
 import kyo.apollo.interceptor.ApolloInterceptor
 import kyo.apollo.interceptor.DefaultApolloInterceptorChain
@@ -31,12 +30,19 @@ import kyo.apollo.runtime.ResponseStream
   * interceptor chain to the HTTP transport once, then hands out an
   * [[ApolloCall]] per operation.
   *
+  * ==Lifecycle==
+  *
+  * A client is a resource: it owns the shared subscription socket. It is created
+  * from an immutable [[ApolloClient.Config]] by [[ApolloClient.init]], which ties it
+  * to the enclosing `Scope` — the Scope's end [[close]]s it. [[ApolloClient.use]]
+  * brackets a block instead, and [[ApolloClient.initUnscoped]] /
+  * [[ApolloClient.Unsafe.init]] leave closing to the caller.
+  *
   * ==What it assembles==
   *
-  * A client is immutable and built through [[ApolloClient.builder]]. At build
-  * time it composes, in order:
+  * At creation it composes, in order:
   *
-  *   1. the **HTTP tier** — the registered [[HttpInterceptor]]s presented as a
+  *   1. the **HTTP tier** — the configured [[HttpInterceptor]]s presented as a
   *      single [[kyo.apollo.network.http.HttpEngine]] via
   *      [[HttpInterceptorChain.asEngine]], wrapping the real
   *      [[kyo.apollo.network.http.FetchHttpEngine]] (or an injected one for tests);
@@ -46,7 +52,7 @@ import kyo.apollo.runtime.ResponseStream
   *      `webSocketServerUrl` for subscriptions; both are the single place
   *      network/HTTP/parse/socket failures become `ApolloResponse.error`
   *      values;
-  *   1. the **Apollo tier** — the registered [[ApolloInterceptor]]s followed by
+  *   1. the **Apollo tier** — the configured [[ApolloInterceptor]]s followed by
   *      a terminal [[NetworkInterceptor]] that routes each operation to the right
   *      transport (queries/mutations over HTTP, subscriptions over WebSocket).
   *
@@ -61,42 +67,19 @@ import kyo.apollo.runtime.ResponseStream
   * long-lived subscription stream all share one path. Nothing runs until the
   * call is executed (the chain is cold).
   *
-  * Mirrors apollo-kotlin's `ApolloClient` / `ApolloClient.Builder`.
+  * Mirrors apollo-kotlin's `ApolloClient`; its `ApolloClient.Builder` is the
+  * [[ApolloClient.Config]] value.
   *
-  * @param serverUrl            the GraphQL endpoint every operation is sent to
-  * @param defaultHttpHeaders   headers applied to every request (per-call
-  *                             headers are appended on top)
-  * @param httpInterceptors     HTTP-tier interceptors, in registration order
-  * @param interceptors         Apollo-tier interceptors, in registration order
-  *                             (the terminal network step is appended internally)
-  * @param defaultHttpMethod    the method used when a call does not pin one
-  *                             (`None` falls back to the composer default, POST)
-  * @param httpEngine           the wire round-trip (defaults to the real fetch
-  *                             engine; injectable for tests / custom transports)
-  * @param webSocketServerUrl   the `ws(s)://` endpoint subscriptions connect to
-  *                             (defaults to `serverUrl`, matching apollo-kotlin)
-  * @param wsProtocol           the subscription wire protocol (defaults to the
-  *                             modern `graphql-transport-ws`)
-  * @param webSocketReopenWhen  decides, from a drop's exception and 1-based
-  *                             attempt number, whether to transparently reopen a
-  *                             dropped subscription socket and resubscribe
-  *                             (defaults to never — opt-in, like apollo-kotlin)
-  * @param webSocketConnectionPayload optional `connection_init` payload (e.g. auth)
-  * @param webSocketEngine      the socket round-trip (defaults to the real JS
-  *                             engine; injectable for tests)
+  * @param activeQueries registry of the live `useQuery` watchers, populated by the
+  *                      kyo-ui binding (each live query registers on setup and
+  *                      de-registers on `Scope` teardown); the seam for imperative
+  *                      `refetchQueries` / `resetStore`
   */
 final class ApolloClient private (
-    serverUrl: String,
-    defaultHttpHeaders: List[HttpHeader],
-    httpInterceptors: List[HttpInterceptor],
-    interceptors: List[ApolloInterceptor],
-    defaultHttpMethod: Option[HttpMethod],
+    config: ApolloClient.Config,
     httpEngine: HttpEngine,
-    webSocketServerUrl: String,
-    wsProtocol: WsProtocol,
-    webSocketReopenWhen: (ApolloException, Long) => Boolean,
-    webSocketConnectionPayload: Option[Json],
-    webSocketEngine: WebSocketEngine
+    webSocketTransport: WebSocketNetworkTransport,
+    private[apollo] val activeQueries: ActiveQueryRegistry
 ):
 
     // The terminal transport, built once: the HTTP interceptor stack presented as
@@ -104,21 +87,8 @@ final class ApolloClient private (
     // transport that folds failures into `ApolloResponse.error` values.
     private val transport: HttpNetworkTransport =
         HttpNetworkTransport(
-            serverUrl,
-            HttpInterceptorChain.asEngine(httpInterceptors, httpEngine)
-        )
-
-    // The terminal transport for subscriptions: one shared, lazily-opened socket
-    // multiplexing every subscription. Built eagerly (it holds nothing and opens
-    // no socket until the first subscription is collected), so a query-only client
-    // pays nothing for it. Torn down by `close()`.
-    private val webSocketTransport: WebSocketNetworkTransport =
-        new WebSocketNetworkTransport(
-            serverUrl = webSocketServerUrl,
-            protocol = wsProtocol,
-            engine = webSocketEngine,
-            connectionPayload = webSocketConnectionPayload,
-            reconnectWhen = webSocketReopenWhen
+            config.serverUrl,
+            HttpInterceptorChain.asEngine(config.httpInterceptors.toList, httpEngine)
         )
 
     // The Apollo-tier chain: user interceptors first, then the terminal
@@ -126,14 +96,7 @@ final class ApolloClient private (
     // subscriptions to the WebSocket transport. Built once; a fresh (cheap,
     // immutable) cursor over it is created per execution.
     private val apolloInterceptors: Chunk[ApolloInterceptor] =
-        Chunk.from(interceptors :+ NetworkInterceptor(transport, Some(webSocketTransport)))
-
-    /** Registry of the live `useQuery` watchers, populated by the kyo-ui binding
-      * (each live query registers on setup and de-registers on `Scope` teardown).
-      * The seam for imperative `refetchQueries` / `resetStore`.
-      */
-    private[apollo] val activeQueries: ActiveQueryRegistry =
-        ActiveQueryRegistry.Unsafe.init()(using AllowUnsafe.embrace.danger)
+        config.interceptors.append(NetworkInterceptor(transport, Some(webSocketTransport)))
 
     /** Prepare a call for `query` — the read path. Nothing runs until the returned
       * [[ApolloCall]] is executed.
@@ -158,8 +121,8 @@ final class ApolloClient private (
         call(subscription)
 
     private def call[D](operation: Operation[D]): ApolloCall[D] =
-        val builder = ApolloRequest.builder(operation).httpHeaders(defaultHttpHeaders)
-        new ApolloCall(this, defaultHttpMethod.fold(builder)(builder.httpMethod))
+        val builder = ApolloRequest.builder(operation).httpHeaders(config.httpHeaders.toList)
+        new ApolloCall(this, config.httpMethod.fold(builder)(builder.httpMethod))
 
     /** Run one execution of `request` through the full Apollo interceptor chain,
       * returning its stream of responses. Invoked by [[ApolloCall.stream]]; a new
@@ -192,26 +155,30 @@ final class ApolloClient private (
             Sync.defer(DefaultApolloInterceptorChain(apolloInterceptors, 0).proceed(request))
         )
 
-    /** The Apollo-tier interceptors registered on this client (the internal
+    /** The Apollo-tier interceptors configured on this client (the internal
       * terminal network step excluded). Exposed package-privately so the cache
       * layer's `normalizedStore` accessor can locate an installed
       * `kyo.apollo.cache.normalized.CacheInterceptor` and hand its store back — without
       * the core client type ever depending on the cache package. The dependency
       * still runs cache → client, mirroring apollo-kotlin's `apolloStore`.
       */
-    private[apollo] def registeredInterceptors: List[ApolloInterceptor] = interceptors
+    private[apollo] def registeredInterceptors: Chunk[ApolloInterceptor] = config.interceptors
 
-    /** Release transport resources: closes the shared subscription socket (if one
-      * is open) and tears down the WebSocket transport, delivering a terminal
-      * `ApolloWebSocketClosedException` value to any active subscribers, and returns
-      * once the socket is closed. The HTTP fetch engine holds nothing disposable, so
-      * queries/mutations are unaffected; a subscription started afterwards yields
-      * the closed value. Mirrors apollo-kotlin's `ApolloClient.close()`.
+    /** Close the client: let the subscriptions active at the call finish for up to
+      * `gracePeriod`, then close the shared subscription socket. Subscriptions still
+      * active then receive a terminal `ApolloWebSocketClosedException` value.
+      * Returns once the socket is closed and the transport's fibers have exited. The
+      * HTTP engine holds nothing disposable, so queries and mutations keep working;
+      * a subscription started afterwards yields the closed value. Mirrors
+      * apollo-kotlin's `ApolloClient.close()`.
       */
-    def close(using Frame): Unit < Async = webSocketTransport.closeNow
+    def close(gracePeriod: Duration)(using Frame): Unit < Async = webSocketTransport.close(gracePeriod)
 
-    /** The same as [[close]]: it returns once the subscription socket is gone. */
-    def closeAndAwait(using Frame): Unit < Async = webSocketTransport.closeNow
+    /** [[close]] with a 30-second grace period — what the end of an [[ApolloClient.init]] Scope runs. */
+    def close(using Frame): Unit < Async = close(30.seconds)
+
+    /** [[close]] without waiting for live subscriptions. */
+    def closeNow(using Frame): Unit < Async = close(Duration.Zero)
 end ApolloClient
 
 /** A prepared, not-yet-executed GraphQL operation carrying the
@@ -298,169 +265,171 @@ end ApolloCall
 
 object ApolloClient:
 
-    /** Start a fresh [[Builder]]. `serverUrl` is required before `build()`. */
-    def builder(): Builder = new Builder
-
-    /** Fluent builder for an immutable [[ApolloClient]].
+    /** Everything an [[ApolloClient]] is created from: an immutable value, so deriving
+      * a variant (`config.addInterceptor(…)`) never changes the original, and each
+      * client created from it owns its own socket, transports and query registry. The
+      * interceptor and engine instances a `Config` holds are shared by every client
+      * created from it. `serverUrl` is the one required field; the fluent methods are
+      * `copy` shorthands.
       *
-      * Mirrors apollo-kotlin's `ApolloClient.Builder`: `serverUrl` is mandatory,
-      * everything else is optional and defaulted. Both list-valued knobs offer a
-      * whole-list setter and an `add*` accumulator; interceptors apply in the
-      * order they were added. Fields are named with a leading underscore so the
-      * accessor generated for each does not collide with its same-named setter.
+      * Mirrors apollo-kotlin's `ApolloClient.Builder`.
+      *
+      * @param serverUrl                  the GraphQL endpoint every operation is sent to
+      * @param httpHeaders                headers applied to every request (per-call
+      *                                   headers are appended on top)
+      * @param httpInterceptors           HTTP-tier interceptors, in order
+      * @param interceptors               Apollo-tier interceptors, in order (the terminal
+      *                                   network step is appended internally)
+      * @param httpMethod                 the method used when a call does not pin one
+      *                                   (`Absent` falls back to the composer default, POST)
+      * @param httpEngine                 the wire round-trip (defaults to the platform's
+      *                                   real engine; injectable for tests / custom transports)
+      * @param webSocketServerUrl         the `ws(s)://` endpoint subscriptions connect to
+      *                                   (defaults to `serverUrl`, matching apollo-kotlin)
+      * @param wsProtocol                 the subscription wire protocol (defaults to the
+      *                                   modern `graphql-transport-ws`)
+      * @param webSocketReopenWhen        decides, from a drop's exception and 1-based
+      *                                   attempt number, whether to transparently reopen a
+      *                                   dropped subscription socket and resubscribe
+      *                                   (defaults to never — opt-in, like apollo-kotlin)
+      * @param webSocketBackoff           the delays before successive reopen attempts
+      * @param webSocketConnectionPayload optional `connection_init` payload (e.g. auth)
+      * @param webSocketEngine            the socket round-trip (defaults to the platform's
+      *                                   real engine; injectable for tests)
+      * @param webSocketConnectTimeout    how long the default socket engine may take to
+      *                                   open a socket (ignored with an injected engine)
+      * @param subscriptionBufferSize     how many responses a subscription buffers before
+      *                                   its consumer's pace holds the socket read back
       */
-    final class Builder:
-        private var _serverUrl: Option[String]               = None
-        private var _httpHeaders: List[HttpHeader]           = Nil
-        private var _httpInterceptors: List[HttpInterceptor] = Nil
-        private var _interceptors: List[ApolloInterceptor]   = Nil
-        private var _httpMethod: Option[HttpMethod]          = None
-        private var _httpEngine: Option[HttpEngine]          = None
-        private var _webSocketServerUrl: Option[String]      = None
-        private var _wsProtocol: WsProtocol                  = GraphQLWsProtocol
-        private var _webSocketReopenWhen: (ApolloException, Long) => Boolean =
-            WebSocketNetworkTransport.reconnectNever
-        private var _webSocketConnectionPayload: Option[Json] = None
-        private var _webSocketEngine: Option[WebSocketEngine] = None
-
-        /** The GraphQL endpoint URL (required). */
-        def serverUrl(value: String): this.type =
-            _serverUrl = Some(value)
-            this
-
-        /** Replace the default headers applied to every request. */
-        def httpHeaders(value: List[HttpHeader]): this.type =
-            _httpHeaders = value
-            this
+    final case class Config(
+        serverUrl: String,
+        httpHeaders: Chunk[HttpHeader] = Chunk.empty,
+        httpInterceptors: Chunk[HttpInterceptor] = Chunk.empty,
+        interceptors: Chunk[ApolloInterceptor] = Chunk.empty,
+        httpMethod: Maybe[HttpMethod] = Absent,
+        httpEngine: Maybe[HttpEngine] = Absent,
+        webSocketServerUrl: Maybe[String] = Absent,
+        wsProtocol: WsProtocol = GraphQLWsProtocol,
+        webSocketReopenWhen: (ApolloException, Long) => Boolean = WebSocketNetworkTransport.reconnectNever,
+        webSocketBackoff: Schedule = WebSocketNetworkTransport.defaultBackoff,
+        webSocketConnectionPayload: Maybe[Json] = Absent,
+        webSocketEngine: Maybe[WebSocketEngine] = Absent,
+        webSocketConnectTimeout: Duration = WebSocketEngine.defaultConnectTimeout,
+        subscriptionBufferSize: Int = WebSocketNetworkTransport.defaultSubscriptionBufferSize
+    ) derives CanEqual:
 
         /** Append one default header applied to every request. */
-        def addHttpHeader(name: String, value: String): this.type =
-            _httpHeaders = _httpHeaders :+ HttpHeader(name, value)
-            this
-
-        /** Replace the HTTP-tier interceptor list. */
-        def httpInterceptors(value: List[HttpInterceptor]): this.type =
-            _httpInterceptors = value
-            this
+        def addHttpHeader(name: String, value: String): Config =
+            copy(httpHeaders = httpHeaders.append(HttpHeader(name, value)))
 
         /** Append one HTTP-tier interceptor. */
-        def addHttpInterceptor(value: HttpInterceptor): this.type =
-            _httpInterceptors = _httpInterceptors :+ value
-            this
-
-        /** Replace the Apollo-tier interceptor list. */
-        def interceptors(value: List[ApolloInterceptor]): this.type =
-            _interceptors = value
-            this
+        def addHttpInterceptor(interceptor: HttpInterceptor): Config =
+            copy(httpInterceptors = httpInterceptors.append(interceptor))
 
         /** Append one Apollo-tier interceptor. */
-        def addInterceptor(value: ApolloInterceptor): this.type =
-            _interceptors = _interceptors :+ value
-            this
+        def addInterceptor(interceptor: ApolloInterceptor): Config =
+            copy(interceptors = interceptors.append(interceptor))
 
         /** Prepend one Apollo-tier interceptor, so it runs *first* — wrapping the
           * rest of the chain (cache included) and observing the final, post-cache
           * responses. The position a devtools/observability interceptor needs.
           */
-        def prependInterceptor(value: ApolloInterceptor): this.type =
-            _interceptors = value :: _interceptors
-            this
+        def prependInterceptor(interceptor: ApolloInterceptor): Config =
+            copy(interceptors = Chunk(interceptor).concat(interceptors))
 
         /** Set the default HTTP method (`Get` or `Post`) for every operation. */
-        def httpMethod(value: HttpMethod): this.type =
-            _httpMethod = Some(value)
-            this
+        def httpMethod(method: HttpMethod): Config = copy(httpMethod = Present(method))
 
         /** Inject the wire engine — primarily for tests (a deterministic fake with
-          * no server) or a custom transport. Defaults to the real fetch engine.
+          * no server) or a custom transport.
           */
-        def httpEngine(value: HttpEngine): this.type =
-            _httpEngine = Some(value)
-            this
+        def httpEngine(engine: HttpEngine): Config = copy(httpEngine = Present(engine))
 
-        /** The `ws(s)://` endpoint subscriptions connect to. Defaults to `serverUrl`
-          * when unset (matching apollo-kotlin); most servers expose subscriptions on
-          * a distinct URL, so set this whenever subscriptions are used.
+        /** The `ws(s)://` endpoint subscriptions connect to. Most servers expose
+          * subscriptions on a distinct URL, so set this whenever subscriptions are used.
           */
-        def webSocketServerUrl(value: String): this.type =
-            _webSocketServerUrl = Some(value)
-            this
+        def webSocketServerUrl(url: String): Config = copy(webSocketServerUrl = Present(url))
 
-        /** The subscription wire protocol. Defaults to the modern
-          * `graphql-transport-ws`; pass
+        /** The subscription wire protocol; pass
           * [[kyo.apollo.network.ws.SubscriptionWsProtocol]] for the legacy
           * `subscriptions-transport-ws` servers.
           */
-        def wsProtocol(value: WsProtocol): this.type =
-            _wsProtocol = value
-            this
+        def wsProtocol(protocol: WsProtocol): Config = copy(wsProtocol = protocol)
 
         /** Opt into automatic reconnection: on an abnormal subscription-socket drop,
           * `predicate(exception, attempt)` decides whether to reopen the socket,
-          * re-run `connection_init`, and resubscribe every active subscription. The
-          * default never reopens. Pass
+          * re-run `connection_init`, and resubscribe every active subscription. Pass
           * [[kyo.apollo.network.ws.WebSocketNetworkTransport.reconnectAlways]] to always
           * reconnect. Mirrors apollo-kotlin's `webSocketReopenWhen`.
           */
-        def webSocketReopenWhen(
-            predicate: (ApolloException, Long) => Boolean
-        ): this.type =
-            _webSocketReopenWhen = predicate
-            this
-        end webSocketReopenWhen
+        def webSocketReopenWhen(predicate: (ApolloException, Long) => Boolean): Config =
+            copy(webSocketReopenWhen = predicate)
 
-        /** The optional `connection_init` payload sent during the WebSocket
-          * handshake — typically auth headers/tokens the server validates before it
-          * acknowledges the connection.
+        /** The delays before successive reopen attempts. */
+        def webSocketBackoff(schedule: Schedule): Config = copy(webSocketBackoff = schedule)
+
+        /** The `connection_init` payload sent during the WebSocket handshake —
+          * typically auth the server validates before it acknowledges the connection.
           */
-        def webSocketConnectionPayload(value: Json): this.type =
-            _webSocketConnectionPayload = Some(value)
-            this
+        def webSocketConnectionPayload(payload: Json): Config = copy(webSocketConnectionPayload = Present(payload))
 
         /** Inject the WebSocket engine — primarily for tests (a scripted in-memory
-          * socket with no server). Defaults to the real JS engine.
+          * socket with no server).
           */
-        def webSocketEngine(value: WebSocketEngine): this.type =
-            _webSocketEngine = Some(value)
-            this
+        def webSocketEngine(engine: WebSocketEngine): Config = copy(webSocketEngine = Present(engine))
 
-        /** Validate the config and build the immutable client without throwing:
-          * `Left(ApolloConfigException)` when `serverUrl` was never set, `Right`
-          * otherwise. The non-throwing core the effectful entry points
-          * (`ApolloClientResource.init` / `.layer`, in the kyo-ui binding) project onto
-          * Kyo's `Abort` channel; prefer those over [[build]] in effect code.
-          */
-        def buildResult()(using Frame): Result[ApolloConfigException, ApolloClient] =
-            _serverUrl match
-                case None =>
-                    Result.fail(
-                        ApolloConfigException(
-                            "ApolloClient requires a serverUrl; call .serverUrl(...) before build()."
-                        )
-                    )
-                case Some(serverUrl) =>
-                    Result.succeed(
-                        new ApolloClient(
-                            serverUrl = serverUrl,
-                            defaultHttpHeaders = _httpHeaders,
-                            httpInterceptors = _httpInterceptors,
-                            interceptors = _interceptors,
-                            defaultHttpMethod = _httpMethod,
-                            httpEngine = _httpEngine.getOrElse(HttpEngine.default()),
-                            webSocketServerUrl = _webSocketServerUrl.getOrElse(serverUrl),
-                            wsProtocol = _wsProtocol,
-                            webSocketReopenWhen = _webSocketReopenWhen,
-                            webSocketConnectionPayload = _webSocketConnectionPayload,
-                            webSocketEngine = _webSocketEngine.getOrElse(WebSocketEngine.default())
-                        )
-                    )
+        /** How long the default socket engine may take to open a socket. */
+        def webSocketConnectTimeout(timeout: Duration): Config = copy(webSocketConnectTimeout = timeout)
 
-        /** Build the immutable client, throwing [[ApolloConfigException]] if `serverUrl`
-          * was never set. A thin convenience over [[buildResult]] for apollo-kotlin
-          * parity and non-effect (test) call sites; effect code should use
-          * `ApolloClientResource.init` / `.layer`, which raise the same failure on
-          * `Abort` instead.
-          */
-        def build()(using Frame): ApolloClient = buildResult().getOrThrow
-    end Builder
+        /** How many responses a subscription buffers before its consumer's pace holds the socket read back. */
+        def subscriptionBufferSize(size: Int): Config = copy(subscriptionBufferSize = size)
+    end Config
+
+    /** Create a client for `config`, owned by the enclosing `Scope`: the Scope's end
+      * [[ApolloClient.close]]s it with the default grace period. The primary way to
+      * create a client.
+      */
+    def init(config: Config)(using Frame): ApolloClient < (Sync & Scope) =
+        initWith(config)(identity)
+
+    /** [[init]], handing the client to `f`. */
+    def initWith(config: Config)[B, S](f: ApolloClient => B < S)(using Frame): B < (S & Sync & Scope) =
+        Sync.Unsafe.defer {
+            val client = construct(config)
+            Scope.ensure(client.close).andThen(f(client))
+        }
+
+    /** Run `f` with a client for `config` and close the client when `f` ends. */
+    def use(config: Config)[B, S](f: ApolloClient => B < S)(using Frame): B < (S & Async) =
+        Scope.run(initWith(config)(f))
+
+    /** Create a client no `Scope` owns: the caller must [[ApolloClient.close]] it. */
+    def initUnscoped(config: Config)(using Frame): ApolloClient < Sync =
+        initUnscopedWith(config)(identity)
+
+    /** [[initUnscoped]], handing the client to `f`. */
+    def initUnscopedWith(config: Config)[B, S](f: ApolloClient => B < S)(using Frame): B < (S & Sync) =
+        Sync.Unsafe.defer(f(Unsafe.init(config)))
+
+    /** WARNING: Low-level API meant for integrations, libraries, and performance-sensitive code. See AllowUnsafe for more details. */
+    object Unsafe:
+        /** Create a client no `Scope` owns: the caller must [[ApolloClient.close]] it. */
+        def init(config: Config)(using AllowUnsafe): ApolloClient = construct(config)
+    end Unsafe
+
+    private def construct(config: Config)(using AllowUnsafe): ApolloClient =
+        new ApolloClient(
+            config = config,
+            httpEngine = config.httpEngine.getOrElse(HttpEngine.default()),
+            webSocketTransport = new WebSocketNetworkTransport(
+                serverUrl = config.webSocketServerUrl.getOrElse(config.serverUrl),
+                protocol = config.wsProtocol,
+                engine = config.webSocketEngine.getOrElse(WebSocketEngine.default(config.webSocketConnectTimeout)),
+                connectionPayload = config.webSocketConnectionPayload.toOption,
+                reconnectWhen = config.webSocketReopenWhen,
+                backoff = config.webSocketBackoff,
+                subscriptionBufferSize = config.subscriptionBufferSize
+            ),
+            activeQueries = ActiveQueryRegistry.Unsafe.init()
+        )
 end ApolloClient
