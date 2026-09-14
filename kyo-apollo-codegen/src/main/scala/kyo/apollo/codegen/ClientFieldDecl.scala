@@ -11,10 +11,10 @@ package kyo.apollo.codegen
   *                operation root).
   * @param name    the client field name (its named-tuple slot and cache key).
   * @param tpe     the field's Scala value type, verbatim — any `Schema`-derivable
-  *                type: a scalar, `Option[…]`, `List[…]`, a (fully-qualified) case
+  *                type: a scalar, `Maybe[…]`, `Chunk[…]`, a (fully-qualified) case
   *                class, or arbitrary nesting. Emitted as `ClientField.create[Origin, tpe]`.
   * @param default a Scala expression for the value read when the field was never
-  *                written (`"false"`, `"Nil"`, `"None"`, a literal, …).
+  *                written (`"false"`, `"Chunk.empty"`, `"Absent"`, a literal, …).
   */
 final case class ClientFieldDecl(
     onType: String,
@@ -31,8 +31,8 @@ final case class ClientFieldDecl(
   *   val fields = declare(
   *     onType("Country")(
   *       field("isFavorite", "Boolean", default = "false"),
-  *       field("tags", "List[String]", default = "Nil"),
-  *       field("note", "Option[myapp.Note]", default = "None")),  // myapp.Note derives Schema
+  *       field("tags", "Chunk[String]", default = "Chunk.empty"),
+  *       field("note", "Maybe[myapp.Note]", default = "Absent")),  // myapp.Note derives Schema
   *     onType("Query")(
   *       field("cartOpen", "Boolean", default = "false")))
   * }}}

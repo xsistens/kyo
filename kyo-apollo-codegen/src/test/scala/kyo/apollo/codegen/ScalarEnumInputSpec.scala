@@ -61,10 +61,10 @@ class ScalarEnumInputSpec extends kyo.test.Test[Any]:
         "input: UpdateCountryInput → a case class deriving Schema" in {
             val src = schemaTypes(CodegenConfig(packageName = "kyo.apollo.example.generated"))
                 .getOrElse("UpdateCountryInput.scala", fail("UpdateCountryInput.scala not emitted"))
-            // required ID → String, nullable fields → Option[String]; the codec is derived.
+            // required ID → String, nullable fields → Maybe[String]; the codec is derived.
             assert(
                 src.contains(
-                    "final case class UpdateCountryInput(code: String, capital: Option[String], emoji: Option[String]) derives Schema"
+                    "final case class UpdateCountryInput(code: String, capital: Maybe[String], emoji: Maybe[String]) derives Schema"
                 ),
                 src
             )
@@ -76,7 +76,7 @@ class ScalarEnumInputSpec extends kyo.test.Test[Any]:
                 .getOrElse("CountryFilter.scala", fail("CountryFilter.scala not emitted"))
             assert(
                 src.contains(
-                    "final case class CountryFilter(continent: Option[Continent], search: Option[String]) derives Schema"
+                    "final case class CountryFilter(continent: Maybe[Continent], search: Maybe[String]) derives Schema"
                 ),
                 src
             )
@@ -103,7 +103,7 @@ class ScalarEnumInputSpec extends kyo.test.Test[Any]:
                 .contents
             assert(
                 opSrc.contains(
-                    "updatedAt: SelectionBuilder[Country, (updatedAt: Option[java.time.Instant])]"
+                    "updatedAt: SelectionBuilder[Country, (updatedAt: Maybe[java.time.Instant])]"
                 ),
                 opSrc
             )
@@ -134,7 +134,7 @@ class ScalarEnumInputSpec extends kyo.test.Test[Any]:
                 .getOrElse(fail("Country.scala not emitted"))
                 .contents
             assert(
-                opSrc.contains("updatedAt: SelectionBuilder[Country, (updatedAt: Option[Long])]"),
+                opSrc.contains("updatedAt: SelectionBuilder[Country, (updatedAt: Maybe[Long])]"),
                 opSrc
             )
             assert(opSrc.contains("ScalarCodec.fromSchema[Long]"), opSrc)
@@ -158,7 +158,7 @@ class ScalarEnumInputSpec extends kyo.test.Test[Any]:
                 .getOrElse(fail("Country.scala not emitted"))
                 .contents
             assert(
-                opSrc.contains("updatedAt: SelectionBuilder[Country, (updatedAt: Option[com.example.ids.GameId])]"),
+                opSrc.contains("updatedAt: SelectionBuilder[Country, (updatedAt: Maybe[com.example.ids.GameId])]"),
                 opSrc
             )
             assert(opSrc.contains("ScalarCodec.fromSchema[com.example.ids.GameId]"), opSrc)
