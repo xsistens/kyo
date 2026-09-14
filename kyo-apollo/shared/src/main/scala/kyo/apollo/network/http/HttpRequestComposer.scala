@@ -153,7 +153,7 @@ final class HttpRequestComposer(defaultHttpMethod: HttpMethod = HttpMethod.Post)
             Map(
                 "persistedQuery" -> Json.JObj(
                     VectorMap(
-                        "version"    -> Json.JNum(1),
+                        "version"    -> Json.JInt(1),
                         "sha256Hash" -> Json.JStr(Sha256.hex(request.operation.document))
                     )
                 )

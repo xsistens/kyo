@@ -1,5 +1,6 @@
 package kyo.apollo.api
 
+import kyo.Frame
 import kyo.Schema
 import kyo.apollo.json.Json
 import kyo.apollo.json.SchemaJson
@@ -28,9 +29,12 @@ trait JsonCodec[D]:
 
 object JsonCodec:
 
-    /** Adapt a kyo-schema `Schema[D]` into a [[JsonCodec]] via [[SchemaJson]]. */
+    /** Adapt a kyo-schema `Schema[D]` into a [[JsonCodec]] via [[SchemaJson]]. A
+      * mismatch throws the `ApolloParseException`, which the response parse re-wraps
+      * with its own frame; `decode` has no frame to thread.
+      */
     def fromSchema[D](using schema: Schema[D]): JsonCodec[D] =
         new JsonCodec[D]:
-            def decode(json: Json): D  = SchemaJson.decode[D](json)
+            def decode(json: Json): D  = SchemaJson.decode[D](json)(using schema, Frame.internal).getOrThrow
             def encode(value: D): Json = SchemaJson.encode[D](value)
 end JsonCodec
