@@ -13,6 +13,7 @@ import kyo.apollo.interceptor.DefaultApolloInterceptorChain
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.ApolloResponse
+import kyo.apollo.network.TestIds
 import kyo.apollo.runtime.ResponseStream
 import scala.collection.immutable.VectorMap
 
@@ -116,7 +117,7 @@ class OperationStoreSpec extends kyo.test.Test[Any]:
 
         "a query flowing through is recorded ready (networkStatus 7) with its document" in {
             val store = new DevtoolsOperationStore()
-            StreamProbe.first(chainOf(store, okTerminal).proceed(ApolloRequest(ValueQuery()))).map { _ =>
+            StreamProbe.first(chainOf(store, okTerminal).proceed(ApolloRequest(ValueQuery(), TestIds.requestUuid))).map { _ =>
                 val qs = store.queriesSnapshot
                 assert(qs.size == 1)
                 assert(qs.head.name == "Value" && qs.head.document == "query Value { value }")
@@ -126,7 +127,7 @@ class OperationStoreSpec extends kyo.test.Test[Any]:
 
         "a mutation flowing through is recorded settled (loading = false)" in {
             val store = new DevtoolsOperationStore()
-            StreamProbe.first(chainOf(store, okTerminal).proceed(ApolloRequest(SetValueMutation()))).map {
+            StreamProbe.first(chainOf(store, okTerminal).proceed(ApolloRequest(SetValueMutation(), TestIds.requestUuid))).map {
                 _ =>
                     val ms = store.mutationsSnapshot
                     assert(ms.size == 1)
@@ -137,7 +138,7 @@ class OperationStoreSpec extends kyo.test.Test[Any]:
         "an errored query is recorded with networkStatus 8 and the error message" in {
             val store = new DevtoolsOperationStore()
             StreamProbe
-                .first(chainOf(store, failingTerminal("nope")).proceed(ApolloRequest(ValueQuery())))
+                .first(chainOf(store, failingTerminal("nope")).proceed(ApolloRequest(ValueQuery(), TestIds.requestUuid)))
                 .map { _ =>
                     val q = store.queriesSnapshot.head
                     assert(q.networkStatus == 8 && q.error == Some("nope"))

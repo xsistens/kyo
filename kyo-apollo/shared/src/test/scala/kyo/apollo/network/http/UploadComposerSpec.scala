@@ -10,6 +10,7 @@ import kyo.apollo.api.ScalarCodec
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.HttpMethod
+import kyo.apollo.network.TestIds
 import scala.collection.immutable.VectorMap
 
 /** Unit tests for the [[HttpRequestComposer]] multipart branch: an operation with
@@ -47,7 +48,7 @@ class UploadComposerSpec extends kyo.test.Test[Any]:
         "an Upload variable produces a multipart formBody (operations/map/part)" in {
             val req = composer.compose(
                 "http://x/graphql",
-                ApolloRequest(UploadMutation(upload))
+                ApolloRequest(UploadMutation(upload), TestIds.requestUuid)
             )
             assert(req.body.isEmpty)
             val form   = req.formBody.getOrElse(sys.error("expected a formBody"))
@@ -64,7 +65,7 @@ class UploadComposerSpec extends kyo.test.Test[Any]:
         }
 
         "a no-upload operation is the unchanged JSON POST" in {
-            val req = composer.compose("http://x/graphql", ApolloRequest(PlainMutation()))
+            val req = composer.compose("http://x/graphql", ApolloRequest(PlainMutation(), TestIds.requestUuid))
             assert(req.formBody.isEmpty)
             assert(req.body.exists(_.contains("\"query\":")))
             assert(req.headers.exists(h => h.name == "Content-Type" && h.value == "application/json"))

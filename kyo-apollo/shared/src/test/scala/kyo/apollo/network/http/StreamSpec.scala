@@ -11,6 +11,7 @@ import kyo.apollo.interceptor.NetworkInterceptor
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.HttpHeader
+import kyo.apollo.network.TestIds
 import scala.collection.immutable.VectorMap
 
 /** End-to-end `@stream` incremental delivery through [[HttpNetworkTransport]]: a
@@ -75,7 +76,7 @@ class StreamSpec extends kyo.test.Test[Any]:
 
         "emits the initial list, then each appended item, growing the list" in {
             val t = transport(engineOf(respond(200, contentType, multipart)))
-            StreamProbe.collect(t.executeStreaming(ApolloRequest(StreamQ()))).map { rs =>
+            StreamProbe.collect(t.executeStreaming(ApolloRequest(StreamQ(), TestIds.requestUuid))).map { rs =>
                 assert(rs.size == 3)
                 assert(rs(0).data == Present(Data(List(Item("a")))))
                 assert(rs(1).data == Present(Data(List(Item("a"), Item("b")))))
@@ -86,7 +87,7 @@ class StreamSpec extends kyo.test.Test[Any]:
         "a server that ignores @stream (plain JSON) collapses to a single full list" in {
             val body = """{"data":{"items":[{"id":"a"},{"id":"b"}]}}"""
             val t    = transport(engineOf(respond(200, "application/json", body)))
-            StreamProbe.collect(t.executeStreaming(ApolloRequest(StreamQ()))).map { rs =>
+            StreamProbe.collect(t.executeStreaming(ApolloRequest(StreamQ(), TestIds.requestUuid))).map { rs =>
                 assert(rs.size == 1)
                 assert(rs(0).data == Present(Data(List(Item("a"), Item("b")))))
             }
@@ -98,7 +99,7 @@ class StreamSpec extends kyo.test.Test[Any]:
         "routes a @stream op to the streaming path (list grows)" in {
             val engine = engineOf(respond(200, contentType, multipart))
             val chain  = DefaultApolloInterceptorChain(Chunk(new NetworkInterceptor(transport(engine))), 0)
-            StreamProbe.collect(chain.proceed(ApolloRequest(StreamQ()))).map { streamed =>
+            StreamProbe.collect(chain.proceed(ApolloRequest(StreamQ(), TestIds.requestUuid))).map { streamed =>
                 assert(streamed.size == 3)
                 assert(streamed(2).data == Present(Data(List(Item("a"), Item("b"), Item("c")))))
             }

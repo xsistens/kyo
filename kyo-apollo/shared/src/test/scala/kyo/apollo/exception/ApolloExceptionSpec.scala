@@ -11,7 +11,7 @@ import kyo.apollo.cache.normalized.api.FieldKey
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloResponse
 import kyo.apollo.network.HttpHeader
-import kyo.apollo.network.Uuid
+import kyo.apollo.network.TestIds
 
 /** Tests the [[ApolloException]] hierarchy: every leaf is a `KyoException` (no stack
   * trace, the creation `Frame`), carries its typed payload, belongs to exactly the
@@ -162,7 +162,7 @@ class ApolloExceptionSpec extends kyo.test.Test[Any]:
         }
 
         "every leaf folds into an ApolloResponse.error value (no throw)" in {
-            val id = Uuid.random()
+            val id = TestIds.requestUuid
             val leaves: List[ApolloException] = List(
                 ApolloNetworkException(),
                 ApolloHttpException(500, Nil, "boom"),

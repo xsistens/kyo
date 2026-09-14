@@ -4,6 +4,7 @@ import kyo.*
 import kyo.apollo.StreamProbe
 import kyo.apollo.exception.ApolloNetworkException
 import kyo.apollo.network.ApolloResponse
+import kyo.apollo.network.TestIds
 import kyo.apollo.network.Uuid
 import scala.concurrent.Future
 
@@ -27,7 +28,7 @@ class ApolloCallSpec extends kyo.test.Test[Any]:
     "ApolloCall" - {
 
         "execute completes with the single emission of stream" in {
-            val uuid = Uuid.random()
+            val uuid = TestIds.requestUuid
             callOf(Stream.init(Seq(okResponse(uuid)))).execute.map { response =>
                 assert(response.requestUuid == uuid)
                 assert(response.data == Present(1))
@@ -36,16 +37,16 @@ class ApolloCallSpec extends kyo.test.Test[Any]:
         }
 
         "execute takes the first emission when stream is multi-emission" in {
-            val first  = okResponse(Uuid.random())
-            val second = okResponse(Uuid.random())
+            val first  = okResponse(TestIds.requestUuid)
+            val second = okResponse(TestIds.otherUuid)
             callOf(Stream.init(Seq(first, second))).execute.map { response =>
                 assert(response.requestUuid == first.requestUuid)
             }
         }
 
         "stream exposes every emission in order" in {
-            val a = okResponse(Uuid.random())
-            val b = okResponse(Uuid.random())
+            val a = okResponse(TestIds.requestUuid)
+            val b = okResponse(TestIds.otherUuid)
             StreamProbe.collect(callOf(Stream.init(Seq(a, b))).stream).map { seen =>
                 assert(seen.map(_.requestUuid) == List(a.requestUuid, b.requestUuid))
             }
@@ -53,7 +54,7 @@ class ApolloCallSpec extends kyo.test.Test[Any]:
 
         "a transport failure arrives as a value, not a failed effect" in {
             val offline = new ApolloNetworkException("offline")
-            val failed  = ApolloResponse.fromException[Int](Uuid.random(), offline)
+            val failed  = ApolloResponse.fromException[Int](TestIds.requestUuid, offline)
             callOf(Stream.init(Seq(failed))).execute.map { response =>
                 assert(response.error == Present(offline))
                 assert(response.data == Absent)

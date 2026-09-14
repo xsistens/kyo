@@ -13,6 +13,7 @@ import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.HttpHeader
+import kyo.apollo.network.TestIds
 import scala.collection.immutable.VectorMap
 
 /** Tests [[HttpNetworkTransport]]'s decode/error-mapping against a fake
@@ -68,7 +69,7 @@ class HttpNetworkTransportSpec extends kyo.test.Test[Any]:
 
         "2xx with a valid envelope lifts to typed data, no exception" in {
             val engine = engineReturning(HttpResponse(200, Nil, """{"data":{"value":42}}"""))
-            transport(engine).execute(ApolloRequest(ValueQuery())).map { response =>
+            transport(engine).execute(ApolloRequest(ValueQuery(), TestIds.requestUuid)).map { response =>
                 assert(response.data == Present(42))
                 assert(response.error == Absent)
                 assert(!response.hasErrors)
@@ -78,7 +79,7 @@ class HttpNetworkTransportSpec extends kyo.test.Test[Any]:
         "non-2xx status becomes an ApolloHttpException value" in {
             val headers = List(HttpHeader("Retry-After", "5"))
             val engine  = engineReturning(HttpResponse(503, headers, "service down"))
-            transport(engine).execute(ApolloRequest(ValueQuery())).map { response =>
+            transport(engine).execute(ApolloRequest(ValueQuery(), TestIds.requestUuid)).map { response =>
                 assert(response.data == Absent)
                 response.error match
                     case Present(e: ApolloHttpException) =>
@@ -92,7 +93,7 @@ class HttpNetworkTransportSpec extends kyo.test.Test[Any]:
 
         "malformed body (not JSON) becomes an ApolloParseException value" in {
             val engine = engineReturning(HttpResponse(200, Nil, "not json at all"))
-            transport(engine).execute(ApolloRequest(ValueQuery())).map { response =>
+            transport(engine).execute(ApolloRequest(ValueQuery(), TestIds.requestUuid)).map { response =>
                 assert(response.data == Absent)
                 assert(response.error.exists(_.isInstanceOf[ApolloParseException]))
             }
@@ -100,14 +101,14 @@ class HttpNetworkTransportSpec extends kyo.test.Test[Any]:
 
         "shape-invalid envelope (JSON array) becomes an ApolloParseException" in {
             val engine = engineReturning(HttpResponse(200, Nil, "[1,2,3]"))
-            transport(engine).execute(ApolloRequest(ValueQuery())).map { response =>
+            transport(engine).execute(ApolloRequest(ValueQuery(), TestIds.requestUuid)).map { response =>
                 assert(response.error.exists(_.isInstanceOf[ApolloParseException]))
             }
         }
 
         "the engine's Abort failure becomes that failure as the response's error value" in {
             val refused = ApolloNetworkException("ECONNREFUSED")
-            transport(engineOf(Abort.fail(refused))).execute(ApolloRequest(ValueQuery())).map { response =>
+            transport(engineOf(Abort.fail(refused))).execute(ApolloRequest(ValueQuery(), TestIds.requestUuid)).map { response =>
                 assert(response.data == Absent)
                 assert(response.error.exists(_ eq refused))
             }
@@ -115,7 +116,7 @@ class HttpNetworkTransportSpec extends kyo.test.Test[Any]:
 
         "a decoder defect on a 2xx body stays a panic, not a network or parse value" in {
             val engine = engineReturning(HttpResponse(200, Nil, """{"data":{"value":1}}"""))
-            Abort.run[Throwable](transport(engine).execute(ApolloRequest(DefectiveQuery()))).map {
+            Abort.run[Throwable](transport(engine).execute(ApolloRequest(DefectiveQuery(), TestIds.requestUuid))).map {
                 case Result.Panic(e) => assert(e.isInstanceOf[ClassCastException])
                 case other           => fail(s"expected the codec's ClassCastException as a panic, got $other")
             }
@@ -123,7 +124,10 @@ class HttpNetworkTransportSpec extends kyo.test.Test[Any]:
 
         "an interrupt raised by the engine stays a panic, not a network value" in {
             val interrupted = Interrupted(summon[Frame])
-            Abort.run[Throwable](transport(engineOf(Abort.panic(interrupted))).execute(ApolloRequest(ValueQuery()))).map {
+            Abort.run[Throwable](transport(engineOf(Abort.panic(interrupted))).execute(ApolloRequest(
+                ValueQuery(),
+                TestIds.requestUuid
+            ))).map {
                 case Result.Panic(e) => assert(e eq interrupted)
                 case other           => fail(s"expected the Interrupted panic, got $other")
             }
@@ -131,14 +135,17 @@ class HttpNetworkTransportSpec extends kyo.test.Test[Any]:
 
         "streaming: a decoder defect stays a panic too" in {
             val engine = engineReturning(HttpResponse(200, Nil, """{"data":{"value":1}}"""))
-            Abort.run[Throwable](StreamProbe.collect(transport(engine).executeStreaming(ApolloRequest(DefectiveQuery())))).map {
+            Abort.run[Throwable](StreamProbe.collect(transport(engine).executeStreaming(ApolloRequest(
+                DefectiveQuery(),
+                TestIds.requestUuid
+            )))).map {
                 case Result.Panic(e) => assert(e.isInstanceOf[ClassCastException])
                 case other           => fail(s"expected the codec's ClassCastException as a panic, got $other")
             }
         }
 
         "the request uuid is echoed onto the response" in {
-            val request = ApolloRequest(ValueQuery())
+            val request = ApolloRequest(ValueQuery(), TestIds.requestUuid)
             val engine  = engineReturning(HttpResponse(200, Nil, """{"data":{"value":1}}"""))
             transport(engine).execute(request).map { response =>
                 assert(response.requestUuid == request.requestUuid)

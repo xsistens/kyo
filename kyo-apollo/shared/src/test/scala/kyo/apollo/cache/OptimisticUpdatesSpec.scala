@@ -18,7 +18,7 @@ import kyo.apollo.json.Json
 import kyo.apollo.json.SchemaJson
 import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.ApolloResponse
-import kyo.apollo.network.ExecutionContext
+import kyo.apollo.network.TestIds
 import kyo.apollo.runtime.ResponseStream
 import scala.collection.immutable.VectorMap
 
@@ -384,10 +384,11 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
             // Building the stream must not touch the store: the layer is acquired only
             // when the stream is consumed, so a stream that is dropped unconsumed can
             // never leave one behind.
-            val request = ApolloRequest
-                .builder(UpdateUserNameMutation("Bob"))
-                .addExecutionContext(ExecutionContext.Empty + OptimisticData(updateData("BobOptimistic"), "m1"))
-                .build()
+            val request = ApolloRequest(
+                UpdateUserNameMutation("Bob"),
+                TestIds.requestUuid,
+                optimisticData = Present(updateData("BobOptimistic"))
+            )
             for
                 store <- seededStore()
                 _ = discard(new CacheInterceptor(store).intercept(request, InertChain))
@@ -447,6 +448,44 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
                 assert(publishes.size == 2, s"expected the optimistic write and the settle only: $publishes")
                 assert(layers.isEmpty)
                 assert(read == userData("Bob"))
+            end for
+        }
+
+        "two executions of one optimistic call stack two layers and roll back independently" in {
+            // One call value, executed twice while both replies are held: each execution is
+            // its own mutation and must own its own layer. The barrier is "both mutations
+            // reached the engine" — each layer is acquired before its request is sent.
+            for
+                arrivedA <- Latch.init(1)
+                arrivedB <- Latch.init(1)
+                engine   <- HeldMutationEngine.init(Chunk(arrivedA, arrivedB))
+                client = cachedClient(engine)
+                store  = client.apolloStore
+                call = client
+                    .mutation(UpdateUserNameMutation("Bob"))
+                    .optimisticUpdates(updateData("BobOptimistic"))
+                    .fetchPolicy(FetchPolicy.NetworkOnly)
+                _              <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                fibA           <- Fiber.init(Scope.run(call.execute))
+                _              <- arrivedA.await
+                fibB           <- Fiber.init(Scope.run(call.execute))
+                _              <- arrivedB.await
+                layersInFlight <- store.optimisticLayerIds
+                _              <- engine.reply(0, "Carol")
+                _              <- fibA.get
+                layersAfterA   <- store.optimisticLayerIds
+                readAfterA     <- store.readOperation(CurrentUserQuery())
+                _              <- engine.reply(1, "Dave")
+                _              <- fibB.get
+                layersAfterB   <- store.optimisticLayerIds
+                readAfterB     <- store.readOperation(CurrentUserQuery())
+            yield
+                val seen = s"in flight: $layersInFlight, after A: $layersAfterA / $readAfterA"
+                assert(layersInFlight.size == 2 && layersInFlight.distinct.size == 2, s"one layer per execution — $seen")
+                assert(layersAfterA.size == 1, s"settling A must drop only A's layer — $seen")
+                assert(readAfterA == userData("BobOptimistic"), s"B's optimistic layer must still cover the read — $seen")
+                assert(layersAfterB.isEmpty)
+                assert(readAfterB == userData("Dave"))
             end for
         }
 
@@ -606,6 +645,45 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
                     """{"data":{"user":{"__typename":"User","id":"1","name":"Alice"}}}"""
                 )
     end GatedEngine
+
+    /** An engine that holds every mutation reply until the test sends it: the n-th
+      * mutation to arrive releases `arrivals(n)` and parks on its own promise, which
+      * [[reply]] completes with a server echo carrying `name`. Queries answer Alice at once.
+      */
+    final private class HeldMutationEngine private (
+        arrivals: Chunk[Latch],
+        held: AtomicRef[Chunk[Promise[kyo.apollo.network.http.HttpResponse, Any]]]
+    ) extends kyo.apollo.network.http.HttpEngine:
+        def execute(
+            request: kyo.apollo.network.http.HttpRequest
+        )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
+            if request.body.getOrElse("").contains("UpdateUserName") then
+                for
+                    reply <- Promise.init[kyo.apollo.network.http.HttpResponse, Any]
+                    all   <- held.updateAndGet(_.append(reply))
+                    _     <- arrivals(all.size - 1).release
+                    sent  <- reply.get
+                yield sent
+            else
+                kyo.apollo.network.http.HttpResponse(
+                    200,
+                    Nil,
+                    """{"data":{"user":{"__typename":"User","id":"1","name":"Alice"}}}"""
+                )
+
+        def reply(index: Int, name: String)(using Frame): Unit < Sync =
+            held.get.map(_(index).completeDiscard(Result.succeed(kyo.apollo.network.http.HttpResponse(
+                200,
+                Nil,
+                s"""{"data":{"updateUser":{"__typename":"User","id":"1","name":"$name"}}}"""
+            ))))
+    end HeldMutationEngine
+
+    private object HeldMutationEngine:
+        def init(arrivals: Chunk[Latch])(using Frame): HeldMutationEngine < Sync =
+            AtomicRef.init(Chunk.empty[Promise[kyo.apollo.network.http.HttpResponse, Any]])
+                .map(new HeldMutationEngine(arrivals, _))
+    end HeldMutationEngine
 
     /** A chain whose continuation answers with an empty stream — a stand-in for the
       * network leg when only the interceptor's build-time behaviour is under test.

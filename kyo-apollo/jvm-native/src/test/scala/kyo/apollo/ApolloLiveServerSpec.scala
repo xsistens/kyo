@@ -7,6 +7,7 @@ import kyo.apollo.api.Query
 import kyo.apollo.exception.ApolloWebSocketClosedException
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloRequest
+import kyo.apollo.network.TestIds
 import kyo.apollo.network.ws.KyoHttpWebSocketEngine
 import kyo.apollo.network.ws.WebSocketConnection
 import kyo.apollo.network.ws.WebSocketNetworkTransport
@@ -144,7 +145,7 @@ class ApolloLiveServerSpec extends kyo.test.Test[Any]:
                     serverUrl = s"ws://127.0.0.1:${server.port}/graphql/ws",
                     engine = new KyoHttpWebSocketEngine
                 )
-                val subscription = transport.subscribe(ApolloRequest(WsTestSupport.ValueSubscription()))
+                val subscription = transport.subscribe(ApolloRequest(WsTestSupport.ValueSubscription(), TestIds.requestUuid))
                 for
                     collected <- Fiber.init(Scope.run(StreamProbe.collect(subscription)))
                     _         <- gotInit.get     // the server got the handshake — the socket is open

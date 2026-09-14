@@ -6,6 +6,7 @@ import kyo.apollo.api.CompiledNamedType
 import kyo.apollo.api.Subscription
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloRequest
+import kyo.apollo.network.TestIds
 import scala.collection.immutable.VectorMap
 
 /** Shared subscription fixture + scripted server-frame builders reused by the
@@ -39,7 +40,7 @@ object WsTestSupport:
         def variables: Json = Json.JObj(VectorMap.empty)
     end ValueSubscription
 
-    def request(): ApolloRequest[Int] = ApolloRequest(ValueSubscription())
+    def request(): ApolloRequest[Int] = ApolloRequest(ValueSubscription(), TestIds.requestUuid)
 
     /** Server-frame builders for the modern `graphql-transport-ws` protocol. */
     object modern:

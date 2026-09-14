@@ -14,6 +14,7 @@ import kyo.apollo.interceptor.NetworkInterceptor
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.HttpHeader
+import kyo.apollo.network.TestIds
 import scala.collection.immutable.VectorMap
 
 /** End-to-end `@defer` incremental delivery through [[HttpNetworkTransport]]:
@@ -92,7 +93,7 @@ class DeferSpec extends kyo.test.Test[Any]:
 
         "emits the initial payload then the merged @defer patch" in {
             val t = transport(engineOf(respond(200, contentType, multipart)))
-            StreamProbe.collect(t.executeStreaming(ApolloRequest(DeferQ()))).map { rs =>
+            StreamProbe.collect(t.executeStreaming(ApolloRequest(DeferQ(), TestIds.requestUuid))).map { rs =>
                 assert(rs.size == 2)
                 assert(rs(0).data == Present(Data(Some(Loc("DE", None)))))
                 assert(rs(1).data == Present(Data(Some(Loc("DE", Some("Berlin"))))))
@@ -102,7 +103,7 @@ class DeferSpec extends kyo.test.Test[Any]:
         "a server that ignores @defer (plain JSON) collapses to a single response" in {
             val body = """{"data":{"country":{"code":"DE","capital":"Berlin"}}}"""
             val t    = transport(engineOf(respond(200, "application/json", body)))
-            StreamProbe.collect(t.executeStreaming(ApolloRequest(DeferQ()))).map { rs =>
+            StreamProbe.collect(t.executeStreaming(ApolloRequest(DeferQ(), TestIds.requestUuid))).map { rs =>
                 assert(rs.size == 1)
                 assert(rs(0).data == Present(Data(Some(Loc("DE", Some("Berlin"))))))
             }
@@ -110,7 +111,7 @@ class DeferSpec extends kyo.test.Test[Any]:
 
         "a non-2xx status arrives as an exception value" in {
             val t = transport(engineOf(respond(500, contentType, "")))
-            StreamProbe.collect(t.executeStreaming(ApolloRequest(DeferQ()))).map { rs =>
+            StreamProbe.collect(t.executeStreaming(ApolloRequest(DeferQ(), TestIds.requestUuid))).map { rs =>
                 assert(rs.size == 1)
                 assert(rs(0).error.isDefined)
                 assert(rs(0).data == Absent)
@@ -119,7 +120,7 @@ class DeferSpec extends kyo.test.Test[Any]:
 
         "a network drop arrives as an exception value" in {
             val t = transport(engineOf(_ => Abort.fail(ApolloNetworkException("dropped"))))
-            StreamProbe.collect(t.executeStreaming(ApolloRequest(DeferQ()))).map { rs =>
+            StreamProbe.collect(t.executeStreaming(ApolloRequest(DeferQ(), TestIds.requestUuid))).map { rs =>
                 assert(rs.size == 1)
                 assert(rs(0).error.exists(_.isInstanceOf[ApolloNetworkException]))
             }
@@ -138,7 +139,7 @@ class DeferSpec extends kyo.test.Test[Any]:
                     """{"incremental":[{"data":{"capital":"Berlin"},"path":["country"]}],"hasNext":true}""" +
                     s"\r\n--$boundary--\r\n"
             val t = transport(engineOf(respond(200, contentType, truncated)))
-            StreamProbe.collect(t.executeStreaming(ApolloRequest(DeferQ()))).map { rs =>
+            StreamProbe.collect(t.executeStreaming(ApolloRequest(DeferQ(), TestIds.requestUuid))).map { rs =>
                 assert(rs.size == 3) // the two delivered patches, then the truncation error
                 assert(rs(0).data == Present(Data(Some(Loc("DE", None)))))
                 assert(rs(1).data == Present(Data(Some(Loc("DE", Some("Berlin"))))))
@@ -154,7 +155,7 @@ class DeferSpec extends kyo.test.Test[Any]:
             // hasNext:false → complete=true. A view keys its "loading more" affordance
             // on this instead of guessing from emission counts.
             val t = transport(engineOf(respond(200, contentType, multipart)))
-            StreamProbe.collect(t.executeStreaming(ApolloRequest(DeferQ()))).map { rs =>
+            StreamProbe.collect(t.executeStreaming(ApolloRequest(DeferQ(), TestIds.requestUuid))).map { rs =>
                 assert(rs.size >= 2)
                 assert(!rs.head.complete)
                 assert(rs.last.complete)
@@ -166,7 +167,7 @@ class DeferSpec extends kyo.test.Test[Any]:
             // false at end-of-stream and no terminal error is appended (guards the new
             // check against firing on a well-formed stream).
             val t = transport(engineOf(respond(200, contentType, multipart)))
-            StreamProbe.collect(t.executeStreaming(ApolloRequest(DeferQ()))).map { rs =>
+            StreamProbe.collect(t.executeStreaming(ApolloRequest(DeferQ(), TestIds.requestUuid))).map { rs =>
                 assert(rs.forall(_.error.isEmpty))
             }
         }
@@ -192,7 +193,7 @@ class DeferSpec extends kyo.test.Test[Any]:
                     val body = Stream.init(Seq(firstEmission)).concat(drop)
                     HttpStreamResponse(200, List(HttpHeader("Content-Type", contentType)), HttpStreamBody.Chunked(body))
                 end executeStreaming
-            StreamProbe.collect(transport(streamingEngine).executeStreaming(ApolloRequest(DeferQ()))).map { rs =>
+            StreamProbe.collect(transport(streamingEngine).executeStreaming(ApolloRequest(DeferQ(), TestIds.requestUuid))).map { rs =>
                 assert(rs.nonEmpty)
                 assert(rs.head.data == Present(Data(Some(Loc("DE", None))))) // the part before the drop still arrives
                 assert(rs.last.error.exists {
@@ -209,8 +210,8 @@ class DeferSpec extends kyo.test.Test[Any]:
             val engine = engineOf(respond(200, contentType, multipart))
             val chain  = DefaultApolloInterceptorChain(Chunk(new NetworkInterceptor(transport(engine))), 0)
             for
-                deferred <- StreamProbe.collect(chain.proceed(ApolloRequest(DeferQ())))
-                plain    <- StreamProbe.collect(chain.proceed(ApolloRequest(PlainQ())))
+                deferred <- StreamProbe.collect(chain.proceed(ApolloRequest(DeferQ(), TestIds.requestUuid)))
+                plain    <- StreamProbe.collect(chain.proceed(ApolloRequest(PlainQ(), TestIds.requestUuid)))
             yield
                 assert(deferred.size == 2) // @defer → executeStreaming splits the multipart body
                 assert(deferred(1).data == Present(Data(Some(Loc("DE", Some("Berlin"))))))

@@ -158,25 +158,32 @@ final class ApolloClient private (
         call(subscription)
 
     private def call[D](operation: Operation[D]): ApolloCall[D] =
-        new ApolloCall(
-            this,
-            ApolloRequest(
-                operation = operation,
-                httpHeaders = defaultHttpHeaders,
-                httpMethod = defaultHttpMethod
-            )
+        val builder = ApolloRequest.builder(operation).httpHeaders(defaultHttpHeaders)
+        new ApolloCall(this, defaultHttpMethod.fold(builder)(builder.httpMethod))
+
+    /** Run one execution of `request` through the full Apollo interceptor chain,
+      * returning its stream of responses. Invoked by [[ApolloCall.stream]]; a new
+      * immutable chain cursor is used each time.
+      *
+      * The execution starts when the stream is consumed: the request is built there
+      * — minting its `requestUuid` unless the builder pins one — so every
+      * consumption is a request of its own. The chain walk is DEFERRED into the
+      * stream body too: interceptors' `intercept` methods (and anything they invoke
+      * while assembling their streams — cache reads, devtools bookkeeping, the
+      * transport's engine call) run only when the stream is consumed, never when
+      * the effect value is constructed. This is what makes `ApolloCall.stream` (and
+      * everything built on it — `.data`, a handle's held `refetch`) genuinely cold.
+      */
+    private[apollo] def executeAsStream[D](
+        request: ApolloRequest.Builder[D]
+    )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
+        Stream.unwrap(
+            Sync.defer(request.build.map(DefaultApolloInterceptorChain(apolloInterceptors, 0).proceed(_)))
         )
 
-    /** Run `request` through the full Apollo interceptor chain, returning its
-      * stream of responses. Invoked by [[ApolloCall.stream]] once the call's
-      * request is finalized; a new immutable chain cursor is used each time.
-      *
-      * The chain walk is DEFERRED into the stream body: interceptors' `intercept`
-      * methods (and anything they invoke while assembling their streams — cache
-      * reads, devtools bookkeeping, the transport's engine call) run only when the
-      * stream is consumed, never when the effect value is constructed. This is
-      * what makes `ApolloCall.stream` (and everything built on it — `.data`,
-      * a handle's held `refetch`) genuinely cold.
+    /** Run an already-built `request` through the full Apollo interceptor chain — for
+      * a caller that owns the execution's id (a `watch()` stamps it onto its cache
+      * re-reads). Deferred into the stream body exactly like the builder overload.
       */
     private[apollo] def executeAsStream[D](
         request: ApolloRequest[D]
@@ -210,26 +217,32 @@ final class ApolloClient private (
     def closeAndAwait(using Frame): Unit < Async = webSocketTransport.closeAndAwait
 end ApolloClient
 
-/** A prepared, not-yet-executed GraphQL operation carrying its own
-  * [[ApolloRequest]] and a back-reference to the [[ApolloClient]] that runs it.
+/** A prepared, not-yet-executed GraphQL operation carrying the
+  * [[ApolloRequest.Builder]] its executions are built from and a back-reference to
+  * the [[ApolloClient]] that runs it.
   *
   * It is the concrete implementation of the [[kyo.apollo.runtime.ApolloCall]]
-  * contract (Task 6): [[toFlow]] runs the client's interceptor chain, and the
-  * inherited `execute()` is "take the first / only emission" over that stream.
+  * contract (Task 6): [[stream]] runs the client's interceptor chain, and the
+  * inherited `execute` is "take the first / only emission" over that stream.
   * The fluent setters (`.addHttpHeader`, `.httpMethod`, …) each return a **new**
-  * `ApolloCall` wrapping a copy of the request, so a call is a cheap immutable
-  * value and building it never mutates the client.
+  * `ApolloCall` over an updated builder, so a call is a cheap immutable value and
+  * building it never mutates the client.
+  *
+  * A call holds no request id. Every consumption of [[stream]] is an execution of
+  * its own and mints its own `requestUuid`, so one call value can be retried or run
+  * concurrently without two executions sharing an identity.
   *
   * @param client  the client whose chain executes this call
-  * @param request the finalized request, updated by each fluent setter
+  * @param request the builder each execution's request is built from
   */
 final class ApolloCall[D] private[apollo] (
     client: ApolloClient,
-    request: ApolloRequest[D]
+    request: ApolloRequest.Builder[D]
 ) extends runtime.ApolloCall[D]:
 
-    /** The stream-first primitive: run this call through the client's full
-      * interceptor chain. Cold — nothing happens until it is consumed.
+    /** The stream-first primitive: run one execution of this call through the
+      * client's full interceptor chain. Cold — nothing happens, and no id is minted,
+      * until it is consumed.
       */
     def stream(using
         Frame,
@@ -243,23 +256,23 @@ final class ApolloCall[D] private[apollo] (
       */
     private[apollo] def apolloClient: ApolloClient = client
 
-    /** The finalized request behind this call. Exposed for `watch()`, whose
-      * re-reads and re-fetches operate on this operation and its execution context
-      * (fetch / refetch policy).
+    /** The builder behind this call. Exposed for `watch()`, whose re-reads and
+      * re-fetches operate on this operation and its execution context (fetch /
+      * refetch policy), and which builds its own requests from it.
       */
-    private[apollo] def apolloRequest: ApolloRequest[D] = request
+    private[apollo] def requestBuilder: ApolloRequest.Builder[D] = request
 
     /** Append one header for this call, on top of the client defaults. */
     def addHttpHeader(name: String, value: String): ApolloCall[D] =
-        withRequest(request.newBuilder.addHttpHeader(name, value).build())
+        withRequest(_.addHttpHeader(name, value))
 
     /** Replace this call's headers wholesale (dropping the client defaults). */
     def httpHeaders(headers: List[HttpHeader]): ApolloCall[D] =
-        withRequest(request.newBuilder.httpHeaders(headers).build())
+        withRequest(_.httpHeaders(headers))
 
     /** Pin the HTTP method for this call, overriding the client default. */
     def httpMethod(method: HttpMethod): ApolloCall[D] =
-        withRequest(request.newBuilder.httpMethod(method).build())
+        withRequest(_.httpMethod(method))
 
     /** Pin the cache [[FetchPolicy]] for this call. The policy rides the request's
       * [[ExecutionContext]] (no new request field), where the
@@ -267,9 +280,7 @@ final class ApolloCall[D] private[apollo] (
       * installed it is inert metadata.
       */
     def fetchPolicy(policy: FetchPolicy): ApolloCall[D] =
-        withRequest(
-            request.newBuilder.addExecutionContext(ExecutionContext.Empty + policy).build()
-        )
+        withRequest(_.addExecutionContext(ExecutionContext.Empty + policy))
 
     /** Pin the [[ErrorPolicy]] for this call — how `.data` treats GraphQL `errors`
       * (react-apollo `errorPolicy`). Rides the request's [[ExecutionContext]] like
@@ -278,16 +289,14 @@ final class ApolloCall[D] private[apollo] (
       * effect on `.response`, which always exposes `data` + `errors`.
       */
     def errorPolicy(policy: ErrorPolicy): ApolloCall[D] =
-        withRequest(
-            request.newBuilder.addExecutionContext(ExecutionContext.Empty + policy).build()
-        )
+        withRequest(_.addExecutionContext(ExecutionContext.Empty + policy))
 
-    /** Build a sibling call over an updated request. Package-private so the cache
-      * layer's `refetchPolicy(...)` extension can attach its context element the
-      * same way `fetchPolicy` does.
+    /** Build a sibling call over an updated builder. Package-private so the cache
+      * layer's `refetchPolicy(...)` / `optimisticUpdates(...)` extensions can extend
+      * the request the same way `fetchPolicy` does.
       */
-    private[apollo] def withRequest(updated: ApolloRequest[D]): ApolloCall[D] =
-        new ApolloCall(client, updated)
+    private[apollo] def withRequest(update: ApolloRequest.Builder[D] => ApolloRequest.Builder[D]): ApolloCall[D] =
+        new ApolloCall(client, update(request))
 end ApolloCall
 
 object ApolloClient:
