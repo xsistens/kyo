@@ -2,6 +2,7 @@ package kyo.apollo.cache
 
 import kyo.Absent
 import kyo.Chunk
+import kyo.Frame
 import kyo.Present
 import kyo.Result
 import kyo.Schema
@@ -11,6 +12,7 @@ import kyo.apollo.cache.normalized.RecordLoader
 import kyo.apollo.cache.normalized.api.*
 import kyo.apollo.cache.normalized.internal.CacheBatchReader
 import kyo.apollo.cache.normalized.internal.Normalizer
+import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.exception.CacheMissException
 import kyo.apollo.json.Json
 import scala.collection.immutable.VectorMap
@@ -283,8 +285,8 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
                 Map("book" -> Json.JObj(Map("__typename" -> jstr("Book"), "id" -> jstr("42"), "title" -> jstr("Dune"))))
             )
             val defective = new JsonCodec[Int]:
-                def decode(json: Json): Int  = throw IllegalStateException("defective codec")
-                def encode(value: Int): Json = Json.JNum(value)
+                def decode(json: Json)(using Frame): Result[ApolloParseException, Int] = throw IllegalStateException("defective codec")
+                def encode(value: Int): Json                                           = Json.JNum(value)
             val read = CacheBatchReader.readRooted(
                 defective,
                 op.rootField,
