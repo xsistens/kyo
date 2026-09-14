@@ -83,13 +83,16 @@ class WatcherSpec extends kyo.test.Test[Any]:
     private val aliceBody =
         """{"data":{"user":{"__typename":"User","id":"1","name":"Alice"}}}"""
 
+    /** Answers Alice and counts its calls; the watch's fetch and refetch fibers call
+      * it while the leaf reads the count, hence the atomic.
+      */
     final private class CountingEngine extends kyo.apollo.network.http.HttpEngine:
-        var calls = 0
+        private val counter = AtomicInt.Unsafe.init(0)(using AllowUnsafe.embrace.danger)
+        def calls: Int      = counter.get()(using AllowUnsafe.embrace.danger)
         def execute(
             request: kyo.apollo.network.http.HttpRequest
         )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
-            calls += 1
-            kyo.apollo.network.http.HttpResponse(200, Nil, aliceBody)
+            counter.safe.incrementAndGet.andThen(kyo.apollo.network.http.HttpResponse(200, Nil, aliceBody))
         end execute
     end CountingEngine
 
@@ -164,6 +167,8 @@ class WatcherSpec extends kyo.test.Test[Any]:
 
         def hide(key: CacheKey)(using Frame): Unit < Sync = Sync.defer(discard(hole.getAndSet(Present(key))))
 
+        def reveal(using Frame): Unit < Sync = Sync.defer(discard(hole.getAndSet(Absent)))
+
         override def read[A](f: RecordLoader => A)(using Frame): A < Sync =
             delegate.read(loader => f(keys => loader.load(keys).filterNot((key, _) => hole.get().contains(key))))
     end HoleCache
@@ -214,9 +219,10 @@ class WatcherSpec extends kyo.test.Test[Any]:
     /** Populate the cache with Alice, then run `body` with a client + a
       * [[StreamProbe.Pull]] handle over a `CacheOnly` watch — `pull.next` awaits
       * exactly the next emission, so a test can interleave synchronous store writes
-      * (wrapped in `Sync.defer`) between exact, ordered pulls. The watch's channel
-      * and drain fiber are `Scope`-managed, so the runner tears them down on leaf
-      * exit; `pull.cancel` remains for tests that stop a watcher mid-leaf.
+      * (wrapped in `Sync.defer`) between exact, ordered pulls. `body` starts once the
+      * initial read is established, so its writes never race the watch's own
+      * follow-up on the fetching fiber. The watch's channel and drain fiber are
+      * `Scope`-managed, so the runner tears them down on leaf exit.
       */
     private def watching(
         body: (ApolloClient, StreamProbe.Pull[ApolloResponse[UserData]]) => Unit < (Async & Scope)
@@ -225,8 +231,9 @@ class WatcherSpec extends kyo.test.Test[Any]:
         for
             client <- cachedClient(engine)
             _      <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
-            pull   <- StreamProbe.Pull.open(query(client).fetchPolicy(FetchPolicy.CacheOnly).watch())
-            _      <- body(client, pull)
+            watch  <- ObservedWatch.open(query(client).fetchPolicy(FetchPolicy.CacheOnly))
+            _      <- watch.awaitEstablished
+            _      <- body(client, watch.pull)
         yield ()
         end for
     end watching
@@ -278,21 +285,34 @@ class WatcherSpec extends kyo.test.Test[Any]:
                 for
                     _ <- pull.next
                     // A changed key outside the read's dependentKeys ({QUERY_ROOT, User:1}).
-                    _           <- Sync.defer(client.apolloStore.publish(Set(CacheKey("Post", "99"))))
-                    maybeSecond <- pull.tryNext
-                yield assert(maybeSecond == Absent) // still just the initial emission
+                    _ <- Sync.defer(client.apolloStore.publish(Set(CacheKey("Post", "99"))))
+                    // Both reactions run on this fiber, in write order: a re-emission for the
+                    // unrelated key would be the next emission, ahead of Bob.
+                    _      <- Sync.defer(client.apolloStore.writeOperation(CurrentUserQuery(), userData("Bob")))
+                    second <- pull.next
+                    more   <- pull.tryNext
+                yield
+                    assert(second.data == Present(userData("Bob")), s"the unrelated write re-emitted: $second")
+                    assert(more == Absent)
             }
         }
 
-        "cancelling the watch stops further emissions" in {
-            watching { (client, pull) =>
-                for
-                    _           <- pull.next
-                    _           <- pull.cancel
-                    _           <- Sync.defer(client.apolloStore.writeOperation(CurrentUserQuery(), userData("Carol")))
-                    maybeSecond <- pull.tryNext
-                yield assert(maybeSecond == Absent) // nothing after cancel
-            }
+        "closing the watch's Scope unsubscribes it" in {
+            // A cancelled pull is silent by construction (its channel is closed), so the
+            // property is asserted on the store, after the teardown has provably run.
+            for
+                client <- cachedClient(CountingEngine())
+                _      <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                watch  <- ObservedWatch.open(query(client).fetchPolicy(FetchPolicy.CacheOnly))
+                first  <- watch.pull.next
+                before <- client.apolloStore.changedKeys.subscriberCount
+                _      <- watch.close
+                after  <- client.apolloStore.changedKeys.subscriberCount
+            yield
+                assert(first.data == Present(userData("Alice")))
+                assert(before == 1)
+                assert(after == 0, s"the closed watch is still subscribed: $after")
+            end for
         }
 
         "no emission reaches the channel after the scope closed" in {
@@ -387,13 +407,16 @@ class WatcherSpec extends kyo.test.Test[Any]:
                 calls  <- AtomicInt.init(0)
                 client <- cachedClient(DefectEngine(calls, defective = 2))
                 _      <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                pull <- StreamProbe.Pull.open(
+                watch <- ObservedWatch.open(
                     query(client)
                         .fetchPolicy(FetchPolicy.CacheOnly)
                         .refetchPolicy(RefetchPolicy.NetworkOnly)
-                        .watch()
                 )
+                pull = watch.pull
                 first <- pull.next
+                // Writes before the key set is established would reach no one and be answered
+                // by a single refetch from the watch's window check: one response, not two.
+                _ <- watch.awaitEstablished
                 _ = assert(first.data == Present(userData("Alice")))
                 _      <- client.apolloStore.writeOperation(CurrentUserQuery(), userData("Bob"))   // its refetch panics
                 _      <- client.apolloStore.writeOperation(CurrentUserQuery(), userData("Carol")) // its refetch answers
@@ -436,13 +459,18 @@ class WatcherSpec extends kyo.test.Test[Any]:
             // dropped. Without a store generation the watch shows Bob for good; with it
             // the re-read notices the store moved past its stamp and reads again. The
             // closing write ("Zed") makes the missing emission observable without a
-            // hang: it is the second emission only when Zoe was never emitted.
+            // hang: it is the second emission only when Zoe was never emitted. The writes
+            // start once the initial read is established: before that the watch's key set
+            // may still be empty, the root write would reach no one, and the watch's own
+            // window check would read straight to the closing write.
             val cache = TrapCache(MemoryCache())
             for
                 client <- cachedClient(CountingEngine(), cache)
                 _      <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                pull   <- StreamProbe.Pull.open(query(client).fetchPolicy(FetchPolicy.CacheOnly).watch())
-                first  <- pull.next
+                watch  <- ObservedWatch.open(query(client).fetchPolicy(FetchPolicy.CacheOnly))
+                pull = watch.pull
+                first <- pull.next
+                _     <- watch.awaitEstablished
                 _ = assert(first.data == Present(userData("Alice")))
                 _ <- cache.arm(CacheKey("User", "2")) {
                     client.apolloStore.writeFragment(UserFragment, CacheKey("User", "2"), User("User", "2", "Zoe")).unit
@@ -486,6 +514,43 @@ class WatcherSpec extends kyo.test.Test[Any]:
             end for
         }
 
+        "a write made on a networked emission, before the watch has established it, is not lost" in {
+            // A consumer answers the first emission with a write. For a networked response
+            // the watch establishes its key set by reading the records back AFTER the offer:
+            // until then the set is empty and the write's publish reaches no one. Stamped
+            // with that later read's own generation, the set already "contains" the write,
+            // the window check finds nothing, and the watch keeps showing the networked
+            // Alice while the store holds Bob. Stamped with the generation of the offer,
+            // the write is newer than the emitted value and is read again. The write runs on
+            // the fetching fiber right after the offer — the position of a consumer that is
+            // faster than the watch — and the closing write (Zed), made once the response is
+            // established, is the second emission exactly when Bob was lost.
+            val engine = CountingEngine()
+            for
+                client  <- cachedClient(engine)
+                written <- AtomicBoolean.init(false)
+                watch <- ObservedWatch.open(
+                    query(client).fetchPolicy(FetchPolicy.NetworkOnly),
+                    onOffered = _ =>
+                        written.compareAndSet(false, true).map { first =>
+                            if first then client.apolloStore.writeOperation(CurrentUserQuery(), userData("Bob")).unit
+                            else Kyo.unit
+                        }
+                )
+                first  <- watch.pull.next
+                _      <- watch.awaitEstablished
+                _      <- client.apolloStore.writeOperation(CurrentUserQuery(), userData("Zed"))
+                second <- watch.pull.next
+                _ = assert(first.data == Present(userData("Alice")))
+                _ = assert(first.cacheInfo.exists(!_.isCacheHit), s"the first emission is the networked response: $first")
+                _ = assert(second.data == Present(userData("Bob")), s"the write made on the first emission was lost: $second")
+                third <- watch.pull.next
+            yield
+                assert(third.data == Present(userData("Zed")))
+                assert(engine.calls == 1, s"the re-read stays in the cache: ${engine.calls} call(s)")
+            end for
+        }
+
         "removing a watched record re-emits a cache miss" in {
             watching { (client, pull) =>
                 for
@@ -506,13 +571,14 @@ class WatcherSpec extends kyo.test.Test[Any]:
             for
                 client <- cachedClient(engine)
                 _      <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                pull <- StreamProbe.Pull.open(
+                watch <- ObservedWatch.open(
                     query(client)
                         .fetchPolicy(FetchPolicy.CacheOnly)
                         .refetchPolicy(RefetchPolicy.CacheFirst)
-                        .watch()
                 )
+                pull = watch.pull
                 first <- pull.next
+                _     <- watch.awaitEstablished
                 _ = assert(first.data == Present(userData("Alice")))
                 _      <- Sync.defer(client.apolloStore.remove(CacheKey("User", "1")))
                 second <- pull.next
@@ -537,36 +603,42 @@ class WatcherSpec extends kyo.test.Test[Any]:
                     calls  <- AtomicInt.init(0)
                     client <- cachedClient(SleepingEngine(clock, calls), cache)
                     _      <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                    pull <- StreamProbe.Pull.open(
+                    watch <- ObservedWatch.open(
                         query(client)
                             .fetchPolicy(FetchPolicy.CacheOnly)
                             .refetchPolicy(RefetchPolicy.CacheFirst)
-                            .watch()
                     )
+                    pull = watch.pull
                     first <- pull.next
+                    _     <- watch.awaitEstablished
                     _ = assert(first.data == Present(userData("Alice-1")))
                     _ <- cache.hide(CacheKey("User", "1"))
                     _ <- client.apolloStore.remove(CacheKey("User", "1"))
                     // The miss went to the network once; that response is parked on the clock.
                     _      <- control.awaitPendingSleepers(1)
-                    _      <- control.advance(1.second)
+                    _      <- control.advance(1.second, Duration.Zero)
                     second <- pull.next
                     _ = assert(second.data == Present(userData("Alice-2")), s"the networked value is still emitted: $second")
-                    // With the fix the miss is already in the channel and this advance finds
-                    // no sleeper; a looping watch has parked its next request here instead,
-                    // and the advance lets that response through as the third emission.
-                    _     <- control.advance(1.second)
+                    // The flight has ended. A looping watch booked the next request during it
+                    // (its write-back re-read missed again); with the rule it booked nothing and
+                    // settled the miss as the value.
+                    rerun <- watch.awaitRefetchEnded
+                    _ = assert(!rerun, "a miss the write-back did not cure booked another refetch")
                     third <- pull.next
                     _ = assert(
                         third.error.exists(_.isInstanceOf[CacheMissException]),
                         s"a miss the write-back did not cure is the value: $third"
                     )
-                    _        <- control.advance(1.second)
-                    _        <- control.advance(1.second)
                     callsNow <- calls.get
-                    more     <- pull.tryNext
+                    // Nothing else is running in the watch now. A write it can read is answered
+                    // on this fiber; a second miss for the old cause would come first.
+                    _      <- cache.reveal
+                    _      <- client.apolloStore.writeOperation(CurrentUserQuery(), userData("Zed"))
+                    fourth <- pull.next
+                    more   <- pull.tryNext
                 yield
                     assert(callsNow == 2, s"one refetch per miss cause, got $callsNow call(s)")
+                    assert(fourth.data == Present(userData("Zed")), s"nothing follows the miss but the next write: $fourth")
                     assert(more == Absent, s"nothing follows the miss: $more")
                 end for
             }
@@ -580,24 +652,34 @@ class WatcherSpec extends kyo.test.Test[Any]:
             for
                 client <- cachedClient(engine)
                 _      <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                pull <- StreamProbe.Pull.open(
+                watch <- ObservedWatch.open(
                     query(client)
                         .fetchPolicy(FetchPolicy.CacheOnly)
                         .refetchPolicy(RefetchPolicy.CacheFirst)
-                        .watch()
                 )
+                pull = watch.pull
                 _      <- pull.next
+                _      <- watch.awaitEstablished
                 _      <- Sync.defer(client.apolloStore.remove(CacheKey("User", "1")))
                 second <- pull.next // the write-back's re-read hit
                 third  <- pull.next // the networked value
+                rerun1 <- watch.awaitRefetchEnded
                 _      <- Sync.defer(client.apolloStore.remove(CacheKey("User", "1")))
                 fourth <- pull.next
                 fifth  <- pull.next
-                more   <- pull.tryNext
+                rerun2 <- watch.awaitRefetchEnded
+                calls = engine.calls
+                // The watch is idle: a readable write is answered on this fiber, and a miss
+                // left over from either eviction would come before it.
+                _     <- client.apolloStore.writeOperation(CurrentUserQuery(), userData("Bob"))
+                sixth <- pull.next
+                more  <- pull.tryNext
             yield
                 assert(Chunk(second, third, fourth, fifth).forall(_.error.isEmpty), "no miss reaches the consumer")
                 assert(fifth.data == Present(userData("Alice")))
-                assert(engine.calls == 3, s"each eviction is answered by one refetch, got ${engine.calls} call(s)")
+                assert(!rerun1 && !rerun2, "a refetch whose write-back cured the miss books nothing further")
+                assert(calls == 3, s"each eviction is answered by one refetch, got $calls call(s)")
+                assert(sixth.data == Present(userData("Bob")), s"nothing but the next write follows: $sixth")
                 assert(more == Absent)
             end for
         }
@@ -612,47 +694,51 @@ class WatcherSpec extends kyo.test.Test[Any]:
                 gate    <- Latch.init(1)
                 client  <- cachedClient(GatedEngine(calls, arrived, gate))
                 _       <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                pull <- StreamProbe.Pull.open(
+                watch <- ObservedWatch.open(
                     query(client)
                         .fetchPolicy(FetchPolicy.CacheOnly)
                         .refetchPolicy(RefetchPolicy.NetworkOnly)
-                        .watch()
                 )
+                pull = watch.pull
                 _        <- pull.next
+                _        <- watch.awaitEstablished
                 _        <- Sync.defer(client.apolloStore.writeOperation(CurrentUserQuery(), userData("Bob")))
-                _        <- arrived.await // the refetch is in flight, parked on `gate`
+                _        <- arrived.await           // the refetch is in flight, parked on `gate`
                 _        <- client.apolloStore.writeOperation(CurrentUserQuery(), userData("Carol"))
                 _        <- client.apolloStore.writeOperation(CurrentUserQuery(), userData("Dave"))
                 _        <- client.apolloStore.writeOperation(CurrentUserQuery(), userData("Eve"))
                 _        <- gate.release
-                second   <- pull.next     // the in-flight response
-                third    <- pull.next     // the one rerun
+                second   <- pull.next               // the in-flight response
+                booked   <- watch.awaitRefetchEnded // ... whose flight booked the rerun
+                third    <- pull.next               // the one rerun
+                rebooked <- watch.awaitRefetchEnded // ... whose flight booked nothing more
                 callsNow <- calls.get
-                more     <- pull.tryNext
             yield
                 assert(second.data == Present(userData("Alice")))
                 assert(third.data == Present(userData("Alice")))
+                assert(booked, "the writes during the flight booked no rerun")
+                assert(!rebooked, "the rerun booked a further refetch")
                 assert(callsNow == 3, s"one in flight plus one rerun, got $callsNow call(s)")
-                assert(more == Absent, s"no further refetch: $more")
             end for
         }
 
-        "a second watcher is independent — one cancel does not silence the other" in {
-            watching { (client, pull) =>
-                for
-                    _ <- pull.next
-                    otherPull <- StreamProbe.Pull.open(
-                        query(client).fetchPolicy(FetchPolicy.CacheOnly).watch()
-                    )
-                    _          <- otherPull.next
-                    _          <- pull.cancel // cancel the first watcher only
-                    _          <- Sync.defer(client.apolloStore.writeOperation(CurrentUserQuery(), userData("Dave")))
-                    firstAfter <- pull.tryNext
-                    otherAfter <- otherPull.next
-                yield
-                    assert(firstAfter == Absent)                         // cancelled — no update
-                    assert(otherAfter.data == Present(userData("Dave"))) // still live
-            }
+        "a second watcher is independent — closing one does not silence the other" in {
+            for
+                client <- cachedClient(CountingEngine())
+                _      <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                first  <- ObservedWatch.open(query(client).fetchPolicy(FetchPolicy.CacheOnly))
+                _      <- first.pull.next
+                other  <- ObservedWatch.open(query(client).fetchPolicy(FetchPolicy.CacheOnly))
+                _      <- other.pull.next
+                _      <- other.awaitEstablished
+                _      <- first.close // the first watch only, teardown included
+                left   <- client.apolloStore.changedKeys.subscriberCount
+                _      <- client.apolloStore.writeOperation(CurrentUserQuery(), userData("Dave"))
+                after  <- other.pull.next
+            yield
+                assert(left == 1, s"closing one watch must leave exactly the other subscribed: $left")
+                assert(after.data == Present(userData("Dave")), s"the other watch is still live: $after")
+            end for
         }
 
         "whether a client has a cache is a total question: normalizedStore" in {
