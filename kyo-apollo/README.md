@@ -66,8 +66,12 @@ The HTTP engine speaks kyo-http's types. An `HttpEngine.Request` is a
 which is what `kyo.HttpClient` returns for a text body. `ApolloClient.Config.httpHeaders`,
 `ApolloRequest.httpHeaders` and `ApolloHttpException.headers` are `kyo.HttpHeaders`;
 `httpMethod` is a `kyo.HttpMethod`: `GET` puts the operation in the URL, any other
-method (`POST` by default) carries it in the body. A server URL that does not parse
-makes each response an `ApolloNetworkException` whose cause is kyo-http's parse failure.
+method (`POST` by default) carries it in the body. A file cannot ride a URL, so a `GET`
+whose variables carry an `Upload` is sent as a multipart `POST`. A server URL that does
+not parse makes each response an `ApolloNetworkException` whose cause is kyo-http's
+parse failure. Interrupting a request cancels it on the wire: the JVM/Native engine
+interrupts kyo-http's request, the JS/Wasm engine aborts the `fetch` through its
+`AbortController` (a streamed request when its `Scope` closes).
 
 kyo-apollo keeps its own types only where kyo-http has none:
 
