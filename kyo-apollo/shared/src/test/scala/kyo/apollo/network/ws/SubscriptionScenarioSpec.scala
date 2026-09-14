@@ -189,7 +189,7 @@ class SubscriptionScenarioSpec extends kyo.test.Test[Any]:
                     serverUrl = "wss://example.com/graphql",
                     engine = engine,
                     reconnectWhen = WebSocketNetworkTransport.reconnectAlways,
-                    backoff = WsBackoff.constant(1000)
+                    backoff = Schedule.fixed(1.second)
                 )
                 var a = List.empty[ApolloResponse[Int]]
                 var b = List.empty[ApolloResponse[Int]]
