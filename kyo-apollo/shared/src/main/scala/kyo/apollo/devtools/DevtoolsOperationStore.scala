@@ -17,6 +17,10 @@ import kyo.discard
   * robust simplification over modelling exact watcher activation/teardown, and a
   * superset of live watchers (one-shot queries are surfaced too). Mutations are a
   * bounded most-recent history keyed by request id.
+  *
+  * The store keeps the variables it is given as they are. [[DevtoolsInterceptor]]
+  * hands it a mutation's variables with every value redacted unless it was built
+  * with a `redact` that keeps them.
   */
 final class DevtoolsOperationStore(val maxMutations: Int = 25):
     import DevtoolsOperationStore.*

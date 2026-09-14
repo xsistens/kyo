@@ -37,3 +37,16 @@ kyo data types; the standard library appears only as input.**
   (`NormalizedCache.merge`, `ChangedKeysSubject`, `ClientField.write*`) is a
   membership set with no ordering; kyo has no `Set`, so `scala.collection.immutable.Set`
   stays.
+
+## Devtools
+
+On Scala.js, `builder.connectToDevtools(name, enabled)` replaces the terminal
+`build()` and, when `enabled`, connects the client to the Apollo Client Devtools
+browser extension. `enabled` has no default; with `enabled = false` the call is
+exactly `build()` and touches no global.
+
+**Warning:** an installed hook exposes the entire normalized cache and every
+operation's variables to every script in the document; pass `enabled = isDevBuild`.
+The Mutations tab shows a mutation's variables with every value replaced by
+`"<redacted>"`, and the Cache tab leaves out `ROOT_MUTATION`, whose keys spell out
+a mutation's arguments. Query variables and query data are shown as they are.
