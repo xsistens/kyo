@@ -54,7 +54,7 @@ import scala.collection.mutable
   */
 final class Normalizer(
     variables: Map[String, Json],
-    rootKey: String,
+    rootKey: CacheKey,
     cacheKeyGenerator: CacheKeyGenerator,
     fieldPolicies: FieldPolicies = FieldPolicies.empty
 ):
@@ -63,7 +63,7 @@ final class Normalizer(
       * the returned map lists the root first, then records in the order they are
       * first encountered — handy for tests and debugging.
       */
-    private val records = mutable.LinkedHashMap.empty[String, Record]
+    private val records = mutable.LinkedHashMap.empty[CacheKey, Record]
 
     /** Normalize `data` against `rootField`'s selections into a set of records.
       *
@@ -75,7 +75,7 @@ final class Normalizer(
       * @return every record produced, keyed by cache key, with duplicate keys
       *         within this response already merged
       */
-    def normalize(data: Map[String, Json], rootField: CompiledField): Map[String, Record] =
+    def normalize(data: Map[String, Json], rootField: CompiledField): Map[CacheKey, Record] =
         val rootType = rootField.fieldType.leafType.name
         // Stamp the root like every nested object (servers rarely send a root
         // `__typename`), so the record merger can resolve type-scoped field
@@ -88,7 +88,7 @@ final class Normalizer(
             selections = rootField.selections,
             parentType = rootType,
             key = rootKey,
-            path = List(rootKey)
+            path = List(rootKey.render)
         )
         records.toMap
     end normalize
@@ -102,11 +102,11 @@ final class Normalizer(
         obj: Map[String, Json],
         selections: Chunk[CompiledSelection],
         parentType: String,
-        key: String,
+        key: CacheKey,
         path: List[String]
     ): Unit =
         val typename     = objectTypename(obj).getOrElse(parentType)
-        val recordFields = mutable.LinkedHashMap.empty[String, RecordValue]
+        val recordFields = mutable.LinkedHashMap.empty[FieldKey, RecordValue]
         // Skip local `@client` fields: a network/operation write-back re-encodes the
         // decoded data (where a client field materializes to its default), which would
         // clobber the locally-written value. Client state is authored only via an
@@ -114,7 +114,7 @@ final class Normalizer(
         for field <- collectFields(selections, typename) if !field.client do
             obj.get(field.responseName).foreach { value =>
                 val fieldKey = fieldPolicies.fieldKey(typename, field, variables)
-                recordFields(fieldKey) = buildFieldValue(value, field, path :+ fieldKey)
+                recordFields(fieldKey) = buildFieldValue(value, field, path :+ fieldKey.render)
             }
         end for
         mergeRecord(Record(key, recordFields.toMap))
@@ -176,7 +176,7 @@ final class Normalizer(
                 obj = enriched,
                 selections = field.selections,
                 parentType = field.fieldType.leafType.name,
-                key = childKey.key,
+                key = childKey,
                 // The path RESTARTS at this object's key, the way `normalize` starts it at
                 // `rootKey` (:82) and `ApolloStore.writeFragment` starts it at the fragment's
                 // entity key. Carrying the response path down instead gave the same entity's
@@ -185,12 +185,12 @@ final class Normalizer(
                 // other writer's fields (GAPS.md F-18).
                 //
                 // A no-op wherever the key came from the path fallback: `CacheKey.fromPath` is
-                // `path.mkString(".")`, so `List(childKey.key)` renders the identical string and
+                // `path.mkString(".")`, so `List(childKey.render)` renders the identical string and
                 // every deeper append is unchanged. It only bites where an identity exists,
                 // which is exactly where it should.
-                path = List(childKey.key)
+                path = List(childKey.render)
             )
-            RecordValue.Reference(CacheReference(childKey.key))
+            RecordValue.Reference(CacheReference(childKey))
         case scalar =>
             // A composite field with a scalar value is malformed data; keep it inline
             // rather than dropping it, so the round-trip surfaces the discrepancy.
@@ -239,8 +239,8 @@ object Normalizer:
         variables: Map[String, Json] = Map.empty,
         cacheKeyGenerator: CacheKeyGenerator = CacheKeyGenerator.default,
         fieldPolicies: FieldPolicies = FieldPolicies.empty
-    ): Map[String, Record] =
-        val rootKey = CacheKey.rootKey(operation).key
+    ): Map[CacheKey, Record] =
+        val rootKey = CacheKey.rootKey(operation)
         new Normalizer(variables, rootKey, cacheKeyGenerator, fieldPolicies)
             .normalize(data, operation.rootField)
     end normalize

@@ -2,6 +2,7 @@ package kyo.apollo.network
 
 import kyo.Maybe
 import kyo.Present
+import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.exception.CacheMissException
 
 /** Per-response metadata describing how the normalized cache participated in
@@ -11,10 +12,10 @@ import kyo.apollo.exception.CacheMissException
   * emits so a caller can tell a cache-served value from a networked one, and a
   * cache hit from a miss — without inspecting `data`/`exception` heuristically.
   * It lives in `kyo.apollo.network` alongside [[ApolloResponse]] (rather than in the
-  * cache package) so the response model keeps depending only on `network` and
-  * the leaf `exception` package, never on the cache layer: the dependency runs
-  * cache → network, not the reverse. Mirrors apollo-kotlin's `CacheInfo`, pared
-  * down to the flags this phase needs.
+  * cache package) so the response model keeps depending only on `network`, the
+  * leaf `exception` package and the cache's key VALUE type ([[CacheKey]]), never
+  * on the cache machinery: the dependency runs cache → network, not the reverse.
+  * Mirrors apollo-kotlin's `CacheInfo`, pared down to the flags this phase needs.
   *
   * @param fromCache           whether this response was served from the cache
   *                            (as opposed to the network)
@@ -38,7 +39,7 @@ final case class CacheInfo(
     fromCache: Boolean,
     isCacheHit: Boolean,
     cacheMissException: Maybe[CacheMissException] = Maybe.empty,
-    dependentKeys: Set[String] = Set.empty,
+    dependentKeys: Set[CacheKey] = Set.empty,
     generation: Long = 0L
 )
 
@@ -50,7 +51,7 @@ object CacheInfo:
       * [[CacheInfo.dependentKeys]]) and the store `generation` it was read at
       * (see [[CacheInfo.generation]]).
       */
-    def hit(dependentKeys: Set[String], generation: Long = 0L): CacheInfo =
+    def hit(dependentKeys: Set[CacheKey], generation: Long = 0L): CacheInfo =
         CacheInfo(fromCache = true, isCacheHit = true, dependentKeys = dependentKeys, generation = generation)
 
     /** A response served from the network (a cache write-back may have run). */
@@ -60,7 +61,7 @@ object CacheInfo:
       * keys the response materialized in the store. A watcher uses them as its
       * fallback watch set when the post-write re-read cannot be satisfied.
       */
-    def network(dependentKeys: Set[String]): CacheInfo =
+    def network(dependentKeys: Set[CacheKey]): CacheInfo =
         CacheInfo(fromCache = false, isCacheHit = false, dependentKeys = dependentKeys)
 
     /** A response representing a cache read that missed, carrying the `miss`. */

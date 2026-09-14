@@ -62,7 +62,7 @@ final class TypePolicyCacheKeyGenerator(
       */
     private def keyFromFields(policy: TypePolicy, obj: Map[String, Json]): Maybe[CacheKey] =
         val values = policy.keyFields.map(f =>
-            obj.get(f).flatMap(TypePolicyCacheKeyGenerator.scalarString(_).toOption)
+            obj.get(f).flatMap(CacheKey.scalarString(_).toOption)
         )
         if values.forall(_.isDefined) then
             Present(CacheKey(policy.typename, values.flatten.mkString("+")))
@@ -81,13 +81,4 @@ object TypePolicyCacheKeyGenerator:
     /** Build a generator from the given policies (id-based fallback for the rest). */
     def of(policies: TypePolicy*): TypePolicyCacheKeyGenerator =
         new TypePolicyCacheKeyGenerator(policies.map(p => p.typename -> p).toMap)
-
-    /** Render a JSON scalar as its raw string (`42`, not `"42"` or `42.0`);
-      * composites and `null` yield `None` and are not usable as key parts.
-      */
-    private def scalarString(json: Json): Maybe[String] = json match
-        case Json.JStr(s)                               => Present(s)
-        case Json.JInt(_) | Json.JDec(_) | Json.JNum(_) => Present(json.render)
-        case Json.JBool(b)                              => Present(b.toString)
-        case _                                          => Absent
 end TypePolicyCacheKeyGenerator

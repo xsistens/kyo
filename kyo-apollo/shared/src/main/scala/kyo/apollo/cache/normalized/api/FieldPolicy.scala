@@ -182,7 +182,7 @@ object ConnectionFieldPolicy:
     private def dedupeByReference(
         items: Chunk[RecordValue]
     ): Chunk[RecordValue] =
-        val seen = scala.collection.mutable.HashSet.empty[String]
+        val seen = scala.collection.mutable.HashSet.empty[CacheKey]
         items.filter {
             case RecordValue.Reference(ref) => seen.add(ref.key)
             case _                          => true

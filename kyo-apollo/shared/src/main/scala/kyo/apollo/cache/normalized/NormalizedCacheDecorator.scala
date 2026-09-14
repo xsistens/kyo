@@ -2,6 +2,7 @@ package kyo.apollo.cache.normalized
 
 import kyo.Maybe
 import kyo.apollo.cache.normalized.api.CacheHeaders
+import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.cache.normalized.api.Record
 
 /** A pass-through [[NormalizedCache]] that forwards every call to a wrapped
@@ -29,24 +30,24 @@ import kyo.apollo.cache.normalized.api.Record
 abstract class NormalizedCacheDecorator(protected val delegate: NormalizedCache)
     extends NormalizedCache:
 
-    def loadRecord(key: String): Maybe[Record] = delegate.loadRecord(key)
+    def loadRecord(key: CacheKey): Maybe[Record] = delegate.loadRecord(key)
 
-    override def loadRecords(keys: Iterable[String]): Map[String, Record] =
+    override def loadRecords(keys: Iterable[CacheKey]): Map[CacheKey, Record] =
         delegate.loadRecords(keys)
 
-    override def allRecords(): Map[String, Record] = delegate.allRecords()
+    override def allRecords(): Map[CacheKey, Record] = delegate.allRecords()
 
-    def merge(records: Iterable[Record], cacheHeaders: CacheHeaders): Set[String] =
+    def merge(records: Iterable[Record], cacheHeaders: CacheHeaders): Set[CacheKey] =
         delegate.merge(records, cacheHeaders)
 
     override def merge(
         records: Iterable[Record],
         cacheHeaders: CacheHeaders,
         recordMerger: RecordMerger
-    ): Set[String] =
+    ): Set[CacheKey] =
         delegate.merge(records, cacheHeaders, recordMerger)
 
-    def remove(key: String): Boolean = delegate.remove(key)
+    def remove(key: CacheKey): Boolean = delegate.remove(key)
 
     def clearAll(): Unit = delegate.clearAll()
 end NormalizedCacheDecorator

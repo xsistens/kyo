@@ -1,32 +1,35 @@
 package kyo.apollo.cache.normalized.api
 
+import kyo.Absent
+import kyo.Maybe
+import kyo.Present
 import kyo.apollo.api.Mutation
 import kyo.apollo.api.Operation
 import kyo.apollo.api.Query
 import kyo.apollo.api.Subscription
+import kyo.apollo.json.Json
 
-/** The identity of a [[Record]] in the cache — a thin value type over the
-  * record key string.
+/** The identity of a [[Record]] in the cache — an opaque type over the record
+  * key string, so a record key can never be confused with a [[FieldKey]] or an
+  * arbitrary string.
   *
   * Every normalized object is stored under exactly one `CacheKey`. Root objects
   * use the well-known keys below (one per operation kind); entity objects use a
-  * key derived by a [[CacheKeyGenerator]] from their `__typename` and id.
-  * Mirrors apollo-kotlin's `CacheKey`.
-  *
-  * @param key the underlying record key string
+  * key derived by a [[CacheKeyGenerator]] from their `__typename` and id, and
+  * id-less objects a position-based key ([[CacheKey.fromPath]]). Those are the
+  * only ways to obtain one. Mirrors apollo-kotlin's `CacheKey`.
   */
-final case class CacheKey(key: String):
-    override def toString: String = key
+opaque type CacheKey = String
 
 object CacheKey:
     /** The well-known root key for query responses. */
-    val QueryRoot: CacheKey = CacheKey("QUERY_ROOT")
+    val QueryRoot: CacheKey = "QUERY_ROOT"
 
     /** The well-known root key for mutation responses. */
-    val MutationRoot: CacheKey = CacheKey("MUTATION_ROOT")
+    val MutationRoot: CacheKey = "MUTATION_ROOT"
 
     /** The well-known root key for subscription responses. */
-    val SubscriptionRoot: CacheKey = CacheKey("SUBSCRIPTION_ROOT")
+    val SubscriptionRoot: CacheKey = "SUBSCRIPTION_ROOT"
 
     /** The root record key for `operation`'s response, chosen by operation kind.
       *
@@ -45,7 +48,7 @@ object CacheKey:
       * [[TypePolicy]] produces.
       */
     def apply(typename: String, id: String): CacheKey =
-        if id.isEmpty then CacheKey(typename) else CacheKey(s"$typename:$id")
+        if id.isEmpty then typename else s"$typename:$id"
 
     /** Build a position-based key from a `path`, e.g. `List("QUERY_ROOT",
       * "countries", "0")` becomes `QUERY_ROOT.countries.0`. The fallback
@@ -55,5 +58,26 @@ object CacheKey:
       * identified parent the key is `Album:1.images.0` rather than the path the
       * response happened to take to get there.
       */
-    def fromPath(path: List[String]): CacheKey = CacheKey(path.mkString("."))
+    def fromPath(path: List[String]): CacheKey = path.mkString(".")
+
+    /** Render a JSON scalar as its raw id string (`42`, not `"42"`); composites and
+      * `null` yield `Absent` and are not usable as key parts. The one scalar-to-id
+      * rendering: every key generator, redirect resolver and masked-fragment
+      * identity check goes through here, so they cannot disagree on a number's
+      * spelling.
+      */
+    def scalarString(json: Json): Maybe[String] = json match
+        case Json.JStr(s)                               => Present(s)
+        case Json.JInt(_) | Json.JDec(_) | Json.JNum(_) => Present(json.render)
+        case Json.JBool(b)                              => Present(b.toString)
+        case _                                          => Absent
+
+    extension (key: CacheKey)
+        /** The key's string form — for messages, diagnostics and serialization
+          * boundaries (e.g. the devtools cache dump). Never feed it back as a key.
+          */
+        def render: String = key
+    end extension
+
+    given CanEqual[CacheKey, CacheKey] = CanEqual.derived
 end CacheKey

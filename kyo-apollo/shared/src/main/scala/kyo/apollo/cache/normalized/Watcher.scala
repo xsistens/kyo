@@ -3,6 +3,7 @@ package kyo.apollo.cache.normalized
 import kyo.*
 import kyo.apollo.ApolloCall
 import kyo.apollo.ApolloClient
+import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.network.ApolloResponse
 import kyo.apollo.network.ExecutionContext
 import kyo.apollo.runtime.ResponseStream
@@ -129,7 +130,7 @@ extension [D](call: ApolloCall[D])
                 // datum is then not offered either). Every caller stands behind a read
                 // that SUCCEEDED, which settles the miss a `CacheFirst` refetch may have
                 // been asked for: `refetched` is cleared in the same compare-and-set.
-                @tailrec def adopt(keys: Set[String], gen: Long): Boolean =
+                @tailrec def adopt(keys: Set[CacheKey], gen: Long): Boolean =
                     val s = state.get()
                     if gen < s.gen then false
                     else if state.compareAndSet(s, s.copy(keys = keys, gen = gen, refetched = false)) then true
@@ -140,7 +141,7 @@ extension [D](call: ApolloCall[D])
                 // back: seeds a watch that has no read behind its set yet (generation 0)
                 // and never rolls back one that has. No read succeeded here, so the miss
                 // a refetch was asked for stays unsettled.
-                @tailrec def seed(keys: Set[String]): Unit =
+                @tailrec def seed(keys: Set[CacheKey]): Unit =
                     val s = state.get()
                     if s.gen == 0L && !state.compareAndSet(s, s.copy(keys = keys)) then seed(keys)
 
@@ -278,7 +279,7 @@ extension [D](call: ApolloCall[D])
                         case RefetchPolicy.NetworkOnly => requestRefetch()
                         case RefetchPolicy.CacheFirst  => reread(refetchOnce)
 
-                def onChangedKeys(changedKeys: Set[String]): Unit =
+                def onChangedKeys(changedKeys: Set[CacheKey]): Unit =
                     val s = state.get() // one read: `active` and `keys` belong together
                     if s.active && changedKeys.intersect(s.keys).nonEmpty then react()
 
@@ -322,7 +323,7 @@ end extension
   */
 final private[normalized] case class WatchState(
     active: Boolean,
-    keys: Set[String],
+    keys: Set[CacheKey],
     gen: Long,
     inflight: Boolean,
     rerun: Boolean,

@@ -92,7 +92,7 @@ class StoreUpdateSpec extends kyo.test.Test[Any]:
                     changed <- Sync.defer(
                         store.updateOperation(CurrentUserQuery())(d => UserData(d.user.copy(name = "Alice B.")))
                     )
-                    _ = assert(changed.contains("User:1"), s"changed keys: $changed")
+                    _ = assert(changed.contains(CacheKey("User", "1")), s"changed keys: $changed")
                     back <- Sync.defer(store.readOperation[UserData](CurrentUserQuery()))
                     _ = assert(back.user.name == "Alice B.", s"updated name: ${back.user.name}")
                 yield ()
@@ -117,13 +117,13 @@ class StoreUpdateSpec extends kyo.test.Test[Any]:
                 val store  = client.apolloStore
                 for
                     _ <- Sync.defer(
-                        store.writeFragment(UserFragment, CacheKey("User:1"), User("User", "1", "Alice"))
+                        store.writeFragment(UserFragment, CacheKey("User", "1"), User("User", "1", "Alice"))
                     )
                     changed <- Sync.defer(
-                        store.updateFragment(UserFragment, CacheKey("User:1"))(u => u.copy(name = "Eve"))
+                        store.updateFragment(UserFragment, CacheKey("User", "1"))(u => u.copy(name = "Eve"))
                     )
-                    _ = assert(changed.contains("User:1"), s"changed keys: $changed")
-                    back <- Sync.defer(store.readFragment[User](UserFragment, CacheKey("User:1")))
+                    _ = assert(changed.contains(CacheKey("User", "1")), s"changed keys: $changed")
+                    back <- Sync.defer(store.readFragment[User](UserFragment, CacheKey("User", "1")))
                     _ = assert(back.name == "Eve", s"updated name: ${back.name}")
                 yield ()
                 end for
@@ -134,7 +134,7 @@ class StoreUpdateSpec extends kyo.test.Test[Any]:
             Scope.run {
                 val client = cachedClient()
                 for changed <- Sync.defer(
-                        client.apolloStore.updateFragment(UserFragment, CacheKey("User:404"))(identity)
+                        client.apolloStore.updateFragment(UserFragment, CacheKey("User", "404"))(identity)
                     )
                 yield assert(changed.isEmpty, s"miss should not write: $changed")
             }

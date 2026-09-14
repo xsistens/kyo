@@ -6,6 +6,7 @@ import kyo.apollo.ClientField
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.*
 import kyo.apollo.cache.normalized.*
+import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.cache.normalized.api.TypePolicy
 import kyo.apollo.cache.normalized.api.TypePolicyCacheKeyGenerator
 import kyo.apollo.network.ApolloResponse
@@ -139,8 +140,8 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
                 // What the NORMALIZER keyed the edge as, read off the cache itself
                 // rather than assumed: `TypePolicy("Edge", List("cursor"))` composes
                 // `Edge:<cursor>`.
-                normalized = client.apolloStore.cache.allRecords().keySet.filter(_.startsWith("Edge"))
-                _          = assert(normalized == Set("Edge:c1"), s"normalizer keyed the edge as $normalized")
+                normalized = client.apolloStore.cache.allRecords().keySet.filter(_.render.startsWith("Edge"))
+                _          = assert(normalized == Set(CacheKey("Edge", "c1")), s"normalizer keyed the edge as $normalized")
                 // What the WRITE says it changed. These two agreeing is the whole
                 // assertion: a mismatch would write to a record nothing reads, and
                 // nothing anywhere would report it.
@@ -163,12 +164,12 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
                 _ = assert(rowOf(first).map(_.selected) == Present(false))
                 // The dependent keys are what makes the next step work; assert them
                 // so a failure says WHICH half broke.
-                _ = assert(first.cacheInfo.map(_.dependentKeys).exists(_.contains("Edge:c1")))
+                _ = assert(first.cacheInfo.map(_.dependentKeys).exists(_.contains(CacheKey("Edge", "c1"))))
                 _      <- Sync.defer(selected.write(client, "c1", true))
                 second <- pull.next
                 _ = assert(rowOf(second).map(_.selected) == Present(true))
                 // A change to an unrelated key does not wake it.
-                _      <- Sync.defer(client.apolloStore.publish(Set("Edge:c99")))
+                _      <- Sync.defer(client.apolloStore.publish(Set(CacheKey("Edge", "c99"))))
                 silent <- pull.tryNext
                 _ = assert(silent == Absent)
             yield assert(true)
@@ -213,7 +214,7 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
             for
                 _     <- client.query(edgeQuery).fetchPolicy(FetchPolicy.NetworkOnly).execute
                 first <- selected.write(client, "c1", true)
-                _ = assert(first == Set("Edge:c1"))
+                _ = assert(first == Set(CacheKey("Edge", "c1")))
                 again <- selected.write(client, "c1", true)
                 _ = assert(again.isEmpty, s"identical re-write reported $again")
             yield assert(true)
@@ -228,11 +229,11 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
             // read touched one of these records, and each of those re-reads its WHOLE
             // operation. Counting the broadcasts is counting those re-reads.
             val (client, _) = cachedClient()
-            val batches     = ListBuffer.empty[Set[String]]
+            val batches     = ListBuffer.empty[Set[CacheKey]]
             for
                 _       <- Sync.defer(discard(client.apolloStore.addChangedKeysListener(ks => discard(batches += ks))))
                 changed <- selected.writeAll(client, Seq("c1" -> true, "c2" -> true, "c3" -> true))
-                _ = assert(changed == Set("Edge:c1", "Edge:c2", "Edge:c3"))
+                _ = assert(changed == Set(CacheKey("Edge", "c1"), CacheKey("Edge", "c2"), CacheKey("Edge", "c3")))
                 _ = assert(batches.size == 1, s"writeAll published ${batches.size} times")
                 _ = assert(batches.head == changed)
                 // The values really landed — a single broadcast of nothing would also
@@ -251,7 +252,7 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
             // A broadcast with no change behind it is exactly the cost this exists to
             // remove, so the empty batch must not make one.
             val (client, _) = cachedClient()
-            val batches     = ListBuffer.empty[Set[String]]
+            val batches     = ListBuffer.empty[Set[CacheKey]]
             for
                 _       <- Sync.defer(discard(client.apolloStore.addChangedKeysListener(ks => discard(batches += ks))))
                 changed <- selected.writeAll(client, Seq.empty)
@@ -265,7 +266,7 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
             val (client, _) = cachedClient()
             for
                 changed <- selected.writeAll(client, Seq("c1" -> true, "c1" -> false))
-                _ = assert(changed == Set("Edge:c1"))
+                _ = assert(changed == Set(CacheKey("Edge", "c1")))
                 value <- selected.read(client, "c1")
                 _ = assert(!value, "the later entry won")
             yield assert(true)
@@ -316,7 +317,7 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
                 _    <- tree.writeRoot(client, value)
                 back <- tree.readRoot(client)
                 _           = assert(back == value, s"read back $back")
-                treeRecords = client.apolloStore.cache.allRecords().keySet.filter(_.contains("tree"))
+                treeRecords = client.apolloStore.cache.allRecords().keySet.filter(_.render.contains("tree"))
                 _           = assert(treeRecords.size == 1, s"exactly the first level is a record: $treeRecords")
             yield assert(true)
             end for

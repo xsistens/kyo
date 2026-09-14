@@ -3,6 +3,7 @@ package kyo.apollo.cache.normalized
 import kyo.*
 import kyo.apollo.api.Mutation
 import kyo.apollo.api.Subscription
+import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.interceptor.ApolloInterceptor
 import kyo.apollo.interceptor.ApolloInterceptorChain
 import kyo.apollo.network.ApolloRequest
@@ -194,7 +195,7 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
       * depended on, and the store generation it was current at — capturing a miss
       * as a `Failure`.
       */
-    private def readFromCache[D](request: ApolloRequest[D])(using Frame): Try[(D, Set[String], Long)] =
+    private def readFromCache[D](request: ApolloRequest[D])(using Frame): Try[(D, Set[CacheKey], Long)] =
         Try(store.readOperationStamped(request.operation))
 
     /** Persist a successful network `response` (data present, no exception) and tag
@@ -211,8 +212,8 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
             if !response.hasTransportError then
                 response.data match
                     case Present(data) => store.writeOperation(request.operation, data)
-                    case Absent        => Set.empty[String]
-            else Set.empty[String]
+                    case Absent        => Set.empty[CacheKey]
+            else Set.empty[CacheKey]
         response.copy(cacheInfo = Present(CacheInfo.network(changed)))
     end writeBack
 
@@ -224,7 +225,7 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
     private def cacheHit[D](
         request: ApolloRequest[D],
         data: D,
-        dependentKeys: Set[String],
+        dependentKeys: Set[CacheKey],
         generation: Long
     ): ApolloResponse[D] =
         CacheResponses.hit(request, data, dependentKeys, generation)

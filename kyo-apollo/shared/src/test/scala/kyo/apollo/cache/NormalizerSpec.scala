@@ -5,6 +5,7 @@ import kyo.Chunk
 import kyo.Present
 import kyo.Schema
 import kyo.apollo.api.*
+import kyo.apollo.cache.TestKeys.*
 import kyo.apollo.cache.normalized.api.*
 import kyo.apollo.cache.normalized.internal.Normalizer
 import kyo.apollo.json.Json
@@ -55,15 +56,15 @@ class NormalizerSpec extends kyo.test.Test[Any]:
       * the Normalizer stamps onto the root (so type-scoped field policies can be
       * resolved for root fields at merge time).
       */
-    private def rootFields(fields: (String, RecordValue)*): Map[String, RecordValue] =
-        Map("__typename" -> RecordValue.Scalar(jstr("Query"))) ++ fields
+    private def rootFields(fields: (FieldKey, RecordValue)*): Map[FieldKey, RecordValue] =
+        Map(FieldKey.Typename -> RecordValue.Scalar(jstr("Query"))) ++ fields
 
     private def normalize(
         selections: Chunk[CompiledSelection],
         data: Map[String, Json],
         variables: Map[String, Json] = Map.empty,
         generator: CacheKeyGenerator = CacheKeyGenerator.default
-    ): Map[String, Record] =
+    ): Map[CacheKey, Record] =
         Normalizer.normalize(TestQuery(selections), data, variables, generator)
 
     "Normalizer" - {
@@ -75,10 +76,10 @@ class NormalizerSpec extends kyo.test.Test[Any]:
                 selections = Chunk(leaf("hello")),
                 data = Map("hello" -> jstr("world"))
             )
-            assert(records.keySet == Set("QUERY_ROOT"))
+            assert(records.keySet == Set(CacheKey.QueryRoot))
             assert(
-                records("QUERY_ROOT").fields ==
-                    rootFields("hello" -> RecordValue.Scalar(jstr("world")))
+                records(CacheKey.QueryRoot).fields ==
+                    rootFields(fk("hello") -> RecordValue.Scalar(jstr("world")))
             )
         }
 
@@ -87,7 +88,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
                 selections = Chunk(leaf("hello")),
                 data = Map("hello" -> Json.JNull)
             )
-            assert(records("QUERY_ROOT").fields == rootFields("hello" -> RecordValue.Null))
+            assert(records(CacheKey.QueryRoot).fields == rootFields(fk("hello") -> RecordValue.Null))
         }
 
         "a scalar list stays inline as a list of scalars" in {
@@ -96,9 +97,9 @@ class NormalizerSpec extends kyo.test.Test[Any]:
                 data = Map("tags" -> Json.JArr(Chunk(jstr("a"), jstr("b"))))
             )
             assert(
-                records("QUERY_ROOT").fields ==
+                records(CacheKey.QueryRoot).fields ==
                     rootFields(
-                        "tags" -> RecordValue.RList(
+                        fk("tags") -> RecordValue.RList(
                             Chunk(RecordValue.Scalar(jstr("a")), RecordValue.Scalar(jstr("b")))
                         )
                     )
@@ -118,19 +119,19 @@ class NormalizerSpec extends kyo.test.Test[Any]:
             )
             val records = normalize(selections, data)
 
-            assert(records.keySet == Set("QUERY_ROOT", "Book:42"))
+            assert(records.keySet == Set(CacheKey.QueryRoot, CacheKey("Book", "42")))
             // Parent holds only a reference to the child.
             assert(
-                records("QUERY_ROOT").fields ==
-                    rootFields("book" -> RecordValue.Reference(CacheReference("Book:42")))
+                records(CacheKey.QueryRoot).fields ==
+                    rootFields(fk("book") -> RecordValue.Reference(CacheReference(CacheKey("Book", "42"))))
             )
             // Child record holds the object's own scalar fields.
             assert(
-                records("Book:42").fields ==
+                records(CacheKey("Book", "42")).fields ==
                     Map(
-                        "__typename" -> RecordValue.Scalar(jstr("Book")),
-                        "id"         -> RecordValue.Scalar(jstr("42")),
-                        "title"      -> RecordValue.Scalar(jstr("Dune"))
+                        fk("__typename") -> RecordValue.Scalar(jstr("Book")),
+                        fk("id")         -> RecordValue.Scalar(jstr("42")),
+                        fk("title")      -> RecordValue.Scalar(jstr("Dune"))
                     )
             )
         }
@@ -140,18 +141,18 @@ class NormalizerSpec extends kyo.test.Test[Any]:
             val data       = Map("stats" -> Json.JObj(Map("views" -> jnum(10))))
             val records    = normalize(selections, data)
 
-            assert(records.keySet == Set("QUERY_ROOT", "QUERY_ROOT.stats"))
+            assert(records.keySet == Set(CacheKey.QueryRoot, pathKey("QUERY_ROOT", "stats")))
             assert(
-                records("QUERY_ROOT").fields ==
-                    rootFields("stats" -> RecordValue.Reference(CacheReference("QUERY_ROOT.stats")))
+                records(CacheKey.QueryRoot).fields ==
+                    rootFields(fk("stats") -> RecordValue.Reference(CacheReference(pathKey("QUERY_ROOT", "stats"))))
             )
             // The static-typename stamp is stored even on a path-keyed record, so the
             // read side's implicit `__typename` selection is satisfied.
             assert(
-                records("QUERY_ROOT.stats").fields ==
+                records(pathKey("QUERY_ROOT", "stats")).fields ==
                     Map(
-                        "views"      -> RecordValue.Scalar(jnum(10)),
-                        "__typename" -> RecordValue.Scalar(jstr("Stats"))
+                        fk("views")      -> RecordValue.Scalar(jnum(10)),
+                        fk("__typename") -> RecordValue.Scalar(jstr("Stats"))
                     )
             )
         }
@@ -177,20 +178,20 @@ class NormalizerSpec extends kyo.test.Test[Any]:
             // key countries by `code`
             val records = normalize(selections, data, generator = IdCacheKeyGenerator(List("code")))
 
-            assert(records.keySet == Set("QUERY_ROOT", "Country:DE", "Country:FR"))
+            assert(records.keySet == Set(CacheKey.QueryRoot, CacheKey("Country", "DE"), CacheKey("Country", "FR")))
             assert(
-                records("QUERY_ROOT").fields ==
+                records(CacheKey.QueryRoot).fields ==
                     rootFields(
-                        "countries" -> RecordValue.RList(
+                        fk("countries") -> RecordValue.RList(
                             Chunk(
-                                RecordValue.Reference(CacheReference("Country:DE")),
-                                RecordValue.Reference(CacheReference("Country:FR"))
+                                RecordValue.Reference(CacheReference(CacheKey("Country", "DE"))),
+                                RecordValue.Reference(CacheReference(CacheKey("Country", "FR")))
                             )
                         )
                     )
             )
-            assert(records("Country:DE").get("name") == Present(RecordValue.Scalar(jstr("Germany"))))
-            assert(records("Country:FR").get("name") == Present(RecordValue.Scalar(jstr("France"))))
+            assert(records(CacheKey("Country", "DE")).get(fk("name")) == Present(RecordValue.Scalar(jstr("Germany"))))
+            assert(records(CacheKey("Country", "FR")).get(fk("name")) == Present(RecordValue.Scalar(jstr("France"))))
         }
 
         "an id-less list of objects keys each element by its indexed path" in {
@@ -203,9 +204,13 @@ class NormalizerSpec extends kyo.test.Test[Any]:
                     )
                 )
             )
-            assert(records.keySet == Set("QUERY_ROOT", "QUERY_ROOT.items.0", "QUERY_ROOT.items.1"))
-            assert(records("QUERY_ROOT.items.0").get("label") == Present(RecordValue.Scalar(jstr("x"))))
-            assert(records("QUERY_ROOT.items.1").get("label") == Present(RecordValue.Scalar(jstr("y"))))
+            assert(records.keySet == Set(
+                CacheKey.QueryRoot,
+                pathKey("QUERY_ROOT", "items", "0"),
+                pathKey("QUERY_ROOT", "items", "1")
+            ))
+            assert(records(pathKey("QUERY_ROOT", "items", "0")).get(fk("label")) == Present(RecordValue.Scalar(jstr("x"))))
+            assert(records(pathKey("QUERY_ROOT", "items", "1")).get(fk("label")) == Present(RecordValue.Scalar(jstr("y"))))
         }
 
         // --- Where an id-less object's path is rooted -----------------------------
@@ -227,8 +232,11 @@ class NormalizerSpec extends kyo.test.Test[Any]:
                     ))
                 )
             )
-            assert(records.keySet == Set("QUERY_ROOT", "Album:1", "Album:1.cover"))
-            assert(records("Album:1").get("cover") == Present(RecordValue.Reference(CacheReference("Album:1.cover"))))
+            assert(records.keySet == Set(CacheKey.QueryRoot, CacheKey("Album", "1"), pathKey("Album:1", "cover")))
+            assert(records(CacheKey(
+                "Album",
+                "1"
+            )).get(fk("cover")) == Present(RecordValue.Reference(CacheReference(pathKey("Album:1", "cover")))))
         }
 
         "an id-less list under an identified parent indexes below the parent's key" in {
@@ -246,7 +254,12 @@ class NormalizerSpec extends kyo.test.Test[Any]:
                     ))
                 )
             )
-            assert(records.keySet == Set("QUERY_ROOT", "Album:1", "Album:1.images.0", "Album:1.images.1"))
+            assert(records.keySet == Set(
+                CacheKey.QueryRoot,
+                CacheKey("Album", "1"),
+                pathKey("Album:1", "images", "0"),
+                pathKey("Album:1", "images", "1")
+            ))
         }
 
         "a path-keyed object's own children keep their flat path key" in {
@@ -261,7 +274,11 @@ class NormalizerSpec extends kyo.test.Test[Any]:
                     "stats" -> Json.JObj(Map("breakdown" -> Json.JObj(Map("views" -> jnum(3)))))
                 )
             )
-            assert(records.keySet == Set("QUERY_ROOT", "QUERY_ROOT.stats", "QUERY_ROOT.stats.breakdown"))
+            assert(records.keySet == Set(
+                CacheKey.QueryRoot,
+                pathKey("QUERY_ROOT", "stats"),
+                pathKey("QUERY_ROOT", "stats", "breakdown")
+            ))
         }
 
         // --- Deduplication / merge within one response ----------------------------
@@ -282,18 +299,18 @@ class NormalizerSpec extends kyo.test.Test[Any]:
             )
             val records = normalize(selections, data)
 
-            assert(records.keySet == Set("QUERY_ROOT", "Book:1"))
+            assert(records.keySet == Set(CacheKey.QueryRoot, CacheKey("Book", "1")))
             // Merged record carries fields from both occurrences.
             assert(
-                records("Book:1").fields ==
+                records(CacheKey("Book", "1")).fields ==
                     Map(
-                        "__typename" -> RecordValue.Scalar(jstr("Book")),
-                        "id"         -> RecordValue.Scalar(jstr("1")),
-                        "title"      -> RecordValue.Scalar(jstr("A")),
-                        "author"     -> RecordValue.Scalar(jstr("B"))
+                        fk("__typename") -> RecordValue.Scalar(jstr("Book")),
+                        fk("id")         -> RecordValue.Scalar(jstr("1")),
+                        fk("title")      -> RecordValue.Scalar(jstr("A")),
+                        fk("author")     -> RecordValue.Scalar(jstr("B"))
                     )
             )
-            assert(records("QUERY_ROOT").fields.keySet == Set("__typename", "primary", "secondary"))
+            assert(records(CacheKey.QueryRoot).fields.keySet == Set("__typename", "primary", "secondary"))
         }
 
         // --- Argument-aware field keys --------------------------------------------
@@ -320,10 +337,10 @@ class NormalizerSpec extends kyo.test.Test[Any]:
             val records = normalize(selections, data)
 
             assert(
-                records("QUERY_ROOT").fields.keySet ==
+                records(CacheKey.QueryRoot).fields.keySet ==
                     Set("__typename", "user({\"id\":1})", "user({\"id\":2})")
             )
-            assert(records.keySet == Set("QUERY_ROOT", "User:1", "User:2"))
+            assert(records.keySet == Set(CacheKey.QueryRoot, CacheKey("User", "1"), CacheKey("User", "2")))
         }
 
         // --- __typename handling --------------------------------------------------
@@ -339,8 +356,8 @@ class NormalizerSpec extends kyo.test.Test[Any]:
             val records = normalize(selections, data)
 
             // The implicit __typename let the id key be computed, and it is stored.
-            assert(records.keySet == Set("QUERY_ROOT", "Book:7"))
-            assert(records("Book:7").get("__typename") == Present(RecordValue.Scalar(jstr("Book"))))
+            assert(records.keySet == Set(CacheKey.QueryRoot, CacheKey("Book", "7")))
+            assert(records(CacheKey("Book", "7")).get(fk("__typename")) == Present(RecordValue.Scalar(jstr("Book"))))
         }
 
         "without __typename in the response the static field type still keys the entity" in {
@@ -351,8 +368,8 @@ class NormalizerSpec extends kyo.test.Test[Any]:
             val selections = Chunk(obj("book", "Book", Chunk(leaf("id"), leaf("title"))))
             val data       = Map("book" -> Json.JObj(Map("id" -> jstr("7"), "title" -> jstr("T"))))
             val records    = normalize(selections, data)
-            assert(records.keySet == Set("QUERY_ROOT", "Book:7"))
-            assert(records("Book:7").get("__typename") == Present(RecordValue.Scalar(jstr("Book"))))
+            assert(records.keySet == Set(CacheKey.QueryRoot, CacheKey("Book", "7")))
+            assert(records(CacheKey("Book", "7")).get(fk("__typename")) == Present(RecordValue.Scalar(jstr("Book"))))
         }
 
         // --- Inline fragments -----------------------------------------------------
@@ -372,7 +389,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
                 )
             )
             val records = normalize(selections, data)
-            assert(records("Book:9").get("title") == Present(RecordValue.Scalar(jstr("Frag"))))
+            assert(records(CacheKey("Book", "9")).get(fk("title")) == Present(RecordValue.Scalar(jstr("Frag"))))
         }
 
         "a non-matching inline fragment contributes no fields" in {
@@ -390,7 +407,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
                 )
             )
             val records = normalize(selections, data)
-            assert(records("Book:9").fieldKeys == Set("__typename", "id"))
+            assert(records(CacheKey("Book", "9")).fieldKeys == Set("__typename", "id"))
         }
 
         // --- Absent fields --------------------------------------------------------
@@ -398,7 +415,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
         "a selected field missing from the response is simply not stored" in {
             val selections = Chunk(leaf("present"), leaf("absent"))
             val records    = normalize(selections, Map("present" -> jstr("here")))
-            assert(records("QUERY_ROOT").fieldKeys == Set("__typename", "present"))
+            assert(records(CacheKey.QueryRoot).fieldKeys == Set("__typename", "present"))
         }
     }
 end NormalizerSpec

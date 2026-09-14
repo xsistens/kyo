@@ -45,9 +45,9 @@ import scala.collection.immutable.VectorMap
   *                         to the identity policy
   */
 final class CacheBatchReader(
-    loadRecord: String => Maybe[Record],
+    loadRecord: CacheKey => Maybe[Record],
     variables: Map[String, Json],
-    rootKey: String,
+    rootKey: CacheKey,
     cacheKeyResolver: CacheKeyResolver = CacheKeyResolver.default,
     fieldPolicies: FieldPolicies = FieldPolicies.empty
 )(using Frame):
@@ -58,30 +58,37 @@ final class CacheBatchReader(
       * to decide whether to re-emit. Populated as a side effect of [[resolve]];
       * read via [[dependentKeys]] after [[toData]] completes.
       */
-    private val visitedKeys = scala.collection.mutable.LinkedHashSet.empty[String]
+    private val visitedKeys = scala.collection.mutable.LinkedHashSet.empty[CacheKey]
 
     /** The set of record keys this reader touched, in first-visit order. Meaningful
       * only after a successful [[toData]] (a miss aborts before the graph is fully
       * walked).
       */
-    def dependentKeys: Set[String] = visitedKeys.toSet
+    def dependentKeys: Set[CacheKey] = visitedKeys.toSet
 
     /** Resolve `key` to its stored [[Record]], recording the key as a dependency on
       * a hit. A miss records nothing — the read is about to abort with a
       * [[CacheMissException]], so there is no successful graph to depend on.
       */
-    private def resolve(key: String): Maybe[Record] =
+    private def resolve(key: CacheKey): Maybe[Record] =
         val record = loadRecord(key)
         if record.isDefined then visitedKeys += key
         record
     end resolve
+
+    /** The miss for record `key`, or for its field `field`. The exception carries
+      * the key's rendered form (the exception model is key-type agnostic), lowered
+      * here once for every miss this reader raises.
+      */
+    private def miss(key: CacheKey, field: Maybe[String] = Absent): CacheMissException =
+        field.fold(CacheMissException(key.render))(CacheMissException(key.render, _))
 
     /** Assemble the response `data` object for `rootField`, resolving references
       * from the store. Throws [[CacheMissException]] if any required record or
       * field is missing.
       */
     def toData(rootField: CompiledField): Json.JObj =
-        val root = resolve(rootKey).getOrElse(throw CacheMissException(rootKey))
+        val root = resolve(rootKey).getOrElse(throw miss(rootKey))
         readObject(root, rootField.selections, rootField.fieldType.leafType.name)
 
     /** Read one object `record` under `selections` into a [[Json.JObj]]. The
@@ -111,7 +118,7 @@ final class CacheBatchReader(
         redirect(parentType, field) match
             case Present(targetKey) =>
                 val target = resolve(targetKey)
-                    .getOrElse(throw CacheMissException(targetKey, field.responseName))
+                    .getOrElse(throw miss(targetKey, Present(field.responseName)))
                 readObject(target, field.selections, field.fieldType.leafType.name)
             case Absent =>
                 val fieldKey = fieldPolicies.fieldKey(parentType, field, variables)
@@ -121,7 +128,7 @@ final class CacheBatchReader(
                     // JNull so the client node's decode produces its default (None / empty
                     // list / default object), rather than aborting the whole read.
                     case Absent if field.client => Json.JNull
-                    case Absent                 => throw CacheMissException(record.key, fieldKey)
+                    case Absent                 => throw miss(record.key, Present(fieldKey.render))
                 end match
 
     /** The redirect target for a composite `field`, if a policy supplies one.
@@ -129,13 +136,12 @@ final class CacheBatchReader(
       * [[CacheKeyResolver]]. Scalar (leaf) fields are never redirected — a redirect
       * names another record to read a sub-selection from.
       */
-    private def redirect(parentType: String, field: CompiledField): Maybe[String] =
+    private def redirect(parentType: String, field: CompiledField): Maybe[CacheKey] =
         if field.selections.isEmpty then Absent
         else
             fieldPolicies
                 .readRedirect(parentType, field, variables)
                 .orElse(cacheKeyResolver.cacheKeyForField(field, variables))
-                .map(_.key)
 
     /** Turn a stored [[RecordValue]] back into JSON: scalars/null pass through,
       * lists recurse element-wise, and a reference loads and reads its target
@@ -147,12 +153,12 @@ final class CacheBatchReader(
         case RecordValue.RList(items) => Json.JArr(items.map(readValue(_, field)))
         case RecordValue.Reference(ref) =>
             val child = resolve(ref.key)
-                .getOrElse(throw CacheMissException(ref.key, field.responseName))
+                .getOrElse(throw miss(ref.key, Present(field.responseName)))
             readObject(child, field.selections, field.fieldType.leafType.name)
 
     /** An object's stored `__typename`, when present as a string scalar. */
     private def recordTypename(record: Record): Maybe[String] =
-        record.get("__typename").collect { case RecordValue.Scalar(Json.JStr(t)) => t }
+        record.get(FieldKey.Typename).collect { case RecordValue.Scalar(Json.JStr(t)) => t }
 end CacheBatchReader
 
 object CacheBatchReader:
@@ -174,7 +180,7 @@ object CacheBatchReader:
       */
     def read[D](
         operation: Operation[D],
-        loadRecord: String => Maybe[Record],
+        loadRecord: CacheKey => Maybe[Record],
         variables: Map[String, Json] = Map.empty,
         cacheKeyResolver: CacheKeyResolver = CacheKeyResolver.default,
         fieldPolicies: FieldPolicies = FieldPolicies.empty
@@ -193,12 +199,12 @@ object CacheBatchReader:
       */
     def readWithDependentKeys[D](
         operation: Operation[D],
-        loadRecord: String => Maybe[Record],
+        loadRecord: CacheKey => Maybe[Record],
         variables: Map[String, Json] = Map.empty,
         cacheKeyResolver: CacheKeyResolver = CacheKeyResolver.default,
         fieldPolicies: FieldPolicies = FieldPolicies.empty
-    )(using Frame): (D, Set[String]) =
-        val rootKey = CacheKey.rootKey(operation).key
+    )(using Frame): (D, Set[CacheKey]) =
+        val rootKey = CacheKey.rootKey(operation)
         val reader =
             new CacheBatchReader(loadRecord, variables, rootKey, cacheKeyResolver, fieldPolicies)
         val data = reader.toData(operation.rootField)

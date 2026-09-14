@@ -4,6 +4,7 @@ import kyo.Absent
 import kyo.Chunk
 import kyo.Present
 import kyo.apollo.api.*
+import kyo.apollo.cache.TestKeys.*
 import kyo.apollo.cache.normalized.api.*
 import kyo.apollo.json.Json
 
@@ -44,7 +45,7 @@ class CacheKeyGenerationSpec extends kyo.test.Test[Any]:
 
         "numeric ids render without a trailing .0" in {
             val obj = Map("__typename" -> Json.JStr("Book"), "id" -> Json.JNum(42))
-            assert(gen.cacheKeyForObject(obj, ctx()) == Present(CacheKey("Book:42")))
+            assert(gen.cacheKeyForObject(obj, ctx()) == Present(CacheKey("Book", "42")))
         }
 
         "falls back to _id when id is absent" in {
@@ -73,7 +74,7 @@ class CacheKeyGenerationSpec extends kyo.test.Test[Any]:
             val obj = Map("__typename" -> Json.JStr("Stats"), "views" -> Json.JNum(10))
             assert(
                 gen.cacheKeyForObject(obj, ctx(path = List("QUERY_ROOT", "stats"))) ==
-                    Present(CacheKey("QUERY_ROOT.stats"))
+                    Present(pathKey("QUERY_ROOT", "stats"))
             )
         }
 
@@ -81,7 +82,7 @@ class CacheKeyGenerationSpec extends kyo.test.Test[Any]:
             val obj = Map("id" -> Json.JStr("42"))
             assert(
                 gen.cacheKeyForObject(obj, ctx(path = List("QUERY_ROOT", "book"))) ==
-                    Present(CacheKey("QUERY_ROOT.book"))
+                    Present(pathKey("QUERY_ROOT", "book"))
             )
         }
 
@@ -100,7 +101,7 @@ class CacheKeyGenerationSpec extends kyo.test.Test[Any]:
         "fromPath joins rooted path segments with dots" in {
             assert(
                 CacheKey.fromPath(List("QUERY_ROOT", "countries", "0")) ==
-                    CacheKey("QUERY_ROOT.countries.0")
+                    pathKey("QUERY_ROOT", "countries", "0")
             )
         }
 
