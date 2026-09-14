@@ -1,6 +1,5 @@
 package kyo.apollo.testing
 
-import java.util.concurrent.atomic.AtomicReference
 import kyo.*
 import kyo.apollo.exception.ApolloException
 import kyo.apollo.exception.ApolloWebSocketClosedException
@@ -34,20 +33,26 @@ final class MockWebSocketServer(
     /** The single scripted connection this server hands back on every `open`. */
     val connection: FakeWebSocketConnection = new FakeWebSocketConnection
 
-    private val opensRef = new AtomicReference[Vector[(String, Option[String])]](Vector.empty)
+    private val opensRef =
+        AtomicRef.Unsafe.init(Chunk.empty[(String, Option[String])])(using AllowUnsafe.embrace.danger).safe
 
     /** Each `open` call's `(url, protocol)`, in order. */
-    def opens: List[(String, Option[String])] = opensRef.get().toList
+    def opens: List[(String, Option[String])] = opensRef.unsafe.get()(using AllowUnsafe.embrace.danger).toList
 
     def open(url: String, protocol: Option[String])(using
         Frame
     ): WebSocketConnection < (Async & Scope & Abort[ApolloException]) =
-        Sync.defer { discard(opensRef.updateAndGet(_ :+ (url, protocol))); connection }
+        opensRef.getAndUpdate(_.append((url, protocol))).andThen(connection)
 
     /** The client → server frames the transport has sent, oldest first (handshake
       * `connection_init`, per-subscription `subscribe`/`start`, `complete`/`stop`).
       */
     def sent: List[String] = connection.sent
+
+    /** Wait for the next client → server frame that satisfies `p` (skipping the
+      * others) — the barrier a test waits on before scripting the server's reply.
+      */
+    def awaitSent(p: String => Boolean)(using Frame): String < Async = connection.awaitSent(p)
 
     /** Push a raw server frame to the transport (buffered until its sink attaches). */
     def push(frame: String): Unit = connection.server(frame)
@@ -140,24 +145,33 @@ end WsFrames
   * Promoted from `core`'s `FakeWebSocket.scala` (native-kyo seam).
   */
 final class FakeWebSocketConnection extends WebSocketConnection:
-    private given AllowUnsafe = AllowUnsafe.embrace.danger
-    private given Frame       = Frame.internal
+    private given Frame = Frame.internal
+    private val unsafe  = AllowUnsafe.embrace.danger
 
-    private val sentRef                                      = new AtomicReference[Vector[String]](Vector.empty)
-    @volatile private var closedState: Option[(Int, String)] = None
-    private val incomingCh: Channel[Maybe[String]] =
-        Sync.Unsafe.evalOrThrow(Channel.initUnscoped[Maybe[String]](Int.MaxValue))
-    private val donePromise: Fiber.Promise[Unit, Abort[ApolloWebSocketClosedException]] =
-        Sync.Unsafe.evalOrThrow(Fiber.Promise.init[Unit, Abort[ApolloWebSocketClosedException]])
+    private val sentRef     = AtomicRef.Unsafe.init(Chunk.empty[String])(using unsafe).safe
+    private val sentCh      = Channel.Unsafe.init[String](Int.MaxValue)(using summon[Frame], unsafe).safe
+    private val closedRef   = AtomicRef.Unsafe.init(Maybe.empty[(Int, String)])(using unsafe).safe
+    private val incomingCh  = Channel.Unsafe.init[Maybe[String]](Int.MaxValue)(using summon[Frame], unsafe).safe
+    private val donePromise = Fiber.Promise.Unsafe.init[Unit, Abort[ApolloWebSocketClosedException]]()(using unsafe).safe
 
     /** Every frame the transport has sent, in order. */
-    def sent: List[String] = sentRef.get().toList
+    def sent: List[String] = sentRef.unsafe.get()(using unsafe).toList
+
+    /** The next frame the transport sends, in send order (each frame is handed out
+      * once) — a barrier a test waits on instead of a pause.
+      */
+    def nextSent(using Frame): String < Async =
+        Abort.run[Closed](sentCh.take).map(_.getOrThrow)
+
+    /** Skip sent frames until one satisfies `p`, and return it. */
+    def awaitSent(p: String => Boolean)(using Frame): String < Async =
+        Loop.foreach(nextSent.map(frame => if p(frame) then Loop.done(frame) else Loop.continue))
 
     /** The `(code, reason)` the transport closed with, if it has. */
-    def closedWith: Option[(Int, String)] = closedState
+    def closedWith: Option[(Int, String)] = closedRef.unsafe.get()(using unsafe).toOption
 
     def send(text: String)(using Frame): Unit < Async =
-        Sync.defer(discard(sentRef.updateAndGet(_ :+ text)))
+        sentRef.getAndUpdate(_.append(text)).andThen(Abort.run[Closed](sentCh.offer(text)).unit)
 
     def incoming(using Frame): Stream[String, Async] = WebSocketConnection.untilEnd(incomingCh)
 
@@ -167,42 +181,35 @@ final class FakeWebSocketConnection extends WebSocketConnection:
         code: Int = WebSocketConnection.NormalClosure,
         reason: String = ""
     )(using Frame): Unit < Async =
-        Sync.defer {
-            given AllowUnsafe = AllowUnsafe.embrace.danger
-            if closedState.isEmpty then
-                closedState = Some((code, reason))
-                if code == WebSocketConnection.NormalClosure then discard(donePromise.unsafe.completeUnitDiscard())
-                else
-                    discard(donePromise.unsafe.completeDiscard(
-                        Result.fail(ApolloWebSocketClosedException(code, Option(reason).filter(_.nonEmpty)))
-                    ))
-                end if
-                discard(incomingCh.unsafe.offer(Absent))
-            end if
+        closedRef.compareAndSet(Absent, Present((code, reason))).map { first =>
+            if !first then Kyo.unit
+            else
+                val settle =
+                    if code == WebSocketConnection.NormalClosure then donePromise.completeUnitDiscard
+                    else donePromise.completeDiscard(Result.fail(closedException(code, reason)))
+                settle.andThen(Abort.run[Closed](incomingCh.offer(Absent)).unit)
         }
 
     /** Push a server frame to the incoming stream (buffered until it drains). */
     def server(text: String): Unit =
-        given AllowUnsafe = AllowUnsafe.embrace.danger
-        discard(incomingCh.unsafe.offer(Present(text)))
+        discard(incomingCh.unsafe.offer(Present(text))(using unsafe, summon[Frame]))
 
     /** Simulate the server closing cleanly (a `1000` close frame): the liveness
       * signal succeeds and the incoming stream ends after the frames already pushed.
       */
     def serverClose(): Unit =
-        given AllowUnsafe = AllowUnsafe.embrace.danger
-        discard(donePromise.unsafe.completeUnitDiscard())
-        discard(incomingCh.unsafe.offer(Absent))
+        discard(donePromise.unsafe.complete(Result.succeed(()))(using unsafe))
+        discard(incomingCh.unsafe.offer(Absent)(using unsafe, summon[Frame]))
     end serverClose
 
     /** Simulate an abnormal server-side drop (aborts the liveness signal). */
     def drop(code: Int, reason: String): Unit =
-        given AllowUnsafe = AllowUnsafe.embrace.danger
-        discard(donePromise.unsafe.completeDiscard(
-            Result.fail(ApolloWebSocketClosedException(code, Option(reason).filter(_.nonEmpty)))
-        ))
-        discard(incomingCh.unsafe.offer(Absent))
+        discard(donePromise.unsafe.complete(Result.fail(closedException(code, reason)))(using unsafe))
+        discard(incomingCh.unsafe.offer(Absent)(using unsafe, summon[Frame]))
     end drop
+
+    private def closedException(code: Int, reason: String): ApolloWebSocketClosedException =
+        ApolloWebSocketClosedException(code, Option(reason).filter(_.nonEmpty))
 end FakeWebSocketConnection
 
 /** An engine that always hands back `conn`, recording each open's url/protocol.
@@ -210,29 +217,41 @@ end FakeWebSocketConnection
   * [[MockWebSocketServer]] for specs that want the raw connection.
   */
 final class FakeWebSocketEngine(conn: FakeWebSocketConnection) extends WebSocketEngine:
-    private val opensRef                      = new AtomicReference[Vector[(String, Option[String])]](Vector.empty)
-    def opens: List[(String, Option[String])] = opensRef.get().toList
+    private val opensRef =
+        AtomicRef.Unsafe.init(Chunk.empty[(String, Option[String])])(using AllowUnsafe.embrace.danger).safe
+
+    def opens: List[(String, Option[String])] = opensRef.unsafe.get()(using AllowUnsafe.embrace.danger).toList
+
     def open(url: String, protocol: Option[String])(using
         Frame
     ): WebSocketConnection < (Async & Scope & Abort[ApolloException]) =
-        Sync.defer { discard(opensRef.updateAndGet(_ :+ (url, protocol))); conn }
+        opensRef.getAndUpdate(_.append((url, protocol))).andThen(conn)
 end FakeWebSocketEngine
 
 /** An engine that hands back a **fresh** [[FakeWebSocketConnection]] per open, in
   * order, so a reconnect gets a brand-new socket instead of the already-
   * terminated first one. Every opened connection is retained in [[conns]] so a
-  * test can drive whichever socket generation it is interested in. Promoted from
-  * `core`'s `FakeWebSocket.scala`.
+  * test can drive whichever socket generation it is interested in, and handed out
+  * once through [[nextConnection]]. Promoted from `core`'s `FakeWebSocket.scala`.
   */
 final class FreshWebSocketEngine extends WebSocketEngine:
-    private val connsRef                       = new AtomicReference[Vector[FakeWebSocketConnection]](Vector.empty)
-    def conns: Vector[FakeWebSocketConnection] = connsRef.get()
+    private given Frame = Frame.internal
+    private val unsafe  = AllowUnsafe.embrace.danger
+
+    private val connsRef = AtomicRef.Unsafe.init(Chunk.empty[FakeWebSocketConnection])(using unsafe).safe
+    private val openedCh = Channel.Unsafe.init[FakeWebSocketConnection](Int.MaxValue)(using summon[Frame], unsafe).safe
+
+    /** Every connection opened so far, in order. */
+    def conns: Vector[FakeWebSocketConnection] = connsRef.unsafe.get()(using unsafe).toVector
+
+    /** The next connection the transport opens (each connection is handed out once). */
+    def nextConnection(using Frame): FakeWebSocketConnection < Async =
+        Abort.run[Closed](openedCh.take).map(_.getOrThrow)
+
     def open(url: String, protocol: Option[String])(using
         Frame
     ): WebSocketConnection < (Async & Scope & Abort[ApolloException]) =
-        Sync.defer {
-            val c = new FakeWebSocketConnection
-            discard(connsRef.updateAndGet(_ :+ c))
-            c
+        Sync.defer(new FakeWebSocketConnection).map { c =>
+            connsRef.getAndUpdate(_.append(c)).andThen(Abort.run[Closed](openedCh.offer(c))).andThen(c)
         }
 end FreshWebSocketEngine
