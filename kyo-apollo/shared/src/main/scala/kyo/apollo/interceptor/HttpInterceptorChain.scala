@@ -1,6 +1,7 @@
 package kyo.apollo.interceptor
 
 import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.network.http.HttpEngine
 import kyo.apollo.network.http.HttpRequest
 import kyo.apollo.network.http.HttpResponse
@@ -13,9 +14,9 @@ import kyo.apollo.network.http.HttpResponse
 trait HttpInterceptorChain:
 
     /** Continue processing `request` at the next link, completing with its
-      * [[HttpResponse]].
+      * [[HttpResponse]] or aborting with the engine's [[HttpEngineFailure]].
       */
-    def proceed(request: HttpRequest)(using Frame): HttpResponse < Async
+    def proceed(request: HttpRequest)(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure])
 end HttpInterceptorChain
 
 /** The default [[HttpInterceptorChain]]: an immutable cursor over an ordered
@@ -37,7 +38,7 @@ final class DefaultHttpInterceptorChain(
     engine: HttpEngine
 ) extends HttpInterceptorChain:
 
-    def proceed(request: HttpRequest)(using Frame): HttpResponse < Async =
+    def proceed(request: HttpRequest)(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) =
         if index < interceptors.length then
             interceptors(index).intercept(
                 request,
@@ -63,6 +64,6 @@ object HttpInterceptorChain:
         else
             val chain = Chunk.from(interceptors)
             new HttpEngine:
-                def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
+                def execute(request: HttpRequest)(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) =
                     DefaultHttpInterceptorChain(chain, 0, engine).proceed(request)
 end HttpInterceptorChain

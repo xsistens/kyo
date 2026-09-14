@@ -1,12 +1,13 @@
 package kyo.apollo.network.http
 
 import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.apollo.exception.HttpEngineFailure
 
 /** The seam between [[HttpNetworkTransport]] and the actual wire.
   *
   * The transport owns GraphQL concerns (composing the request, decoding the
   * envelope, mapping failures to `ApolloResponse.error`); an `HttpEngine`
-  * owns only the raw round-trip `HttpRequest => HttpResponse < Async`. Splitting
+  * owns only the raw round-trip `HttpRequest => HttpResponse`. Splitting
   * it out lets [[FetchHttpEngine]] hit the network in production while unit
   * tests inject a deterministic fake with no server.
   *
@@ -18,20 +19,24 @@ import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
   */
 trait HttpEngine:
 
-    /** Send `request` and complete with the raw [[HttpResponse]]. The effect fails
-      * (on the async Throwable channel) only when no response was received
-      * (connection error); a non-2xx status still completes successfully — status
-      * interpretation is the transport's job, not the engine's.
+    /** Send `request` and complete with the raw [[HttpResponse]]. The effect aborts
+      * with an [[HttpEngineFailure]] only when no response was received (the
+      * connection failed, the request could not be sent); a non-2xx status still
+      * completes successfully — status interpretation is the transport's job, not
+      * the engine's. Anything else an engine raises is a defect and stays a panic.
       */
-    def execute(request: HttpRequest)(using Frame): HttpResponse < Async
+    def execute(request: HttpRequest)(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure])
 
     /** Send `request` and complete with a possibly-streamed [[HttpStreamResponse]] —
-      * the incremental-delivery (`@defer`) round-trip. The default buffers via
-      * [[execute]] (so every non-streaming engine keeps working unchanged); only
-      * [[FetchHttpEngine]] overrides it to read a `multipart/mixed` body as a live
-      * chunk stream.
+      * the incremental-delivery (`@defer`) round-trip, with the same failure row as
+      * [[execute]]; a body that drops mid-stream aborts the chunk stream with it. The
+      * default buffers via [[execute]] (so every non-streaming engine keeps working
+      * unchanged); the production engines override it to read a `multipart/mixed`
+      * body as a live chunk stream.
       */
-    def executeStreaming(request: HttpRequest)(using Frame): HttpStreamResponse < (Async & Scope) =
+    def executeStreaming(request: HttpRequest)(using
+        Frame
+    ): HttpStreamResponse < (Async & Scope & Abort[HttpEngineFailure]) =
         execute(request).map(r =>
             HttpStreamResponse(r.statusCode, r.headers, HttpStreamBody.Buffered(r.body))
         )

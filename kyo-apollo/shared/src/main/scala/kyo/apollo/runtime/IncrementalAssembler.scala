@@ -23,10 +23,13 @@ import kyo.apollo.network.http.MultipartPart
   */
 object IncrementalAssembler:
 
-    def stream[D](
+    /** Fold `parts` into responses; the part stream's effects (e.g. the engine's
+      * failure row for a body that drops) pass through.
+      */
+    def stream[D, S](
         request: ApolloRequest[D],
-        parts: Stream[MultipartPart, Async & Scope]
-    )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
+        parts: Stream[MultipartPart, S]
+    )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): Stream[ApolloResponse[D], S & Sync] =
         Stream.unwrap {
             Sync.defer {
                 var data: Json                    = Json.JObj(Map.empty)

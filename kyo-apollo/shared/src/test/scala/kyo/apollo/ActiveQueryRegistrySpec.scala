@@ -2,6 +2,7 @@ package kyo.apollo
 
 import kyo.*
 import kyo.apollo.exception.ApolloException
+import kyo.apollo.exception.ApolloExecuteFailure
 
 /** Tests [[ActiveQueryRegistry]]: registration is owned by the enclosing `Scope`
   * (release removes exactly that entry), registration order is the refetch
@@ -9,7 +10,15 @@ import kyo.apollo.exception.ApolloException
   */
 class ActiveQueryRegistrySpec extends kyo.test.Test[Any]:
 
-    private def refetch: Unit < (Async & Abort[ApolloException]) = ()
+    private def refetch: Unit < (Async & Abort[ApolloExecuteFailure]) = ()
+
+    "a refetch's row is the execute failures, not the module-wide ApolloException" in {
+        val blanket: Unit < (Async & Abort[ApolloException]) = ()
+        typeCheck("ActiveQueryRegistry.init.map(_.register(\"a\", refetch))")
+        typeCheckFailure("ActiveQueryRegistry.init.map(_.register(\"a\", blanket))")(
+            "Abort[kyo.apollo.exception.ApolloException]"
+        )
+    }
 
     "two registrations released in either order leave the other intact" in {
         for

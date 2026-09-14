@@ -1,7 +1,7 @@
 package kyo.apollo
 
 import kyo.*
-import kyo.apollo.exception.ApolloException
+import kyo.apollo.exception.ApolloExecuteFailure
 import scala.collection.immutable.VectorMap
 
 /** Per-client registry of the **live queries** (`useQuery` watchers). Populated by
@@ -35,11 +35,12 @@ final class ActiveQueryRegistry private (
 
     /** Register a live query by its operation name plus a NetworkOnly refetch effect
       * (typically `handle.refetch.unit`) for the lifetime of the enclosing `Scope`.
-      * The `Scope`'s teardown removes exactly this entry.
+      * The `Scope`'s teardown removes exactly this entry. A refetch executes the
+      * query, so its row is the execute failures.
       */
     def register(
         operationName: String,
-        refetch: Unit < (Async & Abort[ApolloException])
+        refetch: Unit < (Async & Abort[ApolloExecuteFailure])
     )(using Frame): Unit < (Sync & Scope) =
         Scope.acquireRelease(
             seq.incrementAndGet.map { id =>
@@ -61,7 +62,7 @@ final class ActiveQueryRegistry private (
       * `names` is empty (react's `refetchQueries()` with no filter). Works on one
       * snapshot of the registry.
       */
-    private[apollo] def selected(names: Set[String])(using Frame): Chunk[Unit < (Async & Abort[ApolloException])] < Sync =
+    private[apollo] def selected(names: Set[String])(using Frame): Chunk[Unit < (Async & Abort[ApolloExecuteFailure])] < Sync =
         queries.use { qs =>
             Chunk.from(qs.values.collect {
                 case Entry(_, name, refetch) if names.isEmpty || names.contains(name) => refetch
@@ -81,7 +82,7 @@ object ActiveQueryRegistry:
     final private[apollo] case class Entry(
         id: Long,
         name: String,
-        refetch: Unit < (Async & Abort[ApolloException])
+        refetch: Unit < (Async & Abort[ApolloExecuteFailure])
     )
 
     final private[apollo] case class ResetHook(id: Long, hook: Unit < Async)

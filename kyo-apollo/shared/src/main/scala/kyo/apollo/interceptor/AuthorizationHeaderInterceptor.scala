@@ -1,6 +1,7 @@
 package kyo.apollo.interceptor
 
 import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.network.HttpHeader
 import kyo.apollo.network.http.HttpRequest
 import kyo.apollo.network.http.HttpResponse
@@ -25,7 +26,7 @@ final class AuthorizationHeaderInterceptor(
     def intercept(
         request: HttpRequest,
         chain: HttpInterceptorChain
-    )(using Frame): HttpResponse < Async =
+    )(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) =
         val authorized =
             request.copy(headers = request.headers :+ HttpHeader(headerName, value))
         chain.proceed(authorized)
