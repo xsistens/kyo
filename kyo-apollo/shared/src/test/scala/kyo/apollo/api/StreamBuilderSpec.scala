@@ -52,7 +52,7 @@ class StreamBuilderSpec extends kyo.test.Test[Any]:
 
         "leaves the result type unchanged (Chunk[A]) — the streamed list still decodes" in {
             val sel   = Queries.countries(Country.name).streamed(initialCount = 1)
-            val short = JsonParser.parse("""{"countries":[{"name":"Germany"}]}""")
+            val short = JsonParser.parse("""{"countries":[{"name":"Germany"}]}""").getOrThrow
             // Static type here IS `(countries: List[(name: String)])` — proving no wrapper.
             val result = sel.decode(short)
             assert(result.countries.map(_.name) == Chunk("Germany"))

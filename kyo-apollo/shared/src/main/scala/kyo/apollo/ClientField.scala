@@ -172,9 +172,13 @@ object ClientField:
                     if sels.isEmpty then "Client" else ClientFieldStructure.leafName(structure)
                 )
             // Whole-value Schema codec (handles Maybe/Chunk natively), with `__typename`
-            // injected at each product level so the normalizer can key objects.
+            // injected at each product level so the normalizer can key objects. A
+            // mismatch throws, as every leaf codec does; the leaf contract has no frame.
             val codec = ScalarCodec[V](
-                json => SchemaJson.decode[V](ClientFieldStructure.toKyoWire(json, structure))(using sch),
+                json =>
+                    SchemaJson
+                        .decode[V](ClientFieldStructure.toKyoWire(json, structure))(using sch, Frame.internal)
+                        .getOrThrow,
                 value =>
                     ClientFieldStructure.injectTypenames(SchemaJson.encode[V](value)(using sch), structure)
             )

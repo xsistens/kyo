@@ -276,6 +276,8 @@ object ApolloDevtools:
     private def jsonToJs(json: Json): js.Any = json match
         case Json.JNull    => null
         case Json.JBool(b) => b
+        case Json.JInt(n)  => n.toDouble
+        case Json.JDec(n)  => n.toDouble
         case Json.JNum(n)  => n
         case Json.JStr(s)  => s
         case Json.JArr(items) =>

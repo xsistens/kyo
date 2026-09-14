@@ -203,10 +203,10 @@ private[apollo] object MaskedFragment:
       * key generators' rendering so `ref.key` equals the normalizer's record key.
       */
     def scalarString(json: Json): Maybe[String] = json match
-        case Json.JStr(s)  => Present(s)
-        case Json.JNum(_)  => Present(json.render)
-        case Json.JBool(b) => Present(b.toString)
-        case _             => Absent
+        case Json.JStr(s)                               => Present(s)
+        case Json.JInt(_) | Json.JDec(_) | Json.JNum(_) => Present(json.render)
+        case Json.JBool(b)                              => Present(b.toString)
+        case _                                          => Absent
 
     def spreadEntityImpl[Origin: Type, D <: AnyNamedTuple: Type](
         self: Expr[EntityFragment[Origin, D]]

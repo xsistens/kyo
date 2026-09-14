@@ -86,8 +86,8 @@ object TypePolicyCacheKeyGenerator:
       * composites and `null` yield `None` and are not usable as key parts.
       */
     private def scalarString(json: Json): Maybe[String] = json match
-        case Json.JStr(s)  => Present(s)
-        case Json.JNum(_)  => Present(json.render)
-        case Json.JBool(b) => Present(b.toString)
-        case _             => Absent
+        case Json.JStr(s)                               => Present(s)
+        case Json.JInt(_) | Json.JDec(_) | Json.JNum(_) => Present(json.render)
+        case Json.JBool(b)                              => Present(b.toString)
+        case _                                          => Absent
 end TypePolicyCacheKeyGenerator

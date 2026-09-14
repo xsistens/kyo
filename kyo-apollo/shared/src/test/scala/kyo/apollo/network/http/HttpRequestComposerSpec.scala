@@ -175,7 +175,7 @@ class HttpRequestComposerSpec extends kyo.test.Test[Any]:
         "extensions carry raw JSON through unchanged (Json.JObj round-trips)" in {
             // Sanity that the APQ extension really parses back to the same structure.
             val request = ApolloRequest.builder(MiniQuery(1)).sendApqExtensions(true).build()
-            val body    = kyo.apollo.json.JsonParser.parse(composer.compose(url, request).body.get)
+            val body    = kyo.apollo.json.JsonParser.parse(composer.compose(url, request).body.get).getOrThrow
             body match
                 case Json.JObj(fields) =>
                     assert(fields.contains("extensions"))

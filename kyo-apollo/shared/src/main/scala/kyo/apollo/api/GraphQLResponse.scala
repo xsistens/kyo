@@ -61,9 +61,18 @@ object GraphQLResponse:
             case other =>
                 Result.fail(ApolloParseException(other, "a GraphQL response object"))
 
-    /** Decode `payload` with the operation's codec; the codecs' shape errors are the wire failures. */
+    /** Decode `payload` with the operation's codec; the codecs' shape errors are the wire failures.
+      * A schema codec's own `ApolloParseException` is replaced by this one, keeping its cause.
+      */
     private def decodeData[D](payload: Json, operation: Operation[D])(using Frame): Result[ApolloParseException, D] =
         Result
-            .catching[DecodeException | SelectionDecodeException | ScalarDecodeException](operation.dataCodec.decode(payload))
-            .mapFailure(e => ApolloParseException(payload, s"the data of operation '${operation.name}'", e))
+            .catching[ApolloParseException | DecodeException | SelectionDecodeException | ScalarDecodeException](
+                operation.dataCodec.decode(payload)
+            )
+            .mapFailure { e =>
+                val cause: Throwable = e match
+                    case parse: ApolloParseException => Maybe(parse.getCause).getOrElse(parse)
+                    case other                       => other
+                ApolloParseException(payload, s"the data of operation '${operation.name}'", cause)
+            }
 end GraphQLResponse

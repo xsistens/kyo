@@ -42,7 +42,7 @@ class IncrementalAssemblerSpec extends kyo.test.Test[Any]:
         def variables: Json              = Json.JObj(VectorMap.empty)
     end ListQ
 
-    private def part(s: String): MultipartPart = MultipartPart(JsonParser.parse(s))
+    private def part(s: String): MultipartPart = MultipartPart(JsonParser.parse(s).getOrThrow)
 
     "IncrementalAssembler" - {
 

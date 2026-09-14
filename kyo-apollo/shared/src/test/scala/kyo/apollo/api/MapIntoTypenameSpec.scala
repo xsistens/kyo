@@ -1,5 +1,6 @@
 package kyo.apollo.api
 
+import kyo.Result
 import kyo.Schema
 import kyo.apollo.json.JsonParser
 import kyo.apollo.json.SchemaJson
@@ -23,16 +24,16 @@ class MapIntoTypenameSpec extends kyo.test.Test[Any]:
         "tolerates the implicit __typename member" in {
             val json = JsonParser.parse(
                 """{"__typename":"Country","code":"DE","name":"Germany","capital":"Berlin"}"""
-            )
-            assert(SchemaJson.decode[CountryDto](json) == CountryDto("DE", "Germany", Some("Berlin")))
+            ).getOrThrow
+            assert(SchemaJson.decode[CountryDto](json) == Result.succeed(CountryDto("DE", "Germany", Some("Berlin"))))
         }
 
         "tolerates __typename in nested position" in {
             case class Wrap(country: CountryDto) derives Schema
             val json = JsonParser.parse(
                 """{"country":{"__typename":"Country","code":"FR","name":"France","capital":null}}"""
-            )
-            assert(SchemaJson.decode[Wrap](json) == Wrap(CountryDto("FR", "France", None)))
+            ).getOrThrow
+            assert(SchemaJson.decode[Wrap](json) == Result.succeed(Wrap(CountryDto("FR", "France", None))))
         }
     }
 end MapIntoTypenameSpec

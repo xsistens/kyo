@@ -2,6 +2,7 @@ package kyo.apollo.api
 
 import kyo.Absent
 import kyo.Chunk
+import kyo.Frame
 import kyo.Maybe
 import kyo.Present
 import kyo.Schema
@@ -33,17 +34,20 @@ object ScalarCodec:
     /** GraphQL `ID` is serialized as a string on the wire. */
     val id: ScalarCodec[String] = string
 
+    /** GraphQL `Int`: a JSON number with an exact 32-bit value (`1.0` included, `1.5`
+      * and `2^31` rejected, never truncated).
+      */
     val int: ScalarCodec[Int] = ScalarCodec(
-        {
-            case Json.JNum(value) => value.toInt
-            case other            => throw ScalarDecodeException("Int", other)
-        },
-        value => Json.JNum(value.toDouble)
+        json => Json.integral(json).filter(_.isValidInt).map(_.toInt).getOrElse(throw ScalarDecodeException("Int", json)),
+        value => Json.JInt(value.toLong)
     )
 
+    /** GraphQL `Float`: any JSON number, including an integer literal such as `1`. */
     val double: ScalarCodec[Double] = ScalarCodec(
         {
             case Json.JNum(value) => value
+            case Json.JInt(value) => value.toDouble
+            case Json.JDec(value) => value.toDouble
             case other            => throw ScalarDecodeException("Float", other)
         },
         value => Json.JNum(value)
@@ -80,9 +84,11 @@ object ScalarCodec:
 
     /** Reuse a kyo-schema `Schema` (e.g. a generated enum's string-transform
       * `given`, or a mapped custom scalar) as a leaf codec, via [[SchemaJson]].
+      * A mismatch throws the `ApolloParseException`, which the response parse
+      * re-wraps with its own frame; the leaf contract has no frame to thread.
       */
     def fromSchema[V](using Schema[V]): ScalarCodec[V] =
-        ScalarCodec(SchemaJson.decode[V], SchemaJson.encode[V])
+        ScalarCodec(json => SchemaJson.decode[V](json)(using summon[Schema[V]], Frame.internal).getOrThrow, SchemaJson.encode[V])
 
     /** The `Upload` scalar codec: encodes an [[kyo.apollo.Upload]] to a
       * [[Json.JUpload]] placeholder that the request composer lifts into a
