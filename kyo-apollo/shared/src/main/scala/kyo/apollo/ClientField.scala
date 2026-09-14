@@ -61,8 +61,8 @@ final class ClientField[Origin, R <: AnyNamedTuple, V] private[apollo] (
     // label and applies the JNull→default decode), so write/read round-trip through
     // the unchanged ApolloStore.writeFragment/readFragment machinery.
     private val fragment: Fragment[R] = new Fragment[R]:
-        def dataCodec: JsonCodec[R] = slot
-        def rootField: CompiledField =
+        val dataCodec: JsonCodec[R] = slot
+        val rootField: CompiledField =
             // The write fragment's field is deliberately NOT client-marked: `Normalizer`
             // skips client fields on write-back (so a network response can't clobber
             // local state), so this explicit write must present a plain node to actually

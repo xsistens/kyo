@@ -8,6 +8,7 @@ import kyo.apollo.cache.normalized.api.*
 import kyo.apollo.json.Json
 import scala.NamedTuple.AnyNamedTuple
 import scala.NamedTuple.Empty
+import scala.collection.immutable.VectorMap
 
 /** Spike / Go-No-Go gate for the inline `SelectionBuilder` design.
   *
@@ -97,6 +98,59 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
                 SelectionBuilder.Nesting.Nullable(SelectionBuilder.Nesting.Leaf)
             )
     end ApiQueries
+
+    /** Twenty-one fields on one object, for a selection wide enough that an offset or a
+      * split in the combination tree would land a value in the wrong slot.
+      */
+    sealed trait Wide
+
+    object Wide:
+        private def int[R <: AnyNamedTuple](name: String): SelectionBuilder.Deferrable[Wide, R] =
+            SelectionBuilder.scalar(name, CompiledNamedType("Int").notNull, ScalarCodec.int)
+        private def text[R <: AnyNamedTuple](name: String): SelectionBuilder.Deferrable[Wide, R] =
+            SelectionBuilder.scalar(name, CompiledNamedType("String"), ScalarCodec.maybe(ScalarCodec.string))
+
+        def f01: SelectionBuilder.Deferrable[Wide, (f01: Int)]           = int("f01")
+        def f02: SelectionBuilder.Deferrable[Wide, (f02: Int)]           = int("f02")
+        def f03: SelectionBuilder.Deferrable[Wide, (f03: Int)]           = int("f03")
+        def f04: SelectionBuilder.Deferrable[Wide, (f04: Int)]           = int("f04")
+        def f05: SelectionBuilder.Deferrable[Wide, (f05: Maybe[String])] = text("f05")
+        def f06: SelectionBuilder.Deferrable[Wide, (f06: Int)]           = int("f06")
+        def f07: SelectionBuilder.Deferrable[Wide, (f07: Maybe[String])] = text("f07")
+        def f08: SelectionBuilder.Deferrable[Wide, (f08: Int)]           = int("f08")
+        def f09: SelectionBuilder.Deferrable[Wide, (f09: Int)]           = int("f09")
+        def f10: SelectionBuilder.Deferrable[Wide, (f10: Int)]           = int("f10")
+        def g1: SelectionBuilder.Deferrable[Wide, (g1: Maybe[String])]   = text("g1")
+        def g2: SelectionBuilder.Deferrable[Wide, (g2: Int)]             = int("g2")
+        def f12: SelectionBuilder.Deferrable[Wide, (f12: Int)] =
+            SelectionBuilder.scalar(
+                "f12",
+                CompiledNamedType("Int").notNull,
+                ScalarCodec.int,
+                Chunk(SelectionBuilder.Arg("n", CompiledNamedType("Int").notNull, Json.JInt(12)))
+            )
+        def f13: SelectionBuilder.Deferrable[Wide, (f13: Int)]           = int("f13")
+        def f14: SelectionBuilder.Deferrable[Wide, (f14: Int)]           = int("f14")
+        def f15: SelectionBuilder.Deferrable[Wide, (f15: Maybe[String])] = text("f15")
+        def f16: SelectionBuilder.Deferrable[Wide, (f16: Int)]           = int("f16")
+        def f17: SelectionBuilder.Deferrable[Wide, (f17: Int)]           = int("f17")
+        def f18: SelectionBuilder.Deferrable[Wide, (f18: Int)]           = int("f18")
+        def f19: SelectionBuilder.Deferrable[Wide, (f19: Int)]           = int("f19")
+        def f20: SelectionBuilder.Deferrable[Wide, (f20: Int)] =
+            SelectionBuilder.scalar(
+                "f20",
+                CompiledNamedType("Int").notNull,
+                ScalarCodec.int,
+                Chunk(SelectionBuilder.Arg("m", CompiledNamedType("Int").notNull, Json.JInt(20)))
+            )
+
+        /** Twenty result slots: a `.deferred` field at slot 10 and a two-field `defer`
+          * group at slot 11, in the middle of the left-leaning combination tree.
+          */
+        val selection =
+            f01 ~ f02 ~ f03 ~ f04 ~ f05 ~ f06 ~ f07 ~ f08 ~ f09 ~ f10.deferred ~ defer("grp", g1 ~ g2) ~
+                f12 ~ f13 ~ f14 ~ f15 ~ f16 ~ f17 ~ f18 ~ f19 ~ f20
+    end Wide
 
     // --- Tests -----------------------------------------------------------------
 
@@ -198,6 +252,72 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
             assert(!wrongLeaf.contains("4242"), wrongLeaf)
             val notAList = Continent.countries(Country.name).decode(Json.JObj(Map("countries" -> Json.JBool(true))))
             assert(notAList.failure.exists(_.message == "Expected a GraphQL list but got a boolean"), notAList.toString)
+        }
+
+        "a 20-field selection" - {
+
+            def row(entries: (String, Json)*): Json = Json.JObj(VectorMap(entries*))
+            def int(i: Int): Json                   = Json.JInt(i.toLong)
+
+            val before = Seq("f01" -> int(1), "f02" -> int(2), "f03" -> int(3), "f04" -> int(4), "f05" -> Json.JNull)
+            val middle = Seq("f06" -> int(6), "f07" -> Json.JStr("seven"), "f08" -> int(8), "f09" -> int(9))
+            val after = Seq(
+                "f12" -> int(12),
+                "f13" -> int(13),
+                "f14" -> int(14),
+                "f15" -> Json.JStr("fifteen"),
+                "f16" -> int(16),
+                "f17" -> int(17),
+                "f18" -> int(18),
+                "f19" -> int(19),
+                "f20" -> int(20)
+            )
+            val deferredPart = Seq("f10" -> int(10), "g1" -> Json.JStr("one"), "g2" -> int(2222))
+
+            val initial  = row(before ++ middle ++ after*)
+            val complete = row(before ++ middle ++ deferredPart ++ after*)
+
+            val head = List(1, 2, 3, 4, Absent, 6, Present("seven"), 8, 9)
+            val tail = List(12, 13, 14, Present("fifteen"), 16, 17, 18, 19, 20)
+
+            "decodes every slot at its offset, the deferred ones Absent before their payload" in {
+                val decoded = Wide.selection.decode(initial).getOrThrow
+                assert(Wide.selection.arity == 20)
+                assert(decoded.toTuple.toList == head ++ List(Absent, Absent) ++ tail)
+                assert(decoded.f10 == Absent)
+                assert(decoded.grp == Absent)
+                assert(decoded.f20 == 20)
+            }
+
+            "decodes every slot at its offset, the deferred ones Present once their payload is in" in {
+                val decoded = Wide.selection.decode(complete).getOrThrow
+                assert(decoded.f10 == Present(10))
+                assert(decoded.grp.map(_.toTuple) == Present((Present("one"), 2222)))
+                assert(decoded.toTuple.toList.take(9) == head)
+                assert(decoded.toTuple.toList.drop(11) == tail)
+            }
+
+            "encode(decode(json)) is json, field order included" in {
+                assert(Wide.selection.encode(Wide.selection.decode(initial).getOrThrow).render == initial.render)
+                assert(Wide.selection.encode(Wide.selection.decode(complete).getOrThrow).render == complete.render)
+            }
+
+            "a wrong leaf after the deferred slots fails the whole decode" in {
+                val broken = row(before ++ middle ++ deferredPart ++ after.updated(8, "f20" -> Json.JStr("x"))*)
+                assert(Wide.selection.decode(broken).failure.exists(_.message == "Expected a GraphQL Int but got a string"))
+            }
+
+            "its selections are computed once, when it is built" in {
+                assert(Wide.selection.selections eq Wide.selection.selections)
+                val field = Wide.f01
+                assert(field.selections eq field.selections)
+                assert(Wide.selection.selections.size == 20)
+            }
+
+            "its arguments are computed once, when it is built" in {
+                assert(Wide.selection.argEntries eq Wide.selection.argEntries)
+                assert(Wide.selection.argEntries.map(_.name) == Chunk("n", "m"))
+            }
         }
 
         "capabilities are types, not runtime checks" - {
