@@ -2,8 +2,11 @@ package kyo.apollo.api
 
 import kyo.Absent
 import kyo.Chunk
+import kyo.Frame
 import kyo.Maybe
 import kyo.Present
+import kyo.Result
+import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.json.Json
 import scala.NamedTuple.AnyNamedTuple
 import scala.NamedTuple.Concat
@@ -57,8 +60,11 @@ sealed trait SelectionBuilder[Origin, A]:
     /** Every argument in this selection subtree, in encounter order. */
     private[api] def argEntries: Chunk[SelectionBuilder.Arg]
 
-    /** Decode a GraphQL response object into the result `A`. */
-    def decode(json: Json): A
+    /** Decode a GraphQL response object into the result `A`. A response of the wrong
+      * shape is an [[ApolloParseException]] failure naming the shape expected and the
+      * JSON type found; anything a codec throws beyond that is a panic.
+      */
+    def decode(json: Json)(using Frame): Result[ApolloParseException, A]
 
     /** Encode a result value back into a response-shaped [[Json]] object. */
     def encode(value: A): Json
@@ -80,16 +86,19 @@ object SelectionBuilder:
         case Nullable(inner: Nesting)
         case Listed(inner: Nesting)
 
-        private[api] def decode(json: Json, child: Json => Any): Any = this match
-            case Leaf => child(json)
-            case Nullable(inner) =>
-                json match
-                    case Json.JNull => Absent
-                    case other      => Present(inner.decode(other, child))
-            case Listed(inner) =>
-                json match
-                    case Json.JArr(items) => items.map(inner.decode(_, child))
-                    case other            => throw SelectionDecodeException(other)
+        private[api] def decode(json: Json, child: Json => Result[ApolloParseException, Any])(using
+            Frame
+        ): Result[ApolloParseException, Any] =
+            this match
+                case Leaf => child(json)
+                case Nullable(inner) =>
+                    json match
+                        case Json.JNull => Result.succeed(Absent)
+                        case other      => inner.decode(other, child).map(Present(_))
+                case Listed(inner) =>
+                    json match
+                        case Json.JArr(items) => Result.collect(items.map(inner.decode(_, child))).map(Chunk.from)
+                        case other            => Result.fail(ApolloParseException(other, "a GraphQL list"))
 
         private[api] def encode(value: Any, child: Any => Json): Json = this match
             case Leaf => child(value)
@@ -108,12 +117,12 @@ object SelectionBuilder:
       */
     sealed trait Fields[Origin, A <: AnyNamedTuple] extends SelectionBuilder[Origin, A]:
         private[api] def arity: Int
-        private[api] def decodeRaw(row: Map[String, Json]): Tuple
+        private[api] def decodeRaw(row: Map[String, Json])(using Frame): Result[ApolloParseException, Tuple]
         private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)]
 
-        final def decode(json: Json): A = json match
-            case Json.JObj(row) => decodeRaw(row).asInstanceOf[A]
-            case other          => throw SelectionDecodeException(other)
+        final def decode(json: Json)(using Frame): Result[ApolloParseException, A] = json match
+            case Json.JObj(row) => decodeRaw(row).map(_.asInstanceOf[A])
+            case other          => Result.fail(ApolloParseException(other, "a GraphQL object"))
 
         final def encode(value: A): Json =
             Json.JObj(VectorMap.from(encodeRaw(value.asInstanceOf[Tuple])))
@@ -156,7 +165,7 @@ object SelectionBuilder:
         compiled: CompiledField,
         ownArgs: Chunk[Arg],
         childArgs: Chunk[Arg],
-        decodeValue: Json => Any,
+        decodeValue: (Json, Frame) => Result[ApolloParseException, Any],
         encodeValue: Any => Json
     ) extends Deferrable[Origin, A]:
         private[api] def arity: Int              = 1
@@ -174,8 +183,8 @@ object SelectionBuilder:
                 decodeValue,
                 encodeValue
             )
-        private[api] def decodeRaw(row: Map[String, Json]): Tuple =
-            Tuple1(decodeValue(row.getOrElse(compiled.responseName, Json.JNull)))
+        private[api] def decodeRaw(row: Map[String, Json])(using frame: Frame): Result[ApolloParseException, Tuple] =
+            decodeValue(row.getOrElse(compiled.responseName, Json.JNull), frame).map(Tuple1(_))
         private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)] =
             Chunk(compiled.responseName -> encodeValue(value.productElement(0)))
     end Field
@@ -190,8 +199,8 @@ object SelectionBuilder:
         private[api] def arity: Int              = left.arity + right.arity
         def selections: Chunk[CompiledSelection] = left.selections ++ right.selections
         private[api] def argEntries: Chunk[Arg]  = left.argEntries ++ right.argEntries
-        private[api] def decodeRaw(row: Map[String, Json]): Tuple =
-            left.decodeRaw(row) ++ right.decodeRaw(row)
+        private[api] def decodeRaw(row: Map[String, Json])(using Frame): Result[ApolloParseException, Tuple] =
+            left.decodeRaw(row).flatMap(l => right.decodeRaw(row).map(r => l ++ r))
         private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)] =
             val (l, r) = value.toArray.splitAt(left.arity)
             left.encodeRaw(Tuple.fromArray(l)) ++ right.encodeRaw(Tuple.fromArray(r))
@@ -225,8 +234,9 @@ object SelectionBuilder:
         private[api] def arity: Int                                     = 0
         def selections: Chunk[CompiledSelection]                        = Chunk.empty
         private[api] def argEntries: Chunk[Arg]                         = Chunk.empty
-        private[api] def decodeRaw(row: Map[String, Json]): Tuple       = EmptyTuple
         private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)] = Chunk.empty
+        private[api] def decodeRaw(row: Map[String, Json])(using Frame): Result[ApolloParseException, Tuple] =
+            Result.succeed(EmptyTuple)
     end EmptySel
 
     /** A `@defer`ed inline group. Contributes its child's fields to the *parent*
@@ -252,15 +262,16 @@ object SelectionBuilder:
         private[api] def argEntries: Chunk[Arg] = child.argEntries
         // `single` (from `.deferred`) exposes the sole field's *value* as `Maybe[V]`;
         // a `defer` group exposes the whole child tuple as `Maybe[S]`.
-        private[api] def decodeRaw(row: Map[String, Json]): Tuple =
+        private[api] def decodeRaw(row: Map[String, Json])(using Frame): Result[ApolloParseException, Tuple] =
             val present = child.selections.exists {
                 case f: CompiledField => row.contains(f.responseName)
                 case _                => false
             }
-            if !present then Tuple1(Absent)
+            if !present then Result.succeed(Tuple1(Absent))
             else
-                val decoded = child.decodeRaw(row)
-                Tuple1(Present(if single then decoded.productElement(0) else decoded))
+                child.decodeRaw(row).map(decoded =>
+                    Tuple1(Present(if single then decoded.productElement(0) else decoded))
+                )
             end if
         end decodeRaw
         private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)] =
@@ -278,11 +289,23 @@ object SelectionBuilder:
         under: SelectionBuilder[Origin, ?],
         codec: JsonCodec[B]
     ) extends SelectionBuilder[Origin, B]:
-        def selections: Chunk[CompiledSelection] = under.selections
-        private[api] def argEntries: Chunk[Arg]  = under.argEntries
-        def decode(json: Json): B                = codec.decode(json)
-        def encode(value: B): Json               = codec.encode(value)
+        def selections: Chunk[CompiledSelection]                             = under.selections
+        private[api] def argEntries: Chunk[Arg]                              = under.argEntries
+        def decode(json: Json)(using Frame): Result[ApolloParseException, B] = codec.decode(json)
+        def encode(value: B): Json                                           = codec.encode(value)
     end Mapped
+
+    /** Decode one leaf value. [[ScalarCodec]]'s contract has no frame to build a
+      * failure with, so its codecs still throw on a wrong shape; this is the one place
+      * that throw — a `ScalarDecodeException`, or the `ApolloParseException` of a
+      * schema-backed leaf — becomes the failure value. Anything else a codec throws
+      * stays a panic.
+      */
+    private def leaf[V](codec: ScalarCodec[V], json: Json)(using Frame): Result[ApolloParseException, V] =
+        Result.catching[ScalarDecodeException | ApolloParseException](codec.decode(json)).mapFailure {
+            case parse: ApolloParseException   => parse
+            case scalar: ScalarDecodeException => ApolloParseException(json, s"a GraphQL ${scalar.expected}")
+        }
 
     /** Bind a field's captured arguments to same-named operation variables. */
     private def bind(args: Chunk[Arg]): Chunk[CompiledArgument] =
@@ -355,7 +378,7 @@ object SelectionBuilder:
             CompiledField(name = name, fieldType = fieldType, arguments = bind(arguments)),
             arguments,
             Chunk.empty,
-            json => codec.decode(json),
+            (json, frame) => leaf(codec, json)(using frame),
             value => codec.encode(value.asInstanceOf[V])
         )
 
@@ -380,7 +403,7 @@ object SelectionBuilder:
             ),
             arguments,
             child.argEntries,
-            json => nesting.decode(json, child.decode),
+            (json, frame) => nesting.decode(json, child.decode(_)(using frame))(using frame),
             value => nesting.encode(value, a => withTypename(child.encode(a.asInstanceOf[A]), typeName))
         )
     end obj
@@ -404,16 +427,18 @@ object SelectionBuilder:
         codec: ScalarCodec[V],
         default: V
     ): Fields[Origin, R] =
+        def decodeValue(json: Json, frame: Frame): Result[ApolloParseException, Any] =
+            json match
+                case Json.JNull => Result.succeed(default)
+                case other      => leaf(codec, other)(using frame)
         Field[Origin, R](
             CompiledField(name = name, fieldType = fieldType, selections = selections, client = true),
             Chunk.empty,
             Chunk.empty,
-            {
-                case Json.JNull => default
-                case other      => codec.decode(other)
-            },
+            decodeValue,
             value => codec.encode(value.asInstanceOf[V])
         )
+    end clientField
 
     /** Build an inline-fragment branch of a union (or interface) selection:
       * `... on <typeName> { <child> }`. The branch contributes a typed
@@ -435,10 +460,10 @@ object SelectionBuilder:
             def selections: Chunk[CompiledSelection] =
                 Chunk(CompiledFragment(typeName, Chunk(typeName), child.selections))
             private[api] def argEntries: Chunk[Arg] = child.argEntries
-            private[api] def decodeRaw(row: Map[String, Json]): Tuple =
+            private[api] def decodeRaw(row: Map[String, Json])(using Frame): Result[ApolloParseException, Tuple] =
                 row.get("__typename") match
-                    case Some(Json.JStr(`typeName`)) => Tuple1(Present(child.decode(Json.JObj(row))))
-                    case _                           => Tuple1(Absent)
+                    case Some(Json.JStr(`typeName`)) => child.decode(Json.JObj(row)).map(v => Tuple1(Present(v)))
+                    case _                           => Result.succeed(Tuple1(Absent))
             private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)] =
                 value.productElement(0).asInstanceOf[Maybe[A]] match
                     case Absent => Chunk.empty
@@ -461,22 +486,22 @@ object SelectionBuilder:
       * into. `compiled` is what it contributes to the wire selection (spliced
       * flat into the parent, merged with sibling duplicates downstream);
       * `decodeRow` sees the whole parent object and builds the element (a
-      * fragment ref); `encodeValue` re-emits the element's response fields so a
-      * cache write of decoded data stays lossless. Arguments are harvested from
-      * `argsFrom` (the underlying child selection).
+      * fragment ref) with the decoding call's frame; `encodeValue` re-emits the
+      * element's response fields so a cache write of decoded data stays lossless.
+      * Arguments are harvested from `argsFrom` (the underlying child selection).
       */
     private[apollo] def rawLeaf[Origin, R <: AnyNamedTuple](
         compiled: Chunk[CompiledSelection],
         argsFrom: SelectionBuilder[?, ?],
-        decodeRow: Map[String, Json] => Any,
+        decodeRow: (Map[String, Json], Frame) => Result[ApolloParseException, Any],
         encodeValue: Any => Chunk[(String, Json)]
     ): Fields[Origin, R] =
         new Fields[Origin, R]:
             private[api] def arity: Int              = 1
             def selections: Chunk[CompiledSelection] = compiled
             private[api] def argEntries: Chunk[Arg]  = argsFrom.argEntries
-            private[api] def decodeRaw(row: Map[String, Json]): Tuple =
-                Tuple1(decodeRow(row))
+            private[api] def decodeRaw(row: Map[String, Json])(using frame: Frame): Result[ApolloParseException, Tuple] =
+                decodeRow(row, frame).map(Tuple1(_))
             private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)] =
                 encodeValue(value.productElement(0))
 
@@ -580,9 +605,3 @@ end extension
 sealed trait RootQuery
 sealed trait RootMutation
 sealed trait RootSubscription
-
-/** Raised when a selection expects a GraphQL object (or list) but the response
-  * value has a different JSON shape.
-  */
-final class SelectionDecodeException(got: Json)
-    extends RuntimeException(s"Expected a GraphQL object but got: ${got.render}")

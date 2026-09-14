@@ -116,7 +116,7 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
                 )
             )
 
-            val result = sel.decode(response)
+            val result = sel.decode(response).getOrThrow
             // Static type here IS `(country: Maybe[(name: String, capital: Maybe[String])])`.
             assert(result.country.map(_.name) == Present("Germany"))
             assert(result.country.flatMap(_.capital) == Present("Berlin"))
@@ -126,14 +126,14 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
             val sel = Queries.country("XX")(Country.name ~ Country.capital)
 
             val missing = Json.JObj(Map("country" -> Json.JNull))
-            assert(sel.decode(missing).country == Absent)
+            assert(sel.decode(missing).getOrThrow.country == Absent)
 
             val present = Json.JObj(
                 Map(
                     "country" -> Json.JObj(Map("name" -> Json.JStr("Narnia"), "capital" -> Json.JNull))
                 )
             )
-            val result = sel.decode(present)
+            val result = sel.decode(present).getOrThrow
             assert(result.country.map(_.name) == Present("Narnia"))
             assert(result.country.flatMap(_.capital) == Absent)
         }
@@ -153,7 +153,7 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
                     )
                 )
             )
-            assert(sel.encode(sel.decode(response)) == response)
+            assert(sel.encode(sel.decode(response).getOrThrow) == response)
         }
 
         "selection tree binds the argument and auto-injects __typename" in {
@@ -170,15 +170,34 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
         "the result type speaks kyo: a nullable field is Maybe, never Option" in {
             val json = Json.JObj(Map("capital" -> Json.JStr("Berlin")))
             // Positive: the decoded slot ascribes to `Maybe[String]` ...
-            val capital: Maybe[String] = Country.capital.decode(json).capital
+            val capital: Maybe[String] = Country.capital.decode(json).getOrThrow.capital
             assert(capital == Present("Berlin"))
             // ... and the stdlib type is a compile error, not a silent runtime cast.
             typeCheckFailure(
-                "val c: Option[String] = Country.capital.decode(Json.JObj(Map.empty)).capital"
+                "val c: Option[String] = Country.capital.decode(Json.JObj(Map.empty)).getOrThrow.capital"
             )("Required: Option[String]")
             typeCheckFailure(
-                "val o: Option[(name: String)] = Queries.country(\"DE\")(Country.name).decode(Json.JObj(Map.empty)).country"
+                "val o: Option[(name: String)] = Queries.country(\"DE\")(Country.name).decode(Json.JObj(Map.empty)).getOrThrow.country"
             )("Required: Option[(name : String)]")
+        }
+
+        "a response of the wrong shape decodes to a failure value naming JSON types, never a value" in {
+            val sel = Queries.country("DE")(Country.name ~ Country.capital)
+            // `message` is the exception's own text; `getMessage` would add the source lines around
+            // the frame in development mode, and those hold this test's literals.
+            def failureOf(json: Json): String =
+                sel.decode(json) match
+                    case kyo.Result.Failure(e) => e.message
+                    case other                 => fail(s"expected a parse failure, got $other")
+            val notAnObject = failureOf(Json.JObj(Map("country" -> Json.JStr("secret-country"))))
+            assert(notAnObject.contains("Expected a GraphQL object but got a string"), notAnObject)
+            assert(!notAnObject.contains("secret-country"), notAnObject)
+            val wrongLeaf =
+                failureOf(Json.JObj(Map("country" -> Json.JObj(Map("name" -> Json.JInt(4242), "capital" -> Json.JNull)))))
+            assert(wrongLeaf.contains("Expected a GraphQL String but got a number"), wrongLeaf)
+            assert(!wrongLeaf.contains("4242"), wrongLeaf)
+            val notAList = Continent.countries(Country.name).decode(Json.JObj(Map("countries" -> Json.JBool(true))))
+            assert(notAList.failure.exists(_.message == "Expected a GraphQL list but got a boolean"), notAList.toString)
         }
 
         "capabilities are types, not runtime checks" - {
@@ -214,7 +233,7 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
                 val fragments = deferred.selections.collect { case f: CompiledFragment => f }
                 assert(fragments.map(_.defer.map(_.label)) == Chunk(Present("capital")))
                 val result: (code: String, capital: Maybe[Maybe[String]]) =
-                    deferred.decode(Json.JObj(Map("code" -> Json.JStr("DE"))))
+                    deferred.decode(Json.JObj(Map("code" -> Json.JStr("DE")))).getOrThrow
                 assert(result.capital == Absent)
             }
         }

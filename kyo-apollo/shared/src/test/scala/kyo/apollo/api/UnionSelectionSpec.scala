@@ -78,7 +78,7 @@ class UnionSelectionSpec extends kyo.test.Test[Any]:
                     "durationMs" -> Json.JInt(215000)
                 ))
             ))
-            val decoded = sel.decode(response)
+            val decoded = sel.decode(response).getOrThrow
             val item    = decoded.item.getOrElse(fail("item was null"))
             assert(item.onTrack == Present((name = "Glass Season", durationMs = 215000)), item.toString)
             assert(item.onEpisode == Absent, item.toString)
@@ -91,7 +91,7 @@ class UnionSelectionSpec extends kyo.test.Test[Any]:
                     "name"       -> Json.JStr("Signal Path #3")
                 ))
             ))
-            val decoded = sel.decode(response)
+            val decoded = sel.decode(response).getOrThrow
             val item    = decoded.item.getOrElse(fail("item was null"))
             assert(item.onTrack == Absent, item.toString)
             assert(item.onEpisode == Present((name = "Signal Path #3")), item.toString)
@@ -105,11 +105,11 @@ class UnionSelectionSpec extends kyo.test.Test[Any]:
                     "durationMs" -> Json.JInt(215000)
                 ))
             ))
-            assert(sel.encode(sel.decode(response)) == response, sel.encode(sel.decode(response)).toString)
+            assert(sel.encode(sel.decode(response).getOrThrow) == response, sel.encode(sel.decode(response).getOrThrow).toString)
         }
 
         "decodes a null union field to Absent without touching the branches" in {
-            val decoded = sel.decode(Json.JObj(VectorMap("item" -> Json.JNull)))
+            val decoded = sel.decode(Json.JObj(VectorMap("item" -> Json.JNull))).getOrThrow
             assert(decoded.item == Absent, decoded.toString)
         }
     }

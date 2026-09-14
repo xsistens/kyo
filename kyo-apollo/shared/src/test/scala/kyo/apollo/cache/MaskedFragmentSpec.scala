@@ -110,11 +110,16 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
     private val germanyBody =
         """{"country":{"__typename":"Country","code":"DE","name":"Germany","capital":"Berlin"}}"""
 
+    // Kept away from the decode call: in development mode `getMessage` renders the source
+    // lines around the failure's frame, which is that call.
+    private val codelessBody = """{"country":{"__typename":"Country","name":"Germany","capital":"Berlin"}}"""
+    private val codelessRow  = Map("__typename" -> Json.JStr("Country"), "capital" -> Json.JStr("Berlin"))
+
     "spread" - {
 
         "contributes one element whose label is derived from the declaration site" in {
             val q       = countryField(GCountry.code ~ CountryCard.fields.spread).toQuery("Q")
-            val decoded = q.dataCodec.decode(parse(germanyBody))
+            val decoded = q.dataCodec.decode(parse(germanyBody)).getOrThrow
             // The macro derived `countryCard` from `object CountryCard` — no string named it.
             val ref: CountryCard.fields.Ref = decoded.country.countryCard
             assert(decoded.country.code == "DE")
@@ -131,7 +136,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
 
         "a ref exposes no field values through Product or toString" in {
             val q   = countryField(GCountry.code ~ CountryCard.fields.spread).toQuery("Q")
-            val ref = q.dataCodec.decode(parse(germanyBody)).country.countryCard
+            val ref = q.dataCodec.decode(parse(germanyBody)).getOrThrow.country.countryCard
             assert(!ref.toString.contains("Germany"))
             assert(!ref.toString.contains("Berlin"))
             assert(ref.toString == s"Ref(${CountryCard.fields.fragmentName})")
@@ -146,7 +151,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             val q = countryField(GCountry.code ~ CountryCard.fields.spread).toQuery("Q")
             val body =
                 """{"country":{"__typename":"SpecialCountry","code":"DE","name":"Germany","capital":null}}"""
-            val ref = q.dataCodec.decode(parse(body)).country.countryCard
+            val ref = q.dataCodec.decode(parse(body)).getOrThrow.country.countryCard
             assert(ref.typeName == "SpecialCountry")
             val special = new ApolloStore(
                 MemoryCache(),
@@ -157,11 +162,11 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
 
         "two refs are equal exactly when they capture the same slice of the same fragment" in {
             val q       = countryField(GCountry.code ~ CountryCard.fields.spread).toQuery("Q")
-            val germany = q.dataCodec.decode(parse(germanyBody)).country.countryCard
-            val again   = q.dataCodec.decode(parse(germanyBody)).country.countryCard
+            val germany = q.dataCodec.decode(parse(germanyBody)).getOrThrow.country.countryCard
+            val again   = q.dataCodec.decode(parse(germanyBody)).getOrThrow.country.countryCard
             val france = q.dataCodec.decode(
                 parse("""{"country":{"__typename":"Country","code":"FR","name":"France","capital":"Paris"}}""")
-            ).country.countryCard
+            ).getOrThrow.country.countryCard
             assert(germany == again)
             assert(germany.hashCode == again.hashCode)
             assert(germany != france)
@@ -169,9 +174,8 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
 
         "a missing key field names the field, not the row" in {
             val q         = countryField(CountryCard.fields.spread).toQuery("Q")
-            val codeless  = """{"country":{"__typename":"Country","name":"Germany","capital":"Berlin"}}"""
-            val failure   = Result.catching[ApolloParseException](q.dataCodec.decode(parse(codeless)))
-            val refResult = CountryCard.fields.refFromRow(Map("__typename" -> Json.JStr("Country"), "capital" -> Json.JStr("Berlin")))
+            val failure   = q.dataCodec.decode(parse(codelessBody))
+            val refResult = CountryCard.fields.refFromRow(codelessRow)
             failure match
                 case Result.Failure(e) =>
                     assert(e.getMessage.contains("code"), e.getMessage)
@@ -193,7 +197,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
 
         "a write of decoded data keeps the masked fields — the slice re-encodes them" in {
             val q       = countryField(GCountry.code ~ CountryCard.fields.spread).toQuery("Q")
-            val decoded = q.dataCodec.decode(parse(germanyBody))
+            val decoded = q.dataCodec.decode(parse(germanyBody)).getOrThrow
             val s       = store()
             for
                 _ <- s.writeOperation(q, decoded)
@@ -208,7 +212,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
 
         "write → read round-trips the ref by value" in {
             val q       = countryField(GCountry.code ~ CountryCard.fields.spread).toQuery("Q")
-            val decoded = q.dataCodec.decode(parse(germanyBody))
+            val decoded = q.dataCodec.decode(parse(germanyBody)).getOrThrow
             val s       = store()
             for
                 _    <- s.writeOperation(q, decoded)
@@ -223,7 +227,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             ).toQuery("Q")
             val body =
                 """{"country":{"__typename":"Country","code":"DE","name":"Germany","capital":"Berlin","emoji":"DE-FLAG"}}"""
-            val decoded = q.dataCodec.decode(parse(body))
+            val decoded = q.dataCodec.decode(parse(body)).getOrThrow
             val s       = store()
             val cardRef = decoded.country.countryCard
             val flagRef = decoded.country.countryFlag
@@ -240,7 +244,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
 
         "a parent selecting a field the fragment also selects stays a single stored field" in {
             val q       = countryField(GCountry.code ~ GCountry.name ~ CountryCard.fields.spread).toQuery("Q")
-            val decoded = q.dataCodec.decode(parse(germanyBody))
+            val decoded = q.dataCodec.decode(parse(germanyBody)).getOrThrow
             assert(decoded.country.name == "Germany") // the parent's own, explicit dependency
             val s = store()
             for
@@ -262,7 +266,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             for
                 _ <- s.writeOperation(
                     qa,
-                    qa.dataCodec.decode(parse("""{"country":{"__typename":"Country","code":"DE","name":"Germany"}}"""))
+                    qa.dataCodec.decode(parse("""{"country":{"__typename":"Country","code":"DE","name":"Germany"}}""")).getOrThrow
                 )
                 // A's fields alone must NOT satisfy the fragment yet.
                 premature <- Abort.run[CacheReadFailure](
@@ -270,7 +274,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
                 )
                 changedByB <- s.writeOperation(
                     qb,
-                    qb.dataCodec.decode(parse("""{"country":{"__typename":"Country","code":"DE","capital":"Berlin"}}"""))
+                    qb.dataCodec.decode(parse("""{"country":{"__typename":"Country","code":"DE","capital":"Berlin"}}""")).getOrThrow
                 )
                 // …and the fragment now assembles across both operations' contributions.
                 frag  <- s.readFragment(CountryCard.fields.cacheFragment, CacheKey("Country", "DE"))
@@ -293,10 +297,10 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             val q = pageInfoField(GPageInfo.hasNextPage ~ PageBadge.fields.spread).toQuery("Q")
             val body =
                 """{"pageInfo":{"__typename":"PageInfo","hasNextPage":true,"endCursor":"c42"}}"""
-            val decoded                   = q.dataCodec.decode(parse(body))
+            val decoded                   = q.dataCodec.decode(parse(body)).getOrThrow
             val ref: PageBadge.fields.Ref = decoded.pageInfo.pageBadge
             assert(decoded.pageInfo.hasNextPage == true)
-            assert(ref.value == (hasNextPage = true, endCursor = Present("c42")))
+            assert(ref.value == Result.succeed((hasNextPage = true, endCursor = Present("c42"))))
             assert(!ref.toString.contains("c42"))
             assert(!(ref: Any).isInstanceOf[Product])
             typeCheckFailure("ref.productIterator")("productIterator")
@@ -315,7 +319,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
                 cacheKeyGenerator = TypePolicyCacheKeyGenerator.of(TypePolicy("Country", List("name")))
             )
             val q       = countryField(GCountry.code ~ CountryCard.fields.spread).toQuery("Q")
-            val decoded = q.dataCodec.decode(parse(germanyBody))
+            val decoded = q.dataCodec.decode(parse(germanyBody)).getOrThrow
             val ref     = decoded.country.countryCard
             assert(keyed(s, ref.typeName, ref.raw) == Result.succeed(CacheKey("Country", "Germany")))
             for
@@ -333,7 +337,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             // the read of the ref fails on the same row as a miss.
             val s       = new ApolloStore(MemoryCache())
             val q       = countryField(GCountry.code ~ CountryCard.fields.spread).toQuery("Q")
-            val decoded = q.dataCodec.decode(parse(germanyBody))
+            val decoded = q.dataCodec.decode(parse(germanyBody)).getOrThrow
             val ref     = decoded.country.countryCard
             for
                 _ <- s.writeOperation(q, decoded)
@@ -365,7 +369,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
 
         "names the element explicitly when the derived label is not wanted" in {
             val q       = countryField(GCountry.code ~ CountryCard.fields.spreadAs["card"]).toQuery("Q")
-            val decoded = q.dataCodec.decode(parse(germanyBody))
+            val decoded = q.dataCodec.decode(parse(germanyBody)).getOrThrow
             val ref     = decoded.country.card
             assert(keyed(store(), ref.typeName, ref.raw) == Result.succeed(CacheKey("Country", "DE")))
         }

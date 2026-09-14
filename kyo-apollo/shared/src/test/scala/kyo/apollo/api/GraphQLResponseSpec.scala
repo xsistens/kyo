@@ -2,6 +2,7 @@ package kyo.apollo.api
 
 import kyo.Absent
 import kyo.Chunk
+import kyo.Frame
 import kyo.Present
 import kyo.Result
 import kyo.Schema
@@ -55,8 +56,8 @@ class GraphQLResponseSpec extends kyo.test.Test[Any]:
         def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
         def variables: Json          = Json.JObj(VectorMap.empty)
         override def dataCodec: JsonCodec[Hero] = new JsonCodec[Hero]:
-            def decode(json: Json): Hero  = throw new ClassCastException("defective codec")
-            def encode(value: Hero): Json = Json.JNull
+            def decode(json: Json)(using Frame): Result[ApolloParseException, Hero] = throw new ClassCastException("defective codec")
+            def encode(value: Hero): Json                                           = Json.JNull
 
     private def parseResult(text: String): Result[ApolloParseException, GraphQLResponse[Hero]] =
         JsonParser.parse(text).flatMap(GraphQLResponse.parse(_, heroOp))

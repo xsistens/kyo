@@ -2,7 +2,6 @@ package kyo.apollo.api
 
 import kyo.Absent
 import kyo.Chunk
-import kyo.DecodeException
 import kyo.Frame
 import kyo.Maybe
 import kyo.Present
@@ -61,20 +60,15 @@ object GraphQLResponse:
             case other =>
                 Result.fail(ApolloParseException(other, s"a GraphQL response object for operation '${operation.name}'"))
 
-    /** Decode `payload` with the operation's codec; the codecs' shape errors are the wire failures.
-      * A schema codec's own `ApolloParseException` is replaced by this one, keeping its cause.
-      * The failure names the operation; neither its message nor its `getMessage` carries a value
-      * of `payload` or the decoder's own message (see [[ApolloParseException]]).
+    /** Decode `payload` with the operation's decoder; its shape failures are the wire failures.
+      * The decoder's `ApolloParseException` is replaced by one naming the operation, keeping its
+      * cause (the decoder's own failure when it has none). A decoder that throws is a defect and
+      * stays a panic. Neither the message nor `getMessage` carries a value of `payload` or the
+      * decoder's own message (see [[ApolloParseException]]).
       */
     private def decodeData[D](payload: Json, operation: Operation[D])(using Frame): Result[ApolloParseException, D] =
-        Result
-            .catching[ApolloParseException | DecodeException | SelectionDecodeException | ScalarDecodeException](
-                operation.dataCodec.decode(payload)
-            )
-            .mapFailure { e =>
-                val cause: Throwable = e match
-                    case parse: ApolloParseException => Maybe(parse.getCause).getOrElse(parse)
-                    case other                       => other
-                ApolloParseException(payload, s"data matching operation '${operation.name}'", cause)
-            }
+        Result(operation.dataCodec.decode(payload)).flatten.mapFailure { parse =>
+            val cause: Throwable = Maybe(parse.getCause).getOrElse(parse)
+            ApolloParseException(payload, s"data matching operation '${operation.name}'", cause)
+        }
 end GraphQLResponse

@@ -6,6 +6,7 @@ import kyo.apollo.cache.TestKeys.*
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.*
 import kyo.apollo.cache.normalized.api.Record
+import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.exception.CacheMissException
 import kyo.apollo.exception.CacheReadFailure
 import kyo.apollo.json.Json
@@ -68,7 +69,8 @@ class StoreSpec extends kyo.test.Test[Any]:
         def rootField: CompiledField          = CountriesQuery().rootField
         def variables: Json                   = Json.JObj(VectorMap.empty)
         override def dataCodec: JsonCodec[CountriesData] = new JsonCodec[CountriesData]:
-            def decode(json: Json): CountriesData  = throw IllegalStateException("defective codec")
+            def decode(json: Json)(using Frame): Result[ApolloParseException, CountriesData] =
+                throw IllegalStateException("defective codec")
             def encode(value: CountriesData): Json = CountriesQuery().dataCodec.encode(value)
     end DefectiveCountriesQuery
 

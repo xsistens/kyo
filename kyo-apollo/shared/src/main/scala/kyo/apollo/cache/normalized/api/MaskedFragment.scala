@@ -87,8 +87,10 @@ final class EntityFragment[Origin, D <: AnyNamedTuple] private[apollo] (
     ):
         private[apollo] def definition: EntityFragment[Origin, D] = outer
 
-        /** The fragment's fields decoded from the captured response slice. */
-        private[apollo] def decoded: D = selection.decode(Json.JObj(raw))
+        /** The fragment's fields decoded from the captured response slice; a slice
+          * missing or mistyping one of them is a failure.
+          */
+        private[apollo] def decoded(using Frame): Result[ApolloParseException, D] = selection.decode(Json.JObj(raw))
 
         override def equals(other: Any): Boolean = other match
             case that: EntityFragment[?, ?]#Ref => (that.definition eq outer) && that.raw == raw
@@ -144,8 +146,7 @@ final class EntityFragment[Origin, D <: AnyNamedTuple] private[apollo] (
         SelectionBuilder.rawLeaf(
             spreadSelections,
             selection,
-            // The selection decode path still throws (a Result-returning decode is K-HIGH-42/43).
-            row => refFromRow(row)(using Frame.internal).getOrThrow,
+            (row, frame) => refFromRow(row)(using frame),
             value => Chunk.from(value.asInstanceOf[Ref].raw)
         )
 
@@ -190,8 +191,10 @@ final class EmbeddedFragment[Origin, D <: AnyNamedTuple] private[apollo] (
     ):
         private[apollo] def definition: EmbeddedFragment[Origin, D] = outer
 
-        /** The fragment's fields decoded from the captured response slice. */
-        private[apollo] def value: D = selection.decode(Json.JObj(raw))
+        /** The fragment's fields decoded from the captured response slice; a slice
+          * missing or mistyping one of them is a failure.
+          */
+        private[apollo] def value(using Frame): Result[ApolloParseException, D] = selection.decode(Json.JObj(raw))
 
         override def equals(other: Any): Boolean = other match
             case that: EmbeddedFragment[?, ?]#Ref => (that.definition eq outer) && that.raw == raw
@@ -214,7 +217,7 @@ final class EmbeddedFragment[Origin, D <: AnyNamedTuple] private[apollo] (
         SelectionBuilder.rawLeaf(
             selection.selections,
             selection,
-            refFromRow,
+            (row, _) => Result.succeed(refFromRow(row)),
             value => Chunk.from(value.asInstanceOf[Ref].raw)
         )
 

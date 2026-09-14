@@ -5,6 +5,7 @@ import kyo.apollo.api.*
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.cache.normalized.api.Fragment
+import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.exception.CacheReadFailure
 import kyo.apollo.json.Json
 import kyo.apollo.json.SchemaJson
@@ -64,8 +65,8 @@ final class ClientField[Origin, R <: AnyNamedTuple, V] private[apollo] (
         def dataSchema: kyo.Schema[R] =
             throw new UnsupportedOperationException("client-field fragment has no Schema")
         override def dataCodec: JsonCodec[R] = new JsonCodec[R]:
-            def decode(json: Json): R  = slot.decode(json)
-            def encode(value: R): Json = slot.encode(value)
+            def decode(json: Json)(using Frame): Result[ApolloParseException, R] = slot.decode(json)
+            def encode(value: R): Json                                           = slot.encode(value)
         def rootField: CompiledField =
             // The write fragment's field is deliberately NOT client-marked: `Normalizer`
             // skips client fields on write-back (so a network response can't clobber
