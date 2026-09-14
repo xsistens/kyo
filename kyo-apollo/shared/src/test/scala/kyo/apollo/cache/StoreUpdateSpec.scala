@@ -31,11 +31,11 @@ class StoreUpdateSpec extends kyo.test.Test[Any]:
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
-                selections = List(
+                selections = Chunk(
                     CompiledField(
                         "user",
                         CompiledNamedType("User"),
-                        selections = List(
+                        selections = Chunk(
                             CompiledField("__typename", CompiledNamedType("String")),
                             CompiledField("id", CompiledNamedType("String")),
                             CompiledField("name", CompiledNamedType("String"))
@@ -52,7 +52,7 @@ class StoreUpdateSpec extends kyo.test.Test[Any]:
             CompiledField(
                 "user",
                 CompiledNamedType("User"),
-                selections = List(
+                selections = Chunk(
                     CompiledField("__typename", CompiledNamedType("String")),
                     CompiledField("id", CompiledNamedType("String")),
                     CompiledField("name", CompiledNamedType("String"))

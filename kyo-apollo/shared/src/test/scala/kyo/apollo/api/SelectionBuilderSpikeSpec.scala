@@ -1,5 +1,9 @@
 package kyo.apollo.api
 
+import kyo.Absent
+import kyo.Chunk
+import kyo.Maybe
+import kyo.Present
 import kyo.apollo.json.Json
 import scala.NamedTuple.AnyNamedTuple
 
@@ -28,22 +32,22 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
         def name: SelectionBuilder[Country, (name: String)] =
             SelectionBuilder.scalar("name", CompiledNamedType("String").notNull, ScalarCodec.string)
 
-        def capital: SelectionBuilder[Country, (capital: Option[String])] =
+        def capital: SelectionBuilder[Country, (capital: Maybe[String])] =
             SelectionBuilder.scalar(
                 "capital",
                 CompiledNamedType("String"),
-                ScalarCodec.option(ScalarCodec.string)
+                ScalarCodec.maybe(ScalarCodec.string)
             )
     end Country
 
     object Queries:
         def country[A <: AnyNamedTuple](code: String)(
             sel: SelectionBuilder[Country, A]
-        ): SelectionBuilder[RootQuery, (country: Option[A])] =
+        ): SelectionBuilder[RootQuery, (country: Maybe[A])] =
             SelectionBuilder.obj(
                 "country",
                 CompiledNamedType("Country"),
-                List(
+                Chunk(
                     SelectionBuilder.Arg("code", CompiledNamedType("ID").notNull, ScalarCodec.id.encode(code))
                 ),
                 sel,
@@ -70,16 +74,16 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
             )
 
             val result = sel.decode(response)
-            // Static type here IS `(country: Option[(name: String, capital: Option[String])])`.
-            assert(result.country.map(_.name) == Some("Germany"))
-            assert(result.country.flatMap(_.capital) == Some("Berlin"))
+            // Static type here IS `(country: Maybe[(name: String, capital: Maybe[String])])`.
+            assert(result.country.map(_.name) == Present("Germany"))
+            assert(result.country.flatMap(_.capital) == Present("Berlin"))
         }
 
-        "null object → None; null scalar within a present object → None" in {
+        "null object → Absent; null scalar within a present object → Absent" in {
             val sel = Queries.country("XX")(Country.name ~ Country.capital)
 
             val missing = Json.JObj(Map("country" -> Json.JNull))
-            assert(sel.decode(missing).country == None)
+            assert(sel.decode(missing).country == Absent)
 
             val present = Json.JObj(
                 Map(
@@ -87,8 +91,8 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
                 )
             )
             val result = sel.decode(present)
-            assert(result.country.map(_.name) == Some("Narnia"))
-            assert(result.country.flatMap(_.capital) == None)
+            assert(result.country.map(_.name) == Present("Narnia"))
+            assert(result.country.flatMap(_.capital) == Absent)
         }
 
         "structural encode round-trips back to the response object shape (with __typename)" in {
@@ -113,11 +117,25 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
             val sel     = Queries.country("DE")(Country.name ~ Country.capital)
             val country = sel.selections.collect { case f: CompiledField => f }.head
             assert(country.name == "country")
-            assert(country.arguments == List(CompiledArgument.variable("code")))
+            assert(country.arguments == Chunk(CompiledArgument.variable("code")))
             assert(
                 country.selections.collect { case f: CompiledField => f.name } ==
-                    List("__typename", "name", "capital")
+                    Chunk("__typename", "name", "capital")
             )
+        }
+
+        "the result type speaks kyo: a nullable field is Maybe, never Option" in {
+            val json = Json.JObj(Map("capital" -> Json.JStr("Berlin")))
+            // Positive: the decoded slot ascribes to `Maybe[String]` ...
+            val capital: Maybe[String] = Country.capital.decode(json).capital
+            assert(capital == Present("Berlin"))
+            // ... and the stdlib type is a compile error, not a silent runtime cast.
+            typeCheckFailure(
+                "val c: Option[String] = Country.capital.decode(Json.JObj(Map.empty)).capital"
+            )("Required: Option[String]")
+            typeCheckFailure(
+                "val o: Option[(name: String)] = Queries.country(\"DE\")(Country.name).decode(Json.JObj(Map.empty)).country"
+            )("Required: Option[(name : String)]")
         }
     }
 end SelectionBuilderSpikeSpec

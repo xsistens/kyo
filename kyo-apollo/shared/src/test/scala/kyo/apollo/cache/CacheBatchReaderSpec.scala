@@ -25,7 +25,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
     /** A query whose root selections are supplied per-test; `data` is never
       * decoded through `dataSchema` in the Json-level tests, so `Int` is fine.
       */
-    final case class TestQuery(selections: List[CompiledSelection]) extends Query[Int]:
+    final case class TestQuery(selections: Chunk[CompiledSelection]) extends Query[Int]:
         def name                    = "Q"; def document = "query Q { ... }"
         def dataSchema: Schema[Int] = summon[Schema[Int]]
         def rootField: CompiledField =
@@ -41,8 +41,8 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
     private def obj(
         name: String,
         typeName: String,
-        selections: List[CompiledSelection],
-        args: List[CompiledArgument] = Nil
+        selections: Chunk[CompiledSelection],
+        args: Chunk[CompiledArgument] = Chunk.empty
     ): CompiledField =
         CompiledField(name, CompiledNamedType(typeName), arguments = args, selections = selections)
 
@@ -54,7 +54,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
 
     /** Assemble the response `data` map from `records`, starting at `QUERY_ROOT`. */
     private def toData(
-        selections: List[CompiledSelection],
+        selections: Chunk[CompiledSelection],
         records: Map[String, Record],
         variables: Map[String, Json] = Map.empty,
         resolver: CacheKeyResolver = CacheKeyResolver.default
@@ -77,7 +77,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
-                selections = List(obj("book", "Book", List(leaf("__typename"), leaf("id"), leaf("title"))))
+                selections = Chunk(obj("book", "Book", Chunk(leaf("__typename"), leaf("id"), leaf("title"))))
             )
         def variables: Json = Json.JObj(VectorMap.empty)
     end BookQuery
@@ -93,13 +93,13 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
                     Map("hello" -> RecordValue.Scalar(jstr("world")))
                 )
             )
-            assert(toData(List(leaf("hello")), records) == Json.JObj(Map("hello" -> jstr("world"))))
+            assert(toData(Chunk(leaf("hello")), records) == Json.JObj(Map("hello" -> jstr("world"))))
         }
 
         "a null field reads back as JSON null" in {
             val records =
                 Map("QUERY_ROOT" -> Record(CacheKey.QueryRoot, Map("hello" -> RecordValue.Null)))
-            assert(toData(List(leaf("hello")), records) == Json.JObj(Map("hello" -> Json.JNull)))
+            assert(toData(Chunk(leaf("hello")), records) == Json.JObj(Map("hello" -> Json.JNull)))
         }
 
         "a scalar list reads back element-wise, order preserved" in {
@@ -114,7 +114,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
                 )
             )
             assert(
-                toData(List(listOf(leaf("tags"))), records) ==
+                toData(Chunk(listOf(leaf("tags"))), records) ==
                     Json.JObj(Map("tags" -> Json.JArr(Chunk(jstr("a"), jstr("b")))))
             )
         }
@@ -137,7 +137,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
                 )
             )
             val selections =
-                List(obj("book", "Book", List(leaf("__typename"), leaf("id"), leaf("title"))))
+                Chunk(obj("book", "Book", Chunk(leaf("__typename"), leaf("id"), leaf("title"))))
             assert(
                 toData(selections, records) ==
                     Json.JObj(
@@ -172,7 +172,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
                     Map("code" -> RecordValue.Scalar(jstr("FR")))
                 )
             )
-            val selections = List(listOf(obj("countries", "Country", List(leaf("code")))))
+            val selections = Chunk(listOf(obj("countries", "Country", Chunk(leaf("code")))))
             assert(
                 toData(selections, records) ==
                     Json.JObj(
@@ -191,7 +191,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
         // --- Inline fragments (resolved via the stored __typename) ----------------
 
         "a matching inline fragment's fields are read when the record's __typename matches" in {
-            val fragment = CompiledFragment("Book", List("Book"), List(leaf("title")))
+            val fragment = CompiledFragment("Book", Chunk("Book"), Chunk(leaf("title")))
             val records = Map(
                 "QUERY_ROOT" -> Record(
                     CacheKey.QueryRoot,
@@ -206,7 +206,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
                     )
                 )
             )
-            val selections = List(obj("node", "Node", List(leaf("__typename"), leaf("id"), fragment)))
+            val selections = Chunk(obj("node", "Node", Chunk(leaf("__typename"), leaf("id"), fragment)))
             val node       = toData(selections, records).fields("node").asInstanceOf[Json.JObj]
             assert(node.fields.get("title") == Some(jstr("Frag")))
         }
@@ -218,7 +218,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
                 "QUERY_ROOT" -> Record(CacheKey.QueryRoot, Map("present" -> RecordValue.Scalar(jstr("x"))))
             )
             val miss = intercept[CacheMissException] {
-                toData(List(leaf("present"), leaf("absent")), records)
+                toData(Chunk(leaf("present"), leaf("absent")), records)
             }
             assert(miss.key == "QUERY_ROOT")
             assert(miss.fieldName == Some("absent"))
@@ -232,14 +232,14 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
                     Map("book" -> RecordValue.reference(CacheKey("Book", "42")))
                 )
             )
-            val selections = List(obj("book", "Book", List(leaf("id"))))
+            val selections = Chunk(obj("book", "Book", Chunk(leaf("id"))))
             val miss       = intercept[CacheMissException](toData(selections, records))
             assert(miss.key == "Book:42")
             assert(miss.fieldName == Some("book"))
         }
 
         "an absent root record raises a whole-record CacheMissException" in {
-            val miss = intercept[CacheMissException](toData(List(leaf("hello")), Map.empty))
+            val miss = intercept[CacheMissException](toData(Chunk(leaf("hello")), Map.empty))
             assert(miss.key == "QUERY_ROOT")
             assert(miss.fieldName == None)
         }
@@ -260,10 +260,10 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
                 obj(
                     "book",
                     "Book",
-                    List(leaf("id"), leaf("title")),
-                    args = List(CompiledArgument.literal("id", jstr("42")))
+                    Chunk(leaf("id"), leaf("title")),
+                    args = Chunk(CompiledArgument.literal("id", jstr("42")))
                 )
-            val data = toData(List(bookById), records, resolver = CacheKeyResolver.byIdArgument())
+            val data = toData(Chunk(bookById), records, resolver = CacheKeyResolver.byIdArgument())
             val book = data.fields(bookById.responseName).asInstanceOf[Json.JObj]
             assert(book.fields("title") == jstr("Dune"))
         }
@@ -314,8 +314,8 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
         }
 
         "normalize then toData reproduces the original data map (Json round-trip)" in {
-            val selections = List(
-                listOf(obj("countries", "Country", List(leaf("__typename"), leaf("code"), leaf("name"))))
+            val selections = Chunk(
+                listOf(obj("countries", "Country", Chunk(leaf("__typename"), leaf("code"), leaf("name"))))
             )
             val op = TestQuery(selections)
             val data = Map(

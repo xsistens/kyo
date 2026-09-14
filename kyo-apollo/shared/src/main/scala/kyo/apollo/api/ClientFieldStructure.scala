@@ -1,5 +1,6 @@
 package kyo.apollo.api
 
+import kyo.Chunk
 import kyo.Structure
 import kyo.Tag
 import kyo.apollo.json.Json
@@ -19,7 +20,7 @@ import scala.collection.immutable.VectorMap
   * …fields}` on the way into the cache (so the normalizer keys it) and re-wraps it
   * on the way out. A *param-less* enum stays a leaf blob (a string).
   *
-  * **Recursive types** (`Node(children: List[Node])`, `A → B → A`, a Sum whose
+  * **Recursive types** (`Node(children: Chunk[Node])`, `A → B → A`, a Sum whose
   * variant refers back to it) normalize one level deep: kyo-schema holds
   * `Field.fieldType` by-name precisely so such graphs construct, and every walk
   * here carries the `Tag`s of the Products/Sums on its current path. A type seen
@@ -29,7 +30,7 @@ import scala.collection.immutable.VectorMap
   * tree and the encoded value always agree on where normalization stops.
   *
   * The value's `encode`/`decode` are the whole-value `SchemaJson` codec (which
-  * already handles `Option`/`List` wrapping); this object supplies the selection
+  * already handles `Maybe`/`Chunk` wrapping); this object supplies the selection
   * tree the normalizer/reader walk, plus the `__typename` (un)wrapping.
   */
 private[apollo] object ClientFieldStructure:
@@ -51,8 +52,8 @@ private[apollo] object ClientFieldStructure:
             s.variants.forall(_.variantType.isInstanceOf[Structure.Type.Product])
 
     /** The fields of a Product as selections (no leading `__typename`). */
-    private def productFields(p: Structure.Type.Product, visited: Visited): List[CompiledSelection] =
-        p.fields.toList.map { f =>
+    private def productFields(p: Structure.Type.Product, visited: Visited): Chunk[CompiledSelection] =
+        p.fields.map { f =>
             CompiledField(
                 name = f.name,
                 fieldType = CompiledNamedType(leafName(f.fieldType)),
@@ -64,27 +65,27 @@ private[apollo] object ClientFieldStructure:
       * composite object (`__typename` + its fields); a polymorphic `Sum` →
       * `__typename` + one inline fragment per variant; `Optional`/`Collection` unwrap
       * to the inner shape (the codec handles the wrapper); a param-less enum /
-      * `Primitive` / `Mapping` / `Open` → `Nil` (leaf, stored as a blob). A
-      * `Product`/`Sum` re-entered on its own path (a recursive type) → `Nil` as well.
+      * `Primitive` / `Mapping` / `Open` → empty (leaf, stored as a blob). A
+      * `Product`/`Sum` re-entered on its own path (a recursive type) → empty as well.
       */
-    def selections(t: Structure.Type): List[CompiledSelection] = selections(t, Set.empty)
+    def selections(t: Structure.Type): Chunk[CompiledSelection] = selections(t, Set.empty)
 
-    private def selections(t: Structure.Type, visited: Visited): List[CompiledSelection] = t match
+    private def selections(t: Structure.Type, visited: Visited): Chunk[CompiledSelection] = t match
         case p: Structure.Type.Product if !visited.contains(p.tag) =>
-            TypenameField :: productFields(p, visited + p.tag)
+            TypenameField +: productFields(p, visited + p.tag)
         case s: Structure.Type.Sum if isPolymorphic(s) && !visited.contains(s.tag) =>
-            TypenameField :: s.variants.toList.map { v =>
+            TypenameField +: s.variants.map { v =>
                 val fields = v.variantType match
                     case p: Structure.Type.Product => productFields(p, visited + s.tag + p.tag)
-                    case _                         => Nil
-                CompiledFragment(typeCondition = v.name, possibleTypes = List(v.name), selections = fields)
+                    case _                         => Chunk.empty
+                CompiledFragment(typeCondition = v.name, possibleTypes = Chunk(v.name), selections = fields)
             }
         case o: Structure.Type.Optional   => selections(o.innerType, visited)
         case c: Structure.Type.Collection => selections(c.elementType, visited)
-        case _                            => Nil
+        case _                            => Chunk.empty
 
     /** The leaf type name for `t` (a `Product`/`Sum`/`Primitive` name, unwrapping
-      * `Option`/`List`) — the `CompiledType` name the derived field carries.
+      * `Maybe`/`Chunk`) — the `CompiledType` name the derived field carries.
       */
     def leafName(t: Structure.Type): String = t match
         case o: Structure.Type.Optional   => leafName(o.innerType)
@@ -96,7 +97,7 @@ private[apollo] object ClientFieldStructure:
       * fill every declared field (kyo omits `None` optionals — an absent field would
       * make a later read cache-miss, so it becomes explicit `null`). For a
       * polymorphic **Sum** (kyo `{"Circle": {…}}`): flatten to `{__typename:"Circle",
-      * …fields}` so it stores as a normal, keyable object. `Option`/`List` recurse.
+      * …fields}` so it stores as a normal, keyable object. `Maybe`/`Chunk` recurse.
       * Below the recursion cut of [[selections]] the value stays as encoded.
       */
     def injectTypenames(json: Json, t: Structure.Type): Json = injectTypenames(json, t, Set.empty)
@@ -144,7 +145,7 @@ private[apollo] object ClientFieldStructure:
 
     /** Invert [[injectTypenames]] on the read side: turn the cache's flat
       * `{__typename: "Circle", …fields}` back into kyo's `{"Circle": {…fields}}` so
-      * `SchemaJson.decode` accepts it, recursing through Product/Option/List. Products
+      * `SchemaJson.decode` accepts it, recursing through Product/Maybe/Chunk. Products
       * drop `__typename` (kyo tolerates its absence). A no-op for leaves, and for
       * everything below the recursion cut of [[selections]] (already kyo wire).
       */
