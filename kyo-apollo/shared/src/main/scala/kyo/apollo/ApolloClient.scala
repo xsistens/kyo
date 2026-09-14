@@ -203,18 +203,15 @@ final class ApolloClient private (
 
     /** Release transport resources: closes the shared subscription socket (if one
       * is open) and tears down the WebSocket transport, delivering a terminal
-      * `ApolloWebSocketClosedException` value to any active subscribers. The HTTP
-      * fetch engine holds nothing disposable, so queries/mutations are unaffected
-      * and the client stays usable (a later subscription reopens a fresh socket).
-      * Mirrors apollo-kotlin's `ApolloClient.close()`.
+      * `ApolloWebSocketClosedException` value to any active subscribers, and returns
+      * once the socket is closed. The HTTP fetch engine holds nothing disposable, so
+      * queries/mutations are unaffected; a subscription started afterwards yields
+      * the closed value. Mirrors apollo-kotlin's `ApolloClient.close()`.
       */
-    def close(): Unit = webSocketTransport.close()
+    def close(using Frame): Unit < Async = webSocketTransport.closeNow
 
-    /** Close the client and wait for its subscription socket to be gone: `close()` only enqueues the
-      * shutdown onto the transport's owner fiber, so a caller that needs the socket actually closed when it
-      * returns (a `Scope` release, a test) awaits here.
-      */
-    def closeAndAwait(using Frame): Unit < Async = webSocketTransport.closeAndAwait
+    /** The same as [[close]]: it returns once the subscription socket is gone. */
+    def closeAndAwait(using Frame): Unit < Async = webSocketTransport.closeNow
 end ApolloClient
 
 /** A prepared, not-yet-executed GraphQL operation carrying the
