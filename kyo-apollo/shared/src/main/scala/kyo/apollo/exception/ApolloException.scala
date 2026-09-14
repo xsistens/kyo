@@ -74,6 +74,15 @@ final class ApolloHttpException(
   * that is not JSON, an envelope that is not an object, or `data` that does not
   * match the operation. The decoder's own error, when there is one, is the `cause`.
   *
+  * The message names what was expected and the JSON type that was found, never a
+  * value: `actual` is response data, masked fragment fields included, and a message
+  * ends up in logs and on error screens. For the same reason `getMessage` names only
+  * the class of a `Throwable` cause, whose own message may quote the value it
+  * rejected; the cause itself stays available through `getCause`.
+  *
+  * WARNING: `actual` holds the payload as it was read. Rendering it puts response
+  * data wherever the text goes.
+  *
   * @param actual   the JSON that was read (for unparseable text, a prefix of it as a string)
   * @param expected what the decoder required, e.g. `"a GraphQL response object"`
   */
@@ -81,18 +90,38 @@ final class ApolloParseException(
     val actual: Json,
     val expected: String,
     cause: String | Throwable = ""
-)(using Frame) extends ApolloException(ApolloParseException.describe(actual, expected), cause)
+)(using Frame) extends ApolloException(ApolloParseException.describe(actual, expected), ApolloParseException.detail(cause))
     with ApolloExecuteFailure
-    with ApolloParseFailure
+    with ApolloParseFailure:
+
+    override def getCause(): Throwable =
+        cause match
+            case cause: Throwable => cause
+            case _                => null
+end ApolloParseException
 
 object ApolloParseException:
-    private val maxRendered = 200
 
     private def describe(actual: Json, expected: String): String =
-        val rendered = actual.render
-        val shown    = if rendered.length > maxRendered then rendered.take(maxRendered) + "…" else rendered
-        s"Expected $expected but got: $shown"
-    end describe
+        s"Expected $expected but got ${jsonType(actual)}"
+
+    /** The detail `getMessage` appends: a caller's own text as it is, a `Throwable`
+      * only by its class.
+      */
+    private def detail(cause: String | Throwable): String =
+        cause match
+            case cause: Throwable => s"(cause: ${cause.getClass.getSimpleName})"
+            case text: String     => text
+
+    private def jsonType(json: Json): String =
+        json match
+            case Json.JNull                                 => "null"
+            case Json.JBool(_)                              => "a boolean"
+            case Json.JInt(_) | Json.JDec(_) | Json.JNum(_) => "a number"
+            case Json.JStr(_)                               => "a string"
+            case Json.JArr(_)                               => "an array"
+            case Json.JObj(_)                               => "an object"
+            case Json.JUpload(_)                            => "an upload"
 end ApolloParseException
 
 /** A WebSocket connection carrying subscription operations was closed by the
