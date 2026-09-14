@@ -1,5 +1,6 @@
 package kyo.apollo.cache.normalized.internal
 
+import kyo.Chunk
 import kyo.Maybe
 import kyo.apollo.api.*
 import kyo.apollo.cache.normalized.api.*
@@ -99,7 +100,7 @@ final class Normalizer(
       */
     private def normalizeObject(
         obj: Map[String, Json],
-        selections: List[CompiledSelection],
+        selections: Chunk[CompiledSelection],
         parentType: String,
         key: String,
         path: List[String]
@@ -200,9 +201,9 @@ final class Normalizer(
       * when the server sends it. Shared with the reader via [[FieldCollector]].
       */
     private def collectFields(
-        selections: List[CompiledSelection],
+        selections: Chunk[CompiledSelection],
         typename: String
-    ): List[CompiledField] =
+    ): Chunk[CompiledField] =
         FieldCollector.collect(selections, typename, injectTypename = true)
 
     /** Read an object's `__typename`, when present as a JSON string. */

@@ -1,5 +1,7 @@
 package kyo.apollo.api
 
+import kyo.Chunk
+import kyo.Present
 import kyo.apollo.json.Json
 
 /** Unit tests for the runtime GraphQL printer that renders an inline
@@ -13,13 +15,13 @@ class DocumentPrinterSpec extends kyo.test.Test[Any]:
 
         "renders a scalar variable arg + nested selection" in {
             val args =
-                List(SelectionBuilder.Arg("code", CompiledNamedType("ID").notNull, Json.JStr("DE")))
-            val sels = List(
+                Chunk(SelectionBuilder.Arg("code", CompiledNamedType("ID").notNull, Json.JStr("DE")))
+            val sels = Chunk(
                 CompiledField(
                     "country",
                     CompiledNamedType("Country"),
-                    arguments = List(CompiledArgument.variable("code")),
-                    selections = List(
+                    arguments = Chunk(CompiledArgument.variable("code")),
+                    selections = Chunk(
                         CompiledField("name", CompiledNamedType("String").notNull),
                         CompiledField("capital", CompiledNamedType("String"))
                     )
@@ -33,13 +35,13 @@ class DocumentPrinterSpec extends kyo.test.Test[Any]:
 
         "renders list/non-null variable types in the header" in {
             val args =
-                List(SelectionBuilder.Arg("filter", CompiledNamedType("CountryFilter"), Json.JNull))
-            val sels = List(
+                Chunk(SelectionBuilder.Arg("filter", CompiledNamedType("CountryFilter"), Json.JNull))
+            val sels = Chunk(
                 CompiledField(
                     "countries",
                     CompiledNamedType("Country").notNull.list.notNull,
-                    arguments = List(CompiledArgument.variable("filter")),
-                    selections = List(CompiledField("code", CompiledNamedType("ID").notNull))
+                    arguments = Chunk(CompiledArgument.variable("filter")),
+                    selections = Chunk(CompiledField("code", CompiledNamedType("ID").notNull))
                 )
             )
             assert(
@@ -49,80 +51,80 @@ class DocumentPrinterSpec extends kyo.test.Test[Any]:
         }
 
         "renders a no-argument operation without a variable header" in {
-            val sels = List(
+            val sels = Chunk(
                 CompiledField(
                     "me",
                     CompiledNamedType("User"),
-                    selections = List(CompiledField("id", CompiledNamedType("ID").notNull))
+                    selections = Chunk(CompiledField("id", CompiledNamedType("ID").notNull))
                 )
             )
-            assert(DocumentPrinter.render("query", "Me", Nil, sels) == "query Me { me { id } }")
+            assert(DocumentPrinter.render("query", "Me", Chunk.empty, sels) == "query Me { me { id } }")
         }
 
         "renders an anonymous @defer fragment inside a field" in {
-            val sels = List(
+            val sels = Chunk(
                 CompiledField(
                     "country",
                     CompiledNamedType("Country"),
-                    selections = List(
+                    selections = Chunk(
                         CompiledField("code", CompiledNamedType("ID").notNull),
                         CompiledFragment(
                             "",
-                            Nil,
-                            List(CompiledField("capital", CompiledNamedType("String"))),
-                            defer = Some(DeferDirective("details"))
+                            Chunk.empty,
+                            Chunk(CompiledField("capital", CompiledNamedType("String"))),
+                            defer = Present(DeferDirective("details"))
                         )
                     )
                 )
             )
             assert(
-                DocumentPrinter.render("query", "GetCountry", Nil, sels) ==
+                DocumentPrinter.render("query", "GetCountry", Chunk.empty, sels) ==
                     "query GetCountry { country { code ... @defer(label: \"details\") { capital } } }"
             )
         }
 
         "renders a typed @defer fragment carrying an if condition" in {
-            val sels = List(
+            val sels = Chunk(
                 CompiledFragment(
                     "Launch",
-                    List("Launch"),
-                    List(CompiledField("site", CompiledNamedType("String"))),
-                    defer = Some(DeferDirective("more", `if` = Some("expand")))
+                    Chunk("Launch"),
+                    Chunk(CompiledField("site", CompiledNamedType("String"))),
+                    defer = Present(DeferDirective("more", `if` = Present("expand")))
                 )
             )
             assert(
-                DocumentPrinter.render("query", "Q", Nil, sels) ==
+                DocumentPrinter.render("query", "Q", Chunk.empty, sels) ==
                     "query Q { ... on Launch @defer(label: \"more\", if: $expand) { site } }"
             )
         }
 
         "renders a @stream directive on a list field (initialCount first)" in {
-            val sels = List(
+            val sels = Chunk(
                 CompiledField(
                     "countries",
                     CompiledNamedType("Country").notNull.list.notNull,
-                    selections = List(CompiledField("name", CompiledNamedType("String").notNull)),
-                    stream = Some(StreamDirective("countries", 1))
+                    selections = Chunk(CompiledField("name", CompiledNamedType("String").notNull)),
+                    stream = Present(StreamDirective("countries", 1))
                 )
             )
             assert(
-                DocumentPrinter.render("query", "GetCountries", Nil, sels) ==
+                DocumentPrinter.render("query", "GetCountries", Chunk.empty, sels) ==
                     "query GetCountries { countries @stream(initialCount: 1, label: \"countries\") { name } }"
             )
         }
 
         "renders @stream after the field arguments and before the selection set, with if" in {
-            val sels = List(
+            val sels = Chunk(
                 CompiledField(
                     "feed",
                     CompiledNamedType("Post").notNull.list.notNull,
-                    arguments = List(CompiledArgument.variable("limit")),
-                    selections = List(CompiledField("id", CompiledNamedType("ID").notNull)),
-                    stream = Some(StreamDirective("feed", 2, `if` = Some("live")))
+                    arguments = Chunk(CompiledArgument.variable("limit")),
+                    selections = Chunk(CompiledField("id", CompiledNamedType("ID").notNull)),
+                    stream = Present(StreamDirective("feed", 2, `if` = Present("live")))
                 )
             )
             assert(
-                DocumentPrinter.render("query", "Q", Nil, sels) ==
+                DocumentPrinter.render("query", "Q", Chunk.empty, sels) ==
                     "query Q { feed(limit: $limit) @stream(initialCount: 2, label: \"feed\", if: $live) { id } }"
             )
         }

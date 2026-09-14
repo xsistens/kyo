@@ -1,11 +1,15 @@
 package kyo.apollo.api
 
+import kyo.Absent
+import kyo.Chunk
+import kyo.Maybe
+import kyo.Present
 import kyo.apollo.json.Json
 import scala.collection.immutable.VectorMap
 
 /** Guards [[SelectionBuilder.onType]], the inline-fragment branch a generated
   * union selector delegates to: the branch renders as `... on <Type> { … }`,
-  * decodes to `Some` exactly when the object's `__typename` matches, and a
+  * decodes to `Present` exactly when the object's `__typename` matches, and a
   * decoded value encodes back to the same response shape (with the concrete
   * member's `__typename`) so cache normalization keys the member type, not the
   * union. The hand-written layer below mimics what the generator emits for
@@ -34,18 +38,18 @@ class UnionSelectionSpec extends kyo.test.Test[Any]:
             SelectionBuilder.scalar("name", CompiledNamedType("String").notNull, ScalarCodec.string)
 
     object PlayableItem:
-        def onTrack[A](sel: SelectionBuilder[Track, A]): SelectionBuilder[PlayableItem, (onTrack: Option[A])] =
+        def onTrack[A](sel: SelectionBuilder[Track, A]): SelectionBuilder[PlayableItem, (onTrack: Maybe[A])] =
             SelectionBuilder.onType("Track", sel)
-        def onEpisode[A](sel: SelectionBuilder[Episode, A]): SelectionBuilder[PlayableItem, (onEpisode: Option[A])] =
+        def onEpisode[A](sel: SelectionBuilder[Episode, A]): SelectionBuilder[PlayableItem, (onEpisode: Maybe[A])] =
             SelectionBuilder.onType("Episode", sel)
     end PlayableItem
 
     object Queries:
-        def item[A](sel: SelectionBuilder[PlayableItem, A]): SelectionBuilder[RootQuery, (item: Option[A])] =
+        def item[A](sel: SelectionBuilder[PlayableItem, A]): SelectionBuilder[RootQuery, (item: Maybe[A])] =
             SelectionBuilder.obj(
                 "item",
                 CompiledNamedType("PlayableItem"),
-                Nil,
+                Chunk.empty,
                 sel,
                 SelectionBuilder.Nesting.Nullable(SelectionBuilder.Nesting.Leaf)
             )
@@ -59,14 +63,14 @@ class UnionSelectionSpec extends kyo.test.Test[Any]:
     "union selection via onType" - {
 
         "renders inline fragments with type conditions" in {
-            val doc = DocumentPrinter.render("query", "Q", Nil, sel.selections)
+            val doc = DocumentPrinter.render("query", "Q", Chunk.empty, sel.selections)
             assert(
                 doc == "query Q { item { __typename ... on Track { name durationMs } ... on Episode { name } } }",
                 doc
             )
         }
 
-        "decodes the matching branch to Some, the others to None" in {
+        "decodes the matching branch to Present, the others to Absent" in {
             val response = Json.JObj(VectorMap(
                 "item" -> Json.JObj(VectorMap(
                     "__typename" -> Json.JStr("Track"),
@@ -76,8 +80,8 @@ class UnionSelectionSpec extends kyo.test.Test[Any]:
             ))
             val decoded = sel.decode(response)
             val item    = decoded.item.getOrElse(fail("item was null"))
-            assert(item.onTrack == Some((name = "Glass Season", durationMs = 215000)), item.toString)
-            assert(item.onEpisode == None, item.toString)
+            assert(item.onTrack == Present((name = "Glass Season", durationMs = 215000)), item.toString)
+            assert(item.onEpisode == Absent, item.toString)
         }
 
         "decodes an Episode value through the other branch" in {
@@ -89,8 +93,8 @@ class UnionSelectionSpec extends kyo.test.Test[Any]:
             ))
             val decoded = sel.decode(response)
             val item    = decoded.item.getOrElse(fail("item was null"))
-            assert(item.onTrack == None, item.toString)
-            assert(item.onEpisode == Some((name = "Signal Path #3")), item.toString)
+            assert(item.onTrack == Absent, item.toString)
+            assert(item.onEpisode == Present((name = "Signal Path #3")), item.toString)
         }
 
         "encodes a decoded value back to the member-typed response shape" in {
@@ -104,9 +108,9 @@ class UnionSelectionSpec extends kyo.test.Test[Any]:
             assert(sel.encode(sel.decode(response)) == response, sel.encode(sel.decode(response)).toString)
         }
 
-        "decodes a null union field to None without touching the branches" in {
+        "decodes a null union field to Absent without touching the branches" in {
             val decoded = sel.decode(Json.JObj(VectorMap("item" -> Json.JNull)))
-            assert(decoded.item == None, decoded.toString)
+            assert(decoded.item == Absent, decoded.toString)
         }
     }
 end UnionSelectionSpec

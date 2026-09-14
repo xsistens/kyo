@@ -1,5 +1,6 @@
 package kyo.apollo.cache.normalized.api
 
+import kyo.Chunk
 import kyo.Maybe
 import kyo.apollo.api.CompiledField
 import kyo.apollo.json.Json
@@ -24,7 +25,7 @@ import kyo.apollo.json.Json
   * unpolicied Phase 04 path did.
   */
 final class FieldPolicies private (
-    private val keyArgsByField: Map[(String, String), List[String]],
+    private val keyArgsByField: Map[(String, String), Chunk[String]],
     private val readByField: Map[(String, String), FieldPolicyReadContext => Maybe[CacheKey]],
     private val mergeByField: Map[(String, String), FieldValueMerger]
 ):
@@ -80,7 +81,7 @@ object FieldPolicies:
       * When two policies configure the same `(typeName, fieldName)` for the same
       * aspect, the later one wins.
       */
-    def fromList(policies: List[FieldPolicy]): FieldPolicies =
+    def fromList(policies: Seq[FieldPolicy]): FieldPolicies =
         new FieldPolicies(
             policies.collect {
                 case p if p.keyArgs.isDefined => (p.typeName, p.fieldName) -> p.keyArgs.get

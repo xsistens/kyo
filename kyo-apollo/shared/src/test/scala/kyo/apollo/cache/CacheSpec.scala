@@ -51,7 +51,7 @@ class CacheSpec extends kyo.test.Test[Any]:
     private def obj(
         name: String,
         typeName: String,
-        selections: List[CompiledSelection]
+        selections: Chunk[CompiledSelection]
     ): CompiledField =
         CompiledField(name, CompiledNamedType(typeName), selections = selections)
 
@@ -65,22 +65,22 @@ class CacheSpec extends kyo.test.Test[Any]:
             obj(
                 "data",
                 "Query",
-                List(
+                Chunk(
                     obj(
                         "library",
                         "Library",
-                        List(
+                        Chunk(
                             leaf("__typename"),
                             leaf("id"),
                             leaf("name"),
                             CompiledField(
                                 "books",
                                 CompiledListType(CompiledNamedType("Book")),
-                                selections = List(
+                                selections = Chunk(
                                     leaf("__typename"),
                                     leaf("id"),
                                     leaf("title"),
-                                    obj("author", "Author", List(leaf("__typename"), leaf("id"), leaf("name")))
+                                    obj("author", "Author", Chunk(leaf("__typename"), leaf("id"), leaf("name")))
                                 )
                             )
                         )
@@ -124,7 +124,7 @@ class CacheSpec extends kyo.test.Test[Any]:
         def name                          = "StatsQuery"; def document = "query StatsQuery { stats { label } }"
         def dataSchema: Schema[StatsData] = summon[Schema[StatsData]]
         def rootField: CompiledField =
-            obj("data", "Query", List(obj("stats", "Stats", List(leaf("label")))))
+            obj("data", "Query", Chunk(obj("stats", "Stats", Chunk(leaf("label")))))
         def variables: Json = Json.JObj(VectorMap.empty)
     end StatsQuery
 
@@ -145,7 +145,7 @@ class CacheSpec extends kyo.test.Test[Any]:
         derives Schema
     final case class FeaturedData(featured: AlbumNarrow) derives Schema
 
-    private def coversField(subfields: List[CompiledSelection]): CompiledField =
+    private def coversField(subfields: Chunk[CompiledSelection]): CompiledField =
         CompiledField("covers", CompiledListType(CompiledNamedType("Image")), selections = subfields)
 
     final case class WideQuery() extends Query[WideData]:
@@ -157,10 +157,10 @@ class CacheSpec extends kyo.test.Test[Any]:
             obj(
                 "data",
                 "Query",
-                List(obj(
+                Chunk(obj(
                     "album",
                     "Album",
-                    List(leaf("__typename"), leaf("id"), coversField(List(leaf("url"), leaf("alt"))))
+                    Chunk(leaf("__typename"), leaf("id"), coversField(Chunk(leaf("url"), leaf("alt"))))
                 ))
             )
         def variables: Json = Json.JObj(VectorMap.empty)
@@ -175,10 +175,10 @@ class CacheSpec extends kyo.test.Test[Any]:
             obj(
                 "data",
                 "Query",
-                List(obj(
+                Chunk(obj(
                     "featured",
                     "Album",
-                    List(leaf("__typename"), leaf("id"), coversField(List(leaf("url"))))
+                    Chunk(leaf("__typename"), leaf("id"), coversField(Chunk(leaf("url"))))
                 ))
             )
         def variables: Json = Json.JObj(VectorMap.empty)

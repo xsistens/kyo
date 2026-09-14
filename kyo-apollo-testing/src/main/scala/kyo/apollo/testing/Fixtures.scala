@@ -1,5 +1,6 @@
 package kyo.apollo.testing
 
+import kyo.Chunk
 import kyo.Schema
 import kyo.apollo.api.*
 import kyo.apollo.json.Json
@@ -71,7 +72,7 @@ object Fixtures:
     final case class User(__typename: String, id: String, name: String) derives Schema, CanEqual
     final case class UserData(user: User) derives Schema, CanEqual
 
-    private def userSelections: List[CompiledSelection] = List(
+    private def userSelections: Chunk[CompiledSelection] = Chunk(
         CompiledField("__typename", CompiledNamedType("String")),
         CompiledField("id", CompiledNamedType("String")),
         CompiledField("name", CompiledNamedType("String"))
@@ -86,7 +87,7 @@ object Fixtures:
                 "data",
                 CompiledNamedType("Query"),
                 selections =
-                    List(CompiledField("user", CompiledNamedType("User"), selections = userSelections))
+                    Chunk(CompiledField("user", CompiledNamedType("User"), selections = userSelections))
             )
         def variables: Json = Json.JObj(VectorMap.empty)
     end CurrentUserQuery

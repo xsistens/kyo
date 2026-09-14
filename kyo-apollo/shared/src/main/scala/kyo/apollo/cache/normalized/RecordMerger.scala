@@ -60,7 +60,7 @@ final private class FieldPolicyRecordMerger(policies: FieldPolicies) extends Rec
                 val typename = recordTypename(incoming).orElse(recordTypename(old))
                 var changed  = Set.empty[String]
                 val mergedIncoming = incoming.fields.map { case (fieldKey, incomingValue) =>
-                    val oldValue = old.fields.get(fieldKey)
+                    val oldValue = old.get(fieldKey)
                     val newValue = typename
                         .flatMap(t => policies.fieldMerge(t, baseName(fieldKey)))
                         .map(mergeFn => mergeFn(oldValue, incomingValue))

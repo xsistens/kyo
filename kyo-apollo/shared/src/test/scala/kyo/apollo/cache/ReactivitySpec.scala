@@ -46,7 +46,7 @@ class ReactivitySpec extends kyo.test.Test[Any]:
     final case class User(__typename: String, id: String, name: String) derives Schema
     final case class UserData(user: User) derives Schema
 
-    private def userSelections: List[CompiledSelection] = List(
+    private def userSelections: Chunk[CompiledSelection] = Chunk(
         CompiledField("__typename", CompiledNamedType("String")),
         CompiledField("id", CompiledNamedType("String")),
         CompiledField("name", CompiledNamedType("String"))
@@ -61,7 +61,7 @@ class ReactivitySpec extends kyo.test.Test[Any]:
                 "data",
                 CompiledNamedType("Query"),
                 selections =
-                    List(CompiledField("user", CompiledNamedType("User"), selections = userSelections))
+                    Chunk(CompiledField("user", CompiledNamedType("User"), selections = userSelections))
             )
         def variables: Json = Json.JObj(VectorMap.empty)
     end CurrentUserQuery

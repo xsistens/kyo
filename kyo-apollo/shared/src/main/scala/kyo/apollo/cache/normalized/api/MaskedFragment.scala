@@ -1,5 +1,9 @@
 package kyo.apollo.cache.normalized.api
 
+import kyo.Absent
+import kyo.Chunk
+import kyo.Maybe
+import kyo.Present
 import kyo.apollo.api.*
 import kyo.apollo.json.Json
 import scala.NamedTuple.AnyNamedTuple
@@ -81,12 +85,12 @@ final class EntityFragment[Origin, D <: AnyNamedTuple] private[apollo] (
       * merge downstream (FieldCollector by response name, the server per GraphQL
       * §5.3.2).
       */
-    private[apollo] val spreadSelections: List[CompiledSelection] =
-        MaskedFragment.TypenameField :: identity.keyFields ::: selection.selections
+    private[apollo] val spreadSelections: Chunk[CompiledSelection] =
+        (MaskedFragment.TypenameField +: identity.keyFields) ++ selection.selections
 
     /** The response names this fragment's ref captures from the parent row. */
     private val ownResponseNames: Set[String] =
-        (MaskedFragment.TypenameField.responseName :: identity.keyFieldNames :::
+        ((MaskedFragment.TypenameField.responseName +: identity.keyFieldNames) ++
             selection.selections.collect { case f: CompiledField => f.responseName }).toSet
 
     /** Build a [[Ref]] from the parent response object. The type-name part of the
@@ -99,10 +103,10 @@ final class EntityFragment[Origin, D <: AnyNamedTuple] private[apollo] (
             case Some(Json.JStr(t)) => t
             case _                  => typeName
         val values = identity.keyFieldNames.map { field =>
-            row.get(field).flatMap(MaskedFragment.scalarString) match
-                case Some(v) => v
-                case None =>
-                    throw SelectionDecodeException(Json.JObj(VectorMap.from(row)))
+            Maybe
+                .fromOption(row.get(field))
+                .flatMap(MaskedFragment.scalarString)
+                .getOrElse(throw SelectionDecodeException(Json.JObj(VectorMap.from(row))))
         }
         val slice = VectorMap.from(row.view.filterKeys(ownResponseNames).toSeq)
         Ref(slice, CacheKey(tn, values.mkString("+")))
@@ -116,7 +120,7 @@ final class EntityFragment[Origin, D <: AnyNamedTuple] private[apollo] (
             spreadSelections,
             selection,
             refFromRow,
-            value => value.asInstanceOf[Ref].raw.toList
+            value => Chunk.from(value.asInstanceOf[Ref].raw)
         )
 
 end EntityFragment
@@ -177,7 +181,7 @@ final class EmbeddedFragment[Origin, D <: AnyNamedTuple] private[apollo] (
             selection.selections,
             selection,
             refFromRow,
-            value => value.asInstanceOf[Ref].raw.toList
+            value => Chunk.from(value.asInstanceOf[Ref].raw)
         )
 
 end EmbeddedFragment
@@ -198,11 +202,11 @@ private[apollo] object MaskedFragment:
     /** Render a JSON scalar as its raw id string (`42`, not `"42"`), matching the
       * key generators' rendering so `ref.key` equals the normalizer's record key.
       */
-    def scalarString(json: Json): Option[String] = json match
-        case Json.JStr(s)  => Some(s)
-        case Json.JNum(_)  => Some(json.render)
-        case Json.JBool(b) => Some(b.toString)
-        case _             => None
+    def scalarString(json: Json): Maybe[String] = json match
+        case Json.JStr(s)  => Present(s)
+        case Json.JNum(_)  => Present(json.render)
+        case Json.JBool(b) => Present(b.toString)
+        case _             => Absent
 
     def spreadEntityImpl[Origin: Type, D <: AnyNamedTuple: Type](
         self: Expr[EntityFragment[Origin, D]]

@@ -1,5 +1,7 @@
 package kyo.apollo.network.http
 
+import kyo.Chunk
+import kyo.Present
 import kyo.Schema
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledFragment
@@ -43,12 +45,12 @@ class HttpRequestComposerSpec extends kyo.test.Test[Any]:
         def rootField: CompiledField = CompiledField(
             "data",
             CompiledNamedType("Query"),
-            selections = List(
+            selections = Chunk(
                 CompiledFragment(
                     "",
-                    Nil,
-                    List(CompiledField("x", CompiledNamedType("Int"))),
-                    defer = Some(DeferDirective("d"))
+                    Chunk.empty,
+                    Chunk(CompiledField("x", CompiledNamedType("Int"))),
+                    defer = Present(DeferDirective("d"))
                 )
             )
         )

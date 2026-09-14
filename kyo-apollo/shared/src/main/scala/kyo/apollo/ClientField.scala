@@ -131,7 +131,7 @@ end ClientField
 object ClientField:
 
     /** Declare a local `@client` field of **any** `Schema`-derivable value type `V` —
-      * scalar, enum, `Option`, `List`, a case class, or arbitrary nesting — the sole
+      * scalar, enum, `Maybe`, `Chunk`, a case class, or arbitrary nesting — the sole
       * constructor. The codec is derived from `V`'s `Schema`, and the cache SHAPE is
       * derived from its structure ([[kyo.apollo.api.ClientFieldStructure]]): a scalar/
       * enum is an inline blob, while an object/list value is **normalized** into cache
@@ -139,8 +139,8 @@ object ClientField:
       *
       * {{{
       * ClientField.create[Country, Boolean]("isFavorite", default = false)
-      * ClientField.create[Country, Option[Book]]("favoriteBook", default = None)  // Book derives Schema
-      * ClientField.create[Country, List[String]]("tags", default = Nil)
+      * ClientField.create[Country, Maybe[Book]]("favoriteBook", default = Absent)  // Book derives Schema
+      * ClientField.create[Country, Chunk[String]]("tags", default = Chunk.empty)
       * ClientField.create[RootQuery, Boolean]("cartOpen", default = false)
       * }}}
       *
@@ -150,7 +150,7 @@ object ClientField:
       * `TypePolicy` and `V` carries that policy's key field (then it writes into the
       * same `Type:id` record a server query reads); otherwise the object is stored as
       * a path-keyed record embedded under its parent — the local-state default.
-      * Recursive types (`Node(children: List[Node])`, `A → B → A`) normalize one
+      * Recursive types (`Node(children: Chunk[Node])`, `A → B → A`) normalize one
       * level deep; the recursive tail is stored as a blob and still round-trips.
       * Note: `Schema.rename`d fields are unsupported.
       */
@@ -171,7 +171,7 @@ object ClientField:
                 CompiledNamedType(
                     if sels.isEmpty then "Client" else ClientFieldStructure.leafName(structure)
                 )
-            // Whole-value Schema codec (handles Option/List natively), with `__typename`
+            // Whole-value Schema codec (handles Maybe/Chunk natively), with `__typename`
             // injected at each product level so the normalizer can key objects.
             val codec = ScalarCodec[V](
                 json => SchemaJson.decode[V](ClientFieldStructure.toKyoWire(json, structure))(using sch),
