@@ -11,12 +11,15 @@ import kyo.apollo.json.Json
 import kyo.discard
 import scala.annotation.implicitNotFound
 
-/** How two stored values of the *same* field key merge when a new write lands on
-  * an existing record: given the value already stored (`existing`, `Absent` if
-  * the field is new) and the incoming value, produce the value to keep. The
-  * default everywhere is "incoming wins"; a [[FieldPolicy]] overrides that for
-  * one field — e.g. a connection field unions paginated edges instead of
-  * replacing them.
+/** How two values of the *same* field key merge when a record meets another under
+  * its key: given the value already there (`existing`, `Absent` if the field is
+  * new) and the incoming value, produce the value to keep. It runs wherever two
+  * records of one key meet — a later write onto the stored record, and a later
+  * occurrence of the key inside one response (the same entity reached twice, a
+  * connection selected under two aliases) — so it must tolerate seeing the same
+  * incoming value twice. The default everywhere is "incoming wins"; a
+  * [[FieldPolicy]] overrides that for one field — e.g. a connection field unions
+  * paginated edges instead of replacing them.
   */
 type FieldValueMerger = (existing: Maybe[RecordValue], incoming: RecordValue) => RecordValue
 

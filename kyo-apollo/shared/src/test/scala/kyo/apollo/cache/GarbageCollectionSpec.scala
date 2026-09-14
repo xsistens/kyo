@@ -324,49 +324,71 @@ class GarbageCollectionSpec extends kyo.test.Test[Any]:
         // --- NormalizedCacheDecorator persistence seam ------------------------------
 
         "a bare decorator forwards every operation to its delegate" in {
-            val backing = MemoryCache()
+            // All six members of the backend contract: read (as one batch of two keys),
+            // transact (through merge), remove, clearAll, allRecords and sizeLimit.
+            val backing = MemoryCache(maxSize = 3)
             val deco    = new NormalizedCacheDecorator(backing) {}
             for
-                _        <- deco.merge(Chunk(rec(keyA, fk("x") -> scalar("1"))))
-                written  <- backing.loadRecord(keyA)
-                readBack <- deco.loadRecord(keyA)
-                all      <- deco.allRecords
-                removed  <- deco.remove(Chunk(keyA))
-                gone     <- backing.loadRecord(keyA)
+                _       <- deco.merge(Chunk(rec(keyA, fk("x") -> scalar("1")), rec(keyB, fk("y") -> scalar("2"))))
+                written <- backing.loadRecord(keyA)
+                batch   <- deco.read(_.load(Chunk(keyA, keyB)))
+                all     <- deco.allRecords
+                removed <- deco.remove(Chunk(keyA))
+                gone    <- backing.loadRecord(keyA)
+                _       <- deco.clearAll
+                cleared <- backing.allRecords
             yield
-                assert(written.flatMap(_.get(fk("x"))) == Present(scalar("1")))  // written through
-                assert(readBack.flatMap(_.get(fk("x"))) == Present(scalar("1"))) // read through
-                assert(all.keySet == Set(keyA))
+                assert(written.flatMap(_.get(fk("x"))) == Present(scalar("1"))) // written through
+                assert(batch.keySet == Set(keyA, keyB))                         // one batch read through
+                assert(batch.get(keyB).map(_.get(fk("y"))) == Some(Present(scalar("2"))))
+                assert(all.keySet == Set(keyA, keyB))
                 assert(removed == Set(keyA))
                 assert(gone == Absent)
+                assert(cleared.isEmpty)
+                assert(deco.sizeLimit == Present(3))
+                assert(new NormalizedCacheDecorator(MemoryCache()) {}.sizeLimit == Absent)
             end for
         }
 
-        "a decorator that overrides transact sees every write, including the store's" in {
-            val backing   = MemoryCache()
-            var persisted = Chunk.empty[CacheKey]
-            class PersistingCache(d: NormalizedCache) extends NormalizedCacheDecorator(d):
+        "a decorator that overrides transact persists every write a real ApolloStore makes" in {
+            // The persistence pattern the decorator exists for, driven through a store
+            // rather than by calling the decorator directly: `transact` is the one write
+            // primitive, so it is what the store's write reaches.
+            val op   = UpdateUserNameMutation("Bob")
+            val data = UpdateUserData(User("User", "1", "Bob"))
+            class PersistingCache(d: NormalizedCache, persisted: AtomicRef[Set[CacheKey]])
+                extends NormalizedCacheDecorator(d):
                 override def transact[A](
                     f: RecordLoader => (Chunk[Record], A),
                     cacheHeaders: CacheHeaders,
                     merger: RecordMerger
                 )(using Frame): (Set[CacheKey], A) < Sync =
                     super.transact(f, cacheHeaders, merger).map { (changed, a) =>
-                        persisted = persisted ++ Chunk.from(changed)
-                        (changed, a)
+                        persisted.updateAndGet(_ ++ changed).andThen((changed, a))
                     }
             end PersistingCache
-            val deco  = new PersistingCache(backing)
-            val store = new ApolloStore(deco, cacheKeyGenerator = IdCacheKeyGenerator(List("id")))
             for
-                _      <- deco.merge(Chunk(rec(keyA, fk("x") -> scalar("1"))))
-                _      <- store.writeOptimisticUpdates(UpdateUserNameMutation("Bob"), UpdateUserData(User("User", "1", "Bob")), "m1")
-                _      <- store.rollbackAndWrite(UpdateUserNameMutation("Bob"), UpdateUserData(User("User", "1", "Bob")), "m1")
-                loaded <- deco.loadRecord(keyA)
+                persisted <- AtomicRef.init(Set.empty[CacheKey])
+                store = new ApolloStore(new PersistingCache(MemoryCache(), persisted), cacheKeyGenerator = IdCacheKeyGenerator(List("id")))
+                _    <- store.writeOperation(op, data)
+                keys <- persisted.get
+                read <- store.readOperation(op)
             yield
-                assert(persisted.toSet == Set(keyA, CacheKey.MutationRoot, CacheKey("User", "1"))) // intercepted for persistence
-                assert(loaded.isDefined)                                                           // inherited forwarding still works
+                assert(keys == store.normalize(op, data).keySet, s"the store's write bypassed the decorator: $keys")
+                assert(keys == Set(CacheKey.MutationRoot, CacheKey("User", "1")))
+                assert(read == data) // reads still forward
             end for
+        }
+
+        "a decorator has no second write seam to override: merge is final" in {
+            typeCheckFailure("""
+                new kyo.apollo.cache.normalized.NormalizedCacheDecorator(kyo.apollo.cache.normalized.MemoryCache()):
+                    override def merge(
+                        records: kyo.Chunk[kyo.apollo.cache.normalized.api.Record],
+                        cacheHeaders: kyo.apollo.cache.normalized.api.CacheHeaders,
+                        merger: kyo.apollo.cache.normalized.RecordMerger
+                    )(using kyo.Frame): Set[kyo.apollo.cache.normalized.api.CacheKey] < kyo.Sync = Set.empty
+            """)("final")
         }
     }
 end GarbageCollectionSpec

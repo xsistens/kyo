@@ -1,11 +1,12 @@
 package kyo.apollo.cache.normalized.internal
 
+import kyo.Absent
 import kyo.Chunk
 import kyo.Maybe
 import kyo.apollo.api.*
+import kyo.apollo.cache.normalized.RecordMerger
 import kyo.apollo.cache.normalized.api.*
 import kyo.apollo.json.Json
-import kyo.discard
 import scala.collection.mutable
 
 /** Turns a GraphQL response `data` map into a flat set of normalized
@@ -27,7 +28,11 @@ import scala.collection.mutable
   * (typically `__typename` + id), falling back to a position-based key from the
   * response path when the object carries no stable id. Two occurrences of the
   * same key within one response are merged into a single record before the map
-  * is returned. Mirrors apollo-kotlin's `Normalizer`.
+  * is returned — through the store's [[RecordMerger]], the same one the backend
+  * applies when the records are committed. "Two records under one key, which
+  * value holds?" has one answer whether both arrive in one response (a connection
+  * selected twice under two aliases) or in two writes, so a field policy such as a
+  * connection's edges union applies to both. Mirrors apollo-kotlin's `Normalizer`.
   *
   * That fallback path is rooted at the NEAREST KEYED ANCESTOR, not at the
   * operation root: below `Album:1` an id-less image is `Album:1.images.0`, never
@@ -50,13 +55,17 @@ import scala.collection.mutable
   * @param cacheKeyGenerator the policy that assigns a [[CacheKey]] to each object
   * @param fieldPolicies     per-field policies consulted for the storage
   *                          [[FieldKey]] (e.g. a connection field dropping its
-  *                          pagination arguments); defaults to the identity policy
+  *                          pagination arguments)
+  * @param merger            the record merger for two occurrences of one key in
+  *                          the response — the store's own, so the response is
+  *                          merged exactly as the backend merges it
   */
 final class Normalizer(
     variables: Map[String, Json],
     rootKey: CacheKey,
     cacheKeyGenerator: CacheKeyGenerator,
-    fieldPolicies: FieldPolicies = FieldPolicies.empty
+    fieldPolicies: FieldPolicies,
+    merger: RecordMerger
 ):
 
     /** Records accumulated so far, keyed by [[Record.key]]. Insertion-ordered so
@@ -210,38 +219,44 @@ final class Normalizer(
     private def objectTypename(obj: Map[String, Json]): Maybe[String] =
         Maybe.fromOption(obj.get("__typename").collect { case Json.JStr(t) => t })
 
-    /** Merge `record` into the accumulator, unioning fields (later values win) when
-      * the same key appears more than once in a single response.
+    /** Merge `record` into the accumulator through [[merger]] — a later occurrence of
+      * the same key in this response is merged onto the earlier one exactly as a
+      * later write is merged onto the stored record.
       */
     private def mergeRecord(record: Record): Unit =
-        discard(records.updateWith(record.key) {
-            case Some(existing) => Some(existing.copy(fields = existing.fields ++ record.fields))
-            case None           => Some(record)
-        })
+        records.update(record.key, merger.merge(Maybe.fromOption(records.get(record.key)), record)._1)
 end Normalizer
 
 object Normalizer:
     /** Normalize `data` for `operation` into a set of [[Record]]s.
       *
       * Convenience over the class: derives the root key from the operation kind and
-      * runs a fresh [[Normalizer]]. `data` is the operation's response `data` map
-      * (as produced by `operation.dataSchema`).
+      * runs a fresh [[Normalizer]] that merges with `merger`. `data` is the
+      * operation's response `data` map (as produced by `operation.dataSchema`).
       *
       * @param operation         the operation whose response is being normalized
       * @param data              the response `data` object
       * @param variables         the operation's encoded variables (default none)
       * @param cacheKeyGenerator the key policy (default id-based)
-      * @param fieldPolicies     per-field storage-key policies (default identity)
+      * @param fieldPolicies     per-field policies (default identity)
+      * @param merger            the record merger; `Absent` (the default) takes the
+      *                          one an [[kyo.apollo.cache.normalized.ApolloStore]]
+      *                          derives from `fieldPolicies`
       */
     def normalize(
         operation: Operation[?],
         data: Map[String, Json],
         variables: Map[String, Json] = Map.empty,
         cacheKeyGenerator: CacheKeyGenerator = CacheKeyGenerator.default,
-        fieldPolicies: FieldPolicies = FieldPolicies.empty
+        fieldPolicies: FieldPolicies = FieldPolicies.empty,
+        merger: Maybe[RecordMerger] = Absent
     ): Map[CacheKey, Record] =
-        val rootKey = CacheKey.rootKey(operation)
-        new Normalizer(variables, rootKey, cacheKeyGenerator, fieldPolicies)
-            .normalize(data, operation.rootField)
+        new Normalizer(
+            variables,
+            CacheKey.rootKey(operation),
+            cacheKeyGenerator,
+            fieldPolicies,
+            merger.getOrElse(RecordMerger.fieldPolicies(fieldPolicies))
+        ).normalize(data, operation.rootField)
     end normalize
 end Normalizer

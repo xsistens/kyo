@@ -17,9 +17,11 @@ import kyo.apollo.json.Json
   * backend (see [[NormalizedCache.mergeRecords]]). [[fieldPolicies]] wraps that
   * with per-field overrides from a [[FieldPolicies]] registry, so a
   * [[kyo.apollo.cache.normalized.api.ConnectionFieldPolicy]] can union paginated
-  * edges instead of replacing them. A [[NormalizedCache]] backend applies the
-  * merger the store hands it at write time, keeping merge policy out of the
-  * storage layer.
+  * edges instead of replacing them. An [[ApolloStore]] builds one merger and uses
+  * it wherever two records meet under one key: the [[internal.Normalizer]] merges a
+  * key repeated inside one response with it, and a [[NormalizedCache]] backend
+  * merges every commit with the merger the store hands it — keeping merge policy
+  * out of the storage layer and giving the question one answer.
   */
 trait RecordMerger:
     /** Merge `incoming` onto the optional `existing` record of the same key,
