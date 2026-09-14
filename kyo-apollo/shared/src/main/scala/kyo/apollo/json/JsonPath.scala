@@ -1,80 +1,90 @@
 package kyo.apollo.json
 
+import kyo.Absent
 import kyo.Chunk
+import kyo.Maybe
+import kyo.Present
 
 /** Walks and splices a rooted response path (`["a", 0, "b"]`, mixing field names
   * and list indices) into a [[Json]] tree — the addressing an incremental-delivery
   * (`@defer`) patch uses to merge into the accumulated response. Field-unions
   * objects (later wins), matching the normalized cache's record merge.
+  *
+  * A path that does not fit the tree is `Absent`, never a silent no-op: the caller
+  * must be able to tell a patch that landed from one that was dropped.
   */
 object JsonPath:
 
     private given CanEqual[String | Int, String | Int] = CanEqual.derived
 
-    /** Parse a wire `path` array into `String` (field) / `Int` (index) segments. An
-      * index is a JSON number with an exact `Int` value.
+    /** Parse a wire `path` array into `String` (field) / `Int` (index) segments.
+      * `Absent` unless `json` is an array whose every segment is a string or a JSON
+      * number with an exact, non-negative `Int` value.
       */
-    def parse(json: Json): List[String | Int] = json match
+    def parse(json: Json): Maybe[Chunk[String | Int]] = json match
         case Json.JArr(items) =>
-            items.toList.flatMap[String | Int] {
-                case Json.JStr(name) => Some(name)
-                case other           => Json.integral(other).filter(_.isValidInt).map(_.toInt).toOption
+            items.foldLeft(Maybe(Chunk.empty[String | Int])) { (path, item) =>
+                path.flatMap(segments => segment(item).map(segments.append))
             }
-        case _ => Nil
+        case _ => Absent
 
-    /** Splice `patch` into `target` at `path`. An empty path merges at the root; a
-      * segment that doesn't match the tree's shape is a no-op (leaves `target`).
+    private def segment(json: Json): Maybe[String | Int] = json match
+        case Json.JStr(name) => Present(name)
+        case other           => Json.integral(other).filter(i => i >= 0 && i.isValidInt).map(_.toInt)
+
+    /** Splice `patch` into `target` at `path`. An empty path merges at the root. A
+      * field segment into a non-object, or an index segment outside the list (or into
+      * a non-list), is `Absent`.
       */
-    def splice(target: Json, path: List[String | Int], patch: Json): Json =
-        path match
-            case Nil => merge(target, patch)
-            case (field: String) :: rest =>
+    def splice(target: Json, path: Chunk[String | Int], patch: Json): Maybe[Json] =
+        path.headMaybe match
+            case Absent => Present(merge(target, patch))
+            case Present(field: String) =>
                 target match
                     case Json.JObj(fields) =>
                         val child = fields.getOrElse(field, Json.JObj(Map.empty))
-                        Json.JObj(fields.updated(field, splice(child, rest, patch)))
-                    case _ => target
-            case (index: Int) :: rest =>
+                        splice(child, path.dropLeft(1), patch).map(spliced => Json.JObj(fields.updated(field, spliced)))
+                    case _ => Absent
+            case Present(index: Int) =>
                 target match
                     case Json.JArr(items) if index >= 0 && index < items.size =>
-                        val updated = splice(items(index), rest, patch)
-                        Json.JArr(Chunk.from(items.toList.updated(index, updated)))
-                    case _ => target
+                        splice(items(index), path.dropLeft(1), patch).map(spliced => Json.JArr(replaced(items, index, spliced)))
+                    case _ => Absent
 
     /** Splice `@stream`ed `items` into the list at `path`, whose final segment is the
-      * start index the items go at. The list GROWS: items at indices ≥ its current
-      * size are appended (a `@stream` patch always targets the tail, contiguously from
-      * `initialCount`), while a rare in-range index overwrites. A non-terminal index
-      * segment recurses into a list element (a `@stream` nested inside a list); a shape
-      * mismatch, a negative start index, or a present-but-non-list target is a no-op
-      * (never a throw — a malformed `path` must not crash the incremental stream).
-      * Non-contiguous start indices (a gap past the current tail) are not part of the
-      * spec's delivery contract and collapse onto the tail rather than padding holes.
+      * start index the items go at. The normal case appends at the tail (`index ==
+      * size`) in O(items); an in-range index overwrites from there and grows past the
+      * end if needed. A non-terminal index segment recurses into a list element (a
+      * `@stream` nested inside a list). `Absent` for a start index past the tail (a gap
+      * the protocol never sends), a negative index, a path that does not end in an
+      * index, or any segment that does not fit the tree.
       */
-    def spliceItems(target: Json, path: List[String | Int], items: List[Json]): Json =
-        path match
-            case (index: Int) :: Nil if index >= 0 =>
+    def spliceItems(target: Json, path: Chunk[String | Int], items: Chunk[Json]): Maybe[Json] =
+        path.headMaybe match
+            case Present(index: Int) if path.size == 1 =>
                 target match
-                    case Json.JArr(existing) =>
-                        val grown = items.zipWithIndex.foldLeft(existing.toList) { case (acc, (item, k)) =>
-                            val pos = index + k
-                            if pos < acc.size then acc.updated(pos, item) else acc :+ item
-                        }
-                        Json.JArr(Chunk.from(grown))
-                    case _ => target
-            case (field: String) :: rest =>
+                    case Json.JArr(existing) if index >= 0 && index == existing.size =>
+                        // `Chunk.append` is O(1); `Chunk.concat` would copy the whole list.
+                        Present(Json.JArr(items.foldLeft(existing)(_.append(_))))
+                    case Json.JArr(existing) if index >= 0 && index < existing.size =>
+                        Present(Json.JArr(existing.take(index).concat(items).concat(existing.dropLeft(index + items.size))))
+                    case _ => Absent
+            case Present(field: String) =>
                 target match
                     case Json.JObj(fields) =>
-                        val child = fields.getOrElse(field, Json.JArr(Chunk.from(List.empty[Json])))
-                        Json.JObj(fields.updated(field, spliceItems(child, rest, items)))
-                    case _ => target
-            case (index: Int) :: rest =>
+                        val child = fields.getOrElse(field, Json.JArr(Chunk.empty))
+                        spliceItems(child, path.dropLeft(1), items).map(spliced => Json.JObj(fields.updated(field, spliced)))
+                    case _ => Absent
+            case Present(index: Int) =>
                 target match
                     case Json.JArr(existing) if index >= 0 && index < existing.size =>
-                        val updated = spliceItems(existing(index), rest, items)
-                        Json.JArr(Chunk.from(existing.toList.updated(index, updated)))
-                    case _ => target
-            case Nil => target
+                        spliceItems(existing(index), path.dropLeft(1), items)
+                            .map(spliced => Json.JArr(replaced(existing, index, spliced)))
+                    case _ => Absent
+            case _ => Absent
+
+    private def replaced(items: Chunk[Json], index: Int, value: Json): Chunk[Json] =
+        items.take(index).append(value).concat(items.dropLeft(index + 1))
 
     /** Field-union two JSON values: objects merge key-wise (recursing on shared
       * object keys, `patch` winning on scalars/lists); anything else is replaced.
