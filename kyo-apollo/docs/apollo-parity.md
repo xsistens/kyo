@@ -81,7 +81,8 @@ Paths are relative to the repository root; the modules are `kyo-apollo` (core, s
 | Field policies + merge functions, cache redirects | **PRESENT** | `api/FieldPolicy.scala`, `api/FieldPolicies.scala`, `api/CacheKeyResolver.scala` |
 | `readQuery`/`writeQuery`, `updateQuery` | **PRESENT** | `ApolloStore.readOperation`/`writeOperation`/`updateOperation` |
 | `cache.modify` | **PARTIAL** | typed whole-record `updateFragment`; field-granular modify is N/A (records have no typed field access) |
-| `cache.evict` / gc / `extract` | **PRESENT** | `ApolloStore.evict`/`garbageCollect`/`extract` |
+| `cache.evict` / gc / `extract` | **PRESENT** | `ApolloStore.evict`/`garbageCollect`/`extract`; gc publishes what it removed |
+| `cache.retain` / `cache.release` | **PRESENT** | `ApolloStore.retain` (released with its `Scope`); a live `watch()` retains the keys of its last read |
 | Watchers (reactive reads), optimistic responses | **PRESENT** | `Watcher.scala`, `OptimisticUpdates.scala` |
 | `resetStore` / `onResetStore`, `refetchQueries` | **PRESENT** | `ApolloClient` + `ActiveQueryRegistry` |
 
