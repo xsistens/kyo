@@ -5,11 +5,12 @@ import kyo.apollo.cache.normalized.ChangedKeysSubject
 import kyo.apollo.cache.normalized.api.CacheKey
 
 /** Unit tests for the change-notification bus ([[ChangedKeysSubject]]): multicast
-  * delivery, FIFO ordering, Scope-bound subscriptions and removal by callback
-  * identity, the empty-set no-op, and the two hard guarantees — re-entrancy safety
-  * (write/unsubscribe during delivery) and idempotent teardown. Subscribers are
-  * effects the publish runs on the publishing fiber, so a plain local records what
-  * they saw by the time the publish returns.
+  * delivery, FIFO ordering, Scope-bound subscriptions (removed per registration,
+  * only by their Scope), the empty-set no-op, and the hard guarantees — re-entrancy
+  * safety (a write during delivery), idempotent teardown, and failure isolation (a
+  * failing subscriber is logged and starves no one; an interrupt is not swallowed).
+  * Subscribers are effects the publish runs on the publishing fiber, so a local
+  * records what they saw by the time the publish returns.
   */
 class ChangedKeysSubjectSpec extends kyo.test.Test[Any]:
 
@@ -83,17 +84,26 @@ class ChangedKeysSubjectSpec extends kyo.test.Test[Any]:
             end for
         }
 
-        "unsubscribe removes a subscription by callback identity" in {
+        "one callback subscribed in two Scopes ends with each Scope on its own" in {
             val subject                                = new ChangedKeysSubject
             var calls                                  = 0
             val listener: Set[CacheKey] => Unit < Sync = _ => calls += 1
             for
-                _ <- subject.subscribe(listener)
-                _ <- subject.unsubscribe(listener)
-                _ <- subject.unsubscribe(listener) // idempotent
-                _ <- subject.publish(Set(k))
-            yield assert(calls == 0)
+                _     <- subject.subscribe(listener)
+                _     <- Scope.run(subject.subscribe(listener))
+                _     <- subject.publish(Set(k))
+                count <- subject.subscriberCount
+            yield
+                assert(calls == 1) // the inner registration is gone, the outer one of the same callback is not
+                assert(count == 1)
             end for
+        }
+
+        "a subscription has no way to end but its Scope" in {
+            typeCheckFailure("""
+                val subject = new kyo.apollo.cache.normalized.ChangedKeysSubject
+                subject.unsubscribe(_ => kyo.Kyo.unit)(using kyo.Frame.internal)
+            """)("value unsubscribe is not a member of kyo.apollo.cache.normalized.ChangedKeysSubject")
         }
 
         "the same callback subscribed twice is delivered to twice" in {
@@ -123,22 +133,82 @@ class ChangedKeysSubjectSpec extends kyo.test.Test[Any]:
             end for
         }
 
-        "a subscriber that unsubscribes another during delivery is re-entrancy-safe" in {
-            val subject                              = new ChangedKeysSubject
-            var secondCalls                          = 0
-            val second: Set[CacheKey] => Unit < Sync = _ => secondCalls += 1
-            // First subscriber removes the second mid-delivery; the second still receives
-            // THIS emission (the list was read before delivery), and is gone from the next.
+        "a subscriber failing inside a nested publish fails neither publish" in {
+            val subject = new ChangedKeysSubject
+            val boom    = new RuntimeException("inner boom")
             for
-                _ <- subject.subscribe(_ => subject.unsubscribe(second))
-                _ <- subject.subscribe(second)
-                _ <- subject.publish(Set(k))
-                afterFirst = secondCalls
-                _ <- subject.publish(Set(k))
-                afterSecond = secondCalls
+                probe   <- LogProbe.init
+                seen    <- AtomicRef.init(Chunk.empty[Set[CacheKey]])
+                _       <- subject.subscribe(keys => if keys == Set(outer) then subject.publish(Set(inner)) else Kyo.unit)
+                _       <- subject.subscribe(keys => if keys == Set(inner) then Abort.panic(boom) else Kyo.unit)
+                _       <- subject.subscribe(keys => seen.updateAndGet(_.append(keys)).unit)
+                outcome <- Abort.run[Throwable](probe.run(subject.publish(Set(outer))))
+                last    <- seen.get
+                errors  <- probe.errors
             yield
-                assert(afterFirst == 1)  // delivered from the list as it was
-                assert(afterSecond == 1) // gone on the next emission
+                assert(outcome == Result.unit, s"the outer publish failed: $outcome")
+                assert(last == Chunk(Set(inner), Set(outer)))
+                assert(errors.map(_.error) == Chunk(Present(boom)))
+            end for
+        }
+
+        "a failing subscriber does not starve the ones after it" in {
+            val subject = new ChangedKeysSubject
+            val boom    = new RuntimeException("boom")
+            for
+                probe   <- LogProbe.init
+                first   <- AtomicRef.init(Chunk.empty[Set[CacheKey]])
+                third   <- AtomicRef.init(Chunk.empty[Set[CacheKey]])
+                _       <- subject.subscribe(keys => first.updateAndGet(_.append(keys)).unit)
+                _       <- subject.subscribe(_ => Abort.panic(boom))
+                _       <- subject.subscribe(keys => third.updateAndGet(_.append(keys)).unit)
+                outcome <- Abort.run[Throwable](probe.run(subject.publish(Set(k))))
+                before  <- first.get
+                after   <- third.get
+                errors  <- probe.errors
+            yield
+                assert(outcome == Result.unit, s"the publish itself failed: $outcome")
+                assert(before == Chunk(Set(k)))
+                assert(after == Chunk(Set(k)), "the subscriber after the failing one never saw the change")
+                assert(errors.size == 1, s"expected exactly one error line, got $errors")
+                assert(errors.head.error == Present(boom))
+                assert(errors.head.message.contains("ChangedKeysSubjectSpec.scala")) // names where the failing one subscribed
+            end for
+        }
+
+        "a subscriber that throws is isolated like one that panics" in {
+            val subject = new ChangedKeysSubject
+            val boom    = new IllegalStateException("thrown")
+            for
+                probe   <- LogProbe.init
+                later   <- AtomicRef.init(Chunk.empty[Set[CacheKey]])
+                _       <- subject.subscribe(_ => Sync.defer(throw boom))
+                _       <- subject.subscribe(keys => later.updateAndGet(_.append(keys)).unit)
+                outcome <- Abort.run[Throwable](probe.run(subject.publish(Set(k))))
+                seen    <- later.get
+                errors  <- probe.errors
+            yield
+                assert(outcome == Result.unit, s"the publish itself failed: $outcome")
+                assert(seen == Chunk(Set(k)))
+                assert(errors.map(_.error) == Chunk(Present(boom)))
+            end for
+        }
+
+        "an Interrupted panic is not swallowed" in {
+            val subject   = new ChangedKeysSubject
+            val interrupt = Interrupted(summon[Frame], "the test")
+            for
+                probe   <- LogProbe.init
+                later   <- AtomicInt.init(0)
+                _       <- subject.subscribe(_ => Abort.panic(interrupt))
+                _       <- subject.subscribe(_ => later.incrementAndGet.unit)
+                outcome <- Abort.run[Throwable](probe.run(subject.publish(Set(k))))
+                calls   <- later.get
+                errors  <- probe.errors
+            yield
+                assert(outcome == Result.panic(interrupt), s"the interrupt did not reach the publisher: $outcome")
+                assert(calls == 0) // an interrupt ends the publish; it is not a subscriber's failure to skip
+                assert(errors.isEmpty, s"an interrupt is not logged as a failure: $errors")
             end for
         }
     }
