@@ -51,7 +51,7 @@ class UnionSelectorSpec extends kyo.test.Test[Any]:
         "a union-typed field is an object selector, not a String scalar" in {
             val src = sourceOf("PlaybackState.scala")
             assert(src.contains("final class `item$sel`"), src)
-            assert(src.contains("SelectionBuilder[PlaybackState, (item: Option[A])]"), src)
+            assert(src.contains("SelectionBuilder[PlaybackState, (item: Maybe[A])]"), src)
             assert(!src.contains("SelectionBuilder.scalar(\"item\""), src)
         }
     }
