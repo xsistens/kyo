@@ -4,7 +4,6 @@ import java.util.concurrent.atomic.AtomicReference
 import kyo.*
 import kyo.apollo.exception.ApolloException
 import kyo.apollo.exception.ApolloWebSocketClosedException
-import scala.collection.mutable
 
 /** Shared, scripted WebSocket test doubles reused by the client/cache/transport
   * specs so each does not re-implement the same in-memory socket. A test drives a
@@ -114,26 +113,3 @@ final class FreshWebSocketEngine extends WebSocketEngine:
             c
         }
 end FreshWebSocketEngine
-
-/** A scheduler that records timers instead of arming real ones; the test fires
-  * them by hand. Cancelling drops the pending timer. Retained for the HTTP
-  * interceptor specs that still inject a [[WsScheduler]]; the WebSocket transport
-  * now drives its timers through `Clock` and is tested with `Clock.withTimeControl`.
-  */
-final class ManualWsScheduler extends WsScheduler:
-    private val tasks = mutable.Map.empty[Long, () => Unit]
-    private var seq   = 0L
-    def schedule(delayMillis: Long)(task: () => Unit): () => Unit =
-        val id = seq
-        seq += 1
-        tasks(id) = task
-        () =>
-            tasks.remove(id); ()
-    end schedule
-    def pending: Int = tasks.size
-    def fireAll(): Unit =
-        val snapshot = tasks.values.toList
-        tasks.clear()
-        snapshot.foreach(_())
-    end fireAll
-end ManualWsScheduler

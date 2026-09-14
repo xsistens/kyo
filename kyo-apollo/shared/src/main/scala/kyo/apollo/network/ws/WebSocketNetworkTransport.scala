@@ -55,8 +55,11 @@ import scala.collection.immutable.VectorMap
   * every active subscriber; the stream itself does not fail. '''Reconnection''' is
   * opt-in via [[reconnectWhen]]: an established socket's abnormal drop surfaces to
   * every subscriber as the resubscription-signal value, then the transport
-  * reopens after a [[backoff]] delay, re-runs the handshake, and resubscribes
-  * every still-active subscription under its original id.
+  * reopens after the next delay of its [[backoff]] schedule, re-runs the
+  * handshake, and resubscribes every still-active subscription under its
+  * original id. The schedule starts over once a reconnection is acknowledged;
+  * when it has no delay left, the drop terminates the subscriptions as it would
+  * without reconnection.
   *
   * @param serverUrl         the `ws(s)://` endpoint subscriptions connect to
   * @param protocol          the wire protocol (defaults to the modern
@@ -71,7 +74,8 @@ import scala.collection.immutable.VectorMap
   * @param reconnectWhen     decides, from the drop's exception and the 1-based
   *                          attempt number, whether to reopen a dropped socket;
   *                          defaults to [[WebSocketNetworkTransport.reconnectNever]]
-  * @param backoff           how long to wait before each reconnection attempt
+  * @param backoff           the delays before successive reconnection attempts;
+  *                          defaults to 1s, doubling, each capped at 30s
   */
 final class WebSocketNetworkTransport(
     serverUrl: String,
@@ -81,7 +85,7 @@ final class WebSocketNetworkTransport(
     ackTimeoutMillis: Long = 10000L,
     idleTimeoutMillis: Long = 60000L,
     reconnectWhen: (ApolloException, Long) => Boolean = WebSocketNetworkTransport.reconnectNever,
-    backoff: WsBackoff = WsBackoff.default
+    backoff: Schedule = WebSocketNetworkTransport.defaultBackoff
 ):
     import WebSocketNetworkTransport.*
 
@@ -291,15 +295,17 @@ final class WebSocketNetworkTransport(
         case WsMessage.Unknown(_) => ()
 
     /** `connection_ack` arrived: cancel the ack timer, mark the socket established,
-      * reset the reconnect counter, and (re)send the start frame for every route —
-      * covering both freshly-pending subscriptions and a reconnect's resubscribe.
+      * reset the reconnect counter and schedule, and (re)send the start frame for
+      * every route — covering both freshly-pending subscriptions and a reconnect's
+      * resubscribe.
       */
     private def onAck(s: State): Unit < Async =
         val s1 = cancelAckTimer(s).copy(
             awaitingAck = false,
             established = true,
             reconnecting = false,
-            reconnectAttempt = 0L
+            reconnectAttempt = 0L,
+            reconnectPlan = Absent
         )
         stateRef.set(s1)
         s1.conn match
@@ -312,18 +318,22 @@ final class WebSocketNetworkTransport(
     /** The socket closed. `cause` is `Absent` on a clean `1000` close, or the
       * drop's exception on an abnormal close. A failure around the handshake (still
       * awaiting ack) becomes a [[handshakeFailure]]; an established socket's drop
-      * either reconnects (when [[reconnectWhen]] agrees and subscriptions remain)
-      * or terminates them.
+      * either reconnects (when [[reconnectWhen]] agrees, subscriptions remain and
+      * the [[backoff]] schedule has a delay left) or terminates them.
       */
     private def onSocketClosed(s: State, cause: Maybe[ApolloException]): Unit < Async =
         if s.awaitingAck then handshakeFailure(s, cause.getOrElse(normalClose))
         else
             cause match
                 case Present(drop) if s.routes.nonEmpty && reconnectWhen(drop, s.reconnectAttempt + 1) =>
-                    val s1 = clearSocket(s)
-                    stateRef.set(s1)
-                    s1.routes.values.foreach(_.emitException(drop))
-                    scheduleReconnect(s1)
+                    nextReconnectDelay(s).map {
+                        case Present(step) =>
+                            val s1 = clearSocket(s)
+                            stateRef.set(s1)
+                            s1.routes.values.foreach(_.emitException(drop))
+                            scheduleReconnect(s1, step)
+                        case Absent => terminate(s, drop)
+                    }
                 case _ =>
                     terminate(s, cause.getOrElse(normalClose))
     end onSocketClosed
@@ -390,17 +400,26 @@ final class WebSocketNetworkTransport(
 
     // ---- reconnection ---------------------------------------------------------
 
-    private def scheduleReconnect(s: State): Unit < Async =
-        val attempt = s.reconnectAttempt + 1
-        val token   = s.reconnectToken + 1
-        val s1      = cancelReconnectTimer(cancelIdleTimer(s))
+    /** The next reconnection delay and the rest of the [[backoff]] schedule after it,
+      * or `Absent` once the schedule has no delay left. Without a plan in progress —
+      * none since the last acknowledged connection — the schedule starts over.
+      */
+    private def nextReconnectDelay(s: State): Maybe[(Duration, Schedule)] < Sync =
+        Clock.now.map(now => s.reconnectPlan.getOrElse(backoff).next(now))
+
+    private def scheduleReconnect(s: State, step: (Duration, Schedule)): Unit < Async =
+        val (delay, rest) = step
+        val attempt       = s.reconnectAttempt + 1
+        val token         = s.reconnectToken + 1
+        val s1            = cancelReconnectTimer(cancelIdleTimer(s))
         Fiber
-            .initUnscoped(Async.delay(backoff.delayMillis(attempt).millis)(offer(Msg.DoReconnect(token))))
+            .initUnscoped(Async.delay(delay)(offer(Msg.DoReconnect(token))))
             .map { timer =>
                 stateRef.set(s1.copy(
                     reconnectAttempt = attempt,
                     reconnectToken = token,
                     reconnecting = true,
+                    reconnectPlan = Present(rest),
                     reconnectTimer = Present(timer.unsafeWiden)
                 ))
             }
@@ -416,11 +435,16 @@ final class WebSocketNetworkTransport(
     end doReconnect
 
     /** A reconnect attempt failed to re-establish: retry (honoring [[reconnectWhen]]
-      * for the next attempt) or give up and terminate every subscription.
+      * and what is left of the [[backoff]] schedule for the next attempt) or give up
+      * and terminate every subscription.
       */
     private def reconnectFailed(s: State, cause: ApolloException): Unit < Async =
         if s.routes.isEmpty then finishTeardown(s)
-        else if reconnectWhen(cause, s.reconnectAttempt + 1) then scheduleReconnect(s)
+        else if reconnectWhen(cause, s.reconnectAttempt + 1) then
+            nextReconnectDelay(s).map {
+                case Present(step) => scheduleReconnect(s, step)
+                case Absent        => terminate(s, cause)
+            }
         else terminate(s, cause)
 
     // ---- teardown helpers -----------------------------------------------------
@@ -601,9 +625,13 @@ object WebSocketNetworkTransport:
     val reconnectNever: (ApolloException, Long) => Boolean = (_, _) => false
 
     /** Always reopen on a drop, regardless of cause or attempt count (the
-      * [[WsBackoff]] still paces the attempts).
+      * `backoff` schedule still paces the attempts, and ends them once it has no
+      * delay left).
       */
     val reconnectAlways: (ApolloException, Long) => Boolean = (_, _) => true
+
+    /** The default reconnection delays: 1s, doubling, each capped at 30s, without end. */
+    val defaultBackoff: Schedule = Schedule.exponentialBackoff(1.second, 2.0, 30.seconds)
 
     private def normalClose(using Frame): ApolloWebSocketClosedException =
         ApolloWebSocketClosedException(WebSocketConnection.NormalClosure)
@@ -654,6 +682,7 @@ object WebSocketNetworkTransport:
         established: Boolean,
         reconnecting: Boolean,
         reconnectAttempt: Long,
+        reconnectPlan: Maybe[Schedule],
         reconnectToken: Long,
         idleToken: Long,
         ackTimer: Maybe[Fiber[Unit, Any]],
@@ -671,6 +700,7 @@ object WebSocketNetworkTransport:
             established = false,
             reconnecting = false,
             reconnectAttempt = 0L,
+            reconnectPlan = Absent,
             reconnectToken = 0L,
             idleToken = 0L,
             ackTimer = Absent,
