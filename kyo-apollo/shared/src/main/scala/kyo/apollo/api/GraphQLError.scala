@@ -62,14 +62,16 @@ object GraphQLError:
 
     private def parseLocation(json: Json): Option[Location] = json match
         case Json.JObj(fields) =>
-            (fields.get("line"), fields.get("column")) match
-                case (Some(Json.JNum(line)), Some(Json.JNum(column))) =>
-                    Some(Location(line.toInt, column.toInt))
-                case _ => None
+            (fields.get("line").flatMap(exactInt), fields.get("column").flatMap(exactInt)) match
+                case (Some(line), Some(column)) => Some(Location(line, column))
+                case _                          => None
         case _ => None
 
     private def parsePathSegment(json: Json): Option[String | Int] = json match
-        case Json.JStr(name)  => Some(name)
-        case Json.JNum(index) => Some(index.toInt)
-        case _                => None
+        case Json.JStr(name) => Some(name)
+        case other           => exactInt(other)
+
+    /** A JSON number with an exact `Int` value. */
+    private def exactInt(json: Json): Option[Int] =
+        Json.integral(json).filter(_.isValidInt).map(_.toInt).toOption
 end GraphQLError

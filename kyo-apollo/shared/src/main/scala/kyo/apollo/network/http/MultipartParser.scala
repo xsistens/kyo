@@ -31,7 +31,7 @@ object MultipartParser:
             .getOrElse("-")
 
     /** Split a fully-buffered body into its parts. */
-    def parts(boundary: String, body: String): List[MultipartPart] =
+    def parts(boundary: String, body: String)(using Frame): List[MultipartPart] =
         val buffer = new StringBuilder(body)
         extractComplete(buffer, s"--$boundary").toList
 
@@ -59,7 +59,7 @@ object MultipartParser:
     /** Cut every *complete* part (one with a following delimiter) out of `buffer`,
       * leaving the incomplete tail (from the last delimiter on) in place.
       */
-    private def extractComplete(buffer: StringBuilder, delim: String): Seq[MultipartPart] =
+    private def extractComplete(buffer: StringBuilder, delim: String)(using Frame): Seq[MultipartPart] =
         val s    = buffer.toString
         val out  = List.newBuilder[MultipartPart]
         var idx  = s.indexOf(delim)
@@ -80,14 +80,16 @@ object MultipartParser:
     end extractComplete
 
     /** Parse one delimited segment (headers + blank line + JSON body) into a part;
-      * `None` for the closing `--` terminator or an empty/header-only segment.
+      * `None` for the closing `--` terminator or an empty/header-only segment. A body
+      * that is not JSON throws its `ApolloParseException` (a part-level failure value
+      * is K-HIGH-45's fold).
       */
-    private def parsePart(segment: String): Option[MultipartPart] =
+    private def parsePart(segment: String)(using Frame): Option[MultipartPart] =
         val trimmed = segment.trim
         if trimmed.isEmpty || trimmed.startsWith("--") then None
         else
             val body = stripHeaders(segment).trim
-            if body.isEmpty then None else Some(MultipartPart(JsonParser.parse(body)))
+            if body.isEmpty then None else Some(MultipartPart(JsonParser.parse(body).getOrThrow))
         end if
     end parsePart
 

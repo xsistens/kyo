@@ -146,7 +146,7 @@ class HttpTransportRoundTripSpec extends kyo.test.Test[Any]:
                 HttpResponse(200, Nil, """{"data":{"value":1},"extensions":{"cost":3}}""")
             )
             transportWith(engine).execute(ApolloRequest(ValueQuery())).map { response =>
-                assert(response.extensions == Map[String, Json]("cost" -> Json.JNum(3.0)))
+                assert(response.extensions == Map[String, Json]("cost" -> Json.JInt(3)))
             }
         }
 

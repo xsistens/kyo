@@ -20,8 +20,9 @@ object RecordValue:
       *
       * Reuses the existing [[kyo.apollo.json.Json]] scalars rather than inventing a
       * parallel scalar type. `null` is modelled by [[RecordValue.Null]], so a
-      * `Scalar` is expected to wrap a non-null scalar ([[Json.JStr]],
-      * [[Json.JNum]] or [[Json.JBool]]); [[scalar]] enforces this.
+      * `Scalar` is expected to wrap a non-null scalar ([[Json.JStr]], a number
+      * ([[Json.JInt]], [[Json.JDec]], [[Json.JNum]]) or [[Json.JBool]]); [[scalar]]
+      * enforces this.
       */
     final case class Scalar(value: Json) extends RecordValue
 
@@ -43,8 +44,8 @@ object RecordValue:
       *                                  normalized into references/lists first.
       */
     def scalar(value: Json): RecordValue = value match
-        case Json.JNull                                  => Null
-        case Json.JStr(_) | Json.JNum(_) | Json.JBool(_) => Scalar(value)
+        case Json.JNull                                                                => Null
+        case Json.JStr(_) | Json.JInt(_) | Json.JDec(_) | Json.JNum(_) | Json.JBool(_) => Scalar(value)
         case composite =>
             throw IllegalArgumentException(
                 s"RecordValue.scalar expects a JSON scalar, got ${composite.getClass.getSimpleName}"

@@ -1,9 +1,10 @@
 package kyo.apollo.network.ws
 
+import kyo.Frame
+import kyo.Result
 import kyo.apollo.json.Json
 import kyo.apollo.json.JsonParser
 import scala.collection.immutable.VectorMap
-import scala.util.Try
 
 /** A single frame decoded from the server side of a GraphQL-over-WebSocket
   * conversation.
@@ -171,12 +172,13 @@ object WsProtocol:
         name -> Some(value)
 
     /** Parse `text` to a JSON object's fields, or `None` when it is not a JSON
-      * object (malformed text or a non-object top level).
+      * object (malformed text or a non-object top level). The parse failure is
+      * dropped here (the frame becomes `Unknown`), so its frame is never observed.
       */
     private[ws] def asObject(text: String): Option[Map[String, Json]] =
-        Try(JsonParser.parse(text)).toOption.collect { case Json.JObj(fields) =>
-            fields
-        }
+        JsonParser.parse(text)(using Frame.internal) match
+            case Result.Success(Json.JObj(fields)) => Some(fields)
+            case _                                 => None
 
     /** The string `type` discriminator, or `""` when absent/non-string. */
     private[ws] def typeOf(fields: Map[String, Json]): String =

@@ -75,7 +75,7 @@ class UnionSelectionSpec extends kyo.test.Test[Any]:
                 "item" -> Json.JObj(VectorMap(
                     "__typename" -> Json.JStr("Track"),
                     "name"       -> Json.JStr("Glass Season"),
-                    "durationMs" -> Json.JNum(215000)
+                    "durationMs" -> Json.JInt(215000)
                 ))
             ))
             val decoded = sel.decode(response)
@@ -102,7 +102,7 @@ class UnionSelectionSpec extends kyo.test.Test[Any]:
                 "item" -> Json.JObj(VectorMap(
                     "__typename" -> Json.JStr("Track"),
                     "name"       -> Json.JStr("Glass Season"),
-                    "durationMs" -> Json.JNum(215000)
+                    "durationMs" -> Json.JInt(215000)
                 ))
             ))
             assert(sel.encode(sel.decode(response)) == response, sel.encode(sel.decode(response)).toString)

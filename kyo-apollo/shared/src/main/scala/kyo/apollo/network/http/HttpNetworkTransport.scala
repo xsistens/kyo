@@ -203,18 +203,13 @@ final class HttpNetworkTransport(
 
     /** Read `body` as JSON and then as a GraphQL envelope of the request's operation.
       * Text that is not JSON and an envelope of the wrong shape are failures; anything
-      * else the data codec throws is a `Result.Panic`. The text parser is caught
-      * wider than `DecodeException`: the body is untrusted wire input, and kyo's JSON
-      * reader also rejects some malformed numbers with a plain `NumberFormatException`.
+      * else the data codec throws is a `Result.Panic`.
       */
     private def parseBody[D](
         request: ApolloRequest[D],
         body: String
     )(using Frame): Result[ApolloParseException, GraphQLResponse[D]] =
-        Result
-            .catching[Exception](JsonParser.parse(body))
-            .mapFailure(e => ApolloParseException(Json.JStr(body), "a JSON document", e))
-            .flatMap(json => GraphQLResponse.parse(json, request.operation))
+        JsonParser.parse(body).flatMap(json => GraphQLResponse.parse(json, request.operation))
 
     private def failure[D](
         request: ApolloRequest[D],

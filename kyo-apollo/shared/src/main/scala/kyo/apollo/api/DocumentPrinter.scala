@@ -91,11 +91,11 @@ object DocumentPrinter:
       * object keys are unquoted).
       */
     private def renderLiteral(json: Json): String = json match
-        case Json.JNull       => "null"
-        case Json.JBool(v)    => v.toString
-        case Json.JNum(v)     => if v.isWhole then v.toLong.toString else v.toString
-        case Json.JStr(v)     => Json.JStr(v).render // reuse JSON string escaping
-        case Json.JArr(items) => items.map(renderLiteral).mkString("[", ", ", "]")
+        case Json.JNull                                 => "null"
+        case Json.JBool(v)                              => v.toString
+        case Json.JInt(_) | Json.JDec(_) | Json.JNum(_) => json.render         // JSON numbers are GraphQL number literals
+        case Json.JStr(v)                               => Json.JStr(v).render // reuse JSON string escaping
+        case Json.JArr(items)                           => items.map(renderLiteral).mkString("[", ", ", "]")
         case Json.JObj(fields) =>
             fields.map((k, v) => s"$k: ${renderLiteral(v)}").mkString("{ ", ", ", " }")
         case Json.JUpload(_) => "null" // uploads are never inline literals; render defensively

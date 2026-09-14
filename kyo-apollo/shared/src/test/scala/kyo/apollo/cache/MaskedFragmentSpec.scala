@@ -95,7 +95,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             cacheKeyGenerator = CacheIdentity.generator(summon[CacheIdentity[CountryT]])
         )
 
-    private def parse(s: String): Json = JsonParser.parse(s)
+    private def parse(s: String): Json = JsonParser.parse(s).getOrThrow
 
     private val germanyBody =
         """{"country":{"__typename":"Country","code":"DE","name":"Germany","capital":"Berlin"}}"""
