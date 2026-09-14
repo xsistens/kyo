@@ -10,6 +10,8 @@ import kyo.apollo.api.*
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.*
 import kyo.apollo.exception.ApolloParseException
+import kyo.apollo.exception.CacheReadFailure
+import kyo.apollo.exception.NoCacheIdentityException
 import kyo.apollo.json.Json
 import kyo.apollo.json.JsonParser
 import scala.collection.immutable.VectorMap
@@ -99,6 +101,10 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             cacheKeyGenerator = CacheIdentity.generator(summon[CacheIdentity[CountryT]])
         )
 
+    /** The key `s` gives an object — the outcome of `keyOf`, run. */
+    private def keyed(s: ApolloStore, typeName: String, raw: Map[String, Json]): Result[CacheReadFailure, CacheKey] =
+        Abort.run[CacheReadFailure](s.keyOf(typeName, raw)).eval
+
     private def parse(s: String): Json = JsonParser.parse(s).getOrThrow
 
     private val germanyBody =
@@ -112,7 +118,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             // The macro derived `countryCard` from `object CountryCard` — no string named it.
             val ref: CountryCard.fields.Ref = decoded.country.countryCard
             assert(decoded.country.code == "DE")
-            assert(store().keyOf(ref.typeName, ref.raw) == Present(CacheKey("Country", "DE")))
+            assert(keyed(store(), ref.typeName, ref.raw) == Result.succeed(CacheKey("Country", "DE")))
         }
 
         "forces __typename and the identity key fields into the document" in {
@@ -142,11 +148,11 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
                 """{"country":{"__typename":"SpecialCountry","code":"DE","name":"Germany","capital":null}}"""
             val ref = q.dataCodec.decode(parse(body)).country.countryCard
             assert(ref.typeName == "SpecialCountry")
-            val keyed = new ApolloStore(
+            val special = new ApolloStore(
                 MemoryCache(),
                 cacheKeyGenerator = TypePolicyCacheKeyGenerator.of(TypePolicy("SpecialCountry", List("code")))
             )
-            assert(keyed.keyOf(ref.typeName, ref.raw) == Present(CacheKey("SpecialCountry", "DE")))
+            assert(keyed(special, ref.typeName, ref.raw) == Result.succeed(CacheKey("SpecialCountry", "DE")))
         }
 
         "two refs are equal exactly when they capture the same slice of the same fragment" in {
@@ -221,7 +227,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             val s       = store()
             val cardRef = decoded.country.countryCard
             val flagRef = decoded.country.countryFlag
-            assert(s.keyOf(cardRef.typeName, cardRef.raw) == s.keyOf(flagRef.typeName, flagRef.raw))
+            assert(keyed(s, cardRef.typeName, cardRef.raw) == keyed(s, flagRef.typeName, flagRef.raw))
             for
                 _    <- s.writeOperation(q, decoded)
                 card <- s.readFragment(CountryCard.fields.cacheFragment, CacheKey("Country", "DE"))
@@ -259,7 +265,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
                     qa.dataCodec.decode(parse("""{"country":{"__typename":"Country","code":"DE","name":"Germany"}}"""))
                 )
                 // A's fields alone must NOT satisfy the fragment yet.
-                premature <- Abort.run[kyo.apollo.exception.CacheMissException](
+                premature <- Abort.run[CacheReadFailure](
                     s.readFragment(CountryCard.fields.cacheFragment, CacheKey("Country", "DE"))
                 )
                 changedByB <- s.writeOperation(
@@ -311,26 +317,33 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             val q       = countryField(GCountry.code ~ CountryCard.fields.spread).toQuery("Q")
             val decoded = q.dataCodec.decode(parse(germanyBody))
             val ref     = decoded.country.countryCard
-            val key     = s.keyOf(ref.typeName, ref.raw)
-            assert(key == Present(CacheKey("Country", "Germany")))
+            assert(keyed(s, ref.typeName, ref.raw) == Result.succeed(CacheKey("Country", "Germany")))
             for
                 _    <- s.writeOperation(q, decoded)
-                frag <- s.readFragment(CountryCard.fields.cacheFragment, key.get)
+                frag <- s.keyOf(ref.typeName, ref.raw).map(s.readFragment(CountryCard.fields.cacheFragment, _))
             yield
                 assert(frag.name == "Germany")
                 assert(frag.capital == Present("Berlin"))
             end for
         }
 
-        "a store with no identity for the type has no key for the ref, never a positional one" in {
+        "a store with no identity for the type fails the ref's read with NoCacheIdentityException, never a positional key" in {
             // The default generator keys by `id`/`_id`; Country has neither. A ref has no
-            // response path, so the positional fallback cannot apply: the key is Absent
-            // (K-HIGH-41 turns this into CacheReadFailure.NoIdentity).
+            // response path, so the positional fallback cannot apply: there is no key, and
+            // the read of the ref fails on the same row as a miss.
             val s       = new ApolloStore(MemoryCache())
             val q       = countryField(GCountry.code ~ CountryCard.fields.spread).toQuery("Q")
             val decoded = q.dataCodec.decode(parse(germanyBody))
             val ref     = decoded.country.countryCard
-            s.writeOperation(q, decoded).map(_ => assert(s.keyOf(ref.typeName, ref.raw) == Absent))
+            for
+                _ <- s.writeOperation(q, decoded)
+                read <- Abort.run[CacheReadFailure](
+                    s.keyOf(ref.typeName, ref.raw).map(s.readFragment(CountryCard.fields.cacheFragment, _))
+                )
+            yield read match
+                case Result.Failure(e: NoCacheIdentityException) => assert(e.typeName == "Country")
+                case other                                       => fail(s"expected NoCacheIdentityException, got $other")
+            end for
         }
     }
 
@@ -354,7 +367,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             val q       = countryField(GCountry.code ~ CountryCard.fields.spreadAs["card"]).toQuery("Q")
             val decoded = q.dataCodec.decode(parse(germanyBody))
             val ref     = decoded.country.card
-            assert(store().keyOf(ref.typeName, ref.raw) == Present(CacheKey("Country", "DE")))
+            assert(keyed(store(), ref.typeName, ref.raw) == Result.succeed(CacheKey("Country", "DE")))
         }
     }
 end MaskedFragmentSpec

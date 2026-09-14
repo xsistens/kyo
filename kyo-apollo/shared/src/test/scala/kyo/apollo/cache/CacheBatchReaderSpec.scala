@@ -1,6 +1,9 @@
 package kyo.apollo.cache
 
+import kyo.Absent
 import kyo.Chunk
+import kyo.Present
+import kyo.Result
 import kyo.Schema
 import kyo.apollo.api.*
 import kyo.apollo.cache.TestKeys.*
@@ -15,7 +18,7 @@ import scala.collection.immutable.VectorMap
 /** Unit tests for Phase 04 denormalization ([[CacheBatchReader]]): walking an
   * operation's selection tree back over stored [[Record]]s to reassemble a
   * response `data` map and decode it into typed data, with a
-  * [[CacheMissException]] on any gap.
+  * [[CacheMissException]] failure on any gap and a panic on a defect.
   */
 class CacheBatchReaderSpec extends kyo.test.Test[Any]:
 
@@ -54,14 +57,23 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
     private def jnum(n: Double): Json = Json.JNum(n)
 
     /** Assemble the response `data` map from `records`, starting at `QUERY_ROOT`. */
+    private def assemble(
+        selections: Chunk[CompiledSelection],
+        records: Map[CacheKey, Record],
+        variables: Map[String, Json] = Map.empty,
+        resolver: CacheKeyResolver = CacheKeyResolver.default
+    ): Result[CacheMissException, Json.JObj] =
+        new CacheBatchReader(RecordLoader(records), variables, CacheKey.QueryRoot, resolver)
+            .toData(TestQuery(selections).rootField)
+
+    /** [[assemble]] for a read the records satisfy. */
     private def toData(
         selections: Chunk[CompiledSelection],
         records: Map[CacheKey, Record],
         variables: Map[String, Json] = Map.empty,
         resolver: CacheKeyResolver = CacheKeyResolver.default
     ): Json.JObj =
-        new CacheBatchReader(RecordLoader(records), variables, CacheKey.QueryRoot, resolver)
-            .toData(TestQuery(selections).rootField)
+        assemble(selections, records, variables, resolver).getOrThrow
 
     // --- Typed round-trip through the operation's Adapter ---------------------
 
@@ -214,19 +226,18 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
 
         // --- Cache misses ---------------------------------------------------------
 
-        "a selected field absent from its record raises CacheMissException(key, field)" in {
+        "a selected field absent from its record is a CacheMissException(key, field key)" in {
             val records = Map(
                 CacheKey.QueryRoot -> Record(CacheKey.QueryRoot, Map(fk("present") -> RecordValue.Scalar(jstr("x"))))
             )
-            val miss = intercept[CacheMissException] {
-                toData(Chunk(leaf("present"), leaf("absent")), records)
-            }
-            assert(miss.key == CacheKey.QueryRoot)
-            assert(miss.fieldName == Some("absent"))
+            val miss = assemble(Chunk(leaf("present"), leaf("absent")), records).failure
+            assert(miss.map(_.key) == Present(CacheKey.QueryRoot))
+            assert(miss.map(_.fieldKey) == Present(Present(fk("absent"))))
         }
 
-        "a reference to an absent record raises CacheMissException on the missing record" in {
+        "a reference to an absent record is a whole-record CacheMissException on the missing record" in {
             // Parent points at Book:42 but the store never got that record (partial store).
+            // The referencing field IS on its record; what is missing is Book:42 itself.
             val records = Map(
                 CacheKey.QueryRoot -> Record(
                     CacheKey.QueryRoot,
@@ -234,15 +245,57 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
                 )
             )
             val selections = Chunk(obj("book", "Book", Chunk(leaf("id"))))
-            val miss       = intercept[CacheMissException](toData(selections, records))
-            assert(miss.key == CacheKey("Book", "42"))
-            assert(miss.fieldName == Some("book"))
+            val miss       = assemble(selections, records).failure
+            assert(miss.map(_.key) == Present(CacheKey("Book", "42")))
+            assert(miss.map(_.fieldKey) == Present(Absent))
         }
 
-        "an absent root record raises a whole-record CacheMissException" in {
-            val miss = intercept[CacheMissException](toData(Chunk(leaf("hello")), Map.empty))
-            assert(miss.key == CacheKey.QueryRoot)
-            assert(miss.fieldName == None)
+        "an absent root record is a whole-record CacheMissException" in {
+            val miss = assemble(Chunk(leaf("hello")), Map.empty).failure
+            assert(miss.map(_.key) == Present(CacheKey.QueryRoot))
+            assert(miss.map(_.fieldKey) == Present(Absent))
+        }
+
+        "the first missing element ends a list read with that element's miss" in {
+            val records = Map(
+                CacheKey.QueryRoot -> Record(
+                    CacheKey.QueryRoot,
+                    Map(
+                        fk("books") -> RecordValue.RList(
+                            Chunk(
+                                RecordValue.reference(CacheKey("Book", "1")),
+                                RecordValue.reference(CacheKey("Book", "2")),
+                                RecordValue.reference(CacheKey("Book", "3"))
+                            )
+                        )
+                    )
+                ),
+                CacheKey("Book", "1") -> Record(CacheKey("Book", "1"), Map(fk("id") -> RecordValue.Scalar(jstr("1"))))
+            )
+            val miss = assemble(Chunk(listOf(obj("books", "Book", Chunk(leaf("id"))))), records).failure
+            assert(miss.map(_.key) == Present(CacheKey("Book", "2")))
+        }
+
+        "a defective codec is a panic of the typed read, not a miss" in {
+            val op = BookQuery()
+            val records = Normalizer.normalize(
+                op,
+                Map("book" -> Json.JObj(Map("__typename" -> jstr("Book"), "id" -> jstr("42"), "title" -> jstr("Dune"))))
+            )
+            val defective = new JsonCodec[Int]:
+                def decode(json: Json): Int  = throw IllegalStateException("defective codec")
+                def encode(value: Int): Json = Json.JNum(value)
+            val read = CacheBatchReader.readRooted(
+                defective,
+                op.rootField,
+                CacheKey.QueryRoot,
+                RecordLoader(records),
+                Map.empty,
+                CacheKeyResolver.default,
+                FieldPolicies.empty
+            )
+            assert(read.isPanic)
+            assert(read.panic.exists(_.isInstanceOf[IllegalStateException]))
         }
 
         // --- Cache redirects ------------------------------------------------------
@@ -279,13 +332,13 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
             val records = Normalizer.normalize(op, data)
             // Round-trip: the linked records reassemble into the same typed value.
             assert(
-                CacheBatchReader.read(op, RecordLoader(records)) == BookData(
+                CacheBatchReader.read(op, RecordLoader(records)) == Result.succeed(BookData(
                     Book("42", "Dune")
-                )
+                ))
             )
         }
 
-        "reading a partial store through the typed path raises CacheMissException" in {
+        "reading a partial store through the typed path is a CacheMissException" in {
             val op = BookQuery()
             val data = Map(
                 "book" -> Json.JObj(
@@ -294,9 +347,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
             )
             // Drop the Book record so the reference dangles.
             val partial = Normalizer.normalize(op, data) - CacheKey("Book", "42")
-            val _ = intercept[CacheMissException](
-                CacheBatchReader.read(op, RecordLoader(partial))
-            )
+            assert(CacheBatchReader.read(op, RecordLoader(partial)).failure.map(_.key) == Present(CacheKey("Book", "42")))
         }
 
         "readWithDependentKeys captures the root and every reference target visited" in {
@@ -308,7 +359,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
             )
             val records = Normalizer.normalize(op, data)
             val (typed, keys) =
-                CacheBatchReader.readWithDependentKeys(op, RecordLoader(records))
+                CacheBatchReader.readWithDependentKeys(op, RecordLoader(records)).getOrThrow
             // Data path is identical to `read`; keys are the root plus the linked Book.
             assert(typed == BookData(Book("42", "Dune")))
             assert(keys == Set(CacheKey.QueryRoot, CacheKey("Book", "42")))
@@ -349,7 +400,8 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
                 ))
             val loader     = CountingLoader(records)
             val selections = Chunk(listOf(obj("items", "Item", Chunk(leaf("id")))))
-            val data       = new CacheBatchReader(loader, Map.empty, CacheKey.QueryRoot).toData(TestQuery(selections).rootField)
+            val data =
+                new CacheBatchReader(loader, Map.empty, CacheKey.QueryRoot).toData(TestQuery(selections).rootField).getOrThrow
             assert(data.fields("items").asInstanceOf[Json.JArr].items.size == 100)
             assert(loader.batches == Chunk(1, 100), s"one load per level, got batch sizes ${loader.batches}")
         }

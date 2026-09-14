@@ -1,6 +1,7 @@
 package kyo.apollo.cache.normalized
 
 import kyo.<
+import kyo.Abort
 import kyo.Absent
 import kyo.AllowUnsafe
 import kyo.AtomicLong
@@ -21,6 +22,8 @@ import kyo.apollo.cache.normalized.api.*
 import kyo.apollo.cache.normalized.internal.CacheBatchReader
 import kyo.apollo.cache.normalized.internal.Normalizer
 import kyo.apollo.exception.CacheMissException
+import kyo.apollo.exception.CacheReadFailure
+import kyo.apollo.exception.NoCacheIdentityException
 import kyo.apollo.json.Json
 import scala.collection.mutable
 
@@ -41,6 +44,12 @@ import scala.collection.mutable
   * ([[updateOperation]], [[updateFragment]]) is one atomic
   * [[NormalizedCache.transact]], so two concurrent updates of the same data both
   * land.
+  *
+  * A read the cache cannot satisfy fails on its row, `Abort[CacheReadFailure]` —
+  * the miss is the expected outcome this layer is built around (`CacheFirst`,
+  * `NetworkFirst`, [[updateOperation]]), so it is a typed failure, never a throw.
+  * A decode defect or a reader bug is not a miss: it is a panic, under every
+  * handler.
   *
   * @param cache             the backing record store
   * @param cacheKeyGenerator the write-side object → [[CacheKey]] policy
@@ -144,11 +153,17 @@ final class ApolloStore(
                         case Absent          => loaded
                 }
 
-    /** Run `f` over one snapshot of the optimistic stack and one state of the
-      * backend — the shape of every store read.
+    /** Run the reader `f` over one snapshot of the optimistic stack and one state of
+      * the backend — the shape of every store read — and lift its outcome onto the
+      * read's row: a miss is an `Abort[CacheReadFailure]` failure, a defect stays a
+      * panic under every handler.
       */
-    private def readWith[A](f: RecordLoader => A)(using Frame): A < Sync =
-        optimisticLayers.get.map(layers => cache.read(base => f(overlayLoader(layers, base))))
+    private def readWith[A](f: RecordLoader => Result[CacheReadFailure, A])(using
+        Frame
+    ): A < (Sync & Abort[CacheReadFailure]) =
+        optimisticLayers.get
+            .map(layers => cache.read(base => f(overlayLoader(layers, base))))
+            .map(outcome => Abort.get(outcome))
 
     /** Register `listener` to be run (via [[publish]]) on the changed keys of every
       * subsequent write until the enclosing `Scope` closes. The seam watchers hook
@@ -238,18 +253,29 @@ final class ApolloStore(
             fieldPolicies
         )
 
-    /** Commit the records `plan` computes against the backend's current state, and
-      * report the positional-conflict warnings ([[CacheDiagnostics]]) of the attempt
-      * that landed. Every store write funnels through here, so the diagnostic cannot
-      * be wired into some write paths and forgotten on others; while diagnostics are
-      * off it costs one boolean read per record. `plan` may run more than once.
+    /** Commit the records `plan` computes against the backend's current state (see
+      * [[commitWith]]).
       */
     private def commit(
         plan: RecordLoader => Chunk[Record],
         cacheHeaders: CacheHeaders
     )(using Frame): Set[CacheKey] < Sync =
-        def planned(loader: RecordLoader): (Chunk[Record], Chunk[String]) =
-            val records = plan(loader)
+        commitWith(loader => (plan(loader), ()), cacheHeaders).map(_._1)
+
+    /** Commit the records `plan` computes against the backend's current state,
+      * together with a result of `plan`'s own from the attempt that landed, and
+      * report the positional-conflict warnings ([[CacheDiagnostics]]) of that
+      * attempt. Every store write funnels through here — the one call of
+      * [[NormalizedCache.transact]] — so the diagnostic cannot be wired into some
+      * write paths and forgotten on others; while diagnostics are off it costs one
+      * boolean read per record. `plan` may run more than once.
+      */
+    private def commitWith[A](
+        plan: RecordLoader => (Chunk[Record], A),
+        cacheHeaders: CacheHeaders
+    )(using Frame): (Set[CacheKey], A) < Sync =
+        def planned(loader: RecordLoader): (Chunk[Record], (Chunk[String], A)) =
+            val (records, result) = plan(loader)
             val warnings =
                 if !diagnostics.enabled || records.isEmpty then Chunk.empty[String]
                 else
@@ -257,11 +283,11 @@ final class ApolloStore(
                     records.flatMap(incoming =>
                         Chunk.from(stored.get(incoming.key)).flatMap(diagnostics.positionalConflicts(_, incoming))
                     )
-            (records, warnings)
+            (records, (warnings, result))
         end planned
         cache.transact(planned, cacheHeaders, recordMerger)
-            .map((changed, warnings) => diagnostics.report(warnings).andThen(changed))
-    end commit
+            .map { case (changed, (warnings, result)) => diagnostics.report(warnings).andThen((changed, result)) }
+    end commitWith
 
     /** Merge `records` and [[publish]] the keys that changed. */
     private def writeAndPublish(records: => Chunk[Record], cacheHeaders: CacheHeaders)(using
@@ -287,11 +313,11 @@ final class ApolloStore(
 
     /** Reassemble `operation`'s typed `data` from the cache.
       *
-      * @throws kyo.apollo.exception.CacheMissException (raised inside the effect) if
-      *         the cache cannot satisfy every selected field (so the caller can fall
-      *         through to the network or surface the miss as a response value).
+      * A [[kyo.apollo.exception.CacheMissException]] on the row when the cache cannot
+      * satisfy every selected field, so the caller can fall through to the network or
+      * surface the miss as a response value. A decode defect is a panic, not a miss.
       */
-    def readOperation[D](operation: Operation[D])(using Frame): D < Sync =
+    def readOperation[D](operation: Operation[D])(using Frame): D < (Sync & Abort[CacheReadFailure]) =
         readOperationWithKeys(operation).map(_._1)
 
     /** Reassemble `operation`'s typed `data` from the cache *and* the set of record
@@ -299,12 +325,11 @@ final class ApolloStore(
       *
       * The cache interceptor stamps these keys onto [[CacheInfo.dependentKeys]] so a
       * watcher knows exactly which keys to watch: it re-emits only when a write's
-      * changed keys intersect this set.
-      *
-      * @throws kyo.apollo.exception.CacheMissException (raised inside the effect) if
-      *         the cache cannot satisfy every selected field
+      * changed keys intersect this set. Fails like [[readOperation]].
       */
-    def readOperationWithKeys[D](operation: Operation[D])(using Frame): (D, Set[CacheKey]) < Sync =
+    def readOperationWithKeys[D](operation: Operation[D])(using
+        Frame
+    ): (D, Set[CacheKey]) < (Sync & Abort[CacheReadFailure]) =
         readWith(loader =>
             CacheBatchReader.readWithDependentKeys(
                 operation,
@@ -319,12 +344,12 @@ final class ApolloStore(
       * at — sampled *before* the records are loaded, so the stamp is conservative:
       * a write published while the read was in flight has a higher generation and
       * shows up as `currentGeneration > stamp`. A watcher adopts the key set together
-      * with this stamp and re-reads when the store has moved past it.
-      *
-      * @throws kyo.apollo.exception.CacheMissException (raised inside the effect) if
-      *         the cache cannot satisfy every selected field
+      * with this stamp and re-reads when the store has moved past it. Fails like
+      * [[readOperation]].
       */
-    def readOperationStamped[D](operation: Operation[D])(using Frame): (D, Set[CacheKey], Long) < Sync =
+    def readOperationStamped[D](operation: Operation[D])(using
+        Frame
+    ): (D, Set[CacheKey], Long) < (Sync & Abort[CacheReadFailure]) =
         generation.get.map(stamp => readOperationWithKeys(operation).map((data, keys) => (data, keys, stamp)))
 
     /** Normalize and merge `fragment`'s typed `data` into the record stored under
@@ -419,8 +444,9 @@ final class ApolloStore(
     end fragmentRecords
 
     /** The record key this store's [[CacheKeyGenerator]] gives an object of type
-      * `typeName` with the response fields `obj` — `Absent` when the generator has
-      * no identity for it.
+      * `typeName` with the response fields `obj` — a
+      * [[kyo.apollo.exception.NoCacheIdentityException]] on the row when the
+      * generator has no identity for it.
       *
       * The one door from a masked fragment ref to its record: a ref carries the
       * captured slice and its concrete type, never a key of its own, and a read
@@ -430,13 +456,17 @@ final class ApolloStore(
       * fragment was declared with. `typeName` overrides any `__typename` in `obj`.
       * No response path is supplied, so the generator's positional fallback cannot
       * apply: an entity without a usable identity has no key rather than a
-      * position-based one that a list insertion would repoint.
+      * position-based one that a list insertion would repoint. The failure shares
+      * the read's row, so `keyOf(…).map(readFragment(fragment, _))` is one read
+      * with one failure set.
       */
-    def keyOf(typeName: String, obj: Map[String, Json]): Maybe[CacheKey] =
+    def keyOf(typeName: String, obj: Map[String, Json])(using Frame): CacheKey < Abort[CacheReadFailure] =
         cacheKeyGenerator.cacheKeyForObject(
             obj.updated("__typename", Json.JStr(typeName)),
             CacheKeyGeneratorContext(CompiledField(typeName, CompiledNamedType(typeName)))
-        )
+        ) match
+            case Present(key) => key
+            case Absent       => Abort.fail(NoCacheIdentityException(typeName))
 
     /** Reassemble `fragment`'s typed `data` from the record stored under
       * `cacheKey`.
@@ -444,23 +474,21 @@ final class ApolloStore(
       * The targeted-read counterpart to [[readOperation]]: it denormalizes starting
       * at `cacheKey` rather than an operation root, reusing the same
       * [[CacheBatchReader]] decode so the result equals what a full operation would
-      * have produced for that object.
-      *
-      * @throws kyo.apollo.exception.CacheMissException (raised inside the effect) if
-      *         the cache cannot satisfy every field the fragment selects
+      * have produced for that object. A [[kyo.apollo.exception.CacheMissException]]
+      * on the row when the cache cannot satisfy every field the fragment selects; a
+      * decode defect is a panic.
       */
-    def readFragment[D](fragment: Fragment[D], cacheKey: CacheKey)(using Frame): D < Sync =
+    def readFragment[D](fragment: Fragment[D], cacheKey: CacheKey)(using Frame): D < (Sync & Abort[CacheReadFailure]) =
         readFragmentWithKeys(fragment, cacheKey).map(_._1)
 
     /** Reassemble `fragment`'s typed `data` from `cacheKey` *and* the set of record
       * keys the read depended on (`cacheKey` plus every reference/redirect target),
       * mirroring [[readOperationWithKeys]] so a watcher over a fragment knows exactly
-      * which keys to watch.
-      *
-      * @throws kyo.apollo.exception.CacheMissException (raised inside the effect) if
-      *         the cache cannot satisfy every field the fragment selects
+      * which keys to watch. Fails like [[readFragment]].
       */
-    def readFragmentWithKeys[D](fragment: Fragment[D], cacheKey: CacheKey)(using Frame): (D, Set[CacheKey]) < Sync =
+    def readFragmentWithKeys[D](fragment: Fragment[D], cacheKey: CacheKey)(using
+        Frame
+    ): (D, Set[CacheKey]) < (Sync & Abort[CacheReadFailure]) =
         readWith(loader => readFragmentFrom(loader, fragment, cacheKey))
 
     /** The fragment read over one loader — shared by [[readFragmentWithKeys]] and
@@ -468,12 +496,16 @@ final class ApolloStore(
       */
     private def readFragmentFrom[D](loader: RecordLoader, fragment: Fragment[D], cacheKey: CacheKey)(using
         Frame
-    ): (D, Set[CacheKey]) =
-        val reader =
-            new CacheBatchReader(loader, fragmentVariablesOf(fragment), cacheKey, cacheKeyResolver, fieldPolicies)
-        val data = reader.toData(fragment.rootField)
-        (fragment.dataCodec.decode(data), reader.dependentKeys)
-    end readFragmentFrom
+    ): Result[CacheMissException, (D, Set[CacheKey])] =
+        CacheBatchReader.readRooted(
+            fragment.dataCodec,
+            fragment.rootField,
+            cacheKey,
+            loader,
+            fragmentVariablesOf(fragment),
+            cacheKeyResolver,
+            fieldPolicies
+        )
 
     /** Read `operation`'s cached data, apply `update`, and write the result back —
       * react-apollo's `cache.updateQuery` — as ONE atomic step against the backend:
@@ -483,44 +515,53 @@ final class ApolloStore(
       * set); a successful write returns the changed keys, which re-emit every
       * dependent watcher. Use to splice a mutation result into a cached list (the
       * idiomatic alternative to `refetchQueries` for the common case) without a
-      * network round-trip.
+      * network round-trip. A decode defect in the read, or a defect in `update`,
+      * commits nothing and is a panic.
       *
       * `update` must be PURE: when another write commits between its read and its
       * write, the read is repeated on the newer state and `update` is applied again.
       */
     def updateOperation[D](operation: Operation[D])(update: D => D)(using Frame): Set[CacheKey] < Sync =
         updateWith { loader =>
-            Result.catching[CacheMissException](
-                CacheBatchReader.read(operation, loader, variablesOf(operation), cacheKeyResolver, fieldPolicies)
-            ) match
-                case Result.Success(data) => Chunk.from(normalize(operation, update(data)).values)
-                case _                    => Chunk.empty[Record]
+            CacheBatchReader.read(operation, loader, variablesOf(operation), cacheKeyResolver, fieldPolicies)
+                .map(data => Chunk.from(normalize(operation, update(data)).values))
         }
 
     /** Read a fragment for `cacheKey`, apply `update`, and write it back — the typed
       * equivalent of react-apollo's `cache.modify` on a single normalized record — as
-      * one atomic step, like [[updateOperation]]. A **cache miss is a no-op**.
-      * Returns the changed keys (re-emitting dependent watchers). To delete a record
-      * instead, use [[evict]]. `update` must be PURE (it may be applied more than
-      * once under contention).
+      * one atomic step, like [[updateOperation]]. A **cache miss is a no-op**; a
+      * defect commits nothing and is a panic. Returns the changed keys (re-emitting
+      * dependent watchers). To delete a record instead, use [[evict]]. `update` must
+      * be PURE (it may be applied more than once under contention).
       */
     def updateFragment[D](fragment: Fragment[D], cacheKey: CacheKey)(update: D => D)(using
         Frame
     ): Set[CacheKey] < Sync =
         updateWith { loader =>
-            Result.catching[CacheMissException](readFragmentFrom(loader, fragment, cacheKey)._1) match
-                case Result.Success(data) => Chunk.from(fragmentRecords(fragment, cacheKey, update(data)).values)
-                case _                    => Chunk.empty[Record]
+            readFragmentFrom(loader, fragment, cacheKey)
+                .map((data, _) => Chunk.from(fragmentRecords(fragment, cacheKey, update(data)).values))
         }
 
     /** The atomic read-modify-write both update paths share: `plan` reads through
-      * the optimistic overlay (one snapshot of the stack) and returns the records to
+      * the optimistic overlay (one snapshot of the stack) and yields the records to
       * merge; the changed keys are [[publish]]ed once the commit landed.
+      *
+      * A miss in `plan` is the documented no-op: nothing is merged. A panic in
+      * `plan` merges nothing either, and is raised once the transaction is over —
+      * so a defect neither commits a half-computed update nor passes for a miss.
       */
-    private def updateWith(plan: RecordLoader => Chunk[Record])(using Frame): Set[CacheKey] < Sync =
+    private def updateWith(plan: RecordLoader => Result[CacheMissException, Chunk[Record]])(using
+        Frame
+    ): Set[CacheKey] < Sync =
         optimisticLayers.get.map { layers =>
-            commit(base => plan(overlayLoader(layers, base)), CacheHeaders.None)
-                .map(changed => publish(changed).andThen(changed))
+            def planned(base: RecordLoader): (Chunk[Record], Result[Nothing, Unit]) =
+                plan(overlayLoader(layers, base)) match
+                    case Result.Success(records) => (records, Result.unit)
+                    case Result.Failure(_)       => (Chunk.empty[Record], Result.unit)
+                    case Result.Panic(defect)    => (Chunk.empty[Record], Result.panic[Nothing, Unit](defect))
+            commitWith(planned, CacheHeaders.None).map { (changed, outcome) =>
+                Abort.get(outcome).andThen(publish(changed)).andThen(changed)
+            }
         }
 
     /** Fan `keys` out to every registered listener through the change bus (a no-op
