@@ -28,7 +28,7 @@ class StreamReservationSpec extends kyo.test.Test[Any]:
 
             // Scala accessor aliased to `streamed$`, and the result named-tuple field too.
             assert(src.contains("def streamed$"), src)
-            assert(src.contains("(streamed$: Option[String])"), src)
+            assert(src.contains("(streamed$: Maybe[String])"), src)
             // The wire name stays `streamed` — only the Scala accessor is aliased.
             assert(src.contains("SelectionBuilder.scalar(\"streamed\""), src)
             // A sibling field is untouched.

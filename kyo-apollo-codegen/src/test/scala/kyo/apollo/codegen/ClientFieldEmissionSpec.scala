@@ -22,7 +22,7 @@ class ClientFieldEmissionSpec extends kyo.test.Test[Any]:
 
     private val decls = List(
         ClientFieldDecl("Country", "isFavorite", "Boolean", "false"),
-        ClientFieldDecl("Country", "tags", "List[String]", "Nil"),
+        ClientFieldDecl("Country", "tags", "Chunk[String]", "Chunk.empty"),
         ClientFieldDecl("Query", "cartOpen", "Boolean", "false")
     )
     private val cfg = CodegenConfig(packageName = "gen", clientFields = decls)
@@ -44,7 +44,7 @@ class ClientFieldEmissionSpec extends kyo.test.Test[Any]:
             )
             assert(
                 src.contains(
-                    """val tags = ClientField.create[Country, List[String]]("tags", default = Nil)"""
+                    """val tags = ClientField.create[Country, Chunk[String]]("tags", default = Chunk.empty)"""
                 ),
                 src
             )
