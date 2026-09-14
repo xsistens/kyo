@@ -6,15 +6,6 @@ import caliban.parsing.adt.Definition.TypeSystemDefinition.TypeDefinition.UnionT
 import caliban.parsing.adt.Document
 import caliban.parsing.adt.Type
 
-/** Raised for any recoverable failure inside the codegen pipeline (parse errors,
-  * an unresolvable schema type, an unsupported document feature, …). Keeping one
-  * exception type lets the sbt task (Task 6) report codegen failures uniformly.
-  */
-final class CodegenException(message: String) extends RuntimeException(message)
-
-object CodegenException:
-    def apply(message: String): CodegenException = new CodegenException(message)
-
 /** Configuration for a codegen run.
   *
   * @param packageName    the package the generated operation sources are emitted into
@@ -33,6 +24,7 @@ object CodegenException:
   *                       resolves the companion given (a compile error if none
   *                       exists). An unmapped custom scalar falls back to `String`
   *                       (raw wire passthrough, no registration required).
+  * @param clientFields   local `@client` fields to emit descriptors and accessors for
   */
 final case class CodegenConfig(
     packageName: String = "kyo.apollo.generated",
@@ -204,6 +196,46 @@ object ApolloClientWriter:
                 .filter(config.scalarMappings.contains)
                 .map(config.scalarMappings)
                 .filter(t => schemaRecipe(t).isDefined)
+
+        /** The types an argument or input field may have: scalars, enums and input objects. */
+        private val inputTypeNames: Set[String] =
+            BuiltInScalars.keySet ++ customScalarNames ++ enumNames ++ inputNames
+
+        /** Every type a field may have. */
+        private val outputTypeNames: Set[String] =
+            BuiltInScalars.keySet ++ customScalarNames ++ enumNames ++ objectNames ++ unionMembers.keySet
+
+        /** Fail on the first field, argument or input field whose type the schema does
+          * not declare (or, for an argument or input field, is not an input type),
+          * naming the type and the reference's schema coordinate. Emitting such a
+          * reference as anything — a `String` scalar, say — would generate code that
+          * compiles and is wrong at the server.
+          */
+        private def validateTypeReferences(): Unit =
+            def checkOutput(t: Type, coordinate: String): Unit =
+                val name = Type.innerType(t)
+                if !outputTypeNames(name) then
+                    if inputNames(name) then throw CodegenException.NotAnOutputType(name, coordinate)
+                    else throw CodegenException.UnknownType(name, coordinate)
+            end checkOutput
+            def checkInput(t: Type, coordinate: String): Unit =
+                val name = Type.innerType(t)
+                if !inputTypeNames(name) then
+                    if outputTypeNames(name) then throw CodegenException.NotAnInputType(name, coordinate)
+                    else throw CodegenException.UnknownType(name, coordinate)
+            end checkInput
+            schema.objectTypeDefinitions.foreach { obj =>
+                obj.fields.foreach { f =>
+                    checkOutput(f.ofType, s"${obj.name}.${f.name}")
+                    f.args.foreach(a => checkInput(a.ofType, s"${obj.name}.${f.name}(${a.name}:)"))
+                }
+            }
+            schema.inputObjectTypeDefinitions.foreach { in =>
+                in.fields.foreach(f => checkInput(f.ofType, s"${in.name}.${f.name}"))
+            }
+        end validateTypeReferences
+
+        validateTypeReferences()
 
         /** A field of a generated data / input case class. */
         final private case class DataField(
@@ -673,22 +705,14 @@ object ApolloClientWriter:
             config.clientFields.foreach { decl =>
                 val t = decl.onType
                 if !rootSelectorMap.contains(t) && !objectNames(t) then
-                    throw CodegenException(
-                        s"client field `${decl.name}` is declared on `$t`, which is not a GraphQL " +
-                            "object or operation-root type."
-                    )
-                end if
+                    throw CodegenException.ClientFieldOnUnknownType(t, decl.name)
                 val schemaFields =
                     schema.objectTypeDefinitions
                         .find(_.name == t)
                         .map(_.fields.map(_.name).toSet)
                         .getOrElse(Set.empty)
                 if schemaFields.contains(decl.name) then
-                    throw CodegenException(
-                        s"client field `$t.${decl.name}` clashes with a server field of the same name; " +
-                            "client field names must be disjoint from schema fields on that type."
-                    )
-                end if
+                    throw CodegenException.ClientFieldClash(t, decl.name)
             }
 
         /** The chainable client accessors for `gqlType` (`_.code.name.isFavorite`),
@@ -758,7 +782,9 @@ object ApolloClientWriter:
 
         /** The leaf `ScalarCodec` for a named GraphQL type. Enums, input objects and
           * mapped custom scalars reuse their `given Schema` via `ScalarCodec.fromSchema`
-          * (a string transform / derived codec, never sum-type derivation).
+          * (a string transform / derived codec, never sum-type derivation). Only
+          * scalar-like types reach here: composite fields take a nested selection, and
+          * [[validateTypeReferences]] has rejected every other name.
           */
         private def leafCodecExpr(name: String): String = name match
             case "Int"     => "ScalarCodec.int"
@@ -772,7 +798,7 @@ object ApolloClientWriter:
                     config.scalarMappings.get(other) match
                         case Some(scala) => s"ScalarCodec.fromSchema[$scala]"
                         case None        => "ScalarCodec.string"
-                else "ScalarCodec.string"
+                else throw new IllegalStateException(s"no codec for type `$other`, which passed type validation")
 
         /** The Scala value type for a field whose object leaf named tuple is `a`,
           * honouring list/nullable wrappers, e.g. `[Country!]` → `Maybe[Chunk[A]]`
@@ -821,6 +847,9 @@ object ApolloClientWriter:
                 .mkString
         end kyoTypeImports
 
+        /** The Scala type of a named GraphQL type; [[validateTypeReferences]] has already
+          * rejected every name the schema does not declare.
+          */
         private def leafScalaType(name: String): String =
             BuiltInScalars.get(name) match
                 case Some(scala) => scala
@@ -830,7 +859,7 @@ object ApolloClientWriter:
                     else if inputNames(name) then name // input case class emitted by writeSchemaTypes.
                     else if objectNames(name) then name
                     else if unionMembers.contains(name) then name // union marker trait emitted by emitSelectors.
-                    else "String"                                 // unknown leaf: safest wire-compatible default.
+                    else throw new IllegalStateException(s"no Scala type for `$name`, which passed type validation")
 
         /** Whether a GraphQL type reference is non-null (a required variable). */
         private def isNonNull(t: Type): Boolean = t match
