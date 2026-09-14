@@ -3,6 +3,7 @@ package kyo.apollo.network.http
 import java.nio.charset.StandardCharsets
 import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
 import kyo.apollo.StreamProbe
+import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.network.HttpHeader
 import kyo.apollo.network.HttpMethod
 
@@ -127,5 +128,61 @@ class HttpClientEngineStreamingSpec extends kyo.test.Test[Any]:
                 end match
             }
         }
+    }
+
+    "a streamed body reaches the consumer chunk by chunk: the first chunk arrives before the server sends the second" in {
+        // The server sends the second chunk only once the consumer has received the first
+        // (the latch). A body stream that regroups chunks holds the first one back until
+        // more follow, so both sides wait on each other; the timeout only turns that
+        // deadlock into a failure, it orders nothing.
+        val boundary = "graphql"
+        val first    = s"--$boundary\r\nContent-Type: application/json\r\n\r\n{\"data\":{\"a\":1},\"hasNext\":true}\r\n"
+        val second   = s"--$boundary\r\nContent-Type: application/json\r\n\r\n{\"incremental\":[],\"hasNext\":false}\r\n--$boundary--\r\n"
+
+        def span(text: String): Span[Byte] = Span.fromUnsafe(text.getBytes(StandardCharsets.UTF_8))
+
+        for
+            firstReceived <- Latch.init(1)
+            secondSent    <- AtomicBoolean.init(false)
+            route = HttpRoute.postRaw("graphql").request(_.bodyText).response(_.bodyStream)
+            serverBody = Stream
+                .init(Seq(span(first)))
+                .concat(Stream.unwrap(firstReceived.await.andThen(secondSent.set(true)).andThen(Stream.init(Seq(span(second))))))
+            ep = route.handler { _ =>
+                kyo.HttpResponse.ok.addField("body", serverBody).setHeader("Content-Type", s"multipart/mixed; boundary=$boundary")
+            }
+            server <- HttpServer.init(0, "127.0.0.1")(ep)
+            request = HttpRequest(
+                method = HttpMethod.Post,
+                url = s"http://127.0.0.1:${server.port}/graphql",
+                headers = List(HttpHeader("Content-Type", "application/json")),
+                body = Some("{}")
+            )
+            // Each text chunk as it reaches the consumer, with whether the server had sent the second chunk by then.
+            consumed = new HttpClientEngine().executeStreaming(request).map { resp =>
+                resp.body match
+                    case HttpStreamBody.Chunked(stream) =>
+                        stream.fold(Chunk.empty[(String, Boolean)]) { (seen, text) =>
+                            secondSent.get.map { sent =>
+                                if seen.isEmpty then firstReceived.release.andThen(seen.append((text, sent)))
+                                else seen.append((text, sent))
+                            }
+                        }
+                    case other => fail(s"expected a Chunked streaming body, got $other")
+            }
+            result <- Abort.run[Timeout](Async.timeout(30.seconds)(Abort.run[HttpEngineFailure](consumed)))
+        yield result match
+            case Result.Success(Result.Success(seen)) =>
+                assert(seen.nonEmpty)
+                assert(seen.head._2 == false, s"the first chunk reached the consumer only after the second was sent: $seen")
+                assert(first.startsWith(seen.head._1), s"the first chunk carried more than the first part: $seen")
+                assert(
+                    seen.map(_._1).mkString == first + second,
+                    s"the second chunk was never sent — the consumer got the first only once the connection ended: $seen"
+                )
+            case Result.Failure(_: Timeout) =>
+                fail("the first chunk never reached the consumer before the body ended: the body stream holds chunks back")
+            case other => fail(s"streaming failed: $other")
+        end for
     }
 end HttpClientEngineStreamingSpec
