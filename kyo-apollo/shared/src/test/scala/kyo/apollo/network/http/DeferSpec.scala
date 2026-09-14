@@ -8,13 +8,13 @@ import kyo.apollo.api.CompiledNamedType
 import kyo.apollo.api.DeferDirective
 import kyo.apollo.api.Query
 import kyo.apollo.exception.ApolloNetworkException
+import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.interceptor.DefaultApolloInterceptorChain
 import kyo.apollo.interceptor.NetworkInterceptor
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.HttpHeader
 import scala.collection.immutable.VectorMap
-import scala.concurrent.Future
 
 /** End-to-end `@defer` incremental delivery through [[HttpNetworkTransport]]:
   * a `multipart/mixed` reply is split + folded into a stream of progressively
@@ -78,9 +78,9 @@ class DeferSpec extends kyo.test.Test[Any]:
             """{"incremental":[{"data":{"capital":"Berlin"},"path":["country"]}],"hasNext":false}""" +
             s"\r\n--$boundary--\r\n"
 
-    private def engineOf(f: HttpRequest => HttpResponse < Async): HttpEngine =
+    private def engineOf(f: HttpRequest => HttpResponse < (Async & Abort[HttpEngineFailure])): HttpEngine =
         new HttpEngine:
-            def execute(request: HttpRequest)(using Frame): HttpResponse < Async = f(request)
+            def execute(request: HttpRequest)(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) = f(request)
 
     private def transport(engine: HttpEngine): HttpNetworkTransport =
         HttpNetworkTransport("https://x/graphql", engine)
@@ -118,11 +118,10 @@ class DeferSpec extends kyo.test.Test[Any]:
         }
 
         "a network drop arrives as an exception value" in {
-            val boom = new RuntimeException("dropped")
-            val t    = transport(engineOf(_ => Async.fromFuture(Future.failed[HttpResponse](boom))))
+            val t = transport(engineOf(_ => Abort.fail(ApolloNetworkException("dropped"))))
             StreamProbe.collect(t.executeStreaming(ApolloRequest(DeferQ()))).map { rs =>
                 assert(rs.size == 1)
-                assert(rs(0).error.isDefined)
+                assert(rs(0).error.exists(_.isInstanceOf[ApolloNetworkException]))
             }
         }
 
@@ -174,11 +173,10 @@ class DeferSpec extends kyo.test.Test[Any]:
 
         "a live body that drops mid-stream ends with a terminal exception value, not a silent truncation" in {
             // A Chunked engine whose body emits the initial part (flushed by the second
-            // part's leading delimiter) then aborts — the shape of a real TCP drop after
-            // the response head. The transport must fold that failure into a terminal
-            // ApolloNetworkException appended after the already-emitted part, rather than
-            // letting it escape as a panic (which would crash the caller) or vanish.
-            val boom = new RuntimeException("mid-stream drop")
+            // part's leading delimiter) then aborts with the engine failure — the shape of
+            // a real TCP drop after the response head. The transport must fold that failure
+            // into a terminal value appended after the already-emitted part, rather than
+            // letting it escape (which would crash the caller) or vanish.
             val firstEmission =
                 s"--$boundary\r\nContent-Type: application/json\r\n\r\n" +
                     """{"data":{"country":{"code":"DE"}},"hasNext":true}""" +
@@ -186,9 +184,14 @@ class DeferSpec extends kyo.test.Test[Any]:
             val streamingEngine = new HttpEngine:
                 def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
                     HttpResponse(200, List(HttpHeader("Content-Type", contentType)), "")
-                override def executeStreaming(request: HttpRequest)(using Frame): HttpStreamResponse < (Async & Scope) =
-                    val body = Stream.init(Seq(firstEmission)).concat(Stream.unwrap(Sync.defer(throw boom)))
+                override def executeStreaming(request: HttpRequest)(using
+                    Frame
+                ): HttpStreamResponse < (Async & Scope & Abort[HttpEngineFailure]) =
+                    val drop: Stream[String, Abort[HttpEngineFailure]] =
+                        Stream.unwrap(Abort.fail(ApolloNetworkException("mid-stream drop")))
+                    val body = Stream.init(Seq(firstEmission)).concat(drop)
                     HttpStreamResponse(200, List(HttpHeader("Content-Type", contentType)), HttpStreamBody.Chunked(body))
+                end executeStreaming
             StreamProbe.collect(transport(streamingEngine).executeStreaming(ApolloRequest(DeferQ()))).map { rs =>
                 assert(rs.nonEmpty)
                 assert(rs.head.data == Present(Data(Some(Loc("DE", None))))) // the part before the drop still arrives

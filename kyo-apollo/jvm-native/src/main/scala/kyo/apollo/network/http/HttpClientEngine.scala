@@ -5,6 +5,8 @@ import java.nio.CharBuffer
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import kyo.{HttpRequest as _, HttpResponse as _, *}
+import kyo.apollo.exception.ApolloNetworkException
+import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.network.HttpHeader
 import kyo.apollo.network.HttpMethod
 
@@ -15,8 +17,10 @@ import kyo.apollo.network.HttpMethod
   * kyo-http's body methods fail with `HttpStatusException` on non-2xx, but apollo's
   * contract is that a non-2xx status still *completes* (the transport interprets
   * status), so the `*Response` variants are used with `failOnError = false`. A
-  * genuine transport failure (`Abort[HttpException]`) is re-raised as a panic, which
-  * `HttpNetworkTransport` folds into an `ApolloNetworkException` value.
+  * genuine transport failure (`Abort[HttpException]`) becomes the engine's
+  * `Abort[HttpEngineFailure]`: an [[ApolloNetworkException]] whose `cause` is the
+  * kyo-http leaf, so a caller can still tell a refused connection from a DNS
+  * failure or a timeout. A panic from kyo-http stays a panic.
   *
   * [[executeStreaming]] is overridden for real incremental delivery (`@defer`
   * `multipart/mixed`): kyo-http hands the live body only *inside* the `sendWith`
@@ -33,7 +37,7 @@ import kyo.apollo.network.HttpMethod
   */
 final class HttpClientEngine extends HttpEngine:
 
-    def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
+    def execute(request: HttpRequest)(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) =
         request.formBody match
             // A file upload (graphql-multipart-request-spec): the composer sets `formBody`
             // and leaves `body` empty, so the plain text POST below would send an EMPTY
@@ -48,29 +52,47 @@ final class HttpClientEngine extends HttpEngine:
                             HttpClient.getTextResponse(request.url, headers, failOnError = false)
                         case HttpMethod.Post =>
                             HttpClient.postTextResponse(request.url, request.body.getOrElse(""), headers, failOnError = false)
-                Abort.run[HttpException](call).map {
-                    case Result.Success(resp) => toApollo(resp)
-                    case Result.Failure(e)    => Sync.defer(throw e)
-                    case Result.Panic(e)      => Sync.defer(throw e)
-                }
+                onEngineRow(call.map(toApollo))
     end execute
 
     /** Send a `multipart/form-data` body (a file upload) as a real multipart POST over
       * kyo-http, which sets the `Content-Type` (with a generated boundary) itself. Non-2xx
       * still completes (`sendWith` hands the response to the continuation regardless of
-      * status), matching the `failOnError = false` contract of the plain path; a genuine
-      * transport failure re-raises as a panic the transport folds to a value.
+      * status), matching the `failOnError = false` contract of the plain path. The URL is
+      * parsed inside the guarded call, so a malformed one is an engine failure too.
       */
-    private def executeMultipart(request: HttpRequest, form: HttpForm)(using Frame): HttpResponse < Async =
-        val url   = HttpUrl.parse(request.url).getOrThrow
+    private def executeMultipart(request: HttpRequest, form: HttpForm)(using
+        Frame
+    ): HttpResponse < (Async & Abort[HttpEngineFailure]) =
         val route = HttpRoute.postRaw("").request(_.bodyMultipart).response(_.bodyText)
-        val req   = withHeaders(kyo.HttpRequest.postRaw(url).addField("body", formParts(form)), request)
-        Abort.run[HttpException](HttpClient.use(_.sendWith(route, req)(resp => toApollo(resp)))).map {
-            case Result.Success(resp) => resp
-            case Result.Failure(e)    => Sync.defer(throw e)
-            case Result.Panic(e)      => Sync.defer(throw e)
-        }
+        onEngineRow(
+            Abort.get(HttpUrl.parse(request.url)).map { url =>
+                val req = withHeaders(kyo.HttpRequest.postRaw(url).addField("body", formParts(form)), request)
+                HttpClient.use(_.sendWith(route, req)(resp => toApollo(resp)))
+            }
+        )
     end executeMultipart
+
+    /** Move a kyo-http call onto the engine row: its typed failure becomes an
+      * [[ApolloNetworkException]], a panic stays a panic.
+      */
+    private def onEngineRow[A](call: A < (Async & Abort[HttpException]))(using Frame): A < (Async & Abort[HttpEngineFailure]) =
+        Abort.run[HttpException](call).map {
+            case Result.Success(value) => value
+            case Result.Failure(e)     => Abort.fail(engineFailure(e))
+            case Result.Panic(e)       => Abort.panic(e)
+        }
+
+    /** The engine failure for a kyo-http failure: no response was received. The
+      * kyo-http leaf is kept as the `cause`.
+      */
+    private def engineFailure(e: HttpException)(using Frame): HttpEngineFailure =
+        val message = e match
+            case _: HttpConnectionException => "Could not connect to the GraphQL server"
+            case _: HttpRequestException    => "The GraphQL HTTP request failed before a response arrived"
+            case _                          => "The GraphQL HTTP request could not be completed"
+        ApolloNetworkException(message, e)
+    end engineFailure
 
     /** Lower an [[HttpForm]] to kyo-http request parts: each text field becomes a part with
       * no filename/content-type, each file a part carrying both (the ordering — fields then
@@ -87,18 +109,15 @@ final class HttpClientEngine extends HttpEngine:
         HttpResponse(resp.status.code, hs.result(), resp.fields.body)
     end toApollo
 
-    override def executeStreaming(request: HttpRequest)(using Frame): HttpStreamResponse < (Async & Scope) =
+    override def executeStreaming(request: HttpRequest)(using
+        Frame
+    ): HttpStreamResponse < (Async & Scope & Abort[HttpEngineFailure]) =
         for
-            head   <- Fiber.Promise.init[(Int, List[HttpHeader]), Abort[Throwable]]
-            chunks <- Channel.init[Maybe[String]](chunkBufferSize)
-            _      <- Fiber.init(runStreaming(request, head, chunks))
-            resp <- Abort.run[Throwable](head.get).map {
-                case Result.Success((code, headers)) =>
-                    HttpStreamResponse(code, headers, HttpStreamBody.Chunked(bodyStream(chunks)))
-                case Result.Failure(e) => Sync.defer(throw e)
-                case Result.Panic(e)   => Sync.defer(throw e)
-            }
-        yield resp
+            head             <- Fiber.Promise.init[(Int, List[HttpHeader]), Abort[HttpEngineFailure]]
+            chunks           <- Channel.init[Maybe[String]](chunkBufferSize)
+            _                <- Fiber.init(runStreaming(request, head, chunks))
+            statusAndHeaders <- head.get
+        yield HttpStreamResponse(statusAndHeaders._1, statusAndHeaders._2, HttpStreamBody.Chunked(bodyStream(chunks)))
 
     /** The lazy consumer side of the bridge: pull decoded text chunks from the body
       * channel until the producer's [[Absent]] end-marker. Deliberately `take`-based
@@ -118,19 +137,20 @@ final class HttpClientEngine extends HttpEngine:
     /** Run the whole streamed round-trip in the producer fiber: complete `head` with
       * the response status + headers as soon as they land, then decode the live body
       * (UTF-8, stateful across byte-chunk boundaries) into `chunks`, ending with an
-      * [[Absent]] marker. A failure before the head lands fails `head`; the `sendWith`
+      * [[Absent]] marker. A failure before the head lands fails `head` with the engine
+      * failure (a panic with the panic); the `sendWith`
       * continuation drains fully before returning, so kyo-http releases the connection
       * only once the body is done (or the enclosing `Scope` interrupts this fiber and
       * tears it down).
       */
     private def runStreaming(
         request: HttpRequest,
-        head: Fiber.Promise[(Int, List[HttpHeader]), Abort[Throwable]],
+        head: Fiber.Promise[(Int, List[HttpHeader]), Abort[HttpEngineFailure]],
         chunks: Channel[Maybe[String]]
     )(using Frame): Unit < Async =
         // The URL parse is INSIDE the guarded `send` (via Abort.get, not an eager getOrThrow):
         // a malformed URL is then a plain Abort[HttpException] failure that completes `head`
-        // below, rather than an unguarded throw that panics this producer fiber and leaves
+        // below, rather than an unguarded exception that panics this producer fiber and leaves
         // `head` forever incomplete — which would park the caller's `head.get` indefinitely.
         val send: Unit < (Async & Abort[HttpException]) =
             Abort.get(HttpUrl.parse(request.url)).map { url =>
@@ -157,8 +177,8 @@ final class HttpClientEngine extends HttpEngine:
             }
         Abort.run[HttpException](send).map {
             case Result.Success(_) => ()
-            case Result.Failure(e) => head.completeDiscard(Result.fail(e)).andThen(offerEnd(chunks))
-            case Result.Panic(e)   => head.completeDiscard(Result.fail(e)).andThen(offerEnd(chunks))
+            case Result.Failure(e) => head.completeDiscard(Result.fail(engineFailure(e))).andThen(offerEnd(chunks))
+            case Result.Panic(e)   => head.completeDiscard(Result.panic(e)).andThen(offerEnd(chunks))
         }
     end runStreaming
 
@@ -166,7 +186,7 @@ final class HttpClientEngine extends HttpEngine:
         request.headers.foldLeft(req)((r, h) => r.setHeader(h.name, h.value))
 
     private def drainInto(
-        head: Fiber.Promise[(Int, List[HttpHeader]), Abort[Throwable]],
+        head: Fiber.Promise[(Int, List[HttpHeader]), Abort[HttpEngineFailure]],
         chunks: Channel[Maybe[String]]
     )(resp: kyo.HttpResponse["body" ~ Stream[Span[Byte], Async]])(using Frame): Unit < (Async & Abort[HttpException]) =
         val hs = List.newBuilder[HttpHeader]
