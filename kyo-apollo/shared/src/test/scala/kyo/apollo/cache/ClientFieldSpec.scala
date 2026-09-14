@@ -46,10 +46,10 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
     object Edge:
         given TypeName[Edge] = TypeName("Edge")
 
-        def cursor: SelectionBuilder[Edge, (cursor: String)] =
+        def cursor: SelectionBuilder.Deferrable[Edge, (cursor: String)] =
             SelectionBuilder.scalar("cursor", CompiledNamedType("String").notNull, ScalarCodec.string)
 
-        def label: SelectionBuilder[Edge, (label: String)] =
+        def label: SelectionBuilder.Deferrable[Edge, (label: String)] =
             SelectionBuilder.scalar("label", CompiledNamedType("String").notNull, ScalarCodec.string)
     end Edge
 
