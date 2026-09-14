@@ -162,12 +162,23 @@ object IncrementalAssembler:
     private def spliceData(acc: Acc, path: Json, segments: Chunk[String | Int], data: Json)(using Frame): Applied =
         JsonPath.splice(acc.data, segments, data) match
             case Present(tree) => Result.succeed((acc.copy(data = tree), true))
-            case Absent        => Result.fail(ApolloParseException(path, "a path that exists in the accumulated response"))
+            case Absent =>
+                Result.fail(ApolloParseException(path, s"${shown(segments)} to be a path in the accumulated response"))
 
     private def spliceItems(acc: Acc, path: Json, segments: Chunk[String | Int], items: Chunk[Json])(using Frame): Applied =
         JsonPath.spliceItems(acc.data, segments, items) match
             case Present(tree) => Result.succeed((acc.copy(data = tree), true))
-            case Absent => Result.fail(ApolloParseException(path, "the path of a list in the accumulated response, ending at its size"))
+            case Absent =>
+                Result.fail(ApolloParseException(
+                    path,
+                    s"${shown(segments)} to be the path of a list in the accumulated response, ending at its size"
+                ))
+
+    /** A parsed response path for a message: response keys and list indices, which come
+      * from the operation's selections, never from its data.
+      */
+    private def shown(segments: Chunk[String | Int]): String =
+        if segments.isEmpty then "the root path" else segments.mkString(".")
 
     /** Accumulate a part's `errors`; an errors-only item (a deferred or streamed field
       * that resolved to an error) counts as a change so it surfaces even on the

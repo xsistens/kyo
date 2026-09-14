@@ -21,6 +21,21 @@ class GraphQLResponseSpec extends kyo.test.Test[Any]:
 
     final case class Hero(name: String) derives Schema
 
+    final case class Session(token: String, expiresIn: Int) derives Schema
+
+    private val sessionOp: Query[Session] = new Query[Session]:
+        def name: String                = "Session"
+        def document: String            = "query Session { token expiresIn }"
+        def dataSchema: Schema[Session] = summon[Schema[Session]]
+        def rootField: CompiledField    = CompiledField("data", CompiledNamedType("Query"))
+        def variables: Json             = Json.JObj(VectorMap.empty)
+
+    /** `data` with a credential beside the field that fails to decode, and a second marker in that field. */
+    private val sessionData: Json =
+        Json.JObj(VectorMap("token" -> Json.JStr("secret-token-123"), "expiresIn" -> Json.JStr("secret-expiry-456")))
+
+    private val sessionEnvelope: Json = Json.JObj(VectorMap("data" -> sessionData))
+
     /** A minimal operation whose only job here is to carry the `Hero` data
       * `Schema` into [[GraphQLResponse.parse]] (the envelope parsing is what's
       * under test).
@@ -105,7 +120,7 @@ class GraphQLResponseSpec extends kyo.test.Test[Any]:
         "a non-object envelope is a parse failure value carrying what was read" in {
             parseResult("""[1, 2, 3]""") match
                 case Result.Failure(e) =>
-                    assert(e.expected == "a GraphQL response object")
+                    assert(e.expected == "a GraphQL response object for operation 'Hero'")
                     assert(e.actual == JsonParser.parse("""[1, 2, 3]""").getOrThrow)
                 case other => fail(s"expected a parse failure, got $other")
         }
@@ -124,6 +139,23 @@ class GraphQLResponseSpec extends kyo.test.Test[Any]:
                     assert(e.expected.contains("Hero"))
                     assert(e.getCause.isInstanceOf[kyo.DecodeException])
                 case other => fail(s"expected a parse failure, got $other")
+        }
+
+        "a data decode failure's message names the operation and JSON types, never a value of the data" in {
+            // `sessionEnvelope` is declared away from this call: a development-mode
+            // `getMessage` quotes the source around the construction site.
+            GraphQLResponse.parse(sessionEnvelope, sessionOp) match
+                case Result.Failure(e) =>
+                    Chunk(e.getMessage, e.message, e.toString).foreach { text =>
+                        assert(!text.contains("secret-token-123"), text)
+                        assert(!text.contains("secret-expiry-456"), text)
+                    }
+                    assert(e.message == "Expected data matching operation 'Session' but got an object", e.message)
+                    assert(e.getMessage.contains("TypeMismatchException"), e.getMessage)
+                    assert(e.getCause.isInstanceOf[kyo.DecodeException])
+                    assert(e.actual == sessionData)
+                case other => fail(s"expected a parse failure, got $other")
+            end match
         }
 
         "a codec defect is a panic, not a parse failure" in {

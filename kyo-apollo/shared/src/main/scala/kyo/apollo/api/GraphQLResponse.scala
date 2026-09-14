@@ -59,10 +59,12 @@ object GraphQLResponse:
                     case _                    => Map.empty
                 data.flatMap(d => errors.map(es => GraphQLResponse(d, es, extensions)))
             case other =>
-                Result.fail(ApolloParseException(other, "a GraphQL response object"))
+                Result.fail(ApolloParseException(other, s"a GraphQL response object for operation '${operation.name}'"))
 
     /** Decode `payload` with the operation's codec; the codecs' shape errors are the wire failures.
       * A schema codec's own `ApolloParseException` is replaced by this one, keeping its cause.
+      * The failure names the operation; neither its message nor its `getMessage` carries a value
+      * of `payload` or the decoder's own message (see [[ApolloParseException]]).
       */
     private def decodeData[D](payload: Json, operation: Operation[D])(using Frame): Result[ApolloParseException, D] =
         Result
@@ -73,6 +75,6 @@ object GraphQLResponse:
                 val cause: Throwable = e match
                     case parse: ApolloParseException => Maybe(parse.getCause).getOrElse(parse)
                     case other                       => other
-                ApolloParseException(payload, s"the data of operation '${operation.name}'", cause)
+                ApolloParseException(payload, s"data matching operation '${operation.name}'", cause)
             }
 end GraphQLResponse
