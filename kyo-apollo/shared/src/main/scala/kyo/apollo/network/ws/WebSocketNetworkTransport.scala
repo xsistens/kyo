@@ -13,7 +13,6 @@ import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.ApolloResponse
 import kyo.apollo.runtime.ResponseStream
-import kyo.kernel.ContextEffect
 import scala.collection.immutable.VectorMap
 
 /** The terminal transport for **subscription** operations: multiplexes many
@@ -39,16 +38,19 @@ import scala.collection.immutable.VectorMap
   * one is still being torn down (a reconnect opens its socket only after the old
   * one is closed).
   *
-  * '''Lifetime.''' The transport owns a `Scope` that is open from construction
-  * until [[close]]; the owner fiber is forked under it on the first subscription
-  * (inheriting that caller's context, notably a `Clock.withTimeControl` clock).
-  * The owner runs one nested `Scope` per active period — from the first command
-  * to the return to `Idle` — and forks the connection fiber and the timers there,
-  * so their finalizer entries are released with the period. [[close]] lets live
+  * '''Lifetime.''' [[WebSocketNetworkTransport.init]] forks the owner fiber in the
+  * caller's `Scope` (the fiber inherits that caller's context, notably a
+  * `Clock.withTimeControl` clock) and closes the transport when the `Scope` ends.
+  * The owner stays idle, with no socket, until the first subscription arrives; a
+  * transport built with the package-private constructor alone has no owner and
+  * serves no subscription. The owner runs one nested `Scope` per active period —
+  * from the first command to the return to `Idle` — and forks the connection
+  * fiber and the timers there, so their finalizer entries are released with the
+  * period. [[close]] lets live
   * subscriptions finish for the grace period, then waits until the socket is
-  * closed, the connection fiber has released its `Scope`, the owner has exited
-  * and the transport's `Scope` is closed. A closed transport answers every later
-  * [[subscribe]] with an [[ApolloWebSocketClosedException]] value.
+  * closed, the connection fiber has released its `Scope` and the owner has
+  * exited. A closed transport answers every later [[subscribe]] with an
+  * [[ApolloWebSocketClosedException]] value.
   *
   * '''Generation fencing.''' Each opened socket gets a monotonic `generation`.
   * Connection-scoped commands carry the generation they were produced under and
@@ -95,7 +97,7 @@ import scala.collection.immutable.VectorMap
   * @param subscriptionBufferSize how many responses a subscription buffers before
   *                               its consumer's pace holds the socket read back
   */
-final class WebSocketNetworkTransport(
+final class WebSocketNetworkTransport private[apollo] (
     serverUrl: String,
     protocol: WsProtocol = GraphQLWsProtocol,
     engine: WebSocketEngine = WebSocketEngine.default(),
@@ -121,12 +123,6 @@ final class WebSocketNetworkTransport(
     private val mailbox: Channel[Msg] =
         Channel.Unsafe.init[Msg](Int.MaxValue, Access.MultiProducerSingleConsumer)(using summon[Frame], AllowUnsafe.embrace.danger).safe
 
-    /** The transport's own `Scope`: open until [[close]] closes it. The owner fiber is
-      * forked under it, so a transport never runs a fiber no `Scope` accounts for.
-      */
-    private val lifetime: Scope.Finalizer.Awaitable =
-        Scope.Finalizer.Awaitable.Unsafe.init(1)(using summon[Frame], AllowUnsafe.embrace.danger)
-
     // ---- public API -----------------------------------------------------------
 
     /** A cold [[ResponseStream]] for `request`'s subscription. Consuming it (within
@@ -151,7 +147,7 @@ final class WebSocketNetworkTransport(
         Stream.unwrap {
             stateRef.get.map(_.phase).map {
                 case Phase.Closed => closedStream(request)
-                case _            => ensureStarted.andThen(register(request, id))
+                case _            => register(request, id)
             }
         }
     end subscribe
@@ -168,8 +164,6 @@ final class WebSocketNetworkTransport(
             .andThen(closing.completeUnitDiscard)
             .andThen(Async.mask(requestShutdown))
             .andThen(ownerExited.get)
-            .andThen(lifetime.close(Absent))
-            .andThen(lifetime.await)
 
     /** [[close]] with a 30-second grace period. */
     def close(using Frame): Unit < Async = close(30.seconds)
@@ -227,19 +221,26 @@ final class WebSocketNetworkTransport(
 
     // ---- lifecycle ------------------------------------------------------------
 
-    /** Fork the owner fiber under the transport's `Scope`, once. Masked, so an
-      * interrupt between claiming the start and forking cannot leave a transport
-      * whose start is claimed but whose owner never runs. A transport that [[close]]
-      * already claimed is not started; its closed mailbox answers the caller.
+    /** Fork the owner fiber in the caller's `Scope`, once. The owner inherits the
+      * caller's context and waits, idle, for the first subscription. The `Scope`
+      * interrupts the owner when it ends, so whoever starts the transport in a
+      * `Scope` registers [[close]] there afterwards, which runs first and lets the
+      * owner exit on its own. A transport that [[close]] already claimed is not
+      * started.
       */
-    private def ensureStarted(using Frame): Unit < Async =
-        Async.mask {
-            ownerStarted.compareAndSet(false, true).map { claimed =>
-                if claimed then
-                    ContextEffect.handle(Tag[Scope], lifetime: Scope.Finalizer, _ => lifetime)(Fiber.init(runOwner)).unit
-                else Kyo.unit
-            }
+    private[apollo] def start(using Frame): Unit < (Sync & Scope) =
+        Sync.Unsafe.defer {
+            if ownerStarted.unsafe.compareAndSet(false, true) then Fiber.init(runOwner).unit
+            else Kyo.unit
         }
+
+    /** Fork the owner fiber with no `Scope`, once, on a carrier with an empty context:
+      * it runs on the default `Clock` and `Log`, not the caller's. Only [[close]] ends
+      * it; an owner that is never closed stays parked on its mailbox. The start of a
+      * transport created outside the effect system ([[kyo.apollo.ApolloClient.Unsafe.init]]).
+      */
+    private[apollo] def startDetached()(using AllowUnsafe): Unit =
+        if ownerStarted.unsafe.compareAndSet(false, true) then discard(Fiber.Unsafe.init(runOwner))
 
     /** Hand the shutdown to the owner, or — on a transport whose owner never
       * started — close it right here: `Closed`, a closed mailbox, and no message a
@@ -694,6 +695,36 @@ object WebSocketNetworkTransport:
 
     /** The default number of responses a subscription buffers for its consumer. */
     val defaultSubscriptionBufferSize: Int = 256
+
+    /** Create a transport owned by the enclosing `Scope`: its owner fiber is forked in
+      * that `Scope`, idle until the first subscription, and the `Scope`'s end
+      * [[WebSocketNetworkTransport.close]]s the transport with the default grace
+      * period. Parameters as on [[WebSocketNetworkTransport]].
+      */
+    def init(
+        serverUrl: String,
+        protocol: WsProtocol = GraphQLWsProtocol,
+        engine: WebSocketEngine = WebSocketEngine.default(),
+        connectionPayload: Option[Json] = None,
+        ackTimeoutMillis: Long = 10000L,
+        idleTimeoutMillis: Long = 60000L,
+        reconnectWhen: (ApolloException, Long) => Boolean = reconnectNever,
+        backoff: Schedule = defaultBackoff,
+        subscriptionBufferSize: Int = defaultSubscriptionBufferSize
+    )(using Frame): WebSocketNetworkTransport < (Sync & Scope) =
+        Sync.defer(
+            new WebSocketNetworkTransport(
+                serverUrl,
+                protocol,
+                engine,
+                connectionPayload,
+                ackTimeoutMillis,
+                idleTimeoutMillis,
+                reconnectWhen,
+                backoff,
+                subscriptionBufferSize
+            )
+        ).map(transport => transport.start.andThen(Scope.ensure(transport.close)).andThen(transport))
 
     private def normalClose(using Frame): ApolloWebSocketClosedException =
         ApolloWebSocketClosedException(WebSocketConnection.NormalClosure)

@@ -78,7 +78,7 @@ import kyo.apollo.runtime.ResponseStream
 final class ApolloClient private (
     config: ApolloClient.Config,
     httpEngine: HttpEngine,
-    webSocketTransport: WebSocketNetworkTransport,
+    private val webSocketTransport: WebSocketNetworkTransport,
     private[apollo] val activeQueries: ActiveQueryRegistry
 ):
 
@@ -385,9 +385,11 @@ object ApolloClient:
         def subscriptionBufferSize(size: Int): Config = copy(subscriptionBufferSize = size)
     end Config
 
-    /** Create a client for `config`, owned by the enclosing `Scope`: the Scope's end
-      * [[ApolloClient.close]]s it with the default grace period. The primary way to
-      * create a client.
+    /** Create a client for `config`, owned by the enclosing `Scope`: the fiber that
+      * owns its subscription socket is forked in that `Scope` (inheriting the
+      * caller's context, e.g. a `Clock.withTimeControl` clock) and opens no socket
+      * before the first subscription, and the `Scope`'s end [[ApolloClient.close]]s
+      * the client with the default grace period. The primary way to create a client.
       */
     def init(config: Config)(using Frame): ApolloClient < (Sync & Scope) =
         initWith(config)(identity)
@@ -396,14 +398,19 @@ object ApolloClient:
     def initWith(config: Config)[B, S](f: ApolloClient => B < S)(using Frame): B < (S & Sync & Scope) =
         Sync.Unsafe.defer {
             val client = construct(config)
-            Scope.ensure(client.close).andThen(f(client))
+            client.webSocketTransport.start
+                .andThen(Scope.ensure(client.close))
+                .andThen(f(client))
         }
 
     /** Run `f` with a client for `config` and close the client when `f` ends. */
     def use(config: Config)[B, S](f: ApolloClient => B < S)(using Frame): B < (S & Async) =
         Scope.run(initWith(config)(f))
 
-    /** Create a client no `Scope` owns: the caller must [[ApolloClient.close]] it. */
+    /** Create a client no `Scope` owns: the caller must [[ApolloClient.close]] it.
+      * Delegates to [[ApolloClient.Unsafe.init]], so its subscription socket is owned
+      * by a fiber on the default `Clock` and `Log`.
+      */
     def initUnscoped(config: Config)(using Frame): ApolloClient < Sync =
         initUnscopedWith(config)(identity)
 
@@ -413,8 +420,18 @@ object ApolloClient:
 
     /** WARNING: Low-level API meant for integrations, libraries, and performance-sensitive code. See AllowUnsafe for more details. */
     object Unsafe:
-        /** Create a client no `Scope` owns: the caller must [[ApolloClient.close]] it. */
-        def init(config: Config)(using AllowUnsafe): ApolloClient = construct(config)
+        /** Create a client no `Scope` owns: the caller must [[ApolloClient.close]] it.
+          * With no `Scope` and no effect context to inherit, the fiber that owns the
+          * subscription socket is started on a carrier with an empty context: it runs on
+          * the default `Clock` and `Log`, a `Clock.withTimeControl` does not reach it, and
+          * only `close` ends it. It opens no socket before the first subscription, so an
+          * unclosed client that never subscribed holds no connection.
+          */
+        def init(config: Config)(using AllowUnsafe): ApolloClient =
+            val client = construct(config)
+            client.webSocketTransport.startDetached()
+            client
+        end init
     end Unsafe
 
     private def construct(config: Config)(using AllowUnsafe): ApolloClient =

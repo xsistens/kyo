@@ -140,13 +140,13 @@ class ApolloLiveServerSpec extends kyo.test.Test[Any]:
             HttpServer.init(0, "127.0.0.1")(wsHandler).map { server =>
                 // reconnectWhen defaults to reconnectNever, so the drop terminates the
                 // subscription with its close value — exactly the code under test.
-                val transport = new WebSocketNetworkTransport(
-                    serverUrl = s"ws://127.0.0.1:${server.port}/graphql/ws",
-                    engine = new KyoHttpWebSocketEngine
-                )
-                val subscription = transport.subscribe(ApolloRequest(WsTestSupport.ValueSubscription(), TestIds.requestUuid))
+                val request = ApolloRequest(WsTestSupport.ValueSubscription(), TestIds.requestUuid)
                 for
-                    collected <- Fiber.init(Scope.run(StreamProbe.collect(subscription)))
+                    transport <- WebSocketNetworkTransport.init(
+                        serverUrl = s"ws://127.0.0.1:${server.port}/graphql/ws",
+                        engine = new KyoHttpWebSocketEngine
+                    )
+                    collected <- Fiber.init(Scope.run(StreamProbe.collect(transport.subscribe(request))))
                     _         <- gotInit.get     // the server got the handshake — the socket is open
                     _         <- server.closeNow // raw TCP drop, no WS close frame
                     seen      <- collected.get   // the subscription terminates with the drop value
