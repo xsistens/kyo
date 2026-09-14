@@ -1,6 +1,5 @@
 package kyo.apollo.testing
 
-import java.util.concurrent.atomic.AtomicReference
 import kyo.*
 import kyo.apollo.exception.ApolloNetworkException
 import kyo.apollo.exception.HttpEngineFailure
@@ -93,23 +92,30 @@ end TestHttpEngine
   * `Success` assertions), with the request-recording of [[TestHttpEngine]] added.
   */
 final class GatedHttpEngine(responseBody: String, status: Int = 200) extends HttpEngine:
-    private given AllowUnsafe = AllowUnsafe.embrace.danger
-    private given Frame       = Frame.internal
+    private given Frame = Frame.internal
+    private val unsafe  = AllowUnsafe.embrace.danger
 
-    private val gate: Fiber.Promise[Unit, Any] =
-        Sync.Unsafe.evalOrThrow(Fiber.Promise.init[Unit, Any])
-    private val requestsRef = new AtomicReference[Vector[HttpRequest]](Vector.empty)
+    private val gate        = Fiber.Promise.Unsafe.init[Unit, Any]()(using unsafe).safe
+    private val requestsRef = AtomicRef.Unsafe.init(Chunk.empty[HttpRequest])(using unsafe).safe
+    private val arrivedCh   = Channel.Unsafe.init[HttpRequest](Int.MaxValue)(using summon[Frame], unsafe).safe
 
     /** Every request received, oldest first (recorded when parked, before release). */
-    def requests: List[HttpRequest] = requestsRef.get().toList
+    def requests: List[HttpRequest] = requestsRef.unsafe.get()(using unsafe).toList
+
+    /** The next request to reach the engine, in arrival order (each request is
+      * handed out once) — the barrier a test waits on before asserting that a
+      * reply is parked, instead of a pause.
+      */
+    def nextRequest(using Frame): HttpRequest < Async =
+        Abort.run[Closed](arrivedCh.take).map(_.getOrThrow)
 
     /** Release the gate so every parked (and future) reply resolves. Idempotent. */
     def release(): Unit =
-        given AllowUnsafe = AllowUnsafe.embrace.danger
-        discard(gate.unsafe.completeUnitDiscard())
+        discard(gate.unsafe.completeUnitDiscard()(using unsafe))
 
     def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
-        Sync.defer(discard(requestsRef.updateAndGet(_ :+ request))).andThen {
-            gate.get.andThen(HttpResponse(status, Nil, responseBody))
-        }
+        requestsRef.getAndUpdate(_.append(request))
+            .andThen(Abort.run[Closed](arrivedCh.offer(request)))
+            .andThen(gate.get)
+            .andThen(HttpResponse(status, Nil, responseBody))
 end GatedHttpEngine
