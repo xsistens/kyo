@@ -17,8 +17,9 @@ import kyo.apollo.cache.normalized.api.Record
   * primitives it wants to intercept — typically [[transact]] (write-through to
   * durable storage) and [[read]] (read-through on a miss, by wrapping the
   * [[RecordLoader]] it hands on) — while inheriting correct forwarding for the rest.
-  * Because [[NormalizedCache.loadRecord]], [[NormalizedCache.loadRecords]] and
-  * [[NormalizedCache.merge]] are expressed through [[read]] and [[transact]], an
+  * Because [[NormalizedCache.loadRecord]], [[NormalizedCache.loadRecords]],
+  * [[NormalizedCache.merge]] and [[NormalizedCache.remove]] are expressed through
+  * [[read]] and [[transact]], an
   * override of those two reaches every read and write the [[ApolloStore]] makes.
   * Mirrors apollo-kotlin's `NormalizedCache` chaining (`chain`/`nextCache`), where a
   * `SqlNormalizedCache` wraps a `MemoryCache`.
@@ -31,13 +32,11 @@ abstract class NormalizedCacheDecorator(protected val delegate: NormalizedCache)
     def read[A](f: RecordLoader => A)(using Frame): A < Sync = delegate.read(f)
 
     def transact[A](
-        f: RecordLoader => (Chunk[Record], A),
+        f: RecordState => (RecordChanges, A),
         cacheHeaders: CacheHeaders,
         merger: RecordMerger
     )(using Frame): (Set[CacheKey], A) < Sync =
         delegate.transact(f, cacheHeaders, merger)
-
-    def remove(keys: Chunk[CacheKey])(using Frame): Set[CacheKey] < Sync = delegate.remove(keys)
 
     def clearAll(using Frame): Unit < Sync = delegate.clearAll
 

@@ -30,14 +30,14 @@ import kyo.apollo.cache.normalized.api.Record
   *     from that state, so a read sees the store either before or after a
   *     concurrent write, never a mixture of both.
   *   - [[transact]] is an atomic read-modify-write: its function loads what it
-  *     needs, returns the records to merge, and the backend commits them against
-  *     exactly the state that function saw. Under contention the function is run
-  *     again on the newer state, so it must be pure.
+  *     needs, returns the records to merge and the keys to remove, and the backend
+  *     commits both against exactly the state that function saw. Under contention
+  *     the function is run again on the newer state, so it must be pure.
   *
-  * [[loadRecord]], [[loadRecords]] and [[merge]] are `final` conveniences expressed
-  * through those two, so a decorating backend overrides [[read]] and [[transact]]
-  * and reaches every read and write the store makes — there is no second write
-  * entry it could override and have the store call past.
+  * [[loadRecord]], [[loadRecords]], [[merge]] and [[remove]] are `final`
+  * conveniences expressed through those two, so a decorating backend overrides
+  * [[read]] and [[transact]] and reaches every read and write the store makes —
+  * there is no second write entry it could override and have the store call past.
   *
   * Records are merged, never blindly replaced: a commit merges an incoming record
   * onto whatever is already stored through the [[RecordMerger]] the store hands in
@@ -56,26 +56,26 @@ trait NormalizedCache:
       */
     def read[A](f: RecordLoader => A)(using Frame): A < Sync
 
-    /** Atomically load, compute and merge: `f` receives a loader over the current
-      * state and returns the records to merge plus a result of its own; the records
-      * are merged through `merger` onto exactly that state, and the keys whose
-      * stored value changed are returned together with `f`'s result.
+    /** Atomically load, compute and commit: `f` receives the current state — a
+      * loader over it, and every record it holds — and returns the [[RecordChanges]]
+      * to commit plus a result of its own. The changes are committed onto exactly
+      * that state: the keys in `remove` are dropped, then the records in `merge` are
+      * merged through `merger`. The keys whose stored value changed — a merged
+      * record whose fields changed, a removed record that was present — are
+      * returned together with `f`'s result.
       *
       * `f` must be PURE: when another write commits first, the backend runs it again
-      * on the newer state. `cacheHeaders` carries write hints such as
-      * [[CacheHeaders.Date]] (expiry stamp) or [[CacheHeaders.DoNotStore]] (commit
-      * nothing).
+      * on the newer state. That is what makes a change decided by the whole store
+      * (garbage collection, a cascading evict) safe against a concurrent write: the
+      * set is computed and removed on one state. `cacheHeaders` carries write hints
+      * such as [[CacheHeaders.Date]] (expiry stamp) or [[CacheHeaders.DoNotStore]]
+      * (commit nothing).
       */
     def transact[A](
-        f: RecordLoader => (Chunk[Record], A),
+        f: RecordState => (RecordChanges, A),
         cacheHeaders: CacheHeaders,
         merger: RecordMerger
     )(using Frame): (Set[CacheKey], A) < Sync
-
-    /** Remove the records stored under `keys`, returning the keys that were present
-      * and are now gone. Absent keys are skipped.
-      */
-    def remove(keys: Chunk[CacheKey])(using Frame): Set[CacheKey] < Sync
 
     /** Drop every record from the store. */
     def clearAll(using Frame): Unit < Sync
@@ -112,7 +112,13 @@ trait NormalizedCache:
         cacheHeaders: CacheHeaders = CacheHeaders.None,
         merger: RecordMerger = RecordMerger.default
     )(using Frame): Set[CacheKey] < Sync =
-        transact(_ => (records, ()), cacheHeaders, merger).map(_._1)
+        transact(_ => (RecordChanges.merge(records), ()), cacheHeaders, merger).map(_._1)
+
+    /** Remove the records stored under `keys`, returning the keys that were present
+      * and are now gone — a [[transact]] that loads nothing. Absent keys are skipped.
+      */
+    final def remove(keys: Chunk[CacheKey])(using Frame): Set[CacheKey] < Sync =
+        transact(_ => (RecordChanges.remove(keys.toSet), ()), CacheHeaders.None, RecordMerger.default).map(_._1)
 end NormalizedCache
 
 /** A batch lookup over one consistent state of a [[NormalizedCache]] — what
@@ -131,6 +137,30 @@ object RecordLoader:
     def apply(records: Map[CacheKey, Record]): RecordLoader =
         keys => keys.iterator.flatMap(key => records.get(key).map(key -> _)).toMap
 end RecordLoader
+
+/** The state a [[NormalizedCache.transact]] function runs against: a
+  * [[RecordLoader]] over it, and [[allRecords]] for a function that decides by the
+  * whole store — which records no root reaches, which records hang below a key.
+  */
+trait RecordState extends RecordLoader:
+    /** Every record held in this state, keyed by [[Record.key]] — as stored, like
+      * [[NormalizedCache.allRecords]]: a record a read would find expired is included.
+      */
+    def allRecords: Map[CacheKey, Record]
+end RecordState
+
+/** What one [[NormalizedCache.transact]] commits onto the state its function saw:
+  * the keys to `remove`, then the records to `merge`.
+  */
+final case class RecordChanges(merge: Chunk[Record], remove: Set[CacheKey])
+
+object RecordChanges:
+    /** Merge `records`, remove nothing. */
+    def merge(records: Chunk[Record]): RecordChanges = RecordChanges(records, Set.empty)
+
+    /** Remove the records under `keys`, merge nothing. */
+    def remove(keys: Set[CacheKey]): RecordChanges = RecordChanges(Chunk.empty, keys)
+end RecordChanges
 
 object NormalizedCache:
 
