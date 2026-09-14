@@ -77,7 +77,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
 
     // --- root query plumbing -----------------------------------------------------
 
-    private def countryField[A](sel: SelectionBuilder[CountryT, A]): SelectionBuilder.Deferrable[RootQuery, (country: A)] =
+    private def countryField[A](sel: SelectionBuilder.Bidirectional[CountryT, A]): SelectionBuilder.Deferrable[RootQuery, (country: A)] =
         SelectionBuilder.obj(
             "country",
             CompiledNamedType("Country").notNull,
@@ -86,7 +86,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             SelectionBuilder.Nesting.Leaf
         )
 
-    private def pageInfoField[A](sel: SelectionBuilder[PageInfoT, A]): SelectionBuilder.Deferrable[RootQuery, (pageInfo: A)] =
+    private def pageInfoField[A](sel: SelectionBuilder.Bidirectional[PageInfoT, A]): SelectionBuilder.Deferrable[RootQuery, (pageInfo: A)] =
         SelectionBuilder.obj(
             "pageInfo",
             CompiledNamedType("PageInfo").notNull,

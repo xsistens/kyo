@@ -4,6 +4,7 @@ import kyo.*
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
+import kyo.apollo.api.JsonCodec
 import kyo.apollo.api.Mutation
 import kyo.apollo.api.Query
 import kyo.apollo.exception.DefaultApolloException
@@ -28,20 +29,20 @@ class OperationStoreSpec extends kyo.test.Test[Any]:
 
     final case class ValueData(value: Int) derives Schema
 
-    final case class ValueQuery() extends Query[Int]:
+    final case class ValueQuery() extends Query.Normalizable[Int]:
         def name: String     = "Value"
         def document: String = "query Value { value }"
-        def dataSchema: Schema[Int] =
-            summon[Schema[ValueData]].transform[Int](_.value)(ValueData.apply)
+        val dataCodec: JsonCodec[Int] =
+            JsonCodec.fromSchema(using summon[Schema[ValueData]].transform[Int](_.value)(ValueData.apply))
         def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
         def variables: Json          = Json.JObj(VectorMap.empty)
     end ValueQuery
 
-    final case class SetValueMutation() extends Mutation[Int]:
+    final case class SetValueMutation() extends Mutation.Normalizable[Int]:
         def name: String     = "SetValue"
         def document: String = "mutation SetValue { setValue }"
-        def dataSchema: Schema[Int] =
-            summon[Schema[ValueData]].transform[Int](_.value)(ValueData.apply)
+        val dataCodec: JsonCodec[Int] =
+            JsonCodec.fromSchema(using summon[Schema[ValueData]].transform[Int](_.value)(ValueData.apply))
         def rootField: CompiledField = CompiledField("data", CompiledNamedType("Mutation"))
         def variables: Json          = Json.JObj(VectorMap.empty)
     end SetValueMutation

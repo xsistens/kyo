@@ -33,23 +33,22 @@ class HttpNetworkTransportSpec extends kyo.test.Test[Any]:
     final case class ValueData(value: Int) derives Schema
 
     /** A query whose `data` is a single `{ "value": Int }` object. */
-    final case class ValueQuery() extends Query[Int]:
+    final case class ValueQuery() extends Query.Normalizable[Int]:
         def name: String     = "Value"
         def document: String = "query Value { value }"
-        def dataSchema: Schema[Int] =
-            summon[Schema[ValueData]].transform[Int](_.value)(ValueData.apply)
+        val dataCodec: JsonCodec[Int] =
+            JsonCodec.fromSchema(using summon[Schema[ValueData]].transform[Int](_.value)(ValueData.apply))
         def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
         def variables: Json          = Json.JObj(VectorMap.empty)
     end ValueQuery
 
     /** The same query with a defective codec: decoding a well-formed payload throws. */
-    final case class DefectiveQuery() extends Query[Int]:
+    final case class DefectiveQuery() extends Query.Normalizable[Int]:
         def name: String             = "Value"
         def document: String         = "query Value { value }"
-        def dataSchema: Schema[Int]  = ValueQuery().dataSchema
         def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
         def variables: Json          = Json.JObj(VectorMap.empty)
-        override def dataCodec: JsonCodec[Int] = new JsonCodec[Int]:
+        def dataCodec: JsonCodec[Int] = new JsonCodec[Int]:
             def decode(json: Json)(using Frame): Result[ApolloParseException, Int] = throw new ClassCastException("defective codec")
             def encode(value: Int): Json                                           = Json.JNull
     end DefectiveQuery

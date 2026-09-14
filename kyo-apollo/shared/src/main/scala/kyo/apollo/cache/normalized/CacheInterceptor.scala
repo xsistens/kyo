@@ -2,6 +2,7 @@ package kyo.apollo.cache.normalized
 
 import kyo.*
 import kyo.apollo.api.Mutation
+import kyo.apollo.api.Operation
 import kyo.apollo.api.Subscription
 import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.exception.CacheReadFailure
@@ -25,6 +26,12 @@ import kyo.apollo.runtime.ResponseStream
   * network leg writes each response back as it flows through. `CacheAndNetwork`'s
   * "cache then network" is the cache value followed by the network stream. Mirrors
   * apollo-kotlin's `CacheInterceptor` / fetch-policy interceptors.
+  *
+  * Only an [[Operation.Normalizable]] operation is written back. An operation whose
+  * data decodes only — one built from a `.map` projection — runs under every policy
+  * and its responses reach the caller decoded, but they are not normalized (nor is
+  * its optimistic data overlaid); each skip is logged at debug level. Its cache reads
+  * therefore miss unless another operation wrote the same records.
   *
   * @param store the coordinator this interceptor reads from and writes to
   */
@@ -51,8 +58,13 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
                 // With optimistic data the store is additionally overlaid before the
                 // network call and reconciled against the reply.
                 request.optimisticData match
-                    case Present(optimistic) => optimisticMutation(request, chain, optimistic)
-                    case Absent              => network(request, chain)
+                    case Absent => network(request, chain)
+                    case Present(optimistic) =>
+                        request.operation match
+                            case operation: Operation.Normalizable[D] =>
+                                optimisticMutation(request, operation, chain, optimistic)
+                            case operation =>
+                                Stream.unwrap(skipped(operation, "optimistic data not overlaid").andThen(network(request, chain)))
             case _ =>
                 request.executionContext.get(FetchPolicy).getOrElse(FetchPolicy.Default) match
                     case FetchPolicy.CacheFirst      => cacheFirst(request, chain)
@@ -165,6 +177,7 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
       */
     private def optimisticMutation[D](
         request: ApolloRequest[D],
+        operation: Operation.Normalizable[D],
         chain: ApolloInterceptorChain,
         optimistic: D
     )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
@@ -172,13 +185,13 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
             Uuid.random.map { id =>
                 val mutationId = id.value
                 Scope.acquireRelease(
-                    store.writeOptimisticUpdates(request.operation, optimistic, mutationId)
+                    store.writeOptimisticUpdates(operation, optimistic, mutationId)
                 )(_ => store.rollbackOptimisticUpdates(mutationId).unit).andThen {
                     chain.proceed(request).map { response =>
                         val settle =
                             if !response.hasTransportError then
                                 response.data match
-                                    case Present(data) => store.rollbackAndWrite(request.operation, data, mutationId)
+                                    case Present(data) => store.rollbackAndWrite(operation, data, mutationId)
                                     case Absent        => store.rollbackOptimisticUpdates(mutationId)
                             else store.rollbackOptimisticUpdates(mutationId)
                         settle.andThen(response.copy(cacheInfo = Present(CacheInfo.network)))
@@ -216,7 +229,8 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
       * it as network-sourced, stamping the record keys the write-back changed onto
       * `CacheInfo.dependentKeys` — a watcher's fallback watch set when its own
       * post-write re-read cannot be satisfied. Errored/empty responses are passed
-      * through untouched but for the `cacheInfo` stamp.
+      * through untouched but for the `cacheInfo` stamp, and so is the data of an
+      * operation that only decodes (logged at debug level, see [[skipped]]).
       */
     private def writeBack[D](
         request: ApolloRequest[D],
@@ -225,11 +239,21 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
         val changed: Set[CacheKey] < Sync =
             if !response.hasTransportError then
                 response.data match
-                    case Present(data) => store.writeOperation(request.operation, data)
-                    case Absent        => Set.empty[CacheKey]
+                    case Absent => Set.empty[CacheKey]
+                    case Present(data) =>
+                        request.operation match
+                            case operation: Operation.Normalizable[D] => store.writeOperation(operation, data)
+                            case operation => skipped(operation, "response not normalized").andThen(Set.empty[CacheKey])
             else Set.empty[CacheKey]
         changed.map(keys => response.copy(cacheInfo = Present(CacheInfo.network(keys))))
     end writeBack
+
+    /** Log at debug level that `operation`'s data only decodes — an operation built
+      * from a `.map` projection — so this interceptor leaves the store alone: `what`
+      * names the write it skipped.
+      */
+    private def skipped(operation: Operation[?], what: String)(using Frame): Unit < Sync =
+        Log.debug(s"${operation.name}: decode-only projection, $what")
 
     /** A cache-served success response carrying `data`, the `dependentKeys` the
       * read touched and the store `generation` it was read at (stamped onto

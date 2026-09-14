@@ -3,6 +3,7 @@ package kyo.apollo.network.ws
 import kyo.Schema
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
+import kyo.apollo.api.JsonCodec
 import kyo.apollo.api.Subscription
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloRequest
@@ -30,11 +31,11 @@ object WsTestSupport:
     /** A subscription whose `data` is a single `{ "value": Int }` object; the
       * emitted value is the streamed event so assertions read as plain integers.
       */
-    final case class ValueSubscription() extends Subscription[Int]:
+    final case class ValueSubscription() extends Subscription.Normalizable[Int]:
         def name: String     = "Value"
         def document: String = "subscription Value { value }"
-        def dataSchema: Schema[Int] =
-            summon[Schema[ValueData]].transform[Int](_.value)(ValueData.apply)
+        val dataCodec: JsonCodec[Int] =
+            JsonCodec.fromSchema(using summon[Schema[ValueData]].transform[Int](_.value)(ValueData.apply))
         def rootField: CompiledField =
             CompiledField("data", CompiledNamedType("Subscription"))
         def variables: Json = Json.JObj(VectorMap.empty)

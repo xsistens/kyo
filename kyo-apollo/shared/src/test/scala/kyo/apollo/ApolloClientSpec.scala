@@ -3,6 +3,7 @@ package kyo.apollo
 import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
+import kyo.apollo.api.JsonCodec
 import kyo.apollo.api.Mutation
 import kyo.apollo.api.Query
 import kyo.apollo.api.Subscription
@@ -48,28 +49,28 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
     private def valueSchema: Schema[Int] =
         summon[Schema[ValueData]].transform[Int](_.value)(ValueData.apply)
 
-    final case class ValueQuery() extends Query[Int]:
-        def name: String             = "Value"
-        def document: String         = "query Value { value }"
-        def dataSchema: Schema[Int]  = valueSchema
-        def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
-        def variables: Json          = Json.JObj(VectorMap.empty)
+    final case class ValueQuery() extends Query.Normalizable[Int]:
+        def name: String              = "Value"
+        def document: String          = "query Value { value }"
+        val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema(using valueSchema)
+        def rootField: CompiledField  = CompiledField("data", CompiledNamedType("Query"))
+        def variables: Json           = Json.JObj(VectorMap.empty)
     end ValueQuery
 
-    final case class BumpMutation() extends Mutation[Int]:
-        def name: String             = "Bump"
-        def document: String         = "mutation Bump { value }"
-        def dataSchema: Schema[Int]  = valueSchema
-        def rootField: CompiledField = CompiledField("data", CompiledNamedType("Mutation"))
-        def variables: Json          = Json.JObj(VectorMap.empty)
+    final case class BumpMutation() extends Mutation.Normalizable[Int]:
+        def name: String              = "Bump"
+        def document: String          = "mutation Bump { value }"
+        val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema(using valueSchema)
+        def rootField: CompiledField  = CompiledField("data", CompiledNamedType("Mutation"))
+        def variables: Json           = Json.JObj(VectorMap.empty)
     end BumpMutation
 
-    final case class ValueSubscription() extends Subscription[Int]:
-        def name: String             = "Value"
-        def document: String         = "subscription Value { value }"
-        def dataSchema: Schema[Int]  = valueSchema
-        def rootField: CompiledField = CompiledField("data", CompiledNamedType("Subscription"))
-        def variables: Json          = Json.JObj(VectorMap.empty)
+    final case class ValueSubscription() extends Subscription.Normalizable[Int]:
+        def name: String              = "Value"
+        def document: String          = "subscription Value { value }"
+        val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema(using valueSchema)
+        def rootField: CompiledField  = CompiledField("data", CompiledNamedType("Subscription"))
+        def variables: Json           = Json.JObj(VectorMap.empty)
     end ValueSubscription
 
     /** A fake engine that records the last request it saw and returns a canned

@@ -38,14 +38,14 @@ class UnionSelectionSpec extends kyo.test.Test[Any]:
             SelectionBuilder.scalar("name", CompiledNamedType("String").notNull, ScalarCodec.string)
 
     object PlayableItem:
-        def onTrack[A](sel: SelectionBuilder[Track, A]): SelectionBuilder.Fields[PlayableItem, (onTrack: Maybe[A])] =
+        def onTrack[A](sel: SelectionBuilder.Bidirectional[Track, A]): SelectionBuilder.Fields[PlayableItem, (onTrack: Maybe[A])] =
             SelectionBuilder.onType("Track", sel)
-        def onEpisode[A](sel: SelectionBuilder[Episode, A]): SelectionBuilder.Fields[PlayableItem, (onEpisode: Maybe[A])] =
+        def onEpisode[A](sel: SelectionBuilder.Bidirectional[Episode, A]): SelectionBuilder.Fields[PlayableItem, (onEpisode: Maybe[A])] =
             SelectionBuilder.onType("Episode", sel)
     end PlayableItem
 
     object Queries:
-        def item[A](sel: SelectionBuilder[PlayableItem, A]): SelectionBuilder.Deferrable[RootQuery, (item: Maybe[A])] =
+        def item[A](sel: SelectionBuilder.Bidirectional[PlayableItem, A]): SelectionBuilder.Deferrable[RootQuery, (item: Maybe[A])] =
             SelectionBuilder.obj(
                 "item",
                 CompiledNamedType("PlayableItem"),

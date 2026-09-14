@@ -37,9 +37,8 @@ import scala.collection.immutable.VectorMap
   * `CacheBatchReader`.
   *
   * The assembled [[Json]] map is decoded through the operation's own
-  * `dataSchema` (via [[kyo.apollo.json.SchemaJson.decode]], see
-  * [[CacheBatchReader.read]]) — the same kyo-schema typed-decode path the HTTP
-  * transport uses on a live body, which is what guarantees a `writeOperation` →
+  * `dataCodec` (see [[CacheBatchReader.read]]) — the same typed-decode path the
+  * HTTP transport uses on a live body, which is what guarantees a `writeOperation` →
   * `readOperation` round-trip yields data equal to the networked value.
   *
   * @param loader           loads the records present among a batch of keys
@@ -263,7 +262,7 @@ object CacheBatchReader:
     /** Denormalize `operation`'s records into a typed `D`.
       *
       * Assembles the response `data` map from the loader (starting at the
-      * operation's root key) and decodes it through `operation.dataSchema` — the
+      * operation's root key) and decodes it through `operation.dataCodec` — the
       * same typed-decode path the HTTP transport uses — so the result equals what
       * the network would have produced. A pure function of the loader's records:
       * a [[CacheMissException]] failure if they cannot satisfy every selected field,

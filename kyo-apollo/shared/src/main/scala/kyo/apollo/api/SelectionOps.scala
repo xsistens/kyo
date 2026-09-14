@@ -21,30 +21,33 @@ import scala.collection.immutable.VectorMap
   * builder itself.
   *
   *   - `map` / `mapInto` project a selection's result into an arbitrary type (a
-  *     plain function, or a `derives Schema` case class). Because they keep the
-  *     same wire selection, a projected child still nests inside a parent selector.
+  *     plain function, or a `derives Schema` case class). `mapInto` keeps an
+  *     encoder, so its result still nests inside a parent selector and writes to the
+  *     cache; `map` decodes only, so it projects the whole selection an operation is
+  *     built from.
   *   - `toQuery` / `toMutation` / `toSubscription` build the typed [[Operation]]:
-  *     rendering the document, collecting variables, and installing the builder's
-  *     structural codec as the operation's [[Operation.dataCodec]].
+  *     rendering the document, collecting variables, and installing the builder
+  *     itself as the operation's [[Operation.dataCodec]]. A bidirectional selection
+  *     builds a normalizable operation (`Query.Normalizable`, …), which is what the
+  *     normalized cache writes; a `map` projection builds a decode-only one.
   *   - `toCall` fuses the above with [[kyo.apollo.call]]: with a `given
   *     ApolloClient` in scope it goes straight from selection to [[ApolloCall]].
+  *
+  * The terminal builders come as a derived-name and an explicit-name overload rather
+  * than with a default argument, because their normalizable forms are overloads too:
+  * members of [[SelectionBuilder.Bidirectional]] (an extension there would be
+  * ambiguous with these), and overloaded variants may not both declare defaults.
   */
 
 extension [Origin, A](sb: SelectionBuilder[Origin, A])
-    /** Project the result with `f`. Decode-only: the resulting operation cannot be
-      * written back into the normalized cache (arbitrary `f` has no inverse) — use
-      * [[mapInto]] with a `derives Schema` target for that.
+    /** Project the result with `f`. Decode-only: arbitrary `f` has no inverse, so
+      * the projection neither nests into a parent field nor combines with `~`, and an
+      * operation built from it is not normalizable — the cache interceptor decodes
+      * its responses without writing them. Use [[mapInto]] with a `derives Schema`
+      * target for a projection the cache can write.
       */
     def map[B](f: A => B): SelectionBuilder[Origin, B] =
-        SelectionBuilder.project(
-            sb,
-            new JsonCodec[B]:
-                def decode(json: Json)(using Frame): Result[ApolloParseException, B] = sb.decode(json).map(f)
-                def encode(value: B): Json =
-                    throw UnsupportedOperationException(
-                        "`.map` projections are decode-only; use `.mapInto[C]` (C derives Schema) for cache writes"
-                    )
-        )
+        SelectionBuilder.projectDecode(sb, f)
 
     /** Project the result into a `derives Schema` case class `B` whose field names
       * match the selection. Bidirectional (decodes responses *and* encodes for the
@@ -55,9 +58,9 @@ extension [Origin, A](sb: SelectionBuilder[Origin, A])
       * [[SelectionBuilder.fillAbsentNullables]]). Without this, a write → read
       * round-trip of any `Absent` field would abort with a cache miss.
       */
-    def mapInto[B](using Schema[B]): SelectionBuilder[Origin, B] =
+    def mapInto[B](using Schema[B]): SelectionBuilder.Bidirectional[Origin, B] =
         val schemaCodec = JsonCodec.fromSchema[B]
-        SelectionBuilder.project(
+        SelectionBuilder.projectCodec(
             sb,
             new JsonCodec[B]:
                 def decode(json: Json)(using Frame): Result[ApolloParseException, B] = schemaCodec.decode(json)
@@ -67,17 +70,26 @@ extension [Origin, A](sb: SelectionBuilder[Origin, A])
     end mapInto
 end extension
 
-extension [A <: AnyNamedTuple](sb: SelectionBuilder[RootQuery, A])
-    def toQuery(operationName: String = deriveOperationName(sb.selections)): Query[A] =
-        buildQuery(operationName, sb.selections, sb.argEntries, codecOf(sb))
+extension [A](sb: SelectionBuilder[RootQuery, A])
+    /** Build the query, named after its root field(s). */
+    def toQuery(): Query[A] = sb.toQuery(deriveOperationName(sb.selections))
+
+    /** Build the query named `operationName`. A selection that also encodes builds a
+      * [[Query.Normalizable]] even where its static type does not say so, so the cache
+      * interceptor normalizes its responses; a `map` projection builds a decode-only
+      * query.
+      */
+    def toQuery(operationName: String): Query[A] =
+        sb match
+            case codec: SelectionBuilder.Bidirectional[RootQuery, A] =>
+                buildNormalizableQuery(operationName, codec.selections, codec.argEntries, codec)
+            case _ => buildQuery(operationName, sb.selections, sb.argEntries, sb)
 
     /** Shortcut fusing [[toQuery]] with [[kyo.apollo.call]]: build the operation and
       * bind it to the `given ApolloClient` in one step, yielding the [[ApolloCall]]
       * the fluent chain hangs off (`.fetchPolicy` / `.data` / `.watchSignal` / …).
-      * Two overloads (derived name / explicit name) instead of a default argument,
-      * because the phantom root in `SelectionBuilder[Root*, A]` erases: the three
-      * root variants are same-named overloads (disambiguated via `@targetName`),
-      * and overloaded variants may not declare default arguments.
+      * The phantom root in `SelectionBuilder[Root*, A]` erases, so the three root
+      * variants are same-named overloads disambiguated via `@targetName`.
       */
     def toCall(using ApolloClient): ApolloCall[A] =
         sb.toQuery().call
@@ -86,11 +98,12 @@ extension [A <: AnyNamedTuple](sb: SelectionBuilder[RootQuery, A])
         sb.toQuery(operationName).call
 end extension
 
-extension [A <: AnyNamedTuple](sb: SelectionBuilder[RootQuery, A])
+extension [A <: AnyNamedTuple](sb: SelectionBuilder.Bidirectional[RootQuery, A])
     /** Turn a single-connection query into a *page builder* — the seam the kyo-ui
-      * `.paginated` sugar sits on. Yields `Maybe[String] => Query[A]`: the same
-      * document on every call, with only the pagination cursor argument's value
-      * swapped (`Absent` → `null` for the first page, `Present(c)` → that cursor).
+      * `.paginated` sugar sits on. Yields `Maybe[String] => Query.Normalizable[A]`:
+      * the same document on every call, with only the pagination cursor argument's
+      * value swapped (`Absent` → `null` for the first page, `Present(c)` → that
+      * cursor). Normalizable, because merging a page into the cached list writes it.
       *
       * Since the [[SelectionBuilder]] binds an argument to a variable, only the
       * variable's *value* changes across pages — the document (and its APQ hash) is
@@ -103,25 +116,34 @@ extension [A <: AnyNamedTuple](sb: SelectionBuilder[RootQuery, A])
     def pagedBy(
         cursorArg: String = "after",
         operationName: String = deriveOperationName(sb.selections)
-    ): Maybe[String] => Query[A] =
+    ): Maybe[String] => Query.Normalizable[A] =
         require(
             sb.argEntries.exists(_.name == cursorArg),
             s"pagedBy: no `$cursorArg` argument on this query — add it (e.g. after = ...)"
         )
-        val sels  = sb.selections
-        val codec = codecOf(sb)
-        val base  = sb.argEntries
+        val sels = sb.selections
+        val base = sb.argEntries
         after =>
             val args = base.map(a =>
                 if a.name == cursorArg then a.copy(value = after.fold(Json.JNull)(Json.JStr(_)))
                 else a
             )
-            buildQuery(operationName, sels, args, codec)
+            buildNormalizableQuery(operationName, sels, args, sb)
+    end pagedBy
 end extension
 
-extension [A <: AnyNamedTuple](sb: SelectionBuilder[RootMutation, A])
-    def toMutation(operationName: String = deriveOperationName(sb.selections)): Mutation[A] =
-        buildMutation(operationName, sb.selections, sb.argEntries, codecOf(sb))
+extension [A](sb: SelectionBuilder[RootMutation, A])
+    /** Build the mutation, named after its root field(s). */
+    def toMutation(): Mutation[A] = sb.toMutation(deriveOperationName(sb.selections))
+
+    /** Build the mutation named `operationName`; normalizable when the selection also
+      * encodes (see `toQuery`).
+      */
+    def toMutation(operationName: String): Mutation[A] =
+        sb match
+            case codec: SelectionBuilder.Bidirectional[RootMutation, A] =>
+                buildNormalizableMutation(operationName, codec.selections, codec.argEntries, codec)
+            case _ => buildMutation(operationName, sb.selections, sb.argEntries, sb)
 
     @targetName("toMutationCall")
     def toCall(using ApolloClient): ApolloCall[A] =
@@ -132,9 +154,18 @@ extension [A <: AnyNamedTuple](sb: SelectionBuilder[RootMutation, A])
         sb.toMutation(operationName).call
 end extension
 
-extension [A <: AnyNamedTuple](sb: SelectionBuilder[RootSubscription, A])
-    def toSubscription(operationName: String = deriveOperationName(sb.selections)): Subscription[A] =
-        buildSubscription(operationName, sb.selections, sb.argEntries, codecOf(sb))
+extension [A](sb: SelectionBuilder[RootSubscription, A])
+    /** Build the subscription, named after its root field(s). */
+    def toSubscription(): Subscription[A] = sb.toSubscription(deriveOperationName(sb.selections))
+
+    /** Build the subscription named `operationName`; normalizable when the selection
+      * also encodes (see `toQuery`).
+      */
+    def toSubscription(operationName: String): Subscription[A] =
+        sb match
+            case codec: SelectionBuilder.Bidirectional[RootSubscription, A] =>
+                buildNormalizableSubscription(operationName, codec.selections, codec.argEntries, codec)
+            case _ => buildSubscription(operationName, sb.selections, sb.argEntries, sb)
 
     @targetName("toSubscriptionCall")
     def toCall(using ApolloClient): ApolloCall[A] =
@@ -145,7 +176,7 @@ extension [A <: AnyNamedTuple](sb: SelectionBuilder[RootSubscription, A])
         sb.toSubscription(operationName).call
 end extension
 
-extension [Origin, A <: AnyNamedTuple](sb: SelectionBuilder[Origin, A])
+extension [Origin, A <: AnyNamedTuple](sb: SelectionBuilder.Bidirectional[Origin, A])
     /** Build a cache-access [[Fragment]] from this selection — the
       * targeted-read/write analogue of [[toQuery]].
       *
@@ -156,17 +187,16 @@ extension [Origin, A <: AnyNamedTuple](sb: SelectionBuilder[Origin, A])
       * addressing a type the schema does not have. Now the phantom `Origin` decides
       * it, and a type with no generated marker simply does not compile.
       *
-      * Like `toQuery`, the builder's structural codec is installed as the
-      * fragment's [[Fragment.dataCodec]] (its [[Fragment.dataSchema]] is unused,
-      * matching the inline-operation path), and the selection's fields become the
-      * fragment's `rootField` selections — so a `Fragment.of` reads/writes exactly
-      * what an equivalent query selection would.
+      * Like `toQuery`, the builder itself is installed as the fragment's
+      * [[Fragment.dataCodec]], and the selection's fields become the fragment's
+      * `rootField` selections — so a `Fragment.of` reads/writes exactly what an
+      * equivalent query selection would. Only a bidirectional selection builds a
+      * fragment, since writing a fragment encodes its data.
       */
     def toFragment(using origin: TypeName[Origin]): Fragment[A] =
         val typeName = origin.name
         new Fragment[A]:
-            override def dataCodec: JsonCodec[A] = codecOf(sb)
-            def dataSchema: Schema[A]            = throw noSchema(s"fragment on $typeName")
+            def dataCodec: JsonCodec[A] = sb
             def rootField: CompiledField =
                 CompiledField(typeName, CompiledNamedType(typeName), selections = sb.selections)
         end new
@@ -184,18 +214,12 @@ end extension
   * degenerate empty case falls back to `Operation`. The name is a label only
   * (observability / APQ readability), so cross-document collisions are harmless.
   */
-private def deriveOperationName(selections: Chunk[CompiledSelection]): String =
+private[api] def deriveOperationName(selections: Chunk[CompiledSelection]): String =
     val parts = selections.collect { case f: CompiledField => capitalize(f.name) }
     if parts.isEmpty then "Operation" else parts.mkString
 
 private def capitalize(s: String): String =
     if s.isEmpty then s else s"${s.head.toUpper}${s.tail}"
-
-/** Wrap a builder's decode/encode as a [[JsonCodec]] for the operation. */
-private def codecOf[A](sb: SelectionBuilder[?, A]): JsonCodec[A] =
-    new JsonCodec[A]:
-        def decode(json: Json)(using Frame): Result[ApolloParseException, A] = sb.decode(json)
-        def encode(value: A): Json                                           = sb.encode(value)
 
 private def variablesOf(args: Chunk[SelectionBuilder.Arg]): Json =
     Json.JObj(VectorMap.from(args.map(a => a.name -> a.value)))
@@ -255,61 +279,74 @@ private def uniquifyVariables(
     (sels.map(rewriteSel), renamed.result())
 end uniquifyVariables
 
+/** The name, document, root field and variables of an operation built from a
+  * selection whose variables [[uniquifyVariables]] has renamed — everything a built
+  * `Query`/`Mutation`/`Subscription` has besides its data codec.
+  */
+abstract private class Built(
+    kind: String,
+    rootType: String,
+    opName: String,
+    parts: (Chunk[CompiledSelection], Chunk[SelectionBuilder.Arg])
+):
+    def name: String     = opName
+    def document: String = DocumentPrinter.render(kind, opName, parts._2, parts._1)
+    def rootField: CompiledField =
+        CompiledField("data", CompiledNamedType(rootType), selections = parts._1)
+    def variables: Json = variablesOf(parts._2)
+end Built
+
 private def buildQuery[D](
     opName: String,
     sels: Chunk[CompiledSelection],
     args: Chunk[SelectionBuilder.Arg],
-    dc: JsonCodec[D]
+    dc: JsonDecoder[D]
 ): Query[D] =
-    val (usels, uargs) = uniquifyVariables(sels, args)
-    new Query[D]:
-        def name: String     = opName
-        def document: String = DocumentPrinter.render("query", opName, uargs, usels)
-        def rootField: CompiledField =
-            CompiledField("data", CompiledNamedType("Query"), selections = usels)
-        def variables: Json                  = variablesOf(uargs)
-        def dataSchema: Schema[D]            = throw noSchema(opName)
-        override def dataCodec: JsonCodec[D] = dc
-    end new
-end buildQuery
+    new Built("query", "Query", opName, uniquifyVariables(sels, args)) with Query[D]:
+        def dataCodec: JsonDecoder[D] = dc
+
+private[api] def buildNormalizableQuery[D](
+    opName: String,
+    sels: Chunk[CompiledSelection],
+    args: Chunk[SelectionBuilder.Arg],
+    dc: JsonCodec[D]
+): Query.Normalizable[D] =
+    new Built("query", "Query", opName, uniquifyVariables(sels, args)) with Query.Normalizable[D]:
+        def dataCodec: JsonCodec[D] = dc
 
 private def buildMutation[D](
     opName: String,
     sels: Chunk[CompiledSelection],
     args: Chunk[SelectionBuilder.Arg],
-    dc: JsonCodec[D]
+    dc: JsonDecoder[D]
 ): Mutation[D] =
-    val (usels, uargs) = uniquifyVariables(sels, args)
-    new Mutation[D]:
-        def name: String     = opName
-        def document: String = DocumentPrinter.render("mutation", opName, uargs, usels)
-        def rootField: CompiledField =
-            CompiledField("data", CompiledNamedType("Mutation"), selections = usels)
-        def variables: Json                  = variablesOf(uargs)
-        def dataSchema: Schema[D]            = throw noSchema(opName)
-        override def dataCodec: JsonCodec[D] = dc
-    end new
-end buildMutation
+    new Built("mutation", "Mutation", opName, uniquifyVariables(sels, args)) with Mutation[D]:
+        def dataCodec: JsonDecoder[D] = dc
+
+private[api] def buildNormalizableMutation[D](
+    opName: String,
+    sels: Chunk[CompiledSelection],
+    args: Chunk[SelectionBuilder.Arg],
+    dc: JsonCodec[D]
+): Mutation.Normalizable[D] =
+    new Built("mutation", "Mutation", opName, uniquifyVariables(sels, args)) with Mutation.Normalizable[D]:
+        def dataCodec: JsonCodec[D] = dc
 
 private def buildSubscription[D](
     opName: String,
     sels: Chunk[CompiledSelection],
     args: Chunk[SelectionBuilder.Arg],
-    dc: JsonCodec[D]
+    dc: JsonDecoder[D]
 ): Subscription[D] =
-    val (usels, uargs) = uniquifyVariables(sels, args)
-    new Subscription[D]:
-        def name: String     = opName
-        def document: String = DocumentPrinter.render("subscription", opName, uargs, usels)
-        def rootField: CompiledField =
-            CompiledField("data", CompiledNamedType("Subscription"), selections = usels)
-        def variables: Json                  = variablesOf(uargs)
-        def dataSchema: Schema[D]            = throw noSchema(opName)
-        override def dataCodec: JsonCodec[D] = dc
-    end new
-end buildSubscription
+    new Built("subscription", "Subscription", opName, uniquifyVariables(sels, args)) with Subscription[D]:
+        def dataCodec: JsonDecoder[D] = dc
 
-private def noSchema(opName: String): UnsupportedOperationException =
-    UnsupportedOperationException(
-        s"inline SelectionBuilder operation '$opName' has no kyo Schema; its dataCodec is used instead"
-    )
+private[api] def buildNormalizableSubscription[D](
+    opName: String,
+    sels: Chunk[CompiledSelection],
+    args: Chunk[SelectionBuilder.Arg],
+    dc: JsonCodec[D]
+): Subscription.Normalizable[D] =
+    new Built("subscription", "Subscription", opName, uniquifyVariables(sels, args))
+        with Subscription.Normalizable[D]:
+        def dataCodec: JsonCodec[D] = dc

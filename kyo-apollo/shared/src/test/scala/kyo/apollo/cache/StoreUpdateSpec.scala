@@ -23,10 +23,10 @@ class StoreUpdateSpec extends kyo.test.Test[Any]:
     final case class User(__typename: String, id: String, name: String) derives Schema
     final case class UserData(user: User) derives Schema
 
-    final case class CurrentUserQuery() extends Query[UserData]:
-        def name                         = "CurrentUser"
-        def document                     = "query CurrentUser { user { __typename id name } }"
-        def dataSchema: Schema[UserData] = summon[Schema[UserData]]
+    final case class CurrentUserQuery() extends Query.Normalizable[UserData]:
+        def name                           = "CurrentUser"
+        def document                       = "query CurrentUser { user { __typename id name } }"
+        val dataCodec: JsonCodec[UserData] = JsonCodec.fromSchema[UserData]
         def rootField: CompiledField =
             CompiledField(
                 "data",
@@ -47,7 +47,7 @@ class StoreUpdateSpec extends kyo.test.Test[Any]:
     end CurrentUserQuery
 
     object UserFragment extends Fragment[User]:
-        def dataSchema: Schema[User] = summon[Schema[User]]
+        val dataCodec: JsonCodec[User] = JsonCodec.fromSchema[User]
         def rootField: CompiledField =
             CompiledField(
                 "user",

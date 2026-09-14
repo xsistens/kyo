@@ -368,15 +368,15 @@ object ApolloClientWriter:
             val name = u.name
             val branches = u.memberTypes.map { member =>
                 val label = s"on$member"
-                s"""def $label[A](sel: SelectionBuilder[$member, A]): SelectionBuilder.Fields[$name, ($label: Maybe[A])] =
+                s"""def $label[A](sel: SelectionBuilder.Bidirectional[$member, A]): SelectionBuilder.Fields[$name, ($label: Maybe[A])] =
            |  SelectionBuilder.onType("$member", sel)
            |
-           |def $label[A](build: SelectionBuilder.Fields[$member, scala.NamedTuple.Empty] => SelectionBuilder[$member, A]): SelectionBuilder.Fields[$name, ($label: Maybe[A])] =
+           |def $label[A](build: SelectionBuilder.Fields[$member, scala.NamedTuple.Empty] => SelectionBuilder.Bidirectional[$member, A]): SelectionBuilder.Fields[$name, ($label: Maybe[A])] =
            |  SelectionBuilder.onType("$member", build(SelectionBuilder.empty))""".stripMargin
             }.mkString("\n\n")
             val chainAccessors = u.memberTypes.map { member =>
                 val label = s"on$member"
-                s"""def $label[B](sub: SelectionBuilder.Fields[$member, scala.NamedTuple.Empty] => SelectionBuilder[$member, B]): SelectionBuilder.Fields[$name, scala.NamedTuple.Concat[Acc, ($label: Maybe[B])]] =
+                s"""def $label[B](sub: SelectionBuilder.Fields[$member, scala.NamedTuple.Empty] => SelectionBuilder.Bidirectional[$member, B]): SelectionBuilder.Fields[$name, scala.NamedTuple.Concat[Acc, ($label: Maybe[B])]] =
            |  sb ~ $name.$label(sub(SelectionBuilder.empty))""".stripMargin
             }.mkString("\n")
             val chainBlock =
@@ -506,8 +506,9 @@ object ApolloClientWriter:
                     s"Chunk(${entries.mkString(", ")})"
 
             if isComposite(leafName) then
-                // `A` is deliberately unbounded so a `map`/`mapInto`-projected child
-                // selection (whose result is not a named tuple) still nests here.
+                // `A` is deliberately unbounded so a `mapInto`-projected child selection
+                // (whose result is not a named tuple) still nests here; the child must
+                // encode, so a decode-only `map` projection does not.
                 val argClause = if field.args.isEmpty then "" else s"(${argParams.mkString(", ")})"
                 val returnType =
                     s"SelectionBuilder.Deferrable[$originName, ($label: ${wrappedTypeExpr(field.ofType, "A")})]"
@@ -524,20 +525,21 @@ object ApolloClientWriter:
                 // The `$sel` suffix cannot clash with any field (GraphQL names exclude
                 // `$`); backticks keep it valid when the field name is a reserved word.
                 val selClass = s"`${field.name}$$sel`"
-                // `A` is deliberately unbounded so a `map`/`mapInto`-projected child
-                // selection (whose result is not a named tuple) still nests here.
+                // `A` is deliberately unbounded so a `mapInto`-projected child selection
+                // (whose result is not a named tuple) still nests here; the child must
+                // encode, so a decode-only `map` projection does not.
                 // Extending `FieldSelector` lets the selector value double as a typed
                 // field handle for library configuration (`ConnectionFieldPolicy.of`).
                 val selDef =
                     s"""final class $selClass(selArgs: Chunk[SelectionBuilder.Arg]) extends FieldSelector[$originName, $leafName]:
              |  def fieldName: String = "${field.name}"
              |  // Value form: a prebuilt selection (`Country.code ~ …`) passed directly.
-             |  def apply[A](sel: SelectionBuilder[$leafName, A]): $returnType =
+             |  def apply[A](sel: SelectionBuilder.Bidirectional[$leafName, A]): $returnType =
              |    SelectionBuilder.obj("${field.name}", $compiled, selArgs, sel, $nesting)
              |  // Lambda form: folds fields onto the empty selection (`_.code.name`). A
              |  // `SelectionBuilder` value is never a `Function1`, so overload resolution
              |  // picks value vs. lambda unambiguously.
-             |  def apply[A](build: SelectionBuilder.Fields[$leafName, scala.NamedTuple.Empty] => SelectionBuilder[$leafName, A]): $returnType =
+             |  def apply[A](build: SelectionBuilder.Fields[$leafName, scala.NamedTuple.Empty] => SelectionBuilder.Bidirectional[$leafName, A]): $returnType =
              |    SelectionBuilder.obj("${field.name}", $compiled, selArgs, build(SelectionBuilder.empty), $nesting)""".stripMargin
                 val outerDef =
                     s"def $label$argClause: $selClass =\n  new $selClass($argList)"
@@ -610,7 +612,7 @@ object ApolloClientWriter:
                 if hasDefaultedArgs then
                     val cls =
                         s"""final class `$label$$chain`[Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder.Fields[$originName, Acc]):
-               |  def apply[B]$argClause(sub: SelectionBuilder.Fields[$leafName, scala.NamedTuple.Empty] => SelectionBuilder[$leafName, B]): SelectionBuilder.Deferrable[$originName, $chained] =
+               |  def apply[B]$argClause(sub: SelectionBuilder.Fields[$leafName, scala.NamedTuple.Empty] => SelectionBuilder.Bidirectional[$leafName, B]): SelectionBuilder.Deferrable[$originName, $chained] =
                |    sb ~ $originName.$label$argNames(sub(SelectionBuilder.empty))""".stripMargin
                     val acc =
                         s"""def $label: `$label$$chain`[Acc] =
@@ -618,7 +620,7 @@ object ApolloClientWriter:
                     (Some(cls), acc)
                 else
                     val acc =
-                        s"""def $label[B]$argClause(sub: SelectionBuilder.Fields[$leafName, scala.NamedTuple.Empty] => SelectionBuilder[$leafName, B]): SelectionBuilder.Deferrable[$originName, $chained] =
+                        s"""def $label[B]$argClause(sub: SelectionBuilder.Fields[$leafName, scala.NamedTuple.Empty] => SelectionBuilder.Bidirectional[$leafName, B]): SelectionBuilder.Deferrable[$originName, $chained] =
                |  sb ~ $originName.$label$argNames(sub(SelectionBuilder.empty))""".stripMargin
                     (None, acc)
                 end if

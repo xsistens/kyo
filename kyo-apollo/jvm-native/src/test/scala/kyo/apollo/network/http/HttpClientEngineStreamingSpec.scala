@@ -3,6 +3,7 @@ package kyo.apollo.network.http
 import java.nio.charset.StandardCharsets
 import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
 import kyo.apollo.StreamProbe
+import kyo.apollo.api.JsonCodec
 import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.network.HttpHeader
 import kyo.apollo.network.HttpMethod
@@ -53,9 +54,9 @@ class HttpClientEngineStreamingSpec extends kyo.test.Test[Any]:
       * vs `executeStreaming` is the interceptor's job; here we call executeStreaming directly).
       */
     final private case class Ping() extends kyo.apollo.api.Query[Int]:
-        def name: String            = "Ping"
-        def document: String        = "query Ping { ping }"
-        def dataSchema: Schema[Int] = summon[Schema[Int]]
+        def name: String              = "Ping"
+        def document: String          = "query Ping { ping }"
+        val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema[Int]
         def rootField: kyo.apollo.api.CompiledField =
             kyo.apollo.api.CompiledField("data", kyo.apollo.api.CompiledNamedType("Query"))
         def variables: kyo.apollo.json.Json = kyo.apollo.json.Json.JObj(scala.collection.immutable.VectorMap.empty)

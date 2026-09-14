@@ -27,7 +27,7 @@ class StreamBuilderSpec extends kyo.test.Test[Any]:
             SelectionBuilder.scalar("hello", CompiledNamedType("String").notNull, ScalarCodec.string)
 
         def countries[A <: AnyNamedTuple](
-            sel: SelectionBuilder[Country, A]
+            sel: SelectionBuilder.Bidirectional[Country, A]
         ): SelectionBuilder.Deferrable[RootQuery, (countries: Chunk[A])] =
             SelectionBuilder.obj(
                 "countries",

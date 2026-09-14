@@ -5,6 +5,7 @@ import kyo.apollo.ApolloClient
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
+import kyo.apollo.api.JsonCodec
 import kyo.apollo.api.Mutation
 import kyo.apollo.api.Query
 import kyo.apollo.interceptor.ApolloInterceptor
@@ -33,11 +34,11 @@ class DevtoolsInterceptorSpec extends kyo.test.Test[Any]:
     /** A login mutation whose input carries a credential and one value of every JSON
       * leaf kind.
       */
-    final case class LoginMutation() extends Mutation[Boolean]:
-        def name: String                = "Login"
-        def document: String            = "mutation Login($input: LoginInput!) { login(input: $input) }"
-        def dataSchema: Schema[Boolean] = loginSchema
-        def rootField: CompiledField    = CompiledField("data", CompiledNamedType("Mutation"))
+    final case class LoginMutation() extends Mutation.Normalizable[Boolean]:
+        def name: String                  = "Login"
+        def document: String              = "mutation Login($input: LoginInput!) { login(input: $input) }"
+        val dataCodec: JsonCodec[Boolean] = JsonCodec.fromSchema(using loginSchema)
+        def rootField: CompiledField      = CompiledField("data", CompiledNamedType("Mutation"))
         def variables: Json =
             Json.JObj(VectorMap(
                 "input" -> Json.JObj(VectorMap(
@@ -53,11 +54,11 @@ class DevtoolsInterceptorSpec extends kyo.test.Test[Any]:
             ))
     end LoginMutation
 
-    final case class SearchQuery() extends Query[Boolean]:
-        def name: String                = "Search"
-        def document: String            = "query Search($term: String!, $limit: Int!) { login }"
-        def dataSchema: Schema[Boolean] = loginSchema
-        def rootField: CompiledField    = CompiledField("data", CompiledNamedType("Query"))
+    final case class SearchQuery() extends Query.Normalizable[Boolean]:
+        def name: String                  = "Search"
+        def document: String              = "query Search($term: String!, $limit: Int!) { login }"
+        val dataCodec: JsonCodec[Boolean] = JsonCodec.fromSchema(using loginSchema)
+        def rootField: CompiledField      = CompiledField("data", CompiledNamedType("Query"))
         def variables: Json =
             Json.JObj(VectorMap("term" -> Json.JStr("kyo"), "limit" -> Json.JInt(10L)))
     end SearchQuery

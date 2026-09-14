@@ -1,6 +1,5 @@
 package kyo.apollo.cache.normalized.api
 
-import kyo.Schema
 import kyo.apollo.api.*
 import kyo.apollo.json.Json
 import scala.NamedTuple.AnyNamedTuple
@@ -30,17 +29,12 @@ import scala.collection.immutable.VectorMap
   */
 trait Fragment[D]:
 
-    /** kyo-schema codec for this fragment's `data` payload of type `D` — the same
-      * `Schema` contract an operation's [[kyo.apollo.api.Operation.dataSchema]]
-      * satisfies, used to decode a denormalized record into `D` and to encode `D`
-      * back into the response map the [[internal.Normalizer]] walks.
+    /** The bidirectional codec cache reads/writes go through: it decodes a
+      * denormalized record into `D` and encodes `D` back into the response map the
+      * [[internal.Normalizer]] walks. A fragment over a `derives Schema` type supplies
+      * [[kyo.apollo.api.JsonCodec.fromSchema]]; [[Fragment.of]] supplies the selection.
       */
-    def dataSchema: Schema[D]
-
-    /** The bidirectional codec cache reads/writes go through — the fragment analogue
-      * of [[kyo.apollo.api.Operation.dataCodec]]. Defaults to wrapping [[dataSchema]].
-      */
-    def dataCodec: JsonCodec[D] = JsonCodec.fromSchema(using dataSchema)
+    def dataCodec: JsonCodec[D]
 
     /** The root field describing the fragment's selection set.
       *

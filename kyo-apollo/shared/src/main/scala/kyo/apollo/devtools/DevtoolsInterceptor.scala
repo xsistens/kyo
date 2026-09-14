@@ -18,7 +18,9 @@ import kyo.apollo.runtime.ResponseStream
   *
   * Installed first in the chain, so it observes the final (post-cache) responses.
   * Subscriptions pass through untouched — the devtools Queries/Mutations tabs
-  * don't surface them. Recording is part of the execution: an operation is
+  * don't surface them. A query's data is recorded in its response shape, which
+  * takes an [[Operation.Normalizable]] codec; the data of a query built from a
+  * `.map` projection only decodes and is recorded as absent. Recording is part of the execution: an operation is
   * recorded when its stream runs, under the request id minted for that run, and
   * an intercepted stream that never runs records nothing.
   *
@@ -67,9 +69,10 @@ final class DevtoolsInterceptor(
                     store.upsertQuery(op.name, op.document, variables, networkStatus = 1, error = None, data = None)
                     chain.proceed(request).map { response =>
                         Sync.defer {
-                            val data = response.data match
-                                case Present(d) => Some(op.dataCodec.encode(d))
-                                case Absent     => None
+                            val data = (response.data, op) match
+                                case (Present(d), normalizable: Operation.Normalizable[D]) =>
+                                    Some(normalizable.dataCodec.encode(d))
+                                case _ => None
                             store.upsertQuery(
                                 op.name,
                                 op.document,

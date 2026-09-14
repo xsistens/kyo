@@ -52,10 +52,10 @@ class ReactivitySpec extends kyo.test.Test[Any]:
         CompiledField("name", CompiledNamedType("String"))
     )
 
-    final case class CurrentUserQuery() extends Query[UserData]:
-        def name                         = "CurrentUser"
-        def document                     = "query CurrentUser { user { __typename id name } }"
-        def dataSchema: Schema[UserData] = summon[Schema[UserData]]
+    final case class CurrentUserQuery() extends Query.Normalizable[UserData]:
+        def name                           = "CurrentUser"
+        def document                       = "query CurrentUser { user { __typename id name } }"
+        val dataCodec: JsonCodec[UserData] = JsonCodec.fromSchema[UserData]
         def rootField: CompiledField =
             CompiledField(
                 "data",
@@ -70,7 +70,7 @@ class ReactivitySpec extends kyo.test.Test[Any]:
       * imperative write path onto the very `User:1` the query depends on.
       */
     object UserFragment extends Fragment[User]:
-        def dataSchema: Schema[User] = summon[Schema[User]]
+        val dataCodec: JsonCodec[User] = JsonCodec.fromSchema[User]
         def rootField: CompiledField =
             CompiledField("user", CompiledNamedType("User"), selections = userSelections)
     end UserFragment
