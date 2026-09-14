@@ -406,15 +406,31 @@ class StoreSpec extends kyo.test.Test[Any]:
             end for
         }
 
-        "removeChangedKeysListener unsubscribes by callback identity" in {
-            val s                                      = store()
-            var calls                                  = 0
-            val listener: Set[CacheKey] => Unit < Sync = _ => calls += 1
+        "a listener ends only with its Scope: there is no removal by callback" in {
+            typeCheckFailure("""
+                val store = new kyo.apollo.cache.normalized.ApolloStore(kyo.apollo.cache.normalized.MemoryCache())
+                store.removeChangedKeysListener(_ => kyo.Kyo.unit)(using kyo.Frame.internal)
+            """)("value removeChangedKeysListener is not a member of kyo.apollo.cache.normalized.ApolloStore")
+        }
+
+        "writeOperation returns its changed keys even if a listener fails" in {
+            val s = store()
             for
-                _ <- s.addChangedKeysListener(listener)
-                _ <- s.removeChangedKeysListener(listener)
-                _ <- s.writeOperation(CountriesQuery(), sampleData)
-            yield assert(calls == 0)
+                probe     <- LogProbe.init
+                delivered <- AtomicRef.init(Chunk.empty[Set[CacheKey]])
+                _         <- s.addChangedKeysListener(_ => Sync.defer(throw new IllegalStateException("listener boom")))
+                _         <- s.addChangedKeysListener(keys => delivered.updateAndGet(_.append(keys)).unit)
+                written   <- Abort.run[Throwable](probe.run(s.writeOperation(CountriesQuery(), sampleData)))
+                seen      <- delivered.get
+                errors    <- probe.errors
+                read      <- s.readOperation(CountriesQuery())
+            yield
+                val changed = written.getOrElse(Set.empty[CacheKey])
+                assert(written.isSuccess, s"the write reached the cache but its caller saw: $written")
+                assert(changed.contains(CacheKey("Country", "DE")))
+                assert(seen == Chunk(changed)) // the listener after the failing one got the same set
+                assert(errors.size == 1, s"expected exactly one error line, got $errors")
+                assert(read == sampleData)
             end for
         }
 
