@@ -113,6 +113,14 @@ extension [D](call: ApolloCall[D])
       * have caused. A watch therefore never settles on a value that a write in its
       * own dependency set has already overtaken.
       *
+      * The adopted key set is retained in the store (see [[ApolloStore.retain]]) until
+      * the next set replaces it or the `Scope` closes: a garbage collection keeps the
+      * records the watch's last read depended on even when no operation root reaches
+      * them any more — a query whose root field was re-pointed keeps its records until
+      * the watch has read again. A record collected between a read and the adoption of
+      * its set is published like a write, so it moves the generation past that read's
+      * stamp and the watch reads again.
+      *
       * A network refetch (`RefetchPolicy.NetworkOnly`, or `CacheFirst` answering a
       * miss) runs at most one fiber at a time; requests during that flight book a
       * single rerun. Under `CacheFirst` a miss is sent to the network once per
@@ -137,26 +145,49 @@ extension [D](call: ApolloCall[D])
 
                 val state = AtomicRef.Unsafe.init(WatchState.initial)
 
-                // The one CAS path for the key set: adopt `keys` together with the store
-                // generation `gen` their read was current at, unless the set already held
-                // comes from a younger read (an older read must not roll it back; its
-                // datum is then not offered either). Every caller stands behind a read
-                // that SUCCEEDED, which settles the miss a `CacheFirst` refetch may have
-                // been asked for: `refetched` is cleared in the same compare-and-set.
-                @tailrec def adopt(keys: Set[CacheKey], gen: Long): Boolean =
+                // The one path by which the key set changes: move to `keys` if `transition`
+                // allows it on the state as it is, retaining the set in the store so a
+                // garbage collection keeps the records the watch depends on. The move goes
+                // hand over hand (`swapRetained`): `keys` is retained before the
+                // compare-and-set, and the set it replaced — or `keys`, if `transition`
+                // declined — is released after it, so no interleaving of two moves leaves
+                // a watched record unpinned. A read that yields the set already held (the
+                // usual re-read) moves no retain. Returns whether `keys` was installed.
+                def hold(keys: Set[CacheKey])(transition: WatchState => Maybe[WatchState]): Boolean =
                     val s = state.get()
-                    if gen < s.gen then false
-                    else if state.compareAndSet(s, s.copy(keys = keys, gen = gen, refetched = false)) then true
-                    else adopt(keys, gen)
-                end adopt
+                    transition(s) match
+                        case Absent => false
+                        case Present(next) =>
+                            if s.keys == keys && state.compareAndSet(s, next) then true
+                            else store.swapRetained(keys)(install(transition))
+                    end match
+                end hold
+
+                @tailrec def install(transition: WatchState => Maybe[WatchState]): Maybe[Set[CacheKey]] =
+                    val s = state.get()
+                    transition(s) match
+                        case Absent        => Absent
+                        case Present(next) => if state.compareAndSet(s, next) then Present(s.keys) else install(transition)
+                end install
+
+                // Adopt `keys` together with the store generation `gen` their read was
+                // current at, unless the watch has ended or the set already held comes
+                // from a younger read (an older read must not roll it back; its datum is
+                // then not offered either). Every caller stands behind a read that
+                // SUCCEEDED, which settles the miss a `CacheFirst` refetch may have been
+                // asked for: `refetched` is cleared in the same compare-and-set.
+                def adopt(keys: Set[CacheKey], gen: Long): Boolean =
+                    hold(keys)(s =>
+                        if !s.active || gen < s.gen then Absent
+                        else Present(s.copy(keys = keys, gen = gen, refetched = false))
+                    )
 
                 // The write-back fallback for a networked response the store cannot read
                 // back: seeds a watch that has no read behind its set yet (generation 0)
                 // and never rolls back one that has. No read succeeded here, so the miss
                 // a refetch was asked for stays unsettled.
-                @tailrec def seed(keys: Set[CacheKey]): Unit =
-                    val s = state.get()
-                    if s.gen == 0L && !state.compareAndSet(s, s.copy(keys = keys)) then seed(keys)
+                def seed(keys: Set[CacheKey]): Unit =
+                    discard(hold(keys)(s => if !s.active || s.gen != 0L then Absent else Present(s.copy(keys = keys))))
 
                 // Close the window between a read and the adoption of its key set. A
                 // write published in between was intersected against the PREVIOUS set
@@ -335,11 +366,14 @@ extension [D](call: ApolloCall[D])
                 // during the fetch is never missed; the initially empty key set guards
                 // against re-emitting for the initial fetch's own write-back (nothing
                 // intersects the empty set). The subscription ends with the stream's
-                // Scope; the teardown registered after it runs first and flips `active`,
-                // so no reaction offers anything once the Scope is closing.
+                // Scope; the teardown registered after it runs first, flips `active`
+                // and releases the last retained key set in the same step, so no
+                // reaction offers anything once the Scope is closing and no later move
+                // retains a set again (`hold` declines once the watch is inactive).
                 store.changedKeys.subscribe(onChangedKeys)
                     .andThen(Scope.ensure(Sync.Unsafe.defer {
-                        discard(state.updateAndGet(_.copy(active = false)))
+                        val before = state.getAndUpdate(_.copy(active = false, keys = Set.empty))
+                        if before.active then store.releaseRetained(before.keys)
                         discard(channel.unsafe.close())
                     }))
                     .andThen(Sync.Unsafe.defer(spawn(call.stream)))
@@ -353,7 +387,8 @@ end extension
   * callback reads "still active?" and "which keys?" as one snapshot and every
   * transition is one compare-and-set. `active` is cleared once by the `Scope`
   * teardown and never set again; `keys` is the dependent-key set of the last
-  * established read — empty until the initial fetch has landed — and `gen` the
+  * established read — empty until the initial fetch has landed and again once the
+  * watch has ended, and retained in the store while it is installed — and `gen` the
   * [[ApolloStore.currentGeneration]] that read was current at (0 for a set that
   * no store read stands behind, i.e. the initial state and the write-back
   * fallback).
