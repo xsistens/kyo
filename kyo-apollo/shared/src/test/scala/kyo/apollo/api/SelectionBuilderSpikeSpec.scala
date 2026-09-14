@@ -53,7 +53,7 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
 
     object Continent:
         def countries[A <: AnyNamedTuple](
-            sel: SelectionBuilder[Country, A]
+            sel: SelectionBuilder.Bidirectional[Country, A]
         ): SelectionBuilder.Deferrable[Continent, (countries: Chunk[A])] =
             SelectionBuilder.obj(
                 "countries",
@@ -69,7 +69,7 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
 
     object Queries:
         def country[A <: AnyNamedTuple](code: String)(
-            sel: SelectionBuilder[Country, A]
+            sel: SelectionBuilder.Bidirectional[Country, A]
         ): SelectionBuilder.Deferrable[RootQuery, (country: Maybe[A])] =
             SelectionBuilder.obj(
                 "country",
@@ -87,7 +87,7 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
       */
     object ApiQueries:
         def country[A <: AnyNamedTuple](
-            sel: SelectionBuilder[Country, A]
+            sel: SelectionBuilder.Bidirectional[Country, A]
         ): SelectionBuilder.Deferrable[kyo.apollo.api.RootQuery, (country: Maybe[A])] =
             SelectionBuilder.obj(
                 "country",
@@ -222,6 +222,30 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
 
             "a .map projection does not combine" in {
                 typeCheckFailure("Country.code.map(identity) ~ Country.name")("value ~ is not a member of")
+            }
+
+            "a .map projection cannot be written to the normalized cache" in {
+                typeCheckFailure(
+                    "(store: kyo.apollo.cache.normalized.ApolloStore, data: (country: Maybe[(name: String)])) => store.writeOperation(ApiQueries.country(Country.name).map(identity).toQuery(), data)"
+                )("Required: kyo.apollo.api.Operation.Normalizable[")
+                typeCheck(
+                    "(store: kyo.apollo.cache.normalized.ApolloStore, data: (country: Maybe[(name: String)])) => store.writeOperation(ApiQueries.country(Country.name).toQuery(), data)"
+                )
+            }
+
+            "a .map projection does not nest into a parent field; it projects the whole selection" in {
+                typeCheckFailure("ApiQueries.country(Country.name.map(_.name))")(
+                    "Required: kyo.apollo.api.SelectionBuilder.Bidirectional["
+                )
+                typeCheck("val q: Query[Maybe[String]] = ApiQueries.country(Country.name).map(_.country.map(_.name)).toQuery()")
+            }
+
+            "the operation a selection builds is normalizable exactly when the selection encodes" in {
+                val bidirectional: SelectionBuilder[kyo.apollo.api.RootQuery, (country: Maybe[(name: String)])] =
+                    ApiQueries.country(Country.name)
+                val projected = ApiQueries.country(Country.name).map(identity)
+                assert(bidirectional.toQuery("Q").isInstanceOf[Operation.Normalizable[?]])
+                assert(!projected.toQuery("Q").isInstanceOf[Operation.Normalizable[?]])
             }
 
             "what a field selection can do still compiles, and keeps its runtime shape" in {

@@ -24,9 +24,9 @@ class NormalizerSpec extends kyo.test.Test[Any]:
     /** A query whose root selections are supplied per-test; its `data` codec is
       * never exercised here (normalization only reads `rootField`/`variables`).
       */
-    final case class TestQuery(selections: Chunk[CompiledSelection]) extends Query[Int]:
-        def name                    = "Q"; def document = "query Q { ... }"
-        def dataSchema: Schema[Int] = summon[Schema[Int]]
+    final case class TestQuery(selections: Chunk[CompiledSelection]) extends Query.Normalizable[Int]:
+        def name                      = "Q"; def document = "query Q { ... }"
+        val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema[Int]
         def rootField: CompiledField =
             CompiledField("data", CompiledNamedType("Query"), selections = selections)
         def variables: Json = Json.JObj(VectorMap.empty)

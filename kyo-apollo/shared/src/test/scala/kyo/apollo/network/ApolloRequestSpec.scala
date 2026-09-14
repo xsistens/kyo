@@ -3,6 +3,7 @@ package kyo.apollo.network
 import kyo.{HttpMethod as _, *}
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
+import kyo.apollo.api.JsonCodec
 import kyo.apollo.api.Query
 import kyo.apollo.json.Json
 import kyo.apollo.json.SchemaJson
@@ -20,12 +21,12 @@ class ApolloRequestSpec extends kyo.test.Test[Any]:
     given CanEqual[Any, Any] = CanEqual.derived
 
     /** Minimal hand-written query, mirroring the kyo-schema test operations. */
-    final case class MiniQuery(limit: Int) extends Query[Int]:
-        def name: String             = "Mini"
-        def document: String         = "query Mini($limit: Int!) { x }"
-        def dataSchema: Schema[Int]  = summon[Schema[Int]]
-        def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
-        def variables: Json          = Json.JObj(VectorMap("limit" -> SchemaJson.encode(limit)))
+    final case class MiniQuery(limit: Int) extends Query.Normalizable[Int]:
+        def name: String              = "Mini"
+        def document: String          = "query Mini($limit: Int!) { x }"
+        val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema[Int]
+        def rootField: CompiledField  = CompiledField("data", CompiledNamedType("Query"))
+        def variables: Json           = Json.JObj(VectorMap("limit" -> SchemaJson.encode(limit)))
     end MiniQuery
 
     private val id = TestIds.requestUuid
