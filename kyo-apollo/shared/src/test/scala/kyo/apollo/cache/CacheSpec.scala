@@ -212,13 +212,12 @@ class CacheSpec extends kyo.test.Test[Any]:
         end execute
     end CountingEngine
 
-    private def cachedClient(engine: CountingEngine): ApolloClient =
-        ApolloClient
-            .builder()
-            .serverUrl("https://example.com/graphql")
-            .httpEngine(engine)
-            .normalizedCache(MemoryCache()) // default id generator keys the deep graph
-            .build()
+    private def cachedClient(engine: CountingEngine)(using Frame): ApolloClient < (Sync & Scope) =
+        ApolloClient.init(
+            ApolloClient.Config("https://example.com/graphql")
+                .httpEngine(engine)
+                .normalizedCache(MemoryCache()) // default id generator keys the deep graph
+        )
 
     private def call(client: ApolloClient) = client.query(LibraryQuery())
 
@@ -409,10 +408,10 @@ class CacheSpec extends kyo.test.Test[Any]:
 
         "CacheFirst: network on the cold call, cache hit on the second (one fetch)" in {
             val engine = CountingEngine()
-            val client = cachedClient(engine)
             for
-                r1 <- call(client).fetchPolicy(FetchPolicy.CacheFirst).execute
-                r2 <- call(client).fetchPolicy(FetchPolicy.CacheFirst).execute
+                client <- cachedClient(engine)
+                r1     <- call(client).fetchPolicy(FetchPolicy.CacheFirst).execute
+                r2     <- call(client).fetchPolicy(FetchPolicy.CacheFirst).execute
             yield
                 assert(r1.data == Present(sampleLibrary))
                 assert(r1.cacheInfo.map(_.fromCache) == Present(false))
@@ -424,10 +423,10 @@ class CacheSpec extends kyo.test.Test[Any]:
 
         "NetworkOnly: always fetches and writes back (proven by a follow-up CacheOnly hit)" in {
             val engine = CountingEngine()
-            val client = cachedClient(engine)
             for
-                r1 <- call(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                r2 <- call(client).fetchPolicy(FetchPolicy.CacheOnly).execute
+                client <- cachedClient(engine)
+                r1     <- call(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                r2     <- call(client).fetchPolicy(FetchPolicy.CacheOnly).execute
             yield
                 assert(r1.cacheInfo.map(_.fromCache) == Present(false))
                 assert(engine.calls == 1)
@@ -438,18 +437,19 @@ class CacheSpec extends kyo.test.Test[Any]:
 
         "CacheOnly: an empty store emits a CacheMissException value and never hits the network" in {
             val engine = CountingEngine()
-            val client = cachedClient(engine)
-            call(client).fetchPolicy(FetchPolicy.CacheOnly).execute.map { r =>
-                assert(engine.calls == 0)
-                assert(r.data == Absent)
-                assert(r.error.exists(_.isInstanceOf[CacheMissException]))
+            cachedClient(engine).map { client =>
+                call(client).fetchPolicy(FetchPolicy.CacheOnly).execute.map { r =>
+                    assert(engine.calls == 0)
+                    assert(r.data == Absent)
+                    assert(r.error.exists(_.isInstanceOf[CacheMissException]))
+                }
             }
         }
 
         "CacheAndNetwork: emits the cache response then the network response" in {
             val engine = CountingEngine()
-            val client = cachedClient(engine)
             for
+                client    <- cachedClient(engine)
                 _         <- call(client).fetchPolicy(FetchPolicy.NetworkOnly).execute // populate
                 emissions <- collectAll(call(client).fetchPolicy(FetchPolicy.CacheAndNetwork))
             yield
@@ -463,11 +463,11 @@ class CacheSpec extends kyo.test.Test[Any]:
 
         "NetworkFirst: serves the network on success, falls back to cache on error" in {
             val engine = CountingEngine()
-            val client = cachedClient(engine)
             for
-                r1 <- call(client).fetchPolicy(FetchPolicy.NetworkFirst).execute // success, writes back
-                _  <- Sync.defer { engine.status = 500 }
-                r2 <- call(client).fetchPolicy(FetchPolicy.NetworkFirst).execute // errors, cache fallback
+                client <- cachedClient(engine)
+                r1     <- call(client).fetchPolicy(FetchPolicy.NetworkFirst).execute // success, writes back
+                _      <- Sync.defer { engine.status = 500 }
+                r2     <- call(client).fetchPolicy(FetchPolicy.NetworkFirst).execute // errors, cache fallback
             yield
                 assert(r1.cacheInfo.map(_.fromCache) == Present(false))
                 assert(r2.data == Present(sampleLibrary))

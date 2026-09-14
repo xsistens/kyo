@@ -54,7 +54,7 @@ final class NetworkInterceptor(
                                     request.requestUuid,
                                     ApolloNetworkException(
                                         "No WebSocket transport is configured; set " +
-                                            "ApolloClient.Builder.webSocketServerUrl to run subscriptions."
+                                            "ApolloClient.Config.webSocketServerUrl to run subscriptions."
                                     ),
                                     request.executionContext
                                 )

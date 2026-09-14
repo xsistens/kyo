@@ -88,13 +88,12 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
         end execute
     end CountingEngine
 
-    private def cachedClient(engine: CountingEngine): ApolloClient =
-        ApolloClient
-            .builder()
-            .serverUrl("https://example.com/graphql")
-            .httpEngine(engine)
-            .normalizedCache(MemoryCache(), IdCacheKeyGenerator(List("code")))
-            .build()
+    private def cachedClient(engine: CountingEngine)(using Frame): ApolloClient < (Sync & Scope) =
+        ApolloClient.init(
+            ApolloClient.Config("https://example.com/graphql")
+                .httpEngine(engine)
+                .normalizedCache(MemoryCache(), IdCacheKeyGenerator(List("code")))
+        )
 
     private def call(client: ApolloClient) = client.query(CountriesQuery())
 
@@ -110,10 +109,10 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
 
         "CacheFirst serves the network first, then the cache on the second call" in {
             val engine = CountingEngine()
-            val client = cachedClient(engine)
             for
-                r1 <- call(client).fetchPolicy(FetchPolicy.CacheFirst).execute
-                r2 <- call(client).fetchPolicy(FetchPolicy.CacheFirst).execute
+                client <- cachedClient(engine)
+                r1     <- call(client).fetchPolicy(FetchPolicy.CacheFirst).execute
+                r2     <- call(client).fetchPolicy(FetchPolicy.CacheFirst).execute
             yield
                 assert(r1.data == Present(sampleData))
                 assert(r1.cacheInfo.map(_.fromCache) == Present(false))
@@ -125,10 +124,10 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
 
         "the default policy (no .fetchPolicy) is CacheFirst" in {
             val engine = CountingEngine()
-            val client = cachedClient(engine)
             for
-                _  <- call(client).execute
-                r2 <- call(client).execute
+                client <- cachedClient(engine)
+                _      <- call(client).execute
+                r2     <- call(client).execute
             yield
                 assert(engine.calls == 1)
                 assert(r2.cacheInfo.exists(_.isCacheHit))
@@ -139,10 +138,10 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
 
         "NetworkOnly always hits the network and writes back to the cache" in {
             val engine = CountingEngine()
-            val client = cachedClient(engine)
             for
-                r1 <- call(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                r2 <- call(client).fetchPolicy(FetchPolicy.CacheOnly).execute
+                client <- cachedClient(engine)
+                r1     <- call(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                r2     <- call(client).fetchPolicy(FetchPolicy.CacheOnly).execute
             yield
                 assert(r1.cacheInfo.map(_.fromCache) == Present(false))
                 assert(engine.calls == 1)
@@ -155,12 +154,13 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
 
         "CacheOnly on an empty store emits a CacheMissException value, no network" in {
             val engine = CountingEngine()
-            val client = cachedClient(engine)
-            call(client).fetchPolicy(FetchPolicy.CacheOnly).execute.map { r =>
-                assert(engine.calls == 0)
-                assert(r.data == Absent)
-                assert(r.error.exists(_.isInstanceOf[CacheMissException]))
-                assert(r.cacheInfo.exists(_.cacheReadFailure.isDefined))
+            cachedClient(engine).map { client =>
+                call(client).fetchPolicy(FetchPolicy.CacheOnly).execute.map { r =>
+                    assert(engine.calls == 0)
+                    assert(r.data == Absent)
+                    assert(r.error.exists(_.isInstanceOf[CacheMissException]))
+                    assert(r.cacheInfo.exists(_.cacheReadFailure.isDefined))
+                }
             }
         }
 
@@ -168,10 +168,10 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
 
         "CacheFirst with a defective codec panics without a network call" in {
             val engine = CountingEngine()
-            val client = cachedClient(engine)
             for
-                _ <- client.apolloStore.writeOperation(CountriesQuery(), sampleData)
-                r <- Abort.run[Throwable](client.query(DefectiveCountriesQuery()).fetchPolicy(FetchPolicy.CacheFirst).execute)
+                client <- cachedClient(engine)
+                _      <- client.apolloStore.writeOperation(CountriesQuery(), sampleData)
+                r      <- Abort.run[Throwable](client.query(DefectiveCountriesQuery()).fetchPolicy(FetchPolicy.CacheFirst).execute)
             yield
                 assert(engine.calls == 0) // the defect was not answered with the network
                 r match
@@ -182,10 +182,10 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
 
         "CacheOnly with a defective codec panics instead of emitting a miss value" in {
             val engine = CountingEngine()
-            val client = cachedClient(engine)
             for
-                _ <- client.apolloStore.writeOperation(CountriesQuery(), sampleData)
-                r <- Abort.run[Throwable](client.query(DefectiveCountriesQuery()).fetchPolicy(FetchPolicy.CacheOnly).execute)
+                client <- cachedClient(engine)
+                _      <- client.apolloStore.writeOperation(CountriesQuery(), sampleData)
+                r      <- Abort.run[Throwable](client.query(DefectiveCountriesQuery()).fetchPolicy(FetchPolicy.CacheOnly).execute)
             yield
                 assert(engine.calls == 0)
                 r match
@@ -198,8 +198,8 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
 
         "CacheAndNetwork emits the cache response then the network response" in {
             val engine = CountingEngine()
-            val client = cachedClient(engine)
             for
+                client    <- cachedClient(engine)
                 _         <- call(client).fetchPolicy(FetchPolicy.NetworkOnly).execute // populate
                 emissions <- collectAll(call(client).fetchPolicy(FetchPolicy.CacheAndNetwork))
             yield
@@ -214,11 +214,12 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
 
         "CacheAndNetwork on an empty store emits the network response only" in {
             val engine = CountingEngine()
-            val client = cachedClient(engine)
-            collectAll(call(client).fetchPolicy(FetchPolicy.CacheAndNetwork)).map { emissions =>
-                assert(emissions.length == 1)
-                assert(emissions.head.cacheInfo.map(_.fromCache) == Present(false))
-                assert(engine.calls == 1)
+            cachedClient(engine).map { client =>
+                collectAll(call(client).fetchPolicy(FetchPolicy.CacheAndNetwork)).map { emissions =>
+                    assert(emissions.length == 1)
+                    assert(emissions.head.cacheInfo.map(_.fromCache) == Present(false))
+                    assert(engine.calls == 1)
+                }
             }
         }
 
@@ -226,10 +227,10 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
 
         "NetworkFirst serves the network on success and writes back" in {
             val engine = CountingEngine()
-            val client = cachedClient(engine)
             for
-                r1 <- call(client).fetchPolicy(FetchPolicy.NetworkFirst).execute
-                r2 <- call(client).fetchPolicy(FetchPolicy.CacheOnly).execute
+                client <- cachedClient(engine)
+                r1     <- call(client).fetchPolicy(FetchPolicy.NetworkFirst).execute
+                r2     <- call(client).fetchPolicy(FetchPolicy.CacheOnly).execute
             yield
                 assert(r1.cacheInfo.map(_.fromCache) == Present(false))
                 assert(engine.calls == 1)
@@ -239,11 +240,11 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
 
         "NetworkFirst falls back to the cache when the network errors" in {
             val engine = CountingEngine()
-            val client = cachedClient(engine)
             for
-                _ <- call(client).fetchPolicy(FetchPolicy.NetworkOnly).execute // populate at 200
-                _ <- Sync.defer { engine.status = 500 }
-                r <- call(client).fetchPolicy(FetchPolicy.NetworkFirst).execute
+                client <- cachedClient(engine)
+                _      <- call(client).fetchPolicy(FetchPolicy.NetworkOnly).execute // populate at 200
+                _      <- Sync.defer { engine.status = 500 }
+                r      <- call(client).fetchPolicy(FetchPolicy.NetworkFirst).execute
             yield
                 assert(r.data == Present(sampleData)) // served from cache after network error
                 assert(r.cacheInfo.exists(_.isCacheHit))
@@ -305,24 +306,23 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
     /** [[cachedClient]] plus the `byIdArgument` read redirect, so an id-carrying
       * field can be answered straight from the entity record.
       */
-    private def redirectingClient(engine: MutationRoutingEngine): ApolloClient =
-        ApolloClient
-            .builder()
-            .serverUrl("https://example.com/graphql")
-            .httpEngine(engine)
-            .normalizedCache(
-                MemoryCache(),
-                IdCacheKeyGenerator(List("code")),
-                keyResolver = kyo.apollo.cache.normalized.api.CacheKeyResolver.byIdArgument()
-            )
-            .build()
+    private def redirectingClient(engine: MutationRoutingEngine)(using Frame): ApolloClient < (Sync & Scope) =
+        ApolloClient.init(
+            ApolloClient.Config("https://example.com/graphql")
+                .httpEngine(engine)
+                .normalizedCache(
+                    MemoryCache(),
+                    IdCacheKeyGenerator(List("code")),
+                    keyResolver = kyo.apollo.cache.normalized.api.CacheKeyResolver.byIdArgument()
+                )
+        )
 
     "mutations" - {
 
         "a repeated mutation always hits the network (its own write-back is never read)" in {
             val engine = MutationRoutingEngine()
-            val client = redirectingClient(engine)
             for
+                client <- redirectingClient(engine)
                 // First run writes its result under MUTATION_ROOT; without the
                 // mutation bypass the second, identical run would be a CacheFirst hit.
                 r1 <- client.mutation(DeleteCountryMutation("DE")).execute
@@ -336,8 +336,8 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
 
         "an id-carrying mutation is not answered by a cache redirect" in {
             val engine = MutationRoutingEngine()
-            val client = redirectingClient(engine)
             for
+                client <- redirectingClient(engine)
                 // Cache the Country:DE entity and create MUTATION_ROOT via a first
                 // mutation; the second mutation's root field then resolves fully
                 // from the cache through byIdArgument, so only the bypass keeps it

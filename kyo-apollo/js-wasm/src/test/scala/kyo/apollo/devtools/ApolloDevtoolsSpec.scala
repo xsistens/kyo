@@ -21,10 +21,12 @@ import scala.scalajs.js as sjs
   * on the tabs the extension reads.
   *
   * The suite runs under Node, where `window` does not exist. A test that needs one
-  * sets a fake `window` on `globalThis` and removes it again within the same
-  * synchronous block, so no other test can observe it.
+  * sets a fake `window` on `globalThis` and removes it again when its effect ends;
+  * the suite runs its leaves one at a time, so no other test can observe it.
   */
 class ApolloDevtoolsSpec extends kyo.test.Test[Any]:
+
+    override def config = super.config.sequential
 
     given CanEqual[Any, Any] = CanEqual.derived
 
@@ -34,19 +36,19 @@ class ApolloDevtoolsSpec extends kyo.test.Test[Any]:
 
     private val symbol: sjs.Any = sjs.Dynamic.global.Symbol.applyDynamic("for")("apollo.devtools")
 
-    /** Run `f` with a fake `window` on `globalThis`, removing it before returning. */
-    private def withWindow[A](f: sjs.Dynamic => A): A =
-        val window = sjs.Dynamic.literal()
-        globalObject.updateDynamic("window")(window)
-        try f(window)
-        finally discard(sjs.special.delete(globalObject, "window"))
-    end withWindow
+    /** Run `f` with a fake `window` on `globalThis`, removing it once `f` has ended. */
+    private def withWindow[A, S](f: sjs.Dynamic => A < S)(using Frame): A < (S & Sync) =
+        Sync.defer {
+            val window = sjs.Dynamic.literal()
+            globalObject.updateDynamic("window")(window)
+            window
+        }.map(window => Sync.ensure(discard(sjs.special.delete(globalObject, "window")))(f(window)))
 
     private def registered(window: sjs.Dynamic): sjs.Any =
         sjs.Dynamic.global.Reflect.applyDynamic("get")(window, symbol)
 
-    private def builder: ApolloClient.Builder =
-        ApolloClient.builder().serverUrl("https://example.com/graphql").httpEngine(loginEngine)
+    private def clientConfig: ApolloClient.Config =
+        ApolloClient.Config("https://example.com/graphql").httpEngine(loginEngine)
 
     private val loginEngine: HttpEngine = new HttpEngine:
         def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
@@ -91,41 +93,46 @@ class ApolloDevtoolsSpec extends kyo.test.Test[Any]:
 
         "disabled devtools leave window untouched" in {
             withWindow { window =>
-                discard(builder.connectToDevtools("x", enabled = false))
-                discard(builder.connectToDevtools("x", enabled = false, fakeParse))
-                assert(sjs.isUndefined(window.selectDynamic("__APOLLO_CLIENT__")))
-                assert(sjs.isUndefined(registered(window)))
-                assert(sjs.Object.keys(window.asInstanceOf[sjs.Object]).length == 0)
+                for
+                    _ <- clientConfig.connectToDevtools("x", enabled = false)
+                    _ <- clientConfig.connectToDevtools("x", enabled = false, fakeParse)
+                yield
+                    assert(sjs.isUndefined(window.selectDynamic("__APOLLO_CLIENT__")))
+                    assert(sjs.isUndefined(registered(window)))
+                    assert(sjs.Object.keys(window.asInstanceOf[sjs.Object]).length == 0)
+                end for
             }
         }
 
         "enabled devtools install exactly once" in {
             withWindow { window =>
-                discard(builder.connectToDevtools("x", enabled = true, fakeParse))
-                val shim = window.selectDynamic("__APOLLO_CLIENT__")
-                val reg  = registered(window).asInstanceOf[sjs.Array[sjs.Any]]
-                assert(shim.selectDynamic("devtoolsConfig").selectDynamic("name").asInstanceOf[String] == "x")
-                assert(reg.length == 1)
-                assert(reg(0) eq shim)
+                clientConfig.connectToDevtools("x", enabled = true, fakeParse).map { _ =>
+                    val shim = window.selectDynamic("__APOLLO_CLIENT__")
+                    val reg  = registered(window).asInstanceOf[sjs.Array[sjs.Any]]
+                    assert(shim.selectDynamic("devtoolsConfig").selectDynamic("name").asInstanceOf[String] == "x")
+                    assert(reg.length == 1)
+                    assert(reg(0) eq shim)
+                }
             }
         }
 
         "enabled devtools outside a browser return the client and install nothing" in {
-            val client = builder.connectToDevtools("x", enabled = true, fakeParse)
-            assert(client ne null)
-            assert(sjs.isUndefined(globalObject.selectDynamic("__APOLLO_CLIENT__")))
+            clientConfig.connectToDevtools("x", enabled = true, fakeParse).map { client =>
+                assert(client ne null)
+                assert(sjs.isUndefined(globalObject.selectDynamic("__APOLLO_CLIENT__")))
+            }
         }
 
         "the cache tab carries no mutation argument, the entities the mutation wrote stay" in {
-            val window = sjs.Dynamic.literal()
-            globalObject.updateDynamic("window")(window)
-            val client =
-                try builder.normalizedCache(
-                        MemoryCache(),
-                        IdCacheKeyGenerator(List("id"))
-                    ).connectToDevtools("x", enabled = true, fakeParse)
-                finally discard(sjs.special.delete(globalObject, "window"))
-            client.mutation(LoginMutation()).execute.map { response =>
+            for
+                (client, window) <- withWindow { window =>
+                    clientConfig
+                        .normalizedCache(MemoryCache(), IdCacheKeyGenerator(List("id")))
+                        .connectToDevtools("x", enabled = true, fakeParse)
+                        .map((_, window))
+                }
+                response <- client.mutation(LoginMutation()).execute
+            yield
                 assert(response.data.map(_.login.ok) == Present(true))
                 val extracted = window.selectDynamic("__APOLLO_CLIENT__").selectDynamic("cache").applyDynamic("extract")(true)
                 val text      = sjs.JSON.stringify(extracted)
@@ -136,13 +143,13 @@ class ApolloDevtoolsSpec extends kyo.test.Test[Any]:
                 val mutations = window.selectDynamic("__APOLLO_CLIENT__").selectDynamic("queryManager").selectDynamic("mutationStore")
                 val shown     = sjs.JSON.stringify(mutations.selectDynamic("0").selectDynamic("variables"))
                 assert(shown == """{"input":{"email":"<redacted>","password":"<redacted>"}}""", shown)
-            }
+            end for
         }
 
         "the switch is not optional" in {
-            typeCheck("""ApolloClient.builder().connectToDevtools("x", enabled = false)""")
-            typeCheckFailure("""ApolloClient.builder().connectToDevtools("x")""")("connectToDevtools")
-            typeCheckFailure("""ApolloClient.builder().connectToDevtools("x", (sdl: String) => sdl: scala.scalajs.js.Any)""")(
+            typeCheck("""ApolloClient.Config("u").connectToDevtools("x", enabled = false)""")
+            typeCheckFailure("""ApolloClient.Config("u").connectToDevtools("x")""")("connectToDevtools")
+            typeCheckFailure("""ApolloClient.Config("u").connectToDevtools("x", (sdl: String) => sdl: scala.scalajs.js.Any)""")(
                 "Required: Boolean"
             )
         }

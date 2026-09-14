@@ -18,8 +18,9 @@ import kyo.apollo.cache.normalized.api.FieldPolicies
   * cache → client, mirroring apollo-kotlin's `normalizedCache(...)` builder
   * extension living in the cache artifact.
   */
-extension (builder: ApolloClient.Builder)
-    /** Install a normalized cache on this builder and return it for chaining.
+extension (config: ApolloClient.Config)
+    /** A copy of this config with a normalized cache installed. The store is part of
+      * the returned config, so every client created from it shares that store.
       *
       * @param cache         the record backend (e.g. a [[MemoryCache]])
       * @param keyGenerator  the write-side object → [[kyo.apollo.cache.normalized.api.CacheKey]] policy
@@ -36,8 +37,8 @@ extension (builder: ApolloClient.Builder)
         keyGenerator: CacheKeyGenerator = CacheKeyGenerator.default,
         keyResolver: CacheKeyResolver = CacheKeyResolver.default,
         fieldPolicies: FieldPolicies = FieldPolicies.empty
-    ): ApolloClient.Builder =
-        builder.addInterceptor(
+    ): ApolloClient.Config =
+        config.addInterceptor(
             new CacheInterceptor(new ApolloStore(cache, keyGenerator, keyResolver, fieldPolicies))
         )
 end extension

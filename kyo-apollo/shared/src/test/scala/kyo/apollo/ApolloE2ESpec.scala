@@ -47,12 +47,10 @@ class ApolloE2ESpec extends kyo.test.Test[Any]:
                 // interop coverage the run did not actually provide.
                 cancel("APOLLO_IT_URL not set — run scripts/apollo-e2e.sh to exercise the live engines")
             case Present(base) =>
-                val client = ApolloClient
-                    .builder()
-                    .serverUrl(s"http://$base/api/graphql")
-                    .webSocketServerUrl(s"ws://$base/api/graphql/ws")
-                    .build()
                 for
+                    client <- ApolloClient.init(
+                        ApolloClient.Config(s"http://$base/api/graphql").webSocketServerUrl(s"ws://$base/api/graphql/ws")
+                    )
                     queryResp <- client.query(ValueQuery()).execute
                     subResps  <- StreamProbe.collect(client.subscription(WsTestSupport.ValueSubscription()).stream.take(3))
                 yield

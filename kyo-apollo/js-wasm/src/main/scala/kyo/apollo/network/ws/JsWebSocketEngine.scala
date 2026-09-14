@@ -33,7 +33,7 @@ end JsWebSocketEngine
 object JsWebSocketEngine:
 
     /** The default bound on opening a socket. */
-    val defaultConnectTimeout: Duration = 10.seconds
+    val defaultConnectTimeout: Duration = WebSocketEngine.defaultConnectTimeout
 
     /** Node's CommonJS `require`, faceted so the `ws` fallback can be pulled in
       * lazily. Only ever called when the global `WebSocket` is missing.

@@ -117,13 +117,12 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
         end execute
     end RoutingEngine
 
-    private def cachedClient(): ApolloClient =
-        ApolloClient
-            .builder()
-            .serverUrl("https://example.com/graphql")
-            .httpEngine(RoutingEngine())
-            .normalizedCache(MemoryCache(), IdCacheKeyGenerator(List("id")))
-            .build()
+    private def cachedClient()(using Frame): ApolloClient < (Sync & Scope) =
+        ApolloClient.init(
+            ApolloClient.Config("https://example.com/graphql")
+                .httpEngine(RoutingEngine())
+                .normalizedCache(MemoryCache(), IdCacheKeyGenerator(List("id")))
+        )
 
     /** Seed the cache with Alice, then run `body` with a [[StreamProbe.Pull]]
       * handle over a `CacheOnly` watch — `pull.next` awaits exactly the next
@@ -133,9 +132,9 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
     private def watching(
         body: (ApolloClient, StreamProbe.Pull[ApolloResponse[UserData]]) => Unit < (Async & Scope)
     )(using Frame): Unit < (Async & Scope) =
-        val client = cachedClient()
         for
-            _ <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
+            client <- cachedClient()
+            _      <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
             pull <- StreamProbe.Pull.open(
                 client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly).watch()
             )
@@ -192,15 +191,14 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
 
         "a subscription event written back through the cache re-emits a query watcher" in {
             val conn = new FakeWebSocketConnection
-            val client = ApolloClient
-                .builder()
-                .serverUrl("https://example.com/graphql")
-                .httpEngine(RoutingEngine())
-                .webSocketEngine(FakeWebSocketEngine(conn))
-                .normalizedCache(MemoryCache(), IdCacheKeyGenerator(List("id")))
-                .build()
             // Seed Alice, then watch the query off the cache.
             for
+                client <- ApolloClient.init(
+                    ApolloClient.Config("https://example.com/graphql")
+                        .httpEngine(RoutingEngine())
+                        .webSocketEngine(FakeWebSocketEngine(conn))
+                        .normalizedCache(MemoryCache(), IdCacheKeyGenerator(List("id")))
+                )
                 _ <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
                 pull <- StreamProbe.Pull.open(
                     client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly).watch()
@@ -218,7 +216,7 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
                     conn.server(s"""{"id":"0","type":"next","payload":${body("userUpdated", "Dana")}}""")
                 )
                 second <- pull.next
-                _      <- client.close
+                _      <- client.closeNow
             yield assert(second.data == Present(userData("Dana")))
             end for
         }

@@ -180,11 +180,12 @@ object TestResponses:
         uuid => ApolloResponse.fromException(uuid, cause)
 end TestResponses
 
-/** The `ApolloClient` test builders (ADR §5) — the `cacheless` / `cached`
+/** The `ApolloClient` test factories (ADR §5) — the `cacheless` / `cached`
   * factories generalizing `KyoTestSupport.cacheless`/`cached` and the ~9
-  * `cachedClient`/`clientFor` copies scattered across the specs. Each builds a
+  * `cachedClient`/`clientFor` copies scattered across the specs. Each creates a
   * ready-to-run client against a fake [[HttpEngine]] or a [[TestNetworkTransport]],
-  * with an optional normalized cache keyed by `id`.
+  * with an optional normalized cache keyed by `id`, owned by the enclosing `Scope`
+  * ([[ApolloClient.init]]) — a test leaf's `Scope` closes it.
   */
 object TestApolloClient:
 
@@ -196,28 +197,21 @@ object TestApolloClient:
     /** A client with no cache over `engine` — `.execute()` runs the engine through
       * the HTTP transport straight through.
       */
-    def cacheless(engine: HttpEngine, serverUrl: String = DefaultServerUrl)(using Frame): ApolloClient =
-        ApolloClient
-            .builder()
-            .serverUrl(serverUrl)
-            .httpEngine(engine)
-            .build()
+    def cacheless(engine: HttpEngine, serverUrl: String = DefaultServerUrl)(using Frame): ApolloClient < (Sync & Scope) =
+        ApolloClient.init(ApolloClient.Config(serverUrl).httpEngine(engine))
 
     /** A client with a normalized cache (keyed by `keyFields`, default `id`) over
       * `engine`, so a query read and a store write share a record — required by
-      * `watch()` / `watchSignal`.
+      * `watch()` / `watchSignal`. Each evaluation gets a fresh cache.
       */
     def cached(
         engine: HttpEngine,
         keyFields: List[String] = List("id"),
         serverUrl: String = DefaultServerUrl
-    )(using Frame): ApolloClient =
-        ApolloClient
-            .builder()
-            .serverUrl(serverUrl)
-            .httpEngine(engine)
-            .normalizedCache(MemoryCache(), IdCacheKeyGenerator(keyFields))
-            .build()
+    )(using Frame): ApolloClient < (Sync & Scope) =
+        Sync.defer(
+            ApolloClient.Config(serverUrl).httpEngine(engine).normalizedCache(MemoryCache(), IdCacheKeyGenerator(keyFields))
+        ).map(ApolloClient.init)
 
     /** A cacheless client answered at the operation layer by `transport` (added as
       * the terminal interceptor, so the real network is never reached).
@@ -225,26 +219,20 @@ object TestApolloClient:
     def withTransport(
         transport: TestNetworkTransport,
         serverUrl: String = DefaultServerUrl
-    )(using Frame): ApolloClient =
-        ApolloClient
-            .builder()
-            .serverUrl(serverUrl)
-            .addInterceptor(transport)
-            .build()
+    )(using Frame): ApolloClient < (Sync & Scope) =
+        ApolloClient.init(ApolloClient.Config(serverUrl).addInterceptor(transport))
 
     /** A client with a normalized cache whose network tier is `transport`: the
       * cache interceptor runs above the terminal transport, normalizing each
-      * canned response exactly as it would a networked one.
+      * canned response exactly as it would a networked one. Each evaluation gets a
+      * fresh cache.
       */
     def cachedWithTransport(
         transport: TestNetworkTransport,
         keyFields: List[String] = List("id"),
         serverUrl: String = DefaultServerUrl
-    )(using Frame): ApolloClient =
-        ApolloClient
-            .builder()
-            .serverUrl(serverUrl)
-            .normalizedCache(MemoryCache(), IdCacheKeyGenerator(keyFields))
-            .addInterceptor(transport)
-            .build()
+    )(using Frame): ApolloClient < (Sync & Scope) =
+        Sync.defer(
+            ApolloClient.Config(serverUrl).normalizedCache(MemoryCache(), IdCacheKeyGenerator(keyFields)).addInterceptor(transport)
+        ).map(ApolloClient.init)
 end TestApolloClient

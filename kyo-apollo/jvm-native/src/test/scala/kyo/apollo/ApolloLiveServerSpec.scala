@@ -94,12 +94,11 @@ class ApolloLiveServerSpec extends kyo.test.Test[Any]:
             }
 
         HttpServer.init(0, "127.0.0.1")(queryHandler, wsHandler).map { server =>
-            val client = ApolloClient
-                .builder()
-                .serverUrl(s"http://127.0.0.1:${server.port}/graphql")
-                .webSocketServerUrl(s"ws://127.0.0.1:${server.port}/graphql/ws")
-                .build()
             for
+                client <- ApolloClient.init(
+                    ApolloClient.Config(s"http://127.0.0.1:${server.port}/graphql")
+                        .webSocketServerUrl(s"ws://127.0.0.1:${server.port}/graphql/ws")
+                )
                 queryResp <- client.query(ValueQuery()).execute
                 subResps  <- StreamProbe.collect(client.subscription(WsTestSupport.ValueSubscription()).stream.take(3))
             yield

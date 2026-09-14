@@ -87,18 +87,16 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
         end execute
     end Engine
 
-    private def cachedClient(labelOf: () => String = () => "one"): (ApolloClient, Engine) =
+    private def cachedClient(labelOf: () => String = () => "one")(using Frame): (ApolloClient, Engine) < (Sync & Scope) =
         val engine = Engine(labelOf)
-        val client = ApolloClient
-            .builder()
-            .serverUrl("https://example.com/graphql")
-            .httpEngine(engine)
-            .normalizedCache(
-                MemoryCache(),
-                TypePolicyCacheKeyGenerator.of(TypePolicy("Edge", List("cursor")))
-            )
-            .build()
-        (client, engine)
+        ApolloClient.init(
+            ApolloClient.Config("https://example.com/graphql")
+                .httpEngine(engine)
+                .normalizedCache(
+                    MemoryCache(),
+                    TypePolicyCacheKeyGenerator.of(TypePolicy("Edge", List("cursor")))
+                )
+        ).map((_, engine))
     end cachedClient
 
     private def rowOf(r: ApolloResponse[EdgeData]): Maybe[EdgeRow] = r.data.map(_.edge)
@@ -108,9 +106,9 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
         // --- 1. default, then round-trip ---------------------------------------
 
         "reads its default before anything is written, and round-trips a write" in {
-            val (client, _) = cachedClient()
             for
-                first <- client.query(edgeQuery).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                (client, _) <- cachedClient()
+                first       <- client.query(edgeQuery).fetchPolicy(FetchPolicy.NetworkOnly).execute
                 _ = assert(rowOf(first).map(_.selected) == Present(false), "unwritten field reads the default")
                 // The imperative read agrees with the one the query decoded.
                 before <- selected.read(client, "c1")
@@ -127,16 +125,17 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
         }
 
         "reads the default for an entity that was never in the cache at all" in {
-            val (client, _) = cachedClient()
-            selected.read(client, "never-loaded").map(v => assert(!v))
+            cachedClient().map { (client, _) =>
+                selected.read(client, "never-loaded").map(v => assert(!v))
+            }
         }
 
         // --- 2. the write lands on the normalizer's own record ------------------
 
         "writes into the record the normalizer built for the same entity" in {
-            val (client, _) = cachedClient()
             for
-                _ <- client.query(edgeQuery).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                (client, _) <- cachedClient()
+                _           <- client.query(edgeQuery).fetchPolicy(FetchPolicy.NetworkOnly).execute
                 // What the NORMALIZER keyed the edge as, read off the cache itself
                 // rather than assumed: `TypePolicy("Edge", List("cursor"))` composes
                 // `Edge:<cursor>`.
@@ -154,9 +153,9 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
         // --- 3. the write re-emits a watcher that read the record ---------------
 
         "re-emits a watcher whose read visited the record" in {
-            val (client, _) = cachedClient()
             for
-                _ <- client.query(edgeQuery).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                (client, _) <- cachedClient()
+                _           <- client.query(edgeQuery).fetchPolicy(FetchPolicy.NetworkOnly).execute
                 pull <- StreamProbe.Pull.open(
                     client.query(edgeQuery).fetchPolicy(FetchPolicy.CacheOnly).watch()
                 )
@@ -179,11 +178,11 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
         // --- 4. a server write-back leaves local state alone --------------------
 
         "survives a network write-back over the same record" in {
-            var label       = "one"
-            val (client, _) = cachedClient(() => label)
+            var label = "one"
             for
-                _ <- client.query(edgeQuery).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                _ <- selected.write(client, "c1", true)
+                (client, _) <- cachedClient(() => label)
+                _           <- client.query(edgeQuery).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                _           <- selected.write(client, "c1", true)
                 // A refetch rewrites Edge:c1 from a response that has no `selected`.
                 _ = label = "two"
                 refetched <- client.query(edgeQuery).fetchPolicy(FetchPolicy.NetworkOnly).execute
@@ -199,21 +198,22 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
         // --- 5. the server never sees it ----------------------------------------
 
         "is pruned from the printed document" in {
-            val (client, engine) = cachedClient()
-            client.query(edgeQuery).fetchPolicy(FetchPolicy.NetworkOnly).execute.map { _ =>
-                val sent = engine.bodies.mkString
-                assert(sent.contains("cursor"), "a server field is printed")
-                assert(!sent.contains("selected"), s"client field leaked onto the wire: $sent")
+            cachedClient().map { (client, engine) =>
+                client.query(edgeQuery).fetchPolicy(FetchPolicy.NetworkOnly).execute.map { _ =>
+                    val sent = engine.bodies.mkString
+                    assert(sent.contains("cursor"), "a server field is printed")
+                    assert(!sent.contains("selected"), s"client field leaked onto the wire: $sent")
+                }
             }
         }
 
         // --- 6. an identical write is not a change ------------------------------
 
         "publishes nothing when the value does not change" in {
-            val (client, _) = cachedClient()
             for
-                _     <- client.query(edgeQuery).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                first <- selected.write(client, "c1", true)
+                (client, _) <- cachedClient()
+                _           <- client.query(edgeQuery).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                first       <- selected.write(client, "c1", true)
                 _ = assert(first == Set(CacheKey("Edge", "c1")))
                 again <- selected.write(client, "c1", true)
                 _ = assert(again.isEmpty, s"identical re-write reported $again")
@@ -228,44 +228,46 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
             // rather than as its result: a broadcast wakes every watcher whose last
             // read touched one of these records, and each of those re-reads its WHOLE
             // operation. Counting the broadcasts is counting those re-reads.
-            val (client, _) = cachedClient()
-            val batches     = ListBuffer.empty[Set[CacheKey]]
-            for
-                _       <- client.apolloStore.addChangedKeysListener(ks => discard(batches += ks))
-                changed <- selected.writeAll(client, Seq("c1" -> true, "c2" -> true, "c3" -> true))
-                _ = assert(changed == Set(CacheKey("Edge", "c1"), CacheKey("Edge", "c2"), CacheKey("Edge", "c3")))
-                _ = assert(batches.size == 1, s"writeAll published ${batches.size} times")
-                _ = assert(batches.head == changed)
-                // The values really landed — a single broadcast of nothing would also
-                // satisfy the count above.
-                values <- Kyo.foreach(Seq("c1", "c2", "c3"))(selected.read(client, _))
-                _ = assert(values == Seq(true, true, true))
-                // The contrast, measured rather than asserted from the docs.
-                _ = batches.clear()
-                _ <- Kyo.foreachDiscard(Seq("c1", "c2", "c3"))(selected.write(client, _, false))
-                _ = assert(batches.size == 3, s"three separate writes published ${batches.size} times")
-            yield assert(true)
-            end for
+            cachedClient().map { (client, _) =>
+                val batches = ListBuffer.empty[Set[CacheKey]]
+                for
+                    _       <- client.apolloStore.addChangedKeysListener(ks => discard(batches += ks))
+                    changed <- selected.writeAll(client, Seq("c1" -> true, "c2" -> true, "c3" -> true))
+                    _ = assert(changed == Set(CacheKey("Edge", "c1"), CacheKey("Edge", "c2"), CacheKey("Edge", "c3")))
+                    _ = assert(batches.size == 1, s"writeAll published ${batches.size} times")
+                    _ = assert(batches.head == changed)
+                    // The values really landed — a single broadcast of nothing would also
+                    // satisfy the count above.
+                    values <- Kyo.foreach(Seq("c1", "c2", "c3"))(selected.read(client, _))
+                    _ = assert(values == Seq(true, true, true))
+                    // The contrast, measured rather than asserted from the docs.
+                    _ = batches.clear()
+                    _ <- Kyo.foreachDiscard(Seq("c1", "c2", "c3"))(selected.write(client, _, false))
+                    _ = assert(batches.size == 3, s"three separate writes published ${batches.size} times")
+                yield assert(true)
+                end for
+            }
         }
 
         "writeAll of nothing writes nothing and publishes nothing" in {
             // A broadcast with no change behind it is exactly the cost this exists to
             // remove, so the empty batch must not make one.
-            val (client, _) = cachedClient()
-            val batches     = ListBuffer.empty[Set[CacheKey]]
-            for
-                _       <- client.apolloStore.addChangedKeysListener(ks => discard(batches += ks))
-                changed <- selected.writeAll(client, Seq.empty)
-                _ = assert(changed.isEmpty)
-                _ = assert(batches.isEmpty, s"empty writeAll published $batches")
-            yield assert(true)
-            end for
+            cachedClient().map { (client, _) =>
+                val batches = ListBuffer.empty[Set[CacheKey]]
+                for
+                    _       <- client.apolloStore.addChangedKeysListener(ks => discard(batches += ks))
+                    changed <- selected.writeAll(client, Seq.empty)
+                    _ = assert(changed.isEmpty)
+                    _ = assert(batches.isEmpty, s"empty writeAll published $batches")
+                yield assert(true)
+                end for
+            }
         }
 
         "writeAll collapses a repeated id the way one response would, later wins" in {
-            val (client, _) = cachedClient()
             for
-                changed <- selected.writeAll(client, Seq("c1" -> true, "c1" -> false))
+                (client, _) <- cachedClient()
+                changed     <- selected.writeAll(client, Seq("c1" -> true, "c1" -> false))
                 _ = assert(changed == Set(CacheKey("Edge", "c1")))
                 value <- selected.read(client, "c1")
                 _ = assert(!value, "the later entry won")
@@ -283,11 +285,11 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
             // when the store holds a written value. The default `CacheFirst` never
             // takes that path, which is why no caller has met it. This case exists so
             // that a change in the behaviour is a failing test rather than a surprise.
-            val (client, _) = cachedClient()
             for
-                _     <- client.query(edgeQuery).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                _     <- selected.write(client, "c1", true)
-                fresh <- client.query(edgeQuery).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                (client, _) <- cachedClient()
+                _           <- client.query(edgeQuery).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                _           <- selected.write(client, "c1", true)
+                fresh       <- client.query(edgeQuery).fetchPolicy(FetchPolicy.NetworkOnly).execute
                 _ = assert(rowOf(fresh).map(_.selected) == Present(false), "network frame reports the default")
                 // …and the store was right all along.
                 stored <- selected.read(client, "c1")
@@ -308,19 +310,20 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
             // first level becomes a record; the tail is a blob under its `children`
             // leaf. The whole-value codec must still return the identical graph — the
             // cut only steers normalization depth, never what is stored.
-            val (client, _) = cachedClient()
-            val value = CfTreeNode(
-                "root",
-                List(CfTreeNode("child", List(CfTreeNode("grandchild", Nil))), CfTreeNode("sibling", Nil))
-            )
-            for
-                _    <- tree.writeRoot(client, value)
-                back <- tree.readRoot(client)
-                _ = assert(back == value, s"read back $back")
-                treeRecords <- client.apolloStore.cache.allRecords.map(_.keySet.filter(_.render.contains("tree")))
-                _ = assert(treeRecords.size == 1, s"exactly the first level is a record: $treeRecords")
-            yield assert(true)
-            end for
+            cachedClient().map { (client, _) =>
+                val value = CfTreeNode(
+                    "root",
+                    List(CfTreeNode("child", List(CfTreeNode("grandchild", Nil))), CfTreeNode("sibling", Nil))
+                )
+                for
+                    _    <- tree.writeRoot(client, value)
+                    back <- tree.readRoot(client)
+                    _ = assert(back == value, s"read back $back")
+                    treeRecords <- client.apolloStore.cache.allRecords.map(_.keySet.filter(_.render.contains("tree")))
+                    _ = assert(treeRecords.size == 1, s"exactly the first level is a record: $treeRecords")
+                yield assert(true)
+                end for
+            }
         }
     }
 end ClientFieldSpec
