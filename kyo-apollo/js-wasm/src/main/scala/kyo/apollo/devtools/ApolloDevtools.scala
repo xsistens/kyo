@@ -33,6 +33,27 @@ import scala.scalajs.js.annotation.JSGlobal
   *   - `getObservableQueries("active")` — iterable of observable-query shims (Queries tab)
   *   - `getMemoryInternals()` — kyo-apollo's real cache sizes/limits under Apollo's
   *     fixed memory-slot labels (an approximation; see `buildMemoryInternals`)
+  *
+  * Nothing is installed unless the caller passes `enabled = true`: with `enabled =
+  * false` [[connect]] only builds the client and [[install]] returns it, and
+  * neither touches `window`. The switch has no default, and no bundler constant is
+  * read, because only the application's own build knows whether it is a
+  * development build.
+  *
+  * What the tabs show is redacted where it carries a mutation's input: the
+  * Mutations tab gets each mutation's variables with every value replaced
+  * ([[DevtoolsInterceptor.redactMutationVariables]]), and the Cache tab leaves out
+  * the `ROOT_MUTATION` record and the records keyed under it, whose keys spell out
+  * the arguments a mutation's result was written under. The entities a mutation
+  * wrote stay visible under their own keys.
+  *
+  * WARNING: an installed hook exposes the entire normalized cache and every
+  * operation's variables to every script in the document; pass `enabled =
+  * isDevBuild`.
+  *
+  * @see [[DevtoolsInterceptor]] the interceptor that records operations and redacts their variables
+  * @see [[DevtoolsOperationStore]] the operation history the Queries/Mutations tabs read
+  * @see [[kyo.apollo.cache.normalized.ApolloStore.extract]] the cache dump behind the Cache tab
   */
 object ApolloDevtools:
 
@@ -52,39 +73,61 @@ object ApolloDevtools:
         val parse = require("graphql").parse
         (sdl: String) => parse(sdl).asInstanceOf[js.Any]
 
+    /** The default `parse`: forces [[graphqlParse]] on the first document it parses,
+      * so neither a disabled connect nor an installed hook that is never polled
+      * `require`s graphql-js.
+      */
+    private val requiredGraphqlParse: String => js.Any = sdl => graphqlParse(sdl)
+
     /** Connect `builder`'s client to the browser devtools: prepend the recording
       * interceptor, build, and install the window hook. This is the terminal build
-      * step — use it in place of `builder.build()`.
+      * step — use it in place of `builder.build()`. With `enabled = false` it is
+      * exactly `builder.build()`.
       *
-      * @param parse turns an operation's SDL document into the graphql-js
-      *              `DocumentNode` AST the panel `print()`s. Inject the app's bundled
-      *              graphql-js `parse` (esbuild bundles it); defaults to a lazily
-      *              `require`d one for Node.
+      * WARNING: with `enabled = true` the hook exposes the entire normalized cache and
+      * every operation's variables to every script in the document; pass `enabled =
+      * isDevBuild`.
+      *
+      * @param enabled whether to install anything at all
+      * @param parse   turns an operation's SDL document into the graphql-js
+      *                `DocumentNode` AST the panel `print()`s. Inject the app's bundled
+      *                graphql-js `parse` (esbuild bundles it); defaults to one
+      *                `require`d from Node on first use.
       */
     def connect(
         builder: ApolloClient.Builder,
         name: String,
-        parse: String => js.Any = graphqlParse
+        enabled: Boolean,
+        parse: String => js.Any = requiredGraphqlParse
     )(using Frame): ApolloClient =
-        val ops = new DevtoolsOperationStore()
-        builder.prependInterceptor(new DevtoolsInterceptor(ops))
-        val client = builder.build()
-        install(client, name, ops, parse)
+        if !enabled then builder.build()
+        else
+            val ops = new DevtoolsOperationStore()
+            builder.prependInterceptor(new DevtoolsInterceptor(ops))
+            install(builder.build(), name, enabled, ops, parse)
+        end if
     end connect
 
     /** Install the window devtools hook for an already-built `client` fed by `ops`.
-      * A no-op (returning the client unchanged) outside a browser, so a client built
-      * server-side/in tests never throws on the missing `window`.
+      * Returns the client unchanged, and touches nothing, when `enabled` is false or
+      * outside a browser (no `window`), so a client built server-side or in tests
+      * never throws on the missing `window`.
+      *
+      * WARNING: with `enabled = true` the hook exposes the entire normalized cache and
+      * every operation's variables to every script in the document; pass `enabled =
+      * isDevBuild`.
       */
     def install(
         client: ApolloClient,
         name: String,
+        enabled: Boolean,
         ops: DevtoolsOperationStore,
-        parse: String => js.Any = graphqlParse
+        parse: String => js.Any = requiredGraphqlParse
     )(using Frame): ApolloClient =
-        val window = js.Dynamic.global.window
-        if js.isUndefined(window) then client
+        // `typeof` is the one read of an undeclared global that does not throw a ReferenceError.
+        if !enabled || js.typeOf(js.Dynamic.global.window) == "undefined" then client
         else
+            val window = js.Dynamic.global.window
             // Memoize parse: documents are immutable per record, and the panel polls the
             // getters ~1s, so without this every op is re-parsed once per second. Bounded
             // (a real cap, so the devtools memory view can show a genuine size/limit pair).
@@ -112,9 +155,25 @@ object ApolloDevtools:
 
     /** The client's normalized cache as devtools JSON, or an empty object when no
       * normalized cache is installed (so the Cache tab stays empty, not broken).
+      * The mutation root is left out ([[withoutMutationRoot]]).
       */
     private def extractOf(client: ApolloClient, includeOptimistic: Boolean)(using Frame): Json =
-        client.normalizedStore.fold(Json.JObj(Map.empty))(store => evalNow(store.extract(includeOptimistic)))
+        client.normalizedStore.fold(Json.JObj(Map.empty))(store =>
+            withoutMutationRoot(evalNow(store.extract(includeOptimistic)))
+        )
+
+    /** `extract` without the `ROOT_MUTATION` record and the records keyed under it
+      * (`ROOT_MUTATION.login({…})…`). A mutation's result is written under a field
+      * key that spells out its arguments, and an id-less child under a path key that
+      * repeats them, so these keys carry the mutation's input — the password of a
+      * `login(email, password)`. Nothing else references them: the entities the
+      * mutation wrote are stored, and shown, under their own keys.
+      */
+    private def withoutMutationRoot(extract: Json): Json =
+        extract match
+            case Json.JObj(records) =>
+                Json.JObj(records.filter((key, _) => key != "ROOT_MUTATION" && !key.startsWith("ROOT_MUTATION.")))
+            case other => other
 
     /** Run a store effect to completion inside a devtools getter. The extension polls
       * plain synchronous JS functions, so this is the boundary where the store's
@@ -306,15 +365,27 @@ object ApolloDevtools:
     end defineGetter
 end ApolloDevtools
 
-/** Fluent entry point: `builder.serverUrl(...).normalizedCache(...).connectToDevtools("name")`
-  * replaces the terminal `.build()` and wires the client to the browser devtools.
+/** Fluent entry point: `builder.serverUrl(...).normalizedCache(...).connectToDevtools("name",
+  * enabled = isDevBuild)` replaces the terminal `.build()` and, when `enabled`, wires the
+  * client to the browser devtools.
   */
 extension (builder: ApolloClient.Builder)
-    def connectToDevtools(name: String)(using Frame): ApolloClient = ApolloDevtools.connect(builder, name)
+    /** Build the client and, when `enabled`, install the devtools hook ([[ApolloDevtools.connect]]).
+      *
+      * WARNING: with `enabled = true` the hook exposes the entire normalized cache and
+      * every operation's variables to every script in the document; pass `enabled =
+      * isDevBuild`.
+      */
+    def connectToDevtools(name: String, enabled: Boolean)(using Frame): ApolloClient =
+        ApolloDevtools.connect(builder, name, enabled)
 
     /** As [[connectToDevtools]], injecting the app's bundled graphql-js `parse`
       * (so the browser bundle carries a real AST parser for the Queries/Mutations tabs).
+      *
+      * WARNING: with `enabled = true` the hook exposes the entire normalized cache and
+      * every operation's variables to every script in the document; pass `enabled =
+      * isDevBuild`.
       */
-    def connectToDevtools(name: String, parse: String => js.Any)(using Frame): ApolloClient =
-        ApolloDevtools.connect(builder, name, parse)
+    def connectToDevtools(name: String, enabled: Boolean, parse: String => js.Any)(using Frame): ApolloClient =
+        ApolloDevtools.connect(builder, name, enabled, parse)
 end extension

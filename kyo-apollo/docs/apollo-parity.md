@@ -112,7 +112,7 @@ widening to `FetchPolicy` would break every call site and collide in the context
 | `@stream` (Apollo ships in 4.1) | **PRESENT (ahead)** | `.streamed(initialCount)`, type-preserving; `JsonPath.spliceItems` |
 | GraphQL-17-alpha9 incremental format (`pending`/`completed`) | **ABSENT (conditional)** | adopt when a server we talk to emits it · alignment doc §3 |
 | Multipart file upload | **PRESENT** | platform-neutral `Upload(Span[Byte], …)`; browser bridge `UploadJs.fromFile` |
-| Devtools (official extension) | **PRESENT** | `builder.connectToDevtools(name)` · `…/devtools/` |
+| Devtools (official extension) | **PRESENT** | `builder.connectToDevtools(name, enabled)` (no default for `enabled`) · `…/devtools/` |
 
 ## 7. Local state, pagination, codegen, testing
 
