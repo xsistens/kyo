@@ -1,12 +1,12 @@
 package kyo.apollo.interceptor
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.exception.ApolloNetworkException
 import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.json.Json
 import kyo.apollo.json.JsonParser
-import kyo.apollo.network.http.HttpRequest
-import kyo.apollo.network.http.HttpResponse
+import kyo.apollo.network.http.HttpEngine
+import kyo.apollo.network.http.HttpRequestBody
 
 /** An [[HttpInterceptor]] that coalesces several GraphQL POSTs fired within a
   * short window into a single batched HTTP request whose body is a JSON **array**
@@ -23,9 +23,9 @@ import kyo.apollo.network.http.HttpResponse
   * opens a `batchInterval` window; the batch is dispatched when the window ends
   * or when it reaches `maxBatchSize`, whichever comes first. A batch of one is
   * sent as an ordinary request (unwrapped), so a lone call is never reshaped into
-  * an array a non-batching server would reject. Requests without a body (a `Get`,
-  * which carries the operation in its URL) cannot be batched and are forwarded
-  * immediately and individually.
+  * an array a non-batching server would reject. Only JSON bodies are batched: a
+  * request without a body (a `GET`, which carries the operation in its URL) and a
+  * multipart upload are forwarded immediately and individually.
   *
   * All batched requests are sent with the first request's URL and headers — the
   * same limitation apollo-kotlin's `BatchingHttpInterceptor` has — so per-request
@@ -64,30 +64,39 @@ final class BatchingHttpInterceptor private (
     import BatchingHttpInterceptor.*
 
     def intercept(
-        request: HttpRequest,
+        request: HttpEngine.Request,
         chain: HttpInterceptorChain
-    )(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) =
-        // A bodiless request (GET) has nothing to place in a JSON body array; send it
-        // through on its own.
-        if request.body.isEmpty then chain.proceed(request)
-        else
-            for
-                turn    <- Promise.init[Turn, Abort[HttpEngineFailure]]
-                claimed <- AtomicBoolean.init
-                me = Pending(request, chain, turn, claimed)
-                queued <- pending.updateAndGet(_.map(_.append(me)))
-                response <- queued match
-                    case Absent => Abort.panic(closed)
-                    case Present(batch) =>
-                        kick(batch.length).andThen {
-                            Sync.ensure(outcome => outcome.fold(())(_ => withdraw(me))) {
-                                turn.get.map {
-                                    case Turn.Done(response) => response
-                                    case Turn.Lead(batch)    => Async.mask(claim(me).andThen(send(batch)))
-                                }
+    )(using Frame): HttpEngine.Response < (Async & Abort[HttpEngineFailure]) =
+        request.fields.body match
+            // Only a JSON document fits in a JSON body array; a bodiless GET and a
+            // multipart upload go through on their own.
+            case HttpRequestBody.Text(json) => enqueue(request, json, chain)
+            case _                          => chain.proceed(request)
+
+    /** Queue `request` (whose JSON body is `json`) for the next batch and wait for its turn. */
+    private def enqueue(
+        request: HttpEngine.Request,
+        json: String,
+        chain: HttpInterceptorChain
+    )(using Frame): HttpEngine.Response < (Async & Abort[HttpEngineFailure]) =
+        for
+            turn    <- Promise.init[Turn, Abort[HttpEngineFailure]]
+            claimed <- AtomicBoolean.init
+            me = Pending(request, json, chain, turn, claimed)
+            queued <- pending.updateAndGet(_.map(_.append(me)))
+            response <- queued match
+                case Absent => Abort.panic(closed)
+                case Present(batch) =>
+                    kick(batch.length).andThen {
+                        Sync.ensure(outcome => outcome.fold(())(_ => withdraw(me))) {
+                            turn.get.map {
+                                case Turn.Done(response) => response
+                                case Turn.Lead(batch)    => Async.mask(claim(me).andThen(send(batch)))
                             }
                         }
-            yield response
+                    }
+        yield response
+    end enqueue
 
     /** Number of callers waiting for the next window; `0` once the `Scope` ended. */
     private[interceptor] def queued(using Frame): Int < Sync =
@@ -154,13 +163,15 @@ final class BatchingHttpInterceptor private (
       * JSON array of every body on the lead's chain/URL/headers. Every other
       * member is completed with its share; the lead's own share is returned.
       */
-    private def send(batch: Chunk[Pending])(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) =
+    private def send(batch: Chunk[Pending])(using Frame): HttpEngine.Response < (Async & Abort[HttpEngineFailure]) =
         val lead = batch(0)
         val wire =
             if batch.length == 1 then lead.request
-            else lead.request.copy(body = Some(batch.map(_.request.body.getOrElse("null")).mkString("[", ",", "]")))
+            else
+                val array = HttpRequestBody.Text(batch.map(_.json).mkString("[", ",", "]"))
+                lead.request.copy(fields = lead.request.fields.update("body", array))
         Abort.run[HttpEngineFailure](lead.chain.proceed(wire)).map { outcome =>
-            val shares: Chunk[Result[HttpEngineFailure, HttpResponse]] = outcome.fold(
+            val shares: Chunk[Result[HttpEngineFailure, HttpEngine.Response]] = outcome.fold(
                 response => if batch.length == 1 then Chunk(Result.succeed(response)) else split(batch.length, response),
                 failure => Chunk.from(Seq.fill(batch.length)(Result.fail(failure))),
                 cause => Chunk.from(Seq.fill(batch.length)(Result.panic(cause)))
@@ -175,15 +186,17 @@ final class BatchingHttpInterceptor private (
       * non-2xx status is shared verbatim; a 2xx body that is not a JSON array of
       * exactly `n` elements fails every caller: none of them received its response.
       */
-    private def split(n: Int, response: HttpResponse)(using Frame): Chunk[Result[HttpEngineFailure, HttpResponse]] =
-        if !response.isSuccessful then Chunk.from(Seq.fill(n)(Result.succeed(response)))
+    private def split(n: Int, response: HttpEngine.Response)(using
+        Frame
+    ): Chunk[Result[HttpEngineFailure, HttpEngine.Response]] =
+        if !response.status.isSuccess then Chunk.from(Seq.fill(n)(Result.succeed(response)))
         else
-            JsonParser.parse(response.body) match
+            JsonParser.parse(response.fields.body) match
                 case Result.Success(Json.JArr(items)) if items.length == n =>
-                    items.map(json => Result.succeed(HttpResponse(response.statusCode, response.headers, json.render)))
+                    items.map(json => Result.succeed(HttpEngine.response(response.status, json.render, response.headers)))
                 case _ =>
                     val failure = ApolloNetworkException(
-                        s"Batched GraphQL response was not a JSON array of $n element(s): ${response.body}"
+                        s"Batched GraphQL response was not a JSON array of $n element(s): ${response.fields.body}"
                     )
                     Chunk.from(Seq.fill(n)(Result.fail(failure)))
 
@@ -203,14 +216,15 @@ object BatchingHttpInterceptor:
       */
     private enum Turn:
         case Lead(batch: Chunk[Pending])
-        case Done(response: HttpResponse)
+        case Done(response: HttpEngine.Response)
 
-    /** One queued request awaiting its batch: the wire request, the chain that
-      * will carry the (merged) request onward, the promise it waits on, and the
-      * claim flag that decides between sending the batch and giving it back.
+    /** One queued request awaiting its batch: the wire request and its JSON body, the
+      * chain that will carry the (merged) request onward, the promise it waits on, and
+      * the claim flag that decides between sending the batch and giving it back.
       */
     final private case class Pending(
-        request: HttpRequest,
+        request: HttpEngine.Request,
+        json: String,
         chain: HttpInterceptorChain,
         turn: Promise[Turn, Abort[HttpEngineFailure]],
         claimed: AtomicBoolean

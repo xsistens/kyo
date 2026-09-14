@@ -1,6 +1,6 @@
 package kyo.apollo.cache
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.ApolloClient
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.*
@@ -90,9 +90,9 @@ class WatcherSpec extends kyo.test.Test[Any]:
         private val counter = AtomicInt.Unsafe.init(0)(using AllowUnsafe.embrace.danger)
         def calls: Int      = counter.get()(using AllowUnsafe.embrace.danger)
         def execute(
-            request: kyo.apollo.network.http.HttpRequest
-        )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
-            counter.safe.incrementAndGet.andThen(kyo.apollo.network.http.HttpResponse(200, Nil, aliceBody))
+            request: kyo.apollo.network.http.HttpEngine.Request
+        )(using Frame): kyo.apollo.network.http.HttpEngine.Response < Async =
+            counter.safe.incrementAndGet.andThen(kyo.apollo.network.http.HttpEngine.response(HttpStatus.OK, aliceBody))
         end execute
     end CountingEngine
 
@@ -109,10 +109,10 @@ class WatcherSpec extends kyo.test.Test[Any]:
         ended: Maybe[Promise[String, Any]] = Absent
     ) extends kyo.apollo.network.http.HttpEngine:
         def execute(
-            request: kyo.apollo.network.http.HttpRequest
-        )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
+            request: kyo.apollo.network.http.HttpEngine.Request
+        )(using Frame): kyo.apollo.network.http.HttpEngine.Response < Async =
             calls.incrementAndGet.map { n =>
-                val response = kyo.apollo.network.http.HttpResponse(200, Nil, aliceBody)
+                val response = kyo.apollo.network.http.HttpEngine.response(HttpStatus.OK, aliceBody)
                 if n == 1 then response
                 else
                     Sync.ensure { (error: Maybe[Result.Error[Any]]) =>
@@ -131,11 +131,11 @@ class WatcherSpec extends kyo.test.Test[Any]:
       */
     final private class DefectEngine(calls: AtomicInt, defective: Int) extends kyo.apollo.network.http.HttpEngine:
         def execute(
-            request: kyo.apollo.network.http.HttpRequest
-        )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
+            request: kyo.apollo.network.http.HttpEngine.Request
+        )(using Frame): kyo.apollo.network.http.HttpEngine.Response < Async =
             calls.incrementAndGet.map { n =>
                 if n == defective then Abort.panic(new RuntimeException("engine defect"))
-                else kyo.apollo.network.http.HttpResponse(200, Nil, aliceBody)
+                else kyo.apollo.network.http.HttpEngine.response(HttpStatus.OK, aliceBody)
             }
     end DefectEngine
 
@@ -147,11 +147,11 @@ class WatcherSpec extends kyo.test.Test[Any]:
       */
     final private class SleepingEngine(clock: Clock, calls: AtomicInt) extends kyo.apollo.network.http.HttpEngine:
         def execute(
-            request: kyo.apollo.network.http.HttpRequest
-        )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
+            request: kyo.apollo.network.http.HttpEngine.Request
+        )(using Frame): kyo.apollo.network.http.HttpEngine.Response < Async =
             calls.incrementAndGet.map { n =>
                 val body     = s"""{"data":{"user":{"__typename":"User","id":"1","name":"Alice-$n"}}}"""
-                val response = kyo.apollo.network.http.HttpResponse(200, Nil, body)
+                val response = kyo.apollo.network.http.HttpEngine.response(HttpStatus.OK, body)
                 if n == 1 then response
                 else clock.sleep(1.second).map(_.get).andThen(response)
             }

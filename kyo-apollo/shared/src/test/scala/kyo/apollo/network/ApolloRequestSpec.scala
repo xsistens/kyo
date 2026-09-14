@@ -1,6 +1,6 @@
 package kyo.apollo.network
 
-import kyo.{HttpMethod as _, *}
+import kyo.*
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
 import kyo.apollo.api.JsonCodec
@@ -35,8 +35,8 @@ class ApolloRequestSpec extends kyo.test.Test[Any]:
 
         "defaults: POST-unspecified, no headers, document sent, APQ off, no optimistic data, empty context" in {
             val request = ApolloRequest(MiniQuery(1), id)
-            assert(request.httpHeaders == Nil)
-            assert(request.httpMethod == None)
+            assert(request.httpHeaders == HttpHeaders.empty)
+            assert(request.httpMethod == Absent)
             assert(request.sendApqExtensions == false)
             assert(request.sendDocument == true)
             assert(request.optimisticData == Absent)
@@ -72,17 +72,17 @@ class ApolloRequestSpec extends kyo.test.Test[Any]:
             ApolloRequest
                 .builder(MiniQuery(5))
                 .requestUuid(id)
-                .httpMethod(HttpMethod.Get)
+                .httpMethod(HttpMethod.GET)
                 .addHttpHeader("Authorization", "Bearer t")
                 .addHttpHeader("X-Trace", "abc")
                 .sendApqExtensions(true)
                 .sendDocument(false)
                 .build
                 .map { request =>
-                    assert(request.httpMethod == Some(HttpMethod.Get))
+                    assert(request.httpMethod == Present(HttpMethod.GET))
                     assert(
                         request.httpHeaders ==
-                            List(HttpHeader("Authorization", "Bearer t"), HttpHeader("X-Trace", "abc"))
+                            HttpHeaders.empty.add("Authorization", "Bearer t").add("X-Trace", "abc")
                     )
                     assert(request.sendApqExtensions == true)
                     assert(request.sendDocument == false)
@@ -125,12 +125,12 @@ class ApolloRequestSpec extends kyo.test.Test[Any]:
         }
 
         "newBuilder preserves existing values, the id included, and edits incrementally" in {
-            val base = ApolloRequest(MiniQuery(1), id, httpHeaders = List(HttpHeader("A", "1")))
+            val base = ApolloRequest(MiniQuery(1), id, httpHeaders = HttpHeaders.empty.add("A", "1"))
             base.newBuilder.addHttpHeader("B", "2").build.map { edited =>
                 assert(edited.requestUuid == id)
-                assert(edited.httpHeaders == List(HttpHeader("A", "1"), HttpHeader("B", "2")))
+                assert(edited.httpHeaders == HttpHeaders.empty.add("A", "1").add("B", "2"))
                 // The original envelope is untouched (immutability).
-                assert(base.httpHeaders == List(HttpHeader("A", "1")))
+                assert(base.httpHeaders == HttpHeaders.empty.add("A", "1"))
             }
         }
     }

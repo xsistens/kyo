@@ -1,10 +1,8 @@
 package kyo.apollo.interceptor
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.exception.HttpEngineFailure
-import kyo.apollo.network.HttpHeader
-import kyo.apollo.network.http.HttpRequest
-import kyo.apollo.network.http.HttpResponse
+import kyo.apollo.network.http.HttpEngine
 
 /** A concrete [[HttpInterceptor]] that attaches an authorization header to every
   * outgoing request before it continues down the chain.
@@ -24,11 +22,8 @@ final class AuthorizationHeaderInterceptor(
 ) extends HttpInterceptor:
 
     def intercept(
-        request: HttpRequest,
+        request: HttpEngine.Request,
         chain: HttpInterceptorChain
-    )(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) =
-        val authorized =
-            request.copy(headers = request.headers :+ HttpHeader(headerName, value))
-        chain.proceed(authorized)
-    end intercept
+    )(using Frame): HttpEngine.Response < (Async & Abort[HttpEngineFailure]) =
+        chain.proceed(request.addHeader(headerName, value))
 end AuthorizationHeaderInterceptor

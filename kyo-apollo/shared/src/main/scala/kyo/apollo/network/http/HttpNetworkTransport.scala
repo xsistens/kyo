@@ -1,8 +1,9 @@
 package kyo.apollo.network.http
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.api.GraphQLResponse
 import kyo.apollo.exception.ApolloHttpException
+import kyo.apollo.exception.ApolloNetworkException
 import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.json.Json
@@ -33,10 +34,11 @@ import kyo.apollo.runtime.ResponseStream
   * composition and [[GraphQLResponse.parse]] owns response decoding — the
   * transport only wires them to the engine and maps errors.
   *
-  * @param serverUrl the GraphQL endpoint every request is sent to
-  * @param engine    the wire round-trip (defaults to the real [[FetchHttpEngine]];
-  *                  tests inject a fake)
-  * @param composer  the [[ApolloRequest]] → [[HttpRequest]] lowering
+  * @param serverUrl the GraphQL endpoint every request is sent to; a URL that does
+  *                  not parse makes every response an [[ApolloNetworkException]]
+  * @param engine    the wire round-trip (defaults to the platform engine; tests
+  *                  inject a fake)
+  * @param composer  the [[ApolloRequest]] → [[HttpEngine.Request]] lowering
   */
 final class HttpNetworkTransport(
     serverUrl: String,
@@ -50,13 +52,21 @@ final class HttpNetworkTransport(
       * failure.
       */
     def execute[D](request: ApolloRequest[D])(using Frame): ApolloResponse[D] < Async =
-        val httpRequest = composer.compose(serverUrl, request)
-        Abort.run[HttpEngineFailure](engine.execute(httpRequest)).map {
+        Abort.run[HttpEngineFailure](Abort.get(composed(request)).map(engine.execute)).map {
             case Result.Success(httpResponse)  => decode(request, httpResponse)
             case Result.Failure(engineFailure) => failure(request, engineFailure)
             case Result.Panic(cause)           => Abort.panic(cause)
         }
     end execute
+
+    /** The wire request for `request`. The server URL is parsed here, per execution
+      * (as `kyo.HttpClient` does for a `String` URL); a URL that does not parse means no
+      * request could be sent, which is the engine's failure.
+      */
+    private def composed[D](request: ApolloRequest[D])(using Frame): Result[HttpEngineFailure, HttpEngine.Request] =
+        HttpUrl.parse(serverUrl)
+            .map(composer.compose(_, request))
+            .mapFailure(e => ApolloNetworkException("The GraphQL server URL could not be parsed", e))
 
     /** Execute `request` as an incremental-delivery (`@defer`) operation, yielding a
       * [[ResponseStream]] of progressively-fuller [[ApolloResponse]]s. The engine
@@ -71,28 +81,27 @@ final class HttpNetworkTransport(
         Frame,
         Tag[Emit[Chunk[ApolloResponse[D]]]]
     ): ResponseStream[D] =
-        val httpRequest = composer.compose(serverUrl, request)
         foldEngineFailure(request) {
             Stream.unwrap {
-                engine.executeStreaming(httpRequest).map { resp =>
-                    if !resp.isSuccessful then
+                Abort.get(composed(request)).map(engine.executeStreaming).map { resp =>
+                    if !resp.status.isSuccess then
                         Stream.init(
                             Seq(
                                 failure(
                                     request,
                                     ApolloHttpException(
-                                        statusCode = resp.statusCode,
+                                        statusCode = resp.status.code,
                                         headers = resp.headers,
-                                        message = s"HTTP request failed with status ${resp.statusCode}"
+                                        message = s"HTTP request failed with status ${resp.status.code}"
                                     )
                                 )
                             )
                         )
                     else
-                        resp.header("Content-Type") match
-                            case Some(ct) if isMultipart(ct) =>
+                        resp.headers.get("Content-Type") match
+                            case Present(ct) if isMultipart(ct) =>
                                 val boundary = MultipartParser.boundaryOf(ct)
-                                resp.body match
+                                resp.fields.body match
                                     case HttpStreamBody.Chunked(chunks) =>
                                         IncrementalAssembler.stream(request, MultipartParser.parts(boundary, chunks))
                                     case HttpStreamBody.Buffered(text) =>
@@ -100,7 +109,7 @@ final class HttpNetworkTransport(
                                 end match
                             case _ =>
                                 // The server ignored @defer (a plain JSON reply): one response.
-                                resp.body match
+                                resp.fields.body match
                                     case HttpStreamBody.Buffered(text) =>
                                         Stream.unwrap(decodeSingle(request, text).map(r => Stream.init(Seq(r))))
                                     case HttpStreamBody.Chunked(chunks) =>
@@ -139,14 +148,14 @@ final class HttpNetworkTransport(
     private def isMultipart(contentType: String): Boolean =
         contentType.toLowerCase.contains("multipart/mixed")
 
-    /** Turn a received [[HttpResponse]] into an [[ApolloResponse]]: reject non-2xx
-      * statuses, otherwise parse the body (catching parse failures as values).
+    /** Turn a received [[HttpEngine.Response]] into an [[ApolloResponse]]: reject
+      * non-2xx statuses, otherwise parse the body (catching parse failures as values).
       */
     private def decode[D](
         request: ApolloRequest[D],
-        httpResponse: HttpResponse
+        httpResponse: HttpEngine.Response
     )(using Frame): ApolloResponse[D] < Sync =
-        if httpResponse.isSuccessful then decodeSingle(request, httpResponse.body)
+        if httpResponse.status.isSuccess then decodeSingle(request, httpResponse.fields.body)
         else
             // GraphQL-over-HTTP: `application/graphql-response+json` means the body IS a
             // well-formed GraphQL response whatever the status — a 4xx carrying the
@@ -154,16 +163,16 @@ final class HttpNetworkTransport(
             // body that fails to parse (or a legacy `application/json` server, where a
             // non-2xx says nothing about the body) degrades to the status exception.
             val graphqlBody: Maybe[ApolloResponse[D]] < Sync =
-                if isGraphQLResponse(httpResponse.header("Content-Type").getOrElse("")) then
-                    decodeGraphQLResponse(request, httpResponse.body)
+                if isGraphQLResponse(httpResponse.headers.get("Content-Type").getOrElse("")) then
+                    decodeGraphQLResponse(request, httpResponse.fields.body)
                 else Absent
             graphqlBody.map(_.getOrElse(
                 failure(
                     request,
                     ApolloHttpException(
-                        statusCode = httpResponse.statusCode,
+                        statusCode = httpResponse.status.code,
                         headers = httpResponse.headers,
-                        message = s"HTTP request failed with status ${httpResponse.statusCode}"
+                        message = s"HTTP request failed with status ${httpResponse.status.code}"
                     )
                 )
             ))

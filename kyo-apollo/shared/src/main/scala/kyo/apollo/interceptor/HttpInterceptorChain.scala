@@ -1,10 +1,8 @@
 package kyo.apollo.interceptor
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.network.http.HttpEngine
-import kyo.apollo.network.http.HttpRequest
-import kyo.apollo.network.http.HttpResponse
 
 /** The continuation an [[HttpInterceptor]] calls to pass a request further down
   * the HTTP layer. Each `proceed` advances to the next interceptor, or — once
@@ -14,9 +12,9 @@ import kyo.apollo.network.http.HttpResponse
 trait HttpInterceptorChain:
 
     /** Continue processing `request` at the next link, completing with its
-      * [[HttpResponse]] or aborting with the engine's [[HttpEngineFailure]].
+      * [[HttpEngine.Response]] or aborting with the engine's [[HttpEngineFailure]].
       */
-    def proceed(request: HttpRequest)(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure])
+    def proceed(request: HttpEngine.Request)(using Frame): HttpEngine.Response < (Async & Abort[HttpEngineFailure])
 end HttpInterceptorChain
 
 /** The default [[HttpInterceptorChain]]: an immutable cursor over an ordered
@@ -38,7 +36,7 @@ final class DefaultHttpInterceptorChain(
     engine: HttpEngine
 ) extends HttpInterceptorChain:
 
-    def proceed(request: HttpRequest)(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) =
+    def proceed(request: HttpEngine.Request)(using Frame): HttpEngine.Response < (Async & Abort[HttpEngineFailure]) =
         if index < interceptors.length then
             interceptors(index).intercept(
                 request,
@@ -50,11 +48,11 @@ end DefaultHttpInterceptorChain
 object HttpInterceptorChain:
 
     /** Present `interceptors` wrapped around a terminal `engine` as a single
-      * [[HttpEngine]]. Because an interceptor chain is itself just
-      * `HttpRequest => Future[HttpResponse]`, this lets the existing
+      * [[HttpEngine]]. Because an interceptor chain is itself just a request →
+      * response round-trip, this lets the existing
       * [[kyo.apollo.network.http.HttpNetworkTransport]] run through the full HTTP
-      * interceptor stack unchanged — the client (Task 7) builds the engine here
-      * and hands it to the transport. With no interceptors it is `engine` verbatim.
+      * interceptor stack unchanged — the client builds the engine here and hands it
+      * to the transport. With no interceptors it is `engine` verbatim.
       */
     def asEngine(
         interceptors: List[HttpInterceptor],
@@ -64,6 +62,6 @@ object HttpInterceptorChain:
         else
             val chain = Chunk.from(interceptors)
             new HttpEngine:
-                def execute(request: HttpRequest)(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) =
+                def execute(request: HttpEngine.Request)(using Frame): HttpEngine.Response < (Async & Abort[HttpEngineFailure]) =
                     DefaultHttpInterceptorChain(chain, 0, engine).proceed(request)
 end HttpInterceptorChain

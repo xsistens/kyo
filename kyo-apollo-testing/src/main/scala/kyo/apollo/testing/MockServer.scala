@@ -4,8 +4,6 @@ import kyo.*
 import kyo.apollo.exception.ApolloNetworkException
 import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.network.http.HttpEngine
-import kyo.apollo.network.http.HttpRequest
-import kyo.apollo.network.http.HttpResponse
 
 /** An in-memory HTTP server that queues responses and records the requests it
   * received, usable over the HTTP transport via the injectable [[HttpEngine]]
@@ -32,26 +30,26 @@ import kyo.apollo.network.http.HttpResponse
 final class MockServer private (
     responses: AtomicRef[Chunk[MockServer.Responder]],
     fallback: AtomicRef[Maybe[MockServer.Responder]],
-    received: AtomicRef[Chunk[HttpRequest]],
+    received: AtomicRef[Chunk[HttpEngine.Request]],
     taken: AtomicInt
 ) extends HttpEngine:
 
     // --- scripting ------------------------------------------------------------
 
-    /** Queue a fully-formed [[HttpResponse]] as the next reply. */
-    def enqueue(response: HttpResponse)(using Frame): Unit < Sync =
+    /** Queue a fully-formed [[HttpEngine.Response]] as the next reply. */
+    def enqueue(response: HttpEngine.Response)(using Frame): Unit < Sync =
         responses.updateAndGet(_.append(_ => response)).unit
 
     /** Queue a `(status, body)` reply as the next response (the common case). */
-    def enqueue(body: String, status: Int)(using Frame): Unit < Sync =
-        enqueue(HttpResponse(status, Nil, body))
+    def enqueue(body: String, status: HttpStatus)(using Frame): Unit < Sync =
+        enqueue(HttpEngine.response(status, body))
 
     /** Queue a 200 reply carrying `body`. */
     def enqueue(body: String)(using Frame): Unit < Sync =
-        enqueue(HttpResponse(200, Nil, body))
+        enqueue(HttpEngine.response(HttpStatus.OK, body))
 
     /** Queue a reply computed from the request (route on `body`/`url`). */
-    def enqueueWith(respond: HttpRequest => HttpResponse)(using Frame): Unit < Sync =
+    def enqueueWith(respond: HttpEngine.Request => HttpEngine.Response)(using Frame): Unit < Sync =
         responses.updateAndGet(_.append(request => respond(request))).unit
 
     /** Queue a simulated connection error (no response received) as the next
@@ -64,17 +62,17 @@ final class MockServer private (
     /** Install a fallback handler used once the enqueued responses run out
       * (instead of failing). Useful for "always answer X unless overridden".
       */
-    def default(respond: HttpRequest => HttpResponse)(using Frame): Unit < Sync =
+    def default(respond: HttpEngine.Request => HttpEngine.Response)(using Frame): Unit < Sync =
         fallback.set(Present(request => respond(request)))
 
     /** Install a fixed fallback response for every request past the queue. */
-    def default(response: HttpResponse)(using Frame): Unit < Sync =
+    def default(response: HttpEngine.Response)(using Frame): Unit < Sync =
         fallback.set(Present(_ => response))
 
     // --- assertions -----------------------------------------------------------
 
     /** Every request received, oldest first. */
-    def requests(using Frame): Chunk[HttpRequest] < Sync = received.get
+    def requests(using Frame): Chunk[HttpEngine.Request] < Sync = received.get
 
     /** How many requests the server has received. */
     def requestCount(using Frame): Int < Sync = received.get.map(_.size)
@@ -83,7 +81,7 @@ final class MockServer private (
       * apollo-kotlin-style `takeRequest()` assertions. Panics with a
       * `NoSuchElementException` if none is left.
       */
-    def takeRequest(using Frame): HttpRequest < Sync =
+    def takeRequest(using Frame): HttpEngine.Request < Sync =
         received.get.map { all =>
             taken.getAndUpdate(i => if i < all.size then i + 1 else i).map { i =>
                 if i < all.size then all(i)
@@ -97,7 +95,7 @@ final class MockServer private (
 
     // --- engine ---------------------------------------------------------------
 
-    def execute(request: HttpRequest)(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) =
+    def execute(request: HttpEngine.Request)(using Frame): HttpEngine.Response < (Async & Abort[HttpEngineFailure]) =
         received.updateAndGet(_.append(request)).andThen {
             responses.getAndUpdate(_.drop(1)).map { queued =>
                 queued.headMaybe match
@@ -107,7 +105,7 @@ final class MockServer private (
                             case Present(respond) => respond(request)
                             case Absent =>
                                 Abort.panic(new NoSuchElementException(
-                                    s"MockServer: no response enqueued for request to ${request.url}"
+                                    s"MockServer: no response enqueued for request to ${request.url.baseUrl}"
                                 ))
                         }
             }
@@ -117,14 +115,14 @@ end MockServer
 
 object MockServer:
 
-    private type Responder = HttpRequest => HttpResponse < (Async & Abort[HttpEngineFailure])
+    private type Responder = HttpEngine.Request => HttpEngine.Response < (Async & Abort[HttpEngineFailure])
 
     /** A server with an empty queue, no fallback and nothing received. */
     def init(using Frame): MockServer < Sync =
         for
             responses <- AtomicRef.init(Chunk.empty[Responder])
             fallback  <- AtomicRef.init(Maybe.empty[Responder])
-            received  <- AtomicRef.init(Chunk.empty[HttpRequest])
+            received  <- AtomicRef.init(Chunk.empty[HttpEngine.Request])
             taken     <- AtomicInt.init
         yield new MockServer(responses, fallback, received, taken)
 end MockServer

@@ -76,12 +76,11 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
     final private class Engine(labelOf: () => String) extends kyo.apollo.network.http.HttpEngine:
         val bodies = ListBuffer.empty[String]
         def execute(
-            request: kyo.apollo.network.http.HttpRequest
-        )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
-            bodies ++= request.body
-            kyo.apollo.network.http.HttpResponse(
-                200,
-                Nil,
+            request: kyo.apollo.network.http.HttpEngine.Request
+        )(using Frame): kyo.apollo.network.http.HttpEngine.Response < Async =
+            bodies ++= request.fields.body.text
+            kyo.apollo.network.http.HttpEngine.response(
+                HttpStatus.OK,
                 s"""{"data":{"edge":{"__typename":"Edge","cursor":"c1","label":"${labelOf()}"}}}"""
             )
         end execute

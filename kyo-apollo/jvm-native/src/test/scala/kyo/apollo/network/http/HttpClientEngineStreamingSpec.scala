@@ -1,12 +1,10 @@
 package kyo.apollo.network.http
 
 import java.nio.charset.StandardCharsets
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.JsonCodec
 import kyo.apollo.exception.HttpEngineFailure
-import kyo.apollo.network.HttpHeader
-import kyo.apollo.network.HttpMethod
 
 /** The JVM/Native [[HttpClientEngine]]'s real incremental-delivery path: its
   * `executeStreaming` override reads the response body as a live byte stream over
@@ -62,13 +60,22 @@ class HttpClientEngineStreamingSpec extends kyo.test.Test[Any]:
         def variables: kyo.apollo.json.Json = kyo.apollo.json.Json.JObj(scala.collection.immutable.VectorMap.empty)
     end Ping
 
+    /** A JSON POST to `path` on the local `port`. */
+    private def post(port: Int, path: String): HttpEngine.Request =
+        HttpEngine.request(
+            HttpMethod.POST,
+            HttpUrl(Present("http"), "127.0.0.1", port, path, Absent),
+            HttpHeaders.empty.add("Content-Type", "application/json"),
+            HttpRequestBody.Text("{}")
+        )
+
     "a malformed URL in the streaming path folds to an exception value, never hanging" in {
-        // The pre-fix engine parsed the URL with an unguarded getOrThrow inside the streaming
+        // An engine once parsed the URL with an unguarded getOrThrow inside the streaming
         // producer fiber: a malformed URL panicked that fiber and left `head` forever
-        // incomplete, so head.get (and therefore the whole ResponseStream) hung. The fix routes
-        // the parse failure through head; the transport then folds it to an ApolloNetworkException
-        // value ("failures are values"). The outer timeout turns a regressed hang into a test
-        // failure rather than a wedged suite.
+        // incomplete, so head.get (and therefore the whole ResponseStream) hung. The transport
+        // now parses the URL before the engine runs and folds the failure to an
+        // ApolloNetworkException value ("failures are values"). The outer timeout turns a
+        // regressed hang into a test failure rather than a wedged suite.
         val transport = new HttpNetworkTransport("", new HttpClientEngine)
         Abort.run[Timeout](Async.timeout(15.seconds)(
             StreamProbe.collect(transport.executeStreaming(kyo.apollo.network.ApolloRequest(
@@ -111,16 +118,10 @@ class HttpClientEngineStreamingSpec extends kyo.test.Test[Any]:
 
         HttpServer.init(0, "127.0.0.1")(ep).map { server =>
             val engine = new HttpClientEngine
-            val request = HttpRequest(
-                method = HttpMethod.Post,
-                url = s"http://127.0.0.1:${server.port}/graphql",
-                headers = List(HttpHeader("Content-Type", "application/json")),
-                body = Some("{}")
-            )
-            engine.executeStreaming(request).map { resp =>
-                assert(resp.statusCode == 200)
-                assert(resp.header("Content-Type").exists(_.contains("multipart/mixed")))
-                resp.body match
+            engine.executeStreaming(post(server.port, "/graphql")).map { resp =>
+                assert(resp.status == HttpStatus.OK)
+                assert(resp.headers.get("Content-Type").exists(_.contains("multipart/mixed")))
+                resp.fields.body match
                     case HttpStreamBody.Chunked(stream) =>
                         StreamProbe.collect(stream).map { parts =>
                             val reassembled = parts.mkString
@@ -156,15 +157,9 @@ class HttpClientEngineStreamingSpec extends kyo.test.Test[Any]:
                 kyo.HttpResponse.ok.addField("body", serverBody).setHeader("Content-Type", s"multipart/mixed; boundary=$boundary")
             }
             server <- HttpServer.init(0, "127.0.0.1")(ep)
-            request = HttpRequest(
-                method = HttpMethod.Post,
-                url = s"http://127.0.0.1:${server.port}/graphql",
-                headers = List(HttpHeader("Content-Type", "application/json")),
-                body = Some("{}")
-            )
             // Each text chunk as it reaches the consumer, with whether the server had sent the second chunk by then.
-            consumed = new HttpClientEngine().executeStreaming(request).map { resp =>
-                resp.body match
+            consumed = new HttpClientEngine().executeStreaming(post(server.port, "/graphql")).map { resp =>
+                resp.fields.body match
                     case HttpStreamBody.Chunked(stream) =>
                         stream.fold(Chunk.empty[(String, Boolean)]) { (seen, text) =>
                             secondSent.get.map { sent =>

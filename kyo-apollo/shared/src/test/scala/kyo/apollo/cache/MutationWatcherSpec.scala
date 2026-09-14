@@ -1,6 +1,6 @@
 package kyo.apollo.cache
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.ApolloClient
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.*
@@ -105,15 +105,15 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
       */
     final private class RoutingEngine extends kyo.apollo.network.http.HttpEngine:
         def execute(
-            request: kyo.apollo.network.http.HttpRequest
-        )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
-            val text = request.body.getOrElse("")
+            request: kyo.apollo.network.http.HttpEngine.Request
+        )(using Frame): kyo.apollo.network.http.HttpEngine.Response < Async =
+            val text = request.fields.body.text.getOrElse("")
             val payload =
                 if text.contains("UpdateUserName") then
                     val name = """"name":"([^"]*)"""".r.findAllMatchIn(text).map(_.group(1)).toList.last
                     body("updateUser", name)
                 else body("user", "Alice")
-            kyo.apollo.network.http.HttpResponse(200, Nil, payload)
+            kyo.apollo.network.http.HttpEngine.response(HttpStatus.OK, payload)
         end execute
     end RoutingEngine
 

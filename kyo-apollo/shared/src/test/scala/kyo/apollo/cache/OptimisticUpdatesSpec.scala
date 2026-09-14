@@ -1,6 +1,6 @@
 package kyo.apollo.cache
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.ApolloClient
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.*
@@ -605,22 +605,20 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
     final private class ScriptedEngine(mutationFails: Boolean)
         extends kyo.apollo.network.http.HttpEngine:
         def execute(
-            request: kyo.apollo.network.http.HttpRequest
-        )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
-            val text = request.body.getOrElse("")
+            request: kyo.apollo.network.http.HttpEngine.Request
+        )(using Frame): kyo.apollo.network.http.HttpEngine.Response < Async =
+            val text = request.fields.body.text.getOrElse("")
             if text.contains("UpdateUserName") then
-                if mutationFails then kyo.apollo.network.http.HttpResponse(500, Nil, "boom")
+                if mutationFails then kyo.apollo.network.http.HttpEngine.response(HttpStatus(500), "boom")
                 else
                     val name = """"name":"([^"]*)"""".r.findAllMatchIn(text).map(_.group(1)).toList.last
-                    kyo.apollo.network.http.HttpResponse(
-                        200,
-                        Nil,
+                    kyo.apollo.network.http.HttpEngine.response(
+                        HttpStatus.OK,
                         s"""{"data":{"updateUser":{"__typename":"User","id":"1","name":"$name"}}}"""
                     )
             else
-                kyo.apollo.network.http.HttpResponse(
-                    200,
-                    Nil,
+                kyo.apollo.network.http.HttpEngine.response(
+                    HttpStatus.OK,
                     """{"data":{"user":{"__typename":"User","id":"1","name":"Alice"}}}"""
                 )
             end if
@@ -634,20 +632,18 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
     final private class GatedEngine(arrived: Latch, gate: Latch)
         extends kyo.apollo.network.http.HttpEngine:
         def execute(
-            request: kyo.apollo.network.http.HttpRequest
-        )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
-            if request.body.getOrElse("").contains("UpdateUserName") then
+            request: kyo.apollo.network.http.HttpEngine.Request
+        )(using Frame): kyo.apollo.network.http.HttpEngine.Response < Async =
+            if request.fields.body.text.getOrElse("").contains("UpdateUserName") then
                 arrived.release.andThen(gate.await).andThen(
-                    kyo.apollo.network.http.HttpResponse(
-                        200,
-                        Nil,
+                    kyo.apollo.network.http.HttpEngine.response(
+                        HttpStatus.OK,
                         """{"data":{"updateUser":{"__typename":"User","id":"1","name":"Bob"}}}"""
                     )
                 )
             else
-                kyo.apollo.network.http.HttpResponse(
-                    200,
-                    Nil,
+                kyo.apollo.network.http.HttpEngine.response(
+                    HttpStatus.OK,
                     """{"data":{"user":{"__typename":"User","id":"1","name":"Alice"}}}"""
                 )
     end GatedEngine
@@ -658,36 +654,34 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
       */
     final private class HeldMutationEngine private (
         arrivals: Chunk[Latch],
-        held: AtomicRef[Chunk[Promise[kyo.apollo.network.http.HttpResponse, Any]]]
+        held: AtomicRef[Chunk[Promise[kyo.apollo.network.http.HttpEngine.Response, Any]]]
     ) extends kyo.apollo.network.http.HttpEngine:
         def execute(
-            request: kyo.apollo.network.http.HttpRequest
-        )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
-            if request.body.getOrElse("").contains("UpdateUserName") then
+            request: kyo.apollo.network.http.HttpEngine.Request
+        )(using Frame): kyo.apollo.network.http.HttpEngine.Response < Async =
+            if request.fields.body.text.getOrElse("").contains("UpdateUserName") then
                 for
-                    reply <- Promise.init[kyo.apollo.network.http.HttpResponse, Any]
+                    reply <- Promise.init[kyo.apollo.network.http.HttpEngine.Response, Any]
                     all   <- held.updateAndGet(_.append(reply))
                     _     <- arrivals(all.size - 1).release
                     sent  <- reply.get
                 yield sent
             else
-                kyo.apollo.network.http.HttpResponse(
-                    200,
-                    Nil,
+                kyo.apollo.network.http.HttpEngine.response(
+                    HttpStatus.OK,
                     """{"data":{"user":{"__typename":"User","id":"1","name":"Alice"}}}"""
                 )
 
         def reply(index: Int, name: String)(using Frame): Unit < Sync =
-            held.get.map(_(index).completeDiscard(Result.succeed(kyo.apollo.network.http.HttpResponse(
-                200,
-                Nil,
+            held.get.map(_(index).completeDiscard(Result.succeed(kyo.apollo.network.http.HttpEngine.response(
+                HttpStatus.OK,
                 s"""{"data":{"updateUser":{"__typename":"User","id":"1","name":"$name"}}}"""
             ))))
     end HeldMutationEngine
 
     private object HeldMutationEngine:
         def init(arrivals: Chunk[Latch])(using Frame): HeldMutationEngine < Sync =
-            AtomicRef.init(Chunk.empty[Promise[kyo.apollo.network.http.HttpResponse, Any]])
+            AtomicRef.init(Chunk.empty[Promise[kyo.apollo.network.http.HttpEngine.Response, Any]])
                 .map(new HeldMutationEngine(arrivals, _))
     end HeldMutationEngine
 

@@ -1,6 +1,6 @@
 package kyo.apollo.interceptor
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
@@ -93,7 +93,7 @@ class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
     private def networkFail: Uuid => ApolloResponse[Any] =
         uuid => ApolloResponse.fromException(uuid, ApolloNetworkException("boom"))
     private def httpFail(status: Int): Uuid => ApolloResponse[Any] =
-        uuid => ApolloResponse.fromException(uuid, ApolloHttpException(status, Nil, "http"))
+        uuid => ApolloResponse.fromException(uuid, ApolloHttpException(status, HttpHeaders.empty, "http"))
     private def graphqlError: Uuid => ApolloResponse[Any] =
         uuid => ApolloResponse[Any](uuid, error = Present(ApolloGraphQLException(Chunk(GraphQLError("bad field")))))
     private def apqError(message: String): Uuid => ApolloResponse[Any] =

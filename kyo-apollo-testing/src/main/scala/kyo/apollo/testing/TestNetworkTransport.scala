@@ -169,7 +169,7 @@ object TestResponses:
 
     /** A non-2xx HTTP failure. */
     def httpError(status: Int)(using Frame): Uuid => ApolloResponse[Any] =
-        uuid => ApolloResponse.fromException(uuid, ApolloHttpException(status, Nil, s"HTTP $status"))
+        uuid => ApolloResponse.fromException(uuid, ApolloHttpException(status, HttpHeaders.empty, s"HTTP $status"))
 
     /** A response carrying a single GraphQL `errors` entry (not a transport fault). */
     def graphqlError(message: String)(using Frame): Uuid => ApolloResponse[Any] =
