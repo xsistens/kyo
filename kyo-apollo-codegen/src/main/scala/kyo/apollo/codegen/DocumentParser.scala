@@ -26,19 +26,19 @@ object DocumentParser:
       *
       * @throws CodegenException if the document fails to parse.
       */
-    def parse(source: String): Document =
-        Parser.parseQuery(source) match
-            case Right(document) => document
-            case Left(error) =>
-                throw CodegenException(s"Failed to parse GraphQL operation document: ${error.msg}")
+    def parse(source: String): Document = parse(source, "operation document")
 
     /** Load and parse a local `.graphql` operation-document file. */
     def parseFile(path: Path): Document =
-        if !Files.isReadable(path) then
-            throw CodegenException(s"Operation document not readable: $path")
+        if !Files.isReadable(path) then throw CodegenException.UnreadableFile(path)
         val source = Using.resource(scala.io.Source.fromFile(path.toFile, "UTF-8"))(_.mkString)
-        parse(source)
+        parse(source, path.toString)
     end parseFile
+
+    private def parse(text: String, source: String): Document =
+        Parser.parseQuery(text) match
+            case Right(document) => document
+            case Left(error)     => throw CodegenException.ParseFailure(source, error.msg)
 
     /** Load and parse a local `.graphql` operation-document file by path string. */
     def parseFile(path: String): Document = parseFile(Paths.get(path))

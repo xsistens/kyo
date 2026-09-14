@@ -1,9 +1,8 @@
 package kyo.apollo.codegen
 
-/** A single local `@client` field declaration — pure metadata, so the object
-  * holding these compiles independently of the code the codegen emits.
-  * [[ApolloClientWriter]] turns each into a `ClientField.create` descriptor (under
-  * the generated `ClientFields` object) plus a chained accessor
+/** A single local `@client` field declaration — pure metadata about code the
+  * generator emits. [[ApolloClientWriter]] turns each into a `ClientField.create`
+  * descriptor (under the generated `ClientFields` object) plus a chained accessor
   * (`_.code.name.<field>`) next to the server selectors.
   *
   * @param onType  the GraphQL object type the field hangs off (`"Country"`, or
@@ -23,34 +22,21 @@ final case class ClientFieldDecl(
     default: String
 ) derives CanEqual
 
-/** A small authoring DSL so a declarations object reads declaratively. Mix in and
-  * expose a `val fields: List[ClientFieldDecl]`:
-  *
-  * {{{
-  * object MyClientFields extends ClientFieldDsl:
-  *   val fields = declare(
-  *     onType("Country")(
-  *       field("isFavorite", "Boolean", default = "false"),
-  *       field("tags", "Chunk[String]", default = "Chunk.empty"),
-  *       field("note", "Maybe[myapp.Note]", default = "Absent")),  // myapp.Note derives Schema
-  *     onType("Query")(
-  *       field("cartOpen", "Boolean", default = "false")))
-  * }}}
-  *
-  * The codegen loads `fields` by reflection (it runs on the codegen classpath, so
-  * `ClientFieldDecl` is the same class — no marshalling).
-  */
-trait ClientFieldDsl:
+object ClientFieldDecl:
 
-    /** A field declaration still missing its owning type, applied by [[onType]]. */
-    opaque type Pending = String => ClientFieldDecl
+    /** `Type.field: ScalaType = default`; the type runs up to the first `=` that does
+      * not start a `=>`, so function types stay intact.
+      */
+    private val Declaration =
+        """\s*([_A-Za-z][_0-9A-Za-z]*)\.([_A-Za-z][_0-9A-Za-z]*)\s*:\s*(.+?)\s*=(?!>)\s*(.+?)\s*""".r
 
-    def field(name: String, tpe: String, default: String): Pending =
-        t => ClientFieldDecl(t, name, tpe, default)
-
-    def onType(t: String)(pending: Pending*): List[ClientFieldDecl] =
-        pending.iterator.map(_(t)).toList
-
-    def declare(groups: List[ClientFieldDecl]*): List[ClientFieldDecl] =
-        groups.iterator.flatten.toList
-end ClientFieldDsl
+    /** Read a declaration written the way a Scala field reads, as a build passes it:
+      * `--client-field "Country.isFavorite: Boolean = false"`.
+      *
+      * @throws CodegenException.MalformedClientField if `spec` has another shape.
+      */
+    def parse(spec: String): ClientFieldDecl =
+        spec match
+            case Declaration(onType, name, tpe, default) => ClientFieldDecl(onType, name, tpe, default)
+            case _                                       => throw CodegenException.MalformedClientField(spec)
+end ClientFieldDecl
