@@ -3,6 +3,8 @@ package kyo.apollo.cache.normalized
 import kyo.Absent
 import kyo.Maybe
 import kyo.Present
+import kyo.apollo.cache.normalized.api.CacheKey
+import kyo.apollo.cache.normalized.api.FieldKey
 import kyo.apollo.cache.normalized.api.Record
 import kyo.apollo.cache.normalized.api.RecordValue
 import kyo.apollo.json.Json
@@ -54,18 +56,18 @@ final case class CacheDiagnostics(sink: Maybe[String => Unit]):
     private[normalized] def positionalConflicts(existing: Record, incoming: Record): Unit =
         sink.foreach { emit =>
             if CacheDiagnostics.isPositional(incoming.key) then
-                val typename = existing.get("__typename") match
+                val typename = existing.get(FieldKey.Typename) match
                     case Present(RecordValue.Scalar(Json.JStr(t))) => s"'$t'"
                     case _                                         => "this type"
                 incoming.fields.foreach { (fieldKey, incomingValue) =>
                     val old = existing.fields.get(fieldKey)
                     val contradicted =
-                        fieldKey != "__typename" &&
+                        fieldKey != FieldKey.Typename &&
                             incomingValue != RecordValue.Null &&
                             old.exists(_ != incomingValue)
                     if contradicted then
                         emit(
-                            s"kyo-apollo: the write to '${incoming.key}' replaced field '$fieldKey' " +
+                            s"kyo-apollo: the write to '${incoming.key.render}' replaced field '${fieldKey.render}' " +
                                 s"(${old.get} -> $incomingValue) on a record addressed BY POSITION. If the " +
                                 s"list was reordered or shortened, the fields this write did NOT mention " +
                                 s"still belong to the element that used to sit here. Declare a cache " +
@@ -94,7 +96,9 @@ object CacheDiagnostics:
       * key carries no dot unless a custom generator puts one there, in which case the
       * worst outcome is a spurious warning on a diagnostic the caller asked for.
       */
-    private[normalized] def isPositional(key: String): Boolean =
-        val i = key.lastIndexOf('.')
+    private[normalized] def isPositional(cacheKey: CacheKey): Boolean =
+        val key = cacheKey.render
+        val i   = key.lastIndexOf('.')
         i > 0 && i < key.length - 1 && key.substring(i + 1).forall(_.isDigit)
+    end isPositional
 end CacheDiagnostics

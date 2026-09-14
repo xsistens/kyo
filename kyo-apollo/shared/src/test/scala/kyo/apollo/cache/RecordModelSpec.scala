@@ -5,6 +5,7 @@ import kyo.Chunk
 import kyo.Present
 import kyo.Schema
 import kyo.apollo.api.*
+import kyo.apollo.cache.TestKeys.*
 import kyo.apollo.cache.normalized.api.*
 import kyo.apollo.json.Json
 import scala.collection.immutable.VectorMap
@@ -55,24 +56,49 @@ class RecordModelSpec extends kyo.test.Test[Any]:
         }
 
         "root keys have the expected string values" in {
-            assert(CacheKey.QueryRoot.key == "QUERY_ROOT")
-            assert(CacheKey.MutationRoot.key == "MUTATION_ROOT")
-            assert(CacheKey.SubscriptionRoot.key == "SUBSCRIPTION_ROOT")
+            assert(CacheKey.QueryRoot.render == "QUERY_ROOT")
+            assert(CacheKey.MutationRoot.render == "MUTATION_ROOT")
+            assert(CacheKey.SubscriptionRoot.render == "SUBSCRIPTION_ROOT")
         }
 
         "typename/id key renders as Typename:id and toString is the raw key" in {
             val k = CacheKey("Country", "DE")
-            assert(k.key == "Country:DE")
+            assert(k.render == "Country:DE")
             assert(k.toString == "Country:DE")
+            assert(CacheKey("PlaybackState", "").render == "PlaybackState")
+        }
+
+        // --- opaque keys ------------------------------------------------------------
+
+        "a record key and a field key cannot stand in for each other, nor can a string" in {
+            // The well-typed shape compiles — so the failures below are the key types, not the fixture.
+            typeCheck("Record(CacheKey.QueryRoot, Map(FieldKey.Typename -> RecordValue.Null))")
+            typeCheckFailure("""Record("countries", Map("QUERY_ROOT" -> RecordValue.Null))""")(
+                "Required: kyo.apollo.cache.normalized.api.CacheKey"
+            )
+            typeCheckFailure("Record(fk(\"countries\"), Map(CacheKey.QueryRoot -> RecordValue.Null))")(
+                "Required: kyo.apollo.cache.normalized.api.CacheKey"
+            )
+            val rec = Record(CacheKey.QueryRoot, Map(FieldKey.Typename -> RecordValue.Null))
+            typeCheck("rec.get(FieldKey.Typename)")
+            typeCheckFailure("rec.get(rec.key)")("Required: kyo.apollo.cache.normalized.api.FieldKey")
+        }
+
+        "scalarString is the one scalar-to-id rendering the key generators share" in {
+            assert(CacheKey.scalarString(Json.JStr("DE")) == Present("DE"))
+            assert(CacheKey.scalarString(Json.JInt(9007199254740993L)) == Present("9007199254740993"))
+            assert(CacheKey.scalarString(Json.JBool(true)) == Present("true"))
+            assert(CacheKey.scalarString(Json.JNull) == Absent)
+            assert(CacheKey.scalarString(Json.JObj(Map("a" -> Json.JInt(1)))) == Absent)
         }
 
         // --- CacheReference -------------------------------------------------------
 
-        "CacheReference round-trips to and from a CacheKey" in {
+        "CacheReference points at a CacheKey" in {
             val key = CacheKey("Book", "42")
             val ref = CacheReference(key)
-            assert(ref.key == "Book:42")
-            assert(ref.cacheKey == key)
+            assert(ref.key == key)
+            assert(ref.toString == "CacheReference(Book:42)")
         }
 
         // --- RecordValue ----------------------------------------------------------
@@ -101,22 +127,22 @@ class RecordModelSpec extends kyo.test.Test[Any]:
             val record = Record(
                 CacheKey.QueryRoot,
                 Map(
-                    "name" -> RecordValue.scalar(Json.JStr("root")),
-                    "countries" -> RecordValue.RList(
+                    fk("name") -> RecordValue.scalar(Json.JStr("root")),
+                    fk("countries") -> RecordValue.RList(
                         Chunk(RecordValue.Reference(refA), RecordValue.Reference(refB))
                     ),
-                    "featured" -> RecordValue.Reference(refA)
+                    fk("featured") -> RecordValue.Reference(refA)
                 )
             )
             assert(record.references == Set(refA, refB))
-            assert(record.fieldKeys == Set("name", "countries", "featured"))
-            assert(record.get("featured") == Present(RecordValue.Reference(refA)))
-            assert(record.get("missing") == Absent)
+            assert(record.fieldKeys == Set(fk("name"), fk("countries"), fk("featured")))
+            assert(record.get(fk("featured")) == Present(RecordValue.Reference(refA)))
+            assert(record.get(fk("missing")) == Absent)
             assert(record.metadata == Map.empty[String, Json])
         }
 
         "FieldKey with no arguments is just the field name" in {
-            assert(FieldKey(field("countries", Chunk.empty)) == "countries")
+            assert(FieldKey(field("countries", Chunk.empty)).render == "countries")
         }
 
         "FieldKey uses the schema name, not the alias" in {
@@ -125,20 +151,20 @@ class RecordModelSpec extends kyo.test.Test[Any]:
                 CompiledNamedType("Country"),
                 alias = Present("de")
             )
-            assert(FieldKey(aliased) == "country")
+            assert(FieldKey(aliased).render == "country")
         }
 
         "distinct literal argument values yield distinct field keys" in {
             val one = field("user", Chunk(CompiledArgument.literal("id", Json.JNum(1))))
             val two = field("user", Chunk(CompiledArgument.literal("id", Json.JNum(2))))
-            assert(FieldKey(one) == """user({"id":1})""")
-            assert(FieldKey(two) == """user({"id":2})""")
+            assert(FieldKey(one).render == """user({"id":1})""")
+            assert(FieldKey(two).render == """user({"id":2})""")
             assert(FieldKey(one) != FieldKey(two))
         }
 
         "FieldKey resolves variable arguments against the variables map" in {
             val f = field("user", Chunk(CompiledArgument.variable("id", "userId")))
-            assert(FieldKey(f, Map("userId" -> Json.JNum(7))) == """user({"id":7})""")
+            assert(FieldKey(f, Map("userId" -> Json.JNum(7))).render == """user({"id":7})""")
         }
 
         "FieldKey is canonical: argument order does not change the key" in {
@@ -157,7 +183,7 @@ class RecordModelSpec extends kyo.test.Test[Any]:
                 )
             )
             assert(FieldKey(ab) == FieldKey(ba))
-            assert(FieldKey(ab) == """search({"a":1,"b":2})""")
+            assert(FieldKey(ab).render == """search({"a":1,"b":2})""")
         }
 
         "FieldKey sorts nested object argument keys recursively" in {
@@ -170,7 +196,7 @@ class RecordModelSpec extends kyo.test.Test[Any]:
                     )
                 )
             )
-            assert(FieldKey(f) == """search({"filter":{"a":"x","z":1}})""")
+            assert(FieldKey(f).render == """search({"filter":{"a":"x","z":1}})""")
         }
     }
 end RecordModelSpec

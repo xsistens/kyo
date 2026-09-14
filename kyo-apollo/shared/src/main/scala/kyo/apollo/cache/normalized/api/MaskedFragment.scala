@@ -1,10 +1,11 @@
 package kyo.apollo.cache.normalized.api
 
-import kyo.Absent
 import kyo.Chunk
+import kyo.Frame
 import kyo.Maybe
-import kyo.Present
+import kyo.Result
 import kyo.apollo.api.*
+import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.json.Json
 import scala.NamedTuple.AnyNamedTuple
 import scala.NamedTuple.NamedTuple
@@ -36,10 +37,13 @@ import scala.collection.immutable.VectorMap
   * never silently become load-bearing for a parent.
   *
   * The spread also forces the entity's `__typename` and [[CacheIdentity]] key
-  * fields into the document, so the ref can always compute the [[CacheKey]] of
-  * the record the response was normalized into. `ref.key` is deliberately
-  * public — identity is not the masked data, and it is the natural list key for
-  * UI reconciliation.
+  * fields into the document, so the ref always carries what a key generator
+  * needs. The ref computes no key itself: the store resolves it with
+  * `ApolloStore.keyOf(ref.typeName, ref.raw)`, through the very generator that
+  * normalized the response, so the ref and the record cannot disagree about
+  * where the entity lives. Publicly a ref is opaque — no field values, no
+  * `Product` view — and equal to another ref of the same fragment exactly when
+  * both captured the same response slice.
   *
   * An entity spread never produces a path-keyed ref: requiring a declared
   * [[CacheIdentity]] is what rules out capturing a positional
@@ -57,26 +61,43 @@ final class EntityFragment[Origin, D <: AnyNamedTuple] private[apollo] (
 ):
     outer =>
 
-    /** The masked handle a spread decodes to. Publicly it is identity only —
-      * [[key]] plus an opaque `toString` — while the response fields it captured
-      * ride along `private[apollo]` so a cache write of decoded data stays
-      * lossless and `Apollo.fragment` can seed without a cache round-trip.
+    /** The masked handle a spread decodes to. Publicly it is opaque — an
+      * `equals`/`hashCode` over the fragment and the captured slice, and a
+      * `toString` naming only the fragment — while the response fields it
+      * captured ride along `private[apollo]` so a cache write of decoded data
+      * stays lossless and `Apollo.fragment` can seed without a cache round-trip.
+      *
+      * A plain `final class`, not a case class: a case class is a `Product`, and
+      * `productIterator` would hand the masked fields out to any generic printer.
+      * It carries no cache key either — the store computes that from [[typeName]]
+      * and [[raw]] with its own generator (`ApolloStore.keyOf`).
       *
       * Path-dependent (`CountryCard.fields.Ref`), so a ref cannot be handed to a
       * different fragment whose field set merely overlaps — the component's
       * signature pins exactly the fragment it declared.
+      *
+      * @param raw      the response fields this fragment selected (plus
+      *                 `__typename` and the identity's key fields)
+      * @param typeName the entity's concrete type: the response `__typename`,
+      *                 the fragment's declared type when the response has none
       */
-    final case class Ref private[apollo] (
+    final class Ref private[apollo] (
         private[apollo] val raw: VectorMap[String, Json],
-        val key: CacheKey
+        private[apollo] val typeName: String
     ):
         private[apollo] def definition: EntityFragment[Origin, D] = outer
 
         /** The fragment's fields decoded from the captured response slice. */
         private[apollo] def decoded: D = selection.decode(Json.JObj(raw))
 
+        override def equals(other: Any): Boolean = other match
+            case that: EntityFragment[?, ?]#Ref => (that.definition eq outer) && that.raw == raw
+            case _                              => false
+
+        override def hashCode: Int = raw.hashCode * 31 + fragmentName.hashCode
+
         /** Masked: never prints field values. */
-        override def toString: String = s"Ref($fragmentName, $key)"
+        override def toString: String = s"Ref($fragmentName)"
     end Ref
 
     /** What a spread contributes to the wire selection: `__typename` and the
@@ -93,23 +114,27 @@ final class EntityFragment[Origin, D <: AnyNamedTuple] private[apollo] (
         ((MaskedFragment.TypenameField.responseName +: identity.keyFieldNames) ++
             selection.selections.collect { case f: CompiledField => f.responseName }).toSet
 
-    /** Build a [[Ref]] from the parent response object. The type-name part of the
-      * key is taken from the response `__typename` — not the declared type — so a
-      * fragment on an interface keys by the concrete runtime type, matching what
-      * the normalizer stored.
+    /** Build a [[Ref]] from the parent response object. The ref's type name is the
+      * response `__typename` — not the declared type — so a fragment on an
+      * interface is keyed by the concrete runtime type, matching what the
+      * normalizer stored.
+      *
+      * A row missing an identity key field (or carrying a non-scalar one) is a
+      * failure naming the fragment, the type and the missing fields — never the
+      * row's values, which are the masked data.
       */
-    private[apollo] def refFromRow(row: Map[String, Json]): Ref =
+    private[apollo] def refFromRow(row: Map[String, Json])(using Frame): Result[ApolloParseException, Ref] =
         val tn = row.get("__typename") match
             case Some(Json.JStr(t)) => t
             case _                  => typeName
-        val values = identity.keyFieldNames.map { field =>
-            Maybe
-                .fromOption(row.get(field))
-                .flatMap(MaskedFragment.scalarString)
-                .getOrElse(throw SelectionDecodeException(Json.JObj(VectorMap.from(row))))
-        }
-        val slice = VectorMap.from(row.view.filterKeys(ownResponseNames).toSeq)
-        Ref(slice, CacheKey(tn, values.mkString("+")))
+        val missing = identity.keyFieldNames.filter(field => Maybe.fromOption(row.get(field)).flatMap(CacheKey.scalarString).isEmpty)
+        if missing.nonEmpty then
+            Result.fail(ApolloParseException(
+                Json.JObj(VectorMap.from(missing.map(_ -> Json.JNull))),
+                s"scalar values for the key field(s) ${missing.mkString(", ")} of $tn in masked fragment $fragmentName"
+            ))
+        else Result.succeed(Ref(VectorMap.from(row.view.filterKeys(ownResponseNames).toSeq), tn))
+        end if
     end refFromRow
 
     /** [[spread]] with the named-tuple label supplied explicitly — the non-macro
@@ -119,7 +144,8 @@ final class EntityFragment[Origin, D <: AnyNamedTuple] private[apollo] (
         SelectionBuilder.rawLeaf(
             spreadSelections,
             selection,
-            refFromRow,
+            // The selection decode path still throws (a Result-returning decode is K-HIGH-42/43).
+            row => refFromRow(row)(using Frame.internal).getOrThrow,
             value => Chunk.from(value.asInstanceOf[Ref].raw)
         )
 
@@ -155,15 +181,23 @@ final class EmbeddedFragment[Origin, D <: AnyNamedTuple] private[apollo] (
     outer =>
 
     /** The masked handle: carries the captured response slice, opens only for
-      * `Apollo.fragment`. No public [[CacheKey]] — the object has no identity.
+      * `Apollo.fragment`. No cache key — the object has no identity. A plain
+      * `final class` for the same reason as [[EntityFragment.Ref]]: no `Product`
+      * view onto the masked fields.
       */
-    final case class Ref private[apollo] (
+    final class Ref private[apollo] (
         private[apollo] val raw: VectorMap[String, Json]
     ):
         private[apollo] def definition: EmbeddedFragment[Origin, D] = outer
 
         /** The fragment's fields decoded from the captured response slice. */
         private[apollo] def value: D = selection.decode(Json.JObj(raw))
+
+        override def equals(other: Any): Boolean = other match
+            case that: EmbeddedFragment[?, ?]#Ref => (that.definition eq outer) && that.raw == raw
+            case _                                => false
+
+        override def hashCode: Int = raw.hashCode * 31 + fragmentName.hashCode
 
         /** Masked: never prints field values. */
         override def toString: String = s"Ref($fragmentName)"
@@ -198,15 +232,6 @@ private[apollo] object MaskedFragment:
     /** The implicit `__typename` a spread forces into the parent selection. */
     val TypenameField: CompiledField =
         CompiledField("__typename", CompiledNamedType("String").notNull)
-
-    /** Render a JSON scalar as its raw id string (`42`, not `"42"`), matching the
-      * key generators' rendering so `ref.key` equals the normalizer's record key.
-      */
-    def scalarString(json: Json): Maybe[String] = json match
-        case Json.JStr(s)                               => Present(s)
-        case Json.JInt(_) | Json.JDec(_) | Json.JNum(_) => Present(json.render)
-        case Json.JBool(b)                              => Present(b.toString)
-        case _                                          => Absent
 
     def spreadEntityImpl[Origin: Type, D <: AnyNamedTuple: Type](
         self: Expr[EntityFragment[Origin, D]]

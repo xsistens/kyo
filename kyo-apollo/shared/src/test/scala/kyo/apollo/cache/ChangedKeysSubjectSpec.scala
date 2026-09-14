@@ -1,6 +1,7 @@
 package kyo.apollo.cache
 
 import kyo.apollo.cache.normalized.ChangedKeysSubject
+import kyo.apollo.cache.normalized.api.CacheKey
 
 /** Unit tests for the Phase 05 change-notification bus ([[ChangedKeysSubject]]):
   * multicast delivery, FIFO ordering, unsubscribe (via the returned `Cancelable`
@@ -11,17 +12,22 @@ class ChangedKeysSubjectSpec extends kyo.test.Test[Any]:
 
     given CanEqual[Any, Any] = CanEqual.derived
 
+    private val user1 = CacheKey("User", "1")
+    private val k     = CacheKey("K", "1")
+    private val outer = CacheKey("Outer", "1")
+    private val inner = CacheKey("Inner", "1")
+
     "ChangedKeysSubject" - {
 
         "publish fans a changed-key set out to every subscriber" in {
             val subject = new ChangedKeysSubject
-            var a       = Set.empty[String]
-            var b       = Set.empty[String]
+            var a       = Set.empty[CacheKey]
+            var b       = Set.empty[CacheKey]
             subject.subscribe(keys => a = keys)
             subject.subscribe(keys => b = keys)
-            subject.publish(Set("User:1"))
-            assert(a == Set("User:1"))
-            assert(b == Set("User:1"))
+            subject.publish(Set(user1))
+            assert(a == Set(user1))
+            assert(b == Set(user1))
         }
 
         "subscribers are notified in registration (FIFO) order" in {
@@ -30,7 +36,7 @@ class ChangedKeysSubjectSpec extends kyo.test.Test[Any]:
             subject.subscribe(_ => order = order :+ 1)
             subject.subscribe(_ => order = order :+ 2)
             subject.subscribe(_ => order = order :+ 3)
-            subject.publish(Set("k"))
+            subject.publish(Set(k))
             assert(order == List(1, 2, 3))
         }
 
@@ -46,9 +52,9 @@ class ChangedKeysSubjectSpec extends kyo.test.Test[Any]:
             val subject = new ChangedKeysSubject
             var calls   = 0
             val handle  = subject.subscribe(_ => calls += 1)
-            subject.publish(Set("k"))
+            subject.publish(Set(k))
             handle()
-            subject.publish(Set("k"))
+            subject.publish(Set(k))
             assert(calls == 1)
             assert(subject.subscriberCount == 0)
         }
@@ -64,38 +70,38 @@ class ChangedKeysSubjectSpec extends kyo.test.Test[Any]:
         }
 
         "unsubscribe removes a subscription by callback identity" in {
-            val subject                       = new ChangedKeysSubject
-            var calls                         = 0
-            val listener: Set[String] => Unit = _ => calls += 1
+            val subject                         = new ChangedKeysSubject
+            var calls                           = 0
+            val listener: Set[CacheKey] => Unit = _ => calls += 1
             subject.subscribe(listener)
             subject.unsubscribe(listener)
-            subject.publish(Set("k"))
+            subject.publish(Set(k))
             assert(calls == 0)
         }
 
         "the same callback subscribed twice is delivered to twice" in {
-            val subject                       = new ChangedKeysSubject
-            var calls                         = 0
-            val listener: Set[String] => Unit = _ => calls += 1
+            val subject                         = new ChangedKeysSubject
+            var calls                           = 0
+            val listener: Set[CacheKey] => Unit = _ => calls += 1
             subject.subscribe(listener)
             subject.subscribe(listener)
-            subject.publish(Set("k"))
+            subject.publish(Set(k))
             assert(calls == 2)
         }
 
         "a subscriber that publishes during delivery does not disturb this emission" in {
             val subject = new ChangedKeysSubject
-            var seen    = List.empty[Set[String]]
+            var seen    = List.empty[Set[CacheKey]]
             // First subscriber re-publishes synchronously on the outer set. Because the
             // outer publish snapshots before iterating, the nested "inner" publish runs
             // to completion inside sub1's delivery, and the outer emission still reaches
             // sub2 with "outer" afterward — so sub2 receives BOTH, nothing is lost.
             subject.subscribe { keys =>
-                if keys == Set("outer") then subject.publish(Set("inner"))
+                if keys == Set(outer) then subject.publish(Set(inner))
             }
             subject.subscribe(keys => seen = seen :+ keys)
-            subject.publish(Set("outer"))
-            assert(seen == List(Set("inner"), Set("outer")))
+            subject.publish(Set(outer))
+            assert(seen == List(Set(inner), Set(outer)))
         }
 
         "a subscriber that unsubscribes another during delivery is re-entrancy-safe" in {
@@ -106,9 +112,9 @@ class ChangedKeysSubjectSpec extends kyo.test.Test[Any]:
             // second still receives THIS emission, and is gone from the next one.
             subject.subscribe(_ => handle2())
             handle2 = subject.subscribe(_ => secondCalls += 1)
-            subject.publish(Set("k"))
+            subject.publish(Set(k))
             assert(secondCalls == 1) // delivered from the pre-cancel snapshot
-            subject.publish(Set("k"))
+            subject.publish(Set(k))
             assert(secondCalls == 1) // gone on the next emission
         }
     }

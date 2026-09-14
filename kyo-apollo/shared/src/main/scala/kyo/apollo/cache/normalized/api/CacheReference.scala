@@ -10,15 +10,7 @@ package kyo.apollo.cache.normalized.api
   * the store when it walks back into that field. Mirrors apollo-kotlin's
   * `CacheKey` used as a record value.
   *
-  * @param key the [[CacheKey.key]] of the record this points at
+  * @param key the [[CacheKey]] of the record this points at
   */
-final case class CacheReference(key: String):
-    /** The [[CacheKey]] this reference points at. */
-    def cacheKey: CacheKey = CacheKey(key)
-
-    override def toString: String = s"CacheReference($key)"
-end CacheReference
-
-object CacheReference:
-    /** Build a reference to the record identified by `cacheKey`. */
-    def apply(cacheKey: CacheKey): CacheReference = CacheReference(cacheKey.key)
+final case class CacheReference(key: CacheKey):
+    override def toString: String = s"CacheReference(${key.render})"

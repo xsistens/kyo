@@ -5,6 +5,7 @@ import kyo.apollo.ApolloClient
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.*
 import kyo.apollo.cache.normalized.*
+import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.cache.normalized.api.IdCacheKeyGenerator
 import kyo.apollo.json.Json
 import kyo.apollo.json.SchemaJson
@@ -172,7 +173,7 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
                     changed <- Sync.defer(
                         client.apolloStore.writeOperation(CurrentUserQuery(), userData("Carol"))
                     )
-                    _ = assert(changed.contains("User:1"))
+                    _ = assert(changed.contains(CacheKey("User", "1")))
                     second <- pull.next
                 yield assert(second.data == Present(userData("Carol")))
             }
@@ -183,7 +184,7 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
                 for
                     _ <- pull.next
                     // Directly publish a foreign changed key, as a mutation on another record would.
-                    _           <- Sync.defer(client.apolloStore.publish(Set("Post:99")))
+                    _           <- Sync.defer(client.apolloStore.publish(Set(CacheKey("Post", "99"))))
                     maybeSecond <- pull.tryNext
                 yield assert(maybeSecond == Absent)
             }

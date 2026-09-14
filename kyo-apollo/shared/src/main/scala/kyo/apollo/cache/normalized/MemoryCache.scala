@@ -4,6 +4,8 @@ import kyo.Absent
 import kyo.Maybe
 import kyo.Present
 import kyo.apollo.cache.normalized.api.CacheHeaders
+import kyo.apollo.cache.normalized.api.CacheKey
+import kyo.apollo.cache.normalized.api.FieldKey
 import kyo.apollo.cache.normalized.api.Record
 import kyo.apollo.json.Json
 import kyo.discard
@@ -59,9 +61,9 @@ final class MemoryCache(
       * the head is the LRU eviction candidate, the tail the freshest. Order is
       * maintained by re-inserting a key on each use.
       */
-    private val entries = mutable.LinkedHashMap.empty[String, Record]
+    private val entries = mutable.LinkedHashMap.empty[CacheKey, Record]
 
-    def loadRecord(key: String): Maybe[Record] = synchronized {
+    def loadRecord(key: CacheKey): Maybe[Record] = synchronized {
         entries.get(key) match
             case Some(record) if isExpired(record) =>
                 discard(entries.remove(key))
@@ -77,17 +79,17 @@ final class MemoryCache(
             case None => Absent
     }
 
-    def merge(records: Iterable[Record], cacheHeaders: CacheHeaders): Set[String] =
+    def merge(records: Iterable[Record], cacheHeaders: CacheHeaders): Set[CacheKey] =
         merge(records, cacheHeaders, RecordMerger.default)
 
     override def merge(
         records: Iterable[Record],
         cacheHeaders: CacheHeaders,
         recordMerger: RecordMerger
-    ): Set[String] = synchronized {
+    ): Set[CacheKey] = synchronized {
         if cacheHeaders.headerValue(CacheHeaders.DoNotStore).contains("true") then Set.empty
         else
-            val changedKeys = records.foldLeft(Set.empty[String]) { (changed, incoming) =>
+            val changedKeys = records.foldLeft(Set.empty[CacheKey]) { (changed, incoming) =>
                 val existing                = Maybe.fromOption(entries.get(incoming.key))
                 val stamped                 = stamp(incoming, existing, cacheHeaders)
                 val (merged, changedFields) = recordMerger.merge(existing, stamped)
@@ -98,7 +100,7 @@ final class MemoryCache(
             changedKeys
     }
 
-    def remove(key: String): Boolean = synchronized {
+    def remove(key: CacheKey): Boolean = synchronized {
         entries.remove(key).isDefined
     }
 
@@ -106,7 +108,7 @@ final class MemoryCache(
         entries.clear()
     }
 
-    def allRecords(): Map[String, Record] = synchronized {
+    def allRecords(): Map[CacheKey, Record] = synchronized {
         entries.toMap
     }
 
@@ -122,10 +124,10 @@ final class MemoryCache(
       * touching every key by hand. A no-op returning the empty set when neither
       * TTL is configured.
       */
-    def removeExpiredRecords(): Set[String] = synchronized {
+    def removeExpiredRecords(): Set[CacheKey] = synchronized {
         if expireAfterMillis < 0 && maxAge < 0 then Set.empty
         else
-            var removed = Set.empty[String]
+            var removed = Set.empty[CacheKey]
             entries.keys.toList.foreach { key =>
                 entries.get(key).foreach { record =>
                     if isExpired(record) then
@@ -144,7 +146,7 @@ final class MemoryCache(
     }
 
     /** Move `key` to the most-recently-used end by re-inserting it. */
-    private def touch(key: String, record: Record): Unit =
+    private def touch(key: CacheKey, record: Record): Unit =
         discard(entries.remove(key))
         discard(entries.put(key, record))
 
@@ -179,7 +181,7 @@ final class MemoryCache(
             if expireAfterMillis >= 0 then
                 metadata = metadata + (MemoryCache.DateMetaKey -> Json.JInt(date))
             if maxAge >= 0 then
-                val incomingDates = record.fields.keysIterator.map(_ -> Json.JInt(date)).toMap
+                val incomingDates = record.fields.keysIterator.map(dateSlot(_) -> Json.JInt(date)).toMap
                 val priorDates    = existing.map(fieldDates).getOrElse(Map.empty)
                 metadata =
                     metadata + (MemoryCache.FieldDatesMetaKey -> Json.JObj(priorDates ++ incomingDates))
@@ -194,6 +196,13 @@ final class MemoryCache(
             record.metadata.get(MemoryCache.DateMetaKey).flatMap(Json.integral(_).toOption).exists(date =>
                 nowMillis() - date > expireAfterMillis
             )
+
+    /** The slot a field's received date occupies in the per-field date map. The
+      * map is JSON metadata, so it is keyed by the field key's string form — this
+      * is the one place a [[FieldKey]] is lowered to that form, and nothing reads a
+      * slot back into a key: expiry looks slots up from the record's own keys.
+      */
+    private def dateSlot(field: FieldKey): String = field.render
 
     /** The per-field received dates stamped on `record`, or empty if none. */
     private def fieldDates(record: Record): Map[String, Json] =
@@ -211,14 +220,14 @@ final class MemoryCache(
             val dates = fieldDates(record)
             val now   = nowMillis()
             val expiredFields = record.fields.keySet.filter { field =>
-                dates.get(field).flatMap(Json.integral(_).toOption).exists(date => now - date > maxAge)
+                dates.get(dateSlot(field)).flatMap(Json.integral(_).toOption).exists(date => now - date > maxAge)
             }
             if expiredFields.isEmpty then Present(record)
             else
                 val liveFields = record.fields -- expiredFields
                 if liveFields.isEmpty then Absent
                 else
-                    val liveDates = dates -- expiredFields
+                    val liveDates = dates -- expiredFields.map(dateSlot)
                     val metadata =
                         if liveDates.isEmpty then record.metadata - MemoryCache.FieldDatesMetaKey
                         else record.metadata + (MemoryCache.FieldDatesMetaKey -> Json.JObj(liveDates))

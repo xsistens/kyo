@@ -1,18 +1,21 @@
 package kyo.apollo.cache
 
+import kyo.Absent
 import kyo.Chunk
 import kyo.Maybe
 import kyo.Present
+import kyo.Result
 import kyo.apollo.api.*
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.*
+import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.json.Json
 import kyo.apollo.json.JsonParser
 import scala.collection.immutable.VectorMap
 
 /** Colocated masked fragments (Apollo Client 4 fragment colocation + data
-  * masking): a spread contributes exactly one opaque ref element, the ref's key
-  * matches the record the normalizer produces, the captured slice keeps a cache
+  * masking): a spread contributes exactly one opaque ref element, the store keys
+  * the ref to the record its own generator normalized, the captured slice keeps a cache
   * write of decoded data lossless, and — the §2.5 composition — fragments read
   * from records accumulated across separate operations.
   */
@@ -108,7 +111,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             // The macro derived `countryCard` from `object CountryCard` — no string named it.
             val ref: CountryCard.fields.Ref = decoded.country.countryCard
             assert(decoded.country.code == "DE")
-            assert(ref.key == CacheKey("Country", "DE"))
+            assert(store().keyOf(ref.typeName, ref.raw) == Present(CacheKey("Country", "DE")))
         }
 
         "forces __typename and the identity key fields into the document" in {
@@ -119,20 +122,59 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             assert(q.document.contains("capital"))
         }
 
-        "the ref is masked: it renders identity, never field values" in {
+        "a ref exposes no field values through Product or toString" in {
             val q   = countryField(GCountry.code ~ CountryCard.fields.spread).toQuery("Q")
             val ref = q.dataCodec.decode(parse(germanyBody)).country.countryCard
             assert(!ref.toString.contains("Germany"))
             assert(!ref.toString.contains("Berlin"))
-            assert(ref.toString.contains("Country:DE"))
+            assert(ref.toString == s"Ref(${CountryCard.fields.fragmentName})")
+            // Not a case class: no Product view hands the masked slice to a generic printer.
+            assert(!(ref: Any).isInstanceOf[Product])
+            typeCheckFailure("ref.productIterator")("productIterator")
+            // And no key of its own: the store computes it.
+            typeCheckFailure("ref.key")("key")
         }
 
-        "the ref keys by the RESPONSE __typename, so an interface fragment keys the concrete type" in {
+        "the ref carries the RESPONSE __typename, so an interface fragment keys the concrete type" in {
             val q = countryField(GCountry.code ~ CountryCard.fields.spread).toQuery("Q")
             val body =
                 """{"country":{"__typename":"SpecialCountry","code":"DE","name":"Germany","capital":null}}"""
             val ref = q.dataCodec.decode(parse(body)).country.countryCard
-            assert(ref.key == CacheKey("SpecialCountry", "DE"))
+            assert(ref.typeName == "SpecialCountry")
+            val keyed = new ApolloStore(
+                MemoryCache(),
+                cacheKeyGenerator = TypePolicyCacheKeyGenerator.of(TypePolicy("SpecialCountry", List("code")))
+            )
+            assert(keyed.keyOf(ref.typeName, ref.raw) == Present(CacheKey("SpecialCountry", "DE")))
+        }
+
+        "two refs are equal exactly when they capture the same slice of the same fragment" in {
+            val q       = countryField(GCountry.code ~ CountryCard.fields.spread).toQuery("Q")
+            val germany = q.dataCodec.decode(parse(germanyBody)).country.countryCard
+            val again   = q.dataCodec.decode(parse(germanyBody)).country.countryCard
+            val france = q.dataCodec.decode(
+                parse("""{"country":{"__typename":"Country","code":"FR","name":"France","capital":"Paris"}}""")
+            ).country.countryCard
+            assert(germany == again)
+            assert(germany.hashCode == again.hashCode)
+            assert(germany != france)
+        }
+
+        "a missing key field names the field, not the row" in {
+            val q         = countryField(CountryCard.fields.spread).toQuery("Q")
+            val codeless  = """{"country":{"__typename":"Country","name":"Germany","capital":"Berlin"}}"""
+            val failure   = Result.catching[ApolloParseException](q.dataCodec.decode(parse(codeless)))
+            val refResult = CountryCard.fields.refFromRow(Map("__typename" -> Json.JStr("Country"), "capital" -> Json.JStr("Berlin")))
+            failure match
+                case Result.Failure(e) =>
+                    assert(e.getMessage.contains("code"), e.getMessage)
+                    assert(e.getMessage.contains("Country"), e.getMessage)
+                    assert(e.getMessage.contains(CountryCard.fields.fragmentName), e.getMessage)
+                    assert(!e.getMessage.contains("Berlin"), e.getMessage)
+                    assert(!e.getMessage.contains("Germany"), e.getMessage)
+                case other => fail(s"expected a parse failure naming the missing key field, got $other")
+            end match
+            assert(refResult.isFailure)
         }
 
         "fragmentName is derived from the declaration site" in {
@@ -174,7 +216,9 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             val s       = store()
             val _       = s.writeOperation(q, decoded)
 
-            assert(decoded.country.countryCard.key == decoded.country.countryFlag.key)
+            val cardRef = decoded.country.countryCard
+            val flagRef = decoded.country.countryFlag
+            assert(s.keyOf(cardRef.typeName, cardRef.raw) == s.keyOf(flagRef.typeName, flagRef.raw))
             val card = s.readFragment(CountryCard.fields.cacheFragment, CacheKey("Country", "DE"))
             val flag = s.readFragment(CountryFlag.fields.cacheFragment, CacheKey("Country", "DE"))
             assert(card.name == "Germany")
@@ -217,7 +261,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
                 qb.dataCodec.decode(parse("""{"country":{"__typename":"Country","code":"DE","capital":"Berlin"}}"""))
             )
             // B extends the record rather than replacing it…
-            assert(changedByB.contains("Country:DE"))
+            assert(changedByB.contains(CacheKey("Country", "DE")))
             // …and the fragment now assembles across both operations' contributions.
             val frag = s.readFragment(CountryCard.fields.cacheFragment, CacheKey("Country", "DE"))
             assert(frag.name == "Germany")
@@ -238,6 +282,44 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             assert(decoded.pageInfo.hasNextPage == true)
             assert(ref.value == (hasNextPage = true, endCursor = Present("c42")))
             assert(!ref.toString.contains("c42"))
+            assert(!(ref: Any).isInstanceOf[Product])
+            typeCheckFailure("ref.productIterator")("productIterator")
+        }
+    }
+
+    "the store keys a ref (K-HIGH-52)" - {
+
+        "a ref reads through the store's own key generator, even when the store keys the type differently" in {
+            // The fragment's CacheIdentity keys Country by `code`; this store keys it by
+            // `name`. The response is normalized into `Country:Germany`. A key the ref
+            // computed from its own identity (`Country:DE`) names a record that was never
+            // written — before K-HIGH-52 exactly that read was a CacheMissException.
+            val s = new ApolloStore(
+                MemoryCache(),
+                cacheKeyGenerator = TypePolicyCacheKeyGenerator.of(TypePolicy("Country", List("name")))
+            )
+            val q       = countryField(GCountry.code ~ CountryCard.fields.spread).toQuery("Q")
+            val decoded = q.dataCodec.decode(parse(germanyBody))
+            val _       = s.writeOperation(q, decoded)
+            val ref     = decoded.country.countryCard
+
+            val key = s.keyOf(ref.typeName, ref.raw)
+            assert(key == Present(CacheKey("Country", "Germany")))
+            val frag = s.readFragment(CountryCard.fields.cacheFragment, key.get)
+            assert(frag.name == "Germany")
+            assert(frag.capital == Present("Berlin"))
+        }
+
+        "a store with no identity for the type has no key for the ref, never a positional one" in {
+            // The default generator keys by `id`/`_id`; Country has neither. A ref has no
+            // response path, so the positional fallback cannot apply: the key is Absent
+            // (K-HIGH-41 turns this into CacheReadFailure.NoIdentity).
+            val s       = new ApolloStore(MemoryCache())
+            val q       = countryField(GCountry.code ~ CountryCard.fields.spread).toQuery("Q")
+            val decoded = q.dataCodec.decode(parse(germanyBody))
+            val _       = s.writeOperation(q, decoded)
+            val ref     = decoded.country.countryCard
+            assert(s.keyOf(ref.typeName, ref.raw) == Absent)
         }
     }
 
@@ -260,7 +342,8 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
         "names the element explicitly when the derived label is not wanted" in {
             val q       = countryField(GCountry.code ~ CountryCard.fields.spreadAs["card"]).toQuery("Q")
             val decoded = q.dataCodec.decode(parse(germanyBody))
-            assert(decoded.country.card.key == CacheKey("Country", "DE"))
+            val ref     = decoded.country.card
+            assert(store().keyOf(ref.typeName, ref.raw) == Present(CacheKey("Country", "DE")))
         }
     }
 end MaskedFragmentSpec

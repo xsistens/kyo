@@ -41,10 +41,8 @@ final class FieldPolicies private (
       * arguments) or falling back to the full argument-aware key when the field
       * has no policy.
       */
-    def fieldKey(parentType: String, field: CompiledField, variables: Map[String, Json]): String =
-        keyArgsByField.get((parentType, field.name)) match
-            case Some(keptArgs) => FieldKey(field, variables, keptArgs)
-            case None           => FieldKey(field, variables)
+    def fieldKey(parentType: String, field: CompiledField, variables: Map[String, Json]): FieldKey =
+        FieldKey(field, variables, Maybe.fromOption(keyArgsByField.get((parentType, field.name))))
 
     /** The read-redirect target for `field` on an object of type `parentType`, if
       * a [[FieldPolicy.read]] resolver is configured and produces one; otherwise

@@ -134,7 +134,7 @@ class ReactivitySpec extends kyo.test.Test[Any]:
                 // The store-level read reports the root plus the id-keyed User it links to.
                 val (data, keys) = client.apolloStore.readOperationWithKeys(CurrentUserQuery())
                 assert(data == userData("Alice"))
-                assert(keys == Set("QUERY_ROOT", "User:1"))
+                assert(keys == Set(CacheKey.QueryRoot, CacheKey("User", "1")))
             }
         }
 
@@ -144,7 +144,7 @@ class ReactivitySpec extends kyo.test.Test[Any]:
                 yield
                     val info = first.cacheInfo
                     assert(info.exists(_.isCacheHit), "initial emission should be a cache hit")
-                    assert(info.map(_.dependentKeys) == Present(Set("QUERY_ROOT", "User:1")))
+                    assert(info.map(_.dependentKeys) == Present(Set(CacheKey.QueryRoot, CacheKey("User", "1"))))
             }
         }
 
@@ -153,23 +153,28 @@ class ReactivitySpec extends kyo.test.Test[Any]:
         "every write path publishes its changed keys to a registered listener" in {
             val (client, _) = cachedClient()
             client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute.map { _ =>
-                val batches = ListBuffer.empty[Set[String]]
+                val batches = ListBuffer.empty[Set[CacheKey]]
                 val sub     = client.apolloStore.addChangedKeysListener(batches += _)
 
                 // writeOperation on the shared record → publishes User:1.
                 client.apolloStore.writeOperation(CurrentUserQuery(), userData("Bob"))
                 // writeFragment on the same record → publishes User:1.
-                client.apolloStore.writeFragment(UserFragment, CacheKey("User:1"), User("User", "1", "Eve"))
+                client.apolloStore.writeFragment(UserFragment, CacheKey("User", "1"), User("User", "1", "Eve"))
                 // remove → publishes the removed key.
-                client.apolloStore.remove("User:1")
+                client.apolloStore.remove(CacheKey("User", "1"))
                 // manual/external invalidation → publishes verbatim.
-                client.apolloStore.publish(Set("Post:7"))
+                client.apolloStore.publish(Set(CacheKey("Post", "7")))
 
-                assert(batches.toList == List(Set("User:1"), Set("User:1"), Set("User:1"), Set("Post:7")))
+                assert(batches.toList == List(
+                    Set(CacheKey("User", "1")),
+                    Set(CacheKey("User", "1")),
+                    Set(CacheKey("User", "1")),
+                    Set(CacheKey("Post", "7"))
+                ))
                 sub()
 
                 // After unsubscribing, no further batches arrive.
-                client.apolloStore.publish(Set("User:1"))
+                client.apolloStore.publish(Set(CacheKey("User", "1")))
                 assert(batches.size == 4)
             }
         }
@@ -177,7 +182,7 @@ class ReactivitySpec extends kyo.test.Test[Any]:
         "re-writing identical data changes nothing and publishes no keys" in {
             val (client, _) = cachedClient()
             client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute.map { _ =>
-                val batches = ListBuffer.empty[Set[String]]
+                val batches = ListBuffer.empty[Set[CacheKey]]
                 val sub     = client.apolloStore.addChangedKeysListener(batches += _)
                 val changed = client.apolloStore.writeOperation(CurrentUserQuery(), userData("Alice"))
                 assert(changed.isEmpty, "identical re-write should report no changed keys")
@@ -194,22 +199,22 @@ class ReactivitySpec extends kyo.test.Test[Any]:
                     // (1) initial cache value, with its dependent keys stamped.
                     first <- pull.next
                     _ = assert(first.data == Present(userData("Alice")))
-                    _ = assert(first.cacheInfo.map(_.dependentKeys) == Present(Set("QUERY_ROOT", "User:1")))
+                    _ = assert(first.cacheInfo.map(_.dependentKeys) == Present(Set(CacheKey.QueryRoot, CacheKey("User", "1"))))
                     // (3a) a write to the shared User:1 record (as a mutation write-back would)
                     //      intersects the watch set → the CacheOnly re-read fires and re-emits.
                     _      <- Sync.defer(client.apolloStore.writeOperation(CurrentUserQuery(), userData("Bob")))
                     second <- pull.next
                     _ = assert(second.data == Present(userData("Bob")))
                     // (3b) a change to a key OUTSIDE the watch set is ignored — no emission.
-                    _      <- Sync.defer(client.apolloStore.publish(Set("Post:99")))
+                    _      <- Sync.defer(client.apolloStore.publish(Set(CacheKey("Post", "99"))))
                     silent <- pull.tryNext
                     _ = assert(silent == Absent)
                     // (5) an imperative writeFragment onto the watched User:1 re-emits.
                     changed <- Sync.defer(
                         client.apolloStore
-                            .writeFragment(UserFragment, CacheKey("User:1"), User("User", "1", "Carol"))
+                            .writeFragment(UserFragment, CacheKey("User", "1"), User("User", "1", "Carol"))
                     )
-                    _ = assert(changed.contains("User:1"))
+                    _ = assert(changed.contains(CacheKey("User", "1")))
                     third <- pull.next
                     _ = assert(third.data == Present(userData("Carol")))
                     // (4) after cancellation, no further write reaches the watcher.
@@ -217,7 +222,7 @@ class ReactivitySpec extends kyo.test.Test[Any]:
                     _ <- Sync.defer(client.apolloStore.writeOperation(CurrentUserQuery(), userData("Dave")))
                     _ <- Sync.defer(
                         client.apolloStore
-                            .writeFragment(UserFragment, CacheKey("User:1"), User("User", "1", "Erin"))
+                            .writeFragment(UserFragment, CacheKey("User", "1"), User("User", "1", "Erin"))
                     )
                     afterCancel <- pull.tryNext
                 yield assert(afterCancel == Absent)
@@ -235,7 +240,7 @@ class ReactivitySpec extends kyo.test.Test[Any]:
                     // A shared-record write fans out to both.
                     _ <- Sync.defer(
                         client.apolloStore
-                            .writeFragment(UserFragment, CacheKey("User:1"), User("User", "1", "Bob"))
+                            .writeFragment(UserFragment, CacheKey("User", "1"), User("User", "1", "Bob"))
                     )
                     firstBob  <- first.next
                     secondBob <- second.next
@@ -245,7 +250,7 @@ class ReactivitySpec extends kyo.test.Test[Any]:
                     _ <- first.cancel
                     _ <- Sync.defer(
                         client.apolloStore
-                            .writeFragment(UserFragment, CacheKey("User:1"), User("User", "1", "Carol"))
+                            .writeFragment(UserFragment, CacheKey("User", "1"), User("User", "1", "Carol"))
                     )
                     firstAfter  <- first.tryNext
                     secondAfter <- second.next

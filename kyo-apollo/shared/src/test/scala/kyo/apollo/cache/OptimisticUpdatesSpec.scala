@@ -4,7 +4,9 @@ import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
 import kyo.apollo.ApolloClient
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.*
+import kyo.apollo.cache.TestKeys.*
 import kyo.apollo.cache.normalized.*
+import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.cache.normalized.api.IdCacheKeyGenerator
 import kyo.apollo.cache.normalized.api.Record
 import kyo.apollo.cache.normalized.api.RecordValue
@@ -119,32 +121,32 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
             // The read reflects the optimistic overlay...
             assert(s.readOperation(CurrentUserQuery()) == userData("Bob"))
             // ...but the backing cache record is untouched.
-            assert(s.cache.loadRecord("User:1").flatMap(_.get("name")) == Present(scalar("Alice")))
+            assert(s.cache.loadRecord(CacheKey("User", "1")).flatMap(_.get(fk("name"))) == Present(scalar("Alice")))
         }
 
         "writeOptimisticUpdates publishes the record keys it touches" in {
             val s    = seededStore()
-            var seen = Option.empty[Set[String]]
+            var seen = Option.empty[Set[CacheKey]]
             s.addChangedKeysListener(keys => seen = Some(keys))
             val changed = s.writeOptimisticUpdates(UpdateUserNameMutation("Bob"), updateData("Bob"), "m1")
-            assert(changed.contains("User:1"))
+            assert(changed.contains(CacheKey("User", "1")))
             assert(seen == Some(changed))
         }
 
         "rollbackOptimisticUpdates reverts the read and publishes the reverted keys" in {
             val s = seededStore()
             s.writeOptimisticUpdates(UpdateUserNameMutation("Bob"), updateData("Bob"), "m1")
-            var seen = Option.empty[Set[String]]
+            var seen = Option.empty[Set[CacheKey]]
             s.addChangedKeysListener(keys => seen = Some(keys))
             val reverted = s.rollbackOptimisticUpdates("m1")
-            assert(reverted.contains("User:1"))
+            assert(reverted.contains(CacheKey("User", "1")))
             assert(seen == Some(reverted))
             assert(s.readOperation(CurrentUserQuery()) == userData("Alice"))
         }
 
         "rollbackOptimisticUpdates on an unknown mutation id is a no-op" in {
             val s    = seededStore()
-            var seen = Option.empty[Set[String]]
+            var seen = Option.empty[Set[CacheKey]]
             s.addChangedKeysListener(keys => seen = Some(keys))
             assert(s.rollbackOptimisticUpdates("nope") == Set.empty[String])
             assert(seen == None)
@@ -154,10 +156,10 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
             val s = seededStore()
             s.writeOptimisticUpdates(UpdateUserNameMutation("Bob"), updateData("Bob"), "m1")
             val changed = s.rollbackAndWrite(UpdateUserNameMutation("Carol"), updateData("Carol"), "m1")
-            assert(changed.contains("User:1"))
+            assert(changed.contains(CacheKey("User", "1")))
             // The layer is gone and the persisted cache now holds the real value.
             assert(s.readOperation(CurrentUserQuery()) == userData("Carol"))
-            assert(s.cache.loadRecord("User:1").flatMap(_.get("name")) == Present(scalar("Carol")))
+            assert(s.cache.loadRecord(CacheKey("User", "1")).flatMap(_.get(fk("name"))) == Present(scalar("Carol")))
         }
 
         "concurrent optimistic layers stack latest-wins; rolling one back keeps the other" in {
@@ -184,7 +186,7 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
             val s     = new ApolloStore(cache, cacheKeyGenerator = IdCacheKeyGenerator(List("id")))
             s.writeOperation(TwoUsersQuery(), twoUsers("Alice", "Ann"))
             s.writeOptimisticUpdates(TwoUsersQuery(), twoUsers("Bob", "Ben"), "m1")
-            cache.arm("User:1")(discard(s.rollbackOptimisticUpdates("m1")))
+            cache.arm(CacheKey("User", "1"))(discard(s.rollbackOptimisticUpdates("m1")))
             val read = s.readOperation(TwoUsersQuery())
             assert(
                 read == twoUsers("Bob", "Ben") || read == twoUsers("Alice", "Ann"),
@@ -344,11 +346,11 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
       */
     final private class TrapCache(delegate: NormalizedCache) extends NormalizedCacheDecorator(delegate):
         private given AllowUnsafe = AllowUnsafe.embrace.danger
-        private val trap          = AtomicRef.Unsafe.init(Maybe.empty[(String, () => Unit)])
+        private val trap          = AtomicRef.Unsafe.init(Maybe.empty[(CacheKey, () => Unit)])
 
-        def arm(key: String)(action: => Unit): Unit = discard(trap.getAndSet(Present((key, () => action))))
+        def arm(key: CacheKey)(action: => Unit): Unit = discard(trap.getAndSet(Present((key, () => action))))
 
-        override def loadRecord(key: String): Maybe[Record] =
+        override def loadRecord(key: CacheKey): Maybe[Record] =
             val record = delegate.loadRecord(key)
             trap.get() match
                 case Present((armed, action)) if armed == key =>

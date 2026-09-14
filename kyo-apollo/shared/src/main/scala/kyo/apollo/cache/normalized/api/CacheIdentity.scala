@@ -25,10 +25,13 @@ import scala.compiletime.summonFrom
   *     given CacheIdentity[CountryEdge] = CacheIdentity.by(_.cursor)
   * }}}
   *
-  * Consumed in two places, which is the point of declaring it once: the
+  * Consumed in two roles, which is the point of declaring it once: the
   * client's [[CacheKeyGenerator]] ([[CacheIdentity.generator]]) keys normalized
-  * records with it, and a [[Fragment.entity]] spread builds its ref's
-  * [[CacheKey]] with it — one source of truth, so the two can never disagree.
+  * records with it, and a [[Fragment.entity]] spread forces its key fields into
+  * the document. The spread does NOT compute a key of its own: a ref is resolved
+  * to its record by the store's generator (`ApolloStore.keyOf`), the same one
+  * that normalized the response — so there is exactly one place a key is
+  * computed, and a ref cannot point at a record the store never wrote.
   */
 final class CacheIdentity[Origin] private (
     val typeName: String,

@@ -4,6 +4,7 @@ import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
 import kyo.apollo.ApolloClient
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.*
+import kyo.apollo.cache.TestKeys.*
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.*
 import kyo.apollo.exception.CacheMissException
@@ -111,7 +112,14 @@ class CacheSpec extends kyo.test.Test[Any]:
 
     /** All records the deep response normalizes into, one per id-bearing object. */
     private val allKeys =
-        Set("QUERY_ROOT", "Library:l1", "Book:b1", "Book:b2", "Author:a1", "Author:a2")
+        Set(
+            CacheKey.QueryRoot,
+            CacheKey("Library", "l1"),
+            CacheKey("Book", "b1"),
+            CacheKey("Book", "b2"),
+            CacheKey("Author", "a1"),
+            CacheKey("Author", "a2")
+        )
 
     private def store(): ApolloStore = new ApolloStore(MemoryCache())
 
@@ -231,34 +239,34 @@ class CacheSpec extends kyo.test.Test[Any]:
 
             // Root → Library by reference.
             assert(
-                records("QUERY_ROOT").get("library") ==
-                    Present(RecordValue.Reference(CacheReference("Library:l1")))
+                records(CacheKey.QueryRoot).get(fk("library")) ==
+                    Present(RecordValue.Reference(CacheReference(CacheKey("Library", "l1"))))
             )
             // Library → a *list of references* to the per-book records (not inlined).
             assert(
-                records("Library:l1").get("books") ==
+                records(CacheKey("Library", "l1")).get(fk("books")) ==
                     Present(
                         RecordValue.RList(
                             Chunk(
-                                RecordValue.Reference(CacheReference("Book:b1")),
-                                RecordValue.Reference(CacheReference("Book:b2"))
+                                RecordValue.Reference(CacheReference(CacheKey("Book", "b1"))),
+                                RecordValue.Reference(CacheReference(CacheKey("Book", "b2")))
                             )
                         )
                     )
             )
             // Each Book → its Author by reference (the third level of linking).
             assert(
-                records("Book:b1").get("author") == Present(
-                    RecordValue.Reference(CacheReference("Author:a1"))
+                records(CacheKey("Book", "b1")).get(fk("author")) == Present(
+                    RecordValue.Reference(CacheReference(CacheKey("Author", "a1")))
                 )
             )
             assert(
-                records("Book:b2").get("author") == Present(
-                    RecordValue.Reference(CacheReference("Author:a2"))
+                records(CacheKey("Book", "b2")).get(fk("author")) == Present(
+                    RecordValue.Reference(CacheReference(CacheKey("Author", "a2")))
                 )
             )
             // Leaf scalars stay inline on their own record.
-            assert(records("Author:a1").get("name") == Present(RecordValue.Scalar(Json.JStr("Herbert"))))
+            assert(records(CacheKey("Author", "a1")).get(fk("name")) == Present(RecordValue.Scalar(Json.JStr("Herbert"))))
         }
 
         // --- 2. Cache-key generation with and without ids -----------------------
@@ -270,7 +278,7 @@ class CacheSpec extends kyo.test.Test[Any]:
 
         "without ids: an object with no id falls back to a response-path key" in {
             val changed = store().writeOperation(StatsQuery(), StatsData(Stats("ok")))
-            assert(changed == Set("QUERY_ROOT", "QUERY_ROOT.stats"))
+            assert(changed == Set(CacheKey.QueryRoot, pathKey("QUERY_ROOT", "stats")))
         }
 
         // --- 3. Denormalization round-trip: write then read returns equal data --
@@ -286,14 +294,14 @@ class CacheSpec extends kyo.test.Test[Any]:
         "readOperation raises CacheMissException when a record deep in the graph is gone" in {
             val s = store()
             s.writeOperation(LibraryQuery(), sampleLibrary)
-            s.cache.remove("Author:a1") // a leaf entity two levels down
+            s.cache.remove(CacheKey("Author", "a1")) // a leaf entity two levels down
             val miss = intercept[CacheMissException](s.readOperation(LibraryQuery()))
-            assert(miss.key == "Author:a1")
+            assert(miss.key == CacheKey("Author", "a1"))
         }
 
         "readOperation on an empty store raises CacheMissException at the root" in {
             val miss = intercept[CacheMissException](store().readOperation(LibraryQuery()))
-            assert(miss.key == "QUERY_ROOT")
+            assert(miss.key == CacheKey.QueryRoot)
         }
 
         // --- 6. Two operations converging on one entity's id-less children -------
@@ -309,14 +317,14 @@ class CacheSpec extends kyo.test.Test[Any]:
 
             assert(s.readOperation(WideQuery()) == wideAlbum)
             assert(
-                s.cache.loadRecord("Album:1.covers.0").map(_.fieldKeys) ==
-                    Present(Set("__typename", "url", "alt"))
+                s.cache.loadRecord(pathKey("Album:1", "covers", "0")).map(_.fieldKeys) ==
+                    Present(Set(fk("__typename"), fk("url"), fk("alt")))
             )
             // Two records for two covers — not four. Before the fix each writer minted its own
             // pair under its own response path, and the parent pointed at whichever came last.
             assert(
-                s.cache.allRecords().keySet.filter(_.contains("covers")) ==
-                    Set("Album:1.covers.0", "Album:1.covers.1")
+                s.cache.allRecords().keySet.filter(_.render.contains("covers")) ==
+                    Set(pathKey("Album:1", "covers", "0"), pathKey("Album:1", "covers", "1"))
             )
         }
 
@@ -335,9 +343,9 @@ class CacheSpec extends kyo.test.Test[Any]:
             )
 
             // Slot 0 now holds c2's url beside c1's alt. Structurally valid, semantically wrong.
-            val slot0 = s.cache.loadRecord("Album:1.covers.0")
-            assert(slot0.map(_.get("url")) == Present(Present(RecordValue.Scalar(Json.JStr("u2")))))
-            assert(slot0.map(_.get("alt")) == Present(Present(RecordValue.Scalar(Json.JStr("A")))))
+            val slot0 = s.cache.loadRecord(pathKey("Album:1", "covers", "0"))
+            assert(slot0.map(_.get(fk("url"))) == Present(Present(RecordValue.Scalar(Json.JStr("u2")))))
+            assert(slot0.map(_.get(fk("alt"))) == Present(Present(RecordValue.Scalar(Json.JStr("A")))))
         }
 
         // --- 7. The positional-merge diagnostic ---------------------------------

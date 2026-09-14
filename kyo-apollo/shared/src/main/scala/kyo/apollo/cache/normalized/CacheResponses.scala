@@ -24,7 +24,7 @@ private[normalized] object CacheResponses:
     def hit[D](
         request: ApolloRequest[D],
         data: D,
-        dependentKeys: Set[String],
+        dependentKeys: Set[CacheKey],
         generation: Long
     ): ApolloResponse[D] =
         ApolloResponse(
@@ -42,7 +42,7 @@ private[normalized] object CacheResponses:
         val missException = cause match
             case m: CacheMissException => m
             case other =>
-                new CacheMissException(CacheKey.rootKey(request.operation).key, None, other)
+                new CacheMissException(CacheKey.rootKey(request.operation).render, None, other)
         ApolloResponse(
             requestUuid = request.requestUuid,
             executionContext = request.executionContext,

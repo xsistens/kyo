@@ -89,7 +89,7 @@ final class ClientField[Origin, R <: AnyNamedTuple, V] private[apollo] (
     /** Write the field on entity `id` (record `TypeName:id`) and re-emit every
       * watcher whose read visited that record. Returns the changed record keys.
       */
-    def write(client: ApolloClient, id: String, value: V)(using Frame): Set[String] < Sync =
+    def write(client: ApolloClient, id: String, value: V)(using Frame): Set[CacheKey] < Sync =
         Sync.defer(client.apolloStore.writeFragment(fragment, CacheKey(parentType, id), row(value)))
 
     /** Write the field on many entities at once — one cache merge, one changed-keys
@@ -105,7 +105,7 @@ final class ClientField[Origin, R <: AnyNamedTuple, V] private[apollo] (
       * Same value semantics as N calls to [[write]], including the duplicate rule:
       * two entries naming one `id` land as one record, later wins.
       */
-    def writeAll(client: ApolloClient, values: Seq[(String, V)])(using Frame): Set[String] < Sync =
+    def writeAll(client: ApolloClient, values: Seq[(String, V)])(using Frame): Set[CacheKey] < Sync =
         Sync.defer(client.apolloStore.writeFragments(
             fragment,
             values.map((id, value) => (CacheKey(parentType, id), row(value)))
@@ -114,7 +114,7 @@ final class ClientField[Origin, R <: AnyNamedTuple, V] private[apollo] (
     /** Write the field on the `QUERY_ROOT` record — the home for global, non-entity
       * client state (`ClientField.create[RootQuery, …](...)`).
       */
-    def writeRoot(client: ApolloClient, value: V)(using Frame): Set[String] < Sync =
+    def writeRoot(client: ApolloClient, value: V)(using Frame): Set[CacheKey] < Sync =
         Sync.defer(client.apolloStore.writeFragment(fragment, CacheKey.QueryRoot, row(value)))
 
     /** Read the field on entity `id`; [[default]] if never written (or the record

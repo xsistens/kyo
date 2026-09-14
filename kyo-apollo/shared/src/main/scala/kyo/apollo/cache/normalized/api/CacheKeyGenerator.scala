@@ -80,7 +80,7 @@ final class IdCacheKeyGenerator(
             id <- Maybe.fromOption(
                 keyFields.iterator
                     .flatMap(obj.get)
-                    .flatMap(IdCacheKeyGenerator.scalarString(_).iterator)
+                    .flatMap(CacheKey.scalarString(_).iterator)
                     .nextOption()
             )
         yield CacheKey(typename, id)
@@ -93,13 +93,4 @@ end IdCacheKeyGenerator
 object IdCacheKeyGenerator:
     /** The id fields tried, in order, when none is configured explicitly. */
     val DefaultKeyFields: List[String] = List("id", "_id")
-
-    /** Render a JSON scalar as its raw id string (`42`, not `"42"` or `42.0`);
-      * composites and `null` yield `None` and are not usable as ids.
-      */
-    private def scalarString(json: Json): Maybe[String] = json match
-        case Json.JStr(s)                               => Present(s)
-        case Json.JInt(_) | Json.JDec(_) | Json.JNum(_) => Present(json.render)
-        case Json.JBool(b)                              => Present(b.toString)
-        case _                                          => Absent
 end IdCacheKeyGenerator

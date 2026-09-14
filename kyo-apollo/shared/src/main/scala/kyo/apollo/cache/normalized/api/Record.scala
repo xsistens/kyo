@@ -59,26 +59,29 @@ end RecordValue
   *
   * A record is the deduplicated unit of storage: it holds one object's own
   * scalar fields inline and points at nested objects by [[CacheReference]]
-  * rather than embedding them. Records are keyed by [[key]] (a
-  * [[CacheKey.key]]), so the same entity referenced from many places is stored
-  * once and updated in one place. Mirrors apollo-kotlin's `Record`.
+  * rather than embedding them. Records are keyed by [[key]], so the same entity
+  * referenced from many places is stored once and updated in one place. Mirrors
+  * apollo-kotlin's `Record`.
   *
-  * @param key      the record's cache key (see [[CacheKey]])
+  * Both key types are opaque: a [[FieldKey]] where a [[CacheKey]] belongs (or a
+  * bare string in either place) does not compile.
+  *
+  * @param key      the record's cache key
   * @param fields   this object's fields, keyed by [[FieldKey]] (field name plus
   *                 normalized arguments), to their stored [[RecordValue]]
   * @param metadata per-record cache bookkeeping (e.g. expiration stamps written
   *                 from cache headers); empty by default, populated by the store
   */
 final case class Record(
-    key: String,
-    fields: Map[String, RecordValue],
+    key: CacheKey,
+    fields: Map[FieldKey, RecordValue],
     metadata: Map[String, Json] = Map.empty
 ):
     /** The field keys stored on this record. */
-    def fieldKeys: Set[String] = fields.keySet
+    def fieldKeys: Set[FieldKey] = fields.keySet
 
     /** Look up a stored field value by its [[FieldKey]]. */
-    def get(fieldKey: String): Maybe[RecordValue] = Maybe.fromOption(fields.get(fieldKey))
+    def get(fieldKey: FieldKey): Maybe[RecordValue] = Maybe.fromOption(fields.get(fieldKey))
 
     /** Every [[CacheReference]] reachable from this record's fields, including
       * those nested inside lists. Useful for garbage collection and for following
@@ -91,10 +94,4 @@ final case class Record(
             case _                          => Set.empty
         fields.values.flatMap(collect).toSet
     end references
-end Record
-
-object Record:
-    /** A record with no metadata. */
-    def apply(key: CacheKey, fields: Map[String, RecordValue]): Record =
-        Record(key.key, fields, Map.empty)
 end Record

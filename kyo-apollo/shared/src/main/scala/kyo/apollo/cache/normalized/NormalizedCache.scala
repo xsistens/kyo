@@ -4,6 +4,8 @@ import kyo.Absent
 import kyo.Maybe
 import kyo.Present
 import kyo.apollo.cache.normalized.api.CacheHeaders
+import kyo.apollo.cache.normalized.api.CacheKey
+import kyo.apollo.cache.normalized.api.FieldKey
 import kyo.apollo.cache.normalized.api.Record
 
 /** A pluggable backend that stores normalized [[Record]]s keyed by cache key.
@@ -25,12 +27,12 @@ trait NormalizedCache:
     /** The record stored under `key`, or `Absent` if absent (or, for a time-based
       * store, expired).
       */
-    def loadRecord(key: String): Maybe[Record]
+    def loadRecord(key: CacheKey): Maybe[Record]
 
     /** The records present among `keys`, keyed by cache key. Absent keys are
       * simply omitted. Overridable for stores that can batch the lookup.
       */
-    def loadRecords(keys: Iterable[String]): Map[String, Record] =
+    def loadRecords(keys: Iterable[CacheKey]): Map[CacheKey, Record] =
         keys.iterator.flatMap(key => loadRecord(key).map(key -> _).toOption).toMap
 
     /** Every record currently held, keyed by [[Record.key]] — the whole-store
@@ -44,7 +46,7 @@ trait NormalizedCache:
       * that cannot cheaply enumerate (a remote store) may override to page, but the
       * in-memory and decorator backends return their map directly.
       */
-    def allRecords(): Map[String, Record]
+    def allRecords(): Map[CacheKey, Record]
 
     /** Merge `records` into the store and return the set of record keys whose
       * stored value changed (new records always count; a re-write of identical
@@ -54,7 +56,7 @@ trait NormalizedCache:
       * The returned changed-key set is what [[ApolloStore.publish]] hands to
       * watchers (Phase 05) so only affected reads re-run.
       */
-    def merge(records: Iterable[Record], cacheHeaders: CacheHeaders = CacheHeaders.None): Set[String]
+    def merge(records: Iterable[Record], cacheHeaders: CacheHeaders = CacheHeaders.None): Set[CacheKey]
 
     /** Merge `records` using an explicit [[RecordMerger]] — the policy-aware write
       * path the [[ApolloStore]] uses so a per-field merge (e.g. connection edge
@@ -67,13 +69,13 @@ trait NormalizedCache:
         records: Iterable[Record],
         cacheHeaders: CacheHeaders,
         @annotation.unused recordMerger: RecordMerger
-    ): Set[String] =
+    ): Set[CacheKey] =
         merge(records, cacheHeaders)
 
     /** Remove the record stored under `key`. Returns `true` if a record was
       * present and removed, `false` if there was nothing to remove.
       */
-    def remove(key: String): Boolean
+    def remove(key: CacheKey): Boolean
 
     /** Drop every record from the store. */
     def clearAll(): Unit
@@ -102,7 +104,7 @@ object NormalizedCache:
       * @param incoming the record being written
       * @return the merged record, and the field keys that changed
       */
-    def mergeRecords(existing: Maybe[Record], incoming: Record): (Record, Set[String]) =
+    def mergeRecords(existing: Maybe[Record], incoming: Record): (Record, Set[FieldKey]) =
         existing match
             case Absent => (incoming, incoming.fieldKeys)
             case Present(old) =>

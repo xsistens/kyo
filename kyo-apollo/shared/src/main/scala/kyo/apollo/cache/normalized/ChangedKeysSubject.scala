@@ -1,7 +1,9 @@
 package kyo.apollo.cache.normalized
 
+import kyo.apollo.cache.normalized.api.CacheKey
+
 /** The store's change-notification bus: a hot, multicast source of the
-  * `Set[String]` of record keys mutated by every write.
+  * `Set[CacheKey]` of record keys mutated by every write.
   *
   * This is the single seam Phase 05 watchers observe. Every store write path
   * ([[ApolloStore.writeOperation]], [[ApolloStore.remove]], and the manual
@@ -34,7 +36,7 @@ final class ChangedKeysSubject:
     /** A single registration. Identity (`eq`) distinguishes subscriptions, so a
       * callback may be registered more than once and each removes independently.
       */
-    final private class Subscription(val onChangedKeys: Set[String] => Unit)
+    final private class Subscription(val onChangedKeys: Set[CacheKey] => Unit)
 
     /** Current subscriptions in registration (FIFO) order. Reassigned wholesale
       * (never mutated in place) so a snapshot taken by [[publish]] stays stable
@@ -48,7 +50,7 @@ final class ChangedKeysSubject:
       * its own registration. Removal is idempotent (identity `filterNot`), so
       * calling the thunk more than once is safe.
       */
-    def subscribe(onChangedKeys: Set[String] => Unit): () => Unit =
+    def subscribe(onChangedKeys: Set[CacheKey] => Unit): () => Unit =
         val subscription = new Subscription(onChangedKeys)
         synchronized { subscriptions = subscriptions :+ subscription }
         () => remove(subscription)
@@ -58,7 +60,7 @@ final class ChangedKeysSubject:
       * `removeChangedKeysListener` teardown for callers that hold the callback
       * rather than the [[Cancelable]]; a no-op if it was never subscribed.
       */
-    def unsubscribe(onChangedKeys: Set[String] => Unit): Unit = synchronized {
+    def unsubscribe(onChangedKeys: Set[CacheKey] => Unit): Unit = synchronized {
         subscriptions = subscriptions.filterNot(_.onChangedKeys eq onChangedKeys)
     }
 
@@ -67,7 +69,7 @@ final class ChangedKeysSubject:
       * nobody is notified). Subscribers are snapshotted before delivery, so one
       * that writes or unsubscribes mid-delivery does not disturb this emission.
       */
-    def publish(changedKeys: Set[String]): Unit =
+    def publish(changedKeys: Set[CacheKey]): Unit =
         if changedKeys.nonEmpty then
             val current = synchronized(subscriptions)
             current.foreach(_.onChangedKeys(changedKeys))
