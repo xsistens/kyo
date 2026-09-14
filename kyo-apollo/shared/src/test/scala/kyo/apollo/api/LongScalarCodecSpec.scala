@@ -18,13 +18,13 @@ class LongScalarCodecSpec extends kyo.test.Test[Any]:
     private val codec = ScalarCodec.fromSchema[Long]
 
     private def roundTrip(text: String): (Long, String) =
-        val decoded = codec.decode(JsonParser.parse(text).getOrThrow)
+        val decoded = codec.decode(JsonParser.parse(text).getOrThrow).getOrThrow
         (decoded, codec.encode(decoded).render)
 
     "Long scalar codec (fromSchema[Long])" - {
 
         "decodes a small JSON number (action-log id shape)" in {
-            assert(codec.decode(JsonParser.parse("42").getOrThrow) == 42L)
+            assert(codec.decode(JsonParser.parse("42").getOrThrow).getOrThrow == 42L)
         }
 
         "decodes a millisecond-timestamp magnitude without scientific notation" in {
@@ -44,7 +44,7 @@ class LongScalarCodecSpec extends kyo.test.Test[Any]:
         "encode emits a JSON integer that decodes back" in {
             val encoded = codec.encode(123456789012L)
             assert(encoded == Json.JInt(123456789012L))
-            assert(codec.decode(encoded) == 123456789012L)
+            assert(codec.decode(encoded).getOrThrow == 123456789012L)
         }
     }
 end LongScalarCodecSpec
