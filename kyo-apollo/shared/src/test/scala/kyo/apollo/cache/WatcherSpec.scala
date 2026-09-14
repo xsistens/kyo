@@ -135,38 +135,41 @@ class WatcherSpec extends kyo.test.Test[Any]:
         private given AllowUnsafe = AllowUnsafe.embrace.danger
         private val hole          = AtomicRef.Unsafe.init(Maybe.empty[CacheKey])
 
-        def hide(key: CacheKey): Unit = discard(hole.getAndSet(Present(key)))
+        def hide(key: CacheKey)(using Frame): Unit < Sync = Sync.defer(discard(hole.getAndSet(Present(key))))
 
-        override def loadRecord(key: CacheKey): Maybe[Record] =
-            if hole.get().contains(key) then Absent else delegate.loadRecord(key)
-
-        override def loadRecords(keys: Iterable[CacheKey]): Map[CacheKey, Record] =
-            delegate.loadRecords(keys).filterNot((key, _) => hole.get().contains(key))
+        override def read[A](f: RecordLoader => A)(using Frame): A < Sync =
+            delegate.read(loader => f(keys => loader.load(keys).filterNot((key, _) => hole.get().contains(key))))
     end HoleCache
 
-    /** A cache whose `loadRecord` can be armed once: the first load of `key` after
-      * arming completes normally and THEN runs `write` — so the write lands, on the
-      * reading fiber itself, between a read's record loads and the moment the read's
-      * key set is adopted by the watch. That is the P2-33 window, reproduced
-      * single-threaded and without a thread block (the re-read runs synchronously
-      * inside the publisher's `publish`, so a latch there would park a fiber).
+    /** A cache whose read can be armed once: the first read that loads `key` after
+      * arming completes normally and THEN runs `write`, before the read returns to the
+      * store — so the write lands, on the reading fiber itself, between a read and the
+      * moment the read's key set is adopted by the watch. That is the P2-33 window,
+      * reproduced single-threaded and without a thread block (the re-read runs inside
+      * the publisher's `publish`, so a latch there would park the writer).
       */
     final private class TrapCache(delegate: NormalizedCache) extends NormalizedCacheDecorator(delegate):
         private given AllowUnsafe = AllowUnsafe.embrace.danger
-        private val trap          = AtomicRef.Unsafe.init(Maybe.empty[(CacheKey, () => Unit)])
+        private val trap          = AtomicRef.Unsafe.init(Maybe.empty[(CacheKey, Unit < Sync)])
 
-        def arm(key: CacheKey)(write: => Unit): Unit = discard(trap.getAndSet(Present((key, () => write))))
+        def arm(key: CacheKey)(write: => Unit < Sync)(using Frame): Unit < Sync =
+            Sync.defer(discard(trap.getAndSet(Present((key, Sync.defer(write))))))
 
-        override def loadRecord(key: CacheKey): Maybe[Record] =
-            val record = delegate.loadRecord(key)
-            trap.get() match
-                case Present((armed, write)) if armed == key =>
-                    discard(trap.getAndSet(Absent))
-                    write()
-                case _ => ()
-            end match
-            record
-        end loadRecord
+        override def read[A](f: RecordLoader => A)(using Frame): A < Sync =
+            val loadedArmed = AtomicBoolean.Unsafe.init(false)
+            delegate.read { loader =>
+                f { keys =>
+                    if trap.get().exists((armed, _) => keys.contains(armed)) then loadedArmed.set(true)
+                    loader.load(keys)
+                }
+            }.map { result =>
+                trap.get() match
+                    case Present((_, write)) if loadedArmed.get() =>
+                        discard(trap.getAndSet(Absent))
+                        write.andThen(result)
+                    case _ => result
+            }
+        end read
     end TrapCache
 
     private def cachedClient(
@@ -295,9 +298,9 @@ class WatcherSpec extends kyo.test.Test[Any]:
                 _ <- Sync.defer(client.apolloStore.writeOperation(CurrentUserQuery(), userData("Bob")))
                 _ <- arrived.await // the refetch is in flight, parked on `gate`
                 // Close the watch's Scope and wait for its teardown to have run.
-                _ <- drain.interrupt
-                _ <- tornDown.await
-                subscribersAfterClose = client.apolloStore.changedKeys.subscriberCount
+                _                     <- drain.interrupt
+                _                     <- tornDown.await
+                subscribersAfterClose <- client.apolloStore.changedKeys.subscriberCount
                 // Let the late network response through; its write-back publishes User:1.
                 _        <- gate.release
                 _        <- Sync.defer(client.apolloStore.writeOperation(CurrentUserQuery(), userData("Carol")))
@@ -327,13 +330,11 @@ class WatcherSpec extends kyo.test.Test[Any]:
                 pull  <- StreamProbe.Pull.open(query(client).fetchPolicy(FetchPolicy.CacheOnly).watch())
                 first <- pull.next
                 _ = assert(first.data == Present(userData("Alice")))
-                _ <- Sync.defer {
-                    cache.arm(CacheKey("User", "2")) {
-                        discard(client.apolloStore.writeFragment(UserFragment, CacheKey("User", "2"), User("User", "2", "Zoe")))
-                    }
-                    discard(client.apolloStore.writeOperation(CurrentUserQuery(), UserData(User("User", "2", "Bob"))))
-                    discard(client.apolloStore.writeFragment(UserFragment, CacheKey("User", "2"), User("User", "2", "Zed")))
+                _ <- cache.arm(CacheKey("User", "2")) {
+                    client.apolloStore.writeFragment(UserFragment, CacheKey("User", "2"), User("User", "2", "Zoe")).unit
                 }
+                _      <- client.apolloStore.writeOperation(CurrentUserQuery(), UserData(User("User", "2", "Bob")))
+                _      <- client.apolloStore.writeFragment(UserFragment, CacheKey("User", "2"), User("User", "2", "Zed"))
                 second <- pull.next
                 third  <- pull.next
                 // Asserted before the last pull: without the fix the third emission IS
@@ -357,9 +358,9 @@ class WatcherSpec extends kyo.test.Test[Any]:
             val client = cachedClient(CountingEngine(), cache)
             for
                 _ <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                _ <- Sync.defer(cache.arm(CacheKey("User", "1")) {
-                    discard(client.apolloStore.writeFragment(UserFragment, CacheKey("User", "1"), User("User", "1", "Bob")))
-                })
+                _ <- cache.arm(CacheKey("User", "1")) {
+                    client.apolloStore.writeFragment(UserFragment, CacheKey("User", "1"), User("User", "1", "Bob")).unit
+                }
                 pull   <- StreamProbe.Pull.open(query(client).fetchPolicy(FetchPolicy.CacheOnly).watch())
                 first  <- pull.next
                 second <- pull.next
@@ -430,10 +431,8 @@ class WatcherSpec extends kyo.test.Test[Any]:
                     )
                     first <- pull.next
                     _ = assert(first.data == Present(userData("Alice-1")))
-                    _ <- Sync.defer {
-                        cache.hide(CacheKey("User", "1"))
-                        discard(client.apolloStore.remove(CacheKey("User", "1")))
-                    }
+                    _ <- cache.hide(CacheKey("User", "1"))
+                    _ <- client.apolloStore.remove(CacheKey("User", "1"))
                     // The miss went to the network once; that response is parked on the clock.
                     _      <- control.awaitPendingSleepers(1)
                     _      <- control.advance(1.second)
@@ -505,17 +504,15 @@ class WatcherSpec extends kyo.test.Test[Any]:
                         .refetchPolicy(RefetchPolicy.NetworkOnly)
                         .watch()
                 )
-                _ <- pull.next
-                _ <- Sync.defer(client.apolloStore.writeOperation(CurrentUserQuery(), userData("Bob")))
-                _ <- arrived.await // the refetch is in flight, parked on `gate`
-                _ <- Sync.defer {
-                    discard(client.apolloStore.writeOperation(CurrentUserQuery(), userData("Carol")))
-                    discard(client.apolloStore.writeOperation(CurrentUserQuery(), userData("Dave")))
-                    discard(client.apolloStore.writeOperation(CurrentUserQuery(), userData("Eve")))
-                }
+                _        <- pull.next
+                _        <- Sync.defer(client.apolloStore.writeOperation(CurrentUserQuery(), userData("Bob")))
+                _        <- arrived.await // the refetch is in flight, parked on `gate`
+                _        <- client.apolloStore.writeOperation(CurrentUserQuery(), userData("Carol"))
+                _        <- client.apolloStore.writeOperation(CurrentUserQuery(), userData("Dave"))
+                _        <- client.apolloStore.writeOperation(CurrentUserQuery(), userData("Eve"))
                 _        <- gate.release
-                second   <- pull.next // the in-flight response
-                third    <- pull.next // the one rerun
+                second   <- pull.next     // the in-flight response
+                third    <- pull.next     // the one rerun
                 callsNow <- calls.get
                 more     <- pull.tryNext
             yield
