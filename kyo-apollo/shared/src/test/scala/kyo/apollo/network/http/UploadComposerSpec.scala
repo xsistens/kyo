@@ -5,6 +5,7 @@ import kyo.Span
 import kyo.apollo.Upload
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
+import kyo.apollo.api.JsonCodec
 import kyo.apollo.api.Mutation
 import kyo.apollo.api.ScalarCodec
 import kyo.apollo.json.Json
@@ -24,18 +25,18 @@ class UploadComposerSpec extends kyo.test.Test[Any]:
 
     final case class Ok(ok: Boolean) derives Schema
 
-    final case class UploadMutation(file: Upload) extends Mutation[Ok]:
+    final case class UploadMutation(file: Upload) extends Mutation.Normalizable[Ok]:
         def name                     = "UploadFile"
         def document                 = "mutation UploadFile($file: Upload!) { uploadFile(file: $file) { ok } }"
-        def dataSchema: Schema[Ok]   = summon[Schema[Ok]]
+        val dataCodec: JsonCodec[Ok] = JsonCodec.fromSchema[Ok]
         def rootField: CompiledField = CompiledField("data", CompiledNamedType("Mutation"))
         def variables: Json          = Json.JObj(VectorMap("file" -> ScalarCodec.upload.encode(file)))
     end UploadMutation
 
-    final case class PlainMutation() extends Mutation[Ok]:
+    final case class PlainMutation() extends Mutation.Normalizable[Ok]:
         def name                     = "Plain"
         def document                 = "mutation Plain { plain { ok } }"
-        def dataSchema: Schema[Ok]   = summon[Schema[Ok]]
+        val dataCodec: JsonCodec[Ok] = JsonCodec.fromSchema[Ok]
         def rootField: CompiledField = CompiledField("data", CompiledNamedType("Mutation"))
         def variables: Json          = Json.JObj(VectorMap.empty)
     end PlainMutation

@@ -45,9 +45,9 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
 
     // --- TypePolicy through the Normalizer ------------------------------------
 
-    final private case class KeyedQuery(selections: Chunk[CompiledSelection]) extends Query[Int]:
-        def name                    = "Q"; def document = "query Q { ... }"
-        def dataSchema: Schema[Int] = summon[Schema[Int]]
+    final private case class KeyedQuery(selections: Chunk[CompiledSelection]) extends Query.Normalizable[Int]:
+        def name                      = "Q"; def document = "query Q { ... }"
+        val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema[Int]
         def rootField: CompiledField =
             CompiledField("data", CompiledNamedType("Query"), selections = selections)
         def variables: Json = Json.JObj(VectorMap.empty)
@@ -64,10 +64,10 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
         CompiledField("isPlaying", CompiledNamedType("Boolean"))
     )
 
-    final private case class PlayerQuery() extends Query[PlayerData]:
-        def name                           = "Player"
-        def document                       = "query Player { playbackState { __typename isPlaying } }"
-        def dataSchema: Schema[PlayerData] = summon[Schema[PlayerData]]
+    final private case class PlayerQuery() extends Query.Normalizable[PlayerData]:
+        def name                             = "Player"
+        def document                         = "query Player { playbackState { __typename isPlaying } }"
+        val dataCodec: JsonCodec[PlayerData] = JsonCodec.fromSchema[PlayerData]
         def rootField: CompiledField =
             CompiledField(
                 "data",
@@ -78,10 +78,10 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
         def variables: Json = Json.JObj(VectorMap.empty)
     end PlayerQuery
 
-    final private case class PauseMutation() extends Mutation[PauseData]:
-        def name                          = "Pause"
-        def document                      = "mutation Pause { pausePlayback { __typename isPlaying } }"
-        def dataSchema: Schema[PauseData] = summon[Schema[PauseData]]
+    final private case class PauseMutation() extends Mutation.Normalizable[PauseData]:
+        def name                            = "Pause"
+        def document                        = "mutation Pause { pausePlayback { __typename isPlaying } }"
+        val dataCodec: JsonCodec[PauseData] = JsonCodec.fromSchema[PauseData]
         def rootField: CompiledField =
             CompiledField(
                 "data",
@@ -148,10 +148,10 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
         )
 
     /** `{ feed(first: 2, after: $after) { … } }` — one page per request. */
-    final case class FeedQuery(after: Maybe[String]) extends Query[FeedData]:
-        def name                         = "Feed"
-        def document                     = "query Feed { feed { ... } }"
-        def dataSchema: Schema[FeedData] = summon[Schema[FeedData]]
+    final case class FeedQuery(after: Maybe[String]) extends Query.Normalizable[FeedData]:
+        def name                           = "Feed"
+        def document                       = "query Feed { feed { ... } }"
+        val dataCodec: JsonCodec[FeedData] = JsonCodec.fromSchema[FeedData]
         def rootField: CompiledField =
             CompiledField("data", CompiledNamedType("Query"), selections = Chunk(connectionField(Absent, after)))
         def variables: Json = Json.JObj(VectorMap.empty)
@@ -159,7 +159,7 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
 
     /** `feed(first: 2) { … }` as a fragment on `Query`, written at the root key. */
     object FeedFragment extends Fragment[FeedData]:
-        def dataSchema: Schema[FeedData] = summon[Schema[FeedData]]
+        val dataCodec: JsonCodec[FeedData] = JsonCodec.fromSchema[FeedData]
         def rootField: CompiledField =
             CompiledField("data", CompiledNamedType("Query"), selections = Chunk(connectionField(Absent, Absent)))
     end FeedFragment
@@ -169,10 +169,10 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
       * aliases store into the root's single `feed` slot, so one response carries two
       * occurrences of the same connection record.
       */
-    final case class TwoPagesQuery() extends Query[TwoPagesData]:
-        def name                             = "TwoPages"
-        def document                         = "query TwoPages { a: feed { ... } b: feed(after: \"c2\") { ... } }"
-        def dataSchema: Schema[TwoPagesData] = summon[Schema[TwoPagesData]]
+    final case class TwoPagesQuery() extends Query.Normalizable[TwoPagesData]:
+        def name                               = "TwoPages"
+        def document                           = "query TwoPages { a: feed { ... } b: feed(after: \"c2\") { ... } }"
+        val dataCodec: JsonCodec[TwoPagesData] = JsonCodec.fromSchema[TwoPagesData]
         def rootField: CompiledField =
             CompiledField(
                 "data",

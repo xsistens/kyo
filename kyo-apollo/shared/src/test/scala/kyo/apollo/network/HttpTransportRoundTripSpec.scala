@@ -3,6 +3,7 @@ package kyo.apollo.network
 import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
+import kyo.apollo.api.JsonCodec
 import kyo.apollo.api.Query
 import kyo.apollo.exception.ApolloGraphQLException
 import kyo.apollo.exception.ApolloHttpException
@@ -36,11 +37,11 @@ class HttpTransportRoundTripSpec extends kyo.test.Test[Any]:
     final case class ValueData(value: Int) derives Schema
 
     /** A query whose `data` is a single `{ "value": Int }` object. */
-    final case class ValueQuery() extends Query[Int]:
+    final case class ValueQuery() extends Query.Normalizable[Int]:
         def name: String     = "Value"
         def document: String = "query Value { value }"
-        def dataSchema: Schema[Int] =
-            summon[Schema[ValueData]].transform[Int](_.value)(ValueData.apply)
+        val dataCodec: JsonCodec[Int] =
+            JsonCodec.fromSchema(using summon[Schema[ValueData]].transform[Int](_.value)(ValueData.apply))
         def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
         def variables: Json          = Json.JObj(VectorMap.empty)
     end ValueQuery

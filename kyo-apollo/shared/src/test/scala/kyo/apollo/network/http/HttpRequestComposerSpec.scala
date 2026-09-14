@@ -7,6 +7,7 @@ import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledFragment
 import kyo.apollo.api.CompiledNamedType
 import kyo.apollo.api.DeferDirective
+import kyo.apollo.api.JsonCodec
 import kyo.apollo.api.Query
 import kyo.apollo.json.Json
 import kyo.apollo.json.SchemaJson
@@ -28,21 +29,21 @@ class HttpRequestComposerSpec extends kyo.test.Test[Any]:
     /** A minimal query with one `Int` variable — enough to exercise body/param
       * composition without pulling in the example module's richer operations.
       */
-    final case class MiniQuery(limit: Int) extends Query[Int]:
-        def name: String             = "Mini"
-        def document: String         = "query Mini($limit: Int!) { x }"
-        def dataSchema: Schema[Int]  = summon[Schema[Int]]
-        def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
-        def variables: Json          = Json.JObj(VectorMap("limit" -> SchemaJson.encode(limit)))
+    final case class MiniQuery(limit: Int) extends Query.Normalizable[Int]:
+        def name: String              = "Mini"
+        def document: String          = "query Mini($limit: Int!) { x }"
+        val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema[Int]
+        def rootField: CompiledField  = CompiledField("data", CompiledNamedType("Query"))
+        def variables: Json           = Json.JObj(VectorMap("limit" -> SchemaJson.encode(limit)))
     end MiniQuery
 
     /** Same shape as [[MiniQuery]] but its selection tree carries an anonymous
       * `@defer` fragment, so [[Defer.has]] is true and the Accept header widens.
       */
-    final case class DeferQuery(limit: Int) extends Query[Int]:
-        def name: String            = "Mini"
-        def document: String        = "query Mini($limit: Int!) { x }"
-        def dataSchema: Schema[Int] = summon[Schema[Int]]
+    final case class DeferQuery(limit: Int) extends Query.Normalizable[Int]:
+        def name: String              = "Mini"
+        def document: String          = "query Mini($limit: Int!) { x }"
+        val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema[Int]
         def rootField: CompiledField = CompiledField(
             "data",
             CompiledNamedType("Query"),

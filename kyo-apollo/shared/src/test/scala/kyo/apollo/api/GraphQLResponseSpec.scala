@@ -6,6 +6,7 @@ import kyo.Frame
 import kyo.Present
 import kyo.Result
 import kyo.Schema
+import kyo.apollo.api.JsonCodec
 import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.json.Json
 import kyo.apollo.json.JsonParser
@@ -24,12 +25,12 @@ class GraphQLResponseSpec extends kyo.test.Test[Any]:
 
     final case class Session(token: String, expiresIn: Int) derives Schema
 
-    private val sessionOp: Query[Session] = new Query[Session]:
-        def name: String                = "Session"
-        def document: String            = "query Session { token expiresIn }"
-        def dataSchema: Schema[Session] = summon[Schema[Session]]
-        def rootField: CompiledField    = CompiledField("data", CompiledNamedType("Query"))
-        def variables: Json             = Json.JObj(VectorMap.empty)
+    private val sessionOp: Query[Session] = new Query.Normalizable[Session]:
+        def name: String                  = "Session"
+        def document: String              = "query Session { token expiresIn }"
+        val dataCodec: JsonCodec[Session] = JsonCodec.fromSchema[Session]
+        def rootField: CompiledField      = CompiledField("data", CompiledNamedType("Query"))
+        def variables: Json               = Json.JObj(VectorMap.empty)
 
     /** `data` with a credential beside the field that fails to decode, and a second marker in that field. */
     private val sessionData: Json =
@@ -41,21 +42,20 @@ class GraphQLResponseSpec extends kyo.test.Test[Any]:
       * `Schema` into [[GraphQLResponse.parse]] (the envelope parsing is what's
       * under test).
       */
-    private val heroOp: Query[Hero] = new Query[Hero]:
-        def name: String             = "Hero"
-        def document: String         = "query Hero { name }"
-        def dataSchema: Schema[Hero] = summon[Schema[Hero]]
-        def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
-        def variables: Json          = Json.JObj(VectorMap.empty)
+    private val heroOp: Query[Hero] = new Query.Normalizable[Hero]:
+        def name: String               = "Hero"
+        def document: String           = "query Hero { name }"
+        val dataCodec: JsonCodec[Hero] = JsonCodec.fromSchema[Hero]
+        def rootField: CompiledField   = CompiledField("data", CompiledNamedType("Query"))
+        def variables: Json            = Json.JObj(VectorMap.empty)
 
     /** Same operation, but its codec has a defect: decoding throws a non-decode exception. */
-    private val defectiveOp: Query[Hero] = new Query[Hero]:
+    private val defectiveOp: Query[Hero] = new Query.Normalizable[Hero]:
         def name: String             = "Hero"
         def document: String         = "query Hero { name }"
-        def dataSchema: Schema[Hero] = summon[Schema[Hero]]
         def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
         def variables: Json          = Json.JObj(VectorMap.empty)
-        override def dataCodec: JsonCodec[Hero] = new JsonCodec[Hero]:
+        def dataCodec: JsonCodec[Hero] = new JsonCodec[Hero]:
             def decode(json: Json)(using Frame): Result[ApolloParseException, Hero] = throw new ClassCastException("defective codec")
             def encode(value: Hero): Json                                           = Json.JNull
 

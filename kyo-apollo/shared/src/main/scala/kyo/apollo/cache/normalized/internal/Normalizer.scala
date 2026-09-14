@@ -76,8 +76,8 @@ final class Normalizer(
 
     /** Normalize `data` against `rootField`'s selections into a set of records.
       *
-      * @param data      the response `data` object (as produced by
-      *                  `Operation.dataSchema`)
+      * @param data      the response `data` object (as encoded by
+      *                  `Operation.dataCodec`)
       * @param rootField the operation's [[Operation.rootField]]; its
       *                  [[CompiledField.selections]] are the top-level fields and
       *                  its leaf type names the root object's GraphQL type
@@ -232,7 +232,7 @@ object Normalizer:
       *
       * Convenience over the class: derives the root key from the operation kind and
       * runs a fresh [[Normalizer]] that merges with `merger`. `data` is the
-      * operation's response `data` map (as produced by `operation.dataSchema`).
+      * operation's response `data` map (as encoded by `operation.dataCodec`).
       *
       * @param operation         the operation whose response is being normalized
       * @param data              the response `data` object

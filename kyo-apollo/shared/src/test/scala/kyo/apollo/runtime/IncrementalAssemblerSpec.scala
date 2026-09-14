@@ -4,6 +4,7 @@ import kyo.*
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
+import kyo.apollo.api.JsonCodec
 import kyo.apollo.api.Query
 import kyo.apollo.exception.ApolloNetworkException
 import kyo.apollo.exception.ApolloParseException
@@ -26,24 +27,24 @@ class IncrementalAssemblerSpec extends kyo.test.Test[Any]:
     final case class Loc(code: String, capital: Option[String]) derives Schema
     final case class Data(country: Option[Loc]) derives Schema
 
-    final case class Q() extends Query[Data]:
-        def name: String             = "Q"
-        def document: String         = "query Q { country { code capital } }"
-        def dataSchema: Schema[Data] = summon[Schema[Data]]
-        def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
-        def variables: Json          = Json.JObj(VectorMap.empty)
+    final case class Q() extends Query.Normalizable[Data]:
+        def name: String               = "Q"
+        def document: String           = "query Q { country { code capital } }"
+        val dataCodec: JsonCodec[Data] = JsonCodec.fromSchema[Data]
+        def rootField: CompiledField   = CompiledField("data", CompiledNamedType("Query"))
+        def variables: Json            = Json.JObj(VectorMap.empty)
     end Q
 
     final case class Item(id: String) derives Schema
     final case class ListData(items: List[Item]) derives Schema
 
     /** A `@stream` operation whose `items` list grows across incremental parts. */
-    final case class ListQ() extends Query[ListData]:
-        def name: String                 = "Q"
-        def document: String             = "query Q { items @stream(initialCount: 1) { id } }"
-        def dataSchema: Schema[ListData] = summon[Schema[ListData]]
-        def rootField: CompiledField     = CompiledField("data", CompiledNamedType("Query"))
-        def variables: Json              = Json.JObj(VectorMap.empty)
+    final case class ListQ() extends Query.Normalizable[ListData]:
+        def name: String                   = "Q"
+        def document: String               = "query Q { items @stream(initialCount: 1) { id } }"
+        val dataCodec: JsonCodec[ListData] = JsonCodec.fromSchema[ListData]
+        def rootField: CompiledField       = CompiledField("data", CompiledNamedType("Query"))
+        def variables: Json                = Json.JObj(VectorMap.empty)
     end ListQ
 
     private def part(s: String): MultipartPart = MultipartPart.Payload(JsonParser.parse(s).getOrThrow)

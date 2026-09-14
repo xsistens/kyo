@@ -3,6 +3,7 @@ package kyo.apollo
 import kyo.*
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
+import kyo.apollo.api.JsonCodec
 import kyo.apollo.api.Query
 import kyo.apollo.exception.ApolloWebSocketClosedException
 import kyo.apollo.json.Json
@@ -34,12 +35,12 @@ class ApolloLiveServerSpec extends kyo.test.Test[Any]:
     override def config = super.config.sequential.leakCheckSockets(false)
 
     /** A `{ value: Int }` query mirroring [[WsTestSupport.ValueSubscription]]. */
-    final case class ValueQuery() extends Query[Int]:
+    final case class ValueQuery() extends Query.Normalizable[Int]:
         def name: String = "Value"
         def document: String =
             "query Value { value }"
-        def dataSchema: Schema[Int] =
-            summon[Schema[WsTestSupport.ValueData]].transform[Int](_.value)(WsTestSupport.ValueData.apply)
+        val dataCodec: JsonCodec[Int] =
+            JsonCodec.fromSchema(using summon[Schema[WsTestSupport.ValueData]].transform[Int](_.value)(WsTestSupport.ValueData.apply))
         def rootField: CompiledField =
             CompiledField("data", CompiledNamedType("Query"))
         def variables: Json = Json.JObj(VectorMap.empty)

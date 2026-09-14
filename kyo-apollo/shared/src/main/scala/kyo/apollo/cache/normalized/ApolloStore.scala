@@ -35,8 +35,10 @@ import scala.collection.mutable
   * normalizes a response into records and merges them ([[writeOperation]]),
   * reassembles typed data from the store ([[readOperation]]), and announces which
   * keys changed to any registered watchers ([[publish]]). All typed encode/decode
-  * goes through the operation's own `dataSchema`, so a `writeOperation` →
+  * goes through the operation's own `dataCodec`, so a `writeOperation` →
   * `readOperation` round-trip yields data equal to what the network produced.
+  * Writes and updates take an [[kyo.apollo.api.Operation.Normalizable]] operation,
+  * the kind whose codec encodes; reads take any operation.
   * Mirrors apollo-kotlin's `ApolloStore` / `DefaultApolloStore`.
   *
   * Every operation that touches the store's state is an effect (`< Sync`). A read
@@ -309,11 +311,11 @@ final class ApolloStore(
         case RecordValue.Null           => Json.JNull
 
     /** Normalize `operation`'s typed `data` into flat records without storing
-      * them. The data is re-encoded through the operation's `dataSchema` into a
+      * them. The data is re-encoded through the operation's `dataCodec` into a
       * response map and walked by the [[Normalizer]] — the same data map the
       * network path would have decoded from. Pure: it reads no store state.
       */
-    def normalize[D](operation: Operation[D], data: D): Map[CacheKey, Record] =
+    def normalize[D](operation: Operation.Normalizable[D], data: D): Map[CacheKey, Record] =
         Normalizer.normalize(
             operation,
             encode(operation.dataCodec, data),
@@ -378,7 +380,7 @@ final class ApolloStore(
       *                     stamp, or [[CacheHeaders.DoNotStore]])
       */
     def writeOperation[D](
-        operation: Operation[D],
+        operation: Operation.Normalizable[D],
         data: D,
         cacheHeaders: CacheHeaders = CacheHeaders.None
     )(using Frame): Set[CacheKey] < Sync =
@@ -592,7 +594,7 @@ final class ApolloStore(
       * `update` must be PURE: when another write commits between its read and its
       * write, the read is repeated on the newer state and `update` is applied again.
       */
-    def updateOperation[D](operation: Operation[D])(update: D => D)(using Frame): Set[CacheKey] < Sync =
+    def updateOperation[D](operation: Operation.Normalizable[D])(update: D => D)(using Frame): Set[CacheKey] < Sync =
         updateWith { loader =>
             CacheBatchReader.read(operation, loader, variablesOf(operation), cacheKeyResolver, fieldPolicies)
                 .map(data => Chunk.from(normalize(operation, update(data)).values))
@@ -658,7 +660,7 @@ final class ApolloStore(
       * the optimistic state immediately.
       *
       * The data is normalized exactly like a real [[writeOperation]] — same
-      * `dataSchema`, same key generator — but the records are held in a separate
+      * `dataCodec`, same key generator — but the records are held in a separate
       * optimistic layer over the pristine cache rather than merged into it.
       * Concurrent optimistic mutations **stack by `mutationId`**: each is an
       * independent layer, applied latest-wins at read time. Reversed by
@@ -667,7 +669,7 @@ final class ApolloStore(
       * `ApolloStore.writeOptimisticUpdates`.
       */
     def writeOptimisticUpdates[D](
-        operation: Operation[D],
+        operation: Operation.Normalizable[D],
         data: D,
         mutationId: String
     )(using Frame): Set[CacheKey] < Sync =
@@ -728,7 +730,7 @@ final class ApolloStore(
       * @param cacheHeaders write hints forwarded to the backend (e.g. an expiry stamp)
       */
     def rollbackAndWrite[D](
-        operation: Operation[D],
+        operation: Operation.Normalizable[D],
         data: D,
         mutationId: String,
         cacheHeaders: CacheHeaders = CacheHeaders.None

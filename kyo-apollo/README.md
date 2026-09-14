@@ -5,6 +5,26 @@ selection DSL (`SelectionBuilder`), a normalized cache with declarative
 policies, incremental delivery (`@defer` / `@stream`), and `kyo-apollo-codegen`
 for schema-driven selector objects. See `docs/` for the design notes.
 
+## What a selection can do
+
+What a selection supports is its type, so a misuse does not compile:
+
+- Every `SelectionBuilder[Origin, A]` decodes a response (`decode` returns a
+  `Result[ApolloParseException, A]`). A `SelectionBuilder.Bidirectional` also
+  encodes: named-tuple selections and `mapInto[C]` projections are, `map(f)`
+  projections are not.
+- Only `SelectionBuilder.Fields` (named-tuple selections) combine with `~`.
+- Only `SelectionBuilder.Deferrable` selections — whose last-added operand is a
+  single field selector — take `.deferred` and `.streamed`; `.streamed` also needs
+  that field to be a list. The empty selection, a `defer(...)` group, a union
+  branch, a fragment spread and a `@client` field do not.
+- A nested field takes a bidirectional child, so `map` projects the whole selection
+  an operation is built from, never a child (use `mapInto` there).
+- A bidirectional root builds a normalizable operation (`Query.Normalizable`, …),
+  the only kind `ApolloStore.writeOperation`/`updateOperation` accept. A query built
+  from a `map` projection runs and decodes normally, but the cache interceptor does
+  not normalize its responses; it logs each skip at debug level.
+
 ## Type conventions
 
 The module follows kyo's `CONTRIBUTING.md`: **model types and return types carry

@@ -19,25 +19,25 @@ class RecordModelSpec extends kyo.test.Test[Any]:
 
     // --- Minimal operations, one per kind, for CacheKey.rootKey ---------------
 
-    final case class RootQuery() extends Query[Int]:
-        def name                     = "Q"; def document = "query Q { x }"
-        def dataSchema: Schema[Int]  = summon[Schema[Int]]
-        def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
-        def variables: Json          = Json.JObj(VectorMap.empty)
+    final case class RootQuery() extends Query.Normalizable[Int]:
+        def name                      = "Q"; def document = "query Q { x }"
+        val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema[Int]
+        def rootField: CompiledField  = CompiledField("data", CompiledNamedType("Query"))
+        def variables: Json           = Json.JObj(VectorMap.empty)
     end RootQuery
 
-    final case class RootMutation() extends Mutation[Int]:
-        def name                     = "M"; def document = "mutation M { x }"
-        def dataSchema: Schema[Int]  = summon[Schema[Int]]
-        def rootField: CompiledField = CompiledField("data", CompiledNamedType("Mutation"))
-        def variables: Json          = Json.JObj(VectorMap.empty)
+    final case class RootMutation() extends Mutation.Normalizable[Int]:
+        def name                      = "M"; def document = "mutation M { x }"
+        val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema[Int]
+        def rootField: CompiledField  = CompiledField("data", CompiledNamedType("Mutation"))
+        def variables: Json           = Json.JObj(VectorMap.empty)
     end RootMutation
 
-    final case class RootSubscription() extends Subscription[Int]:
-        def name                     = "S"; def document = "subscription S { x }"
-        def dataSchema: Schema[Int]  = summon[Schema[Int]]
-        def rootField: CompiledField = CompiledField("data", CompiledNamedType("Subscription"))
-        def variables: Json          = Json.JObj(VectorMap.empty)
+    final case class RootSubscription() extends Subscription.Normalizable[Int]:
+        def name                      = "S"; def document = "subscription S { x }"
+        val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema[Int]
+        def rootField: CompiledField  = CompiledField("data", CompiledNamedType("Subscription"))
+        def variables: Json           = Json.JObj(VectorMap.empty)
     end RootSubscription
 
     // --- FieldKey -------------------------------------------------------------

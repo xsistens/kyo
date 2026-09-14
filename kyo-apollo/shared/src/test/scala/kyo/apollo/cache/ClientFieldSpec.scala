@@ -58,7 +58,7 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
     private type EdgeRow  = (cursor: String, label: String, selected: Boolean)
     private type EdgeData = (edge: EdgeRow)
 
-    private def edgeSelection: SelectionBuilder[Edge, EdgeRow] =
+    private def edgeSelection: SelectionBuilder.Fields[Edge, EdgeRow] =
         Edge.cursor ~ Edge.label ~ selected.select
 
     private def edgeQuery: Query[EdgeData] =

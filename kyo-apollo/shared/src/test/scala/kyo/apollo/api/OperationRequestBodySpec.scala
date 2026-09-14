@@ -1,6 +1,7 @@
 package kyo.apollo.api
 
 import kyo.Schema
+import kyo.apollo.api.JsonCodec
 import kyo.apollo.json.Json
 import kyo.apollo.json.SchemaJson
 import scala.collection.immutable.VectorMap
@@ -20,22 +21,22 @@ class OperationRequestBodySpec extends kyo.test.Test[Any]:
     given Schema[Stamp] = Schema.stringSchema.transform[Stamp](Stamp.apply)(_.iso)
 
     /** Minimal hand-written query with an `Int` variable. */
-    final case class MiniQuery(limit: Int) extends Query[Int]:
-        def name: String             = "Mini"
-        def document: String         = "query Mini($limit: Int!) { x }"
-        def dataSchema: Schema[Int]  = summon[Schema[Int]]
-        def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
+    final case class MiniQuery(limit: Int) extends Query.Normalizable[Int]:
+        def name: String              = "Mini"
+        def document: String          = "query Mini($limit: Int!) { x }"
+        val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema[Int]
+        def rootField: CompiledField  = CompiledField("data", CompiledNamedType("Query"))
         def variables: Json = Json.JObj(
             VectorMap("limit" -> SchemaJson.encode(limit))
         )
     end MiniQuery
 
     /** Query carrying a custom-scalar variable alongside a built-in one. */
-    final case class SearchQuery(limit: Int, after: Stamp) extends Query[Int]:
-        def name: String             = "Search"
-        def document: String         = "query Search($limit: Int!, $after: DateTime) { y }"
-        def dataSchema: Schema[Int]  = summon[Schema[Int]]
-        def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
+    final case class SearchQuery(limit: Int, after: Stamp) extends Query.Normalizable[Int]:
+        def name: String              = "Search"
+        def document: String          = "query Search($limit: Int!, $after: DateTime) { y }"
+        val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema[Int]
+        def rootField: CompiledField  = CompiledField("data", CompiledNamedType("Query"))
         def variables: Json = Json.JObj(
             VectorMap(
                 "limit" -> SchemaJson.encode(limit),

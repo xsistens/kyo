@@ -1,13 +1,19 @@
 package kyo.apollo.api
 
-import kyo.Schema
 import kyo.apollo.json.Json
 
 /** Root of the GraphQL operation hierarchy.
   *
   * Mirrors apollo-kotlin's `Operation` shape: a typed description of a single
   * GraphQL request. `D` is the operation's `data` payload type. The hierarchy
-  * is sealed so the three operation kinds below are the only direct subtypes.
+  * is sealed so the three operation kinds below are the only direct subtypes,
+  * plus [[Operation.Normalizable]], whose only subtypes are their normalizable
+  * forms.
+  *
+  * Every operation decodes its `data`; only a [[Operation.Normalizable]] one also
+  * encodes it, and only such an operation can be written to the normalized cache.
+  * An operation over a `.map` projection decodes responses and reads the cache, but
+  * the cache interceptor does not normalize its responses.
   */
 sealed trait Operation[D]:
     /** The operation name as it appears in the GraphQL document. */
@@ -16,25 +22,12 @@ sealed trait Operation[D]:
     /** The full GraphQL document text sent over the wire. */
     def document: String
 
-    /** kyo-schema codec that decodes/encodes the `data` payload of type `D`.
-      *
-      * Replaces the legacy reader/writer `kyo.apollo.adapter.Adapter`: the generated
-      * `Data` case class `derives Schema`, so this is simply `summon[Schema[D]]`.
-      * Schema-derived operations supply only this; the actual read/write seam is
-      * [[dataCodec]], which defaults to wrapping it.
+    /** Decodes the `data` payload of type `D` — the seam response decoding
+      * ([[GraphQLResponse.parse]]) and a denormalized cache read go through. An
+      * operation over a `derives Schema` type supplies [[JsonCodec.fromSchema]]; an
+      * inline-query ([[SelectionBuilder]]) operation supplies its structural codec.
       */
-    def dataSchema: Schema[D]
-
-    /** The bidirectional JSON codec response decoding ([[GraphQLResponse.parse]])
-      * and cache (de)normalization ([[kyo.apollo.cache.normalized.ApolloStore]])
-      * actually go through.
-      *
-      * Defaults to [[JsonCodec.fromSchema]] over [[dataSchema]], so schema-derived
-      * operations need only supply `dataSchema`. Inline-query ([[SelectionBuilder]])
-      * operations override this directly with a structural codec — they have no
-      * `Schema` for their named-tuple result — and never touch `dataSchema`.
-      */
-    def dataCodec: JsonCodec[D] = JsonCodec.fromSchema(using dataSchema)
+    def dataCodec: JsonDecoder[D]
 
     /** The root field describing this operation's response shape.
       *
@@ -57,11 +50,36 @@ sealed trait Operation[D]:
     def variables: Json
 end Operation
 
+object Operation:
+
+    /** An operation whose `data` codec also encodes, so its typed data can be
+      * normalized into the cache: what [[kyo.apollo.cache.normalized.ApolloStore]]'s
+      * write and update operations take. Sealed: its only subtypes are
+      * [[Query.Normalizable]], [[Mutation.Normalizable]] and
+      * [[Subscription.Normalizable]], so every normalizable operation is still one of
+      * the three kinds.
+      */
+    sealed trait Normalizable[D] extends Operation[D]:
+        def dataCodec: JsonCodec[D]
+end Operation
+
 /** A read-only GraphQL query. */
 trait Query[D] extends Operation[D]
+
+object Query:
+    /** A query the normalized cache can write. */
+    trait Normalizable[D] extends Query[D] with Operation.Normalizable[D]
 
 /** A GraphQL mutation. */
 trait Mutation[D] extends Operation[D]
 
+object Mutation:
+    /** A mutation the normalized cache can write. */
+    trait Normalizable[D] extends Mutation[D] with Operation.Normalizable[D]
+
 /** A GraphQL subscription. */
 trait Subscription[D] extends Operation[D]
+
+object Subscription:
+    /** A subscription the normalized cache can write. */
+    trait Normalizable[D] extends Subscription[D] with Operation.Normalizable[D]

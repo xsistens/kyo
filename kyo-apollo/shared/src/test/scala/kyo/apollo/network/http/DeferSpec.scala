@@ -6,6 +6,7 @@ import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledFragment
 import kyo.apollo.api.CompiledNamedType
 import kyo.apollo.api.DeferDirective
+import kyo.apollo.api.JsonCodec
 import kyo.apollo.api.Query
 import kyo.apollo.exception.ApolloNetworkException
 import kyo.apollo.exception.HttpEngineFailure
@@ -31,10 +32,10 @@ class DeferSpec extends kyo.test.Test[Any]:
     final case class Data(country: Option[Loc]) derives Schema
 
     /** An operation whose selection tree carries a `@defer`ed fragment. */
-    final case class DeferQ() extends Query[Data]:
-        def name: String             = "Q"
-        def document: String         = "query Q { country { code ... @defer(label: \"capital\") { capital } } }"
-        def dataSchema: Schema[Data] = summon[Schema[Data]]
+    final case class DeferQ() extends Query.Normalizable[Data]:
+        def name: String               = "Q"
+        def document: String           = "query Q { country { code ... @defer(label: \"capital\") { capital } } }"
+        val dataCodec: JsonCodec[Data] = JsonCodec.fromSchema[Data]
         def rootField: CompiledField = CompiledField(
             "data",
             CompiledNamedType("Query"),
@@ -58,12 +59,12 @@ class DeferSpec extends kyo.test.Test[Any]:
     end DeferQ
 
     /** Same data shape, but no `@defer` — [[kyo.apollo.api.Defer.has]] is false. */
-    final case class PlainQ() extends Query[Data]:
-        def name: String             = "Q"
-        def document: String         = "query Q { country { code capital } }"
-        def dataSchema: Schema[Data] = summon[Schema[Data]]
-        def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
-        def variables: Json          = Json.JObj(VectorMap.empty)
+    final case class PlainQ() extends Query.Normalizable[Data]:
+        def name: String               = "Q"
+        def document: String           = "query Q { country { code capital } }"
+        val dataCodec: JsonCodec[Data] = JsonCodec.fromSchema[Data]
+        def rootField: CompiledField   = CompiledField("data", CompiledNamedType("Query"))
+        def variables: Json            = Json.JObj(VectorMap.empty)
     end PlainQ
 
     private val boundary    = "graphql"

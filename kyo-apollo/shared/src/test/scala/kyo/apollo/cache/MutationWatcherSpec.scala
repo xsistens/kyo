@@ -52,10 +52,10 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
     // A `CurrentUser` query reading the shared `User:1` record.
     final case class UserData(user: User) derives Schema
 
-    final case class CurrentUserQuery() extends Query[UserData]:
-        def name                         = "CurrentUser"
-        def document                     = "query CurrentUser { user { __typename id name } }"
-        def dataSchema: Schema[UserData] = summon[Schema[UserData]]
+    final case class CurrentUserQuery() extends Query.Normalizable[UserData]:
+        def name                           = "CurrentUser"
+        def document                       = "query CurrentUser { user { __typename id name } }"
+        val dataCodec: JsonCodec[UserData] = JsonCodec.fromSchema[UserData]
         def rootField: CompiledField =
             CompiledField("data", CompiledNamedType("Query"), selections = Chunk(userField("user")))
         def variables: Json = Json.JObj(VectorMap.empty)
@@ -64,11 +64,11 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
     // A mutation writing back the *same* `User:1` record under a different field.
     final case class UpdateUserData(updateUser: User) derives Schema
 
-    final case class UpdateUserNameMutation(newName: String) extends Mutation[UpdateUserData]:
+    final case class UpdateUserNameMutation(newName: String) extends Mutation.Normalizable[UpdateUserData]:
         def name = "UpdateUserName"
         def document =
             "mutation UpdateUserName($name: String!) { updateUser(name: $name) { __typename id name } }"
-        def dataSchema: Schema[UpdateUserData] = summon[Schema[UpdateUserData]]
+        val dataCodec: JsonCodec[UpdateUserData] = JsonCodec.fromSchema[UpdateUserData]
         def rootField: CompiledField =
             CompiledField(
                 "data",
@@ -82,10 +82,10 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
     // so a streamed event normalizes into the shared record a watcher reads.
     final case class UserUpdatedData(userUpdated: User) derives Schema
 
-    final case class UserUpdatedSubscription() extends Subscription[UserUpdatedData]:
-        def name                                = "UserUpdated"
-        def document                            = "subscription UserUpdated { userUpdated { __typename id name } }"
-        def dataSchema: Schema[UserUpdatedData] = summon[Schema[UserUpdatedData]]
+    final case class UserUpdatedSubscription() extends Subscription.Normalizable[UserUpdatedData]:
+        def name                                  = "UserUpdated"
+        def document                              = "subscription UserUpdated { userUpdated { __typename id name } }"
+        val dataCodec: JsonCodec[UserUpdatedData] = JsonCodec.fromSchema[UserUpdatedData]
         def rootField: CompiledField =
             CompiledField(
                 "data",

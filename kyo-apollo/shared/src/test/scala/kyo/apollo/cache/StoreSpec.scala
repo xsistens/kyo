@@ -36,10 +36,10 @@ class StoreSpec extends kyo.test.Test[Any]:
     final case class CountriesData(countries: List[Country]) derives Schema
 
     /** A query for `{ countries { __typename code name } }`. */
-    final case class CountriesQuery() extends Query[CountriesData]:
-        def name                              = "Countries"
-        def document                          = "query Countries { countries { __typename code name } }"
-        def dataSchema: Schema[CountriesData] = summon[Schema[CountriesData]]
+    final case class CountriesQuery() extends Query.Normalizable[CountriesData]:
+        def name                                = "Countries"
+        def document                            = "query Countries { countries { __typename code name } }"
+        val dataCodec: JsonCodec[CountriesData] = JsonCodec.fromSchema[CountriesData]
         def rootField: CompiledField =
             CompiledField(
                 "data",
@@ -62,13 +62,12 @@ class StoreSpec extends kyo.test.Test[Any]:
     /** [[CountriesQuery]]'s shape (same root and field keys, so it reads the records
       * a `CountriesQuery` write left) with a codec whose decode is defective.
       */
-    final case class DefectiveCountriesQuery() extends Query[CountriesData]:
-        def name                              = "Countries"
-        def document                          = CountriesQuery().document
-        def dataSchema: Schema[CountriesData] = summon[Schema[CountriesData]]
-        def rootField: CompiledField          = CountriesQuery().rootField
-        def variables: Json                   = Json.JObj(VectorMap.empty)
-        override def dataCodec: JsonCodec[CountriesData] = new JsonCodec[CountriesData]:
+    final case class DefectiveCountriesQuery() extends Query.Normalizable[CountriesData]:
+        def name                     = "Countries"
+        def document                 = CountriesQuery().document
+        def rootField: CompiledField = CountriesQuery().rootField
+        def variables: Json          = Json.JObj(VectorMap.empty)
+        def dataCodec: JsonCodec[CountriesData] = new JsonCodec[CountriesData]:
             def decode(json: Json)(using Frame): Result[ApolloParseException, CountriesData] =
                 throw IllegalStateException("defective codec")
             def encode(value: CountriesData): Json = CountriesQuery().dataCodec.encode(value)

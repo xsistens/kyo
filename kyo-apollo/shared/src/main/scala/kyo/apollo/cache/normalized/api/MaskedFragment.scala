@@ -56,7 +56,7 @@ final class EntityFragment[Origin, D <: AnyNamedTuple] private[apollo] (
     val fragmentName: String,
     private[apollo] val typeName: String,
     private[apollo] val identity: CacheIdentity[Origin],
-    private[apollo] val selection: SelectionBuilder[Origin, D],
+    private[apollo] val selection: SelectionBuilder.Fields[Origin, D],
     private[apollo] val cacheFragment: Fragment[D]
 ):
     outer =>
@@ -177,7 +177,7 @@ end extension
 final class EmbeddedFragment[Origin, D <: AnyNamedTuple] private[apollo] (
     val fragmentName: String,
     private[apollo] val typeName: String,
-    private[apollo] val selection: SelectionBuilder[Origin, D]
+    private[apollo] val selection: SelectionBuilder.Fields[Origin, D]
 ):
     outer =>
 

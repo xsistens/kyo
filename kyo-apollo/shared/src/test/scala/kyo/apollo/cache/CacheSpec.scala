@@ -57,11 +57,11 @@ class CacheSpec extends kyo.test.Test[Any]:
         CompiledField(name, CompiledNamedType(typeName), selections = selections)
 
     /** `query { library { __typename id name books { __typename id title author { __typename id name } } } }` */
-    final case class LibraryQuery() extends Query[LibraryData]:
+    final case class LibraryQuery() extends Query.Normalizable[LibraryData]:
         def name = "LibraryQuery"
         def document =
             "query LibraryQuery { library { __typename id name books { __typename id title author { __typename id name } } } }"
-        def dataSchema: Schema[LibraryData] = summon[Schema[LibraryData]]
+        val dataCodec: JsonCodec[LibraryData] = JsonCodec.fromSchema[LibraryData]
         def rootField: CompiledField =
             obj(
                 "data",
@@ -128,9 +128,9 @@ class CacheSpec extends kyo.test.Test[Any]:
     final case class Stats(label: String) derives Schema
     final case class StatsData(stats: Stats) derives Schema
 
-    final case class StatsQuery() extends Query[StatsData]:
-        def name                          = "StatsQuery"; def document = "query StatsQuery { stats { label } }"
-        def dataSchema: Schema[StatsData] = summon[Schema[StatsData]]
+    final case class StatsQuery() extends Query.Normalizable[StatsData]:
+        def name                            = "StatsQuery"; def document = "query StatsQuery { stats { label } }"
+        val dataCodec: JsonCodec[StatsData] = JsonCodec.fromSchema[StatsData]
         def rootField: CompiledField =
             obj("data", "Query", Chunk(obj("stats", "Stats", Chunk(leaf("label")))))
         def variables: Json = Json.JObj(VectorMap.empty)
@@ -156,11 +156,11 @@ class CacheSpec extends kyo.test.Test[Any]:
     private def coversField(subfields: Chunk[CompiledSelection]): CompiledField =
         CompiledField("covers", CompiledListType(CompiledNamedType("Image")), selections = subfields)
 
-    final case class WideQuery() extends Query[WideData]:
+    final case class WideQuery() extends Query.Normalizable[WideData]:
         def name = "WideQuery"
         def document =
             "query WideQuery { album { __typename id covers { url alt } } }"
-        def dataSchema: Schema[WideData] = summon[Schema[WideData]]
+        val dataCodec: JsonCodec[WideData] = JsonCodec.fromSchema[WideData]
         def rootField: CompiledField =
             obj(
                 "data",
@@ -174,11 +174,11 @@ class CacheSpec extends kyo.test.Test[Any]:
         def variables: Json = Json.JObj(VectorMap.empty)
     end WideQuery
 
-    final case class FeaturedQuery() extends Query[FeaturedData]:
+    final case class FeaturedQuery() extends Query.Normalizable[FeaturedData]:
         def name = "FeaturedQuery"
         def document =
             "query FeaturedQuery { featured { __typename id covers { url } } }"
-        def dataSchema: Schema[FeaturedData] = summon[Schema[FeaturedData]]
+        val dataCodec: JsonCodec[FeaturedData] = JsonCodec.fromSchema[FeaturedData]
         def rootField: CompiledField =
             obj(
                 "data",

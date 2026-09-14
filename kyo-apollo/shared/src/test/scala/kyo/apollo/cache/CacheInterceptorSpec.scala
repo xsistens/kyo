@@ -8,6 +8,7 @@ import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.IdCacheKeyGenerator
 import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.exception.CacheMissException
+import kyo.apollo.exception.CacheReadFailure
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloResponse
 import scala.collection.immutable.VectorMap
@@ -29,10 +30,10 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
     final case class Country(__typename: String, code: String, name: String) derives Schema
     final case class CountriesData(countries: List[Country]) derives Schema
 
-    final case class CountriesQuery() extends Query[CountriesData]:
-        def name                              = "Countries"
-        def document                          = "query Countries { countries { __typename code name } }"
-        def dataSchema: Schema[CountriesData] = summon[Schema[CountriesData]]
+    final case class CountriesQuery() extends Query.Normalizable[CountriesData]:
+        def name                                = "Countries"
+        def document                            = "query Countries { countries { __typename code name } }"
+        val dataCodec: JsonCodec[CountriesData] = JsonCodec.fromSchema[CountriesData]
         def rootField: CompiledField =
             CompiledField(
                 "data",
@@ -55,17 +56,36 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
     /** [[CountriesQuery]]'s shape (it reads the records a `CountriesQuery` write
       * left) with a codec whose decode is defective.
       */
-    final case class DefectiveCountriesQuery() extends Query[CountriesData]:
-        def name                              = "Countries"
-        def document                          = CountriesQuery().document
-        def dataSchema: Schema[CountriesData] = summon[Schema[CountriesData]]
-        def rootField: CompiledField          = CountriesQuery().rootField
-        def variables: Json                   = Json.JObj(VectorMap.empty)
-        override def dataCodec: JsonCodec[CountriesData] = new JsonCodec[CountriesData]:
+    final case class DefectiveCountriesQuery() extends Query.Normalizable[CountriesData]:
+        def name                     = "Countries"
+        def document                 = CountriesQuery().document
+        def rootField: CompiledField = CountriesQuery().rootField
+        def variables: Json          = Json.JObj(VectorMap.empty)
+        def dataCodec: JsonCodec[CountriesData] = new JsonCodec[CountriesData]:
             def decode(json: Json)(using Frame): Result[ApolloParseException, CountriesData] =
                 throw IllegalStateException("defective codec")
             def encode(value: CountriesData): Json = CountriesQuery().dataCodec.encode(value)
     end DefectiveCountriesQuery
+
+    /** The same `countries { __typename code name }` selection, written with the DSL and
+      * projected by `.map` to the list of codes: a decode-only query.
+      */
+    sealed trait CountryT
+    private def countryCode: SelectionBuilder.Deferrable[CountryT, (code: String)] =
+        SelectionBuilder.scalar("code", CompiledNamedType("String"), ScalarCodec.string)
+    private def countryName: SelectionBuilder.Deferrable[CountryT, (name: String)] =
+        SelectionBuilder.scalar("name", CompiledNamedType("String"), ScalarCodec.string)
+    private val countryCodesQuery: Query[Chunk[String]] =
+        SelectionBuilder
+            .obj[RootQuery, (countries: Chunk[(code: String, name: String)]), (code: String, name: String)](
+                "countries",
+                CompiledListType(CompiledNamedType("Country")),
+                Chunk.empty,
+                countryCode ~ countryName,
+                SelectionBuilder.Nesting.Listed(SelectionBuilder.Nesting.Leaf)
+            )
+            .map(_.countries.map(_.code))
+            .toQuery("Countries")
 
     private val body =
         """{"data":{"countries":[""" +
@@ -253,6 +273,32 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
                 assert(engine.calls == 2)
             end for
         }
+
+        // --- a decode-only projection -------------------------------------------
+
+        "a .map query reaches the caller decoded, is not normalized, and the skip is logged at debug" in {
+            val engine = CountingEngine()
+            for
+                probe  <- LogProbe.init
+                client <- cachedClient(engine)
+                first  <- probe.run(client.query(countryCodesQuery).fetchPolicy(FetchPolicy.CacheFirst).execute)
+                cached <- Abort.run[CacheReadFailure](client.apolloStore.readOperation(countryCodesQuery))
+                second <- probe.run(client.query(countryCodesQuery).fetchPolicy(FetchPolicy.CacheFirst).execute)
+                lines  <- probe.lines
+            yield
+                assert(first.data == Present(Chunk("DE", "FR")), first.toString)
+                assert(first.error == Absent, first.toString)
+                assert(first.cacheInfo.map(_.dependentKeys) == Present(Set.empty[kyo.apollo.cache.normalized.api.CacheKey]))
+                assert(cached.failure.exists(_.isInstanceOf[CacheMissException]), cached.toString)
+                // Nothing was written, so the second CacheFirst call misses and goes to the network again.
+                assert(second.data == Present(Chunk("DE", "FR")))
+                assert(engine.calls == 2)
+                val skips = lines.filter(line =>
+                    line.level == Log.Level.debug && line.message.contains("Countries: decode-only projection, response not normalized")
+                )
+                assert(skips.size == 2, lines.toString)
+            end for
+        }
     }
 
     // --- mutations bypass the cache read entirely -----------------------------
@@ -261,11 +307,11 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
     // the shape `CacheKeyResolver.byIdArgument` redirects on.
     final case class DeleteCountryData(deleteCountry: Country) derives Schema
 
-    final case class DeleteCountryMutation(code: String) extends Mutation[DeleteCountryData]:
+    final case class DeleteCountryMutation(code: String) extends Mutation.Normalizable[DeleteCountryData]:
         def name = "DeleteCountry"
         def document =
             s"""mutation DeleteCountry { deleteCountry(id: "$code") { __typename code name } }"""
-        def dataSchema: Schema[DeleteCountryData] = summon[Schema[DeleteCountryData]]
+        val dataCodec: JsonCodec[DeleteCountryData] = JsonCodec.fromSchema[DeleteCountryData]
         def rootField: CompiledField =
             CompiledField(
                 "data",

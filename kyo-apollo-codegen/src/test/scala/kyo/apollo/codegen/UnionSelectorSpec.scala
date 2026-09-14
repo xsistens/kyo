@@ -37,10 +37,12 @@ class UnionSelectorSpec extends kyo.test.Test[Any]:
         "each member gets value + lambda `on<Member>` branches delegating to onType" in {
             val src = sourceOf("PlayableItem.scala")
             assert(
-                src.contains("def onTrack[A](sel: SelectionBuilder[Track, A]): SelectionBuilder.Fields[PlayableItem, (onTrack: Maybe[A])]"),
+                src.contains(
+                    "def onTrack[A](sel: SelectionBuilder.Bidirectional[Track, A]): SelectionBuilder.Fields[PlayableItem, (onTrack: Maybe[A])]"
+                ),
                 src
             )
-            assert(src.contains("def onEpisode[A](sel: SelectionBuilder[Episode, A])"), src)
+            assert(src.contains("def onEpisode[A](sel: SelectionBuilder.Bidirectional[Episode, A])"), src)
             assert(src.contains("SelectionBuilder.onType(\"Track\", sel)"), src)
             assert(src.contains("SelectionBuilder.onType(\"Episode\", build(SelectionBuilder.empty))"), src)
         }
@@ -54,7 +56,12 @@ class UnionSelectorSpec extends kyo.test.Test[Any]:
         "a union-typed field is an object selector, not a String scalar" in {
             val src = sourceOf("PlaybackState.scala")
             assert(src.contains("final class `item$sel`"), src)
-            assert(src.contains("SelectionBuilder.Deferrable[PlaybackState, (item: Maybe[A])]"), src)
+            assert(
+                src.contains(
+                    "def apply[A](sel: SelectionBuilder.Bidirectional[PlayableItem, A]): SelectionBuilder.Deferrable[PlaybackState, (item: Maybe[A])]"
+                ),
+                src
+            )
             assert(!src.contains("SelectionBuilder.scalar(\"item\""), src)
         }
     }

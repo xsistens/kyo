@@ -55,10 +55,10 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
 
     final case class UserData(user: User) derives Schema
 
-    final case class CurrentUserQuery() extends Query[UserData]:
-        def name                         = "CurrentUser"
-        def document                     = "query CurrentUser { user { __typename id name } }"
-        def dataSchema: Schema[UserData] = summon[Schema[UserData]]
+    final case class CurrentUserQuery() extends Query.Normalizable[UserData]:
+        def name                           = "CurrentUser"
+        def document                       = "query CurrentUser { user { __typename id name } }"
+        val dataCodec: JsonCodec[UserData] = JsonCodec.fromSchema[UserData]
         def rootField: CompiledField =
             CompiledField("data", CompiledNamedType("Query"), selections = Chunk(userField("user")))
         def variables: Json = Json.JObj(VectorMap.empty)
@@ -66,11 +66,11 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
 
     final case class UpdateUserData(updateUser: User) derives Schema
 
-    final case class UpdateUserNameMutation(newName: String) extends Mutation[UpdateUserData]:
+    final case class UpdateUserNameMutation(newName: String) extends Mutation.Normalizable[UpdateUserData]:
         def name = "UpdateUserName"
         def document =
             "mutation UpdateUserName($name: String!) { updateUser(name: $name) { __typename id name } }"
-        def dataSchema: Schema[UpdateUserData] = summon[Schema[UpdateUserData]]
+        val dataCodec: JsonCodec[UpdateUserData] = JsonCodec.fromSchema[UpdateUserData]
         def rootField: CompiledField =
             CompiledField(
                 "data",
@@ -86,11 +86,11 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
     /** `User:1` and its friend `User:2`, one level apart in the selection tree — so a
       * read loads them in two separate batches, which a layer change can fall between.
       */
-    final case class TwoUsersQuery() extends Query[TwoUsersData]:
+    final case class TwoUsersQuery() extends Query.Normalizable[TwoUsersData]:
         def name = "TwoUsers"
         def document =
             "query TwoUsers { first { __typename id name friend { __typename id name } } }"
-        def dataSchema: Schema[TwoUsersData] = summon[Schema[TwoUsersData]]
+        val dataCodec: JsonCodec[TwoUsersData] = JsonCodec.fromSchema[TwoUsersData]
         def rootField: CompiledField =
             CompiledField(
                 "data",
