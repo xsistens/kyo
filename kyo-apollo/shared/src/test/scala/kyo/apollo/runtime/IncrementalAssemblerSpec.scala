@@ -188,6 +188,10 @@ class IncrementalAssemblerSpec extends kyo.test.Test[Any]:
                 assert(responses.size == 2, s"got $responses")
                 assert(isParseFailure(responses.last))
                 assert(responses.forall(_.complete == false))
+                // The message names the path it could not place the patch at, and no value of the patch.
+                val message = responses.last.error.fold("")(_.message)
+                assert(message.contains("country.0"), message)
+                assert(!message.contains("Berlin"), message)
             }
         }
 
@@ -245,6 +249,7 @@ class IncrementalAssemblerSpec extends kyo.test.Test[Any]:
             StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(ListQ(), TestIds.requestUuid), parts)).map { responses =>
                 assert(responses.size == 2, s"got $responses")
                 assert(isParseFailure(responses.last))
+                assert(responses.last.error.exists(_.message.contains("items.2")), s"${responses.last.error}")
             }
         }
     }
