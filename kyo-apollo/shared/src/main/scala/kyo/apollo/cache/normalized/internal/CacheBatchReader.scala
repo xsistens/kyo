@@ -1,6 +1,7 @@
 package kyo.apollo.cache.normalized.internal
 
 import kyo.Absent
+import kyo.Chunk
 import kyo.Maybe
 import kyo.Present
 import kyo.apollo.api.*
@@ -88,7 +89,7 @@ final class CacheBatchReader(
       */
     private def readObject(
         record: Record,
-        selections: List[CompiledSelection],
+        selections: Chunk[CompiledSelection],
         parentType: String
     ): Json.JObj =
         val typename = recordTypename(record).getOrElse(parentType)

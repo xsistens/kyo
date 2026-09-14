@@ -43,7 +43,7 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
         CompiledField(
             field,
             CompiledNamedType("User"),
-            selections = List(
+            selections = Chunk(
                 CompiledField("__typename", CompiledNamedType("String")),
                 CompiledField("id", CompiledNamedType("String")),
                 CompiledField("name", CompiledNamedType("String"))
@@ -57,7 +57,7 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
         def document                     = "query CurrentUser { user { __typename id name } }"
         def dataSchema: Schema[UserData] = summon[Schema[UserData]]
         def rootField: CompiledField =
-            CompiledField("data", CompiledNamedType("Query"), selections = List(userField("user")))
+            CompiledField("data", CompiledNamedType("Query"), selections = Chunk(userField("user")))
         def variables: Json = Json.JObj(VectorMap.empty)
     end CurrentUserQuery
 
@@ -72,7 +72,7 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
             CompiledField(
                 "data",
                 CompiledNamedType("Mutation"),
-                selections = List(userField("updateUser"))
+                selections = Chunk(userField("updateUser"))
             )
         def variables: Json = Json.JObj(VectorMap("name" -> SchemaJson.encode(newName)))
     end UpdateUserNameMutation
@@ -90,7 +90,7 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
-                selections = List(userField("first"), userField("second"))
+                selections = Chunk(userField("first"), userField("second"))
             )
         def variables: Json = Json.JObj(VectorMap.empty)
     end TwoUsersQuery
@@ -206,7 +206,7 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
                     client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly).watch()
                 )
                 first <- pull.next
-                _ = assert(name(first) == Some("Alice"))
+                _ = assert(name(first) == Present("Alice"))
                 // Fire the mutation on a forked fiber with an optimistic value distinct from
                 // the server echo. The optimistic overlay is applied — and observable by the
                 // watcher — as the fiber runs the chain up to (but not including) the fetch.
@@ -220,12 +220,12 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
                     )
                 )
                 optimistic <- pull.next
-                _ = assert(name(optimistic) == Some("BobOptimistic"))
+                _ = assert(name(optimistic) == Present("BobOptimistic"))
                 response <- fib.get
                 _ = assert(response.error.isEmpty)
                 // Network truth ("Bob") replaces the optimistic value; layer is gone.
                 settled <- pull.next
-                _ = assert(name(settled) == Some("Bob"))
+                _ = assert(name(settled) == Present("Bob"))
                 _ = assert(client.apolloStore.readOperation(CurrentUserQuery()) == userData("Bob"))
             yield ()
             end for
@@ -239,7 +239,7 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
                     client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly).watch()
                 )
                 first <- pull.next
-                _ = assert(name(first) == Some("Alice"))
+                _ = assert(name(first) == Present("Alice"))
                 fib <- Fiber.init(
                     Scope.run(
                         client
@@ -250,13 +250,13 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
                     )
                 )
                 optimistic <- pull.next
-                _ = assert(name(optimistic) == Some("BobOptimistic"))
+                _ = assert(name(optimistic) == Present("BobOptimistic"))
                 response <- fib.get
                 _ = assert(response.error.isDefined) // the scripted 500 surfaced as a value
                 // The optimistic layer rolled back cleanly: watcher is back to Alice, and
                 // the pristine cache never took the optimistic value.
                 reverted <- pull.next
-                _ = assert(name(reverted) == Some("Alice"))
+                _ = assert(name(reverted) == Present("Alice"))
                 _ = assert(client.apolloStore.readOperation(CurrentUserQuery()) == userData("Alice"))
             yield ()
             end for
@@ -457,6 +457,6 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
         builder.build()
     end cachedClient
 
-    private def name(response: ApolloResponse[UserData]): Option[String] =
-        response.data.map(_.user.name).toOption
+    private def name(response: ApolloResponse[UserData]): Maybe[String] =
+        response.data.map(_.user.name)
 end OptimisticUpdatesSpec

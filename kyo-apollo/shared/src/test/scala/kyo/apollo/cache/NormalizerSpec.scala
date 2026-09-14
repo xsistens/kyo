@@ -23,7 +23,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
     /** A query whose root selections are supplied per-test; its `data` codec is
       * never exercised here (normalization only reads `rootField`/`variables`).
       */
-    final case class TestQuery(selections: List[CompiledSelection]) extends Query[Int]:
+    final case class TestQuery(selections: Chunk[CompiledSelection]) extends Query[Int]:
         def name                    = "Q"; def document = "query Q { ... }"
         def dataSchema: Schema[Int] = summon[Schema[Int]]
         def rootField: CompiledField =
@@ -39,8 +39,8 @@ class NormalizerSpec extends kyo.test.Test[Any]:
     private def obj(
         name: String,
         typeName: String,
-        selections: List[CompiledSelection],
-        args: List[CompiledArgument] = Nil
+        selections: Chunk[CompiledSelection],
+        args: Chunk[CompiledArgument] = Chunk.empty
     ): CompiledField =
         CompiledField(name, CompiledNamedType(typeName), arguments = args, selections = selections)
 
@@ -59,7 +59,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
         Map("__typename" -> RecordValue.Scalar(jstr("Query"))) ++ fields
 
     private def normalize(
-        selections: List[CompiledSelection],
+        selections: Chunk[CompiledSelection],
         data: Map[String, Json],
         variables: Map[String, Json] = Map.empty,
         generator: CacheKeyGenerator = CacheKeyGenerator.default
@@ -72,7 +72,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
 
         "scalar fields stay inline on the root record" in {
             val records = normalize(
-                selections = List(leaf("hello")),
+                selections = Chunk(leaf("hello")),
                 data = Map("hello" -> jstr("world"))
             )
             assert(records.keySet == Set("QUERY_ROOT"))
@@ -84,7 +84,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
 
         "a null scalar is stored as RecordValue.Null" in {
             val records = normalize(
-                selections = List(leaf("hello")),
+                selections = Chunk(leaf("hello")),
                 data = Map("hello" -> Json.JNull)
             )
             assert(records("QUERY_ROOT").fields == rootFields("hello" -> RecordValue.Null))
@@ -92,7 +92,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
 
         "a scalar list stays inline as a list of scalars" in {
             val records = normalize(
-                selections = List(listOf(leaf("tags"))),
+                selections = Chunk(listOf(leaf("tags"))),
                 data = Map("tags" -> Json.JArr(Chunk(jstr("a"), jstr("b"))))
             )
             assert(
@@ -108,8 +108,8 @@ class NormalizerSpec extends kyo.test.Test[Any]:
         // --- Nested objects → separate records ------------------------------------
 
         "a nested object with an id becomes a separate record linked by reference" in {
-            val selections = List(
-                obj("book", "Book", List(leaf("__typename"), leaf("id"), leaf("title")))
+            val selections = Chunk(
+                obj("book", "Book", Chunk(leaf("__typename"), leaf("id"), leaf("title")))
             )
             val data = Map(
                 "book" -> Json.JObj(
@@ -136,7 +136,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
         }
 
         "an id-less nested object is keyed by its response path" in {
-            val selections = List(obj("stats", "Stats", List(leaf("views", "Int"))))
+            val selections = Chunk(obj("stats", "Stats", Chunk(leaf("views", "Int"))))
             val data       = Map("stats" -> Json.JObj(Map("views" -> jnum(10))))
             val records    = normalize(selections, data)
 
@@ -160,8 +160,8 @@ class NormalizerSpec extends kyo.test.Test[Any]:
 
         "a list of objects becomes a list of references to per-element records" in {
             val country =
-                obj("countries", "Country", List(leaf("__typename"), leaf("code"), leaf("name")))
-            val selections = List(listOf(country))
+                obj("countries", "Country", Chunk(leaf("__typename"), leaf("code"), leaf("name")))
+            val selections = Chunk(listOf(country))
             val data = Map(
                 "countries" -> Json.JArr(
                     Chunk(
@@ -194,9 +194,9 @@ class NormalizerSpec extends kyo.test.Test[Any]:
         }
 
         "an id-less list of objects keys each element by its indexed path" in {
-            val item = obj("items", "Item", List(leaf("label")))
+            val item = obj("items", "Item", Chunk(leaf("label")))
             val records = normalize(
-                selections = List(listOf(item)),
+                selections = Chunk(listOf(item)),
                 data = Map(
                     "items" -> Json.JArr(
                         Chunk(Json.JObj(Map("label" -> jstr("x"))), Json.JObj(Map("label" -> jstr("y"))))
@@ -215,10 +215,10 @@ class NormalizerSpec extends kyo.test.Test[Any]:
             // reaching the same album by another route would mint a SECOND record for one
             // logical field, and the narrower of the two writers would win the parent's
             // pointer while missing the other's fields.
-            val cover = obj("cover", "Image", List(leaf("url")))
-            val album = obj("album", "Album", List(leaf("__typename"), leaf("id"), cover))
+            val cover = obj("cover", "Image", Chunk(leaf("url")))
+            val album = obj("album", "Album", Chunk(leaf("__typename"), leaf("id"), cover))
             val records = normalize(
-                selections = List(album),
+                selections = Chunk(album),
                 data = Map(
                     "album" -> Json.JObj(Map(
                         "__typename" -> jstr("Album"),
@@ -232,10 +232,10 @@ class NormalizerSpec extends kyo.test.Test[Any]:
         }
 
         "an id-less list under an identified parent indexes below the parent's key" in {
-            val images = listOf(obj("images", "Image", List(leaf("url"))))
-            val album  = obj("album", "Album", List(leaf("__typename"), leaf("id"), images))
+            val images = listOf(obj("images", "Image", Chunk(leaf("url"))))
+            val album  = obj("album", "Album", Chunk(leaf("__typename"), leaf("id"), images))
             val records = normalize(
-                selections = List(album),
+                selections = Chunk(album),
                 data = Map(
                     "album" -> Json.JObj(Map(
                         "__typename" -> jstr("Album"),
@@ -253,10 +253,10 @@ class NormalizerSpec extends kyo.test.Test[Any]:
             // The idempotence half of the rule, and the reason rerooting changed no existing
             // expectation: with no identity anywhere, restarting the path at the child's own
             // path key renders the identical string.
-            val breakdown = obj("breakdown", "Breakdown", List(leaf("views")))
-            val stats     = obj("stats", "Stats", List(breakdown))
+            val breakdown = obj("breakdown", "Breakdown", Chunk(leaf("views")))
+            val stats     = obj("stats", "Stats", Chunk(breakdown))
             val records = normalize(
-                selections = List(stats),
+                selections = Chunk(stats),
                 data = Map(
                     "stats" -> Json.JObj(Map("breakdown" -> Json.JObj(Map("views" -> jnum(3)))))
                 )
@@ -268,9 +268,9 @@ class NormalizerSpec extends kyo.test.Test[Any]:
 
         "the same entity referenced twice merges into one record with unioned fields" in {
             // Two sibling fields select the same Book:1, each requesting a different scalar.
-            val selections = List(
-                obj("primary", "Book", List(leaf("__typename"), leaf("id"), leaf("title"))),
-                obj("secondary", "Book", List(leaf("__typename"), leaf("id"), leaf("author")))
+            val selections = Chunk(
+                obj("primary", "Book", Chunk(leaf("__typename"), leaf("id"), leaf("title"))),
+                obj("secondary", "Book", Chunk(leaf("__typename"), leaf("id"), leaf("author")))
             )
             val data = Map(
                 "primary" -> Json.JObj(
@@ -303,12 +303,12 @@ class NormalizerSpec extends kyo.test.Test[Any]:
                 obj(
                     "user",
                     "User",
-                    List(leaf("__typename"), leaf("id"), leaf("name")),
-                    args = List(CompiledArgument.literal("id", jnum(id)))
+                    Chunk(leaf("__typename"), leaf("id"), leaf("name")),
+                    args = Chunk(CompiledArgument.literal("id", jnum(id)))
                 )
             // Same response name `user`, different args → distinct field keys on the root.
             val selections =
-                List(userById(1).copy(alias = Some("u1")), userById(2).copy(alias = Some("u2")))
+                Chunk(userById(1).copy(alias = Present("u1")), userById(2).copy(alias = Present("u2")))
             val data = Map(
                 "u1" -> Json.JObj(
                     Map("__typename" -> jstr("User"), "id" -> jstr("1"), "name" -> jstr("Ann"))
@@ -330,7 +330,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
 
         "__typename is collected implicitly even when not explicitly selected" in {
             // The selection set does NOT list __typename, but the server sends it.
-            val selections = List(obj("book", "Book", List(leaf("id"), leaf("title"))))
+            val selections = Chunk(obj("book", "Book", Chunk(leaf("id"), leaf("title"))))
             val data = Map(
                 "book" -> Json.JObj(
                     Map("__typename" -> jstr("Book"), "id" -> jstr("7"), "title" -> jstr("T"))
@@ -348,7 +348,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
             // without `__typename` (e.g. a `mapInto` write-back re-encode) is stamped
             // with the field's static leaf type, so an id-carrying object is keyed as
             // an entity — never re-keyed under the writing operation's root path.
-            val selections = List(obj("book", "Book", List(leaf("id"), leaf("title"))))
+            val selections = Chunk(obj("book", "Book", Chunk(leaf("id"), leaf("title"))))
             val data       = Map("book" -> Json.JObj(Map("id" -> jstr("7"), "title" -> jstr("T"))))
             val records    = normalize(selections, data)
             assert(records.keySet == Set("QUERY_ROOT", "Book:7"))
@@ -360,11 +360,11 @@ class NormalizerSpec extends kyo.test.Test[Any]:
         "a matching inline fragment's fields are spliced into the object record" in {
             val fragment = CompiledFragment(
                 typeCondition = "Book",
-                possibleTypes = List("Book"),
-                selections = List(leaf("title"))
+                possibleTypes = Chunk("Book"),
+                selections = Chunk(leaf("title"))
             )
-            val selections = List(
-                obj("node", "Node", List(leaf("__typename"), leaf("id"), fragment))
+            val selections = Chunk(
+                obj("node", "Node", Chunk(leaf("__typename"), leaf("id"), fragment))
             )
             val data = Map(
                 "node" -> Json.JObj(
@@ -378,11 +378,11 @@ class NormalizerSpec extends kyo.test.Test[Any]:
         "a non-matching inline fragment contributes no fields" in {
             val fragment = CompiledFragment(
                 typeCondition = "Magazine",
-                possibleTypes = List("Magazine"),
-                selections = List(leaf("issue"))
+                possibleTypes = Chunk("Magazine"),
+                selections = Chunk(leaf("issue"))
             )
-            val selections = List(
-                obj("node", "Node", List(leaf("__typename"), leaf("id"), fragment))
+            val selections = Chunk(
+                obj("node", "Node", Chunk(leaf("__typename"), leaf("id"), fragment))
             )
             val data = Map(
                 "node" -> Json.JObj(
@@ -396,7 +396,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
         // --- Absent fields --------------------------------------------------------
 
         "a selected field missing from the response is simply not stored" in {
-            val selections = List(leaf("present"), leaf("absent"))
+            val selections = Chunk(leaf("present"), leaf("absent"))
             val records    = normalize(selections, Map("present" -> jstr("here")))
             assert(records("QUERY_ROOT").fieldKeys == Set("__typename", "present"))
         }

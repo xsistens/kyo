@@ -1,5 +1,7 @@
 package kyo.apollo.api
 
+import kyo.Chunk
+
 /** Helpers for the `@defer` / `@stream` incremental-delivery directives. */
 object Defer:
 
@@ -11,7 +13,7 @@ object Defer:
     def has(rootField: CompiledField): Boolean =
         hasIn(rootField.selections)
 
-    private def hasIn(selections: List[CompiledSelection]): Boolean =
+    private def hasIn(selections: Chunk[CompiledSelection]): Boolean =
         selections.exists {
             case field: CompiledField       => field.stream.isDefined || hasIn(field.selections)
             case fragment: CompiledFragment => fragment.defer.isDefined || hasIn(fragment.selections)

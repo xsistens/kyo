@@ -1,6 +1,9 @@
 package kyo.apollo.api
 
+import kyo.Absent
 import kyo.Chunk
+import kyo.Maybe
+import kyo.Present
 import kyo.Schema
 import kyo.apollo.json.Json
 import kyo.apollo.json.SchemaJson
@@ -54,25 +57,25 @@ object ScalarCodec:
         value => Json.JBool(value)
     )
 
-    /** Lift a codec over a nullable field: JSON `null` ⇄ `None`. */
-    def option[V](inner: ScalarCodec[V]): ScalarCodec[Option[V]] = ScalarCodec(
+    /** Lift a codec over a nullable field: JSON `null` ⇄ `Absent`. */
+    def maybe[V](inner: ScalarCodec[V]): ScalarCodec[Maybe[V]] = ScalarCodec(
         {
-            case Json.JNull => None
-            case other      => Some(inner.decode(other))
+            case Json.JNull => Absent
+            case other      => Present(inner.decode(other))
         },
         {
-            case None        => Json.JNull
-            case Some(value) => inner.encode(value)
+            case Absent         => Json.JNull
+            case Present(value) => inner.encode(value)
         }
     )
 
-    /** Lift a codec over a list field. */
-    def list[V](inner: ScalarCodec[V]): ScalarCodec[List[V]] = ScalarCodec(
+    /** Lift a codec over a list field: a JSON array ⇄ `Chunk`. */
+    def chunk[V](inner: ScalarCodec[V]): ScalarCodec[Chunk[V]] = ScalarCodec(
         {
-            case Json.JArr(items) => items.toList.map(inner.decode)
+            case Json.JArr(items) => items.map(inner.decode)
             case other            => throw ScalarDecodeException("List", other)
         },
-        values => Json.JArr(Chunk.from(values.map(inner.encode)))
+        values => Json.JArr(values.map(inner.encode))
     )
 
     /** Reuse a kyo-schema `Schema` (e.g. a generated enum's string-transform

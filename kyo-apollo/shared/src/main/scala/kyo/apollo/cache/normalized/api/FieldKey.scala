@@ -1,5 +1,6 @@
 package kyo.apollo.cache.normalized.api
 
+import kyo.Chunk
 import kyo.apollo.api.CompiledArgument
 import kyo.apollo.api.CompiledArgumentValue
 import kyo.apollo.api.CompiledField
@@ -39,7 +40,7 @@ object FieldKey:
     def apply(
         field: CompiledField,
         variables: Map[String, Json],
-        keyArgs: List[String]
+        keyArgs: Chunk[String]
     ): String =
         render(field.name, field.arguments.filter(arg => keyArgs.contains(arg.name)), variables)
 
@@ -49,7 +50,7 @@ object FieldKey:
       */
     private def render(
         name: String,
-        arguments: List[CompiledArgument],
+        arguments: Chunk[CompiledArgument],
         variables: Map[String, Json]
     ): String =
         if arguments.isEmpty then name
