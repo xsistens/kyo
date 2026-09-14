@@ -25,12 +25,15 @@ class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
 
     given CanEqual[Any, Any] = CanEqual.derived
 
-    /** An [[HttpEngine]] that records every request and answers via `respond`. */
+    /** An [[HttpEngine]] that records every request and answers via `respond`. Lead
+      * callers send from their own fibers, so the record is an atomic, appended when
+      * the send runs.
+      */
     final class RecordingEngine(respond: HttpRequest => HttpResponse < Abort[HttpEngineFailure]) extends HttpEngine:
-        @volatile var seen: List[HttpRequest] = Nil
+        private val recorded        = AtomicRef.Unsafe.init(List.empty[HttpRequest])(using AllowUnsafe.embrace.danger)
+        def seen: List[HttpRequest] = recorded.get()(using AllowUnsafe.embrace.danger)
         def execute(request: HttpRequest)(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) =
-            seen = seen :+ request
-            respond(request)
+            recorded.safe.updateAndGet(_ :+ request).andThen(respond(request))
     end RecordingEngine
 
     private def post(body: String): HttpRequest =
@@ -76,7 +79,7 @@ class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
                 _  <- control.awaitPendingSleepers(1) // a is queued and the window is open
                 fb <- Fiber.init(chain.proceed(post("""{"query":"b"}""")))
                 _  <- untilQueued(batching, 2)
-                _  <- control.advance(interval)
+                _  <- control.advance(interval, Duration.Zero)
                 ra <- fa.get
                 rb <- fb.get
             yield
@@ -114,7 +117,7 @@ class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
                 chain = chainOf(batching, engine)
                 fa <- Fiber.init(chain.proceed(post("""{"query":"solo"}""")))
                 _  <- control.awaitPendingSleepers(1)
-                _  <- control.advance(interval)
+                _  <- control.advance(interval, Duration.Zero)
                 ra <- fa.get
             yield
                 assert(engine.seen.length == 1)
@@ -147,7 +150,7 @@ class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
                 _  <- untilQueued(batching, 0)
                 fb <- Fiber.init(chain.proceed(post("""{"query":"b"}""")))
                 _  <- untilQueued(batching, 1)        // b alone is queued when the window ends
-                _  <- control.advance(interval)
+                _  <- control.advance(interval, Duration.Zero)
                 rb <- fb.get
             yield
                 // A batch of one: b left unwrapped — a's slot was gone before the window ended.
@@ -175,7 +178,7 @@ class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
                     _      <- stop.release                    // the owner leaves its Scope
                     early  <- caller.getResult
                     _      <- owner.get
-                    _      <- control.advance(interval * 10)
+                    _      <- control.advance(interval * 10, Duration.Zero)
                     late   <- Abort.run[Throwable](chain.proceed(post("""{"query":"b"}""")))
                 yield
                     assert(engine.seen.isEmpty) // no window fired after the Scope ended
