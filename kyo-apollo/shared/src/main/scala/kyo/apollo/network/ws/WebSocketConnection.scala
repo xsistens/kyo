@@ -101,10 +101,17 @@ trait WebSocketEngine:
 end WebSocketEngine
 
 object WebSocketEngine:
+    /** The default bound on opening a socket. */
+    val defaultConnectTimeout: Duration = 10.seconds
+
     /** The platform's production engine, resolved per-platform via
       * [[WebSocketEnginePlatform]]: the browser/Node `WebSocket`-backed
       * `JsWebSocketEngine` on JS/Wasm, a `kyo-http`-backed `KyoHttpWebSocketEngine`
       * on JVM/Native.
+      *
+      * @param connectTimeout how long connecting and the WebSocket upgrade may take
+      *                       before the open fails
       */
-    def default(): WebSocketEngine = WebSocketEnginePlatform.default()
+    def default(connectTimeout: Duration = defaultConnectTimeout): WebSocketEngine =
+        WebSocketEnginePlatform.default(connectTimeout)
 end WebSocketEngine
