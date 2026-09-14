@@ -2,7 +2,6 @@ package kyo.apollo
 
 import kyo.Span
 import kyo.apollo.api.ScalarCodec
-import kyo.apollo.api.ScalarDecodeException
 import kyo.apollo.json.Json
 import org.scalajs.dom
 import scala.scalajs.js as sjs
@@ -33,11 +32,8 @@ class UploadCodecSpec extends kyo.test.Test[Any]:
             assert(Json.JUpload(fakeUpload).render == "null")
         }
 
-        "decode is unsupported (uploads are input-only)" in {
-            val _ = intercept[ScalarDecodeException] {
-                ScalarCodec.upload.decode(Json.JStr("x"))
-            }
-            assert(true)
+        "decode is unsupported (uploads are input-only): every decode is a failure value" in {
+            assert(ScalarCodec.upload.decode(Json.JStr("x")).failure.exists(_.expected.contains("input-only")))
         }
 
         "UploadJs.fromBlob reads the blob's bytes and carries the filename" in {
