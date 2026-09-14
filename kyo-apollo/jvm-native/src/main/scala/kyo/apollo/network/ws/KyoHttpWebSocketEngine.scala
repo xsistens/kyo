@@ -16,14 +16,23 @@ import kyo.apollo.exception.ApolloWebSocketClosedException
   * socket ends (cleanly on a 1000 close, aborting otherwise). Interrupting that
   * fiber — which the apollo transport does to discard a socket — tears the kyo-http
   * connection down via its scope.
+  *
+  * @param connectTimeout how long connecting and the WebSocket upgrade may take
+  *                       before the open fails; `HttpWebSocket.Config` sets no
+  *                       bound of its own
   */
-final class KyoHttpWebSocketEngine extends WebSocketEngine:
+final class KyoHttpWebSocketEngine(connectTimeout: Duration = KyoHttpWebSocketEngine.defaultConnectTimeout)
+    extends WebSocketEngine:
     def open(
         url: String,
         protocol: Option[String] = None
     )(using Frame): WebSocketConnection < (Async & Scope & Abort[ApolloException]) =
-        KyoHttpWebSocketConnection.open(url, protocol)
+        KyoHttpWebSocketConnection.open(url, protocol, connectTimeout)
 end KyoHttpWebSocketEngine
+
+object KyoHttpWebSocketEngine:
+    /** The default bound on opening a socket. */
+    val defaultConnectTimeout: Duration = 10.seconds
 
 final private[ws] class KyoHttpWebSocketConnection private (
     ws: HttpWebSocket,
@@ -52,7 +61,8 @@ private[ws] object KyoHttpWebSocketConnection:
 
     def open(
         url: String,
-        protocol: Option[String]
+        protocol: Option[String],
+        connectTimeout: Duration
     )(using Frame): WebSocketConnection < (Async & Scope & Abort[ApolloException]) =
         for
             // Unbounded and never closed: frames are `Present`, the socket's end is one
@@ -63,8 +73,14 @@ private[ws] object KyoHttpWebSocketConnection:
             opened     <- Fiber.Promise.init[HttpWebSocket, Abort[ApolloException]]
             // The connection lives on this scoped fiber; interrupting it (on discard)
             // closes the kyo-http socket via its scope.
-            _  <- Fiber.init(runConnection(url, protocol, incomingCh, done, opened))
-            ws <- opened.get
+            _ <- Fiber.init(runConnection(url, protocol, incomingCh, done, opened))
+            // A server that accepts the connection but never completes the upgrade would
+            // otherwise hold the open forever; the scope's end interrupts the connecting fiber.
+            ws <- Abort.run[Timeout](Async.timeout(connectTimeout)(opened.get)).map {
+                case Result.Success(ws) => ws
+                case Result.Failure(_)  => Abort.fail(ApolloNetworkException(s"The WebSocket did not open within ${connectTimeout.show}"))
+                case Result.Panic(e)    => Abort.panic(e)
+            }
         yield new KyoHttpWebSocketConnection(ws, incomingCh, done)
 
     /** Connect, expose the live socket, drain frames, and settle `closed`. */

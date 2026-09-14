@@ -1,6 +1,8 @@
 package kyo.apollo.network.ws
 
 import kyo.*
+import kyo.apollo.exception.ApolloException
+import kyo.apollo.exception.ApolloNetworkException
 import kyo.apollo.exception.ApolloWebSocketClosedException
 // Aliased to `sjs`: `kyo.test.Test` inherits a `js` platform-filter extension
 // method, and an inherited member outranks an explicit import, so a bare
@@ -54,7 +56,7 @@ class JsWebSocketConnectionSpec extends kyo.test.Test[Any]:
       */
     private def open(fake: FakeSocket)(using
         Frame
-    ): JsWebSocketConnection < (Async & Scope & Abort[ApolloWebSocketClosedException]) =
+    ): JsWebSocketConnection < (Async & Scope & Abort[ApolloException]) =
         for
             fiber <- Fiber.init(JsWebSocketConnection.openWith(fake.asJs))
             _     <- Async.sleep(10.millis)
@@ -154,6 +156,22 @@ class JsWebSocketConnectionSpec extends kyo.test.Test[Any]:
                 case Result.Failure(e: ApolloWebSocketClosedException) => assert(e.code == 4401)
                 case other => assert(false, s"expected ApolloWebSocketClosedException, got $other")
             end for
+        }
+
+        "a socket that never fires open fails after the connect timeout, and its scope closes the socket" in Clock.withTimeControl {
+            control =>
+                val fake = new FakeSocket
+                for
+                    fiber  <- Fiber.init(Scope.run(Abort.run[ApolloException](JsWebSocketConnection.openWith(fake.asJs, 5.seconds))))
+                    _      <- control.awaitPendingSleepers(1) // the connect timeout is armed
+                    _      <- control.advance(5.seconds, Duration.Zero)
+                    result <- fiber.get
+                yield
+                    result match
+                        case Result.Failure(e: ApolloNetworkException) => assert(e.message.contains("did not open within"))
+                        case other                                     => assert(false, s"expected ApolloNetworkException, got $other")
+                    assert(fake.closedWith.isDefined, "the socket must be closed when its open times out")
+                end for
         }
     }
 end JsWebSocketConnectionSpec
