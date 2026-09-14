@@ -5,6 +5,7 @@ import kyo.apollo.api.*
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.cache.normalized.api.Fragment
+import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.exception.CacheReadFailure
 import kyo.apollo.json.Json
 import kyo.apollo.json.SchemaJson
@@ -167,16 +168,13 @@ object ClientField:
                     if sels.isEmpty then "Client" else ClientFieldStructure.leafName(structure)
                 )
             // Whole-value Schema codec (handles Maybe/Chunk natively), with `__typename`
-            // injected at each product level so the normalizer can key objects. A
-            // mismatch throws, as every leaf codec does; the leaf contract has no frame.
-            val codec = ScalarCodec[V](
-                json =>
-                    SchemaJson
-                        .decode[V](ClientFieldStructure.toKyoWire(json, structure))(using sch, Frame.internal)
-                        .getOrThrow,
-                value =>
+            // injected at each product level so the normalizer can key objects. A value
+            // the schema rejects is a failure built with the decoding call's frame.
+            val codec = new ScalarCodec[V]:
+                def decode(json: Json)(using Frame): Result[ApolloParseException, V] =
+                    SchemaJson.decode[V](ClientFieldStructure.toKyoWire(json, structure))(using sch)
+                def encode(value: V): Json =
                     ClientFieldStructure.injectTypenames(SchemaJson.encode[V](value)(using sch), structure)
-            )
             val slot =
                 SelectionBuilder.clientField[Origin, NamedTuple[L *: EmptyTuple, V *: EmptyTuple], V](
                     label,
