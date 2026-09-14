@@ -70,8 +70,10 @@ final class ApolloStore(
 
     /** The record-merge policy derived from [[fieldPolicies]]: a per-field merger
       * (e.g. connection edge unioning) when policies are configured, otherwise the
-      * default field-wise union. Handed to the backend on every write so merge
-      * policy lives with the store, not the storage layer.
+      * default field-wise union. The store's ONE answer to "two records under one
+      * key": the [[Normalizer]] merges repeated keys of a response with it, a batch
+      * of fragment writes merges repeated keys with it, and the backend merges every
+      * commit with it — so merge policy lives with the store, not the storage layer.
       */
     private val recordMerger: RecordMerger = RecordMerger.fieldPolicies(fieldPolicies)
 
@@ -250,7 +252,8 @@ final class ApolloStore(
             encode(operation.dataCodec, data),
             variablesOf(operation),
             cacheKeyGenerator,
-            fieldPolicies
+            fieldPolicies,
+            Present(recordMerger)
         )
 
     /** Commit the records `plan` computes against the backend's current state (see
@@ -387,10 +390,11 @@ final class ApolloStore(
       * [[kyo.apollo.ClientField.writeAll]] exists.
       *
       * Two entries may normalize to the same record key (the same entity written
-      * twice, or a shared nested object). They are unioned field-wise in argument
-      * order, later wins — the rule [[Normalizer]] already applies to two occurrences
-      * of one key inside a single response, so a batch behaves like the one response
-      * it stands in for.
+      * twice, or a shared nested object). They are merged in argument order through
+      * the store's record merger — what [[Normalizer]] does with two occurrences of
+      * one key inside a single response, and what the backend does with two writes —
+      * so a batch behaves like the one response it stands in for, field policies
+      * included.
       *
       * An empty `entries` writes nothing and publishes nothing: a broadcast with no
       * change behind it is the cost this method exists to remove.
@@ -407,10 +411,7 @@ final class ApolloStore(
                     val merged = mutable.LinkedHashMap.empty[CacheKey, Record]
                     entries.foreach { (cacheKey, data) =>
                         fragmentRecords(fragment, cacheKey, data).foreach { (key, record) =>
-                            kyo.discard(merged.updateWith(key) {
-                                case Some(existing) => Some(existing.copy(fields = existing.fields ++ record.fields))
-                                case None           => Some(record)
-                            })
+                            merged.update(key, recordMerger.merge(Maybe.fromOption(merged.get(key)), record)._1)
                         }
                     }
                     Chunk.from(merged.values)
@@ -439,7 +440,7 @@ final class ApolloStore(
         val enriched =
             if encoded.contains("__typename") then encoded
             else encoded + ("__typename" -> Json.JStr(fragment.rootField.fieldType.leafType.name))
-        new Normalizer(fragmentVariablesOf(fragment), cacheKey, cacheKeyGenerator, fieldPolicies)
+        new Normalizer(fragmentVariablesOf(fragment), cacheKey, cacheKeyGenerator, fieldPolicies, recordMerger)
             .normalize(enriched, fragment.rootField)
     end fragmentRecords
 

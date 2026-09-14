@@ -102,61 +102,85 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
     final case class Feed(__typename: String, edges: List[PostEdge], pageInfo: PageInfo)
         derives Schema
     final case class FeedData(feed: Feed) derives Schema
+    final case class TwoPagesData(a: Feed, b: Feed) derives Schema
 
-    /** `{ feed(first: 2, after: $after) { __typename edges { __typename cursor
-      * node { __typename id title } } pageInfo { endCursor hasNextPage } } }`.
-      * `after` rides as a literal so each page is a distinct request; the
-      * connection policy's `keyArgs` collapses both onto one cache slot.
+    /** `feed(first: 2, after: $after) { __typename edges { __typename cursor
+      * node { __typename id title } } pageInfo { endCursor hasNextPage } }`, under
+      * `alias` when given. `after` rides as a literal so each page is a distinct
+      * request; the connection policy's `keyArgs` collapses every page onto one
+      * cache slot.
       */
+    private def connectionField(alias: Maybe[String], after: Maybe[String]): CompiledField =
+        CompiledField(
+            "feed",
+            CompiledNamedType("FeedConnection"),
+            alias = alias,
+            arguments = CompiledArgument.literal("first", jnum(2)) +:
+                after.map(c => CompiledArgument.literal("after", jstr(c))).toChunk,
+            selections = Chunk(
+                CompiledField("__typename", CompiledNamedType("String")),
+                CompiledField(
+                    "edges",
+                    CompiledListType(CompiledNamedType("PostEdge")),
+                    selections = Chunk(
+                        CompiledField("__typename", CompiledNamedType("String")),
+                        CompiledField("cursor", CompiledNamedType("String")),
+                        CompiledField(
+                            "node",
+                            CompiledNamedType("Post"),
+                            selections = Chunk(
+                                CompiledField("__typename", CompiledNamedType("String")),
+                                CompiledField("id", CompiledNamedType("String")),
+                                CompiledField("title", CompiledNamedType("String"))
+                            )
+                        )
+                    )
+                ),
+                CompiledField(
+                    "pageInfo",
+                    CompiledNamedType("PageInfo"),
+                    selections = Chunk(
+                        CompiledField("endCursor", CompiledNamedType("String")),
+                        CompiledField("hasNextPage", CompiledNamedType("Boolean"))
+                    )
+                )
+            )
+        )
+
+    /** `{ feed(first: 2, after: $after) { … } }` — one page per request. */
     final case class FeedQuery(after: Maybe[String]) extends Query[FeedData]:
         def name                         = "Feed"
         def document                     = "query Feed { feed { ... } }"
         def dataSchema: Schema[FeedData] = summon[Schema[FeedData]]
         def rootField: CompiledField =
-            val args = CompiledArgument.literal("first", jnum(2)) +:
-                after.map(c => CompiledArgument.literal("after", jstr(c))).toChunk
+            CompiledField("data", CompiledNamedType("Query"), selections = Chunk(connectionField(Absent, after)))
+        def variables: Json = Json.JObj(VectorMap.empty)
+    end FeedQuery
+
+    /** `feed(first: 2) { … }` as a fragment on `Query`, written at the root key. */
+    object FeedFragment extends Fragment[FeedData]:
+        def dataSchema: Schema[FeedData] = summon[Schema[FeedData]]
+        def rootField: CompiledField =
+            CompiledField("data", CompiledNamedType("Query"), selections = Chunk(connectionField(Absent, Absent)))
+    end FeedFragment
+
+    /** `{ a: feed(first: 2) { … } b: feed(first: 2, after: "c2") { … } }` — the same
+      * connection selected twice in ONE operation. Under the connection policy both
+      * aliases store into the root's single `feed` slot, so one response carries two
+      * occurrences of the same connection record.
+      */
+    final case class TwoPagesQuery() extends Query[TwoPagesData]:
+        def name                             = "TwoPages"
+        def document                         = "query TwoPages { a: feed { ... } b: feed(after: \"c2\") { ... } }"
+        def dataSchema: Schema[TwoPagesData] = summon[Schema[TwoPagesData]]
+        def rootField: CompiledField =
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
-                selections = Chunk(
-                    CompiledField(
-                        "feed",
-                        CompiledNamedType("FeedConnection"),
-                        arguments = args,
-                        selections = Chunk(
-                            CompiledField("__typename", CompiledNamedType("String")),
-                            CompiledField(
-                                "edges",
-                                CompiledListType(CompiledNamedType("PostEdge")),
-                                selections = Chunk(
-                                    CompiledField("__typename", CompiledNamedType("String")),
-                                    CompiledField("cursor", CompiledNamedType("String")),
-                                    CompiledField(
-                                        "node",
-                                        CompiledNamedType("Post"),
-                                        selections = Chunk(
-                                            CompiledField("__typename", CompiledNamedType("String")),
-                                            CompiledField("id", CompiledNamedType("String")),
-                                            CompiledField("title", CompiledNamedType("String"))
-                                        )
-                                    )
-                                )
-                            ),
-                            CompiledField(
-                                "pageInfo",
-                                CompiledNamedType("PageInfo"),
-                                selections = Chunk(
-                                    CompiledField("endCursor", CompiledNamedType("String")),
-                                    CompiledField("hasNextPage", CompiledNamedType("Boolean"))
-                                )
-                            )
-                        )
-                    )
-                )
+                selections = Chunk(connectionField(Present("a"), Absent), connectionField(Present("b"), Present("c2")))
             )
-        end rootField
         def variables: Json = Json.JObj(VectorMap.empty)
-    end FeedQuery
+    end TwoPagesQuery
 
     private def connectionStore(): ApolloStore =
         new ApolloStore(
@@ -470,6 +494,49 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
                 )
                 merged <- store.readOperation(FeedQuery(Absent))
             yield assert(merged.feed.edges.map(_.cursor) == List("c1", "c2", "c3"))
+            end for
+        }
+
+        "two occurrences of one policied connection in a single response are unioned, not overwritten" in {
+            // `a` and `b` land in the same connection record, `QUERY_ROOT.feed`. Merging
+            // two occurrences of one key inside a response is the same question as merging
+            // a write onto the store, so it must get the same answer — the edges union —
+            // before the store ever sees the records. Replacing field-wise instead keeps
+            // only `b`'s edges.
+            val store = connectionStore()
+            val data = TwoPagesData(
+                a = page(List("c1" -> "1", "c2" -> "2"), "c2", hasNext = true).feed,
+                b = page(List("c3" -> "3"), "c3", hasNext = false).feed
+            )
+            val normalizedEdges = Maybe
+                .fromOption(store.normalize(TwoPagesQuery(), data).get(pathKey("QUERY_ROOT", "feed")))
+                .flatMap(_.get(fk("edges")))
+            for
+                _      <- store.writeOperation(TwoPagesQuery(), data)
+                merged <- store.readOperation(FeedQuery(Absent))
+            yield
+                assert(
+                    normalizedEdges == Present(RecordValue.RList(Chunk("c1", "c2", "c3").map(c => ref(CacheKey("PostEdge", c))))),
+                    s"the response's own records lost an occurrence: $normalizedEdges"
+                )
+                assert(merged.feed.edges.map(_.node.id) == List("1", "2", "3"), s"the store saw one page: ${merged.feed.edges}")
+            end for
+        }
+
+        "a batch of fragment writes merges a repeated connection record like one response" in {
+            // writeFragments stands in for one response: two entries that normalize to the
+            // same connection record meet under the same merger, not a field-wise replace.
+            val store = connectionStore()
+            for
+                _ <- store.writeFragments(
+                    FeedFragment,
+                    Seq(
+                        CacheKey.QueryRoot -> page(List("c1" -> "1", "c2" -> "2"), "c2", hasNext = true),
+                        CacheKey.QueryRoot -> page(List("c3" -> "3"), "c3", hasNext = false)
+                    )
+                )
+                merged <- store.readOperation(FeedQuery(Absent))
+            yield assert(merged.feed.edges.map(_.node.id) == List("1", "2", "3"), s"the batch kept one entry: ${merged.feed.edges}")
             end for
         }
 
