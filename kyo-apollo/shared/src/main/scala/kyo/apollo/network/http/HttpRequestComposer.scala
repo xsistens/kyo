@@ -26,7 +26,12 @@ import scala.collection.immutable.VectorMap
   *   - every other method (`POST` by default) — a JSON body built by
   *     [[OperationRequestBody]], the single source of request-body serialization.
   *     The composer never hand-builds `{ query, … }`; it delegates and only feeds an
-  *     `extensions` map in.
+  *     `extensions` map in. With an [[kyo.apollo.Upload]] among the variables the
+  *     body is `multipart/form-data` per the graphql-multipart-request-spec.
+  *
+  * A file cannot ride a query string, so a `GET` whose variables carry an `Upload`
+  * is sent as a multipart `POST` instead (as apollo-kotlin does): an upload is never
+  * sent as a bare `null`.
   *
   * APQ handling is expressed purely through the two [[ApolloRequest]] flags:
   *   - `sendApqExtensions` adds the `persistedQuery` extension (version 1 plus
@@ -44,9 +49,17 @@ final class HttpRequestComposer(defaultHttpMethod: HttpMethod = HttpMethod.POST)
     /** Compose the [[HttpEngine.Request]] for `request` against `serverUrl`. */
     def compose[D](serverUrl: HttpUrl, request: ApolloRequest[D]): HttpEngine.Request =
         val method = request.httpMethod.getOrElse(defaultHttpMethod)
-        if method == HttpMethod.GET then composeGet(serverUrl, request)
-        else composeBody(method, serverUrl, request)
+        if method != HttpMethod.GET then composeBody(method, serverUrl, request)
+        else if containsUpload(request.operation.variables) then composeBody(HttpMethod.POST, serverUrl, request)
+        else composeGet(serverUrl, request)
     end compose
+
+    /** Whether `json` holds an [[Json.JUpload]] anywhere. */
+    private def containsUpload(json: Json): Boolean = json match
+        case Json.JUpload(_)   => true
+        case Json.JObj(fields) => fields.valuesIterator.exists(containsUpload)
+        case Json.JArr(items)  => items.exists(containsUpload)
+        case _                 => false
 
     private def composeBody[D](
         method: HttpMethod,

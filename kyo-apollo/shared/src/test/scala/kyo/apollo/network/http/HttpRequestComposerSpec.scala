@@ -1,5 +1,6 @@
 package kyo.apollo.network.http
 
+import java.nio.charset.StandardCharsets
 import kyo.Absent
 import kyo.Chunk
 import kyo.HttpHeaders
@@ -7,12 +8,15 @@ import kyo.HttpMethod
 import kyo.HttpUrl
 import kyo.Present
 import kyo.Schema
+import kyo.Span
+import kyo.apollo.Upload
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledFragment
 import kyo.apollo.api.CompiledNamedType
 import kyo.apollo.api.DeferDirective
 import kyo.apollo.api.JsonCodec
 import kyo.apollo.api.Query
+import kyo.apollo.api.ScalarCodec
 import kyo.apollo.json.Json
 import kyo.apollo.json.SchemaJson
 import kyo.apollo.network.ApolloRequest
@@ -60,6 +64,15 @@ class HttpRequestComposerSpec extends kyo.test.Test[Any]:
         )
         def variables: Json = Json.JObj(VectorMap("limit" -> SchemaJson.encode(limit)))
     end DeferQuery
+
+    /** A query with an `Upload` variable — a file can ride a query as well as a mutation. */
+    final case class PreviewQuery(file: Upload) extends Query.Normalizable[Int]:
+        def name: String              = "Preview"
+        def document: String          = "query Preview($file: Upload!) { preview(file: $file) }"
+        val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema[Int]
+        def rootField: CompiledField  = CompiledField("data", CompiledNamedType("Query"))
+        def variables: Json           = Json.JObj(VectorMap("file" -> ScalarCodec.upload.encode(file)))
+    end PreviewQuery
 
     private val composer = HttpRequestComposer()
     private val urlText  = "https://example.com/graphql"
@@ -163,6 +176,30 @@ class HttpRequestComposerSpec extends kyo.test.Test[Any]:
         "a non-defer operation keeps the plain Accept header" in {
             val http = composer.compose(url, ApolloRequest(MiniQuery(1), TestIds.requestUuid))
             assert(http.headers.getAll("Accept").contains(plainAccept))
+        }
+
+        "a GET request carrying an Upload variable is sent as multipart POST" in {
+            val file   = Upload(Span.from("hello".getBytes(StandardCharsets.UTF_8)), "a.txt", "text/plain")
+            val pinned = ApolloRequest(PreviewQuery(file), TestIds.requestUuid, httpMethod = Present(HttpMethod.GET))
+            // A pinned GET and a GET default both switch.
+            Seq(
+                composer.compose(url, pinned),
+                HttpRequestComposer(defaultHttpMethod = HttpMethod.GET).compose(url, ApolloRequest(PreviewQuery(file), TestIds.requestUuid))
+            ).foreach { http =>
+                assert(http.method == HttpMethod.POST, s"sent as ${http.method.name} ${http.url.full}")
+                assert(http.url.rawQuery == Absent, s"the operation rode the query string: ${http.url.full}")
+                http.fields.body match
+                    case HttpRequestBody.Multipart(parts) =>
+                        def text(name: String): String =
+                            parts.find(_.name == name).map(p => new String(p.data.toArray, StandardCharsets.UTF_8)).getOrElse("<none>")
+                        // The nulled variable in `operations` is mapped to a file part carrying the bytes.
+                        assert(text("operations").contains("\"variables\":{\"file\":null}"), text("operations"))
+                        assert(text("map") == """{"0":["variables.file"]}""", text("map"))
+                        assert(parts.exists(p => p.name == "0" && p.filename == Present("a.txt")), s"no file part: $parts")
+                        assert(text("0") == "hello")
+                    case other => fail(s"expected a multipart body, got $other")
+                end match
+            }
         }
 
         "a request-pinned method overrides the composer default" in {
