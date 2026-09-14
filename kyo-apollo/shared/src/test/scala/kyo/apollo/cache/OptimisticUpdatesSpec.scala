@@ -540,7 +540,7 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
             discard(armed.getAndSet(Present((Sync.defer(before), Sync.defer(after)))))
 
         override def transact[A](
-            f: RecordLoader => (Chunk[Record], A),
+            f: RecordState => (RecordChanges, A),
             cacheHeaders: CacheHeaders,
             merger: RecordMerger
         )(using Frame): (Set[CacheKey], A) < Sync =
