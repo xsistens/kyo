@@ -6,6 +6,7 @@ import kyo.Maybe
 import kyo.Present
 import kyo.Schema
 import kyo.apollo.api.*
+import kyo.apollo.cache.TestKeys.*
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.*
 import kyo.apollo.cache.normalized.internal.Normalizer
@@ -37,7 +38,7 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
 
     // --- ConnectionFieldPolicy.unionByReference -------------------------------
 
-    private def ref(key: String): RecordValue = RecordValue.reference(CacheKey(key))
+    private def ref(key: CacheKey): RecordValue = RecordValue.reference(key)
 
     /** A stored `__typename` value, as the Normalizer writes it. */
     private def tn(typename: String): RecordValue = RecordValue.Scalar(jstr(typename))
@@ -190,7 +191,7 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
         "multiple key fields are joined in declaration order with a + separator" in {
             val gen = TypePolicyCacheKeyGenerator.of(TypePolicy("Book", List("isbn", "edition")))
             val obj = Map("__typename" -> jstr("Book"), "isbn" -> jstr("111"), "edition" -> jnum(2))
-            assert(gen.cacheKeyForObject(obj, ctx()) == Present(CacheKey("Book:111+2")))
+            assert(gen.cacheKeyForObject(obj, ctx()) == Present(CacheKey("Book", "111+2")))
         }
 
         "a type without a policy falls back to the default id-based key" in {
@@ -204,7 +205,7 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
             val obj = Map("__typename" -> jstr("Country")) // no `code`
             assert(
                 gen.cacheKeyForObject(obj, ctx(path = List("QUERY_ROOT", "country"))) ==
-                    Present(CacheKey("QUERY_ROOT.country"))
+                    Present(pathKey("QUERY_ROOT", "country"))
             )
         }
 
@@ -212,7 +213,7 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
             // Apollo Client's `keyFields: []` — the singleton-record declaration.
             val gen = TypePolicyCacheKeyGenerator.of(TypePolicy("PlaybackState", Nil))
             val obj = Map("__typename" -> jstr("PlaybackState"), "isPlaying" -> Json.JBool(true))
-            assert(gen.cacheKeyForObject(obj, ctx()) == Present(CacheKey("PlaybackState")))
+            assert(gen.cacheKeyForObject(obj, ctx()) == Present(CacheKey("PlaybackState", "")))
         }
 
         "a query snapshot and a mutation response of a singleton type share one record" in {
@@ -223,10 +224,10 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
                 cacheKeyGenerator = TypePolicyCacheKeyGenerator.of(TypePolicy("Player", Nil))
             )
             store.writeOperation(PlayerQuery(), PlayerData(Player("Player", isPlaying = true)))
-            assert(store.cache.loadRecord("Player").isDefined)
+            assert(store.cache.loadRecord(CacheKey("Player", "")).isDefined)
 
             val changed = store.writeOperation(PauseMutation(), PauseData(Player("Player", isPlaying = false)))
-            assert(changed.contains("Player"))
+            assert(changed.contains(CacheKey("Player", "")))
             assert(!store.readOperation(PlayerQuery()).playbackState.isPlaying)
         }
 
@@ -238,30 +239,30 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
                     CompiledArgument.literal("after", jstr("cursor"))
                 )
             )
-            assert(FieldKey(field, Map.empty, Chunk("category")) == "feed({\"category\":\"tech\"})")
+            assert(FieldKey(field, Map.empty, Present(Chunk("category"))).render == "feed({\"category\":\"tech\"})")
         }
 
         "empty keyArgs collapses a field to its bare name regardless of arguments" in {
             val field = feedField(Chunk(CompiledArgument.literal("first", jnum(10))))
-            assert(FieldKey(field, Map.empty, Chunk.empty) == "feed")
+            assert(FieldKey(field, Map.empty, Present(Chunk.empty)).render == "feed")
         }
 
         "without keyArgs a field key includes all of its arguments" in {
             val field = feedField(Chunk(CompiledArgument.literal("first", jnum(10))))
-            assert(FieldKey(field, Map.empty) == "feed({\"first\":10})")
+            assert(FieldKey(field, Map.empty).render == "feed({\"first\":10})")
         }
 
         "unionByReference appends new edge references, de-duplicating by key" in {
-            val existing = RecordValue.RList(Chunk(ref("E:1"), ref("E:2")))
-            val incoming = RecordValue.RList(Chunk(ref("E:2"), ref("E:3")))
+            val existing = RecordValue.RList(Chunk(ref(CacheKey("E", "1")), ref(CacheKey("E", "2"))))
+            val incoming = RecordValue.RList(Chunk(ref(CacheKey("E", "2")), ref(CacheKey("E", "3"))))
             assert(
                 ConnectionFieldPolicy.unionByReference(Present(existing), incoming) ==
-                    RecordValue.RList(Chunk(ref("E:1"), ref("E:2"), ref("E:3")))
+                    RecordValue.RList(Chunk(ref(CacheKey("E", "1")), ref(CacheKey("E", "2")), ref(CacheKey("E", "3"))))
             )
         }
 
         "unionByReference on a first write keeps the incoming list" in {
-            val incoming = RecordValue.RList(Chunk(ref("E:1")))
+            val incoming = RecordValue.RList(Chunk(ref(CacheKey("E", "1"))))
             assert(ConnectionFieldPolicy.unionByReference(Absent, incoming) == incoming)
         }
 
@@ -302,7 +303,7 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
             val policies = FieldPolicies.empty
             assert(policies.isEmpty)
             val field = feedField(Chunk(CompiledArgument.literal("first", jnum(1))))
-            assert(policies.fieldKey("Query", field, Map.empty) == "feed({\"first\":1})")
+            assert(policies.fieldKey("Query", field, Map.empty).render == "feed({\"first\":1})")
             assert(policies.readRedirect("Query", field, Map.empty) == Absent)
             assert(policies.fieldMerge("FeedConnection", "feed") == Absent)
         }
@@ -317,9 +318,9 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
                 arguments = Chunk(CompiledArgument.literal("first", jnum(10)))
             )
             // On the declared type the pagination args are dropped from the key.
-            assert(policies.fieldKey("Playlist", field, Map.empty) == "tracks")
+            assert(policies.fieldKey("Playlist", field, Map.empty).render == "tracks")
             // On any other type the same field name keeps its full argument-aware key.
-            assert(policies.fieldKey("CurrentUser", field, Map.empty) == "tracks({\"first\":10})")
+            assert(policies.fieldKey("CurrentUser", field, Map.empty).render == "tracks({\"first\":10})")
             // The edges union is bound to the connection type, not to every `edges`.
             assert(policies.fieldMerge("PlaylistTrackConnection", "edges").isDefined)
             assert(policies.fieldMerge("SavedTrackConnection", "edges") == Absent)
@@ -328,10 +329,10 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
         "a FieldPolicy carries Maybe/Chunk: keyArgs = Present(Chunk.empty) collapses the key" in {
             val policies = FieldPolicies.of(FieldPolicy("Query", "feed", keyArgs = Present(Chunk.empty)))
             val field    = feedField(Chunk(CompiledArgument.literal("first", jnum(10))))
-            assert(policies.fieldKey("Query", field, Map.empty) == "feed")
+            assert(policies.fieldKey("Query", field, Map.empty).render == "feed")
             // `Absent` (the default) keeps every argument in the key.
             val plain = FieldPolicies.of(FieldPolicy("Query", "feed"))
-            assert(plain.fieldKey("Query", field, Map.empty) == "feed({\"first\":10})")
+            assert(plain.fieldKey("Query", field, Map.empty).render == "feed({\"first\":10})")
             assert(FieldPolicy("Query", "feed").keyArgs == Absent)
         }
 
@@ -349,16 +350,16 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
             )
             val merger = RecordMerger.fieldPolicies(policies)
             val existing = Record(
-                "Feed:1",
-                Map("__typename" -> tn("Feed"), "edges" -> RecordValue.RList(Chunk(ref("E:1"))))
+                CacheKey("Feed", "1"),
+                Map(FieldKey.Typename -> tn("Feed"), fk("edges") -> RecordValue.RList(Chunk(ref(CacheKey("E", "1")))))
             )
             val incoming = Record(
-                "Feed:1",
-                Map("__typename" -> tn("Feed"), "edges" -> RecordValue.RList(Chunk(ref("E:2"))))
+                CacheKey("Feed", "1"),
+                Map(FieldKey.Typename -> tn("Feed"), fk("edges") -> RecordValue.RList(Chunk(ref(CacheKey("E", "2")))))
             )
             val (merged, changed) = merger.merge(Present(existing), incoming)
-            assert(merged.get("edges") == Present(RecordValue.RList(Chunk(ref("E:1"), ref("E:2")))))
-            assert(changed == Set("edges"))
+            assert(merged.get(fk("edges")) == Present(RecordValue.RList(Chunk(ref(CacheKey("E", "1")), ref(CacheKey("E", "2"))))))
+            assert(changed == Set(fk("edges")))
         }
 
         "a merge policy does not leak onto a same-named field of another type" in {
@@ -370,15 +371,18 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
             )
             val merger = RecordMerger.fieldPolicies(policies)
             val existing = Record(
-                "Saved:1",
-                Map("__typename" -> tn("Saved"), "edges" -> RecordValue.RList(Chunk(ref("E:1"), ref("E:2"))))
+                CacheKey("Saved", "1"),
+                Map(
+                    FieldKey.Typename -> tn("Saved"),
+                    fk("edges")       -> RecordValue.RList(Chunk(ref(CacheKey("E", "1")), ref(CacheKey("E", "2"))))
+                )
             )
             val incoming = Record(
-                "Saved:1",
-                Map("__typename" -> tn("Saved"), "edges" -> RecordValue.RList(Chunk(ref("E:2"))))
+                CacheKey("Saved", "1"),
+                Map(FieldKey.Typename -> tn("Saved"), fk("edges") -> RecordValue.RList(Chunk(ref(CacheKey("E", "2")))))
             )
             val (merged, _) = merger.merge(Present(existing), incoming)
-            assert(merged.get("edges") == Present(RecordValue.RList(Chunk(ref("E:2")))))
+            assert(merged.get(fk("edges")) == Present(RecordValue.RList(Chunk(ref(CacheKey("E", "2"))))))
         }
 
         "a record without a stored __typename matches no merge policy" in {
@@ -386,11 +390,11 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
                 FieldPolicy("Feed", "edges", merge = Present(ConnectionFieldPolicy.unionByReference))
             )
             val merger            = RecordMerger.fieldPolicies(policies)
-            val existing          = Record("Feed:1", Map("edges" -> RecordValue.RList(Chunk(ref("E:1")))))
-            val incoming          = Record("Feed:1", Map("edges" -> RecordValue.RList(Chunk(ref("E:2")))))
+            val existing          = Record(CacheKey("Feed", "1"), Map(fk("edges") -> RecordValue.RList(Chunk(ref(CacheKey("E", "1"))))))
+            val incoming          = Record(CacheKey("Feed", "1"), Map(fk("edges") -> RecordValue.RList(Chunk(ref(CacheKey("E", "2"))))))
             val (merged, changed) = merger.merge(Present(existing), incoming)
-            assert(merged.get("edges") == Present(RecordValue.RList(Chunk(ref("E:2")))))
-            assert(changed == Set("edges"))
+            assert(merged.get(fk("edges")) == Present(RecordValue.RList(Chunk(ref(CacheKey("E", "2"))))))
+            assert(changed == Set(fk("edges")))
         }
 
         "RecordMerger.fieldPolicies falls back to the default for unpolicied fields" in {
@@ -420,8 +424,8 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
                 data,
                 cacheKeyGenerator = TypePolicyCacheKeyGenerator.of(TypePolicy("Country", List("code")))
             )
-            assert(records.keySet == Set("QUERY_ROOT", "Country:FR"))
-            assert(records("Country:FR").get("name") == Present(RecordValue.Scalar(jstr("France"))))
+            assert(records.keySet == Set(CacheKey.QueryRoot, CacheKey("Country", "FR")))
+            assert(records(CacheKey("Country", "FR")).get(fk("name")) == Present(RecordValue.Scalar(jstr("France"))))
         }
 
         "ConnectionFieldPolicy merges paginated pages into one logical list" in {
@@ -438,8 +442,8 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
             // Both pages collapsed onto the single connection field key `feed`
             // (next to the root's stamped `__typename`).
             assert(
-                store.cache.loadRecord("QUERY_ROOT").map(_.fieldKeys) ==
-                    Present(Set("__typename", "feed"))
+                store.cache.loadRecord(CacheKey.QueryRoot).map(_.fieldKeys) ==
+                    Present(Set(FieldKey.Typename, fk("feed")))
             )
 
             val merged = store.readOperation(FeedQuery(Absent))
@@ -483,7 +487,7 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
 
             // Two distinct field keys on the root (plus the stamped `__typename`) —
             // the pages are isolated.
-            assert(store.cache.loadRecord("QUERY_ROOT").map(_.fieldKeys.size) == Present(3))
+            assert(store.cache.loadRecord(CacheKey.QueryRoot).map(_.fieldKeys.size) == Present(3))
             assert(store.readOperation(FeedQuery(Absent)).feed.edges.map(_.cursor) == List("c1", "c2"))
             assert(
                 store.readOperation(FeedQuery(Present("c2"))).feed.edges.map(_.cursor) == List("c3", "c4")

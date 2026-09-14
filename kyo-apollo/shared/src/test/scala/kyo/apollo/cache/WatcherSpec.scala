@@ -133,14 +133,14 @@ class WatcherSpec extends kyo.test.Test[Any]:
       */
     final private class HoleCache(delegate: NormalizedCache) extends NormalizedCacheDecorator(delegate):
         private given AllowUnsafe = AllowUnsafe.embrace.danger
-        private val hole          = AtomicRef.Unsafe.init(Maybe.empty[String])
+        private val hole          = AtomicRef.Unsafe.init(Maybe.empty[CacheKey])
 
-        def hide(key: String): Unit = discard(hole.getAndSet(Present(key)))
+        def hide(key: CacheKey): Unit = discard(hole.getAndSet(Present(key)))
 
-        override def loadRecord(key: String): Maybe[Record] =
+        override def loadRecord(key: CacheKey): Maybe[Record] =
             if hole.get().contains(key) then Absent else delegate.loadRecord(key)
 
-        override def loadRecords(keys: Iterable[String]): Map[String, Record] =
+        override def loadRecords(keys: Iterable[CacheKey]): Map[CacheKey, Record] =
             delegate.loadRecords(keys).filterNot((key, _) => hole.get().contains(key))
     end HoleCache
 
@@ -153,11 +153,11 @@ class WatcherSpec extends kyo.test.Test[Any]:
       */
     final private class TrapCache(delegate: NormalizedCache) extends NormalizedCacheDecorator(delegate):
         private given AllowUnsafe = AllowUnsafe.embrace.danger
-        private val trap          = AtomicRef.Unsafe.init(Maybe.empty[(String, () => Unit)])
+        private val trap          = AtomicRef.Unsafe.init(Maybe.empty[(CacheKey, () => Unit)])
 
-        def arm(key: String)(write: => Unit): Unit = discard(trap.getAndSet(Present((key, () => write))))
+        def arm(key: CacheKey)(write: => Unit): Unit = discard(trap.getAndSet(Present((key, () => write))))
 
-        override def loadRecord(key: String): Maybe[Record] =
+        override def loadRecord(key: CacheKey): Maybe[Record] =
             val record = delegate.loadRecord(key)
             trap.get() match
                 case Present((armed, write)) if armed == key =>
@@ -212,7 +212,7 @@ class WatcherSpec extends kyo.test.Test[Any]:
                 yield
                     assert(first.data == Present(userData("Alice")))
                     assert(first.cacheInfo.exists(_.isCacheHit))
-                    assert(first.cacheInfo.exists(_.dependentKeys.contains("User:1")))
+                    assert(first.cacheInfo.exists(_.dependentKeys.contains(CacheKey("User", "1"))))
             }
         }
 
@@ -236,9 +236,9 @@ class WatcherSpec extends kyo.test.Test[Any]:
                     // watch set, so the CacheOnly re-read fires and the watcher emits Eve.
                     changed <- Sync.defer(
                         client.apolloStore
-                            .writeFragment(UserFragment, CacheKey("User:1"), User("User", "1", "Eve"))
+                            .writeFragment(UserFragment, CacheKey("User", "1"), User("User", "1", "Eve"))
                     )
-                    _ = assert(changed.contains("User:1"))
+                    _ = assert(changed.contains(CacheKey("User", "1")))
                     second <- pull.next
                 yield assert(second.data == Present(userData("Eve")))
             }
@@ -249,7 +249,7 @@ class WatcherSpec extends kyo.test.Test[Any]:
                 for
                     _ <- pull.next
                     // A changed key outside the read's dependentKeys ({QUERY_ROOT, User:1}).
-                    _           <- Sync.defer(client.apolloStore.publish(Set("Post:99")))
+                    _           <- Sync.defer(client.apolloStore.publish(Set(CacheKey("Post", "99"))))
                     maybeSecond <- pull.tryNext
                 yield assert(maybeSecond == Absent) // still just the initial emission
             }
@@ -328,11 +328,11 @@ class WatcherSpec extends kyo.test.Test[Any]:
                 first <- pull.next
                 _ = assert(first.data == Present(userData("Alice")))
                 _ <- Sync.defer {
-                    cache.arm("User:2") {
-                        discard(client.apolloStore.writeFragment(UserFragment, CacheKey("User:2"), User("User", "2", "Zoe")))
+                    cache.arm(CacheKey("User", "2")) {
+                        discard(client.apolloStore.writeFragment(UserFragment, CacheKey("User", "2"), User("User", "2", "Zoe")))
                     }
                     discard(client.apolloStore.writeOperation(CurrentUserQuery(), UserData(User("User", "2", "Bob"))))
-                    discard(client.apolloStore.writeFragment(UserFragment, CacheKey("User:2"), User("User", "2", "Zed")))
+                    discard(client.apolloStore.writeFragment(UserFragment, CacheKey("User", "2"), User("User", "2", "Zed")))
                 }
                 second <- pull.next
                 third  <- pull.next
@@ -357,8 +357,8 @@ class WatcherSpec extends kyo.test.Test[Any]:
             val client = cachedClient(CountingEngine(), cache)
             for
                 _ <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                _ <- Sync.defer(cache.arm("User:1") {
-                    discard(client.apolloStore.writeFragment(UserFragment, CacheKey("User:1"), User("User", "1", "Bob")))
+                _ <- Sync.defer(cache.arm(CacheKey("User", "1")) {
+                    discard(client.apolloStore.writeFragment(UserFragment, CacheKey("User", "1"), User("User", "1", "Bob")))
                 })
                 pull   <- StreamProbe.Pull.open(query(client).fetchPolicy(FetchPolicy.CacheOnly).watch())
                 first  <- pull.next
@@ -375,7 +375,7 @@ class WatcherSpec extends kyo.test.Test[Any]:
             watching { (client, pull) =>
                 for
                     _      <- pull.next
-                    _      <- Sync.defer(client.apolloStore.remove("User:1"))
+                    _      <- Sync.defer(client.apolloStore.remove(CacheKey("User", "1")))
                     second <- pull.next
                 yield
                     assert(second.data.isEmpty)
@@ -399,7 +399,7 @@ class WatcherSpec extends kyo.test.Test[Any]:
                 )
                 first <- pull.next
                 _ = assert(first.data == Present(userData("Alice")))
-                _      <- Sync.defer(client.apolloStore.remove("User:1"))
+                _      <- Sync.defer(client.apolloStore.remove(CacheKey("User", "1")))
                 second <- pull.next
             yield
                 assert(second.error.isEmpty, s"the miss must not reach the consumer: ${second.error}")
@@ -431,8 +431,8 @@ class WatcherSpec extends kyo.test.Test[Any]:
                     first <- pull.next
                     _ = assert(first.data == Present(userData("Alice-1")))
                     _ <- Sync.defer {
-                        cache.hide("User:1")
-                        discard(client.apolloStore.remove("User:1"))
+                        cache.hide(CacheKey("User", "1"))
+                        discard(client.apolloStore.remove(CacheKey("User", "1")))
                     }
                     // The miss went to the network once; that response is parked on the clock.
                     _      <- control.awaitPendingSleepers(1)
@@ -474,10 +474,10 @@ class WatcherSpec extends kyo.test.Test[Any]:
                         .watch()
                 )
                 _      <- pull.next
-                _      <- Sync.defer(client.apolloStore.remove("User:1"))
+                _      <- Sync.defer(client.apolloStore.remove(CacheKey("User", "1")))
                 second <- pull.next // the write-back's re-read hit
                 third  <- pull.next // the networked value
-                _      <- Sync.defer(client.apolloStore.remove("User:1"))
+                _      <- Sync.defer(client.apolloStore.remove(CacheKey("User", "1")))
                 fourth <- pull.next
                 fifth  <- pull.next
                 more   <- pull.tryNext
