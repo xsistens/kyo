@@ -79,10 +79,10 @@ trait NormalizedCache:
     def clearAll(): Unit
 
     /** The maximum number of records this backend retains before eviction, when it
-      * is bounded — `None` for an unbounded store. Surfaced for diagnostics (e.g. the
+      * is bounded — `Absent` for an unbounded store. Surfaced for diagnostics (e.g. the
       * devtools memory view); backends with a size cap override this.
       */
-    def sizeLimit: Option[Int] = None
+    def sizeLimit: Maybe[Int] = Absent
 end NormalizedCache
 
 object NormalizedCache:

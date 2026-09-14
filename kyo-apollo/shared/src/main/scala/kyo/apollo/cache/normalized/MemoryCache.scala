@@ -52,8 +52,8 @@ final class MemoryCache(
 
     require(maxSize >= 1, s"maxSize must be >= 1, was $maxSize")
 
-    /** The LRU record cap, or `None` when effectively unbounded (`Int.MaxValue`). */
-    override def sizeLimit: Option[Int] = if maxSize == Int.MaxValue then None else Some(maxSize)
+    /** The LRU record cap, or `Absent` when effectively unbounded (`Int.MaxValue`). */
+    override def sizeLimit: Maybe[Int] = if maxSize == Int.MaxValue then Absent else Present(maxSize)
 
     /** Records keyed by [[Record.key]], in least- to most-recently-used order:
       * the head is the LRU eviction candidate, the tail the freshest. Order is

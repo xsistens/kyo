@@ -1,5 +1,8 @@
 package kyo.apollo.cache
 
+import kyo.Chunk
+import kyo.Maybe
+import kyo.Present
 import kyo.apollo.api.*
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.*
@@ -32,11 +35,11 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             SelectionBuilder.scalar("code", CompiledNamedType("ID").notNull, ScalarCodec.string)
         def name: SelectionBuilder[CountryT, (name: String)] =
             SelectionBuilder.scalar("name", CompiledNamedType("String").notNull, ScalarCodec.string)
-        def capital: SelectionBuilder[CountryT, (capital: Option[String])] =
+        def capital: SelectionBuilder[CountryT, (capital: Maybe[String])] =
             SelectionBuilder.scalar(
                 "capital",
                 CompiledNamedType("String"),
-                ScalarCodec.option(ScalarCodec.string)
+                ScalarCodec.maybe(ScalarCodec.string)
             )
         def emoji: SelectionBuilder[CountryT, (emoji: String)] =
             SelectionBuilder.scalar("emoji", CompiledNamedType("String").notNull, ScalarCodec.string)
@@ -45,11 +48,11 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
     object GPageInfo:
         def hasNextPage: SelectionBuilder[PageInfoT, (hasNextPage: Boolean)] =
             SelectionBuilder.scalar("hasNextPage", CompiledNamedType("Boolean").notNull, ScalarCodec.boolean)
-        def endCursor: SelectionBuilder[PageInfoT, (endCursor: Option[String])] =
+        def endCursor: SelectionBuilder[PageInfoT, (endCursor: Maybe[String])] =
             SelectionBuilder.scalar(
                 "endCursor",
                 CompiledNamedType("String"),
-                ScalarCodec.option(ScalarCodec.string)
+                ScalarCodec.maybe(ScalarCodec.string)
             )
     end GPageInfo
 
@@ -72,7 +75,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
         SelectionBuilder.obj(
             "country",
             CompiledNamedType("Country").notNull,
-            Nil,
+            Chunk.empty,
             sel,
             SelectionBuilder.Nesting.Leaf
         )
@@ -81,7 +84,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
         SelectionBuilder.obj(
             "pageInfo",
             CompiledNamedType("PageInfo").notNull,
-            Nil,
+            Chunk.empty,
             sel,
             SelectionBuilder.Nesting.Leaf
         )
@@ -149,7 +152,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             // value carried them only inside the opaque ref.
             val frag = s.readFragment(CountryCard.fields.cacheFragment, CacheKey("Country", "DE"))
             assert(frag.name == "Germany")
-            assert(frag.capital == Some("Berlin"))
+            assert(frag.capital == Present("Berlin"))
         }
 
         "write → read round-trips the ref by value" in {
@@ -218,7 +221,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             // …and the fragment now assembles across both operations' contributions.
             val frag = s.readFragment(CountryCard.fields.cacheFragment, CacheKey("Country", "DE"))
             assert(frag.name == "Germany")
-            assert(frag.capital == Some("Berlin"))
+            assert(frag.capital == Present("Berlin"))
             // A's own read survives B's write: old fields were unioned, not clobbered.
             assert(s.readOperation(qa).country.name == "Germany")
         }
@@ -233,7 +236,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             val decoded                   = q.dataCodec.decode(parse(body))
             val ref: PageBadge.fields.Ref = decoded.pageInfo.pageBadge
             assert(decoded.pageInfo.hasNextPage == true)
-            assert(ref.value == (hasNextPage = true, endCursor = Some("c42")))
+            assert(ref.value == (hasNextPage = true, endCursor = Present("c42")))
             assert(!ref.toString.contains("c42"))
         }
     }

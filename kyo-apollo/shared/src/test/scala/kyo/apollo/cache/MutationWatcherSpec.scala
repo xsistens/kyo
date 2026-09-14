@@ -41,7 +41,7 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
         CompiledField(
             field,
             CompiledNamedType("User"),
-            selections = List(
+            selections = Chunk(
                 CompiledField("__typename", CompiledNamedType("String")),
                 CompiledField("id", CompiledNamedType("String")),
                 CompiledField("name", CompiledNamedType("String"))
@@ -56,7 +56,7 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
         def document                     = "query CurrentUser { user { __typename id name } }"
         def dataSchema: Schema[UserData] = summon[Schema[UserData]]
         def rootField: CompiledField =
-            CompiledField("data", CompiledNamedType("Query"), selections = List(userField("user")))
+            CompiledField("data", CompiledNamedType("Query"), selections = Chunk(userField("user")))
         def variables: Json = Json.JObj(VectorMap.empty)
     end CurrentUserQuery
 
@@ -72,7 +72,7 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
             CompiledField(
                 "data",
                 CompiledNamedType("Mutation"),
-                selections = List(userField("updateUser"))
+                selections = Chunk(userField("updateUser"))
             )
         def variables: Json = Json.JObj(VectorMap("name" -> SchemaJson.encode(newName)))
     end UpdateUserNameMutation
@@ -89,7 +89,7 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
             CompiledField(
                 "data",
                 CompiledNamedType("Subscription"),
-                selections = List(userField("userUpdated"))
+                selections = Chunk(userField("userUpdated"))
             )
         def variables: Json = Json.JObj(VectorMap.empty)
     end UserUpdatedSubscription

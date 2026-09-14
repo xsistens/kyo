@@ -52,19 +52,19 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
             SelectionBuilder.scalar("name", CompiledNamedType("String").notNull, ScalarCodec.string)
         def players[A](
             sel: SelectionBuilder[LobbyPlayerT, A]
-        ): SelectionBuilder[LobbyViewT, (players: List[A])] =
+        ): SelectionBuilder[LobbyViewT, (players: Chunk[A])] =
             SelectionBuilder.obj(
                 "players",
                 CompiledNamedType("LobbyPlayer").notNull.list.notNull,
-                Nil,
+                Chunk.empty,
                 sel,
                 SelectionBuilder.Nesting.Listed(SelectionBuilder.Nesting.Leaf)
             )
-        def startedGameId: SelectionBuilder[LobbyViewT, (startedGameId: Option[String])] =
+        def startedGameId: SelectionBuilder[LobbyViewT, (startedGameId: Maybe[String])] =
             SelectionBuilder.scalar(
                 "startedGameId",
                 CompiledNamedType("GameId"),
-                ScalarCodec.option(ScalarCodec.string)
+                ScalarCodec.maybe(ScalarCodec.string)
             )
     end GLobby
 
@@ -74,14 +74,14 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
     final case class Lobby(
         id: String,
         name: String,
-        players: List[Player],
-        startedGameId: Option[String]
+        players: Chunk[Player],
+        startedGameId: Maybe[String]
     ) derives Schema
 
     /** The shared selection: query, mutation and subscription all use it, so every
       * reply/event must update the same records (civolution `Model.lobby`). The
-      * nullable `startedGameId` guards the `Option = None` write → read round-trip
-      * (kyo-schema encodes `None` as an ABSENT field; the cache must repair it to
+      * nullable `startedGameId` guards the `Maybe = Absent` write → read round-trip
+      * (kyo-schema encodes `Absent` as an ABSENT field; the cache must repair it to
       * an explicit `null` or every later read misses).
       */
     private def playerSel: SelectionBuilder[LobbyPlayerT, Player] =
@@ -90,8 +90,8 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
     private def lobbySel: SelectionBuilder[LobbyViewT, Lobby] =
         (GLobby.id ~ GLobby.name ~ GLobby.players(playerSel) ~ GLobby.startedGameId).mapInto[Lobby]
 
-    private def lobbyArg(id: String): List[SelectionBuilder.Arg] =
-        List(
+    private def lobbyArg(id: String): Chunk[SelectionBuilder.Arg] =
+        Chunk(
             SelectionBuilder.Arg(
                 "id",
                 CompiledNamedType("LobbyId").notNull,
@@ -111,8 +111,8 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
     private def lobbyQuery(id: String): Query[(lobby: Lobby)] =
         lobbyQuerySel(id).toQuery()
 
-    private def lobbySubscription(id: String): Subscription[(lobbyUpdates: Option[Lobby])] =
-        val sel: SelectionBuilder[RootSubscription, (lobbyUpdates: Option[Lobby])] =
+    private def lobbySubscription(id: String): Subscription[(lobbyUpdates: Maybe[Lobby])] =
+        val sel: SelectionBuilder[RootSubscription, (lobbyUpdates: Maybe[Lobby])] =
             SelectionBuilder.obj(
                 "lobbyUpdates",
                 CompiledNamedType("LobbyView"),
@@ -144,19 +144,19 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
 
     private def badgesSel[A](
         sel: SelectionBuilder[LobbyBadgeT, A]
-    ): SelectionBuilder[LobbyViewT, (badges: List[A])] =
+    ): SelectionBuilder[LobbyViewT, (badges: Chunk[A])] =
         SelectionBuilder.obj(
             "badges",
             CompiledNamedType("LobbyBadge").notNull.list.notNull,
-            Nil,
+            Chunk.empty,
             sel,
             SelectionBuilder.Nesting.Listed(SelectionBuilder.Nesting.Leaf)
         )
 
     final case class BadgeWide(label: String, tone: String) derives Schema
     final case class BadgeNarrow(label: String) derives Schema
-    final case class LobbyWide(id: String, badges: List[BadgeWide]) derives Schema
-    final case class LobbyNarrow(id: String, badges: List[BadgeNarrow]) derives Schema
+    final case class LobbyWide(id: String, badges: Chunk[BadgeWide]) derives Schema
+    final case class LobbyNarrow(id: String, badges: Chunk[BadgeNarrow]) derives Schema
 
     private def wideBadgeQuery(id: String): Query[(lobby: LobbyWide)] =
         SelectionBuilder.obj(
@@ -167,7 +167,7 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
             SelectionBuilder.Nesting.Leaf
         ).toQuery()
 
-    private def narrowBadgeSubscription(id: String): Subscription[(lobbyUpdates: Option[LobbyNarrow])] =
+    private def narrowBadgeSubscription(id: String): Subscription[(lobbyUpdates: Maybe[LobbyNarrow])] =
         SelectionBuilder.obj(
             "lobbyUpdates",
             CompiledNamedType("LobbyView"),
@@ -176,15 +176,15 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
             SelectionBuilder.Nesting.Nullable(SelectionBuilder.Nesting.Leaf)
         ).toSubscription()
 
-    private val wideLobby = LobbyWide("L1", List(BadgeWide("Host", "gold")))
+    private val wideLobby = LobbyWide("L1", Chunk(BadgeWide("Host", "gold")))
     // A different label, so the write genuinely changes a watched record: writing the same
     // value back changes no field, publishes no key, and a watcher would rightly stay silent.
-    private val narrowLobby = LobbyNarrow("L1", List(BadgeNarrow("Co-host")))
-    private val mergedLobby = LobbyWide("L1", List(BadgeWide("Co-host", "gold")))
+    private val narrowLobby = LobbyNarrow("L1", Chunk(BadgeNarrow("Co-host")))
+    private val mergedLobby = LobbyWide("L1", Chunk(BadgeWide("Co-host", "gold")))
 
     private val p1                      = Player("p1", "Red")
     private val p2                      = Player("p2", "Blue")
-    private def lobby(players: Player*) = Lobby("L1", "Alpha", players.toList, None)
+    private def lobby(players: Player*) = Lobby("L1", "Alpha", Chunk.from(players), Absent)
 
     // --- fixture ----------------------------------------------------------------
 
@@ -237,7 +237,7 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
             val store = cachedClient().apolloStore
             val _     = store.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1)))
             val changed =
-                store.writeOperation(lobbySubscription("L1"), (lobbyUpdates = Some(lobby(p1, p2))))
+                store.writeOperation(lobbySubscription("L1"), (lobbyUpdates = Present(lobby(p1, p2))))
 
             // Reference (Apollo JS): players normalize into `LobbyPlayer:<id>` on every
             // write path; the lobby's `players` field always references those records.
@@ -253,7 +253,7 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
             val _         = store.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1)))
             val (_, deps) = store.readOperationWithKeys(lobbyQuery("L1"))
             val changed =
-                store.writeOperation(lobbySubscription("L1"), (lobbyUpdates = Some(lobby(p1, p2))))
+                store.writeOperation(lobbySubscription("L1"), (lobbyUpdates = Present(lobby(p1, p2))))
 
             // The watcher predicate: the subscription's changed keys must intersect the
             // query read's dependent keys, and the re-read must yield the new list.
@@ -284,18 +284,18 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
             succeed
         }
 
-        "an Option = None field round-trips as an explicit null, and a push can flip it" in {
+        "a Maybe = Absent field round-trips as an explicit null, and a push can flip it" in {
             val store = cachedClient().apolloStore
-            // kyo-schema encodes `None` as an ABSENT field; without the mapInto
+            // kyo-schema encodes `Absent` as an ABSENT field; without the mapInto
             // null-repair every later read of the record misses on `startedGameId`.
             val _ = store.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1)))
-            assert(store.readOperation(lobbyQuery("L1")).lobby.startedGameId == None)
+            assert(store.readOperation(lobbyQuery("L1")).lobby.startedGameId == Absent)
 
             // The civolution start-game push: the subscription event carries the id;
             // a query re-read (the redirect observer's input) must see it.
-            val started = lobby(p1).copy(startedGameId = Some("G9"))
-            val _       = store.writeOperation(lobbySubscription("L1"), (lobbyUpdates = Some(started)))
-            assert(store.readOperation(lobbyQuery("L1")).lobby.startedGameId == Some("G9"))
+            val started = lobby(p1).copy(startedGameId = Present("G9"))
+            val _       = store.writeOperation(lobbySubscription("L1"), (lobbyUpdates = Present(started)))
+            assert(store.readOperation(lobbyQuery("L1")).lobby.startedGameId == Present("G9"))
             succeed
         }
     }
@@ -311,7 +311,7 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
                     // event: normalize + merge + publish, on the subscription operation.
                     _ <- Sync.defer(
                         client.apolloStore
-                            .writeOperation(lobbySubscription("L1"), (lobbyUpdates = Some(lobby(p1, p2))))
+                            .writeOperation(lobbySubscription("L1"), (lobbyUpdates = Present(lobby(p1, p2))))
                     )
                     second <- pull.next
                 yield assert(second.data.map(_.lobby) == Present(lobby(p1, p2)))
@@ -333,7 +333,7 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
                 first <- pull.next
                 _ = assert(first.data == Present((lobby = wideLobby)))
                 _ <- Sync.defer(
-                    store.writeOperation(narrowBadgeSubscription("L1"), (lobbyUpdates = Some(narrowLobby)))
+                    store.writeOperation(narrowBadgeSubscription("L1"), (lobbyUpdates = Present(narrowLobby)))
                 )
                 second <- pull.next
             yield

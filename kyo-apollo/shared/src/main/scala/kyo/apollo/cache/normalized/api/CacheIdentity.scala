@@ -1,5 +1,6 @@
 package kyo.apollo.cache.normalized.api
 
+import kyo.Chunk
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.SelectionBuilder
 import kyo.apollo.api.TypeName
@@ -31,12 +32,12 @@ import scala.compiletime.summonFrom
   */
 final class CacheIdentity[Origin] private (
     val typeName: String,
-    private[apollo] val keyFields: List[CompiledField]
+    private[apollo] val keyFields: Chunk[CompiledField]
 ):
-    private[apollo] def keyFieldNames: List[String] = keyFields.map(_.responseName)
+    private[apollo] def keyFieldNames: Chunk[String] = keyFields.map(_.responseName)
 
     /** This identity as the [[TypePolicy]] the key generator consumes. */
-    private[apollo] def policy: TypePolicy = TypePolicy(typeName, keyFieldNames)
+    private[apollo] def policy: TypePolicy = TypePolicy(typeName, keyFieldNames.toList)
 
     override def toString: String = s"CacheIdentity($typeName, ${keyFieldNames.mkString("+")})"
 end CacheIdentity
@@ -67,7 +68,7 @@ object CacheIdentity:
       * one cache watcher observes them all, optimistic overlays included.
       */
     def singleton[Origin](using origin: TypeName[Origin]): CacheIdentity[Origin] =
-        new CacheIdentity(origin.name, Nil)
+        new CacheIdentity(origin.name, Chunk.empty)
 
     /** A [[CacheKeyGenerator]] over the given identities — the client-build
       * counterpart of the `given` declarations. Types without an identity fall
@@ -82,12 +83,12 @@ object CacheIdentity:
       * identities the application declared, at the call site where its givens are
       * visible. A type with no identity given simply contributes nothing.
       */
-    inline def collectAll[T <: Tuple]: List[CacheIdentity[?]] =
+    inline def collectAll[T <: Tuple]: Chunk[CacheIdentity[?]] =
         inline erasedValue[T] match
-            case _: EmptyTuple => Nil
+            case _: EmptyTuple => Chunk.empty
             case _: (h *: t) =>
                 summonFrom {
-                    case ci: CacheIdentity[`h`] => ci :: collectAll[t]
+                    case ci: CacheIdentity[`h`] => ci +: collectAll[t]
                     case _                      => collectAll[t]
                 }
 

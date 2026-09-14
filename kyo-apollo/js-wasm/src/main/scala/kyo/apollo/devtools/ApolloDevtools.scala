@@ -1,5 +1,7 @@
 package kyo.apollo.devtools
 
+import kyo.Absent
+import kyo.Maybe
 import kyo.apollo.ApolloClient
 import kyo.apollo.cache.normalized.apolloStore
 import kyo.apollo.devtools.DevtoolsOperationStore.MutationRecord
@@ -240,9 +242,9 @@ object ApolloDevtools:
         val recordCount =
             try client.apolloStore.cache.allRecords().size
             catch case _: Throwable => 0
-        val cacheLimit =
+        val cacheLimit: Maybe[Int] =
             try client.apolloStore.cache.sizeLimit
-            catch case _: Throwable => None
+            catch case _: Throwable => Absent
 
         val sizes = js.Dynamic.literal()
         sizes.updateDynamic("print")(astSize)
