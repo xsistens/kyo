@@ -1,12 +1,15 @@
 package kyo.apollo.api
 
 import kyo.Chunk
+import kyo.Frame
 import kyo.Maybe
+import kyo.Result
 import kyo.Schema
 import kyo.apollo.ApolloCall
 import kyo.apollo.ApolloClient
 import kyo.apollo.cache.normalized.api.Fragment
 import kyo.apollo.call
+import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.json.Json
 import scala.NamedTuple.AnyNamedTuple
 import scala.annotation.targetName
@@ -36,7 +39,7 @@ extension [Origin, A](sb: SelectionBuilder[Origin, A])
         SelectionBuilder.project(
             sb,
             new JsonCodec[B]:
-                def decode(json: Json): B = f(sb.decode(json))
+                def decode(json: Json)(using Frame): Result[ApolloParseException, B] = sb.decode(json).map(f)
                 def encode(value: B): Json =
                     throw UnsupportedOperationException(
                         "`.map` projections are decode-only; use `.mapInto[C]` (C derives Schema) for cache writes"
@@ -57,7 +60,7 @@ extension [Origin, A](sb: SelectionBuilder[Origin, A])
         SelectionBuilder.project(
             sb,
             new JsonCodec[B]:
-                def decode(json: Json): B = schemaCodec.decode(json)
+                def decode(json: Json)(using Frame): Result[ApolloParseException, B] = schemaCodec.decode(json)
                 def encode(value: B): Json =
                     SelectionBuilder.fillAbsentNullables(schemaCodec.encode(value), sb.selections)
         )
@@ -191,8 +194,8 @@ private def capitalize(s: String): String =
 /** Wrap a builder's decode/encode as a [[JsonCodec]] for the operation. */
 private def codecOf[A](sb: SelectionBuilder[?, A]): JsonCodec[A] =
     new JsonCodec[A]:
-        def decode(json: Json): A  = sb.decode(json)
-        def encode(value: A): Json = sb.encode(value)
+        def decode(json: Json)(using Frame): Result[ApolloParseException, A] = sb.decode(json)
+        def encode(value: A): Json                                           = sb.encode(value)
 
 private def variablesOf(args: Chunk[SelectionBuilder.Arg]): Json =
     Json.JObj(VectorMap.from(args.map(a => a.name -> a.value)))

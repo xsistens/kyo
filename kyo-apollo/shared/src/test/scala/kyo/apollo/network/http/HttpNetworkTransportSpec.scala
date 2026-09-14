@@ -50,8 +50,8 @@ class HttpNetworkTransportSpec extends kyo.test.Test[Any]:
         def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
         def variables: Json          = Json.JObj(VectorMap.empty)
         override def dataCodec: JsonCodec[Int] = new JsonCodec[Int]:
-            def decode(json: Json): Int  = throw new ClassCastException("defective codec")
-            def encode(value: Int): Json = Json.JNull
+            def decode(json: Json)(using Frame): Result[ApolloParseException, Int] = throw new ClassCastException("defective codec")
+            def encode(value: Int): Json                                           = Json.JNull
     end DefectiveQuery
 
     /** An [[HttpEngine]] that runs `respond` for every request. */

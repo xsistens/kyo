@@ -113,7 +113,8 @@ object ApolloParseException:
             case cause: Throwable => s"(cause: ${cause.getClass.getSimpleName})"
             case text: String     => text
 
-    private def jsonType(json: Json): String =
+    /** The JSON type of `json` as a message names it ("a string", "null"), never its value. */
+    private[apollo] def jsonType(json: Json): String =
         json match
             case Json.JNull                                 => "null"
             case Json.JBool(_)                              => "a boolean"

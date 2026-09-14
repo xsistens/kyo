@@ -6,6 +6,7 @@ import kyo.apollo.StreamProbe
 import kyo.apollo.api.*
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.IdCacheKeyGenerator
+import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.exception.CacheMissException
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloResponse
@@ -61,7 +62,8 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
         def rootField: CompiledField          = CountriesQuery().rootField
         def variables: Json                   = Json.JObj(VectorMap.empty)
         override def dataCodec: JsonCodec[CountriesData] = new JsonCodec[CountriesData]:
-            def decode(json: Json): CountriesData  = throw IllegalStateException("defective codec")
+            def decode(json: Json)(using Frame): Result[ApolloParseException, CountriesData] =
+                throw IllegalStateException("defective codec")
             def encode(value: CountriesData): Json = CountriesQuery().dataCodec.encode(value)
     end DefectiveCountriesQuery
 
