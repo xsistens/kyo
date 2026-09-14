@@ -34,8 +34,8 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
 
         "TestHttpEngine.returning answers a query and records the request" in {
             for
-                engine <- TestHttpEngine.returning("""{"data":{"value":7}}""")
-                client = TestApolloClient.cacheless(engine)
+                engine   <- TestHttpEngine.returning("""{"data":{"value":7}}""")
+                client   <- TestApolloClient.cacheless(engine)
                 response <- client.query(Fixtures.ValueQuery()).execute
                 calls    <- engine.calls
                 last     <- engine.lastRequest
@@ -48,8 +48,8 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
 
         "TestHttpEngine.failing surfaces as an ApolloResponse.error value" in {
             for
-                engine <- TestHttpEngine.failing(new RuntimeException("down"))
-                client = TestApolloClient.cacheless(engine)
+                engine   <- TestHttpEngine.failing(new RuntimeException("down"))
+                client   <- TestApolloClient.cacheless(engine)
                 response <- client.query(Fixtures.ValueQuery()).execute
             yield
                 assert(response.data == Absent)
@@ -74,9 +74,9 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
                 received <- server.requestCount
                 answered <- transport.requests
                 // The queued answers are still there for the executions that do run.
-                client = TestApolloClient.cacheless(server)
-                first <- client.query(Fixtures.ValueQuery()).execute
-                seen  <- transport.intercept(ApolloRequest(Fixtures.ValueQuery(), requestId), InertChain).run
+                client <- TestApolloClient.cacheless(server)
+                first  <- client.query(Fixtures.ValueQuery()).execute
+                seen   <- transport.intercept(ApolloRequest(Fixtures.ValueQuery(), requestId), InertChain).run
             yield
                 assert(calls == 0, s"TestHttpEngine counted a request that never ran: $calls")
                 assert(received == 0, s"MockServer counted a request that never ran: $received")
@@ -106,7 +106,7 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
                 server <- MockServer.init
                 _      <- server.enqueue("""{"data":{"value":1}}""")
                 _      <- server.enqueue("""{"data":{"value":2}}""")
-                client = TestApolloClient.cacheless(server)
+                client <- TestApolloClient.cacheless(server)
                 first  <- client.query(Fixtures.ValueQuery()).execute
                 second <- client.query(Fixtures.ValueQuery()).execute
                 count  <- server.requestCount
@@ -128,10 +128,10 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
                 transport <- QueueTestNetworkTransport.init
                 _         <- transport.enqueueData(41)
                 _         <- transport.enqueueData(42)
-                client = TestApolloClient.withTransport(transport)
-                a     <- client.query(Fixtures.ValueQuery()).execute
-                b     <- client.query(Fixtures.ValueQuery()).execute
-                names <- transport.operationNames
+                client    <- TestApolloClient.withTransport(transport)
+                a         <- client.query(Fixtures.ValueQuery()).execute
+                b         <- client.query(Fixtures.ValueQuery()).execute
+                names     <- transport.operationNames
             yield
                 assert(a.data == Present(41))
                 assert(b.data == Present(42))
@@ -146,9 +146,9 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
                 transport <- MapTestNetworkTransport.init
                 _         <- transport.registerData(Fixtures.ValueQuery(), 99)
                 _         <- transport.registerData(Fixtures.CurrentUserQuery(), Fixtures.userData("Alice"))
-                client = TestApolloClient.withTransport(transport)
-                value <- client.query(Fixtures.ValueQuery()).execute
-                user  <- client.query(Fixtures.CurrentUserQuery()).execute
+                client    <- TestApolloClient.withTransport(transport)
+                value     <- client.query(Fixtures.ValueQuery()).execute
+                user      <- client.query(Fixtures.CurrentUserQuery()).execute
             yield
                 assert(value.data == Present(99))
                 assert(user.data.exists(_.user.name == "Alice"))
@@ -160,7 +160,7 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
         "cached: a CacheFirst re-read is served from the cache, not the engine" in {
             for
                 engine <- TestHttpEngine.returning(Fixtures.body("Alice"))
-                client = TestApolloClient.cached(engine)
+                client <- TestApolloClient.cached(engine)
                 first  <- client.query(Fixtures.CurrentUserQuery()).execute
                 second <- client.query(Fixtures.CurrentUserQuery()).execute
                 calls  <- engine.calls
@@ -175,8 +175,8 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
             for
                 transport <- MapTestNetworkTransport.init
                 _         <- transport.registerData(Fixtures.CurrentUserQuery(), Fixtures.userData("Bob"))
-                client = TestApolloClient.cachedWithTransport(transport)
-                _ <- client.query(Fixtures.CurrentUserQuery()).execute
+                client    <- TestApolloClient.cachedWithTransport(transport)
+                _         <- client.query(Fixtures.CurrentUserQuery()).execute
                 cached <- client
                     .query(Fixtures.CurrentUserQuery())
                     .fetchPolicy(FetchPolicy.CacheOnly)
@@ -189,10 +189,10 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
 
         "GatedHttpEngine parks the reply until released" in {
             val engine = GatedHttpEngine("""{"data":{"value":5}}""")
-            val client = TestApolloClient.cacheless(engine)
             for
-                fiber <- Fiber.init(Scope.run(client.query(Fixtures.ValueQuery()).execute))
-                _     <- settle
+                client <- TestApolloClient.cacheless(engine)
+                fiber  <- Fiber.init(Scope.run(client.query(Fixtures.ValueQuery()).execute))
+                _      <- settle
                 // The request reached the engine and is now parked on the gate; the
                 // result only arrives after release.
                 _        <- Sync.defer(assert(engine.requests.nonEmpty))
@@ -206,15 +206,13 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
 
         "MockWebSocketServer drives a subscription: ack, events, complete" in {
             val ws = new MockWebSocketServer
-            val client = kyo.apollo.ApolloClient
-                .builder()
-                .serverUrl("https://example.test/graphql")
-                .webSocketServerUrl("wss://example.test/graphql")
-                .webSocketEngine(ws)
-                .build()
-            val subscription = client.subscription(Fixtures.ValueSubscription()).stream
             for
-                done <- Fiber.init(Scope.run(StreamProbe.collect(subscription)))
+                client <- kyo.apollo.ApolloClient.init(
+                    kyo.apollo.ApolloClient.Config("https://example.test/graphql")
+                        .webSocketServerUrl("wss://example.test/graphql")
+                        .webSocketEngine(ws)
+                )
+                done <- Fiber.init(Scope.run(StreamProbe.collect(client.subscription(Fixtures.ValueSubscription()).stream)))
                 _    <- ws.awaitSent(_.contains("connection_init"))
                 _    <- Sync.defer(ws.ack())
                 _    <- ws.awaitSent(_.contains("\"type\":\"subscribe\""))

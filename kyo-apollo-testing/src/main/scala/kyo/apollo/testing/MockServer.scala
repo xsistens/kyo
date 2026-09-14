@@ -9,7 +9,7 @@ import kyo.apollo.network.http.HttpResponse
 
 /** An in-memory HTTP server that queues responses and records the requests it
   * received, usable over the HTTP transport via the injectable [[HttpEngine]]
-  * seam (`ApolloClient.builder().httpEngine(mockServer)`). Mirrors apollo-kotlin's
+  * seam (`ApolloClient.Config(url).httpEngine(mockServer)`). Mirrors apollo-kotlin's
   * `MockServer`: [[enqueue]] the responses a scenario will hand back in order,
   * run operations, then [[takeRequest]] / inspect [[requests]] to assert on what
   * the client actually sent.

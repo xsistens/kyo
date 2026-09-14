@@ -32,7 +32,7 @@ end KyoHttpWebSocketEngine
 
 object KyoHttpWebSocketEngine:
     /** The default bound on opening a socket. */
-    val defaultConnectTimeout: Duration = 10.seconds
+    val defaultConnectTimeout: Duration = WebSocketEngine.defaultConnectTimeout
 
 final private[ws] class KyoHttpWebSocketConnection private (
     ws: HttpWebSocket,

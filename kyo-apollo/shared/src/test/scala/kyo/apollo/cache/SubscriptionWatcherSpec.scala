@@ -203,13 +203,12 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
         end execute
     end LobbyEngine
 
-    private def cachedClient(engine: LobbyEngine = LobbyEngine()): ApolloClient =
-        ApolloClient
-            .builder()
-            .serverUrl("https://example.com/graphql")
-            .httpEngine(engine)
-            .normalizedCache(MemoryCache(), IdCacheKeyGenerator(List("id")))
-            .build()
+    private def cachedClient(engine: LobbyEngine = LobbyEngine())(using Frame): ApolloClient < (Sync & Scope) =
+        ApolloClient.init(
+            ApolloClient.Config("https://example.com/graphql")
+                .httpEngine(engine)
+                .normalizedCache(MemoryCache(), IdCacheKeyGenerator(List("id")))
+        )
 
     /** Fetch the query once over the (fake) network, then run `body` with the
       * client and a pull over a `CacheOnly` watch — the WatcherSpec harness, on the
@@ -219,9 +218,9 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
         body: (ApolloClient, StreamProbe.Pull[ApolloResponse[(lobby: Lobby)]]) => Unit <
             (Async & Scope)
     )(using Frame): Unit < (Async & Scope) =
-        val client = cachedClient()
         for
-            _ <- client.query(lobbyQuery("L1")).fetchPolicy(FetchPolicy.NetworkOnly).execute
+            client <- cachedClient()
+            _      <- client.query(lobbyQuery("L1")).fetchPolicy(FetchPolicy.NetworkOnly).execute
             pull <- StreamProbe.Pull.open(
                 client.query(lobbyQuery("L1")).fetchPolicy(FetchPolicy.CacheOnly).watch()
             )
@@ -235,8 +234,8 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
     "subscription write-back (store level)" - {
 
         "nested entities keep their entity keys — never re-keyed under the writer's root" in {
-            val store = cachedClient().apolloStore
             for
+                store   <- cachedClient().map(_.apolloStore)
                 _       <- store.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1)))
                 changed <- store.writeOperation(lobbySubscription("L1"), (lobbyUpdates = Present(lobby(p1, p2))))
                 all     <- store.cache.allRecords
@@ -250,8 +249,8 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
         }
 
         "a query re-read after the subscription write sees the pushed players" in {
-            val store = cachedClient().apolloStore
             for
+                store   <- cachedClient().map(_.apolloStore)
                 _       <- store.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1)))
                 before  <- store.readOperationWithKeys(lobbyQuery("L1"))
                 changed <- store.writeOperation(lobbySubscription("L1"), (lobbyUpdates = Present(lobby(p1, p2))))
@@ -275,8 +274,8 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
             val playerFragment: Fragment[(id: String, color: String)] =
                 (GPlayer.id ~ GPlayer.color).toFragment
 
-            val store = cachedClient().apolloStore
             for
+                store   <- cachedClient().map(_.apolloStore)
                 _       <- store.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1)))
                 _       <- store.remove(CacheKey("LobbyPlayer", "p1"))
                 changed <- store.writeFragment(playerFragment, CacheKey("LobbyPlayer", "p1"), (id = "p1", color = "Red"))
@@ -290,21 +289,22 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
         }
 
         "a Maybe = Absent field round-trips as an explicit null, and a push can flip it" in {
-            val store = cachedClient().apolloStore
-            // The civolution start-game push: the subscription event carries the id;
-            // a query re-read (the redirect observer's input) must see it.
-            val started = lobby(p1).copy(startedGameId = Present("G9"))
-            for
-                // kyo-schema encodes `Absent` as an ABSENT field; without the mapInto
-                // null-repair every later read of the record misses on `startedGameId`.
-                _      <- store.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1)))
-                before <- store.readOperation(lobbyQuery("L1"))
-                _      <- store.writeOperation(lobbySubscription("L1"), (lobbyUpdates = Present(started)))
-                after  <- store.readOperation(lobbyQuery("L1"))
-            yield
-                assert(before.lobby.startedGameId == Absent)
-                assert(after.lobby.startedGameId == Present("G9"))
-            end for
+            cachedClient().map(_.apolloStore).map { store =>
+                // The civolution start-game push: the subscription event carries the id;
+                // a query re-read (the redirect observer's input) must see it.
+                val started = lobby(p1).copy(startedGameId = Present("G9"))
+                for
+                    // kyo-schema encodes `Absent` as an ABSENT field; without the mapInto
+                    // null-repair every later read of the record misses on `startedGameId`.
+                    _      <- store.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1)))
+                    before <- store.readOperation(lobbyQuery("L1"))
+                    _      <- store.writeOperation(lobbySubscription("L1"), (lobbyUpdates = Present(started)))
+                    after  <- store.readOperation(lobbyQuery("L1"))
+                yield
+                    assert(before.lobby.startedGameId == Absent)
+                    assert(after.lobby.startedGameId == Present("G9"))
+                end for
+            }
         }
     }
 
@@ -331,40 +331,42 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
             // what the reader sees. Deliberately on the DEFAULT refetch policy (CacheOnly),
             // so a later `RefetchPolicy.CacheFirst` cannot satisfy this by going to the
             // network instead of reading what is there.
-            val client = cachedClient()
-            val store  = client.apolloStore
-            for
-                _ <- store.writeOperation(wideBadgeQuery("L1"), (lobby = wideLobby))
-                pull <- StreamProbe.Pull.open(
-                    client.query(wideBadgeQuery("L1")).fetchPolicy(FetchPolicy.CacheOnly).watch()
-                )
-                first <- pull.next
-                _ = assert(first.data == Present((lobby = wideLobby)))
-                _ <- Sync.defer(
-                    store.writeOperation(narrowBadgeSubscription("L1"), (lobbyUpdates = Present(narrowLobby)))
-                )
-                second <- pull.next
-            yield
-                assert(second.error.isEmpty, s"the re-read must not miss: ${second.error}")
-                // The new label, and the tone the narrower writer never mentioned.
-                assert(second.data == Present((lobby = mergedLobby)))
-            end for
+            cachedClient().map { client =>
+                val store = client.apolloStore
+                for
+                    _ <- store.writeOperation(wideBadgeQuery("L1"), (lobby = wideLobby))
+                    pull <- StreamProbe.Pull.open(
+                        client.query(wideBadgeQuery("L1")).fetchPolicy(FetchPolicy.CacheOnly).watch()
+                    )
+                    first <- pull.next
+                    _ = assert(first.data == Present((lobby = wideLobby)))
+                    _ <- Sync.defer(
+                        store.writeOperation(narrowBadgeSubscription("L1"), (lobbyUpdates = Present(narrowLobby)))
+                    )
+                    second <- pull.next
+                yield
+                    assert(second.error.isEmpty, s"the re-read must not miss: ${second.error}")
+                    // The new label, and the tone the narrower writer never mentioned.
+                    assert(second.data == Present((lobby = mergedLobby)))
+                end for
+            }
         }
 
         "constructing a call effect fires no request — effects are inert until run" in {
             val engine = LobbyEngine()
-            val client = cachedClient(engine)
-            // A held effect (e.g. a handle's `refetch`) must not touch the network at
-            // construction: the interceptor chain walks only on consumption.
-            val _ = client.query(lobbyQuery("L1")).fetchPolicy(FetchPolicy.NetworkOnly).stream
-            assert(engine.calls == 0, s"expected no network call at construction, got ${engine.calls}")
-            succeed
+            cachedClient(engine).map { client =>
+                // A held effect (e.g. a handle's `refetch`) must not touch the network at
+                // construction: the interceptor chain walks only on consumption.
+                val _ = client.query(lobbyQuery("L1")).fetchPolicy(FetchPolicy.NetworkOnly).stream
+                assert(engine.calls == 0, s"expected no network call at construction, got ${engine.calls}")
+                succeed
+            }
         }
 
         "a CacheAndNetwork watch on an empty cache fetches exactly once (no refetch churn)" in {
             val engine = LobbyEngine()
-            val client = cachedClient(engine)
             for
+                client <- cachedClient(engine)
                 pull <- StreamProbe.Pull.open(
                     client.query(lobbyQuery("L1")).fetchPolicy(FetchPolicy.CacheAndNetwork).watch()
                 )

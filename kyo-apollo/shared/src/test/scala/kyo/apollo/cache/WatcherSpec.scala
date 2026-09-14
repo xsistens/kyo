@@ -202,13 +202,12 @@ class WatcherSpec extends kyo.test.Test[Any]:
     private def cachedClient(
         engine: kyo.apollo.network.http.HttpEngine,
         cache: NormalizedCache = MemoryCache()
-    ): ApolloClient =
-        ApolloClient
-            .builder()
-            .serverUrl("https://example.com/graphql")
-            .httpEngine(engine)
-            .normalizedCache(cache, IdCacheKeyGenerator(List("id")))
-            .build()
+    )(using Frame): ApolloClient < (Sync & Scope) =
+        ApolloClient.init(
+            ApolloClient.Config("https://example.com/graphql")
+                .httpEngine(engine)
+                .normalizedCache(cache, IdCacheKeyGenerator(List("id")))
+        )
 
     private def query(client: ApolloClient) = client.query(CurrentUserQuery())
 
@@ -223,11 +222,11 @@ class WatcherSpec extends kyo.test.Test[Any]:
         body: (ApolloClient, StreamProbe.Pull[ApolloResponse[UserData]]) => Unit < (Async & Scope)
     )(using Frame): Unit < (Async & Scope) =
         val engine = CountingEngine()
-        val client = cachedClient(engine)
         for
-            _    <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
-            pull <- StreamProbe.Pull.open(query(client).fetchPolicy(FetchPolicy.CacheOnly).watch())
-            _    <- body(client, pull)
+            client <- cachedClient(engine)
+            _      <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+            pull   <- StreamProbe.Pull.open(query(client).fetchPolicy(FetchPolicy.CacheOnly).watch())
+            _      <- body(client, pull)
         yield ()
         end for
     end watching
@@ -306,9 +305,9 @@ class WatcherSpec extends kyo.test.Test[Any]:
                 arrived  <- Latch.init(1)
                 gate     <- Latch.init(1)
                 tornDown <- Latch.init(1)
-                client = cachedClient(GatedEngine(calls, arrived, gate))
-                _     <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                probe <- Channel.init[ApolloResponse[UserData]](Int.MaxValue)
+                client   <- cachedClient(GatedEngine(calls, arrived, gate))
+                _        <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                probe    <- Channel.init[ApolloResponse[UserData]](Int.MaxValue)
                 // Scope finalizers run last-registered-first, so `tornDown` is released
                 // only after the watch's own teardown has completed.
                 drain <- Fiber.init(Scope.run(
@@ -352,9 +351,9 @@ class WatcherSpec extends kyo.test.Test[Any]:
                 gate     <- Latch.init(1)
                 ended    <- Promise.init[String, Any]
                 tornDown <- Latch.init(1)
-                client = cachedClient(GatedEngine(calls, arrived, gate, Present(ended)))
-                _     <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                probe <- Channel.init[ApolloResponse[UserData]](Int.MaxValue)
+                client   <- cachedClient(GatedEngine(calls, arrived, gate, Present(ended)))
+                _        <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                probe    <- Channel.init[ApolloResponse[UserData]](Int.MaxValue)
                 // Registered first, so it runs after every finalizer of the watch.
                 drain <- Fiber.init(Scope.run(
                     Scope.ensure(tornDown.release).andThen(
@@ -385,9 +384,9 @@ class WatcherSpec extends kyo.test.Test[Any]:
             // error response, and the watch goes on: the next write's refetch answers.
             // A detached fiber that swallows its failure emits nothing for the first write.
             for
-                calls <- AtomicInt.init(0)
-                client = cachedClient(DefectEngine(calls, defective = 2))
-                _ <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                calls  <- AtomicInt.init(0)
+                client <- cachedClient(DefectEngine(calls, defective = 2))
+                _      <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
                 pull <- StreamProbe.Pull.open(
                     query(client)
                         .fetchPolicy(FetchPolicy.CacheOnly)
@@ -415,10 +414,10 @@ class WatcherSpec extends kyo.test.Test[Any]:
             // The initial fetch runs on a fiber of the watch too; its defect is the
             // watch's first emission rather than a silent, empty stream.
             for
-                calls <- AtomicInt.init(0)
-                client = cachedClient(DefectEngine(calls, defective = 1))
-                pull  <- StreamProbe.Pull.open(query(client).fetchPolicy(FetchPolicy.NetworkOnly).watch())
-                first <- pull.next
+                calls  <- AtomicInt.init(0)
+                client <- cachedClient(DefectEngine(calls, defective = 1))
+                pull   <- StreamProbe.Pull.open(query(client).fetchPolicy(FetchPolicy.NetworkOnly).watch())
+                first  <- pull.next
             yield
                 assert(first.data.isEmpty)
                 assert(
@@ -438,12 +437,12 @@ class WatcherSpec extends kyo.test.Test[Any]:
             // the re-read notices the store moved past its stamp and reads again. The
             // closing write ("Zed") makes the missing emission observable without a
             // hang: it is the second emission only when Zoe was never emitted.
-            val cache  = TrapCache(MemoryCache())
-            val client = cachedClient(CountingEngine(), cache)
+            val cache = TrapCache(MemoryCache())
             for
-                _     <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                pull  <- StreamProbe.Pull.open(query(client).fetchPolicy(FetchPolicy.CacheOnly).watch())
-                first <- pull.next
+                client <- cachedClient(CountingEngine(), cache)
+                _      <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                pull   <- StreamProbe.Pull.open(query(client).fetchPolicy(FetchPolicy.CacheOnly).watch())
+                first  <- pull.next
                 _ = assert(first.data == Present(userData("Alice")))
                 _ <- cache.arm(CacheKey("User", "2")) {
                     client.apolloStore.writeFragment(UserFragment, CacheKey("User", "2"), User("User", "2", "Zoe")).unit
@@ -469,10 +468,10 @@ class WatcherSpec extends kyo.test.Test[Any]:
             // carries Alice and the generation its read was current at. Adopting that
             // stamp shows the store has moved on, and the watch re-reads to Bob — the
             // second emission a watch without generations never produces.
-            val cache  = TrapCache(MemoryCache())
-            val client = cachedClient(CountingEngine(), cache)
+            val cache = TrapCache(MemoryCache())
             for
-                _ <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                client <- cachedClient(CountingEngine(), cache)
+                _      <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
                 _ <- cache.arm(CacheKey("User", "1")) {
                     client.apolloStore.writeFragment(UserFragment, CacheKey("User", "1"), User("User", "1", "Bob")).unit
                 }
@@ -504,9 +503,9 @@ class WatcherSpec extends kyo.test.Test[Any]:
             // eviction, answered by a fetch rather than by handing the consumer a failed query.
             // apollo-kotlin reaches this by passing the full FetchPolicy to refetchPolicy.
             val engine = CountingEngine()
-            val client = cachedClient(engine)
             for
-                _ <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                client <- cachedClient(engine)
+                _      <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
                 pull <- StreamProbe.Pull.open(
                     query(client)
                         .fetchPolicy(FetchPolicy.CacheOnly)
@@ -534,10 +533,10 @@ class WatcherSpec extends kyo.test.Test[Any]:
             Clock.withTimeControl { control =>
                 val cache = HoleCache(MemoryCache())
                 for
-                    clock <- Clock.get
-                    calls <- AtomicInt.init(0)
-                    client = cachedClient(SleepingEngine(clock, calls), cache)
-                    _ <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                    clock  <- Clock.get
+                    calls  <- AtomicInt.init(0)
+                    client <- cachedClient(SleepingEngine(clock, calls), cache)
+                    _      <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
                     pull <- StreamProbe.Pull.open(
                         query(client)
                             .fetchPolicy(FetchPolicy.CacheOnly)
@@ -578,9 +577,9 @@ class WatcherSpec extends kyo.test.Test[Any]:
             // User:1, the re-read hits and settles the cause, so a later eviction is a new
             // cause and goes to the network again — the watch does not go dead.
             val engine = CountingEngine()
-            val client = cachedClient(engine)
             for
-                _ <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                client <- cachedClient(engine)
+                _      <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
                 pull <- StreamProbe.Pull.open(
                     query(client)
                         .fetchPolicy(FetchPolicy.CacheOnly)
@@ -611,8 +610,8 @@ class WatcherSpec extends kyo.test.Test[Any]:
                 calls   <- AtomicInt.init(0)
                 arrived <- Latch.init(1)
                 gate    <- Latch.init(1)
-                client = cachedClient(GatedEngine(calls, arrived, gate))
-                _ <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                client  <- cachedClient(GatedEngine(calls, arrived, gate))
+                _       <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
                 pull <- StreamProbe.Pull.open(
                     query(client)
                         .fetchPolicy(FetchPolicy.CacheOnly)
@@ -657,24 +656,20 @@ class WatcherSpec extends kyo.test.Test[Any]:
         }
 
         "whether a client has a cache is a total question: normalizedStore" in {
-            val bare = ApolloClient
-                .builder()
-                .serverUrl("https://example.com/graphql")
-                .httpEngine(CountingEngine())
-                .build()
-            val cached = cachedClient(CountingEngine())
-            assert(bare.normalizedStore == Absent)
-            assert(cached.normalizedStore.exists(_ eq cached.apolloStore))
+            for
+                bare   <- ApolloClient.init(ApolloClient.Config("https://example.com/graphql").httpEngine(CountingEngine()))
+                cached <- cachedClient(CountingEngine())
+            yield
+                assert(bare.normalizedStore == Absent)
+                assert(cached.normalizedStore.exists(_ eq cached.apolloStore))
+            end for
         }
 
         "apolloStore on a client without a cache is a misuse panic naming the fix, not an IllegalStateException" in {
-            val client = ApolloClient
-                .builder()
-                .serverUrl("https://example.com/graphql")
-                .httpEngine(CountingEngine())
-                .build()
-            val misuse = intercept[ApolloConfigException](client.apolloStore)
-            assert(misuse.message.contains("normalizedCache"))
+            ApolloClient.init(ApolloClient.Config("https://example.com/graphql").httpEngine(CountingEngine())).map { client =>
+                val misuse = intercept[ApolloConfigException](client.apolloStore)
+                assert(misuse.message.contains("normalizedCache"))
+            }
         }
     }
 end WatcherSpec

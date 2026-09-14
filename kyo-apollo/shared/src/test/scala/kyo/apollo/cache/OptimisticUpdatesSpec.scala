@@ -274,44 +274,45 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
         // --- end-to-end through the interceptor chain + watch() -------------------
 
         "optimistic mutation: a watcher sees the optimistic value, then the real value" in {
-            val client = cachedClient()
-            // Seed Alice, then watch the query off the cache.
-            for
-                _ <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                pull <- StreamProbe.Pull.open(
-                    client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly).watch()
-                )
-                first <- pull.next
-                _ = assert(name(first) == Present("Alice"))
-                // Fire the mutation on a forked fiber with an optimistic value distinct from
-                // the server echo. The optimistic overlay is applied — and observable by the
-                // watcher — as the fiber runs the chain up to (but not including) the fetch.
-                fib <- Fiber.init(
-                    Scope.run(
-                        client
-                            .mutation(UpdateUserNameMutation("Bob"))
-                            .optimisticUpdates(updateData("BobOptimistic"))
-                            .fetchPolicy(FetchPolicy.NetworkOnly)
-                            .execute
+            cachedClient().map { client =>
+                // Seed Alice, then watch the query off the cache.
+                for
+                    _ <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                    pull <- StreamProbe.Pull.open(
+                        client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly).watch()
                     )
-                )
-                optimistic <- pull.next
-                _ = assert(name(optimistic) == Present("BobOptimistic"))
-                response <- fib.get
-                _ = assert(response.error.isEmpty)
-                // Network truth ("Bob") replaces the optimistic value; layer is gone.
-                settled <- pull.next
-                _ = assert(name(settled) == Present("Bob"))
-                read <- client.apolloStore.readOperation(CurrentUserQuery())
-                _ = assert(read == userData("Bob"))
-            yield ()
-            end for
+                    first <- pull.next
+                    _ = assert(name(first) == Present("Alice"))
+                    // Fire the mutation on a forked fiber with an optimistic value distinct from
+                    // the server echo. The optimistic overlay is applied — and observable by the
+                    // watcher — as the fiber runs the chain up to (but not including) the fetch.
+                    fib <- Fiber.init(
+                        Scope.run(
+                            client
+                                .mutation(UpdateUserNameMutation("Bob"))
+                                .optimisticUpdates(updateData("BobOptimistic"))
+                                .fetchPolicy(FetchPolicy.NetworkOnly)
+                                .execute
+                        )
+                    )
+                    optimistic <- pull.next
+                    _ = assert(name(optimistic) == Present("BobOptimistic"))
+                    response <- fib.get
+                    _ = assert(response.error.isEmpty)
+                    // Network truth ("Bob") replaces the optimistic value; layer is gone.
+                    settled <- pull.next
+                    _ = assert(name(settled) == Present("Bob"))
+                    read <- client.apolloStore.readOperation(CurrentUserQuery())
+                    _ = assert(read == userData("Bob"))
+                yield ()
+                end for
+            }
         }
 
         "optimistic mutation failure: the watcher reverts to the pre-optimistic value" in {
-            val client = cachedClient(ScriptedEngine(mutationFails = true))
             for
-                _ <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                client <- cachedClient(ScriptedEngine(mutationFails = true))
+                _      <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
                 pull <- StreamProbe.Pull.open(
                     client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly).watch()
                 )
@@ -350,8 +351,8 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
                 arrived  <- Latch.init(1)
                 gate     <- Latch.init(1)
                 tornDown <- Latch.init(1)
-                client = cachedClient(GatedEngine(arrived, gate))
-                store  = client.apolloStore
+                client   <- cachedClient(GatedEngine(arrived, gate))
+                store = client.apolloStore
                 _ <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
                 // Scope finalizers run last-registered-first, so `tornDown` is released
                 // only after the mutation's own layer release has completed.
@@ -403,52 +404,54 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
         "an exception raised below the cache interceptor rolls the layer back" in {
             // A transport that raises instead of answering with an `ApolloResponse`
             // value never reaches the response mapping; the Scope release still runs.
-            val client = cachedClient(ScriptedEngine(mutationFails = false), belowCache = List(RaisingInterceptor))
-            val store  = client.apolloStore
-            for
-                _ <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                result <- Abort.run[Throwable](Scope.run(
-                    client
-                        .mutation(UpdateUserNameMutation("Bob"))
-                        .optimisticUpdates(updateData("BobOptimistic"))
-                        .fetchPolicy(FetchPolicy.NetworkOnly)
-                        .execute
-                ))
-                layers <- store.optimisticLayerIds
-                read   <- store.readOperation(CurrentUserQuery())
-            yield
-                assert(!result.isSuccess, s"the raised exception must surface: $result")
-                assert(layers.isEmpty, s"the exception leaked a layer: $layers")
-                assert(read == userData("Alice"))
-            end for
+            cachedClient(ScriptedEngine(mutationFails = false), belowCache = List(RaisingInterceptor)).map { client =>
+                val store = client.apolloStore
+                for
+                    _ <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                    result <- Abort.run[Throwable](Scope.run(
+                        client
+                            .mutation(UpdateUserNameMutation("Bob"))
+                            .optimisticUpdates(updateData("BobOptimistic"))
+                            .fetchPolicy(FetchPolicy.NetworkOnly)
+                            .execute
+                    ))
+                    layers <- store.optimisticLayerIds
+                    read   <- store.readOperation(CurrentUserQuery())
+                yield
+                    assert(!result.isSuccess, s"the raised exception must surface: $result")
+                    assert(layers.isEmpty, s"the exception leaked a layer: $layers")
+                    assert(read == userData("Alice"))
+                end for
+            }
         }
 
         "a settled optimistic mutation publishes once, and the Scope release finds nothing" in {
             // The reply settles the layer itself (commit, drop, one publish); the release
             // that follows when the Scope closes must neither find a layer nor publish.
-            val client = cachedClient()
-            val store  = client.apolloStore
-            for
-                _         <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                published <- AtomicRef.init(Chunk.empty[Set[CacheKey]])
-                _         <- store.addChangedKeysListener(keys => published.updateAndGet(_.append(keys)).unit)
-                response <- Scope.run(
-                    client
-                        .mutation(UpdateUserNameMutation("Bob"))
-                        .optimisticUpdates(updateData("BobOptimistic"))
-                        .fetchPolicy(FetchPolicy.NetworkOnly)
-                        .execute
-                )
-                publishes <- published.get
-                layers    <- store.optimisticLayerIds
-                read      <- store.readOperation(CurrentUserQuery())
-            yield
-                assert(response.error.isEmpty)
-                // One publish for the optimistic write, one for the settle — none from the release.
-                assert(publishes.size == 2, s"expected the optimistic write and the settle only: $publishes")
-                assert(layers.isEmpty)
-                assert(read == userData("Bob"))
-            end for
+            cachedClient().map { client =>
+                val store = client.apolloStore
+                for
+                    _         <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                    published <- AtomicRef.init(Chunk.empty[Set[CacheKey]])
+                    _         <- store.addChangedKeysListener(keys => published.updateAndGet(_.append(keys)).unit)
+                    response <- Scope.run(
+                        client
+                            .mutation(UpdateUserNameMutation("Bob"))
+                            .optimisticUpdates(updateData("BobOptimistic"))
+                            .fetchPolicy(FetchPolicy.NetworkOnly)
+                            .execute
+                    )
+                    publishes <- published.get
+                    layers    <- store.optimisticLayerIds
+                    read      <- store.readOperation(CurrentUserQuery())
+                yield
+                    assert(response.error.isEmpty)
+                    // One publish for the optimistic write, one for the settle — none from the release.
+                    assert(publishes.size == 2, s"expected the optimistic write and the settle only: $publishes")
+                    assert(layers.isEmpty)
+                    assert(read == userData("Bob"))
+                end for
+            }
         }
 
         "two executions of one optimistic call stack two layers and roll back independently" in {
@@ -459,8 +462,8 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
                 arrivedA <- Latch.init(1)
                 arrivedB <- Latch.init(1)
                 engine   <- HeldMutationEngine.init(Chunk(arrivedA, arrivedB))
-                client = cachedClient(engine)
-                store  = client.apolloStore
+                client   <- cachedClient(engine)
+                store = client.apolloStore
                 call = client
                     .mutation(UpdateUserNameMutation("Bob"))
                     .optimisticUpdates(updateData("BobOptimistic"))
@@ -494,41 +497,42 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
             // must still be on the stack: dropping it before the commit would leave watchers
             // on the optimistic value with nothing published. The Scope release then drops
             // it and publishes the revert.
-            val cache  = new CommitTrap(MemoryCache())
-            val client = cachedClient(cache = cache)
-            val store  = client.apolloStore
-            for
-                _               <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                layersAtFailure <- AtomicRef.init(Chunk.empty[String])
-                published       <- AtomicRef.init(Chunk.empty[Set[CacheKey]])
-                _               <- store.addChangedKeysListener(keys => published.updateAndGet(_.append(keys)).unit)
-                _ <- Sync.defer(cache.arm(
-                    before = store.optimisticLayerIds
-                        .map(ids => layersAtFailure.set(ids))
-                        .andThen(Abort.panic(new IllegalStateException("the backend refused the commit"))),
-                    after = Kyo.unit
-                ))
-                result <- Abort.run[Throwable](Scope.run(
-                    client
-                        .mutation(UpdateUserNameMutation("Bob"))
-                        .optimisticUpdates(updateData("BobOptimistic"))
-                        .fetchPolicy(FetchPolicy.NetworkOnly)
-                        .execute
-                ))
-                failing   <- layersAtFailure.get
-                layers    <- store.optimisticLayerIds
-                publishes <- published.get
-                read      <- store.readOperation(CurrentUserQuery())
-            yield
-                assert(result.isPanic, s"the failed commit must surface: $result")
-                assert(failing.size == 1, s"the layer was already dropped when the commit failed: $failing")
-                assert(layers.isEmpty, s"the release left the layer behind: $layers")
-                assert(
-                    publishes.size == 2 && publishes.last.contains(CacheKey("User", "1")),
-                    s"the revert was never published: $publishes"
-                )
-                assert(read == userData("Alice"))
-            end for
+            val cache = new CommitTrap(MemoryCache())
+            cachedClient(cache = cache).map { client =>
+                val store = client.apolloStore
+                for
+                    _               <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                    layersAtFailure <- AtomicRef.init(Chunk.empty[String])
+                    published       <- AtomicRef.init(Chunk.empty[Set[CacheKey]])
+                    _               <- store.addChangedKeysListener(keys => published.updateAndGet(_.append(keys)).unit)
+                    _ <- Sync.defer(cache.arm(
+                        before = store.optimisticLayerIds
+                            .map(ids => layersAtFailure.set(ids))
+                            .andThen(Abort.panic(new IllegalStateException("the backend refused the commit"))),
+                        after = Kyo.unit
+                    ))
+                    result <- Abort.run[Throwable](Scope.run(
+                        client
+                            .mutation(UpdateUserNameMutation("Bob"))
+                            .optimisticUpdates(updateData("BobOptimistic"))
+                            .fetchPolicy(FetchPolicy.NetworkOnly)
+                            .execute
+                    ))
+                    failing   <- layersAtFailure.get
+                    layers    <- store.optimisticLayerIds
+                    publishes <- published.get
+                    read      <- store.readOperation(CurrentUserQuery())
+                yield
+                    assert(result.isPanic, s"the failed commit must surface: $result")
+                    assert(failing.size == 1, s"the layer was already dropped when the commit failed: $failing")
+                    assert(layers.isEmpty, s"the release left the layer behind: $layers")
+                    assert(
+                        publishes.size == 2 && publishes.last.contains(CacheKey("User", "1")),
+                        s"the revert was never published: $publishes"
+                    )
+                    assert(read == userData("Alice"))
+                end for
+            }
         }
     }
 
@@ -717,14 +721,11 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
         engine: kyo.apollo.network.http.HttpEngine = ScriptedEngine(mutationFails = false),
         belowCache: List[ApolloInterceptor] = Nil,
         cache: NormalizedCache = MemoryCache()
-    ): ApolloClient =
-        val builder = ApolloClient
-            .builder()
-            .serverUrl("https://example.com/graphql")
+    )(using Frame): ApolloClient < (Sync & Scope) =
+        val cached = ApolloClient.Config("https://example.com/graphql")
             .httpEngine(engine)
             .normalizedCache(cache, IdCacheKeyGenerator(List("id")))
-        belowCache.foreach(builder.addInterceptor)
-        builder.build()
+        ApolloClient.init(belowCache.foldLeft(cached)(_.addInterceptor(_)))
     end cachedClient
 
     private def name(response: ApolloResponse[UserData]): Maybe[String] =
