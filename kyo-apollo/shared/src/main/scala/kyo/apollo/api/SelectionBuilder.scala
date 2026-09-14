@@ -37,18 +37,18 @@ import scala.collection.immutable.VectorMap
   *     with `map`/`mapInto`.
   *
   * What a selection can do is its type, not a check at run time:
+  *   - every selection decodes; only a [[SelectionBuilder.Bidirectional]] one also
+  *     encodes, which is what nesting it into a parent field and writing its
+  *     operation to the normalized cache need. A `map` projection decodes only;
+  *     `mapInto` and every named-tuple selection are bidirectional;
   *   - only [[SelectionBuilder.Fields]] combine with `~`;
   *   - only [[SelectionBuilder.Deferrable]] — a selection whose last-added operand
   *     is a single field — take `.deferred` and `.streamed`, and `.streamed` also
   *     needs that field to be a list.
   *
   * A misuse is therefore a compile error at the call site.
-  *
-  * The builder carries a **bidirectional** codec (both `decode` and `encode`),
-  * because the runtime uses the operation's data codec to normalize into *and*
-  * read back from the cache, not only to decode responses.
   */
-sealed trait SelectionBuilder[Origin, A]:
+sealed trait SelectionBuilder[Origin, A] extends JsonDecoder[A]:
 
     /** The compiled selections of this selection set, in declaration order. A
       * selection is usually a [[CompiledField]], but a defer group contributes a
@@ -65,9 +65,6 @@ sealed trait SelectionBuilder[Origin, A]:
       * JSON type found; anything a codec throws beyond that is a panic.
       */
     def decode(json: Json)(using Frame): Result[ApolloParseException, A]
-
-    /** Encode a result value back into a response-shaped [[Json]] object. */
-    def encode(value: A): Json
 end SelectionBuilder
 
 object SelectionBuilder:
@@ -110,12 +107,64 @@ object SelectionBuilder:
                 Json.JArr(value.asInstanceOf[Chunk[Any]].map(inner.encode(_, child)))
     end Nesting
 
+    /** A selection that also encodes its result back into the response shape — what
+      * a parent field needs to nest it and what the normalized cache needs to write
+      * its operation. Every [[Fields]] selection is one, and so is a `mapInto`
+      * projection; a `map` projection is not, since an arbitrary function has no
+      * inverse.
+      */
+    sealed trait Bidirectional[Origin, A] extends SelectionBuilder[Origin, A] with JsonCodec[A]:
+
+        /** Encode a result value back into a response-shaped [[Json]] object. */
+        def encode(value: A): Json
+
+        // The normalizable terminal forms are members, not extensions: Scala 3 reports an
+        // extension overload on this type and one on `SelectionBuilder` as ambiguous, and a
+        // member is chosen before any extension is tried.
+
+        /** Build the query of this root selection, named after its root field(s); the
+          * normalized cache can write it.
+          */
+        def toQuery()(using Origin =:= RootQuery): Query.Normalizable[A] =
+            toQuery(deriveOperationName(selections))
+
+        /** Build the query of this root selection named `operationName`; the normalized
+          * cache can write it.
+          */
+        def toQuery(operationName: String)(using Origin =:= RootQuery): Query.Normalizable[A] =
+            buildNormalizableQuery(operationName, selections, argEntries, this)
+
+        /** Build the mutation of this root selection, named after its root field(s); the
+          * normalized cache can write it.
+          */
+        def toMutation()(using Origin =:= RootMutation): Mutation.Normalizable[A] =
+            toMutation(deriveOperationName(selections))
+
+        /** Build the mutation of this root selection named `operationName`; the normalized
+          * cache can write it.
+          */
+        def toMutation(operationName: String)(using Origin =:= RootMutation): Mutation.Normalizable[A] =
+            buildNormalizableMutation(operationName, selections, argEntries, this)
+
+        /** Build the subscription of this root selection, named after its root field(s);
+          * the normalized cache can write it.
+          */
+        def toSubscription()(using Origin =:= RootSubscription): Subscription.Normalizable[A] =
+            toSubscription(deriveOperationName(selections))
+
+        /** Build the subscription of this root selection named `operationName`; the
+          * normalized cache can write it.
+          */
+        def toSubscription(operationName: String)(using Origin =:= RootSubscription): Subscription.Normalizable[A] =
+            buildNormalizableSubscription(operationName, selections, argEntries, this)
+    end Bidirectional
+
     /** A named-tuple-shaped selection: the composable form. Only these combine with
       * `~` (the extension below). The runtime tuple carries no names, so every node
       * below takes the named tuple it decodes to as a type argument its constructor
       * or combinator pins.
       */
-    sealed trait Fields[Origin, A <: AnyNamedTuple] extends SelectionBuilder[Origin, A]:
+    sealed trait Fields[Origin, A <: AnyNamedTuple] extends Bidirectional[Origin, A]:
         private[api] def arity: Int
         private[api] def decodeRaw(row: Map[String, Json])(using Frame): Result[ApolloParseException, Tuple]
         private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)]
@@ -281,25 +330,38 @@ object SelectionBuilder:
                 case Absent => Chunk.empty
     end Deferred
 
-    /** A selection whose result has been projected to an arbitrary `B` (via `map` /
-      * `mapInto`). It keeps the same wire selection and arguments; only the
-      * decode/encode target differs, and it can no longer be combined with `~`.
+    /** A selection whose result a `map` projected to an arbitrary `B`. It keeps the
+      * same wire selection and arguments and decodes only: it neither combines with
+      * `~` nor nests into a parent field, and its operation is not normalizable.
       */
-    final private class Mapped[Origin, B](
+    final private class Mapped[Origin, A, B](
+        under: SelectionBuilder[Origin, A],
+        f: A => B
+    ) extends SelectionBuilder[Origin, B]:
+        def selections: Chunk[CompiledSelection]                             = under.selections
+        private[api] def argEntries: Chunk[Arg]                              = under.argEntries
+        def decode(json: Json)(using Frame): Result[ApolloParseException, B] = under.decode(json).map(f)
+    end Mapped
+
+    /** A selection whose result a `mapInto` projected to a `B` with a codec that also
+      * encodes: it nests into a parent field and its operation is normalizable, but
+      * it does not combine with `~`.
+      */
+    final private class MappedInto[Origin, B](
         under: SelectionBuilder[Origin, ?],
         codec: JsonCodec[B]
-    ) extends SelectionBuilder[Origin, B]:
+    ) extends Bidirectional[Origin, B]:
         def selections: Chunk[CompiledSelection]                             = under.selections
         private[api] def argEntries: Chunk[Arg]                              = under.argEntries
         def decode(json: Json)(using Frame): Result[ApolloParseException, B] = codec.decode(json)
         def encode(value: B): Json                                           = codec.encode(value)
-    end Mapped
+    end MappedInto
 
     /** Decode one leaf value. [[ScalarCodec]]'s contract has no frame to build a
-      * failure with, so its codecs still throw on a wrong shape; this is the one place
-      * that throw — a `ScalarDecodeException`, or the `ApolloParseException` of a
-      * schema-backed leaf — becomes the failure value. Anything else a codec throws
-      * stays a panic.
+      * failure with, so a codec still signals a wrong shape by raising
+      * `ScalarDecodeException` (or, for a schema-backed leaf, `ApolloParseException`);
+      * this is the one place that turns it into the failure value. Anything else a
+      * codec raises stays a panic.
       */
     private def leaf[V](codec: ScalarCodec[V], json: Json)(using Frame): Result[ApolloParseException, V] =
         Result.catching[ScalarDecodeException | ApolloParseException](codec.decode(json)).mapFailure {
@@ -383,14 +445,15 @@ object SelectionBuilder:
         )
 
     /** Build a nested-object selector, wrapping the child selection's result per
-      * `nesting` (identity / `Maybe` / `Chunk`, arbitrarily deep). The child may be
-      * any selection — a named-tuple one or a `map`/`mapInto` projection.
+      * `nesting` (identity / `Maybe` / `Chunk`, arbitrarily deep). The child is a
+      * bidirectional selection — a named-tuple one or a `mapInto` projection — since
+      * the field re-encodes it; a `map` projection applies to the whole selection.
       */
     def obj[Origin, R <: AnyNamedTuple, A](
         name: String,
         fieldType: CompiledType,
         arguments: Chunk[Arg],
-        child: SelectionBuilder[?, A],
+        child: Bidirectional[?, A],
         nesting: Nesting
     ): Deferrable[Origin, R] =
         val typeName = fieldType.leafType.name
@@ -453,7 +516,7 @@ object SelectionBuilder:
       */
     def onType[Origin, R <: AnyNamedTuple, A](
         typeName: String,
-        child: SelectionBuilder[?, A]
+        child: Bidirectional[?, A]
     ): Fields[Origin, R] =
         new Fields[Origin, R]:
             private[api] def arity: Int = 1
@@ -474,12 +537,23 @@ object SelectionBuilder:
                             // parent row; the branch's fields simply stay absent.
                             case _ => Chunk.empty
 
-    /** Project a selection's result to `B`, reusing its wire selection/arguments. */
-    private[api] def project[Origin, B](
+    /** Project a selection's result to `B` with `f`, decoding only (backs `map`), reusing
+      * its wire selection/arguments. An exception raised by `f` is a panic of the decode.
+      */
+    private[api] def projectDecode[Origin, A, B](
+        under: SelectionBuilder[Origin, A],
+        f: A => B
+    ): SelectionBuilder[Origin, B] =
+        Mapped(under, f)
+
+    /** Project a selection's result to `B` with a codec that also encodes (backs
+      * `mapInto`), reusing its wire selection/arguments.
+      */
+    private[api] def projectCodec[Origin, B](
         under: SelectionBuilder[Origin, ?],
         codec: JsonCodec[B]
-    ): SelectionBuilder[Origin, B] =
-        Mapped(under, codec)
+    ): Bidirectional[Origin, B] =
+        MappedInto(under, codec)
 
     /** A raw arity-1 node whose single element is computed from the PARENT row
       * rather than one response field — the seam a masked fragment spread plugs

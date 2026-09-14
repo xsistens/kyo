@@ -4,6 +4,7 @@ import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
+import kyo.apollo.api.JsonCodec
 import kyo.apollo.api.Query
 import kyo.apollo.api.StreamDirective
 import kyo.apollo.interceptor.DefaultApolloInterceptorChain
@@ -28,10 +29,10 @@ class StreamSpec extends kyo.test.Test[Any]:
     final case class Data(items: List[Item]) derives Schema
 
     /** An operation whose `items` list field carries a `@stream` directive. */
-    final case class StreamQ() extends Query[Data]:
-        def name: String             = "Q"
-        def document: String         = "query Q { items @stream(initialCount: 1) { id } }"
-        def dataSchema: Schema[Data] = summon[Schema[Data]]
+    final case class StreamQ() extends Query.Normalizable[Data]:
+        def name: String               = "Q"
+        def document: String           = "query Q { items @stream(initialCount: 1) { id } }"
+        val dataCodec: JsonCodec[Data] = JsonCodec.fromSchema[Data]
         def rootField: CompiledField = CompiledField(
             "data",
             CompiledNamedType("Query"),

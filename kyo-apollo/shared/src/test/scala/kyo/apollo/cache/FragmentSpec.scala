@@ -30,7 +30,7 @@ class FragmentSpec extends kyo.test.Test[Any]:
 
     /** A `... on User { __typename id name }` fragment, rooted at a `User` record. */
     object UserFragment extends Fragment[UserFields]:
-        def dataSchema: Schema[UserFields] = summon[Schema[UserFields]]
+        val dataCodec: JsonCodec[UserFields] = JsonCodec.fromSchema[UserFields]
         def rootField: CompiledField =
             CompiledField(
                 "user",
@@ -47,10 +47,10 @@ class FragmentSpec extends kyo.test.Test[Any]:
     // fragment write and an operation read share one record.
     final case class UserData(user: UserFields) derives Schema
 
-    final case class CurrentUserQuery() extends Query[UserData]:
-        def name                         = "CurrentUser"
-        def document                     = "query CurrentUser { user { __typename id name } }"
-        def dataSchema: Schema[UserData] = summon[Schema[UserData]]
+    final case class CurrentUserQuery() extends Query.Normalizable[UserData]:
+        def name                           = "CurrentUser"
+        def document                       = "query CurrentUser { user { __typename id name } }"
+        val dataCodec: JsonCodec[UserData] = JsonCodec.fromSchema[UserData]
         def rootField: CompiledField =
             CompiledField(
                 "data",
@@ -86,15 +86,15 @@ class FragmentSpec extends kyo.test.Test[Any]:
         )
 
     object ProfileFragment extends Fragment[ProfileFields]:
-        def dataSchema: Schema[ProfileFields] = summon[Schema[ProfileFields]]
+        val dataCodec: JsonCodec[ProfileFields] = JsonCodec.fromSchema[ProfileFields]
         def rootField: CompiledField =
             CompiledField("user", CompiledNamedType("User"), selections = avatarSelections)
     end ProfileFragment
 
-    final case class ProfileQuery() extends Query[ProfileData]:
-        def name                            = "Profile"
-        def document                        = "query Profile { user { __typename id avatar { url } } }"
-        def dataSchema: Schema[ProfileData] = summon[Schema[ProfileData]]
+    final case class ProfileQuery() extends Query.Normalizable[ProfileData]:
+        def name                              = "Profile"
+        def document                          = "query Profile { user { __typename id avatar { url } } }"
+        val dataCodec: JsonCodec[ProfileData] = JsonCodec.fromSchema[ProfileData]
         def rootField: CompiledField =
             CompiledField(
                 "data",

@@ -72,11 +72,11 @@ class GarbageCollectionSpec extends kyo.test.Test[Any]:
 
     final case class UpdateUserData(updateUser: User) derives Schema
 
-    final case class UpdateUserNameMutation(newName: String) extends Mutation[UpdateUserData]:
+    final case class UpdateUserNameMutation(newName: String) extends Mutation.Normalizable[UpdateUserData]:
         def name = "UpdateUserName"
         def document =
             "mutation UpdateUserName($name: String!) { updateUser(name: $name) { __typename id name } }"
-        def dataSchema: Schema[UpdateUserData] = summon[Schema[UpdateUserData]]
+        val dataCodec: JsonCodec[UpdateUserData] = JsonCodec.fromSchema[UpdateUserData]
         def rootField: CompiledField =
             CompiledField(
                 "data",
@@ -91,10 +91,10 @@ class GarbageCollectionSpec extends kyo.test.Test[Any]:
     final case class UserData(user: User) derives Schema
 
     /** `{ user { __typename id name } }` — QUERY_ROOT, then `User:<id>`. */
-    final case class UserQuery() extends Query[UserData]:
-        def name                         = "User"
-        def document                     = "query User { user { __typename id name } }"
-        def dataSchema: Schema[UserData] = summon[Schema[UserData]]
+    final case class UserQuery() extends Query.Normalizable[UserData]:
+        def name                           = "User"
+        def document                       = "query User { user { __typename id name } }"
+        val dataCodec: JsonCodec[UserData] = JsonCodec.fromSchema[UserData]
         def rootField: CompiledField =
             CompiledField("data", CompiledNamedType("Query"), selections = Chunk(userField("user")))
         def variables: Json = Json.JObj(VectorMap.empty)

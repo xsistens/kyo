@@ -42,23 +42,23 @@ object Fixtures:
         summon[Schema[ValueData]].transform[Int](_.value)(ValueData.apply)
 
     /** A query whose `data` is a single `{ "value": Int }` object. */
-    final case class ValueQuery() extends Query[Int]:
-        def name: String             = "Value"
-        def document: String         = "query Value { value }"
-        def dataSchema: Schema[Int]  = valueSchema
-        def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
-        def variables: Json          = Json.JObj(VectorMap.empty)
+    final case class ValueQuery() extends Query.Normalizable[Int]:
+        def name: String              = "Value"
+        def document: String          = "query Value { value }"
+        val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema(using valueSchema)
+        def rootField: CompiledField  = CompiledField("data", CompiledNamedType("Query"))
+        def variables: Json           = Json.JObj(VectorMap.empty)
     end ValueQuery
 
     /** A subscription whose `data` is a single `{ "value": Int }` object; the
       * emitted value is the streamed event so assertions read as plain integers.
       */
-    final case class ValueSubscription() extends Subscription[Int]:
-        def name: String             = "Value"
-        def document: String         = "subscription Value { value }"
-        def dataSchema: Schema[Int]  = valueSchema
-        def rootField: CompiledField = CompiledField("data", CompiledNamedType("Subscription"))
-        def variables: Json          = Json.JObj(VectorMap.empty)
+    final case class ValueSubscription() extends Subscription.Normalizable[Int]:
+        def name: String              = "Value"
+        def document: String          = "subscription Value { value }"
+        val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema(using valueSchema)
+        def rootField: CompiledField  = CompiledField("data", CompiledNamedType("Subscription"))
+        def variables: Json           = Json.JObj(VectorMap.empty)
     end ValueSubscription
 
     /** An [[ApolloRequest]] for the `value` subscription (mirrors the promoted
@@ -81,10 +81,10 @@ object Fixtures:
         CompiledField("name", CompiledNamedType("String"))
     )
 
-    final case class CurrentUserQuery() extends Query[UserData]:
-        def name: String                 = "CurrentUser"
-        def document: String             = "query CurrentUser { user { __typename id name } }"
-        def dataSchema: Schema[UserData] = summon[Schema[UserData]]
+    final case class CurrentUserQuery() extends Query.Normalizable[UserData]:
+        def name: String                   = "CurrentUser"
+        def document: String               = "query CurrentUser { user { __typename id name } }"
+        val dataCodec: JsonCodec[UserData] = JsonCodec.fromSchema[UserData]
         def rootField: CompiledField =
             CompiledField(
                 "data",
