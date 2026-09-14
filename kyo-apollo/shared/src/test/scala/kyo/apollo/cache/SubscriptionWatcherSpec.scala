@@ -52,7 +52,7 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
         def name: SelectionBuilder.Deferrable[LobbyViewT, (name: String)] =
             SelectionBuilder.scalar("name", CompiledNamedType("String").notNull, ScalarCodec.string)
         def players[A](
-            sel: SelectionBuilder[LobbyPlayerT, A]
+            sel: SelectionBuilder.Bidirectional[LobbyPlayerT, A]
         ): SelectionBuilder.Deferrable[LobbyViewT, (players: Chunk[A])] =
             SelectionBuilder.obj(
                 "players",
@@ -85,10 +85,10 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
       * (kyo-schema encodes `Absent` as an ABSENT field; the cache must repair it to
       * an explicit `null` or every later read misses).
       */
-    private def playerSel: SelectionBuilder[LobbyPlayerT, Player] =
+    private def playerSel: SelectionBuilder.Bidirectional[LobbyPlayerT, Player] =
         (GPlayer.id ~ GPlayer.color).mapInto[Player]
 
-    private def lobbySel: SelectionBuilder[LobbyViewT, Lobby] =
+    private def lobbySel: SelectionBuilder.Bidirectional[LobbyViewT, Lobby] =
         (GLobby.id ~ GLobby.name ~ GLobby.players(playerSel) ~ GLobby.startedGameId).mapInto[Lobby]
 
     private def lobbyArg(id: String): Chunk[SelectionBuilder.Arg] =
@@ -109,10 +109,10 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
             SelectionBuilder.Nesting.Leaf
         )
 
-    private def lobbyQuery(id: String): Query[(lobby: Lobby)] =
+    private def lobbyQuery(id: String): Query.Normalizable[(lobby: Lobby)] =
         lobbyQuerySel(id).toQuery()
 
-    private def lobbySubscription(id: String): Subscription[(lobbyUpdates: Maybe[Lobby])] =
+    private def lobbySubscription(id: String): Subscription.Normalizable[(lobbyUpdates: Maybe[Lobby])] =
         val sel: SelectionBuilder.Deferrable[RootSubscription, (lobbyUpdates: Maybe[Lobby])] =
             SelectionBuilder.obj(
                 "lobbyUpdates",
@@ -144,7 +144,7 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
     end GBadge
 
     private def badgesSel[A](
-        sel: SelectionBuilder[LobbyBadgeT, A]
+        sel: SelectionBuilder.Bidirectional[LobbyBadgeT, A]
     ): SelectionBuilder.Deferrable[LobbyViewT, (badges: Chunk[A])] =
         SelectionBuilder.obj(
             "badges",
@@ -159,7 +159,7 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
     final case class LobbyWide(id: String, badges: Chunk[BadgeWide]) derives Schema
     final case class LobbyNarrow(id: String, badges: Chunk[BadgeNarrow]) derives Schema
 
-    private def wideBadgeQuery(id: String): Query[(lobby: LobbyWide)] =
+    private def wideBadgeQuery(id: String): Query.Normalizable[(lobby: LobbyWide)] =
         SelectionBuilder.obj(
             "lobby",
             CompiledNamedType("LobbyView").notNull,
@@ -168,7 +168,7 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
             SelectionBuilder.Nesting.Leaf
         ).toQuery()
 
-    private def narrowBadgeSubscription(id: String): Subscription[(lobbyUpdates: Maybe[LobbyNarrow])] =
+    private def narrowBadgeSubscription(id: String): Subscription.Normalizable[(lobbyUpdates: Maybe[LobbyNarrow])] =
         SelectionBuilder.obj(
             "lobbyUpdates",
             CompiledNamedType("LobbyView"),

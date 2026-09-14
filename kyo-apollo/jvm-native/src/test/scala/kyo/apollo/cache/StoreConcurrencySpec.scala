@@ -32,10 +32,10 @@ class StoreConcurrencySpec extends kyo.test.Test[Any]:
         )
 
     /** `{ album { __typename id title } }` — the root, then `Album:<id>`. */
-    final case class AlbumQuery() extends Query[AlbumData]:
-        def name                          = "Album"
-        def document                      = "query Album { album { __typename id title } }"
-        def dataSchema: Schema[AlbumData] = summon[Schema[AlbumData]]
+    final case class AlbumQuery() extends Query.Normalizable[AlbumData]:
+        def name                            = "Album"
+        def document                        = "query Album { album { __typename id title } }"
+        val dataCodec: JsonCodec[AlbumData] = JsonCodec.fromSchema[AlbumData]
         def rootField: CompiledField =
             CompiledField(
                 "data",
@@ -48,10 +48,10 @@ class StoreConcurrencySpec extends kyo.test.Test[Any]:
     final case class TagsData(tags: List[String]) derives Schema
 
     /** `{ tags }` — one list field on the root record. */
-    final case class TagsQuery() extends Query[TagsData]:
-        def name                         = "Tags"
-        def document                     = "query Tags { tags }"
-        def dataSchema: Schema[TagsData] = summon[Schema[TagsData]]
+    final case class TagsQuery() extends Query.Normalizable[TagsData]:
+        def name                           = "Tags"
+        def document                       = "query Tags { tags }"
+        val dataCodec: JsonCodec[TagsData] = JsonCodec.fromSchema[TagsData]
         def rootField: CompiledField =
             CompiledField(
                 "data",
@@ -73,10 +73,10 @@ class StoreConcurrencySpec extends kyo.test.Test[Any]:
         )
 
     /** `User:1` and its friend `User:2`, one level apart: two batches of one read. */
-    final case class TwoUsersQuery() extends Query[TwoUsersData]:
-        def name                             = "TwoUsers"
-        def document                         = "query TwoUsers { first { __typename id name friend { __typename id name } } }"
-        def dataSchema: Schema[TwoUsersData] = summon[Schema[TwoUsersData]]
+    final case class TwoUsersQuery() extends Query.Normalizable[TwoUsersData]:
+        def name                               = "TwoUsers"
+        def document                           = "query TwoUsers { first { __typename id name friend { __typename id name } } }"
+        val dataCodec: JsonCodec[TwoUsersData] = JsonCodec.fromSchema[TwoUsersData]
         def rootField: CompiledField =
             CompiledField(
                 "data",

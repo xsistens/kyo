@@ -5,6 +5,7 @@ import kyo.apollo.ApolloClient
 import kyo.apollo.api.CompiledArgument
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
+import kyo.apollo.api.JsonCodec
 import kyo.apollo.api.Mutation
 import kyo.apollo.cache.normalized.MemoryCache
 import kyo.apollo.cache.normalized.api.IdCacheKeyGenerator
@@ -59,10 +60,10 @@ class ApolloDevtoolsSpec extends kyo.test.Test[Any]:
     final case class LoginData(login: LoginPayload) derives Schema
 
     /** `mutation Login($input: LoginInput!) { login(input: $input) { ok user { id } } }` */
-    final case class LoginMutation() extends Mutation[LoginData]:
-        def name: String                  = "Login"
-        def document: String              = "mutation Login($input: LoginInput!) { login(input: $input) { ok user { id } } }"
-        def dataSchema: Schema[LoginData] = summon[Schema[LoginData]]
+    final case class LoginMutation() extends Mutation.Normalizable[LoginData]:
+        def name: String                    = "Login"
+        def document: String                = "mutation Login($input: LoginInput!) { login(input: $input) { ok user { id } } }"
+        val dataCodec: JsonCodec[LoginData] = JsonCodec.fromSchema[LoginData]
         def rootField: CompiledField =
             CompiledField(
                 "data",

@@ -29,11 +29,11 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
     // --- Minimal operations (root key + selection tree) -----------------------
 
     /** A query whose root selections are supplied per-test; `data` is never
-      * decoded through `dataSchema` in the Json-level tests, so `Int` is fine.
+      * decoded through `dataCodec` in the Json-level tests, so `Int` is fine.
       */
-    final case class TestQuery(selections: Chunk[CompiledSelection]) extends Query[Int]:
-        def name                    = "Q"; def document = "query Q { ... }"
-        def dataSchema: Schema[Int] = summon[Schema[Int]]
+    final case class TestQuery(selections: Chunk[CompiledSelection]) extends Query.Normalizable[Int]:
+        def name                      = "Q"; def document = "query Q { ... }"
+        val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema[Int]
         def rootField: CompiledField =
             CompiledField("data", CompiledNamedType("Query"), selections = selections)
         def variables: Json = Json.JObj(VectorMap.empty)
@@ -85,9 +85,9 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
     /** A query for `{ book { __typename id title } }` returning [[BookData]]. The
       * stored `__typename` is an unknown field to `Book` and is ignored on decode.
       */
-    final case class BookQuery() extends Query[BookData]:
-        def name                         = "BookQuery"; def document = "query BookQuery { book { __typename id title } }"
-        def dataSchema: Schema[BookData] = summon[Schema[BookData]]
+    final case class BookQuery() extends Query.Normalizable[BookData]:
+        def name                           = "BookQuery"; def document = "query BookQuery { book { __typename id title } }"
+        val dataCodec: JsonCodec[BookData] = JsonCodec.fromSchema[BookData]
         def rootField: CompiledField =
             CompiledField(
                 "data",
