@@ -8,6 +8,7 @@ import kyo.Present
 import kyo.Result
 import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.json.Json
+import kyo.discard
 import scala.NamedTuple.AnyNamedTuple
 import scala.NamedTuple.Concat
 import scala.NamedTuple.DropNames
@@ -73,6 +74,9 @@ object SelectionBuilder:
       * rendering the `$var: Type` header), and its already-encoded value.
       */
     final case class Arg(name: String, typeRef: CompiledType, value: Json)
+
+    /** The response object an encode writes its fields into, in selection order. */
+    private[api] type RowBuilder = scala.collection.mutable.Builder[(String, Json), VectorMap[String, Json]]
 
     /** How a nested object field wraps its child selection's result. Recursive, so
       * it models arbitrarily deep list/nullable structures, e.g. `[Country!]`
@@ -163,18 +167,36 @@ object SelectionBuilder:
       * `~` (the extension below). The runtime tuple carries no names, so every node
       * below takes the named tuple it decodes to as a type argument its constructor
       * or combinator pins.
+      *
+      * A selection's structure — its selections, arguments and arity — is computed
+      * once, when it is built. Decoding a response allocates one array of `arity`
+      * slots, which every node fills at its own offset, and one tuple over it;
+      * encoding reads the tuple's elements by offset into one object builder.
       */
     sealed trait Fields[Origin, A <: AnyNamedTuple] extends Bidirectional[Origin, A]:
+
+        /** The number of slots this selection contributes to its result tuple. */
         private[api] def arity: Int
-        private[api] def decodeRaw(row: Map[String, Json])(using Frame): Result[ApolloParseException, Tuple]
-        private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)]
+
+        /** Decode this node's slots from `row` into `out`, starting at `offset`. */
+        private[api] def decodeInto(row: Map[String, Json], out: Array[Any], offset: Int)(using
+            Frame
+        ): Result[ApolloParseException, Unit]
+
+        /** Encode this node's slots of `value`, starting at `offset`, into `out`. */
+        private[api] def encodeInto(value: Product, offset: Int, out: RowBuilder): Unit
 
         final def decode(json: Json)(using Frame): Result[ApolloParseException, A] = json match
-            case Json.JObj(row) => decodeRaw(row).map(_.asInstanceOf[A])
-            case other          => Result.fail(ApolloParseException(other, "a GraphQL object"))
+            case Json.JObj(row) =>
+                val out = new Array[Any](arity)
+                decodeInto(row, out, 0).map(_ => Tuple.fromArray(out).asInstanceOf[A])
+            case other => Result.fail(ApolloParseException(other, "a GraphQL object"))
 
         final def encode(value: A): Json =
-            Json.JObj(VectorMap.from(encodeRaw(value.asInstanceOf[Tuple])))
+            val out = VectorMap.newBuilder[String, Json]
+            encodeInto(value.asInstanceOf[Product], 0, out)
+            Json.JObj(out.result())
+        end encode
     end Fields
 
     /** A selection whose LAST-added operand is a single field — the operand
@@ -217,9 +239,9 @@ object SelectionBuilder:
         decodeValue: (Json, Frame) => Result[ApolloParseException, Any],
         encodeValue: Any => Json
     ) extends Deferrable[Origin, A]:
-        private[api] def arity: Int              = 1
-        def selections: Chunk[CompiledSelection] = Chunk(compiled)
-        private[api] def argEntries: Chunk[Arg]  = ownArgs ++ childArgs
+        private[api] val arity: Int              = 1
+        val selections: Chunk[CompiledSelection] = Chunk(compiled)
+        private[api] val argEntries: Chunk[Arg]  = ownArgs ++ childArgs
         private[api] def deferLast[R <: AnyNamedTuple]: Fields[Origin, R] =
             Deferred[Origin, R](compiled.responseName, Absent, this, single = true)
         private[api] def streamLast(initialCount: Int, condition: Maybe[String]): Deferrable[Origin, A] =
@@ -232,27 +254,32 @@ object SelectionBuilder:
                 decodeValue,
                 encodeValue
             )
-        private[api] def decodeRaw(row: Map[String, Json])(using frame: Frame): Result[ApolloParseException, Tuple] =
-            decodeValue(row.getOrElse(compiled.responseName, Json.JNull), frame).map(Tuple1(_))
-        private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)] =
-            Chunk(compiled.responseName -> encodeValue(value.productElement(0)))
+        private[api] def decodeInto(row: Map[String, Json], out: Array[Any], offset: Int)(using
+            frame: Frame
+        ): Result[ApolloParseException, Unit] =
+            decodeValue(row.getOrElse(compiled.responseName, Json.JNull), frame).map(value => out(offset) = value)
+        private[api] def encodeInto(value: Product, offset: Int, out: RowBuilder): Unit =
+            discard(out += compiled.responseName -> encodeValue(value.productElement(offset)))
     end Field
 
-    /** Two selections combined; splits the tuple by left arity when encoding. `R` is
-      * the named tuple the combinator pins (`Concat` of the operands' for `~`).
+    /** Two selections combined: `right`'s slots follow `left`'s. `R` is the named tuple
+      * the combinator pins (`Concat` of the operands' for `~`).
       */
     sealed abstract private class Pair[Origin, R <: AnyNamedTuple](
         left: Fields[Origin, ? <: AnyNamedTuple],
         right: Fields[Origin, ? <: AnyNamedTuple]
     ) extends Fields[Origin, R]:
-        private[api] def arity: Int              = left.arity + right.arity
-        def selections: Chunk[CompiledSelection] = left.selections ++ right.selections
-        private[api] def argEntries: Chunk[Arg]  = left.argEntries ++ right.argEntries
-        private[api] def decodeRaw(row: Map[String, Json])(using Frame): Result[ApolloParseException, Tuple] =
-            left.decodeRaw(row).flatMap(l => right.decodeRaw(row).map(r => l ++ r))
-        private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)] =
-            val (l, r) = value.toArray.splitAt(left.arity)
-            left.encodeRaw(Tuple.fromArray(l)) ++ right.encodeRaw(Tuple.fromArray(r))
+        private val leftArity: Int               = left.arity
+        private[api] val arity: Int              = leftArity + right.arity
+        val selections: Chunk[CompiledSelection] = left.selections ++ right.selections
+        private[api] val argEntries: Chunk[Arg]  = left.argEntries ++ right.argEntries
+        private[api] def decodeInto(row: Map[String, Json], out: Array[Any], offset: Int)(using
+            Frame
+        ): Result[ApolloParseException, Unit] =
+            left.decodeInto(row, out, offset).flatMap(_ => right.decodeInto(row, out, offset + leftArity))
+        private[api] def encodeInto(value: Product, offset: Int, out: RowBuilder): Unit =
+            left.encodeInto(value, offset, out)
+            right.encodeInto(value, offset + leftArity, out)
     end Pair
 
     /** A combination whose right operand is not a single field. */
@@ -280,12 +307,14 @@ object SelectionBuilder:
       * `EmptyTuple ++ row =:= row` at runtime — leaving exactly the chained field.
       */
     final private class EmptySel[Origin] extends Fields[Origin, Empty]:
-        private[api] def arity: Int                                     = 0
-        def selections: Chunk[CompiledSelection]                        = Chunk.empty
-        private[api] def argEntries: Chunk[Arg]                         = Chunk.empty
-        private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)] = Chunk.empty
-        private[api] def decodeRaw(row: Map[String, Json])(using Frame): Result[ApolloParseException, Tuple] =
-            Result.succeed(EmptyTuple)
+        private[api] val arity: Int                                                     = 0
+        val selections: Chunk[CompiledSelection]                                        = Chunk.empty
+        private[api] val argEntries: Chunk[Arg]                                         = Chunk.empty
+        private[api] def encodeInto(value: Product, offset: Int, out: RowBuilder): Unit = ()
+        private[api] def decodeInto(row: Map[String, Json], out: Array[Any], offset: Int)(using
+            Frame
+        ): Result[ApolloParseException, Unit] =
+            Result.unit
     end EmptySel
 
     /** A `@defer`ed inline group. Contributes its child's fields to the *parent*
@@ -303,31 +332,34 @@ object SelectionBuilder:
         child: Fields[Origin, ? <: AnyNamedTuple],
         single: Boolean
     ) extends Fields[Origin, R]:
-        private[api] def arity: Int = 1
-        def selections: Chunk[CompiledSelection] =
+        private[api] val arity: Int = 1
+        val selections: Chunk[CompiledSelection] =
             Chunk(
                 CompiledFragment("", Chunk.empty, child.selections, defer = Present(DeferDirective(label, condition)))
             )
-        private[api] def argEntries: Chunk[Arg] = child.argEntries
+        private[api] val argEntries: Chunk[Arg] = child.argEntries
+        // The group counts as arrived once any of its own fields is in the row.
+        private val responseNames: Chunk[String] = child.selections.collect { case f: CompiledField => f.responseName }
         // `single` (from `.deferred`) exposes the sole field's *value* as `Maybe[V]`;
         // a `defer` group exposes the whole child tuple as `Maybe[S]`.
-        private[api] def decodeRaw(row: Map[String, Json])(using Frame): Result[ApolloParseException, Tuple] =
-            val present = child.selections.exists {
-                case f: CompiledField => row.contains(f.responseName)
-                case _                => false
-            }
-            if !present then Result.succeed(Tuple1(Absent))
+        private[api] def decodeInto(row: Map[String, Json], out: Array[Any], offset: Int)(using
+            Frame
+        ): Result[ApolloParseException, Unit] =
+            if !responseNames.exists(row.contains) then
+                out(offset) = Absent
+                Result.unit
             else
-                child.decodeRaw(row).map(decoded =>
-                    Tuple1(Present(if single then decoded.productElement(0) else decoded))
-                )
+                val slots = new Array[Any](child.arity)
+                child.decodeInto(row, slots, 0).map { _ =>
+                    out(offset) = Present(if single then slots(0) else Tuple.fromArray(slots))
+                }
             end if
-        end decodeRaw
-        private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)] =
-            value.productElement(0).asInstanceOf[Maybe[Any]] match
+        end decodeInto
+        private[api] def encodeInto(value: Product, offset: Int, out: RowBuilder): Unit =
+            value.productElement(offset).asInstanceOf[Maybe[Any]] match
                 case Present(v) =>
-                    child.encodeRaw(if single then Tuple1(v) else v.asInstanceOf[Tuple])
-                case Absent => Chunk.empty
+                    child.encodeInto(if single then Tuple1(v) else v.asInstanceOf[Product], 0, out)
+                case Absent => ()
     end Deferred
 
     /** A selection whose result a `map` projected to an arbitrary `B`. It keeps the
@@ -338,8 +370,8 @@ object SelectionBuilder:
         under: SelectionBuilder[Origin, A],
         f: A => B
     ) extends SelectionBuilder[Origin, B]:
-        def selections: Chunk[CompiledSelection]                             = under.selections
-        private[api] def argEntries: Chunk[Arg]                              = under.argEntries
+        val selections: Chunk[CompiledSelection]                             = under.selections
+        private[api] val argEntries: Chunk[Arg]                              = under.argEntries
         def decode(json: Json)(using Frame): Result[ApolloParseException, B] = under.decode(json).map(f)
     end Mapped
 
@@ -351,8 +383,8 @@ object SelectionBuilder:
         under: SelectionBuilder[Origin, ?],
         codec: JsonCodec[B]
     ) extends Bidirectional[Origin, B]:
-        def selections: Chunk[CompiledSelection]                             = under.selections
-        private[api] def argEntries: Chunk[Arg]                              = under.argEntries
+        val selections: Chunk[CompiledSelection]                             = under.selections
+        private[api] val argEntries: Chunk[Arg]                              = under.argEntries
         def decode(json: Json)(using Frame): Result[ApolloParseException, B] = codec.decode(json)
         def encode(value: B): Json                                           = codec.encode(value)
     end MappedInto
@@ -519,23 +551,27 @@ object SelectionBuilder:
         child: Bidirectional[?, A]
     ): Fields[Origin, R] =
         new Fields[Origin, R]:
-            private[api] def arity: Int = 1
-            def selections: Chunk[CompiledSelection] =
+            private[api] val arity: Int = 1
+            val selections: Chunk[CompiledSelection] =
                 Chunk(CompiledFragment(typeName, Chunk(typeName), child.selections))
-            private[api] def argEntries: Chunk[Arg] = child.argEntries
-            private[api] def decodeRaw(row: Map[String, Json])(using Frame): Result[ApolloParseException, Tuple] =
+            private[api] val argEntries: Chunk[Arg] = child.argEntries
+            private[api] def decodeInto(row: Map[String, Json], out: Array[Any], offset: Int)(using
+                Frame
+            ): Result[ApolloParseException, Unit] =
                 row.get("__typename") match
-                    case Some(Json.JStr(`typeName`)) => child.decode(Json.JObj(row)).map(v => Tuple1(Present(v)))
-                    case _                           => Result.succeed(Tuple1(Absent))
-            private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)] =
-                value.productElement(0).asInstanceOf[Maybe[A]] match
-                    case Absent => Chunk.empty
+                    case Some(Json.JStr(`typeName`)) => child.decode(Json.JObj(row)).map(v => out(offset) = Present(v))
+                    case _ =>
+                        out(offset) = Absent
+                        Result.unit
+            private[api] def encodeInto(value: Product, offset: Int, out: RowBuilder): Unit =
+                value.productElement(offset).asInstanceOf[Maybe[A]] match
+                    case Absent => ()
                     case Present(v) =>
                         withTypename(child.encode(v), typeName) match
-                            case Json.JObj(fields) => Chunk.from(fields)
+                            case Json.JObj(fields) => discard(out ++= fields)
                             // A non-object projection cannot be spliced back into the
                             // parent row; the branch's fields simply stay absent.
-                            case _ => Chunk.empty
+                            case _ => ()
 
     /** Project a selection's result to `B` with `f`, decoding only (backs `map`), reusing
       * its wire selection/arguments. An exception raised by `f` is a panic of the decode.
@@ -571,13 +607,15 @@ object SelectionBuilder:
         encodeValue: Any => Chunk[(String, Json)]
     ): Fields[Origin, R] =
         new Fields[Origin, R]:
-            private[api] def arity: Int              = 1
-            def selections: Chunk[CompiledSelection] = compiled
-            private[api] def argEntries: Chunk[Arg]  = argsFrom.argEntries
-            private[api] def decodeRaw(row: Map[String, Json])(using frame: Frame): Result[ApolloParseException, Tuple] =
-                decodeRow(row, frame).map(Tuple1(_))
-            private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)] =
-                encodeValue(value.productElement(0))
+            private[api] val arity: Int              = 1
+            val selections: Chunk[CompiledSelection] = compiled
+            private[api] val argEntries: Chunk[Arg]  = argsFrom.argEntries
+            private[api] def decodeInto(row: Map[String, Json], out: Array[Any], offset: Int)(using
+                frame: Frame
+            ): Result[ApolloParseException, Unit] =
+                decodeRow(row, frame).map(value => out(offset) = value)
+            private[api] def encodeInto(value: Product, offset: Int, out: RowBuilder): Unit =
+                discard(out ++= encodeValue(value.productElement(offset)))
 
     /** The empty selection for `Origin`: selects nothing, and is the neutral
       * starting point a chainable selection folds fields onto — the lambda form
