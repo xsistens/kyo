@@ -55,21 +55,16 @@ object CacheKeyResolver:
                 .map(id => CacheKey(field.fieldType.leafType.name, id))
 
     /** Resolve an argument value to its raw id string: literals pass through,
-      * variable references are looked up. Composite/`null` values are not usable
-      * as ids and yield `None`.
+      * variable references are looked up, and the value is rendered by
+      * [[CacheKey.scalarString]] — the same rendering the key generators use, so a
+      * redirect names the record the normalizer wrote. Composite/`null` values
+      * are not usable as ids and yield `Absent`.
       */
     private def argumentString(
         value: CompiledArgumentValue,
         variables: Map[String, Json]
     ): Maybe[String] =
-        val json = value match
-            case CompiledArgumentValue.Literal(j)     => j
-            case CompiledArgumentValue.Variable(name) => variables.getOrElse(name, Json.JNull)
-        json match
-            case Json.JStr(s)                               => Present(s)
-            case Json.JInt(_) | Json.JDec(_) | Json.JNum(_) => Present(json.render)
-            case Json.JBool(b)                              => Present(b.toString)
-            case _                                          => Absent
-        end match
-    end argumentString
+        value match
+            case CompiledArgumentValue.Literal(json)  => CacheKey.scalarString(json)
+            case CompiledArgumentValue.Variable(name) => CacheKey.scalarString(variables.getOrElse(name, Json.JNull))
 end CacheKeyResolver

@@ -4,6 +4,7 @@ import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
 import kyo.apollo.ApolloClient
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.*
+import kyo.apollo.cache.TestKeys.*
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.cache.normalized.api.Fragment
@@ -242,9 +243,9 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
             // Reference (Apollo JS): players normalize into `LobbyPlayer:<id>` on every
             // write path; the lobby's `players` field always references those records.
             val all = store.cache.allRecords()
-            assert(all.contains("LobbyPlayer:p1"), s"expected LobbyPlayer:p1 in ${all.keySet}")
-            assert(all.contains("LobbyPlayer:p2"), s"expected LobbyPlayer:p2 in ${all.keySet}")
-            assert(changed.contains("LobbyView:L1"))
+            assert(all.contains(CacheKey("LobbyPlayer", "p1")), s"expected LobbyPlayer:p1 in ${all.keySet}")
+            assert(all.contains(CacheKey("LobbyPlayer", "p2")), s"expected LobbyPlayer:p2 in ${all.keySet}")
+            assert(changed.contains(CacheKey("LobbyView", "L1")))
             succeed
         }
 
@@ -275,11 +276,11 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
 
             val store = cachedClient().apolloStore
             val _     = store.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1)))
-            val _     = store.remove("LobbyPlayer:p1")
+            val _     = store.remove(CacheKey("LobbyPlayer", "p1"))
             val changed =
-                store.writeFragment(playerFragment, CacheKey("LobbyPlayer:p1"), (id = "p1", color = "Red"))
-            assert(changed.contains("LobbyPlayer:p1"))
-            assert(store.cache.loadRecord("LobbyPlayer:p1").exists(_.get("__typename").isDefined))
+                store.writeFragment(playerFragment, CacheKey("LobbyPlayer", "p1"), (id = "p1", color = "Red"))
+            assert(changed.contains(CacheKey("LobbyPlayer", "p1")))
+            assert(store.cache.loadRecord(CacheKey("LobbyPlayer", "p1")).exists(_.get(fk("__typename")).isDefined))
             assert(store.readOperation(lobbyQuery("L1")).lobby == lobby(p1))
             succeed
         }
@@ -377,7 +378,7 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
                     _ <- pull.next
                     // Evict the entity: the watcher re-emits a miss (already covered by
                     // WatcherSpec) …
-                    _    <- Sync.defer(client.apolloStore.remove("LobbyView:L1"))
+                    _    <- Sync.defer(client.apolloStore.remove(CacheKey("LobbyView", "L1")))
                     miss <- pull.next
                     _ = assert(miss.data.isEmpty)
                     // … and once data lands again, the watcher must come back — Apollo JS

@@ -7,6 +7,8 @@ import kyo.Chunk
 import kyo.Frame
 import kyo.Maybe
 import kyo.Present
+import kyo.apollo.api.CompiledField
+import kyo.apollo.api.CompiledNamedType
 import kyo.apollo.api.JsonCodec
 import kyo.apollo.api.Operation
 import kyo.apollo.cache.normalized.api.*
@@ -82,7 +84,7 @@ final class ApolloStore(
     /** One optimistic layer: the records (by key) a mutation wrote *optimistically*
       * before its network round-trip, tagged by the mutation's id.
       */
-    final private case class Layer(mutationId: String, records: Map[String, Record])
+    final private case class Layer(mutationId: String, records: Map[CacheKey, Record])
 
     /** Optimistic record layers, stacked in application order (the `Chunk`'s
       * order *is* the stacking order: concurrent optimistic mutations resolve
@@ -118,7 +120,7 @@ final class ApolloStore(
       * mutations without the cache itself ever being mutated. `layers` is the
       * read's [[layerSnapshot]]: every load of one read overlays the SAME stack.
       */
-    private def loadRecordOverlay(layers: Chunk[Layer], key: String): Maybe[Record] =
+    private def loadRecordOverlay(layers: Chunk[Layer], key: CacheKey): Maybe[Record] =
         layers.foldLeft(cache.loadRecord(key)) { (base, layer) =>
             layer.records.get(key) match
                 case None             => base
@@ -131,14 +133,14 @@ final class ApolloStore(
       * subscription down on stream cancellation (or use
       * [[removeChangedKeysListener]] with the same callback).
       */
-    def addChangedKeysListener(listener: Set[String] => Unit): () => Unit =
+    def addChangedKeysListener(listener: Set[CacheKey] => Unit): () => Unit =
         changedKeys.subscribe(listener)
 
     /** Unsubscribe a `listener` previously registered with
       * [[addChangedKeysListener]] (by identity); a no-op if it was never
       * registered. The named teardown the watcher calls on cancellation.
       */
-    def removeChangedKeysListener(listener: Set[String] => Unit): Unit =
+    def removeChangedKeysListener(listener: Set[CacheKey] => Unit): Unit =
         changedKeys.unsubscribe(listener)
 
     /** Dump the whole normalized cache as one JSON object in the exact shape Apollo
@@ -160,7 +162,7 @@ final class ApolloStore(
       */
     def extract(includeOptimistic: Boolean = true): Json =
         val base = cache.allRecords()
-        val records: Map[String, Record] =
+        val records: Map[CacheKey, Record] =
             if !includeOptimistic then base
             else
                 val layers = layerSnapshot
@@ -173,10 +175,13 @@ final class ApolloStore(
         Json.JObj(records.map((key, record) => apolloizeKey(key) -> recordToJson(record)))
     end extract
 
-    /** Translate a kyo root key (or a path rooted at one) to Apollo's convention so
-      * the Devtools cache view is recognizable; all other keys pass through.
+    /** The devtools dump's rendering of a record key — the one place [[extract]]
+      * lowers a [[CacheKey]] to a string. A kyo root key (or a path rooted at one)
+      * is translated to Apollo's convention so the Devtools cache view is
+      * recognizable; all other keys pass through.
       */
-    private def apolloizeKey(key: String): String =
+    private def apolloizeKey(cacheKey: CacheKey): String =
+        val key = cacheKey.render
         if key == "QUERY_ROOT" then "ROOT_QUERY"
         else if key == "MUTATION_ROOT" then "ROOT_MUTATION"
         else if key == "SUBSCRIPTION_ROOT" then "ROOT_SUBSCRIPTION"
@@ -186,9 +191,11 @@ final class ApolloStore(
         else if key.startsWith("SUBSCRIPTION_ROOT.") then
             "ROOT_SUBSCRIPTION." + key.stripPrefix("SUBSCRIPTION_ROOT.")
         else key
+        end if
+    end apolloizeKey
 
     private def recordToJson(record: Record): Json =
-        Json.JObj(record.fields.map((fieldKey, value) => fieldKey -> recordValueToJson(value)))
+        Json.JObj(record.fields.map((fieldKey, value) => fieldKey.render -> recordValueToJson(value)))
 
     private def recordValueToJson(value: RecordValue): Json = value match
         case RecordValue.Scalar(json)   => json
@@ -201,7 +208,7 @@ final class ApolloStore(
       * response map and walked by the [[Normalizer]] — the same data map the
       * network path would have decoded from.
       */
-    def normalize[D](operation: Operation[D], data: D): Map[String, Record] =
+    def normalize[D](operation: Operation[D], data: D): Map[CacheKey, Record] =
         Normalizer.normalize(
             operation,
             encode(operation.dataCodec, data),
@@ -221,7 +228,7 @@ final class ApolloStore(
       * ([[CacheDiagnostics]]) cannot be wired into two of the three write paths and
       * forgotten on the third. While diagnostics are off it costs one boolean read.
       */
-    private def mergeRecords(records: Iterable[Record], cacheHeaders: CacheHeaders): Set[String] =
+    private def mergeRecords(records: Iterable[Record], cacheHeaders: CacheHeaders): Set[CacheKey] =
         if diagnostics.enabled then
             records.foreach { incoming =>
                 cache.loadRecord(incoming.key).foreach(diagnostics.positionalConflicts(_, incoming))
@@ -234,7 +241,7 @@ final class ApolloStore(
         operation: Operation[D],
         data: D,
         cacheHeaders: CacheHeaders = CacheHeaders.None
-    ): Set[String] =
+    ): Set[CacheKey] =
         val changedKeys = mergeRecords(normalize(operation, data).values, cacheHeaders)
         publish(changedKeys)
         changedKeys
@@ -259,7 +266,7 @@ final class ApolloStore(
       * @throws kyo.apollo.exception.CacheMissException if the cache cannot satisfy
       *         every selected field
       */
-    def readOperationWithKeys[D](operation: Operation[D])(using Frame): (D, Set[String]) =
+    def readOperationWithKeys[D](operation: Operation[D])(using Frame): (D, Set[CacheKey]) =
         val layers = layerSnapshot
         CacheBatchReader.readWithDependentKeys(
             operation,
@@ -279,7 +286,7 @@ final class ApolloStore(
       * @throws kyo.apollo.exception.CacheMissException if the cache cannot satisfy
       *         every selected field
       */
-    def readOperationStamped[D](operation: Operation[D])(using Frame): (D, Set[String], Long) =
+    def readOperationStamped[D](operation: Operation[D])(using Frame): (D, Set[CacheKey], Long) =
         val stamp        = currentGeneration
         val (data, keys) = readOperationWithKeys(operation)
         (data, keys, stamp)
@@ -304,7 +311,7 @@ final class ApolloStore(
         cacheKey: CacheKey,
         data: D,
         cacheHeaders: CacheHeaders = CacheHeaders.None
-    ): Set[String] =
+    ): Set[CacheKey] =
         val changedKeys = mergeRecords(fragmentRecords(fragment, cacheKey, data).values, cacheHeaders)
         publish(changedKeys)
         changedKeys
@@ -335,10 +342,10 @@ final class ApolloStore(
         fragment: Fragment[D],
         entries: Seq[(CacheKey, D)],
         cacheHeaders: CacheHeaders = CacheHeaders.None
-    ): Set[String] =
+    ): Set[CacheKey] =
         if entries.isEmpty then Set.empty
         else
-            val merged = mutable.LinkedHashMap.empty[String, Record]
+            val merged = mutable.LinkedHashMap.empty[CacheKey, Record]
             entries.foreach { (cacheKey, data) =>
                 fragmentRecords(fragment, cacheKey, data).foreach { (key, record) =>
                     discard(merged.updateWith(key) {
@@ -360,7 +367,7 @@ final class ApolloStore(
         fragment: Fragment[D],
         cacheKey: CacheKey,
         data: D
-    ): Map[String, Record] =
+    ): Map[CacheKey, Record] =
         // `addTypename` semantics for the fragment ROOT: the normalizer stamps a
         // static `__typename` onto NESTED objects (see Normalizer.compositeValue),
         // but the root object lands in `normalizeObject` directly — so a fragment
@@ -373,9 +380,29 @@ final class ApolloStore(
         val enriched =
             if encoded.contains("__typename") then encoded
             else encoded + ("__typename" -> Json.JStr(fragment.rootField.fieldType.leafType.name))
-        new Normalizer(fragmentVariablesOf(fragment), cacheKey.key, cacheKeyGenerator, fieldPolicies)
+        new Normalizer(fragmentVariablesOf(fragment), cacheKey, cacheKeyGenerator, fieldPolicies)
             .normalize(enriched, fragment.rootField)
     end fragmentRecords
+
+    /** The record key this store's [[CacheKeyGenerator]] gives an object of type
+      * `typeName` with the response fields `obj` — `Absent` when the generator has
+      * no identity for it.
+      *
+      * The one door from a masked fragment ref to its record: a ref carries the
+      * captured slice and its concrete type, never a key of its own, and a read
+      * asks `keyOf(ref.typeName, ref.raw)`. That is the generator which normalized
+      * the response, so the ref names the record that was actually written even
+      * when the store keys the type differently from the [[CacheIdentity]] the
+      * fragment was declared with. `typeName` overrides any `__typename` in `obj`.
+      * No response path is supplied, so the generator's positional fallback cannot
+      * apply: an entity without a usable identity has no key rather than a
+      * position-based one that a list insertion would repoint.
+      */
+    def keyOf(typeName: String, obj: Map[String, Json]): Maybe[CacheKey] =
+        cacheKeyGenerator.cacheKeyForObject(
+            obj.updated("__typename", Json.JStr(typeName)),
+            CacheKeyGeneratorContext(CompiledField(typeName, CompiledNamedType(typeName)))
+        )
 
     /** Reassemble `fragment`'s typed `data` from the record stored under
       * `cacheKey`.
@@ -399,13 +426,13 @@ final class ApolloStore(
       * @throws kyo.apollo.exception.CacheMissException if the cache cannot satisfy every
       *         field the fragment selects
       */
-    def readFragmentWithKeys[D](fragment: Fragment[D], cacheKey: CacheKey)(using Frame): (D, Set[String]) =
+    def readFragmentWithKeys[D](fragment: Fragment[D], cacheKey: CacheKey)(using Frame): (D, Set[CacheKey]) =
         val layers = layerSnapshot
         val reader =
             new CacheBatchReader(
                 loadRecordOverlay(layers, _),
                 fragmentVariablesOf(fragment),
-                cacheKey.key,
+                cacheKey,
                 cacheKeyResolver,
                 fieldPolicies
             )
@@ -420,7 +447,7 @@ final class ApolloStore(
       * cached list (the idiomatic alternative to `refetchQueries` for the common
       * case) without a network round-trip.
       */
-    def updateOperation[D](operation: Operation[D])(update: D => D)(using Frame): Set[String] =
+    def updateOperation[D](operation: Operation[D])(update: D => D)(using Frame): Set[CacheKey] =
         val current =
             try Present(readOperation(operation))
             catch case _: CacheMissException => Maybe.empty[D]
@@ -434,7 +461,7 @@ final class ApolloStore(
       * **cache miss is a no-op**. Returns the changed keys (re-emitting dependent
       * watchers). To delete a record instead, use [[evict]].
       */
-    def updateFragment[D](fragment: Fragment[D], cacheKey: CacheKey)(update: D => D)(using Frame): Set[String] =
+    def updateFragment[D](fragment: Fragment[D], cacheKey: CacheKey)(update: D => D)(using Frame): Set[CacheKey] =
         val current =
             try Present(readFragment(fragment, cacheKey))
             catch case _: CacheMissException => Maybe.empty[D]
@@ -453,7 +480,7 @@ final class ApolloStore(
       * listener re-reading during delivery already stamps the new generation and
       * needs no follow-up read; an empty publish moves nothing and stamps nothing.
       */
-    def publish(keys: Set[String]): Unit =
+    def publish(keys: Set[CacheKey]): Unit =
         if keys.nonEmpty then
             discard(generation.incrementAndGet()(using AllowUnsafe.embrace.danger))
             changedKeys.publish(keys)
@@ -475,7 +502,7 @@ final class ApolloStore(
         operation: Operation[D],
         data: D,
         mutationId: String
-    ): Set[String] =
+    ): Set[CacheKey] =
         val records = normalize(operation, data)
         val layer   = Layer(mutationId, records)
         // A re-write under an id already on the stack replaces that layer in place
@@ -495,11 +522,11 @@ final class ApolloStore(
       * keys it held (empty if no such layer was on the stack). The one swap both
       * rollback paths share; the caller decides what to [[publish]].
       */
-    private def dropLayer(mutationId: String): Set[String] =
+    private def dropLayer(mutationId: String): Set[CacheKey] =
         val before = optimisticLayers.getAndUpdate(_.filter(_.mutationId != mutationId))(using
             AllowUnsafe.embrace.danger
         )
-        before.foldLeft(Set.empty[String]) { (keys, layer) =>
+        before.foldLeft(Set.empty[CacheKey]) { (keys, layer) =>
             if layer.mutationId == mutationId then keys ++ layer.records.keySet else keys
         }
     end dropLayer
@@ -510,7 +537,7 @@ final class ApolloStore(
       * no-op returning the empty set if the layer was already dropped. Mirrors
       * apollo-kotlin's `ApolloStore.rollbackOptimisticUpdates`.
       */
-    def rollbackOptimisticUpdates(mutationId: String): Set[String] =
+    def rollbackOptimisticUpdates(mutationId: String): Set[CacheKey] =
         val changed = dropLayer(mutationId)
         publish(changed)
         changed
@@ -533,7 +560,7 @@ final class ApolloStore(
         data: D,
         mutationId: String,
         cacheHeaders: CacheHeaders = CacheHeaders.None
-    ): Set[String] =
+    ): Set[CacheKey] =
         val optimisticKeys  = dropLayer(mutationId)
         val realChangedKeys = mergeRecords(normalize(operation, data).values, cacheHeaders)
         val changed         = optimisticKeys ++ realChangedKeys
@@ -555,16 +582,11 @@ final class ApolloStore(
       * — unlike the bare `cache.remove` — does not drop the changed key on the
       * floor.
       */
-    def remove(key: String): Boolean =
+    def remove(key: CacheKey): Boolean =
         val removed = cache.remove(key)
         if removed then publish(Set(key))
         removed
     end remove
-
-    /** Remove the record identified by `cacheKey` — the [[CacheKey]] overload of
-      * [[remove]].
-      */
-    def remove(cacheKey: CacheKey): Boolean = remove(cacheKey.key)
 
     /** Sweep the cache for records unreachable from any root and remove them,
       * returning the set of removed keys.
@@ -582,7 +604,7 @@ final class ApolloStore(
       * apollo-kotlin's `ApolloStore.garbageCollect`. This is the sweep helper the
       * public [[garbageCollect]] delegates to.
       */
-    def removeUnreachableRecords(): Set[String] =
+    def removeUnreachableRecords(): Set[CacheKey] =
         val all         = cache.allRecords()
         val reachable   = reachableKeys(all)
         val unreachable = all.keySet.diff(reachable)
@@ -596,7 +618,7 @@ final class ApolloStore(
       * [[removeUnreachableRecords]]. Run it after bulk invalidations (e.g. an
       * [[evict]] that orphaned a subtree) to reclaim the records left dangling.
       */
-    def garbageCollect(): Set[String] = removeUnreachableRecords()
+    def garbageCollect(): Set[CacheKey] = removeUnreachableRecords()
 
     /** The set of record keys reachable from a root, over the `all`-records
       * snapshot: the operation roots and every live optimistic layer's records and
@@ -605,13 +627,13 @@ final class ApolloStore(
       * keys they point at are seeded directly rather than discovered by walking
       * `all` — off one [[layerSnapshot]], like a read.
       */
-    private def reachableKeys(all: Map[String, Record]): Set[String] =
+    private def reachableKeys(all: Map[CacheKey, Record]): Set[CacheKey] =
         val optimisticRecords = layerSnapshot.iterator.flatMap(_.records.values).toList
         val seeds =
-            Set(CacheKey.QueryRoot.key, CacheKey.MutationRoot.key, CacheKey.SubscriptionRoot.key) ++
+            Set(CacheKey.QueryRoot, CacheKey.MutationRoot, CacheKey.SubscriptionRoot) ++
                 optimisticRecords.iterator.map(_.key) ++
                 optimisticRecords.iterator.flatMap(_.references.iterator.map(_.key))
-        val reachable = scala.collection.mutable.Set.empty[String]
+        val reachable = scala.collection.mutable.Set.empty[CacheKey]
         val frontier  = scala.collection.mutable.Queue.from(seeds)
         while frontier.nonEmpty do
             val key = frontier.dequeue()
@@ -635,10 +657,10 @@ final class ApolloStore(
       * @param cacheKey the record to evict
       * @param cascade  whether to also evict the records `cacheKey` references
       */
-    def evict(cacheKey: CacheKey, cascade: Boolean = false): Set[String] =
+    def evict(cacheKey: CacheKey, cascade: Boolean = false): Set[CacheKey] =
         val removed =
-            if !cascade then if cache.remove(cacheKey.key) then Set(cacheKey.key) else Set.empty
-            else cascadeEvict(cacheKey.key)
+            if !cascade then if cache.remove(cacheKey) then Set(cacheKey) else Set.empty
+            else cascadeEvict(cacheKey)
         if removed.nonEmpty then publish(removed)
         removed
     end evict
@@ -648,9 +670,9 @@ final class ApolloStore(
       * [[Record.references]] from each removed record, so a cascade clears an entire
       * owned subtree in one pass; absent keys along the way are simply skipped.
       */
-    private def cascadeEvict(start: String): Set[String] =
+    private def cascadeEvict(start: CacheKey): Set[CacheKey] =
         val all      = cache.allRecords()
-        var removed  = Set.empty[String]
+        var removed  = Set.empty[CacheKey]
         val frontier = scala.collection.mutable.Queue(start)
         while frontier.nonEmpty do
             val key = frontier.dequeue()
