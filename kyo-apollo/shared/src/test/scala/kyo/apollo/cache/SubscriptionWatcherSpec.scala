@@ -40,20 +40,20 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
         given TypeName[LobbyViewT] = TypeName("LobbyView")
 
     object GPlayer:
-        def id: SelectionBuilder[LobbyPlayerT, (id: String)] =
+        def id: SelectionBuilder.Deferrable[LobbyPlayerT, (id: String)] =
             SelectionBuilder.scalar("id", CompiledNamedType("PlayerId").notNull, ScalarCodec.string)
-        def color: SelectionBuilder[LobbyPlayerT, (color: String)] =
+        def color: SelectionBuilder.Deferrable[LobbyPlayerT, (color: String)] =
             SelectionBuilder.scalar("color", CompiledNamedType("String").notNull, ScalarCodec.string)
     end GPlayer
 
     object GLobby:
-        def id: SelectionBuilder[LobbyViewT, (id: String)] =
+        def id: SelectionBuilder.Deferrable[LobbyViewT, (id: String)] =
             SelectionBuilder.scalar("id", CompiledNamedType("LobbyId").notNull, ScalarCodec.string)
-        def name: SelectionBuilder[LobbyViewT, (name: String)] =
+        def name: SelectionBuilder.Deferrable[LobbyViewT, (name: String)] =
             SelectionBuilder.scalar("name", CompiledNamedType("String").notNull, ScalarCodec.string)
         def players[A](
             sel: SelectionBuilder[LobbyPlayerT, A]
-        ): SelectionBuilder[LobbyViewT, (players: Chunk[A])] =
+        ): SelectionBuilder.Deferrable[LobbyViewT, (players: Chunk[A])] =
             SelectionBuilder.obj(
                 "players",
                 CompiledNamedType("LobbyPlayer").notNull.list.notNull,
@@ -61,7 +61,7 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
                 sel,
                 SelectionBuilder.Nesting.Listed(SelectionBuilder.Nesting.Leaf)
             )
-        def startedGameId: SelectionBuilder[LobbyViewT, (startedGameId: Maybe[String])] =
+        def startedGameId: SelectionBuilder.Deferrable[LobbyViewT, (startedGameId: Maybe[String])] =
             SelectionBuilder.scalar(
                 "startedGameId",
                 CompiledNamedType("GameId"),
@@ -100,7 +100,7 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
             )
         )
 
-    private def lobbyQuerySel(id: String): SelectionBuilder[RootQuery, (lobby: Lobby)] =
+    private def lobbyQuerySel(id: String): SelectionBuilder.Deferrable[RootQuery, (lobby: Lobby)] =
         SelectionBuilder.obj(
             "lobby",
             CompiledNamedType("LobbyView").notNull,
@@ -113,7 +113,7 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
         lobbyQuerySel(id).toQuery()
 
     private def lobbySubscription(id: String): Subscription[(lobbyUpdates: Maybe[Lobby])] =
-        val sel: SelectionBuilder[RootSubscription, (lobbyUpdates: Maybe[Lobby])] =
+        val sel: SelectionBuilder.Deferrable[RootSubscription, (lobbyUpdates: Maybe[Lobby])] =
             SelectionBuilder.obj(
                 "lobbyUpdates",
                 CompiledNamedType("LobbyView"),
@@ -137,15 +137,15 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
         given TypeName[LobbyBadgeT] = TypeName("LobbyBadge")
 
     object GBadge:
-        def label: SelectionBuilder[LobbyBadgeT, (label: String)] =
+        def label: SelectionBuilder.Deferrable[LobbyBadgeT, (label: String)] =
             SelectionBuilder.scalar("label", CompiledNamedType("String").notNull, ScalarCodec.string)
-        def tone: SelectionBuilder[LobbyBadgeT, (tone: String)] =
+        def tone: SelectionBuilder.Deferrable[LobbyBadgeT, (tone: String)] =
             SelectionBuilder.scalar("tone", CompiledNamedType("String").notNull, ScalarCodec.string)
     end GBadge
 
     private def badgesSel[A](
         sel: SelectionBuilder[LobbyBadgeT, A]
-    ): SelectionBuilder[LobbyViewT, (badges: Chunk[A])] =
+    ): SelectionBuilder.Deferrable[LobbyViewT, (badges: Chunk[A])] =
         SelectionBuilder.obj(
             "badges",
             CompiledNamedType("LobbyBadge").notNull.list.notNull,

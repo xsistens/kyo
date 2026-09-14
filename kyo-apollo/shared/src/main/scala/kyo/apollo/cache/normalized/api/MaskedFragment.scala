@@ -140,7 +140,7 @@ final class EntityFragment[Origin, D <: AnyNamedTuple] private[apollo] (
     /** [[spread]] with the named-tuple label supplied explicitly — the non-macro
       * form (`fields.spreadAs["countryCard"]`), and what the macro expands to.
       */
-    def spreadAs[L <: String]: SelectionBuilder[Origin, NamedTuple[L *: EmptyTuple, Ref *: EmptyTuple]] =
+    def spreadAs[L <: String]: SelectionBuilder.Fields[Origin, NamedTuple[L *: EmptyTuple, Ref *: EmptyTuple]] =
         SelectionBuilder.rawLeaf(
             spreadSelections,
             selection,
@@ -162,7 +162,7 @@ end EntityFragment
   * inside an inline method only ever shows it a synthetic proxy.)
   */
 extension [Origin, D <: AnyNamedTuple](inline self: EntityFragment[Origin, D])
-    transparent inline def spread: SelectionBuilder[Origin, ? <: AnyNamedTuple] =
+    transparent inline def spread: SelectionBuilder.Fields[Origin, ? <: AnyNamedTuple] =
         ${ MaskedFragment.spreadEntityImpl[Origin, D]('self) }
 end extension
 
@@ -210,7 +210,7 @@ final class EmbeddedFragment[Origin, D <: AnyNamedTuple] private[apollo] (
         Ref(VectorMap.from(row.view.filterKeys(ownResponseNames).toSeq))
 
     /** See [[EntityFragment.spreadAs]]. */
-    def spreadAs[L <: String]: SelectionBuilder[Origin, NamedTuple[L *: EmptyTuple, Ref *: EmptyTuple]] =
+    def spreadAs[L <: String]: SelectionBuilder.Fields[Origin, NamedTuple[L *: EmptyTuple, Ref *: EmptyTuple]] =
         SelectionBuilder.rawLeaf(
             selection.selections,
             selection,
@@ -222,7 +222,7 @@ end EmbeddedFragment
 
 /** See the [[spread]] extension on [[EntityFragment]] — same contract, no key. */
 extension [Origin, D <: AnyNamedTuple](inline self: EmbeddedFragment[Origin, D])
-    transparent inline def spread: SelectionBuilder[Origin, ? <: AnyNamedTuple] =
+    transparent inline def spread: SelectionBuilder.Fields[Origin, ? <: AnyNamedTuple] =
         ${ MaskedFragment.spreadEmbeddedImpl[Origin, D]('self) }
 end extension
 
@@ -235,7 +235,7 @@ private[apollo] object MaskedFragment:
 
     def spreadEntityImpl[Origin: Type, D <: AnyNamedTuple: Type](
         self: Expr[EntityFragment[Origin, D]]
-    )(using Quotes): Expr[SelectionBuilder[Origin, ? <: AnyNamedTuple]] =
+    )(using Quotes): Expr[SelectionBuilder.Fields[Origin, ? <: AnyNamedTuple]] =
         import quotes.reflect.*
         spreadLabel(self.asTerm) match
             case '[type l <: String; l] => '{ $self.spreadAs[l] }
@@ -243,7 +243,7 @@ private[apollo] object MaskedFragment:
 
     def spreadEmbeddedImpl[Origin: Type, D <: AnyNamedTuple: Type](
         self: Expr[EmbeddedFragment[Origin, D]]
-    )(using Quotes): Expr[SelectionBuilder[Origin, ? <: AnyNamedTuple]] =
+    )(using Quotes): Expr[SelectionBuilder.Fields[Origin, ? <: AnyNamedTuple]] =
         import quotes.reflect.*
         spreadLabel(self.asTerm) match
             case '[type l <: String; l] => '{ $self.spreadAs[l] }

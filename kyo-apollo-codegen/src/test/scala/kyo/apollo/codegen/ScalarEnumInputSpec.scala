@@ -103,7 +103,7 @@ class ScalarEnumInputSpec extends kyo.test.Test[Any]:
                 .contents
             assert(
                 opSrc.contains(
-                    "updatedAt: SelectionBuilder[Country, (updatedAt: Maybe[java.time.Instant])]"
+                    "updatedAt: SelectionBuilder.Deferrable[Country, (updatedAt: Maybe[java.time.Instant])]"
                 ),
                 opSrc
             )
@@ -134,7 +134,7 @@ class ScalarEnumInputSpec extends kyo.test.Test[Any]:
                 .getOrElse(fail("Country.scala not emitted"))
                 .contents
             assert(
-                opSrc.contains("updatedAt: SelectionBuilder[Country, (updatedAt: Maybe[Long])]"),
+                opSrc.contains("updatedAt: SelectionBuilder.Deferrable[Country, (updatedAt: Maybe[Long])]"),
                 opSrc
             )
             assert(opSrc.contains("ScalarCodec.fromSchema[Long]"), opSrc)
@@ -158,7 +158,7 @@ class ScalarEnumInputSpec extends kyo.test.Test[Any]:
                 .getOrElse(fail("Country.scala not emitted"))
                 .contents
             assert(
-                opSrc.contains("updatedAt: SelectionBuilder[Country, (updatedAt: Maybe[com.example.ids.GameId])]"),
+                opSrc.contains("updatedAt: SelectionBuilder.Deferrable[Country, (updatedAt: Maybe[com.example.ids.GameId])]"),
                 opSrc
             )
             assert(opSrc.contains("ScalarCodec.fromSchema[com.example.ids.GameId]"), opSrc)

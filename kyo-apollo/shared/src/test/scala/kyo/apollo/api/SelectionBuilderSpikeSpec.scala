@@ -4,8 +4,10 @@ import kyo.Absent
 import kyo.Chunk
 import kyo.Maybe
 import kyo.Present
+import kyo.apollo.cache.normalized.api.*
 import kyo.apollo.json.Json
 import scala.NamedTuple.AnyNamedTuple
+import scala.NamedTuple.Empty
 
 /** Spike / Go-No-Go gate for the inline `SelectionBuilder` design.
   *
@@ -28,11 +30,20 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
     sealed trait RootQuery
     sealed trait Country
 
+    sealed trait Continent
+
     object Country:
-        def name: SelectionBuilder[Country, (name: String)] =
+        given TypeName[Country] = TypeName("Country")
+
+        def select: SelectionBuilder.Fields[Country, Empty] = SelectionBuilder.empty[Country]
+
+        def code: SelectionBuilder.Deferrable[Country, (code: String)] =
+            SelectionBuilder.scalar("code", CompiledNamedType("ID").notNull, ScalarCodec.id)
+
+        def name: SelectionBuilder.Deferrable[Country, (name: String)] =
             SelectionBuilder.scalar("name", CompiledNamedType("String").notNull, ScalarCodec.string)
 
-        def capital: SelectionBuilder[Country, (capital: Maybe[String])] =
+        def capital: SelectionBuilder.Deferrable[Country, (capital: Maybe[String])] =
             SelectionBuilder.scalar(
                 "capital",
                 CompiledNamedType("String"),
@@ -40,10 +51,26 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
             )
     end Country
 
+    object Continent:
+        def countries[A <: AnyNamedTuple](
+            sel: SelectionBuilder[Country, A]
+        ): SelectionBuilder.Deferrable[Continent, (countries: Chunk[A])] =
+            SelectionBuilder.obj(
+                "countries",
+                CompiledNamedType("Country").notNull.list.notNull,
+                Chunk.empty,
+                sel,
+                SelectionBuilder.Nesting.Listed(SelectionBuilder.Nesting.Leaf)
+            )
+    end Continent
+
+    object CountryName:
+        val fields = Fragment.embedded[Country](_ ~ Country.name)
+
     object Queries:
         def country[A <: AnyNamedTuple](code: String)(
             sel: SelectionBuilder[Country, A]
-        ): SelectionBuilder[RootQuery, (country: Maybe[A])] =
+        ): SelectionBuilder.Deferrable[RootQuery, (country: Maybe[A])] =
             SelectionBuilder.obj(
                 "country",
                 CompiledNamedType("Country"),
@@ -54,6 +81,22 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
                 SelectionBuilder.Nesting.Nullable(SelectionBuilder.Nesting.Leaf)
             )
     end Queries
+
+    /** The same `country` root field on the library's own [[kyo.apollo.api.RootQuery]], which the
+      * terminal `toQuery` extensions key on.
+      */
+    object ApiQueries:
+        def country[A <: AnyNamedTuple](
+            sel: SelectionBuilder[Country, A]
+        ): SelectionBuilder.Deferrable[kyo.apollo.api.RootQuery, (country: Maybe[A])] =
+            SelectionBuilder.obj(
+                "country",
+                CompiledNamedType("Country"),
+                Chunk.empty,
+                sel,
+                SelectionBuilder.Nesting.Nullable(SelectionBuilder.Nesting.Leaf)
+            )
+    end ApiQueries
 
     // --- Tests -----------------------------------------------------------------
 
@@ -136,6 +179,44 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
             typeCheckFailure(
                 "val o: Option[(name: String)] = Queries.country(\"DE\")(Country.name).decode(Json.JObj(Map.empty)).country"
             )("Required: Option[(name : String)]")
+        }
+
+        "capabilities are types, not runtime checks" - {
+
+            "deferring needs a selected field: the empty selection has no .deferred" in {
+                typeCheckFailure("Country.select.deferred")("value deferred is not a member of")
+            }
+
+            "a @defer group is not a list field: it has no .streamed" in {
+                typeCheckFailure("defer(\"x\", Country.code).streamed(2)")("value streamed is not a member of")
+            }
+
+            "a fragment spread is not a list field: it has no .streamed" in {
+                typeCheckFailure("CountryName.fields.spread.streamed(2)")("value streamed is not a member of")
+            }
+
+            "@stream applies to a list field only" in {
+                typeCheckFailure("Country.code.streamed(2)")(
+                    "`.streamed` applies to a list field, but the last field of (code : String) is not a list"
+                )
+            }
+
+            "a .map projection does not combine" in {
+                typeCheckFailure("Country.code.map(identity) ~ Country.name")("value ~ is not a member of")
+            }
+
+            "what a field selection can do still compiles, and keeps its runtime shape" in {
+                typeCheck("Country.select ~ Country.code ~ Country.capital.deferred")
+                typeCheck("(Country.code ~ Country.name).deferred ~ Country.capital.deferred")
+                typeCheck("Continent.countries(Country.name).streamed(2).deferred")
+                typeCheck("defer(\"details\", Country.name ~ Country.capital) ~ Country.code")
+                val deferred  = (Country.select ~ Country.code ~ Country.capital).deferred
+                val fragments = deferred.selections.collect { case f: CompiledFragment => f }
+                assert(fragments.map(_.defer.map(_.label)) == Chunk(Present("capital")))
+                val result: (code: String, capital: Maybe[Maybe[String]]) =
+                    deferred.decode(Json.JObj(Map("code" -> Json.JStr("DE"))))
+                assert(result.capital == Absent)
+            }
         }
     }
 end SelectionBuilderSpikeSpec
