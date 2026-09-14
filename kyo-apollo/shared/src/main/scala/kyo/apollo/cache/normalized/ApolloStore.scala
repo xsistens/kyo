@@ -633,8 +633,8 @@ final class ApolloStore(
     def rollbackOptimisticUpdates(mutationId: String)(using Frame): Set[CacheKey] < Sync =
         dropLayer(mutationId).map(changed => publish(changed).andThen(changed))
 
-    /** Complete a *successful* optimistic mutation: drop its optimistic layer and
-      * merge the real `data` into the cache, [[publish]]ing the union of the
+    /** Complete a *successful* optimistic mutation: merge the real `data` into the
+      * cache, then drop its optimistic layer, [[publish]]ing the union of the
       * optimistic keys and the real changed keys in a **single** notification.
       *
       * The single publish is deliberate: rolling back and writing separately would
@@ -642,6 +642,14 @@ final class ApolloStore(
       * re-read the pre-optimistic value before the real one landed (a visible
       * flicker). Publishing the union once lets watchers converge straight onto
       * server truth.
+      *
+      * The order is deliberate too. The layer lives in the store and the record in
+      * the backend, so the two steps are not one atomic swap, and a read can land
+      * between them. Committing first means that read sees the layer over the new
+      * record — still the optimistic value — never the value from before the
+      * mutation. It also means a commit that fails leaves the layer on the stack
+      * untouched and unpublished, for the caller's rollback (the
+      * [[CacheInterceptor]]'s `Scope` release) to drop and publish.
       *
       * @param cacheHeaders write hints forwarded to the backend (e.g. an expiry stamp)
       */
@@ -651,9 +659,9 @@ final class ApolloStore(
         mutationId: String,
         cacheHeaders: CacheHeaders = CacheHeaders.None
     )(using Frame): Set[CacheKey] < Sync =
-        dropLayer(mutationId).map { optimisticKeys =>
-            Sync.defer(Chunk.from(normalize(operation, data).values)).map { records =>
-                commit(_ => records, cacheHeaders).map { realChangedKeys =>
+        Sync.defer(Chunk.from(normalize(operation, data).values)).map { records =>
+            commit(_ => records, cacheHeaders).map { realChangedKeys =>
+                dropLayer(mutationId).map { optimisticKeys =>
                     val changed = optimisticKeys ++ realChangedKeys
                     publish(changed).andThen(changed)
                 }

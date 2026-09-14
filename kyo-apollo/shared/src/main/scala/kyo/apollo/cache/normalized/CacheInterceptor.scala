@@ -155,7 +155,8 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
       * raised exception below this interceptor, or the consumer dropping the stream.
       * The success path drops the layer itself through `rollbackAndWrite`, so the
       * Scope release then finds nothing and publishes nothing; the reply is the only
-      * publication a settled mutation makes.
+      * publication a settled mutation makes. `rollbackAndWrite` drops the layer only
+      * once the reply is committed, so a commit that fails leaves it to the release.
       */
     private def optimisticMutation[D](
         request: ApolloRequest[D],
