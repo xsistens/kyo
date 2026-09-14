@@ -30,7 +30,7 @@ class FieldSelectorEmissionSpec extends kyo.test.Test[Any]:
             val album = src("Album.scala")
             assert(
                 album.contains(
-                    "final class `tracks$sel`(selArgs: List[SelectionBuilder.Arg]) extends FieldSelector[Album, TrackPage]:"
+                    "final class `tracks$sel`(selArgs: Chunk[SelectionBuilder.Arg]) extends FieldSelector[Album, TrackPage]:"
                 ),
                 album
             )
@@ -41,7 +41,7 @@ class FieldSelectorEmissionSpec extends kyo.test.Test[Any]:
             val page = src("TrackPage.scala")
             assert(
                 page.contains(
-                    "final class `edges$sel`(selArgs: List[SelectionBuilder.Arg]) extends FieldSelector[TrackPage, TrackEdge]:"
+                    "final class `edges$sel`(selArgs: Chunk[SelectionBuilder.Arg]) extends FieldSelector[TrackPage, TrackEdge]:"
                 ),
                 page
             )
@@ -52,7 +52,7 @@ class FieldSelectorEmissionSpec extends kyo.test.Test[Any]:
             val queries = src("Queries.scala")
             assert(
                 queries.contains(
-                    "final class `album$sel`(selArgs: List[SelectionBuilder.Arg]) extends FieldSelector[RootQuery, Album]:"
+                    "final class `album$sel`(selArgs: Chunk[SelectionBuilder.Arg]) extends FieldSelector[RootQuery, Album]:"
                 ),
                 queries
             )
