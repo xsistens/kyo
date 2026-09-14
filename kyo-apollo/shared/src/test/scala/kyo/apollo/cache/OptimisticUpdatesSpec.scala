@@ -277,11 +277,13 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
             cachedClient().map { client =>
                 // Seed Alice, then watch the query off the cache.
                 for
-                    _ <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                    pull <- StreamProbe.Pull.open(
-                        client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly).watch()
-                    )
+                    _     <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                    watch <- ObservedWatch.open(client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly))
+                    pull = watch.pull
                     first <- pull.next
+                    // Before this, the optimistic write could reach an empty key set and be read
+                    // together with the real value by the watch's window check.
+                    _ <- watch.awaitEstablished
                     _ = assert(name(first) == Present("Alice"))
                     // Fire the mutation on a forked fiber with an optimistic value distinct from
                     // the server echo. The optimistic overlay is applied — and observable by the
@@ -313,10 +315,10 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
             for
                 client <- cachedClient(ScriptedEngine(mutationFails = true))
                 _      <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                pull <- StreamProbe.Pull.open(
-                    client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly).watch()
-                )
+                watch  <- ObservedWatch.open(client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly))
+                pull = watch.pull
                 first <- pull.next
+                _     <- watch.awaitEstablished
                 _ = assert(name(first) == Present("Alice"))
                 fib <- Fiber.init(
                     Scope.run(

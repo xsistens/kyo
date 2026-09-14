@@ -193,13 +193,16 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
         """{"data":{"lobby":{"__typename":"LobbyView","id":"L1","name":"Alpha",""" +
             """"players":[{"__typename":"LobbyPlayer","id":"p1","color":"Red"}],"startedGameId":null}}}"""
 
+    /** Answers the one-player lobby and counts its calls; a watch's fetching fiber
+      * calls it while the leaf reads the count, hence the atomic.
+      */
     final private class LobbyEngine extends kyo.apollo.network.http.HttpEngine:
-        var calls = 0
+        private val counter = AtomicInt.Unsafe.init(0)(using AllowUnsafe.embrace.danger)
+        def calls: Int      = counter.get()(using AllowUnsafe.embrace.danger)
         def execute(
             request: kyo.apollo.network.http.HttpRequest
         )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
-            calls += 1
-            kyo.apollo.network.http.HttpResponse(200, Nil, onePlayerBody)
+            counter.safe.incrementAndGet.andThen(kyo.apollo.network.http.HttpResponse(200, Nil, onePlayerBody))
         end execute
     end LobbyEngine
 
@@ -211,8 +214,8 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
         )
 
     /** Fetch the query once over the (fake) network, then run `body` with the
-      * client and a pull over a `CacheOnly` watch — the WatcherSpec harness, on the
-      * civolution selection shape.
+      * client and a pull over a `CacheOnly` watch whose initial read is established
+      * — the WatcherSpec harness, on the civolution selection shape.
       */
     private def watching(
         body: (ApolloClient, StreamProbe.Pull[ApolloResponse[(lobby: Lobby)]]) => Unit <
@@ -221,10 +224,9 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
         for
             client <- cachedClient()
             _      <- client.query(lobbyQuery("L1")).fetchPolicy(FetchPolicy.NetworkOnly).execute
-            pull <- StreamProbe.Pull.open(
-                client.query(lobbyQuery("L1")).fetchPolicy(FetchPolicy.CacheOnly).watch()
-            )
-            _ <- body(client, pull)
+            watch  <- ObservedWatch.open(client.query(lobbyQuery("L1")).fetchPolicy(FetchPolicy.CacheOnly))
+            _      <- watch.awaitEstablished
+            _      <- body(client, watch.pull)
         yield ()
         end for
     end watching
@@ -334,11 +336,11 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
             cachedClient().map { client =>
                 val store = client.apolloStore
                 for
-                    _ <- store.writeOperation(wideBadgeQuery("L1"), (lobby = wideLobby))
-                    pull <- StreamProbe.Pull.open(
-                        client.query(wideBadgeQuery("L1")).fetchPolicy(FetchPolicy.CacheOnly).watch()
-                    )
+                    _     <- store.writeOperation(wideBadgeQuery("L1"), (lobby = wideLobby))
+                    watch <- ObservedWatch.open(client.query(wideBadgeQuery("L1")).fetchPolicy(FetchPolicy.CacheOnly))
+                    pull = watch.pull
                     first <- pull.next
+                    _     <- watch.awaitEstablished
                     _ = assert(first.data == Present((lobby = wideLobby)))
                     _ <- Sync.defer(
                         store.writeOperation(narrowBadgeSubscription("L1"), (lobbyUpdates = Present(narrowLobby)))
@@ -367,17 +369,22 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
             val engine = LobbyEngine()
             for
                 client <- cachedClient(engine)
-                pull <- StreamProbe.Pull.open(
-                    client.query(lobbyQuery("L1")).fetchPolicy(FetchPolicy.CacheAndNetwork).watch()
-                )
-                first <- pull.next
+                watch  <- ObservedWatch.open(client.query(lobbyQuery("L1")).fetchPolicy(FetchPolicy.CacheAndNetwork))
+                first  <- watch.pull.next
                 _ = assert(first.data.map(_.lobby) == Present(lobby(p1)))
-                // The write-back publish must not re-trigger this watcher's own fetch,
-                // and no second emission is pending.
-                maybeMore <- pull.tryNext
+                // Once the networked response is established the watch has done everything
+                // its own write-back could cause. A write it must answer is answered on this
+                // fiber; a re-emission or refetch churn from the write-back would come first.
+                _ <- watch.awaitEstablished
+                calls = engine.calls
+                _    <- client.apolloStore.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1, p2)))
+                next <- watch.pull.next
+                more <- watch.pull.tryNext
             yield
-                assert(maybeMore == Absent)
-                assert(engine.calls == 1, s"expected one network call, got ${engine.calls}")
+                assert(next.data.map(_.lobby) == Present(lobby(p1, p2)), s"the write-back re-emitted: $next")
+                assert(more == Absent)
+                assert(calls == 1, s"expected one network call, got $calls")
+                assert(engine.calls == 1, s"the write refetched: ${engine.calls} call(s)")
             end for
         }
 

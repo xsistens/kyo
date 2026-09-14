@@ -23,9 +23,9 @@ import scala.collection.immutable.VectorMap
   * through a fake [[kyo.apollo.network.http.HttpEngine]] that routes by operation name
   * and the synchronous `CacheOnly` refetch path, so every assertion is
   * deterministic — no clock, no real network, no async fences. On kyo-test each
-  * leaf body IS the effect; ordered pulls run on a [[StreamProbe.Pull]] and a
-  * short `Async.sleep` lets the scheduler dispatch background fibers between
-  * scripted socket frames.
+  * leaf body IS the effect; ordered pulls run on a [[StreamProbe.Pull]], writes
+  * start once the watch has established its initial read, and scripted socket
+  * frames wait on the fake connection's sent-frame barrier.
   */
 class MutationWatcherSpec extends kyo.test.Test[Any]:
 
@@ -125,9 +125,9 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
         )
 
     /** Seed the cache with Alice, then run `body` with a [[StreamProbe.Pull]]
-      * handle over a `CacheOnly` watch — `pull.next` awaits exactly the next
-      * emission, so a test can interleave a real mutation/write between exact,
-      * ordered pulls.
+      * handle over a `CacheOnly` watch whose initial read is established —
+      * `pull.next` awaits exactly the next emission, so a test can interleave a real
+      * mutation/write between exact, ordered pulls.
       */
     private def watching(
         body: (ApolloClient, StreamProbe.Pull[ApolloResponse[UserData]]) => Unit < (Async & Scope)
@@ -135,10 +135,9 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
         for
             client <- cachedClient()
             _      <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
-            pull <- StreamProbe.Pull.open(
-                client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly).watch()
-            )
-            _ <- body(client, pull)
+            watch  <- ObservedWatch.open(client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly))
+            _      <- watch.awaitEstablished
+            _      <- body(client, watch.pull)
         yield ()
         end for
     end watching
@@ -183,9 +182,15 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
                 for
                     _ <- pull.next
                     // Directly publish a foreign changed key, as a mutation on another record would.
-                    _           <- Sync.defer(client.apolloStore.publish(Set(CacheKey("Post", "99"))))
-                    maybeSecond <- pull.tryNext
-                yield assert(maybeSecond == Absent)
+                    _ <- Sync.defer(client.apolloStore.publish(Set(CacheKey("Post", "99"))))
+                    // Then a write the watcher must answer: both react on this fiber, in order,
+                    // so a re-emission for the foreign key would be the next emission.
+                    _      <- Sync.defer(client.apolloStore.writeOperation(CurrentUserQuery(), userData("Carol")))
+                    second <- pull.next
+                    more   <- pull.tryNext
+                yield
+                    assert(second.data == Present(userData("Carol")), s"the foreign key re-emitted the watcher: $second")
+                    assert(more == Absent)
             }
         }
 
@@ -199,11 +204,11 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
                         .webSocketEngine(FakeWebSocketEngine(conn))
                         .normalizedCache(MemoryCache(), IdCacheKeyGenerator(List("id")))
                 )
-                _ <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                pull <- StreamProbe.Pull.open(
-                    client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly).watch()
-                )
+                _     <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                watch <- ObservedWatch.open(client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly))
+                pull = watch.pull
                 first <- pull.next
+                _     <- watch.awaitEstablished
                 _ = assert(first.data == Present(userData("Alice")))
                 // Open a subscription that streams an updated `User:1` (fire-and-forget drain).
                 _ <- Fiber.init(Scope.run(client.subscription(UserUpdatedSubscription()).stream.discard))

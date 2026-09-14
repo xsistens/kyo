@@ -156,10 +156,10 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
             for
                 (client, _) <- cachedClient()
                 _           <- client.query(edgeQuery).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                pull <- StreamProbe.Pull.open(
-                    client.query(edgeQuery).fetchPolicy(FetchPolicy.CacheOnly).watch()
-                )
+                watch       <- ObservedWatch.open(client.query(edgeQuery).fetchPolicy(FetchPolicy.CacheOnly))
+                pull = watch.pull
                 first <- pull.next
+                _     <- watch.awaitEstablished
                 _ = assert(rowOf(first).map(_.selected) == Present(false))
                 // The dependent keys are what makes the next step work; assert them
                 // so a failure says WHICH half broke.
@@ -167,11 +167,15 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
                 _      <- Sync.defer(selected.write(client, "c1", true))
                 second <- pull.next
                 _ = assert(rowOf(second).map(_.selected) == Present(true))
-                // A change to an unrelated key does not wake it.
+                // A change to an unrelated key does not wake it: that publish and the next
+                // write both react on this fiber, in order, so a wake-up would come first.
                 _      <- Sync.defer(client.apolloStore.publish(Set(CacheKey("Edge", "c99"))))
+                _      <- Sync.defer(selected.write(client, "c1", false))
+                third  <- pull.next
                 silent <- pull.tryNext
-                _ = assert(silent == Absent)
-            yield assert(true)
+            yield
+                assert(rowOf(third).map(_.selected) == Present(false), s"the unrelated publish woke the watcher: $third")
+                assert(silent == Absent)
             end for
         }
 
