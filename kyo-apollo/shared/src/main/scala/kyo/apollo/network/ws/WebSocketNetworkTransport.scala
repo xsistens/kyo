@@ -555,7 +555,11 @@ final class WebSocketNetworkTransport(
         GraphQLResponse.parse(payload, request.operation).fold(
             response => ApolloResponse.fromGraphQLResponse(request.requestUuid, response, request.executionContext),
             parseFailure => exceptionResponse(request, parseFailure),
-            defect => exceptionResponse(request, ApolloParseException(payload, "a GraphQL response payload", defect))
+            defect =>
+                exceptionResponse(
+                    request,
+                    ApolloParseException(payload, s"a GraphQL response payload for operation '${request.operation.name}'", defect)
+                )
         )
 
     private def errorResponse[D](request: ApolloRequest[D], payload: Json): ApolloResponse[D] =
@@ -568,7 +572,11 @@ final class WebSocketNetworkTransport(
                     executionContext = request.executionContext
                 ),
             parseFailure => exceptionResponse(request, parseFailure),
-            defect => exceptionResponse(request, ApolloParseException(payload, "GraphQL error objects", defect))
+            defect =>
+                exceptionResponse(
+                    request,
+                    ApolloParseException(payload, s"GraphQL error objects for operation '${request.operation.name}'", defect)
+                )
         )
 
     private def parseErrors(payload: Json): Result[ApolloParseException, Chunk[GraphQLError]] = payload match
