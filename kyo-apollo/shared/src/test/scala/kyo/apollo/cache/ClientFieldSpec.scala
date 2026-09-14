@@ -295,4 +295,36 @@ class ClientFieldSpec extends kyo.test.Test[Any]:
             end for
         }
     }
+
+    // --- a recursive value type: normalized one level, blob below ----------------
+
+    private val tree = ClientField.create[RootQuery, CfTreeNode]("tree", default = CfTreeNode("", Nil))
+
+    "a client field holding a recursive value" - {
+
+        "round-trips a three-level tree through the normalized store" in {
+            // The selection tree cuts where `CfTreeNode` re-enters itself, so only the
+            // first level becomes a record; the tail is a blob under its `children`
+            // leaf. The whole-value codec must still return the identical graph — the
+            // cut only steers normalization depth, never what is stored.
+            val (client, _) = cachedClient()
+            val value = CfTreeNode(
+                "root",
+                List(CfTreeNode("child", List(CfTreeNode("grandchild", Nil))), CfTreeNode("sibling", Nil))
+            )
+            for
+                _    <- tree.writeRoot(client, value)
+                back <- tree.readRoot(client)
+                _           = assert(back == value, s"read back $back")
+                treeRecords = client.apolloStore.cache.allRecords().keySet.filter(_.contains("tree"))
+                _           = assert(treeRecords.size == 1, s"exactly the first level is a record: $treeRecords")
+            yield assert(true)
+            end for
+        }
+    }
 end ClientFieldSpec
+
+/** A self-referential value type for the recursive round-trip case (file-level so
+  * the derived `Schema` is a stable given while kyo-schema ties the by-name knot).
+  */
+case class CfTreeNode(name: String, children: List[CfTreeNode]) derives CanEqual, Schema
