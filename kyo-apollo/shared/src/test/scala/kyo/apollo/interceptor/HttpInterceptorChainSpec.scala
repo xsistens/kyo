@@ -1,6 +1,7 @@
 package kyo.apollo.interceptor
 
 import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.network.HttpHeader
 import kyo.apollo.network.HttpMethod
 import kyo.apollo.network.http.HttpEngine
@@ -66,8 +67,7 @@ class HttpInterceptorChainSpec extends kyo.test.Test[Any]:
             val a: HttpInterceptor = new HttpInterceptor:
                 def intercept(req: HttpRequest, next: HttpInterceptorChain)(using
                     Frame
-                ): HttpResponse <
-                    Async =
+                ): HttpResponse < (Async & Abort[HttpEngineFailure]) =
                     order = order :+ "a-before"
                     next.proceed(req).map { r =>
                         order = order :+ "a-after"; r
@@ -76,8 +76,7 @@ class HttpInterceptorChainSpec extends kyo.test.Test[Any]:
             val b: HttpInterceptor = new HttpInterceptor:
                 def intercept(req: HttpRequest, next: HttpInterceptorChain)(using
                     Frame
-                ): HttpResponse <
-                    Async =
+                ): HttpResponse < (Async & Abort[HttpEngineFailure]) =
                     order = order :+ "b-before"
                     next.proceed(req).map { r =>
                         order = order :+ "b-after"; r

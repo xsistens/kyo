@@ -1,6 +1,8 @@
 package kyo.apollo.interceptor
 
 import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.apollo.exception.ApolloNetworkException
+import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.json.Json
 import kyo.apollo.json.JsonParser
 import kyo.apollo.network.http.HttpRequest
@@ -29,10 +31,11 @@ import kyo.apollo.network.http.HttpResponse
   * same limitation apollo-kotlin's `BatchingHttpInterceptor` has — so per-request
   * header overrides (e.g. distinct auth) are not preserved across a batch. Errors
   * are shared fairly: a non-2xx batched response is handed to every caller (each
-  * transport maps it to an `ApolloHttpException` value), and a 2xx body that is
-  * not an array of the expected length fails every caller (the transport maps
-  * that to an `ApolloNetworkException` value) rather than silently dropping
-  * responses.
+  * transport maps it to an `ApolloHttpException` value), the engine's
+  * `HttpEngineFailure` fails every caller with that same failure, and a 2xx body
+  * that is not an array of the expected length fails every caller with an
+  * `ApolloNetworkException` (no response of its own arrived) rather than silently
+  * dropping responses.
   *
   * Ownership and concurrency: the interceptor is created with
   * [[BatchingHttpInterceptor.init]] inside a `Scope` that owns its window fiber;
@@ -63,13 +66,13 @@ final class BatchingHttpInterceptor private (
     def intercept(
         request: HttpRequest,
         chain: HttpInterceptorChain
-    )(using Frame): HttpResponse < Async =
+    )(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) =
         // A bodiless request (GET) has nothing to place in a JSON body array; send it
         // through on its own.
         if request.body.isEmpty then chain.proceed(request)
         else
             for
-                turn    <- Promise.init[Turn, Any]
+                turn    <- Promise.init[Turn, Abort[HttpEngineFailure]]
                 claimed <- AtomicBoolean.init
                 me = Pending(request, chain, turn, claimed)
                 queued <- pending.updateAndGet(_.map(_.append(me)))
@@ -151,15 +154,15 @@ final class BatchingHttpInterceptor private (
       * JSON array of every body on the lead's chain/URL/headers. Every other
       * member is completed with its share; the lead's own share is returned.
       */
-    private def send(batch: Chunk[Pending])(using Frame): HttpResponse < Async =
+    private def send(batch: Chunk[Pending])(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) =
         val lead = batch(0)
         val wire =
             if batch.length == 1 then lead.request
             else lead.request.copy(body = Some(batch.map(_.request.body.getOrElse("null")).mkString("[", ",", "]")))
-        Abort.run[Throwable](lead.chain.proceed(wire)).map { outcome =>
-            val shares = outcome.fold(
+        Abort.run[HttpEngineFailure](lead.chain.proceed(wire)).map { outcome =>
+            val shares: Chunk[Result[HttpEngineFailure, HttpResponse]] = outcome.fold(
                 response => if batch.length == 1 then Chunk(Result.succeed(response)) else split(batch.length, response),
-                cause => Chunk.from(Seq.fill(batch.length)(Result.panic(cause))),
+                failure => Chunk.from(Seq.fill(batch.length)(Result.fail(failure))),
                 cause => Chunk.from(Seq.fill(batch.length)(Result.panic(cause)))
             )
             Kyo.foreachDiscard(batch.drop(1).zip(shares.drop(1))) { (member, share) =>
@@ -170,19 +173,19 @@ final class BatchingHttpInterceptor private (
 
     /** Split a batched `response` into one share per caller, preserving order. A
       * non-2xx status is shared verbatim; a 2xx body that is not a JSON array of
-      * exactly `n` elements fails every caller.
+      * exactly `n` elements fails every caller: none of them received its response.
       */
-    private def split(n: Int, response: HttpResponse): Chunk[Result[Nothing, HttpResponse]] =
+    private def split(n: Int, response: HttpResponse)(using Frame): Chunk[Result[HttpEngineFailure, HttpResponse]] =
         if !response.isSuccessful then Chunk.from(Seq.fill(n)(Result.succeed(response)))
         else
             Result.catching[Throwable](JsonParser.parse(response.body)) match
                 case Result.Success(Json.JArr(items)) if items.length == n =>
                     items.map(json => Result.succeed(HttpResponse(response.statusCode, response.headers, json.render)))
                 case _ =>
-                    val cause = new RuntimeException(
+                    val failure = ApolloNetworkException(
                         s"Batched GraphQL response was not a JSON array of $n element(s): ${response.body}"
                     )
-                    Chunk.from(Seq.fill(n)(Result.panic(cause)))
+                    Chunk.from(Seq.fill(n)(Result.fail(failure)))
 
     /** Answer every member of `batch` with a `cause` panic. */
     private def fail(batch: Chunk[Pending], cause: Throwable)(using Frame): Unit < Sync =
@@ -209,7 +212,7 @@ object BatchingHttpInterceptor:
     final private case class Pending(
         request: HttpRequest,
         chain: HttpInterceptorChain,
-        turn: Promise[Turn, Any],
+        turn: Promise[Turn, Abort[HttpEngineFailure]],
         claimed: AtomicBoolean
     )
 
