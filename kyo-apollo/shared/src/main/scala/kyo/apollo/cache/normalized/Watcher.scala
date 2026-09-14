@@ -4,6 +4,8 @@ import kyo.*
 import kyo.apollo.ApolloCall
 import kyo.apollo.ApolloClient
 import kyo.apollo.cache.normalized.api.CacheKey
+import kyo.apollo.exception.ApolloConfigException
+import kyo.apollo.exception.CacheReadFailure
 import kyo.apollo.network.ApolloResponse
 import kyo.apollo.network.ExecutionContext
 import kyo.apollo.runtime.ResponseStream
@@ -22,23 +24,37 @@ import scala.annotation.tailrec
   */
 
 extension (client: ApolloClient)
-    /** The single [[ApolloStore]] backing this client's normalized cache — the
-      * store built once by `normalizedCache(...)` and reached here by locating the
-      * installed [[CacheInterceptor]]. Both `watch()` and imperative
-      * `apolloStore.writeOperation(...)` updates go through this one store, so a
-      * write and a watch see the same cache and the same changed-keys stream.
+    /** The single [[ApolloStore]] backing this client's normalized cache, or
+      * `Absent` when the client was built without `normalizedCache(...)` — the store
+      * built once by the builder and reached here by locating the installed
+      * [[CacheInterceptor]]. Both `watch()` and imperative
+      * `writeOperation(...)` updates go through this one store, so a write and a
+      * watch see the same cache and the same changed-keys stream.
       *
-      * @throws IllegalStateException if no normalized cache is installed
+      * The total form: ask it whether a client has a cache at all (a view that
+      * degrades to a constant value without one, a devtools panel that shows an
+      * empty cache).
       */
-    def apolloStore: ApolloStore =
-        client.registeredInterceptors
-            .collectFirst { case interceptor: CacheInterceptor => interceptor.store }
-            .getOrElse(
-                throw new IllegalStateException(
-                    "No normalized cache is installed on this ApolloClient. Call " +
-                        "`.normalizedCache(...)` on the builder before reading the store or watching a query."
-                )
+    def normalizedStore: Maybe[ApolloStore] =
+        Maybe.fromOption(client.registeredInterceptors.collectFirst { case interceptor: CacheInterceptor =>
+            interceptor.store
+        })
+
+    /** [[normalizedStore]] for code that requires the cache — `watch()`, a
+      * `ClientField`, a test of a client built with `normalizedCache(...)`.
+      *
+      * Using it on a client without a cache is a programmer error, not a failure a
+      * caller handles: it panics with an [[kyo.apollo.exception.ApolloConfigException]]
+      * and appears on no row. Code that has to cope with a client without a cache
+      * asks [[normalizedStore]] instead of catching this.
+      */
+    def apolloStore(using Frame): ApolloStore =
+        normalizedStore.getOrElse(
+            throw ApolloConfigException(
+                "No normalized cache is installed on this ApolloClient. Call " +
+                    "`.normalizedCache(...)` on the builder before reading the store or watching a query."
             )
+        )
 end extension
 
 extension [D](call: ApolloCall[D])
@@ -161,11 +177,17 @@ extension [D](call: ApolloCall[D])
                 def offer(response: ApolloResponse[D]): Unit =
                     if state.get().active then discard(channel.unsafe.offer(response))
 
-                // The store read behind every reaction. A miss is raised inside the read and
-                // arrives here as the result's failure; a panic (an interrupt) is not a miss
-                // and is passed on.
-                def readStamped: Result[Throwable, (D, Set[CacheKey], Long)] < Sync =
-                    Abort.run[Throwable](store.readOperationStamped(request.operation))
+                // The store read behind every reaction: `hit` gets the data, its key set and
+                // the generation it was read at; `miss` gets the read's failure. Nothing
+                // else is a miss — a decode defect or an interrupt is a panic and passes
+                // through untouched.
+                def readStamped(
+                    hit: (D, Set[CacheKey], Long) => Unit < Sync,
+                    miss: CacheReadFailure => Unit < Sync
+                ): Unit < Sync =
+                    Abort.recover[CacheReadFailure](miss)(
+                        store.readOperationStamped(request.operation).map(hit(_, _, _))
+                    )
 
                 // Launch the initial fetch as a detached fiber that pushes each emission
                 // through `emitFresh`. Network refetches go through `requestRefetch`.
@@ -188,13 +210,13 @@ extension [D](call: ApolloCall[D])
                         Sync.Unsafe.defer(discard(adopt(stamped, info.map(_.generation).getOrElse(0L))))
                             .andThen(closeWindow())
                     else
-                        readStamped.map {
-                            case Result.Success((_, keys, gen)) =>
+                        readStamped(
+                            hit = (_, keys, gen) =>
                                 discard(adopt(keys, gen))
                                 closeWindow()
-                            case Result.Failure(_)   => if stamped.nonEmpty then seed(stamped)
-                            case Result.Panic(cause) => Abort.panic(cause)
-                        }
+                            ,
+                            miss = _ => Sync.Unsafe.defer(if stamped.nonEmpty then seed(stamped))
+                        )
                     end if
                 end establishFrom
 
@@ -214,20 +236,20 @@ extension [D](call: ApolloCall[D])
                 // Either way the watch set is KEPT, so a later write restoring the data
                 // revives the watcher (Apollo Client watchers stay registered across
                 // incomplete reads). A watch that never established a set stays silent.
-                def reread(onMiss: Throwable => Unit < Sync): Unit < Sync =
-                    readStamped.map {
-                        case Result.Success((data, keys, gen)) =>
+                def reread(onMiss: CacheReadFailure => Unit < Sync): Unit < Sync =
+                    readStamped(
+                        hit = (data, keys, gen) =>
                             if adopt(keys, gen) then offer(CacheResponses.hit(request, data, keys, gen))
                             closeWindow()
-                        case Result.Failure(cause) => onMiss(cause)
-                        case Result.Panic(cause)   => Abort.panic(cause)
-                    }
+                        ,
+                        miss = onMiss
+                    )
 
                 /** [[RefetchPolicy.CacheOnly]]'s miss leg: the miss IS the value. */
-                def emitMiss(cause: Throwable): Unit < Sync =
+                def emitMiss(failure: CacheReadFailure): Unit < Sync =
                     Sync.Unsafe.defer {
                         val s = state.get()
-                        if s.active && s.keys.nonEmpty then offer(CacheResponses.miss(request, cause))
+                        if s.active && s.keys.nonEmpty then offer(CacheResponses.miss(request, failure))
                     }
 
                 // Re-run the operation over the network (which writes the response back
@@ -281,15 +303,15 @@ extension [D](call: ApolloCall[D])
                 // field in every response (each write-back publishes a watched key, each
                 // re-read misses again) is an endless chain of network requests out of a
                 // single watch.
-                def refetchOnce(cause: Throwable): Unit < Sync = Sync.Unsafe.defer(settleMiss(cause))
+                def refetchOnce(failure: CacheReadFailure): Unit < Sync = Sync.Unsafe.defer(settleMiss(failure))
 
-                @tailrec def settleMiss(cause: Throwable): Unit < Sync =
+                @tailrec def settleMiss(failure: CacheReadFailure): Unit < Sync =
                     val s = state.get()
                     if !s.active then Kyo.unit
                     else if s.refetched && s.inflight then Kyo.unit // settled once, at the end of the flight
-                    else if s.refetched then emitMiss(cause)
+                    else if s.refetched then emitMiss(failure)
                     else if state.compareAndSet(s, s.copy(refetched = true)) then requestRefetch()
-                    else settleMiss(cause)
+                    else settleMiss(failure)
                     end if
                 end settleMiss
 

@@ -7,6 +7,7 @@ import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.*
 import kyo.apollo.cache.normalized.api.Record
 import kyo.apollo.exception.CacheMissException
+import kyo.apollo.exception.CacheReadFailure
 import kyo.apollo.json.Json
 import scala.collection.immutable.VectorMap
 
@@ -56,6 +57,20 @@ class StoreSpec extends kyo.test.Test[Any]:
             )
         def variables: Json = Json.JObj(VectorMap.empty)
     end CountriesQuery
+
+    /** [[CountriesQuery]]'s shape (same root and field keys, so it reads the records
+      * a `CountriesQuery` write left) with a codec whose decode is defective.
+      */
+    final case class DefectiveCountriesQuery() extends Query[CountriesData]:
+        def name                              = "Countries"
+        def document                          = CountriesQuery().document
+        def dataSchema: Schema[CountriesData] = summon[Schema[CountriesData]]
+        def rootField: CompiledField          = CountriesQuery().rootField
+        def variables: Json                   = Json.JObj(VectorMap.empty)
+        override def dataCodec: JsonCodec[CountriesData] = new JsonCodec[CountriesData]:
+            def decode(json: Json): CountriesData  = throw IllegalStateException("defective codec")
+            def encode(value: CountriesData): Json = CountriesQuery().dataCodec.encode(value)
+    end DefectiveCountriesQuery
 
     private def store(): ApolloStore =
         new ApolloStore(MemoryCache(), cacheKeyGenerator = IdCacheKeyGenerator(List("code")))
@@ -249,19 +264,74 @@ class StoreSpec extends kyo.test.Test[Any]:
             end for
         }
 
-        "readOperation on an empty store raises CacheMissException" in {
+        "readOperation on an empty store fails with a whole-record CacheMissException for the root" in {
             val s = store()
-            Abort.run[CacheMissException](s.readOperation(CountriesQuery())).map(result => assert(result.isFailure))
+            Abort.run[CacheReadFailure](s.readOperation(CountriesQuery())).map {
+                case Result.Failure(miss: CacheMissException) =>
+                    assert(miss.key == CacheKey.QueryRoot)
+                    assert(miss.fieldKey == Absent)
+                case other => fail(s"expected a miss, got $other")
+            }
         }
 
-        "readOperation on a partial store (a record removed) raises CacheMissException" in {
+        "readOperation on a partial store (a record removed) fails with a miss of that record" in {
             val s = store()
             for
                 _      <- s.writeOperation(CountriesQuery(), sampleData)
                 _      <- s.cache.remove(Chunk(CacheKey("Country", "FR")))
-                result <- Abort.run[CacheMissException](s.readOperation(CountriesQuery()))
-            yield assert(result.isFailure)
+                result <- Abort.run[CacheReadFailure](s.readOperation(CountriesQuery()))
+            yield result match
+                case Result.Failure(miss: CacheMissException) => assert(miss.key == CacheKey("Country", "FR"))
+                case other                                    => fail(s"expected a miss, got $other")
             end for
+        }
+
+        "a store read names its miss on the row: it has no form without Abort[CacheReadFailure]" in {
+            val s = store()
+            typeCheck(
+                """val read: CountriesData < (Sync & Abort[kyo.apollo.exception.CacheReadFailure]) = s.readOperation(CountriesQuery())"""
+            )
+            typeCheckFailure("""val read: CountriesData < Sync = s.readOperation(CountriesQuery())""")("CacheReadFailure")
+            typeCheckFailure(
+                """val read: Country < Sync = s.readFragment(null.asInstanceOf[Fragment[Country]], CacheKey("Country", "DE"))"""
+            )(
+                "CacheReadFailure"
+            )
+        }
+
+        "a decode defect during a read is a panic, not a miss" in {
+            // Even the broadest handler sees a panic: a defect never travels as a
+            // failure a caller could take for a miss and answer with the network.
+            val s = store()
+            for
+                _    <- s.writeOperation(CountriesQuery(), sampleData)
+                read <- Abort.run[Throwable](s.readOperation(DefectiveCountriesQuery()))
+            yield read match
+                case Result.Panic(_: IllegalStateException) => succeed
+                case other                                  => fail(s"expected a panic, got $other")
+            end for
+        }
+
+        "an update whose read hits a decode defect commits nothing, publishes nothing and panics" in {
+            val s         = store()
+            var published = Set.empty[CacheKey]
+            for
+                _       <- s.writeOperation(CountriesQuery(), sampleData)
+                _       <- s.addChangedKeysListener(keys => published = published ++ keys)
+                outcome <- Abort.run[Throwable](s.updateOperation(DefectiveCountriesQuery())(_ => CountriesData(Nil)))
+                after   <- s.readOperation(CountriesQuery())
+            yield
+                outcome match
+                    case Result.Panic(_: IllegalStateException) => succeed
+                    case other                                  => fail(s"expected a panic, got $other")
+                assert(after == sampleData)
+                assert(published.isEmpty)
+            end for
+        }
+
+        "an update of data the cache does not hold is a no-op, not a failure" in {
+            val s = store()
+            s.updateOperation(CountriesQuery())(_ => sampleData).map(changed => assert(changed.isEmpty))
         }
 
         "publish notifies a registered listener with the changed keys of a write" in {

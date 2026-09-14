@@ -1,9 +1,14 @@
 package kyo.apollo.exception
 
+import kyo.Absent
 import kyo.Chunk
 import kyo.Frame
 import kyo.KyoException
+import kyo.Maybe
+import kyo.Present
 import kyo.apollo.api.GraphQLError
+import kyo.apollo.cache.normalized.api.CacheKey
+import kyo.apollo.cache.normalized.api.FieldKey
 import kyo.apollo.json.Json
 import kyo.apollo.network.HttpHeader
 
@@ -37,7 +42,10 @@ sealed trait ApolloParseFailure extends ApolloException
 /** The failures of an `HttpEngine` round-trip: no HTTP response was received. */
 sealed trait HttpEngineFailure extends ApolloException
 
-/** The failures of reading from the normalized cache. */
+/** The failures of reading from the normalized cache — the row of every store read:
+  * the data is not cached ([[CacheMissException]]), or the object has no identity
+  * to look its record up by ([[NoCacheIdentityException]]).
+  */
 sealed trait CacheReadFailure extends ApolloException
 
 /** No HTTP response was received at all: the connection failed, the request could
@@ -140,35 +148,50 @@ final class ApolloConfigException(
     cause: String | Throwable = ""
 )(using Frame) extends ApolloException(message, cause)
 
-/** A denormalizing read could not be satisfied from the normalized cache: a
-  * required record or one of its selected fields was absent. Carries the [[key]]
-  * of the record being read and the [[fieldName]] that was missing (`None` when the
-  * whole record was absent), mirroring apollo-kotlin's `CacheMissException(key, fieldName)`.
+/** A denormalizing read could not be satisfied from the normalized cache: the
+  * record [[key]] was absent, or — when [[fieldKey]] is present — that record does
+  * not hold the selected field stored under [[fieldKey]]. Mirrors apollo-kotlin's
+  * `CacheMissException(key, fieldName)`.
   *
-  * Because it is a distinct leaf, the cache interceptor can tell a genuine cache
-  * miss apart from a transport error: `CacheFirst`/`NetworkFirst` fall through to
-  * the network on a miss, while `CacheOnly` surfaces it as an `ApolloResponse.error` value.
+  * A miss is the expected outcome of reading data the cache does not hold yet, so
+  * it travels on the read's `Abort[CacheReadFailure]` row, never as a throw:
+  * `CacheFirst`/`NetworkFirst` answer it with the network, while `CacheOnly`
+  * surfaces it as an `ApolloResponse.error` value. A decode defect is not a miss;
+  * it stays a panic.
   *
-  * @param key       the record key that was being read
-  * @param fieldName the missing field, or `None` when the record itself was absent
+  * @param key      the record that was absent, or that lacks the field
+  * @param fieldKey the storage key of the missing field, or `Absent` when the
+  *                 record itself was absent
   */
 final class CacheMissException(
-    val key: String,
-    val fieldName: Option[String] = None,
-    cause: String | Throwable = ""
-)(using Frame) extends ApolloException(CacheMissException.describe(key, fieldName), cause)
+    val key: CacheKey,
+    val fieldKey: Maybe[FieldKey] = Absent
+)(using Frame) extends ApolloException(CacheMissException.describe(key, fieldKey))
     with CacheReadFailure
 
 object CacheMissException:
     /** A miss for the whole record `key` (no such record in the cache). */
-    def apply(key: String)(using Frame): CacheMissException = new CacheMissException(key, None)
+    def apply(key: CacheKey)(using Frame): CacheMissException = new CacheMissException(key, Absent)
 
-    /** A miss for field `fieldName` of record `key`. */
-    def apply(key: String, fieldName: String)(using Frame): CacheMissException =
-        new CacheMissException(key, Some(fieldName))
+    /** A miss for the field stored under `fieldKey` in record `key`. */
+    def apply(key: CacheKey, fieldKey: FieldKey)(using Frame): CacheMissException =
+        new CacheMissException(key, Present(fieldKey))
 
-    private def describe(key: String, fieldName: Option[String]): String =
-        fieldName match
-            case Some(f) => s"Object '$key' has no field named '$f' in the cache"
-            case None    => s"Object '$key' not found in the cache"
+    private def describe(key: CacheKey, fieldKey: Maybe[FieldKey]): String =
+        fieldKey match
+            case Present(field) => s"Object '${key.render}' has no field named '${field.render}' in the cache"
+            case Absent         => s"Object '${key.render}' not found in the cache"
 end CacheMissException
+
+/** An object has no record in the normalized cache to read, because the store's
+  * key generator gives an object of type [[typeName]] no identity (no key field it
+  * recognizes). The failure of looking up the record of a masked fragment ref
+  * (`ApolloStore.keyOf`) whose type the store does not identify; there is no
+  * positional fallback for a ref, so no key is guessed.
+  *
+  * @param typeName the object's concrete GraphQL type
+  */
+final class NoCacheIdentityException(val typeName: String)(using Frame)
+    extends ApolloException(
+        s"The cache has no identity for an object of type '$typeName': its key generator produces no key for it"
+    ) with CacheReadFailure

@@ -51,6 +51,20 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
         def variables: Json = Json.JObj(VectorMap.empty)
     end CountriesQuery
 
+    /** [[CountriesQuery]]'s shape (it reads the records a `CountriesQuery` write
+      * left) with a codec whose decode is defective.
+      */
+    final case class DefectiveCountriesQuery() extends Query[CountriesData]:
+        def name                              = "Countries"
+        def document                          = CountriesQuery().document
+        def dataSchema: Schema[CountriesData] = summon[Schema[CountriesData]]
+        def rootField: CompiledField          = CountriesQuery().rootField
+        def variables: Json                   = Json.JObj(VectorMap.empty)
+        override def dataCodec: JsonCodec[CountriesData] = new JsonCodec[CountriesData]:
+            def decode(json: Json): CountriesData  = throw IllegalStateException("defective codec")
+            def encode(value: CountriesData): Json = CountriesQuery().dataCodec.encode(value)
+    end DefectiveCountriesQuery
+
     private val body =
         """{"data":{"countries":[""" +
             """{"__typename":"Country","code":"DE","name":"Germany"},""" +
@@ -146,8 +160,38 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
                 assert(engine.calls == 0)
                 assert(r.data == Absent)
                 assert(r.error.exists(_.isInstanceOf[CacheMissException]))
-                assert(r.cacheInfo.exists(_.cacheMissException.isDefined))
+                assert(r.cacheInfo.exists(_.cacheReadFailure.isDefined))
             }
+        }
+
+        // --- a defective read is not a miss ------------------------------------
+
+        "CacheFirst with a defective codec panics without a network call" in {
+            val engine = CountingEngine()
+            val client = cachedClient(engine)
+            for
+                _ <- client.apolloStore.writeOperation(CountriesQuery(), sampleData)
+                r <- Abort.run[Throwable](client.query(DefectiveCountriesQuery()).fetchPolicy(FetchPolicy.CacheFirst).execute)
+            yield
+                assert(engine.calls == 0) // the defect was not answered with the network
+                r match
+                    case Result.Panic(_: IllegalStateException) => succeed
+                    case other                                  => fail(s"expected the read's panic, got $other")
+            end for
+        }
+
+        "CacheOnly with a defective codec panics instead of emitting a miss value" in {
+            val engine = CountingEngine()
+            val client = cachedClient(engine)
+            for
+                _ <- client.apolloStore.writeOperation(CountriesQuery(), sampleData)
+                r <- Abort.run[Throwable](client.query(DefectiveCountriesQuery()).fetchPolicy(FetchPolicy.CacheOnly).execute)
+            yield
+                assert(engine.calls == 0)
+                r match
+                    case Result.Panic(_: IllegalStateException) => succeed
+                    case other                                  => fail(s"expected the read's panic, got $other")
+            end for
         }
 
         // --- CacheAndNetwork ----------------------------------------------------
