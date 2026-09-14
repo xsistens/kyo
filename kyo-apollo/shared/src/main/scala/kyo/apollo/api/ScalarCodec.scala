@@ -6,6 +6,7 @@ import kyo.Frame
 import kyo.Maybe
 import kyo.Present
 import kyo.Schema
+import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.json.Json
 import kyo.apollo.json.SchemaJson
 
@@ -101,6 +102,9 @@ object ScalarCodec:
     )
 end ScalarCodec
 
-/** Raised when a leaf value is not the JSON shape its [[ScalarCodec]] expects. */
-final class ScalarDecodeException(expected: String, got: Json)
-    extends RuntimeException(s"Expected a GraphQL $expected but got: ${got.render}")
+/** Raised when a leaf value is not the JSON shape its [[ScalarCodec]] expects. The
+  * message names the expected GraphQL type and the JSON type found, never the value.
+  * A selection's decode turns it into an `ApolloParseException` failure.
+  */
+final class ScalarDecodeException(val expected: String, got: Json)
+    extends RuntimeException(s"Expected a GraphQL $expected but got ${ApolloParseException.jsonType(got)}")

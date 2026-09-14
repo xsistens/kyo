@@ -318,10 +318,12 @@ object CacheBatchReader:
       *
       * The outcome is a [[CacheMissException]] failure only for a missing record or
       * field. Anything the walk or `codec` throws — a decode defect, a policy bug —
-      * is a `Panic`, so no caller can take a defect for a miss.
+      * is a `Panic`, and so is a decode failure: data the store holds under the
+      * codec's own selections and does not decode is a defect, not a miss. No caller
+      * can take a defect for a miss.
       */
     def readRooted[D](
-        codec: JsonCodec[D],
+        codec: JsonDecoder[D],
         rootField: CompiledField,
         rootKey: CacheKey,
         loader: RecordLoader,
@@ -330,6 +332,12 @@ object CacheBatchReader:
         fieldPolicies: FieldPolicies
     )(using Frame): Result[CacheMissException, (D, Set[CacheKey])] =
         val reader = new CacheBatchReader(loader, variables, rootKey, cacheKeyResolver, fieldPolicies)
-        Result(reader.toData(rootField)).flatten.map(data => (codec.decode(data), reader.dependentKeys))
+        Result(reader.toData(rootField)).flatten.flatMap { data =>
+            codec.decode(data).fold(
+                decoded => Result.succeed((decoded, reader.dependentKeys)),
+                failure => Result.panic(failure),
+                defect => Result.panic(defect)
+            )
+        }
     end readRooted
 end CacheBatchReader

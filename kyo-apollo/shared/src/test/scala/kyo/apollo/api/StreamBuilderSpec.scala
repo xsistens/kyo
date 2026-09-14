@@ -54,7 +54,7 @@ class StreamBuilderSpec extends kyo.test.Test[Any]:
             val sel   = Queries.countries(Country.name).streamed(initialCount = 1)
             val short = JsonParser.parse("""{"countries":[{"name":"Germany"}]}""").getOrThrow
             // Static type here IS `(countries: List[(name: String)])` — proving no wrapper.
-            val result = sel.decode(short)
+            val result = sel.decode(short).getOrThrow
             assert(result.countries.map(_.name) == Chunk("Germany"))
         }
 
