@@ -37,24 +37,24 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
         given TypeName[PageInfoT] = TypeName("PageInfo")
 
     object GCountry:
-        def code: SelectionBuilder[CountryT, (code: String)] =
+        def code: SelectionBuilder.Deferrable[CountryT, (code: String)] =
             SelectionBuilder.scalar("code", CompiledNamedType("ID").notNull, ScalarCodec.string)
-        def name: SelectionBuilder[CountryT, (name: String)] =
+        def name: SelectionBuilder.Deferrable[CountryT, (name: String)] =
             SelectionBuilder.scalar("name", CompiledNamedType("String").notNull, ScalarCodec.string)
-        def capital: SelectionBuilder[CountryT, (capital: Maybe[String])] =
+        def capital: SelectionBuilder.Deferrable[CountryT, (capital: Maybe[String])] =
             SelectionBuilder.scalar(
                 "capital",
                 CompiledNamedType("String"),
                 ScalarCodec.maybe(ScalarCodec.string)
             )
-        def emoji: SelectionBuilder[CountryT, (emoji: String)] =
+        def emoji: SelectionBuilder.Deferrable[CountryT, (emoji: String)] =
             SelectionBuilder.scalar("emoji", CompiledNamedType("String").notNull, ScalarCodec.string)
     end GCountry
 
     object GPageInfo:
-        def hasNextPage: SelectionBuilder[PageInfoT, (hasNextPage: Boolean)] =
+        def hasNextPage: SelectionBuilder.Deferrable[PageInfoT, (hasNextPage: Boolean)] =
             SelectionBuilder.scalar("hasNextPage", CompiledNamedType("Boolean").notNull, ScalarCodec.boolean)
-        def endCursor: SelectionBuilder[PageInfoT, (endCursor: Maybe[String])] =
+        def endCursor: SelectionBuilder.Deferrable[PageInfoT, (endCursor: Maybe[String])] =
             SelectionBuilder.scalar(
                 "endCursor",
                 CompiledNamedType("String"),
@@ -77,7 +77,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
 
     // --- root query plumbing -----------------------------------------------------
 
-    private def countryField[A](sel: SelectionBuilder[CountryT, A]): SelectionBuilder[RootQuery, (country: A)] =
+    private def countryField[A](sel: SelectionBuilder[CountryT, A]): SelectionBuilder.Deferrable[RootQuery, (country: A)] =
         SelectionBuilder.obj(
             "country",
             CompiledNamedType("Country").notNull,
@@ -86,7 +86,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             SelectionBuilder.Nesting.Leaf
         )
 
-    private def pageInfoField[A](sel: SelectionBuilder[PageInfoT, A]): SelectionBuilder[RootQuery, (pageInfo: A)] =
+    private def pageInfoField[A](sel: SelectionBuilder[PageInfoT, A]): SelectionBuilder.Deferrable[RootQuery, (pageInfo: A)] =
         SelectionBuilder.obj(
             "pageInfo",
             CompiledNamedType("PageInfo").notNull,

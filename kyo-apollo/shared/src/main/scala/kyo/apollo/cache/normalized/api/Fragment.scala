@@ -84,7 +84,7 @@ object Fragment:
       */
     final class Builder[Origin](using TypeName[Origin]):
         def apply[D <: AnyNamedTuple](
-            build: SelectionBuilder[Origin, Empty] => SelectionBuilder[Origin, D]
+            build: SelectionBuilder.Fields[Origin, Empty] => SelectionBuilder.Fields[Origin, D]
         ): Fragment[D] =
             build(SelectionBuilder.empty[Origin]).toFragment
     end Builder
@@ -110,7 +110,7 @@ object Fragment:
         frame: kyo.Frame
     ):
         def apply[D <: AnyNamedTuple](
-            build: SelectionBuilder[Origin, Empty] => SelectionBuilder[Origin, D]
+            build: SelectionBuilder.Fields[Origin, Empty] => SelectionBuilder.Fields[Origin, D]
         ): EntityFragment[Origin, D] =
             val selection = build(SelectionBuilder.empty[Origin])
             EntityFragment(
@@ -133,7 +133,7 @@ object Fragment:
 
     final class EmbeddedBuilder[Origin](using origin: TypeName[Origin], frame: kyo.Frame):
         def apply[D <: AnyNamedTuple](
-            build: SelectionBuilder[Origin, Empty] => SelectionBuilder[Origin, D]
+            build: SelectionBuilder.Fields[Origin, Empty] => SelectionBuilder.Fields[Origin, D]
         ): EmbeddedFragment[Origin, D] =
             EmbeddedFragment(
                 fragmentName = frame.className,
