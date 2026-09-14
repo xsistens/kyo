@@ -27,25 +27,25 @@ class UnionSelectionSpec extends kyo.test.Test[Any]:
     sealed trait PlayableItem
 
     object Track:
-        def name: SelectionBuilder[Track, (name: String)] =
+        def name: SelectionBuilder.Deferrable[Track, (name: String)] =
             SelectionBuilder.scalar("name", CompiledNamedType("String").notNull, ScalarCodec.string)
-        def durationMs: SelectionBuilder[Track, (durationMs: Int)] =
+        def durationMs: SelectionBuilder.Deferrable[Track, (durationMs: Int)] =
             SelectionBuilder.scalar("durationMs", CompiledNamedType("Int").notNull, ScalarCodec.int)
     end Track
 
     object Episode:
-        def name: SelectionBuilder[Episode, (name: String)] =
+        def name: SelectionBuilder.Deferrable[Episode, (name: String)] =
             SelectionBuilder.scalar("name", CompiledNamedType("String").notNull, ScalarCodec.string)
 
     object PlayableItem:
-        def onTrack[A](sel: SelectionBuilder[Track, A]): SelectionBuilder[PlayableItem, (onTrack: Maybe[A])] =
+        def onTrack[A](sel: SelectionBuilder[Track, A]): SelectionBuilder.Fields[PlayableItem, (onTrack: Maybe[A])] =
             SelectionBuilder.onType("Track", sel)
-        def onEpisode[A](sel: SelectionBuilder[Episode, A]): SelectionBuilder[PlayableItem, (onEpisode: Maybe[A])] =
+        def onEpisode[A](sel: SelectionBuilder[Episode, A]): SelectionBuilder.Fields[PlayableItem, (onEpisode: Maybe[A])] =
             SelectionBuilder.onType("Episode", sel)
     end PlayableItem
 
     object Queries:
-        def item[A](sel: SelectionBuilder[PlayableItem, A]): SelectionBuilder[RootQuery, (item: Maybe[A])] =
+        def item[A](sel: SelectionBuilder[PlayableItem, A]): SelectionBuilder.Deferrable[RootQuery, (item: Maybe[A])] =
             SelectionBuilder.obj(
                 "item",
                 CompiledNamedType("PlayableItem"),

@@ -61,7 +61,7 @@ class ClientFieldEmissionSpec extends kyo.test.Test[Any]:
             val country = sourceText(ApolloClientWriter.writeSelectors(schema, cfg), "Country.scala")
             assert(
                 country.contains(
-                    "def isFavorite: SelectionBuilder[Country, scala.NamedTuple.Concat[Acc, (isFavorite: Boolean)]]"
+                    "def isFavorite: SelectionBuilder.Fields[Country, scala.NamedTuple.Concat[Acc, (isFavorite: Boolean)]]"
                 ),
                 country
             )

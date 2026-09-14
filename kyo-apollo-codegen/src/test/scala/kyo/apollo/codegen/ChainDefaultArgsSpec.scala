@@ -54,7 +54,7 @@ class ChainDefaultArgsSpec extends kyo.test.Test[Any]:
         "a no-arg field keeps the direct accessor (no chain class)" in {
             val src = albumSrc
             assert(!src.contains("`name$chain`"), src)
-            assert(src.contains("def name: SelectionBuilder[Album"), src)
+            assert(src.contains("def name: SelectionBuilder.Deferrable[Album"), src)
         }
 
         "generated selectors speak kyo types and import them (never Option/List/None/Nil)" in {

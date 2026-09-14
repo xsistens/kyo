@@ -11,6 +11,7 @@ import scala.NamedTuple.DropNames
 import scala.NamedTuple.Empty
 import scala.NamedTuple.NamedTuple
 import scala.NamedTuple.Names
+import scala.annotation.implicitNotFound
 import scala.collection.immutable.VectorMap
 
 /** A type-safe, composable GraphQL selection, rooted in the object type `Origin`
@@ -29,8 +30,16 @@ import scala.collection.immutable.VectorMap
   *     has no instances and no runtime footprint; it only stops a `Country`
   *     selector from being combined into a `Continent` selection.
   *   - `A` is the selection's result type — a named tuple for the composable
-  *     ([[SelectionBuilder.Tuples]]) selectors, or an arbitrary type once projected
+  *     ([[SelectionBuilder.Fields]]) selectors, or an arbitrary type once projected
   *     with `map`/`mapInto`.
+  *
+  * What a selection can do is its type, not a check at run time:
+  *   - only [[SelectionBuilder.Fields]] combine with `~`;
+  *   - only [[SelectionBuilder.Deferrable]] — a selection whose last-added operand
+  *     is a single field — take `.deferred` and `.streamed`, and `.streamed` also
+  *     needs that field to be a list.
+  *
+  * A misuse is therefore a compile error at the call site.
   *
   * The builder carries a **bidirectional** codec (both `decode` and `encode`),
   * because the runtime uses the operation's data codec to normalize into *and*
@@ -92,27 +101,15 @@ object SelectionBuilder:
                 Json.JArr(value.asInstanceOf[Chunk[Any]].map(inner.encode(_, child)))
     end Nesting
 
-    /** A named-tuple-shaped selection: the composable form. Only these support `~`
-      * (via the extension below) and only these are combined by [[Combine]].
+    /** A named-tuple-shaped selection: the composable form. Only these combine with
+      * `~` (the extension below). The runtime tuple carries no names, so every node
+      * below takes the named tuple it decodes to as a type argument its constructor
+      * or combinator pins.
       */
-    sealed trait Tuples[Origin, A <: AnyNamedTuple] extends SelectionBuilder[Origin, A]:
+    sealed trait Fields[Origin, A <: AnyNamedTuple] extends SelectionBuilder[Origin, A]:
         private[api] def arity: Int
         private[api] def decodeRaw(row: Map[String, Json]): Tuple
         private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)]
-
-        /** Wrap this selection's LAST-added field in an anonymous `@defer` group,
-          * auto-labelled by that field's response name — the runtime of `.deferred`.
-          * In a chain (`~` is left-associative) the last field is the outer
-          * `Combine`'s right operand, always arity 1.
-          */
-        private[api] def deferLast: Tuples[Origin, ? <: AnyNamedTuple]
-
-        /** Mark this selection's LAST-added field with `@stream`, auto-labelled by that
-          * field's response name — the runtime of `.streamed`. Unlike [[deferLast]],
-          * the result type is unchanged (`@stream` grows a `Chunk[T]` in place, no
-          * wrapper), so the return type stays `Tuples[Origin, A]`.
-          */
-        private[api] def streamLast(initialCount: Int, condition: Maybe[String]): Tuples[Origin, A]
 
         final def decode(json: Json): A = json match
             case Json.JObj(row) => decodeRaw(row).asInstanceOf[A]
@@ -120,7 +117,39 @@ object SelectionBuilder:
 
         final def encode(value: A): Json =
             Json.JObj(VectorMap.from(encodeRaw(value.asInstanceOf[Tuple])))
-    end Tuples
+    end Fields
+
+    /** A selection whose LAST-added operand is a single field — the operand
+      * `.deferred` and `.streamed` act on. A field selector is one; `a ~ b` is one
+      * exactly when `b` is. The empty selection, a `@defer` group, an inline-fragment
+      * branch, a fragment spread and a `@client` field are [[Fields]] only.
+      */
+    sealed trait Deferrable[Origin, A <: AnyNamedTuple] extends Fields[Origin, A]:
+
+        /** Wrap the last-added field in an anonymous `@defer` group, auto-labelled by
+          * its response name — the runtime of `.deferred`, which pins `R` to
+          * `DeferLast[A]`. In a chain (`~` is left-associative) the last field is the
+          * outer combination's right operand, always arity 1.
+          */
+        private[api] def deferLast[R <: AnyNamedTuple]: Fields[Origin, R]
+
+        /** Mark the last-added field with `@stream`, auto-labelled by its response
+          * name — the runtime of `.streamed`. The result type is unchanged (`@stream`
+          * grows a `Chunk[T]` in place), and the last operand is still that field.
+          */
+        private[api] def streamLast(initialCount: Int, condition: Maybe[String]): Deferrable[Origin, A]
+    end Deferrable
+
+    /** Evidence that the last element of the named tuple `A` is a list (`Chunk[T]`,
+      * nullable or not) — what `.streamed` requires, since `@stream` applies to list
+      * fields only.
+      */
+    @implicitNotFound("`.streamed` applies to a list field, but the last field of ${A} is not a list")
+    final class EndsInList[A <: AnyNamedTuple] private ()
+
+    object EndsInList:
+        given [A <: AnyNamedTuple](using Tuple.Last[DropNames[A]] <:< (Chunk[?] | Maybe[Chunk[?]])): EndsInList[A] =
+            new EndsInList[A]
 
     /** A single selected field: its compiled metadata + arguments + a value codec. */
     final private class Field[Origin, A <: AnyNamedTuple](
@@ -129,13 +158,13 @@ object SelectionBuilder:
         childArgs: Chunk[Arg],
         decodeValue: Json => Any,
         encodeValue: Any => Json
-    ) extends Tuples[Origin, A]:
+    ) extends Deferrable[Origin, A]:
         private[api] def arity: Int              = 1
         def selections: Chunk[CompiledSelection] = Chunk(compiled)
         private[api] def argEntries: Chunk[Arg]  = ownArgs ++ childArgs
-        private[api] def deferLast: Tuples[Origin, ? <: AnyNamedTuple] =
-            Deferred(compiled.responseName, Absent, this, single = true)
-        private[api] def streamLast(initialCount: Int, condition: Maybe[String]): Tuples[Origin, A] =
+        private[api] def deferLast[R <: AnyNamedTuple]: Fields[Origin, R] =
+            Deferred[Origin, R](compiled.responseName, Absent, this, single = true)
+        private[api] def streamLast(initialCount: Int, condition: Maybe[String]): Deferrable[Origin, A] =
             Field[Origin, A](
                 compiled.copy(stream =
                     Present(StreamDirective(compiled.responseName, initialCount, condition))
@@ -151,50 +180,53 @@ object SelectionBuilder:
             Chunk(compiled.responseName -> encodeValue(value.productElement(0)))
     end Field
 
-    /** Two selections combined; splits the tuple by left arity when encoding. */
-    final private class Combine[Origin, A <: AnyNamedTuple, B <: AnyNamedTuple](
-        left: Tuples[Origin, A],
-        right: Tuples[Origin, B]
-    ) extends Tuples[Origin, Concat[A, B]]:
+    /** Two selections combined; splits the tuple by left arity when encoding. `R` is
+      * the named tuple the combinator pins (`Concat` of the operands' for `~`).
+      */
+    sealed abstract private class Pair[Origin, R <: AnyNamedTuple](
+        left: Fields[Origin, ? <: AnyNamedTuple],
+        right: Fields[Origin, ? <: AnyNamedTuple]
+    ) extends Fields[Origin, R]:
         private[api] def arity: Int              = left.arity + right.arity
         def selections: Chunk[CompiledSelection] = left.selections ++ right.selections
         private[api] def argEntries: Chunk[Arg]  = left.argEntries ++ right.argEntries
-        // Defer only the last-added field: recurse into the right operand, leaving
-        // `left` untouched. The `B` cast is erased-safe (runtime tuples carry no names).
-        private[api] def deferLast: Tuples[Origin, ? <: AnyNamedTuple] =
-            Combine(left, right.deferLast.asInstanceOf[Tuples[Origin, B]])
-        // Stream only the last-added field: recurse into the right operand, leave
-        // `left` untouched. Type-preserving, so the `Combine` type is unchanged.
-        private[api] def streamLast(
-            initialCount: Int,
-            condition: Maybe[String]
-        ): Tuples[Origin, Concat[A, B]] =
-            Combine(left, right.streamLast(initialCount, condition))
         private[api] def decodeRaw(row: Map[String, Json]): Tuple =
             left.decodeRaw(row) ++ right.decodeRaw(row)
         private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)] =
             val (l, r) = value.toArray.splitAt(left.arity)
             left.encodeRaw(Tuple.fromArray(l)) ++ right.encodeRaw(Tuple.fromArray(r))
-    end Combine
+    end Pair
+
+    /** A combination whose right operand is not a single field. */
+    final private class Combine[Origin, R <: AnyNamedTuple](
+        left: Fields[Origin, ? <: AnyNamedTuple],
+        right: Fields[Origin, ? <: AnyNamedTuple]
+    ) extends Pair[Origin, R](left, right)
+
+    /** A combination whose right operand ends in a single field, so `.deferred` and
+      * `.streamed` recurse into it and leave `left` untouched.
+      */
+    final private class CombineDeferrable[Origin, R <: AnyNamedTuple](
+        left: Fields[Origin, ? <: AnyNamedTuple],
+        right: Deferrable[Origin, ? <: AnyNamedTuple]
+    ) extends Pair[Origin, R](left, right) with Deferrable[Origin, R]:
+        private[api] def deferLast[R2 <: AnyNamedTuple]: Fields[Origin, R2] =
+            Combine[Origin, R2](left, right.deferLast[AnyNamedTuple])
+        private[api] def streamLast(initialCount: Int, condition: Maybe[String]): Deferrable[Origin, R] =
+            CombineDeferrable[Origin, R](left, right.streamLast(initialCount, condition))
+    end CombineDeferrable
 
     /** The empty selection: the neutral starting point of a chainable selection
       * (`Country.select.code.name`). Selects no fields (arity 0), so combining it
       * with `~` reduces away — `Concat[Empty, B] =:= B` at the type level and
       * `EmptyTuple ++ row =:= row` at runtime — leaving exactly the chained field.
       */
-    final private class EmptySel[Origin] extends Tuples[Origin, Empty]:
+    final private class EmptySel[Origin] extends Fields[Origin, Empty]:
         private[api] def arity: Int                                     = 0
         def selections: Chunk[CompiledSelection]                        = Chunk.empty
         private[api] def argEntries: Chunk[Arg]                         = Chunk.empty
         private[api] def decodeRaw(row: Map[String, Json]): Tuple       = EmptyTuple
         private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)] = Chunk.empty
-        private[api] def deferLast: Tuples[Origin, ? <: AnyNamedTuple] =
-            throw IllegalStateException("`.deferred` requires at least one selected field to defer")
-        private[api] def streamLast(
-            initialCount: Int,
-            condition: Maybe[String]
-        ): Tuples[Origin, Empty] =
-            throw IllegalStateException("`.streamed` requires a selected list field to stream")
     end EmptySel
 
     /** A `@defer`ed inline group. Contributes its child's fields to the *parent*
@@ -206,16 +238,13 @@ object SelectionBuilder:
       * field's response name for `.deferred`, explicit for a `defer` group). `R` is
       * the 1-ary named tuple the caller ascribes, e.g. `(details: Maybe[S])`.
       */
-    final private class Deferred[Origin, S <: AnyNamedTuple, R <: AnyNamedTuple](
+    final private class Deferred[Origin, R <: AnyNamedTuple](
         label: String,
         condition: Maybe[String],
-        child: Tuples[Origin, S],
+        child: Fields[Origin, ? <: AnyNamedTuple],
         single: Boolean
-    ) extends Tuples[Origin, R]:
-        private[api] def arity: Int                                    = 1
-        private[api] def deferLast: Tuples[Origin, ? <: AnyNamedTuple] = this
-        private[api] def streamLast(initialCount: Int, condition: Maybe[String]): Tuples[Origin, R] =
-            throw IllegalStateException("`.streamed` cannot be applied to a `@defer` group")
+    ) extends Fields[Origin, R]:
+        private[api] def arity: Int = 1
         def selections: Chunk[CompiledSelection] =
             Chunk(
                 CompiledFragment("", Chunk.empty, child.selections, defer = Present(DeferDirective(label, condition)))
@@ -321,7 +350,7 @@ object SelectionBuilder:
         fieldType: CompiledType,
         codec: ScalarCodec[V],
         arguments: Chunk[Arg] = Chunk.empty
-    ): SelectionBuilder[Origin, R] =
+    ): Deferrable[Origin, R] =
         Field[Origin, R](
             CompiledField(name = name, fieldType = fieldType, arguments = bind(arguments)),
             arguments,
@@ -340,7 +369,7 @@ object SelectionBuilder:
         arguments: Chunk[Arg],
         child: SelectionBuilder[?, A],
         nesting: Nesting
-    ): SelectionBuilder[Origin, R] =
+    ): Deferrable[Origin, R] =
         val typeName = fieldType.leafType.name
         Field[Origin, R](
             CompiledField(
@@ -365,6 +394,8 @@ object SelectionBuilder:
       * (blob) or a composite object tree (`__typename` + fields) that normalizes;
       * `codec` is the whole-value codec (which already handles `Maybe`/`Chunk`
       * wrapping). `R` is the 1-ary named tuple the caller ascribes, e.g. `(count: Int)`.
+      * Not [[Deferrable]]: the document prunes a `@client` field, so deferring it
+      * alone would print an empty `@defer` group.
       */
     def clientField[Origin, R <: AnyNamedTuple, V](
         name: String,
@@ -372,7 +403,7 @@ object SelectionBuilder:
         selections: Chunk[CompiledSelection],
         codec: ScalarCodec[V],
         default: V
-    ): SelectionBuilder[Origin, R] =
+    ): Fields[Origin, R] =
         Field[Origin, R](
             CompiledField(name = name, fieldType = fieldType, selections = selections, client = true),
             Chunk.empty,
@@ -398,8 +429,8 @@ object SelectionBuilder:
     def onType[Origin, R <: AnyNamedTuple, A](
         typeName: String,
         child: SelectionBuilder[?, A]
-    ): SelectionBuilder[Origin, R] =
-        new Tuples[Origin, R]:
+    ): Fields[Origin, R] =
+        new Fields[Origin, R]:
             private[api] def arity: Int = 1
             def selections: Chunk[CompiledSelection] =
                 Chunk(CompiledFragment(typeName, Chunk(typeName), child.selections))
@@ -417,14 +448,6 @@ object SelectionBuilder:
                             // A non-object projection cannot be spliced back into the
                             // parent row; the branch's fields simply stay absent.
                             case _ => Chunk.empty
-            private[api] def deferLast: Tuples[Origin, ? <: AnyNamedTuple] =
-                throw IllegalStateException(
-                    "`.deferred` cannot be applied to an inline-fragment branch"
-                )
-            private[api] def streamLast(initialCount: Int, condition: Maybe[String]): Tuples[Origin, R] =
-                throw IllegalStateException(
-                    "`.streamed` cannot be applied to an inline-fragment branch"
-                )
 
     /** Project a selection's result to `B`, reusing its wire selection/arguments. */
     private[api] def project[Origin, B](
@@ -447,8 +470,8 @@ object SelectionBuilder:
         argsFrom: SelectionBuilder[?, ?],
         decodeRow: Map[String, Json] => Any,
         encodeValue: Any => Chunk[(String, Json)]
-    ): SelectionBuilder[Origin, R] =
-        new Tuples[Origin, R]:
+    ): Fields[Origin, R] =
+        new Fields[Origin, R]:
             private[api] def arity: Int              = 1
             def selections: Chunk[CompiledSelection] = compiled
             private[api] def argEntries: Chunk[Arg]  = argsFrom.argEntries
@@ -456,56 +479,67 @@ object SelectionBuilder:
                 Tuple1(decodeRow(row))
             private[api] def encodeRaw(value: Tuple): Chunk[(String, Json)] =
                 encodeValue(value.productElement(0))
-            private[api] def deferLast: Tuples[Origin, ? <: AnyNamedTuple] =
-                throw IllegalStateException("`.deferred` cannot be applied to a fragment spread")
-            private[api] def streamLast(initialCount: Int, condition: Maybe[String]): Tuples[Origin, R] =
-                throw IllegalStateException("`.streamed` cannot be applied to a fragment spread")
 
     /** The empty selection for `Origin`: selects nothing, and is the neutral
-      * starting point a chainable selection folds fields onto — the generated
-      * `Country.select` returns this, so `Country.select.code.name` is
-      * `SelectionBuilder.empty ~ Country.code ~ Country.name`.
+      * starting point a chainable selection folds fields onto — the lambda form
+      * `_.code.name` of a generated selector is applied to it, so it reads
+      * `SelectionBuilder.empty ~ Country.code ~ Country.name`. It has no field to
+      * defer or stream.
       */
-    def empty[Origin]: SelectionBuilder[Origin, Empty] = EmptySel()
+    def empty[Origin]: Fields[Origin, Empty] = EmptySel()
 
-    /** Combine two named-tuple selections (backs the `~` extension). */
+    /** Combine two named-tuple selections (backs `~` with a right operand that is not a single field). */
     private[api] def combine[Origin, A <: AnyNamedTuple, B <: AnyNamedTuple](
-        a: SelectionBuilder[Origin, A],
-        b: SelectionBuilder[Origin, B]
-    ): SelectionBuilder[Origin, Concat[A, B]] =
-        Combine(a.asInstanceOf[Tuples[Origin, A]], b.asInstanceOf[Tuples[Origin, B]])
+        a: Fields[Origin, A],
+        b: Fields[Origin, B]
+    ): Fields[Origin, Concat[A, B]] =
+        Combine[Origin, Concat[A, B]](a, b)
+
+    /** Combine two named-tuple selections whose right operand ends in a single field (backs `~`). */
+    private[api] def combineDeferrable[Origin, A <: AnyNamedTuple, B <: AnyNamedTuple](
+        a: Fields[Origin, A],
+        b: Deferrable[Origin, B]
+    ): Deferrable[Origin, Concat[A, B]] =
+        CombineDeferrable[Origin, Concat[A, B]](a, b)
 
     /** Wrap a child selection in a `@defer` group (backs the `defer` function). */
     private[api] def deferGroup[Origin, S <: AnyNamedTuple, R <: AnyNamedTuple](
         label: String,
         condition: Maybe[String],
-        child: SelectionBuilder[Origin, S]
-    ): SelectionBuilder[Origin, R] =
-        Deferred(label, condition, child.asInstanceOf[Tuples[Origin, S]], single = false)
+        child: Fields[Origin, S]
+    ): Fields[Origin, R] =
+        Deferred[Origin, R](label, condition, child, single = false)
 end SelectionBuilder
 
 /** Combine two selections on the same `Origin`, concatenating their result named
   * tuples: `Country.name ~ Country.capital` is
-  * `SelectionBuilder[Country, (name: String, capital: Maybe[String])]`.
+  * `SelectionBuilder.Deferrable[Country, (name: String, capital: Maybe[String])]`.
+  * The combination is [[SelectionBuilder.Deferrable]] exactly when `that` is.
   */
-extension [Origin, A <: AnyNamedTuple](sb: SelectionBuilder[Origin, A])
+extension [Origin, A <: AnyNamedTuple](sb: SelectionBuilder.Fields[Origin, A])
     infix def ~[B <: AnyNamedTuple](
-        that: SelectionBuilder[Origin, B]
-    ): SelectionBuilder[Origin, Concat[A, B]] =
+        that: SelectionBuilder.Fields[Origin, B]
+    ): SelectionBuilder.Fields[Origin, Concat[A, B]] =
         SelectionBuilder.combine(sb, that)
+
+    infix def ~[B <: AnyNamedTuple](
+        that: SelectionBuilder.Deferrable[Origin, B]
+    ): SelectionBuilder.Deferrable[Origin, Concat[A, B]] =
+        SelectionBuilder.combineDeferrable(sb, that)
 end extension
 
 /** Defer an explicitly-labelled group of sibling fields — the `@defer` form for an
   * *anonymous* group with no intrinsic name. `defer("details", Country.capital ~
   * Country.currency)` exposes the group as a single `details: Maybe[(…)]` element,
   * `Absent` until the deferred payload arrives. For a single field, prefer
-  * `.deferred` (no label — the field's own name is reused).
+  * `.deferred` (no label — the field's own name is reused). A group is not a field:
+  * it neither defers again nor streams.
   */
 def defer[Origin, S <: AnyNamedTuple, L <: String & Singleton](
     label: L,
-    child: SelectionBuilder[Origin, S],
+    child: SelectionBuilder.Fields[Origin, S],
     `if`: Maybe[String] = Absent
-): SelectionBuilder[Origin, NamedTuple[L *: EmptyTuple, Maybe[S] *: EmptyTuple]] =
+): SelectionBuilder.Fields[Origin, NamedTuple[L *: EmptyTuple, Maybe[S] *: EmptyTuple]] =
     SelectionBuilder.deferGroup(label, `if`, child)
 
 /** A named-tuple selection with its LAST element's value wrapped in `Maybe` — the
@@ -514,31 +548,29 @@ def defer[Origin, S <: AnyNamedTuple, L <: String & Singleton](
 type DeferLast[A <: AnyNamedTuple] =
     NamedTuple[Names[A], Tuple.Append[Tuple.Init[DropNames[A]], Maybe[Tuple.Last[DropNames[A]]]]]
 
-/** Defer the last-added field of a chained/combined selection: its value becomes
-  * `Maybe[…]` (absent until the deferred payload arrives) with its name unchanged,
-  * and an auto-derived `@defer(label:)` — the field's response name — rides the
-  * document. No string needed. Chainable: `_.a.b.deferred.c.deferred` defers `b`
-  * and `c`; standalone via `~`: `Country.code ~ Country.capital.deferred`. Applies
-  * to field/chain selections (not `map`/`mapInto` projections).
-  */
-extension [Origin, A <: AnyNamedTuple](sb: SelectionBuilder[Origin, A])
-    def deferred: SelectionBuilder[Origin, DeferLast[A]] =
-        sb.asInstanceOf[SelectionBuilder.Tuples[Origin, A]]
-            .deferLast
-            .asInstanceOf[SelectionBuilder[Origin, DeferLast[A]]]
-end extension
+extension [Origin, A <: AnyNamedTuple](sb: SelectionBuilder.Deferrable[Origin, A])
+    /** Defer the last-added field of a chained/combined selection: its value becomes
+      * `Maybe[…]` (absent until the deferred payload arrives) with its name unchanged,
+      * and an auto-derived `@defer(label:)` — the field's response name — rides the
+      * document. No string needed. Chainable: `_.a.b.deferred.c.deferred` defers `b`
+      * and `c`; standalone via `~`: `Country.code ~ Country.capital.deferred`. The
+      * result's last operand is a `@defer` group, so it does not defer again.
+      */
+    def deferred: SelectionBuilder.Fields[Origin, DeferLast[A]] =
+        sb.deferLast[DeferLast[A]]
 
-/** Mark the last-added *list* field of a selection with `@stream(initialCount:)`:
-  * the server delivers the first `initialCount` items in the initial response and
-  * appends the rest over `multipart/mixed`, so the list grows across emissions. The
-  * result type is UNCHANGED (`Chunk[T]` stays `Chunk[T]` — no wrapper, unlike
-  * `.deferred`); the label rides the document auto-derived from the field's response
-  * name. No string needed. `Country.code ~ Continent.countries(_.name).streamed(2)`.
-  * Applies to field/chain selections (not `map`/`mapInto` projections).
-  */
-extension [Origin, A <: AnyNamedTuple](sb: SelectionBuilder[Origin, A])
-    def streamed(initialCount: Int, `if`: Maybe[String] = Absent): SelectionBuilder[Origin, A] =
-        sb.asInstanceOf[SelectionBuilder.Tuples[Origin, A]].streamLast(initialCount, `if`)
+    /** Mark the last-added *list* field of a selection with `@stream(initialCount:)`:
+      * the server delivers the first `initialCount` items in the initial response and
+      * appends the rest over `multipart/mixed`, so the list grows across emissions. The
+      * result type is UNCHANGED (`Chunk[T]` stays `Chunk[T]` — no wrapper, unlike
+      * `.deferred`); the label rides the document auto-derived from the field's response
+      * name. No string needed. `Country.code ~ Continent.countries(_.name).streamed(2)`.
+      */
+    def streamed(initialCount: Int, `if`: Maybe[String] = Absent)(using
+        SelectionBuilder.EndsInList[A]
+    ): SelectionBuilder.Deferrable[Origin, A] =
+        sb.streamLast(initialCount, `if`)
+end extension
 
 /** Phantom `Origin` markers for the three operation roots. Universal (not
   * schema-specific), so they live in `core`; generated `Queries`/`Mutations`/

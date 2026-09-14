@@ -368,19 +368,19 @@ object ApolloClientWriter:
             val name = u.name
             val branches = u.memberTypes.map { member =>
                 val label = s"on$member"
-                s"""def $label[A](sel: SelectionBuilder[$member, A]): SelectionBuilder[$name, ($label: Maybe[A])] =
+                s"""def $label[A](sel: SelectionBuilder[$member, A]): SelectionBuilder.Fields[$name, ($label: Maybe[A])] =
            |  SelectionBuilder.onType("$member", sel)
            |
-           |def $label[A](build: SelectionBuilder[$member, scala.NamedTuple.Empty] => SelectionBuilder[$member, A]): SelectionBuilder[$name, ($label: Maybe[A])] =
+           |def $label[A](build: SelectionBuilder.Fields[$member, scala.NamedTuple.Empty] => SelectionBuilder[$member, A]): SelectionBuilder.Fields[$name, ($label: Maybe[A])] =
            |  SelectionBuilder.onType("$member", build(SelectionBuilder.empty))""".stripMargin
             }.mkString("\n\n")
             val chainAccessors = u.memberTypes.map { member =>
                 val label = s"on$member"
-                s"""def $label[B](sub: SelectionBuilder[$member, scala.NamedTuple.Empty] => SelectionBuilder[$member, B]): SelectionBuilder[$name, scala.NamedTuple.Concat[Acc, ($label: Maybe[B])]] =
+                s"""def $label[B](sub: SelectionBuilder.Fields[$member, scala.NamedTuple.Empty] => SelectionBuilder[$member, B]): SelectionBuilder.Fields[$name, scala.NamedTuple.Concat[Acc, ($label: Maybe[B])]] =
            |  sb ~ $name.$label(sub(SelectionBuilder.empty))""".stripMargin
             }.mkString("\n")
             val chainBlock =
-                s"""extension [Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder[$name, Acc])
+                s"""extension [Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder.Fields[$name, Acc])
            |${indent(chainAccessors, 2)}""".stripMargin
             val body = s"given TypeName[$name] = TypeName(\"$name\")\n\n$branches\n\n$chainBlock"
             val contents =
@@ -484,8 +484,9 @@ object ApolloClientWriter:
         end renderSelectorObject
 
         /** A single selector method: a scalar leaf field becomes a `def` returning a
-          * scalar `SelectionBuilder`; an object field takes a nested selection and
-          * wraps its result named tuple per the field's list/nullable structure.
+          * `SelectionBuilder.Deferrable`; an object field takes a nested selection and
+          * wraps its result named tuple per the field's list/nullable structure. Both
+          * are single fields, so `.deferred`/`.streamed` apply to them.
           */
         private def selectorMethod(originName: String, field: FieldSpec): String =
             val label    = accessorLabel(field.name)
@@ -509,7 +510,7 @@ object ApolloClientWriter:
                 // selection (whose result is not a named tuple) still nests here.
                 val argClause = if field.args.isEmpty then "" else s"(${argParams.mkString(", ")})"
                 val returnType =
-                    s"SelectionBuilder[$originName, ($label: ${wrappedTypeExpr(field.ofType, "A")})]"
+                    s"SelectionBuilder.Deferrable[$originName, ($label: ${wrappedTypeExpr(field.ofType, "A")})]"
                 val compiled = compiledTypeExpr(field.ofType)
                 val nesting  = nestingExpr(field.ofType)
                 // Scala forbids two overloads that BOTH declare default arguments, so the
@@ -536,14 +537,14 @@ object ApolloClientWriter:
              |  // Lambda form: folds fields onto the empty selection (`_.code.name`). A
              |  // `SelectionBuilder` value is never a `Function1`, so overload resolution
              |  // picks value vs. lambda unambiguously.
-             |  def apply[A](build: SelectionBuilder[$leafName, scala.NamedTuple.Empty] => SelectionBuilder[$leafName, A]): $returnType =
+             |  def apply[A](build: SelectionBuilder.Fields[$leafName, scala.NamedTuple.Empty] => SelectionBuilder[$leafName, A]): $returnType =
              |    SelectionBuilder.obj("${field.name}", $compiled, selArgs, build(SelectionBuilder.empty), $nesting)""".stripMargin
                 val outerDef =
                     s"def $label$argClause: $selClass =\n  new $selClass($argList)"
                 s"$selDef\n\n$outerDef"
             else
                 val paramLists = if field.args.isEmpty then "" else s"(${argParams.mkString(", ")})"
-                val returnType = s"SelectionBuilder[$originName, ($label: ${scalaTypeOf(field.ofType)})]"
+                val returnType = s"SelectionBuilder.Deferrable[$originName, ($label: ${scalaTypeOf(field.ofType)})]"
                 val argArg     = if field.args.isEmpty then "" else s", $argList"
                 val body =
                     s"""SelectionBuilder.scalar("${field.name}", ${compiledTypeExpr(
@@ -554,7 +555,7 @@ object ApolloClientWriter:
         end selectorMethod
 
         /** The chainable-selection block appended to a non-root selector object: an
-          * `extension` on `SelectionBuilder[Origin, Acc]` carrying one accessor per
+          * `extension` on `SelectionBuilder.Fields[Origin, Acc]` carrying one accessor per
           * field. Each accessor folds its field onto the accumulated selection via
           * `~`, so a chain reads a field's siblings off the first field —
           * `Country.code.name.capital` (a factorable value, same type as
@@ -571,7 +572,7 @@ object ApolloClientWriter:
             val classes   = parts.flatMap(_._1)
             val accessors = parts.map(_._2).mkString("\n")
             val ext =
-                s"""extension [Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder[$originName, Acc])
+                s"""extension [Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder.Fields[$originName, Acc])
          |${indent(accessors, 2)}""".stripMargin
             if classes.isEmpty then ext
             else classes.mkString("\n\n") + "\n\n" + ext
@@ -608,8 +609,8 @@ object ApolloClientWriter:
                     s"scala.NamedTuple.Concat[Acc, ($label: ${wrappedTypeExpr(field.ofType, "B")})]"
                 if hasDefaultedArgs then
                     val cls =
-                        s"""final class `$label$$chain`[Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder[$originName, Acc]):
-               |  def apply[B]$argClause(sub: SelectionBuilder[$leafName, scala.NamedTuple.Empty] => SelectionBuilder[$leafName, B]): SelectionBuilder[$originName, $chained] =
+                        s"""final class `$label$$chain`[Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder.Fields[$originName, Acc]):
+               |  def apply[B]$argClause(sub: SelectionBuilder.Fields[$leafName, scala.NamedTuple.Empty] => SelectionBuilder[$leafName, B]): SelectionBuilder.Deferrable[$originName, $chained] =
                |    sb ~ $originName.$label$argNames(sub(SelectionBuilder.empty))""".stripMargin
                     val acc =
                         s"""def $label: `$label$$chain`[Acc] =
@@ -617,7 +618,7 @@ object ApolloClientWriter:
                     (Some(cls), acc)
                 else
                     val acc =
-                        s"""def $label[B]$argClause(sub: SelectionBuilder[$leafName, scala.NamedTuple.Empty] => SelectionBuilder[$leafName, B]): SelectionBuilder[$originName, $chained] =
+                        s"""def $label[B]$argClause(sub: SelectionBuilder.Fields[$leafName, scala.NamedTuple.Empty] => SelectionBuilder[$leafName, B]): SelectionBuilder.Deferrable[$originName, $chained] =
                |  sb ~ $originName.$label$argNames(sub(SelectionBuilder.empty))""".stripMargin
                     (None, acc)
                 end if
@@ -625,8 +626,8 @@ object ApolloClientWriter:
                 val chained = s"scala.NamedTuple.Concat[Acc, ($label: ${scalaTypeOf(field.ofType)})]"
                 if hasDefaultedArgs then
                     val cls =
-                        s"""final class `$label$$chain`[Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder[$originName, Acc]):
-               |  def apply$argClause: SelectionBuilder[$originName, $chained] =
+                        s"""final class `$label$$chain`[Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder.Fields[$originName, Acc]):
+               |  def apply$argClause: SelectionBuilder.Deferrable[$originName, $chained] =
                |    sb ~ $originName.$label$argNames""".stripMargin
                     val acc =
                         s"""def $label: `$label$$chain`[Acc] =
@@ -634,7 +635,7 @@ object ApolloClientWriter:
                     (Some(cls), acc)
                 else
                     val acc =
-                        s"""def $label$argClause: SelectionBuilder[$originName, $chained] =
+                        s"""def $label$argClause: SelectionBuilder.Deferrable[$originName, $chained] =
                |  sb ~ $originName.$label$argNames""".stripMargin
                     (None, acc)
                 end if
@@ -699,12 +700,12 @@ object ApolloClientWriter:
                 val accessors = cfs
                     .map { decl =>
                         val label = accessorLabel(decl.name)
-                        s"""def $label: SelectionBuilder[$originName, scala.NamedTuple.Concat[Acc, ($label: ${decl.tpe})]] =
+                        s"""def $label: SelectionBuilder.Fields[$originName, scala.NamedTuple.Concat[Acc, ($label: ${decl.tpe})]] =
                |  sb.clientField(ClientFields.$gqlType.$label)""".stripMargin
                     }
                     .mkString("\n")
                 Some(
-                    s"""extension [Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder[$originName, Acc])
+                    s"""extension [Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder.Fields[$originName, Acc])
              |${indent(accessors, 2)}""".stripMargin
                 )
             end if

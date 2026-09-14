@@ -19,16 +19,16 @@ class StreamBuilderSpec extends kyo.test.Test[Any]:
     sealed trait Country
 
     object Country:
-        def name: SelectionBuilder[Country, (name: String)] =
+        def name: SelectionBuilder.Deferrable[Country, (name: String)] =
             SelectionBuilder.scalar("name", CompiledNamedType("String").notNull, ScalarCodec.string)
 
     object Queries:
-        def hello: SelectionBuilder[RootQuery, (hello: String)] =
+        def hello: SelectionBuilder.Deferrable[RootQuery, (hello: String)] =
             SelectionBuilder.scalar("hello", CompiledNamedType("String").notNull, ScalarCodec.string)
 
         def countries[A <: AnyNamedTuple](
             sel: SelectionBuilder[Country, A]
-        ): SelectionBuilder[RootQuery, (countries: Chunk[A])] =
+        ): SelectionBuilder.Deferrable[RootQuery, (countries: Chunk[A])] =
             SelectionBuilder.obj(
                 "countries",
                 CompiledNamedType("Country").notNull.list.notNull,
