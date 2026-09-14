@@ -3,6 +3,7 @@ package kyo.apollo.exception
 import kyo.Absent
 import kyo.Chunk
 import kyo.Frame
+import kyo.HttpHeaders
 import kyo.KyoException
 import kyo.Maybe
 import kyo.Present
@@ -10,7 +11,6 @@ import kyo.apollo.api.GraphQLError
 import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.cache.normalized.api.FieldKey
 import kyo.apollo.json.Json
-import kyo.apollo.network.HttpHeader
 
 /** Root of the Apollo error hierarchy, the one sealed module exception.
   *
@@ -64,7 +64,7 @@ final class ApolloNetworkException(
   */
 final class ApolloHttpException(
     val statusCode: Int,
-    val headers: List[HttpHeader],
+    val headers: HttpHeaders,
     message: String,
     cause: String | Throwable = ""
 )(using Frame) extends ApolloException(message, cause)

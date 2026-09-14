@@ -1,6 +1,6 @@
 package kyo.apollo.cache
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.ApolloClient
 import kyo.apollo.api.*
 import kyo.apollo.cache.normalized.*
@@ -65,9 +65,9 @@ class StoreUpdateSpec extends kyo.test.Test[Any]:
 
     final private class OkEngine extends kyo.apollo.network.http.HttpEngine:
         def execute(
-            request: kyo.apollo.network.http.HttpRequest
-        )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
-            kyo.apollo.network.http.HttpResponse(200, Nil, aliceBody)
+            request: kyo.apollo.network.http.HttpEngine.Request
+        )(using Frame): kyo.apollo.network.http.HttpEngine.Response < Async =
+            kyo.apollo.network.http.HttpEngine.response(HttpStatus.OK, aliceBody)
     end OkEngine
 
     private def cachedClient()(using Frame): ApolloClient < (Sync & Scope) =

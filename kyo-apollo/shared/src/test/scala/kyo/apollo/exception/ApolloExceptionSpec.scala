@@ -2,6 +2,7 @@ package kyo.apollo.exception
 
 import kyo.Absent
 import kyo.Chunk
+import kyo.HttpHeaders
 import kyo.KyoException
 import kyo.Present
 import kyo.apollo.api.CompiledField
@@ -10,7 +11,6 @@ import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.cache.normalized.api.FieldKey
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloResponse
-import kyo.apollo.network.HttpHeader
 import kyo.apollo.network.TestIds
 
 /** Tests the [[ApolloException]] hierarchy: every leaf is a `KyoException` (no stack
@@ -27,7 +27,7 @@ class ApolloExceptionSpec extends kyo.test.Test[Any]:
         "every leaf is a KyoException: no stack trace is captured" in {
             val leaves: List[ApolloException] = List(
                 ApolloNetworkException(),
-                ApolloHttpException(500, Nil, "boom"),
+                ApolloHttpException(500, HttpHeaders.empty, "boom"),
                 ApolloParseException(Json.JNull, "an object"),
                 ApolloWebSocketClosedException(1006),
                 ApolloGraphQLException(Chunk.empty),
@@ -50,7 +50,7 @@ class ApolloExceptionSpec extends kyo.test.Test[Any]:
         }
 
         "http exception: carries status code and response headers" in {
-            val headers = List(HttpHeader("Retry-After", "30"))
+            val headers = HttpHeaders.empty.add("Retry-After", "30")
             val ex = ApolloHttpException(
                 statusCode = 503,
                 headers = headers,
@@ -132,7 +132,7 @@ class ApolloExceptionSpec extends kyo.test.Test[Any]:
 
             "execute: network, HTTP status, parse, websocket close, GraphQL errors" in {
                 typeCheck("""val e: ApolloExecuteFailure = ApolloNetworkException()""")
-                typeCheck("""val e: ApolloExecuteFailure = ApolloHttpException(500, Nil, "boom")""")
+                typeCheck("""val e: ApolloExecuteFailure = ApolloHttpException(500, HttpHeaders.empty, "boom")""")
                 typeCheck("""val e: ApolloExecuteFailure = ApolloParseException(Json.JNull, "x")""")
                 typeCheck("""val e: ApolloExecuteFailure = ApolloWebSocketClosedException(1006)""")
                 typeCheck("""val e: ApolloExecuteFailure = ApolloGraphQLException(Chunk.empty)""")
@@ -147,7 +147,7 @@ class ApolloExceptionSpec extends kyo.test.Test[Any]:
 
             "the engine row is only 'no response received': an HTTP status or a parse failure is not on it" in {
                 typeCheck("""val e: HttpEngineFailure = ApolloNetworkException()""")
-                typeCheckFailure("""val e: HttpEngineFailure = ApolloHttpException(500, Nil, "boom")""")("HttpEngineFailure")
+                typeCheckFailure("""val e: HttpEngineFailure = ApolloHttpException(500, HttpHeaders.empty, "boom")""")("HttpEngineFailure")
                 typeCheckFailure("""val e: HttpEngineFailure = ApolloParseException(Json.JNull, "x")""")("HttpEngineFailure")
             }
 
@@ -181,7 +181,7 @@ class ApolloExceptionSpec extends kyo.test.Test[Any]:
             val id = TestIds.requestUuid
             val leaves: List[ApolloException] = List(
                 ApolloNetworkException(),
-                ApolloHttpException(500, Nil, "boom"),
+                ApolloHttpException(500, HttpHeaders.empty, "boom"),
                 ApolloParseException(Json.JNull, "an object"),
                 ApolloWebSocketClosedException(1006),
                 DefaultApolloException()
