@@ -16,8 +16,6 @@ import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.ApolloResponse
 import kyo.apollo.network.ExecutionContext
-import kyo.apollo.network.HttpHeader
-import kyo.apollo.network.HttpMethod
 import kyo.apollo.network.http.HttpEngine
 import kyo.apollo.network.http.HttpNetworkTransport
 import kyo.apollo.network.ws.GraphQLWsProtocol
@@ -121,7 +119,7 @@ final class ApolloClient private (
         call(subscription)
 
     private def call[D](operation: Operation[D]): ApolloCall[D] =
-        val builder = ApolloRequest.builder(operation).httpHeaders(config.httpHeaders.toList)
+        val builder = ApolloRequest.builder(operation).httpHeaders(config.httpHeaders)
         new ApolloCall(this, config.httpMethod.fold(builder)(builder.httpMethod))
 
     /** Run one execution of `request` through the full Apollo interceptor chain,
@@ -231,7 +229,7 @@ final class ApolloCall[D] private[apollo] (
         withRequest(_.addHttpHeader(name, value))
 
     /** Replace this call's headers wholesale (dropping the client defaults). */
-    def httpHeaders(headers: List[HttpHeader]): ApolloCall[D] =
+    def httpHeaders(headers: HttpHeaders): ApolloCall[D] =
         withRequest(_.httpHeaders(headers))
 
     /** Pin the HTTP method for this call, overriding the client default. */
@@ -303,7 +301,7 @@ object ApolloClient:
       */
     final case class Config(
         serverUrl: String,
-        httpHeaders: Chunk[HttpHeader] = Chunk.empty,
+        httpHeaders: HttpHeaders = HttpHeaders.empty,
         httpInterceptors: Chunk[HttpInterceptor] = Chunk.empty,
         interceptors: Chunk[ApolloInterceptor] = Chunk.empty,
         httpMethod: Maybe[HttpMethod] = Absent,
@@ -320,7 +318,7 @@ object ApolloClient:
 
         /** Append one default header applied to every request. */
         def addHttpHeader(name: String, value: String): Config =
-            copy(httpHeaders = httpHeaders.append(HttpHeader(name, value)))
+            copy(httpHeaders = httpHeaders.add(name, value))
 
         /** Append one HTTP-tier interceptor. */
         def addHttpInterceptor(interceptor: HttpInterceptor): Config =
@@ -337,7 +335,10 @@ object ApolloClient:
         def prependInterceptor(interceptor: ApolloInterceptor): Config =
             copy(interceptors = Chunk(interceptor).concat(interceptors))
 
-        /** Set the default HTTP method (`Get` or `Post`) for every operation. */
+        /** Set the default HTTP method for every operation: `HttpMethod.GET` puts the
+          * operation in the URL, any other method (`POST` is the default) carries it in
+          * the body.
+          */
         def httpMethod(method: HttpMethod): Config = copy(httpMethod = Present(method))
 
         /** Inject the wire engine — primarily for tests (a deterministic fake with

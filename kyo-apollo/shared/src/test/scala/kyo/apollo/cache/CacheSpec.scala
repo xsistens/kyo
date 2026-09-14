@@ -1,6 +1,6 @@
 package kyo.apollo.cache
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.ApolloClient
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.*
@@ -204,11 +204,11 @@ class CacheSpec extends kyo.test.Test[Any]:
     final private class CountingEngine(var status: Int = 200)
         extends kyo.apollo.network.http.HttpEngine:
         var calls = 0
-        def execute(request: kyo.apollo.network.http.HttpRequest)(using
+        def execute(request: kyo.apollo.network.http.HttpEngine.Request)(using
             Frame
-        ): kyo.apollo.network.http.HttpResponse < Async =
+        ): kyo.apollo.network.http.HttpEngine.Response < Async =
             calls += 1
-            kyo.apollo.network.http.HttpResponse(status, Nil, libraryBody)
+            kyo.apollo.network.http.HttpEngine.response(HttpStatus(status), libraryBody)
         end execute
     end CountingEngine
 

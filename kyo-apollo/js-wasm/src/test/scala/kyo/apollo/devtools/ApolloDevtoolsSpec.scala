@@ -1,6 +1,6 @@
 package kyo.apollo.devtools
 
-import kyo.{HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.ApolloClient
 import kyo.apollo.api.CompiledArgument
 import kyo.apollo.api.CompiledField
@@ -12,8 +12,6 @@ import kyo.apollo.cache.normalized.api.IdCacheKeyGenerator
 import kyo.apollo.cache.normalized.normalizedCache
 import kyo.apollo.json.Json
 import kyo.apollo.network.http.HttpEngine
-import kyo.apollo.network.http.HttpRequest
-import kyo.apollo.network.http.HttpResponse
 import scala.collection.immutable.VectorMap
 import scala.scalajs.js as sjs
 
@@ -52,8 +50,8 @@ class ApolloDevtoolsSpec extends kyo.test.Test[Any]:
         ApolloClient.Config("https://example.com/graphql").httpEngine(loginEngine)
 
     private val loginEngine: HttpEngine = new HttpEngine:
-        def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
-            HttpResponse(200, Nil, """{"data":{"login":{"ok":true,"user":{"__typename":"User","id":"1"}}}}""")
+        def execute(request: HttpEngine.Request)(using Frame): HttpEngine.Response < Async =
+            HttpEngine.response(HttpStatus.OK, """{"data":{"login":{"ok":true,"user":{"__typename":"User","id":"1"}}}}""")
 
     final case class LoginUser(id: String) derives Schema
     final case class LoginPayload(ok: Boolean, user: LoginUser) derives Schema

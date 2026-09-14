@@ -1,6 +1,6 @@
 package kyo.apollo.cache
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.api.*
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.CacheKey
