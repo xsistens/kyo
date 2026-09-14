@@ -82,7 +82,10 @@ class IncrementalAssemblerSpec extends kyo.test.Test[Any]:
             }
         }
 
-        "a final part with no data change emits nothing" in {
+        "a terminal part without a data change completes the delivery with the data last emitted" in {
+            // Without this response a consumer never sees `complete = true` and cannot end
+            // its loading state. The terminal part that does change the data completes with
+            // that one response instead ("complete flips only on the terminal part").
             val parts = Stream.init(
                 Seq(
                     part("""{"data":{"country":{"code":"US"}},"hasNext":true}"""),
@@ -90,8 +93,11 @@ class IncrementalAssemblerSpec extends kyo.test.Test[Any]:
                 )
             )
             StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q(), TestIds.requestUuid), parts)).map { responses =>
-                assert(responses.size == 1)
+                assert(responses.size == 2, s"the terminal part must emit a completing response: $responses")
                 assert(responses(0).data == Present(Data(Some(Loc("US", None)))))
+                assert(responses(0).complete == false)
+                assert(responses.last.complete == true)
+                assert(responses.last.data == responses(0).data)
             }
         }
 

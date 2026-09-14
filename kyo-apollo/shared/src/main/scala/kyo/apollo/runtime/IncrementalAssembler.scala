@@ -13,7 +13,10 @@ import kyo.apollo.network.http.MultipartPart
 
 /** Folds a stream of `multipart/mixed` incremental-delivery parts into a stream of
   * [[ApolloResponse]] — one per part that changes the data, each carrying the
-  * *accumulated* (progressively-fuller) response.
+  * *accumulated* (progressively-fuller) response. The part that ends the delivery
+  * (`hasNext: false` after `hasNext: true`) always yields exactly one response with
+  * `complete = true`: the one its change produces, or — when it changes nothing —
+  * the data last emitted, now complete.
   *
   * The initial part seeds `data`; each `@defer` patch is spliced at its `path`
   * into the retained JSON tree (both the `deferSpec=20220824` `incremental: [{data,
@@ -47,8 +50,9 @@ object IncrementalAssembler:
     private object Acc:
         val empty: Acc = Acc(Json.JObj(Map.empty), Chunk.empty, Map.empty, awaitingMore = false, failed = false)
 
-    /** One applied part: the next state and whether it changed anything worth a
-      * response, or the parse failure that ends the delivery.
+    /** One applied part: the next state and whether it is worth a response (it
+      * changed the data or errors, or it completes the delivery), or the parse
+      * failure that ends the delivery.
       */
     private type Applied = Result[ApolloParseException, (Acc, Boolean)]
 
@@ -106,7 +110,10 @@ object IncrementalAssembler:
                             }
                         case Some(other) => Result.fail(ApolloParseException(other, "an incremental array"))
                         case None        => applyPayload(announced, fields)
-                patched.map((next, changed) => withErrors(next, changed, fields.get("errors")))
+                // The part that ends the delivery is always worth a response: a terminal part
+                // that changes nothing still has to tell the consumer the data is complete.
+                val completes = acc.awaitingMore && !awaitingMore
+                patched.map((next, changed) => withErrors(next, changed || completes, fields.get("errors")))
             case MultipartPart.Payload(other) =>
                 Result.fail(ApolloParseException(other, "an incremental delivery payload object"))
 
