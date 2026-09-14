@@ -26,7 +26,7 @@ class CodegenRunnerSpec extends kyo.test.Test[Any]:
 
     private def parsedSchema = SchemaLoader.fromString(resource("schema.graphql"))
 
-    "CodegenRunner.generate / run / parseScalarMappings" - {
+    "CodegenRunner.generate / run / main" - {
 
         "generate emits shared schema types plus the inline selector layer" in {
             val sources   = CodegenRunner.generate(parsedSchema, codegenConfig)
@@ -84,14 +84,97 @@ class CodegenRunnerSpec extends kyo.test.Test[Any]:
             assert(Files.getLastModifiedTime(target) == firstModified)
         }
 
-        "parseScalarMappings parses entries and treats `-`/empty as none" in {
-            assert(CodegenRunner.parseScalarMappings("-") == Map.empty[String, String])
-            assert(CodegenRunner.parseScalarMappings("") == Map.empty[String, String])
-            assert(
-                CodegenRunner.parseScalarMappings("DateTime=java.time.Instant,URL=java.net.URI")
-                    == Map("DateTime" -> "java.time.Instant", "URL" -> "java.net.URI")
+        "unknown leaf types fail generation loudly" in {
+            val schema = SchemaLoader.fromString("type Query { mystery: Mystery }")
+            val e      = intercept[CodegenException](CodegenRunner.generate(schema, codegenConfig))
+            assert(e.getMessage.contains("Mystery"), e.getMessage)
+            assert(e.getMessage.contains("Query.mystery"), e.getMessage)
+        }
+
+        "named options write the generated sources" in {
+            val schemaFile = Files.createTempFile("schema", ".graphql")
+            Files.writeString(schemaFile, resource("schema.graphql"))
+            val outDir = Files.createTempDirectory("apollo-codegen-cli")
+            CodegenRunner.main(Array(
+                "--schema",
+                schemaFile.toString,
+                "--out",
+                outDir.toString,
+                "--package",
+                "cli.gen",
+                "--scalar",
+                "DateTime=java.time.Instant"
+            ))
+            val country = Files.readString(outDir.resolve("Country.scala"))
+            assert(country.startsWith("package cli.gen"), country)
+            assert(country.contains("Maybe[java.time.Instant]"), country)
+        }
+
+        "a missing --schema is reported by name" in {
+            val outDir = Files.createTempDirectory("apollo-codegen-cli-missing")
+            val e = intercept[CodegenException](
+                CodegenRunner.main(Array("--out", outDir.toString, "--package", "cli.gen"))
             )
-            val _ = intercept[CodegenException](CodegenRunner.parseScalarMappings("bogus"))
+            assert(e.getMessage.contains("--schema"), e.getMessage)
+        }
+
+        "repeatable options accumulate, and a stray argument is reported by name" in {
+            val options = CodegenRunner.parseArgs(List(
+                "--schema",
+                "s.graphql",
+                "--out",
+                "out",
+                "--package",
+                "p",
+                "--scalar",
+                "DateTime=java.time.Instant",
+                "--scalar",
+                "URL=java.net.URI",
+                "--client-field",
+                "Country.isFavorite: Boolean = false",
+                "--client-field",
+                "Query.cartOpen: Boolean=false"
+            ))
+            assert(options.scalarMappings == Map("DateTime" -> "java.time.Instant", "URL" -> "java.net.URI"))
+            assert(options.clientFields == List(
+                ClientFieldDecl("Country", "isFavorite", "Boolean", "false"),
+                ClientFieldDecl("Query", "cartOpen", "Boolean", "false")
+            ))
+            val positional = intercept[CodegenException](CodegenRunner.parseArgs(List("out", "p", "-", "s.graphql")))
+            assert(positional == CodegenException.UnknownOption("out"))
+            val repeated = intercept[CodegenException](
+                CodegenRunner.parseArgs(List("--schema", "a", "--schema", "b", "--out", "o", "--package", "p"))
+            )
+            assert(repeated == CodegenException.RepeatedOption("--schema"))
+            val dangling = intercept[CodegenException](CodegenRunner.parseArgs(List("--schema", "a", "--out")))
+            assert(dangling == CodegenException.MissingValue("--out"))
+            assert(intercept[CodegenException](CodegenRunner.parseScalarMapping("bogus")) ==
+                CodegenException.MalformedScalarMapping("bogus"))
+        }
+
+        "a client field declaration reads like a Scala field" in {
+            assert(ClientFieldDecl.parse("Country.tags: Chunk[String] = Chunk.empty") ==
+                ClientFieldDecl("Country", "tags", "Chunk[String]", "Chunk.empty"))
+            assert(ClientFieldDecl.parse("Query.onPick: String => Unit = _ => ()") ==
+                ClientFieldDecl("Query", "onPick", "String => Unit", "_ => ()"))
+            assert(intercept[CodegenException](ClientFieldDecl.parse("isFavorite: Boolean")) ==
+                CodegenException.MalformedClientField("isFavorite: Boolean"))
+        }
+
+        "a rerun deletes the sources of types that left the schema, and nothing else" in {
+            val schemaFile = Files.createTempFile("schema", ".graphql")
+            val outDir     = Files.createTempDirectory("apollo-codegen-prune")
+            Files.writeString(schemaFile, "enum Color { RED }\ntype Query { color: Color }")
+            CodegenRunner.run(schemaFile, outDir, codegenConfig)
+            assert(Files.exists(outDir.resolve("Color.scala")))
+            val handWritten = outDir.resolve("Notes.scala")
+            Files.writeString(handWritten, "object Notes")
+
+            Files.writeString(schemaFile, "type Query { name: String }")
+            CodegenRunner.run(schemaFile, outDir, codegenConfig)
+            assert(!Files.exists(outDir.resolve("Color.scala")))
+            assert(Files.exists(outDir.resolve("Queries.scala")))
+            assert(Files.exists(handWritten))
         }
     }
 end CodegenRunnerSpec

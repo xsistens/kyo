@@ -27,21 +27,22 @@ object SchemaLoader:
       *
       * @throws CodegenException if the SDL fails to parse.
       */
-    def fromString(sdl: String): Document =
-        Parser.parseQuery(sdl) match
-            case Right(document) => document
-            case Left(error) =>
-                throw CodegenException(s"Failed to parse GraphQL schema SDL: ${error.msg}")
+    def fromString(sdl: String): Document = parse(sdl, "schema SDL")
 
     /** Load and parse a local `.graphql` SDL file into a schema [[Document]].
       *
       * @throws CodegenException if the file is unreadable or the SDL fails to parse.
       */
     def fromFile(path: Path): Document =
-        if !Files.isReadable(path) then throw CodegenException(s"Schema file not readable: $path")
+        if !Files.isReadable(path) then throw CodegenException.UnreadableFile(path)
         val sdl = Using.resource(scala.io.Source.fromFile(path.toFile, "UTF-8"))(_.mkString)
-        fromString(sdl)
+        parse(sdl, path.toString)
     end fromFile
+
+    private def parse(sdl: String, source: String): Document =
+        Parser.parseQuery(sdl) match
+            case Right(document) => document
+            case Left(error)     => throw CodegenException.ParseFailure(source, error.msg)
 
     /** Load and parse a local `.graphql` SDL file given as a path string. */
     def fromFile(path: String): Document = fromFile(Paths.get(path))
@@ -70,10 +71,7 @@ object SchemaLoader:
                 zio.Runtime.default.unsafe.run(loader.load).getOrThrowFiberFailure()
             }
         catch
-            case error: Throwable =>
-                throw CodegenException(
-                    s"Failed to load schema by introspection from $url: ${error.getMessage}"
-                )
+            case error: Throwable => throw CodegenException.IntrospectionFailure(url, error)
         end try
     end fromIntrospectionUrl
 end SchemaLoader
