@@ -168,18 +168,13 @@ final class ApolloStore(
             .map(outcome => Abort.get(outcome))
 
     /** Register `listener` to be run (via [[publish]]) on the changed keys of every
-      * subsequent write until the enclosing `Scope` closes. The seam watchers hook
-      * into.
+      * subsequent write until the enclosing `Scope` closes — the only way a listener
+      * ends. The seam watchers hook into. A listener that fails is logged and fails
+      * neither the write that published nor the listeners after it (see
+      * [[ChangedKeysSubject]]).
       */
     def addChangedKeysListener(listener: Set[CacheKey] => Unit < Sync)(using Frame): Unit < (Sync & Scope) =
         changedKeys.subscribe(listener)
-
-    /** Unsubscribe a `listener` previously registered with
-      * [[addChangedKeysListener]] (by identity); a no-op if it was never
-      * registered.
-      */
-    def removeChangedKeysListener(listener: Set[CacheKey] => Unit < Sync)(using Frame): Unit < Sync =
-        changedKeys.unsubscribe(listener)
 
     /** Dump the whole normalized cache as one JSON object in the exact shape Apollo
       * Client's `InMemoryCache.extract()` returns — the shape the Apollo Client
@@ -302,7 +297,8 @@ final class ApolloStore(
 
     /** Normalize and merge `operation`'s response `data` into the cache, returning
       * the set of record keys whose stored value changed. Also [[publish]]es the
-      * changed keys so watchers can react.
+      * changed keys so watchers can react; a listener that fails there is logged,
+      * and the write still returns its changed keys.
       *
       * @param cacheHeaders write hints forwarded to the backend (e.g. an expiry
       *                     stamp, or [[CacheHeaders.DoNotStore]])
@@ -574,6 +570,10 @@ final class ApolloStore(
       * A non-empty publish advances [[currentGeneration]] before the fan-out, so a
       * listener re-reading during delivery already stamps the new generation and
       * needs no follow-up read; an empty publish moves nothing and stamps nothing.
+      *
+      * Every listener is run, each isolated from the others: a failing one is
+      * logged and the fan-out continues, so a publish fails only on an
+      * [[kyo.Interrupted]] panic (see [[ChangedKeysSubject]]).
       */
     def publish(keys: Set[CacheKey])(using Frame): Unit < Sync =
         if keys.isEmpty then Kyo.unit
