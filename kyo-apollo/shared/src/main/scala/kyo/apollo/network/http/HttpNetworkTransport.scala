@@ -3,8 +3,8 @@ package kyo.apollo.network.http
 import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
 import kyo.apollo.api.GraphQLResponse
 import kyo.apollo.exception.ApolloHttpException
-import kyo.apollo.exception.ApolloNetworkException
 import kyo.apollo.exception.ApolloParseException
+import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.json.Json
 import kyo.apollo.json.JsonParser
 import kyo.apollo.network.ApolloRequest
@@ -16,13 +16,18 @@ import kyo.apollo.runtime.ResponseStream
   * [[HttpEngine]], and returns a fully-decoded [[ApolloResponse]].
   *
   * It is the single place where failures become values (Phase 03's contract):
-  * every network drop, non-2xx status, or unparseable body is caught here and
-  * folded into `ApolloResponse.error`, so the returned `Future` **never
-  * fails** for those conditions.
+  * the engine's typed failure, a non-2xx status and an unparseable body are
+  * folded into `ApolloResponse.error`, so the returned effect never fails for
+  * those conditions.
   *
-  *   - connection error / `fetch` rejection → [[ApolloNetworkException]]
-  *   - HTTP status outside 2xx             → [[ApolloHttpException]]
-  *   - body not a valid GraphQL envelope   → [[ApolloParseException]]
+  *   - no response received (engine `Abort[HttpEngineFailure]`) → that failure,
+  *     e.g. [[kyo.apollo.exception.ApolloNetworkException]]
+  *   - HTTP status outside 2xx           → [[ApolloHttpException]]
+  *   - body not a valid GraphQL envelope → [[ApolloParseException]]
+  *
+  * Only the engine's row is folded. A defect — a codec that throws, a panicking
+  * engine — and an interrupt stay panics: they are bugs or cancellations, not
+  * network conditions.
   *
   * Serialization stays delegated: [[HttpRequestComposer]] owns request-body
   * composition and [[GraphQLResponse.parse]] owns response decoding — the
@@ -40,31 +45,17 @@ final class HttpNetworkTransport(
 ):
 
     /** Execute `request`, yielding its [[ApolloResponse]]. Never raises for
-      * network/HTTP/parse conditions — those arrive in `exception`.
-      *
-      * Effect pivot (Slice 2): the engine + HTTP interceptors are kyo (`< Async`)
-      * and this returns the response as a Kyo value directly (the Slice 1
-      * `KyoInterop`/`Future` bridge is gone). A connection error surfaces on the
-      * async Throwable channel and is folded to an `ApolloNetworkException` value.
+      * network/HTTP/parse conditions — those arrive in `error`. Decoding runs after
+      * the engine's row is folded, so a decoder defect is not reported as a network
+      * failure.
       */
     def execute[D](request: ApolloRequest[D])(using Frame): ApolloResponse[D] < Async =
         val httpRequest = composer.compose(serverUrl, request)
-        // `Abort.run[Throwable]` captures BOTH an abort-failure AND a panic as a
-        // `Result` — critical because a `fetch` rejection arrives via
-        // `Async.fromFuture` on the PANIC channel, which a plain `Abort.recover`
-        // would re-raise (letting a real network drop escape uncaught). Folding
-        // both keeps the "failures are values" contract for the production engine.
-        Abort
-            .run[Throwable] {
-                engine.execute(httpRequest).map(httpResponse => decode(request, httpResponse))
-            }
-            .map {
-                case Result.Success(decoded) => decoded
-                case Result.Failure(cause) =>
-                    failure(request, ApolloNetworkException(cause = cause))
-                case Result.Panic(cause) =>
-                    failure(request, ApolloNetworkException(cause = cause))
-            }
+        Abort.run[HttpEngineFailure](engine.execute(httpRequest)).map {
+            case Result.Success(httpResponse)  => decode(request, httpResponse)
+            case Result.Failure(engineFailure) => failure(request, engineFailure)
+            case Result.Panic(cause)           => Abort.panic(cause)
+        }
     end execute
 
     /** Execute `request` as an incremental-delivery (`@defer`) operation, yielding a
@@ -73,7 +64,7 @@ final class HttpNetworkTransport(
       * production engine, buffered otherwise); the parts are split
       * ([[MultipartParser]]) and folded ([[IncrementalAssembler]]) into one response
       * per patch. A server that ignores `@defer` (non-multipart Content-Type) or a
-      * non-2xx / network failure collapses to a single response, keeping the
+      * non-2xx / engine failure collapses to a single response, keeping the
       * "failures are values" contract.
       */
     def executeStreaming[D](request: ApolloRequest[D])(using
@@ -81,10 +72,10 @@ final class HttpNetworkTransport(
         Tag[Emit[Chunk[ApolloResponse[D]]]]
     ): ResponseStream[D] =
         val httpRequest = composer.compose(serverUrl, request)
-        foldStreamFailure(request) {
+        foldEngineFailure(request) {
             Stream.unwrap {
-                Abort.run[Throwable](engine.executeStreaming(httpRequest)).map {
-                    case Result.Success(resp) if !resp.isSuccessful =>
+                engine.executeStreaming(httpRequest).map { resp =>
+                    if !resp.isSuccessful then
                         Stream.init(
                             Seq(
                                 failure(
@@ -97,15 +88,16 @@ final class HttpNetworkTransport(
                                 )
                             )
                         )
-                    case Result.Success(resp) =>
+                    else
                         resp.header("Content-Type") match
                             case Some(ct) if isMultipart(ct) =>
                                 val boundary = MultipartParser.boundaryOf(ct)
-                                val partStream = resp.body match
-                                    case HttpStreamBody.Chunked(chunks) => MultipartParser.parts(boundary, chunks)
+                                resp.body match
+                                    case HttpStreamBody.Chunked(chunks) =>
+                                        IncrementalAssembler.stream(request, MultipartParser.parts(boundary, chunks))
                                     case HttpStreamBody.Buffered(text) =>
-                                        Stream.init(MultipartParser.parts(boundary, text))
-                                IncrementalAssembler.stream(request, partStream)
+                                        IncrementalAssembler.stream(request, Stream.init(MultipartParser.parts(boundary, text)))
+                                end match
                             case _ =>
                                 // The server ignored @defer (a plain JSON reply): one response.
                                 resp.body match
@@ -117,34 +109,30 @@ final class HttpNetworkTransport(
                                                 .map(cs => decodeSingle(request, cs.mkString))
                                                 .map(r => Stream.init(Seq(r)))
                                         )
-                    case Result.Failure(cause) =>
-                        Stream.init(Seq(failure(request, ApolloNetworkException(cause = cause))))
-                    case Result.Panic(cause) =>
-                        Stream.init(Seq(failure(request, ApolloNetworkException(cause = cause))))
+                    end if
                 }
             }
         }
     end executeStreaming
 
-    /** Fold any failure raised *while the body stream is being consumed* into a
-      * terminal [[ApolloNetworkException]] response appended after whatever was already
-      * emitted — the streaming counterpart of [[execute]]'s `Abort.run`. The initial
-      * round-trip failure is already a value (see the `Result.Failure`/`Panic` arms
-      * above); this covers a live body that drops mid-stream (the JVM/Native engine
-      * re-raises such a drop through its body stream), keeping "failures are values"
-      * without buffering — chunks emitted before the drop still reach the caller.
+    /** Fold the engine's failure into a terminal response appended after whatever
+      * was already emitted — the streaming counterpart of [[execute]]'s fold. It
+      * covers both the round-trip (no response head) and a live body that drops
+      * mid-stream, without buffering: chunks emitted before the drop still reach the
+      * caller. Like [[execute]], only the engine's row is folded; a panic (a decoder
+      * defect, an interrupt) passes through.
       */
-    private def foldStreamFailure[D](request: ApolloRequest[D])(stream: ResponseStream[D])(using
+    private def foldEngineFailure[D](request: ApolloRequest[D])(
+        stream: Stream[ApolloResponse[D], Async & Scope & Abort[HttpEngineFailure]]
+    )(using
         Frame,
         Tag[Emit[Chunk[ApolloResponse[D]]]]
     ): ResponseStream[D] =
         Stream {
-            Abort.run[Throwable](stream.emit).map {
-                case Result.Success(_) => ()
-                case Result.Failure(cause) =>
-                    Emit.value(Chunk(failure(request, ApolloNetworkException(cause = cause))))
-                case Result.Panic(cause) =>
-                    Emit.value(Chunk(failure(request, ApolloNetworkException(cause = cause))))
+            Abort.run[HttpEngineFailure](stream.emit).map {
+                case Result.Success(_)             => ()
+                case Result.Failure(engineFailure) => Emit.value(Chunk(failure(request, engineFailure)))
+                case Result.Panic(cause)           => Abort.panic(cause)
             }
         }
 
@@ -215,14 +203,16 @@ final class HttpNetworkTransport(
 
     /** Read `body` as JSON and then as a GraphQL envelope of the request's operation.
       * Text that is not JSON and an envelope of the wrong shape are failures; anything
-      * else the decoders throw is a `Result.Panic`.
+      * else the data codec throws is a `Result.Panic`. The text parser is caught
+      * wider than `DecodeException`: the body is untrusted wire input, and kyo's JSON
+      * reader also rejects some malformed numbers with a plain `NumberFormatException`.
       */
     private def parseBody[D](
         request: ApolloRequest[D],
         body: String
     )(using Frame): Result[ApolloParseException, GraphQLResponse[D]] =
         Result
-            .catching[DecodeException](JsonParser.parse(body))
+            .catching[Exception](JsonParser.parse(body))
             .mapFailure(e => ApolloParseException(Json.JStr(body), "a JSON document", e))
             .flatMap(json => GraphQLResponse.parse(json, request.operation))
 

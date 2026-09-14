@@ -1,6 +1,7 @@
 package kyo.apollo.network.http
 
 import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.network.HttpHeader
 
 /** A received HTTP response whose body may be streamed — the streaming counterpart
@@ -31,8 +32,9 @@ end HttpStreamResponse
 
 /** The body of an [[HttpStreamResponse]]: either a fully-buffered string (the
   * default for non-streaming engines and non-multipart responses) or a live stream
-  * of UTF-8 text chunks (a `multipart/mixed` incremental-delivery body).
+  * of UTF-8 text chunks (a `multipart/mixed` incremental-delivery body). A chunked
+  * body that drops mid-stream aborts with the engine's [[HttpEngineFailure]].
   */
 enum HttpStreamBody:
     case Buffered(text: String)
-    case Chunked(chunks: Stream[String, Async & Scope])
+    case Chunked(chunks: Stream[String, Async & Scope & Abort[HttpEngineFailure]])

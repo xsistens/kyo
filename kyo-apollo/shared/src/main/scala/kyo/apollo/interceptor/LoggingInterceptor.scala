@@ -1,6 +1,7 @@
 package kyo.apollo.interceptor
 
 import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.network.http.HttpRequest
 import kyo.apollo.network.http.HttpResponse
 
@@ -19,7 +20,7 @@ final class LoggingInterceptor(log: String => Unit = line => println(line)) exte
     def intercept(
         request: HttpRequest,
         chain: HttpInterceptorChain
-    )(using Frame): HttpResponse < Async =
+    )(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) =
         log(s"--> ${request.method} ${request.url}")
         request.headers.foreach(h => log(s"    ${h.name}: ${h.value}"))
         request.body.foreach(body => log(s"    $body"))

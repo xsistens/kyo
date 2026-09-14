@@ -1,6 +1,8 @@
 package kyo.apollo.interceptor
 
 import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.apollo.exception.ApolloNetworkException
+import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.network.HttpMethod
 import kyo.apollo.network.http.HttpEngine
 import kyo.apollo.network.http.HttpRequest
@@ -13,8 +15,9 @@ import kyo.apollo.network.http.HttpResponse
   * platform timers.
   *
   * Covers coalescing within a window, the size cap, the unwrapped single request,
-  * the pass-through GET, the failure shapes (non-2xx shared, malformed array
-  * fails all, a throwing send fails all), and the two ownership contracts from
+  * the pass-through GET, the failure shapes (non-2xx shared, an engine failure
+  * shared as that failure, malformed array fails all with an engine failure, a
+  * throwing send panics all), and the two ownership contracts from
   * P1-40: an interrupted caller is not sent on its behalf, and ending the owning
   * `Scope` stops the window and answers whoever is still waiting.
   */
@@ -23,9 +26,9 @@ class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
     given CanEqual[Any, Any] = CanEqual.derived
 
     /** An [[HttpEngine]] that records every request and answers via `respond`. */
-    final class RecordingEngine(respond: HttpRequest => HttpResponse) extends HttpEngine:
+    final class RecordingEngine(respond: HttpRequest => HttpResponse < Abort[HttpEngineFailure]) extends HttpEngine:
         @volatile var seen: List[HttpRequest] = Nil
-        def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
+        def execute(request: HttpRequest)(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) =
             seen = seen :+ request
             respond(request)
     end RecordingEngine
@@ -210,8 +213,31 @@ class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
                 rb <- fb.getResult
             yield
                 assert(engine.seen.length == 1)
-                assert(ra.panic.exists(_.getMessage.contains("not a JSON array of 2")))
-                assert(rb.panic.exists(_.getMessage.contains("not a JSON array of 2")))
+                // No caller received its own response: an engine failure, which the
+                // transport folds into a value, not a panic that would crash the query.
+                Seq(ra, rb).foreach { r =>
+                    assert(r.failure.exists {
+                        case e: ApolloNetworkException => e.message.contains("not a JSON array of 2")
+                    })
+                }
+            end for
+        }
+
+        "an engine failure of the batched send is every caller's failure, not a panic" in Clock.withTimeControl { control =>
+            val down   = ApolloNetworkException("server unreachable")
+            val engine = RecordingEngine(_ => Abort.fail(down))
+            for
+                batching <- BatchingHttpInterceptor.init(interval, maxBatchSize = 2)
+                chain = chainOf(batching, engine)
+                fa <- Fiber.init(chain.proceed(post("""{"query":"a"}""")))
+                _  <- control.awaitPendingSleepers(1)
+                fb <- Fiber.init(chain.proceed(post("""{"query":"b"}""")))
+                ra <- fa.getResult
+                rb <- fb.getResult
+            yield
+                assert(engine.seen.length == 1)
+                assert(ra.failure.exists(_ eq down))
+                assert(rb.failure.exists(_ eq down))
             end for
         }
 

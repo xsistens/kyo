@@ -24,10 +24,10 @@ object StreamProbe:
     /** All of a finite stream's emissions, in order — for a query/mutation or a
       * live stream already bounded by `.take(n)`.
       */
-    def collect[A](stream: Stream[A, Async & Scope])(using
+    def collect[A, S](stream: Stream[A, S])(using
         Frame,
         Tag[Emit[Chunk[A]]]
-    ): List[A] < (Async & Scope) =
+    ): List[A] < S =
         stream.run.map(_.toList)
 
     /** A stream's first emission (the single-response convenience). A

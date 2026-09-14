@@ -1,22 +1,26 @@
 package kyo.apollo.network.http
 
 import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.apollo.StreamProbe
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
+import kyo.apollo.api.JsonCodec
 import kyo.apollo.api.Query
 import kyo.apollo.exception.ApolloHttpException
 import kyo.apollo.exception.ApolloNetworkException
 import kyo.apollo.exception.ApolloParseException
+import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.HttpHeader
 import scala.collection.immutable.VectorMap
-import scala.concurrent.Future
 
 /** Tests [[HttpNetworkTransport]]'s decode/error-mapping against a fake
   * [[HttpEngine]] — no network. Covers the "failures are values" contract:
-  * success lifts to typed data, while non-2xx / malformed body / connection
-  * error all land in `ApolloResponse.error` rather than being thrown.
+  * success lifts to typed data, while non-2xx / malformed body / the engine's
+  * failure row all land in `ApolloResponse.error` rather than being thrown — and
+  * its limit: only the engine's row is folded, so a decoder defect or an interrupt
+  * stays a panic instead of posing as a network failure.
   */
 class HttpNetworkTransportSpec extends kyo.test.Test[Any]:
 
@@ -37,20 +41,25 @@ class HttpNetworkTransportSpec extends kyo.test.Test[Any]:
         def variables: Json          = Json.JObj(VectorMap.empty)
     end ValueQuery
 
-    /** An [[HttpEngine]] that always yields the same canned response. */
-    private def engineReturning(response: HttpResponse): HttpEngine =
-        new HttpEngine:
-            def execute(request: HttpRequest)(using Frame): HttpResponse < Async = response
+    /** The same query with a defective codec: decoding a well-formed payload throws. */
+    final case class DefectiveQuery() extends Query[Int]:
+        def name: String             = "Value"
+        def document: String         = "query Value { value }"
+        def dataSchema: Schema[Int]  = ValueQuery().dataSchema
+        def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
+        def variables: Json          = Json.JObj(VectorMap.empty)
+        override def dataCodec: JsonCodec[Int] = new JsonCodec[Int]:
+            def decode(json: Json): Int  = throw new ClassCastException("defective codec")
+            def encode(value: Int): Json = Json.JNull
+    end DefectiveQuery
 
-    /** An [[HttpEngine]] that always fails (a connection error) — via the SAME
-      * async-rejection path the production [[FetchHttpEngine]] uses
-      * (`Async.fromFuture` of a rejected `fetch`), so this actually guards how a
-      * real network drop is folded rather than a synthetic synchronous throw.
-      */
-    private def engineFailing(cause: Throwable): HttpEngine =
+    /** An [[HttpEngine]] that runs `respond` for every request. */
+    private def engineOf(respond: => HttpResponse < (Async & Abort[HttpEngineFailure])): HttpEngine =
         new HttpEngine:
-            def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
-                Async.fromFuture(Future.failed(cause))
+            def execute(request: HttpRequest)(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) = respond
+
+    /** An [[HttpEngine]] that always yields the same canned response. */
+    private def engineReturning(response: HttpResponse): HttpEngine = engineOf(response)
 
     private def transport(engine: HttpEngine): HttpNetworkTransport =
         HttpNetworkTransport("https://example.com/graphql", engine)
@@ -96,11 +105,35 @@ class HttpNetworkTransportSpec extends kyo.test.Test[Any]:
             }
         }
 
-        "connection error becomes an ApolloNetworkException value" in {
-            val engine = engineFailing(new RuntimeException("ECONNREFUSED"))
-            transport(engine).execute(ApolloRequest(ValueQuery())).map { response =>
+        "the engine's Abort failure becomes that failure as the response's error value" in {
+            val refused = ApolloNetworkException("ECONNREFUSED")
+            transport(engineOf(Abort.fail(refused))).execute(ApolloRequest(ValueQuery())).map { response =>
                 assert(response.data == Absent)
-                assert(response.error.exists(_.isInstanceOf[ApolloNetworkException]))
+                assert(response.error.exists(_ eq refused))
+            }
+        }
+
+        "a decoder defect on a 2xx body stays a panic, not a network or parse value" in {
+            val engine = engineReturning(HttpResponse(200, Nil, """{"data":{"value":1}}"""))
+            Abort.run[Throwable](transport(engine).execute(ApolloRequest(DefectiveQuery()))).map {
+                case Result.Panic(e) => assert(e.isInstanceOf[ClassCastException])
+                case other           => fail(s"expected the codec's ClassCastException as a panic, got $other")
+            }
+        }
+
+        "an interrupt raised by the engine stays a panic, not a network value" in {
+            val interrupted = Interrupted(summon[Frame])
+            Abort.run[Throwable](transport(engineOf(Abort.panic(interrupted))).execute(ApolloRequest(ValueQuery()))).map {
+                case Result.Panic(e) => assert(e eq interrupted)
+                case other           => fail(s"expected the Interrupted panic, got $other")
+            }
+        }
+
+        "streaming: a decoder defect stays a panic too" in {
+            val engine = engineReturning(HttpResponse(200, Nil, """{"data":{"value":1}}"""))
+            Abort.run[Throwable](StreamProbe.collect(transport(engine).executeStreaming(ApolloRequest(DefectiveQuery())))).map {
+                case Result.Panic(e) => assert(e.isInstanceOf[ClassCastException])
+                case other           => fail(s"expected the codec's ClassCastException as a panic, got $other")
             }
         }
 

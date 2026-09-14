@@ -1,6 +1,7 @@
 package kyo.apollo.interceptor
 
 import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.network.http.HttpRequest
 import kyo.apollo.network.http.HttpResponse
 
@@ -23,10 +24,12 @@ import kyo.apollo.network.http.HttpResponse
 trait HttpInterceptor:
 
     /** Handle `request`, delegating to `chain.proceed` to continue toward the
-      * network, and complete with the (observed or produced) [[HttpResponse]].
+      * network, and complete with the (observed or produced) [[HttpResponse]]. The
+      * row is the engine's: an interceptor may pass on, recover or raise an
+      * [[HttpEngineFailure]].
       */
     def intercept(
         request: HttpRequest,
         chain: HttpInterceptorChain
-    )(using Frame): HttpResponse < Async
+    )(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure])
 end HttpInterceptor

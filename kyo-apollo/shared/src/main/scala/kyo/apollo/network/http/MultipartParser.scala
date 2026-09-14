@@ -37,12 +37,13 @@ object MultipartParser:
 
     /** Split a stream of text chunks into parts as each completes. A `StringBuilder`
       * buffer accumulates across chunks (safe: single-threaded JS, single-use
-      * stream) and is created per materialization.
+      * stream) and is created per materialization. The chunk stream's effects —
+      * including an engine's failure row — pass through unchanged.
       */
-    def parts(
+    def parts[S](
         boundary: String,
-        chunks: Stream[String, Async & Scope]
-    )(using Frame): Stream[MultipartPart, Async & Scope] =
+        chunks: Stream[String, S]
+    )(using Frame): Stream[MultipartPart, S & Sync] =
         val delim = s"--$boundary"
         Stream.unwrap {
             Sync.defer {

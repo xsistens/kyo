@@ -1,11 +1,12 @@
 package kyo.apollo.testing
 
 import kyo.*
+import kyo.apollo.exception.ApolloNetworkException
+import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.network.http.HttpEngine
 import kyo.apollo.network.http.HttpRequest
 import kyo.apollo.network.http.HttpResponse
 import scala.collection.mutable
-import scala.concurrent.Future
 
 /** An in-memory HTTP server that queues responses and records the requests it
   * received, usable over the HTTP transport via the injectable [[HttpEngine]]
@@ -29,9 +30,9 @@ import scala.concurrent.Future
   */
 final class MockServer extends HttpEngine:
 
-    private val responses                                             = mutable.Queue.empty[HttpRequest => HttpResponse < Async]
-    private var received: List[HttpRequest]                           = Nil
-    private var takeCursor: Int                                       = 0
+    private val responses                   = mutable.Queue.empty[HttpRequest => HttpResponse < (Async & Abort[HttpEngineFailure])]
+    private var received: List[HttpRequest] = Nil
+    private var takeCursor: Int             = 0
     private var fallback: Option[HttpRequest => HttpResponse < Async] = None
 
     // --- scripting ------------------------------------------------------------
@@ -55,10 +56,11 @@ final class MockServer extends HttpEngine:
         this
 
     /** Queue a simulated connection error (no response received) as the next
-      * round-trip — the transport folds it into an `ApolloNetworkException` value.
+      * round-trip: the engine aborts with an `ApolloNetworkException` carrying `cause`,
+      * which the transport folds into an `ApolloResponse.error` value.
       */
     def enqueueError(cause: Throwable)(using Frame): MockServer =
-        responses.enqueue(_ => Async.fromFuture(Future.failed[HttpResponse](cause)))
+        responses.enqueue(_ => Abort.fail(ApolloNetworkException(cause = cause)))
         this
 
     /** Install a fallback handler used once the enqueued responses run out
@@ -97,7 +99,7 @@ final class MockServer extends HttpEngine:
 
     // --- engine ---------------------------------------------------------------
 
-    def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
+    def execute(request: HttpRequest)(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) =
         received = received :+ request
         if responses.nonEmpty then responses.dequeue()(request)
         else
