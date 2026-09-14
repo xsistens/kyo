@@ -11,6 +11,7 @@ import kyo.apollo.cache.normalized.api.IdCacheKeyGenerator
 import kyo.apollo.cache.normalized.api.Record
 import kyo.apollo.exception.ApolloConfigException
 import kyo.apollo.exception.CacheMissException
+import kyo.apollo.exception.DefaultApolloException
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloResponse
 import scala.collection.immutable.VectorMap
@@ -95,26 +96,51 @@ class WatcherSpec extends kyo.test.Test[Any]:
     /** An engine whose second and later calls park on `gate` before answering and
       * signal `arrived` as they start — so a `NetworkOnly` refetch can be held in
       * flight across the watch's teardown. The first call (the cache-populating
-      * fetch) answers at once.
+      * fetch) answers at once. When `ended` is given, a parked call completes it with
+      * how the call ended: `"answered"`, `"interrupted"`, or `"failed"`.
       */
-    final private class GatedEngine(calls: AtomicInt, arrived: Latch, gate: Latch)
-        extends kyo.apollo.network.http.HttpEngine:
+    final private class GatedEngine(
+        calls: AtomicInt,
+        arrived: Latch,
+        gate: Latch,
+        ended: Maybe[Promise[String, Any]] = Absent
+    ) extends kyo.apollo.network.http.HttpEngine:
         def execute(
             request: kyo.apollo.network.http.HttpRequest
         )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
             calls.incrementAndGet.map { n =>
                 val response = kyo.apollo.network.http.HttpResponse(200, Nil, aliceBody)
                 if n == 1 then response
-                else arrived.release.andThen(gate.await).andThen(response)
+                else
+                    Sync.ensure { (error: Maybe[Result.Error[Any]]) =>
+                        val how = error match
+                            case Absent                                => "answered"
+                            case Present(Result.Panic(_: Interrupted)) => "interrupted"
+                            case Present(_)                            => "failed"
+                        ended.fold(Kyo.unit)(_.completeDiscard(Result.succeed(how)))
+                    }(arrived.release.andThen(gate.await).andThen(response))
+                end if
             }
     end GatedEngine
 
+    /** An engine whose call number `defective` is a defect — it panics instead of
+      * answering or failing on the engine row — and whose other calls answer Alice.
+      */
+    final private class DefectEngine(calls: AtomicInt, defective: Int) extends kyo.apollo.network.http.HttpEngine:
+        def execute(
+            request: kyo.apollo.network.http.HttpRequest
+        )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
+            calls.incrementAndGet.map { n =>
+                if n == defective then Abort.panic(new RuntimeException("engine defect"))
+                else kyo.apollo.network.http.HttpResponse(200, Nil, aliceBody)
+            }
+    end DefectEngine
+
     /** An engine whose every answer differs (`Alice-<n>`, a volatile field in each
       * response) and whose second and later calls sleep one second on `clock` before
-      * answering. The controlled clock is passed in explicitly: a watch's fetch fibers
-      * are detached (`Fiber.Unsafe.init`, empty context) and would not see the
-      * `Clock.withTimeControl` local, so `control.advance` releases exactly the
-      * responses parked on this clock.
+      * answering. The controlled clock is passed in explicitly, so `control.advance`
+      * releases exactly the responses parked on this clock whichever fiber the engine
+      * runs on.
       */
     final private class SleepingEngine(clock: Clock, calls: AtomicInt) extends kyo.apollo.network.http.HttpEngine:
         def execute(
@@ -311,6 +337,94 @@ class WatcherSpec extends kyo.test.Test[Any]:
                 assert(subscribersAfterClose == 0, "teardown must unsubscribe the watcher")
                 assert(late == Absent, s"an emission reached the consumer after teardown: $late")
                 assert(callsNow == 2, s"a closed watch must not refetch again, got $callsNow call(s)")
+            end for
+        }
+
+        "a refetch fiber does not outlive its watch" in {
+            // P2-40. A NetworkOnly refetch is parked on the engine when the watch's Scope
+            // closes. The refetch fiber belongs to that Scope, so the close interrupts the
+            // request in flight: the engine sees its call end by interruption even though
+            // the gate opens right after, and nothing reaches the consumer. A detached
+            // fiber would outlive the watch and answer normally once the gate opens.
+            for
+                calls    <- AtomicInt.init(0)
+                arrived  <- Latch.init(1)
+                gate     <- Latch.init(1)
+                ended    <- Promise.init[String, Any]
+                tornDown <- Latch.init(1)
+                client = cachedClient(GatedEngine(calls, arrived, gate, Present(ended)))
+                _     <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                probe <- Channel.init[ApolloResponse[UserData]](Int.MaxValue)
+                // Registered first, so it runs after every finalizer of the watch.
+                drain <- Fiber.init(Scope.run(
+                    Scope.ensure(tornDown.release).andThen(
+                        query(client)
+                            .fetchPolicy(FetchPolicy.CacheOnly)
+                            .refetchPolicy(RefetchPolicy.NetworkOnly)
+                            .watch()
+                            .foreach(probe.put)
+                    )
+                ))
+                first <- probe.take
+                _ = assert(first.data == Present(userData("Alice")))
+                _       <- client.apolloStore.writeOperation(CurrentUserQuery(), userData("Bob"))
+                _       <- arrived.await // the refetch is in flight, parked on `gate`
+                _       <- drain.interrupt
+                _       <- tornDown.await
+                _       <- gate.release
+                outcome <- ended.get
+                late    <- probe.poll
+            yield
+                assert(outcome == "interrupted", s"closing the watch must interrupt its refetch in flight, the request $outcome")
+                assert(late == Absent, s"an emission reached the consumer after teardown: $late")
+            end for
+        }
+
+        "a failing refetch surfaces as a response" in {
+            // P2-40. The refetch's engine call panics. The watch's consumer sees that as an
+            // error response, and the watch goes on: the next write's refetch answers.
+            // A detached fiber that swallows its failure emits nothing for the first write.
+            for
+                calls <- AtomicInt.init(0)
+                client = cachedClient(DefectEngine(calls, defective = 2))
+                _ <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                pull <- StreamProbe.Pull.open(
+                    query(client)
+                        .fetchPolicy(FetchPolicy.CacheOnly)
+                        .refetchPolicy(RefetchPolicy.NetworkOnly)
+                        .watch()
+                )
+                first <- pull.next
+                _ = assert(first.data == Present(userData("Alice")))
+                _      <- client.apolloStore.writeOperation(CurrentUserQuery(), userData("Bob"))   // its refetch panics
+                _      <- client.apolloStore.writeOperation(CurrentUserQuery(), userData("Carol")) // its refetch answers
+                second <- pull.next
+                _ = assert(second.error.nonEmpty, s"the failed refetch must reach the consumer as a response: $second")
+                third <- pull.next
+            yield
+                assert(second.data.isEmpty)
+                assert(
+                    second.error.exists(e => e.isInstanceOf[DefaultApolloException] && e.getCause.getMessage == "engine defect"),
+                    s"the response carries the defect as its cause: ${second.error}"
+                )
+                assert(third.data == Present(userData("Alice")), s"the watch refetches again after a failure: $third")
+            end for
+        }
+
+        "a failing initial fetch surfaces as a response" in {
+            // The initial fetch runs on a fiber of the watch too; its defect is the
+            // watch's first emission rather than a silent, empty stream.
+            for
+                calls <- AtomicInt.init(0)
+                client = cachedClient(DefectEngine(calls, defective = 1))
+                pull  <- StreamProbe.Pull.open(query(client).fetchPolicy(FetchPolicy.NetworkOnly).watch())
+                first <- pull.next
+            yield
+                assert(first.data.isEmpty)
+                assert(
+                    first.error.exists(e => e.isInstanceOf[DefaultApolloException] && e.getCause.getMessage == "engine defect"),
+                    s"the response carries the defect as its cause: ${first.error}"
+                )
             end for
         }
 
