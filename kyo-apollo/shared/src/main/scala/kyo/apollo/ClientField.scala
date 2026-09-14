@@ -40,7 +40,8 @@ import scala.NamedTuple.NamedTuple
   * }}}
   *
   * Codegen can generate these descriptors and chainable `_.code.isFavorite`
-  * accessors from a declarations object — see `ClientFieldDsl` in the codegen module.
+  * accessors from declarations such as `Country.isFavorite: Boolean = false` — the
+  * `apolloClientFields` setting / `--client-field` option of the codegen module.
   *
   * @tparam Origin the GraphQL object type the field hangs off (phantom marker)
   * @tparam R      the 1-slot named tuple `(label: V)` this contributes to a selection
