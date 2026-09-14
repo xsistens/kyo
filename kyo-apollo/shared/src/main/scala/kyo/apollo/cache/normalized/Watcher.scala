@@ -6,6 +6,8 @@ import kyo.apollo.ApolloClient
 import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.exception.ApolloConfigException
 import kyo.apollo.exception.CacheReadFailure
+import kyo.apollo.exception.DefaultApolloException
+import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.ApolloResponse
 import kyo.apollo.network.ExecutionContext
 import kyo.apollo.runtime.ResponseStream
@@ -87,14 +89,17 @@ extension [D](call: ApolloCall[D])
       * is the stream body. The change notification is an effect the store runs on
       * the publishing fiber — `changedKeys.subscribe` registers it for the stream's
       * `Scope` — and cache re-reads push into the channel via `channel.unsafe.offer`.
-      * The two *async* legs (the initial fetch and a network refetch) run as
-      * detached fibers (`Fiber.Unsafe.init`) that drive `client.executeAsStream`
-      * into the same channel — the idiomatic callback→Kyo
-      * interop, mirroring the WS transport and `kyo-ui`'s reactive bridge. Those
-      * fetch streams are finite, so they complete on their own; teardown only flips
-      * `active`, closes the channel, and ends the subscription.
+      * The two *async* legs drive `client.executeAsStream` into the same channel on
+      * fibers of the watch: the initial fetch, and the refetch fiber, which runs the
+      * network refetches the watch books one after another. Both are started with
+      * `Fiber.init` in the `Scope` that consumes the stream and inherit its context
+      * (a controlled `Clock`, a seeded `Random`); closing that `Scope` interrupts them,
+      * a request in flight included. A fetch that fails instead of answering — a
+      * defect no response value carries — reaches the consumer as a response whose
+      * error is a [[kyo.apollo.exception.DefaultApolloException]] with the defect as
+      * its cause, and the watch goes on.
       *
-      * The reactions run on three different contexts — the detached fetch fibers,
+      * The reactions run on three different contexts — the fetch fibers,
       * whichever fiber writes to the store (its `publish` runs `onChangedKeys`
       * before the write returns), and the `Scope` teardown — so the watch's mutable state
       * lives in one [[AtomicRef]] over a [[WatchState]]: "still active?" and "which
@@ -118,8 +123,8 @@ extension [D](call: ApolloCall[D])
       * stamp and the watch reads again.
       *
       * A network refetch (`RefetchPolicy.NetworkOnly`, or `CacheFirst` answering a
-      * miss) runs at most one fiber at a time; requests during that flight book a
-      * single rerun. Under `CacheFirst` a miss is sent to the network once per
+      * miss) runs one at a time; requests during that flight book a single rerun.
+      * Under `CacheFirst` a miss is sent to the network once per
       * cause: if no read has succeeded by the end of that flight, the miss is
       * emitted as the value, as `CacheOnly` would, and so is any later miss until a
       * read succeeds again — a read the write-back cannot satisfy never becomes an
@@ -140,7 +145,11 @@ extension [D](call: ApolloCall[D])
             builder.executionContext.get(RefetchPolicy).getOrElse(RefetchPolicy.Default)
 
         Stream.unwrap {
-            Kyo.zip(builder.build, Channel.initUnscoped[ApolloResponse[D]](Int.MaxValue)).map { (request, channel) =>
+            Kyo.zip(
+                builder.build,
+                Channel.initUnscoped[ApolloResponse[D]](Int.MaxValue),
+                Channel.initUnscoped[Unit](1)
+            ).map { (request, channel, refetches) =>
                 given AllowUnsafe = AllowUnsafe.embrace.danger
 
                 val state = AtomicRef.Unsafe.init(WatchState.initial)
@@ -220,10 +229,29 @@ extension [D](call: ApolloCall[D])
                         store.readOperationStamped(request.operation).map(hit(_, _, _))
                     )
 
-                // Launch the initial fetch as a detached fiber that pushes each emission
-                // through `emitFresh`. Network refetches go through `requestRefetch`.
-                def spawn(src: ResponseStream[D]): Unit =
-                    val _ = Fiber.Unsafe.init[Throwable, Unit](Scope.run(src.foreach(emitFresh)))
+                // Run one network fetch into the watch, each emission through `emitFresh`. A
+                // fetch that fails instead of answering — a defect in an engine, an
+                // interceptor or a decoder, which no response value carries — is offered to
+                // the consumer as a response with that defect as its cause instead of ending
+                // the fiber that ran it, so the refetch fiber goes on to the next refetch. An
+                // interrupt is the watch ending, not a failure of the fetch.
+                def fetchInto(fetched: ApolloRequest[D]): Unit < Async =
+                    Abort.run[Throwable](Scope.run(client.executeAsStream(fetched).foreach(emitFresh))).map(
+                        _.foldError(
+                            _ => Kyo.unit,
+                            error =>
+                                error.exception match
+                                    case _: Interrupted => Kyo.unit
+                                    case defect         => Sync.Unsafe.defer(offer(failed(fetched, defect)))
+                        )
+                    )
+
+                def failed(fetched: ApolloRequest[D], defect: Throwable): ApolloResponse[D] =
+                    ApolloResponse.fromException(
+                        fetched.requestUuid,
+                        DefaultApolloException(s"A network fetch of watched operation '${request.operation.name}' failed", defect),
+                        fetched.executionContext
+                    )
 
                 // Refresh the watch set from a just-emitted response. A cache hit already
                 // carries the `dependentKeys` its read touched and the generation it was
@@ -284,33 +312,42 @@ extension [D](call: ApolloCall[D])
                     }
 
                 // Re-run the operation over the network (which writes the response back
-                // into the store) and emit the networked value — at most one such fiber
-                // at a time. A request that arrives while one is in flight books a single
-                // rerun instead of a second fiber: the rerun starts after the writes that
-                // asked for it, so its response covers all of them, and the in-flight
-                // response is emitted regardless. n writes in a row cost at most two
-                // network requests (the running one and the rerun).
+                // into the store) and emit the networked value — one refetch at a time. A
+                // request that arrives while one is in flight books a single rerun instead
+                // of a second refetch: the rerun starts after the writes that asked for it,
+                // so its response covers all of them, and the in-flight response is emitted
+                // regardless. n writes in a row cost at most two network requests (the
+                // running one and the rerun).
                 def requestRefetch(): Unit < Sync = Sync.Unsafe.defer(bookRefetch())
 
+                // A booking runs on whichever fiber reacts — often a writer, which has no
+                // part in the watch's `Scope` — so it does not start a fiber itself: it hands
+                // the refetch to the watch's refetch fiber through `refetches`. Only the
+                // booking that sets `inflight` offers, and `inflight` is cleared only after the
+                // refetch fiber has taken that offer, so the one-slot channel is never full.
                 @tailrec def bookRefetch(): Unit =
                     val s = state.get()
                     if !s.active then ()
                     else if s.inflight then
                         if !state.compareAndSet(s, s.copy(rerun = true)) then bookRefetch()
                     else if state.compareAndSet(s, s.copy(inflight = true, rerun = false)) then
-                        val networked = builder.addExecutionContext(ExecutionContext.Empty + FetchPolicy.NetworkOnly)
-                        discard(Fiber.Unsafe.init[Throwable, Unit](
-                            Scope.run(
-                                Sync.ensure(finishRefetch())(
-                                    client.executeAsStream(networked).foreach(emitFresh)
-                                )
-                            )
-                        ))
+                        discard(refetches.unsafe.offer(()))
                     else bookRefetch()
                     end if
                 end bookRefetch
 
-                // Runs when the refetch fiber ends, however it ends: hand the flight back
+                // The watch's refetch fiber: runs each booked refetch to its end, then takes
+                // the next. `finishRefetch` runs however a refetch ends — answered, failed or
+                // interrupted — so the flight is always handed back.
+                def refetchLoop: Unit < Async =
+                    Abort.run[Closed](Loop.forever(refetches.take.andThen(runRefetch()))).unit
+
+                def runRefetch(): Unit < Async =
+                    Sync.ensure(finishRefetch())(
+                        builder.addExecutionContext(ExecutionContext.Empty + FetchPolicy.NetworkOnly).build.map(fetchInto)
+                    )
+
+                // Runs when a refetch ends, however it ends: hand the flight back
                 // and run the one booked rerun, if any. Otherwise, if a `CacheFirst` miss
                 // is still unsettled — no read succeeded during the flight, so the
                 // write-back did not cure it — the miss is now the value: one re-read,
@@ -364,17 +401,23 @@ extension [D](call: ApolloCall[D])
                 // during the fetch is never missed; the initially empty key set guards
                 // against re-emitting for the initial fetch's own write-back (nothing
                 // intersects the empty set). The subscription ends with the stream's
-                // Scope; the teardown registered after it runs first, flips `active`
+                // Scope; the teardown registered after it runs before it, flips `active`
                 // and releases the last retained key set in the same step, so no
                 // reaction offers anything once the Scope is closing and no later move
                 // retains a set again (`hold` declines once the watch is inactive).
+                // The two fetch fibers are registered last, so the Scope interrupts them
+                // first. A refetch booked before the refetch fiber runs waits in
+                // `refetches`.
                 store.changedKeys.subscribe(onChangedKeys)
                     .andThen(Scope.ensure(Sync.Unsafe.defer {
                         val before = state.getAndUpdate(_.copy(active = false, keys = Set.empty))
                         if before.active then store.releaseRetained(before.keys)
+                        discard(refetches.unsafe.close())
                         discard(channel.unsafe.close())
                     }))
-                    .andThen(Sync.Unsafe.defer(spawn(client.executeAsStream(request))))
+                    .andThen(Fiber.init(fetchInto(request)))
+                    .andThen(Fiber.init(refetchLoop))
+                    .map(refetcher => Sync.Unsafe.defer(discard(state.getAndUpdate(_.copy(refetcher = Present(refetcher))))))
                     .andThen(channel.streamUntilClosed())
             }
         }
@@ -391,11 +434,13 @@ end extension
   * no store read stands behind, i.e. the initial state and the write-back
   * fallback).
   *
-  * The network refetch is guarded by the same cell: `inflight` while its fiber
-  * runs, `rerun` when a further request arrived during that flight (at most one
-  * is booked; it runs once the fiber ends), and `refetched` once a `CacheFirst`
+  * The network refetch is guarded by the same cell: `inflight` from its booking
+  * until it ends, `rerun` when a further request arrived during that flight (at
+  * most one is booked; it runs once the flight ends), and `refetched` once a `CacheFirst`
   * miss has been answered with a refetch and no read has succeeded since — a
   * miss is then emitted (once the flight has ended) instead of refetched again.
+  * `refetcher` is the fiber that runs those refetches, set once it has started;
+  * the `Scope` that started it interrupts it when the watch ends.
   *
   * Transitions go through `copy`, so a further per-watch fact is added as a
   * field here and rides the same CAS rather than a second cell.
@@ -406,9 +451,19 @@ final private[normalized] case class WatchState(
     gen: Long,
     inflight: Boolean,
     rerun: Boolean,
-    refetched: Boolean
+    refetched: Boolean,
+    refetcher: Maybe[Fiber[Unit, Any]]
 )
 
 private[normalized] object WatchState:
     val initial: WatchState =
-        WatchState(active = true, keys = Set.empty, gen = 0L, inflight = false, rerun = false, refetched = false)
+        WatchState(
+            active = true,
+            keys = Set.empty,
+            gen = 0L,
+            inflight = false,
+            rerun = false,
+            refetched = false,
+            refetcher = Absent
+        )
+end WatchState
