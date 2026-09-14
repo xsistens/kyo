@@ -88,7 +88,7 @@ class ClientFieldStructureSpec extends kyo.test.Test[Any]:
             assert(top.get("children") == wire.asInstanceOf[Json.JObj].fields.get("children"))
 
             assert(ClientFieldStructure.toKyoWire(injected, structure) == wire)
-            assert(SchemaJson.decode[CfsNode](ClientFieldStructure.toKyoWire(injected, structure)) == value)
+            assert(SchemaJson.decode[CfsNode](ClientFieldStructure.toKyoWire(injected, structure)) == kyo.Result.succeed(value))
         }
     }
 end ClientFieldStructureSpec

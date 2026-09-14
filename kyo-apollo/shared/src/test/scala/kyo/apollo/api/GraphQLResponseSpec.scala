@@ -44,7 +44,7 @@ class GraphQLResponseSpec extends kyo.test.Test[Any]:
             def encode(value: Hero): Json = Json.JNull
 
     private def parseResult(text: String): Result[ApolloParseException, GraphQLResponse[Hero]] =
-        GraphQLResponse.parse(JsonParser.parse(text), heroOp)
+        JsonParser.parse(text).flatMap(GraphQLResponse.parse(_, heroOp))
 
     private def parse(text: String): GraphQLResponse[Hero] = parseResult(text).getOrThrow
 
@@ -99,14 +99,14 @@ class GraphQLResponseSpec extends kyo.test.Test[Any]:
             val response = parse(
                 """{ "data": { "name": "Luke" }, "extensions": { "cost": 3 } }"""
             )
-            assert(response.extensions == Map[String, Json]("cost" -> Json.JNum(3.0)))
+            assert(response.extensions == Map[String, Json]("cost" -> Json.JInt(3)))
         }
 
         "a non-object envelope is a parse failure value carrying what was read" in {
             parseResult("""[1, 2, 3]""") match
                 case Result.Failure(e) =>
                     assert(e.expected == "a GraphQL response object")
-                    assert(e.actual == JsonParser.parse("""[1, 2, 3]"""))
+                    assert(e.actual == JsonParser.parse("""[1, 2, 3]""").getOrThrow)
                 case other => fail(s"expected a parse failure, got $other")
         }
 
@@ -127,7 +127,7 @@ class GraphQLResponseSpec extends kyo.test.Test[Any]:
         }
 
         "a codec defect is a panic, not a parse failure" in {
-            GraphQLResponse.parse(JsonParser.parse("""{ "data": { "name": "Luke" } }"""), defectiveOp) match
+            GraphQLResponse.parse(JsonParser.parse("""{ "data": { "name": "Luke" } }""").getOrThrow, defectiveOp) match
                 case Result.Panic(e) => assert(e.isInstanceOf[ClassCastException])
                 case other           => fail(s"expected a panic, got $other")
         }
@@ -136,7 +136,7 @@ class GraphQLResponseSpec extends kyo.test.Test[Any]:
             val error = GraphQLError.parse(
                 JsonParser.parse(
                     """{ "path": ["ok", true, 2], "locations": [{ "line": 1 }, { "line": 1, "column": 4 }] }"""
-                )
+                ).getOrThrow
             ).getOrThrow
             assert(error.message == "")
             // `true` is not a valid path segment and is skipped; strings and ints stay.

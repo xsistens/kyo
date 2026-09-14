@@ -177,9 +177,9 @@ final class MemoryCache(
             val date     = writeDate(cacheHeaders)
             var metadata = record.metadata
             if expireAfterMillis >= 0 then
-                metadata = metadata + (MemoryCache.DateMetaKey -> Json.JNum(date.toDouble))
+                metadata = metadata + (MemoryCache.DateMetaKey -> Json.JInt(date))
             if maxAge >= 0 then
-                val incomingDates = record.fields.keysIterator.map(_ -> Json.JNum(date.toDouble)).toMap
+                val incomingDates = record.fields.keysIterator.map(_ -> Json.JInt(date)).toMap
                 val priorDates    = existing.map(fieldDates).getOrElse(Map.empty)
                 metadata =
                     metadata + (MemoryCache.FieldDatesMetaKey -> Json.JObj(priorDates ++ incomingDates))
@@ -190,9 +190,10 @@ final class MemoryCache(
       * received date.
       */
     private def isExpired(record: Record): Boolean =
-        expireAfterMillis >= 0 && (record.metadata.get(MemoryCache.DateMetaKey) match
-            case Some(Json.JNum(date)) => nowMillis() - date.toLong > expireAfterMillis
-            case _                     => false)
+        expireAfterMillis >= 0 &&
+            record.metadata.get(MemoryCache.DateMetaKey).flatMap(Json.integral(_).toOption).exists(date =>
+                nowMillis() - date > expireAfterMillis
+            )
 
     /** The per-field received dates stamped on `record`, or empty if none. */
     private def fieldDates(record: Record): Map[String, Json] =
@@ -210,9 +211,7 @@ final class MemoryCache(
             val dates = fieldDates(record)
             val now   = nowMillis()
             val expiredFields = record.fields.keySet.filter { field =>
-                dates.get(field) match
-                    case Some(Json.JNum(date)) => now - date.toLong > maxAge
-                    case _                     => false
+                dates.get(field).flatMap(Json.integral(_).toOption).exists(date => now - date > maxAge)
             }
             if expiredFields.isEmpty then Present(record)
             else

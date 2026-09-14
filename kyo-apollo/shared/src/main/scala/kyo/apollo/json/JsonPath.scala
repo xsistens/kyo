@@ -11,13 +11,14 @@ object JsonPath:
 
     private given CanEqual[String | Int, String | Int] = CanEqual.derived
 
-    /** Parse a wire `path` array into `String` (field) / `Int` (index) segments. */
+    /** Parse a wire `path` array into `String` (field) / `Int` (index) segments. An
+      * index is a JSON number with an exact `Int` value.
+      */
     def parse(json: Json): List[String | Int] = json match
         case Json.JArr(items) =>
-            items.toList.flatMap {
-                case Json.JStr(name)  => Some(name)
-                case Json.JNum(index) => Some(index.toInt)
-                case _                => None
+            items.toList.flatMap[String | Int] {
+                case Json.JStr(name) => Some(name)
+                case other           => Json.integral(other).filter(_.isValidInt).map(_.toInt).toOption
             }
         case _ => Nil
 
