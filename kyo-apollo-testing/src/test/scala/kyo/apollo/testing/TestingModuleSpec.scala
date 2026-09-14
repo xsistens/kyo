@@ -23,11 +23,6 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
 
     given CanEqual[Any, Any] = CanEqual.derived
 
-    /** Yield to kyo's scheduler so the WebSocket transport's background fibers
-      * dispatch the frames scripted just before — the effect-native `flush`.
-      */
-    private def settle(using Frame): Unit < Async = Async.sleep(30L.millis)
-
     "kyo.apollo.testing" - {
 
         // --- TestHttpEngine + cacheless client ---------------------------------
@@ -190,15 +185,19 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
         "GatedHttpEngine parks the reply until released" in {
             val engine = GatedHttpEngine("""{"data":{"value":5}}""")
             for
-                client <- TestApolloClient.cacheless(engine)
-                fiber  <- Fiber.init(Scope.run(client.query(Fixtures.ValueQuery()).execute))
-                _      <- settle
-                // The request reached the engine and is now parked on the gate; the
-                // result only arrives after release.
-                _        <- Sync.defer(assert(engine.requests.nonEmpty))
+                client  <- TestApolloClient.cacheless(engine)
+                fiber   <- Fiber.init(Scope.run(client.query(Fixtures.ValueQuery()).execute))
+                request <- engine.nextRequest
+                // The request reached the engine; nothing but the gate can answer it,
+                // so the call is still open here whatever the scheduler did meanwhile.
+                parked   <- fiber.done
                 _        <- Sync.defer(engine.release())
                 response <- fiber.get
-            yield assert(response.data == Present(5))
+            yield
+                assert(request.body.exists(_.contains("Value")))
+                assert(!parked, "the reply resolved before the gate was released")
+                assert(engine.requests == List(request))
+                assert(response.data == Present(5))
             end for
         }
 
@@ -235,6 +234,12 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
                 assert(all == List(1, 2, 3))
                 assert(head == 9)
             end for
+        }
+
+        "the module offers barriers, not waits on the wall clock: no Waits, no StreamProbe.drain" in {
+            typeCheckFailure("Waits.settles(Sync.defer(1))")("Not found: Waits")
+            typeCheckFailure("Waits.eventually(Sync.defer(1))(_ == 1)")("Not found: Waits")
+            typeCheckFailure("StreamProbe.drain(Stream.init(Seq(1)))(_ => ())")("drain")
         }
 
         "WsFrames build the two protocol wire forms" in {
