@@ -389,18 +389,6 @@ object SelectionBuilder:
         def encode(value: B): Json                                           = codec.encode(value)
     end MappedInto
 
-    /** Decode one leaf value. [[ScalarCodec]]'s contract has no frame to build a
-      * failure with, so a codec still signals a wrong shape by raising
-      * `ScalarDecodeException` (or, for a schema-backed leaf, `ApolloParseException`);
-      * this is the one place that turns it into the failure value. Anything else a
-      * codec raises stays a panic.
-      */
-    private def leaf[V](codec: ScalarCodec[V], json: Json)(using Frame): Result[ApolloParseException, V] =
-        Result.catching[ScalarDecodeException | ApolloParseException](codec.decode(json)).mapFailure {
-            case parse: ApolloParseException   => parse
-            case scalar: ScalarDecodeException => ApolloParseException(json, s"a GraphQL ${scalar.expected}")
-        }
-
     /** Bind a field's captured arguments to same-named operation variables. */
     private def bind(args: Chunk[Arg]): Chunk[CompiledArgument] =
         args.map(a => CompiledArgument.variable(a.name))
@@ -472,7 +460,7 @@ object SelectionBuilder:
             CompiledField(name = name, fieldType = fieldType, arguments = bind(arguments)),
             arguments,
             Chunk.empty,
-            (json, frame) => leaf(codec, json)(using frame),
+            (json, frame) => codec.decode(json)(using frame),
             value => codec.encode(value.asInstanceOf[V])
         )
 
@@ -525,7 +513,7 @@ object SelectionBuilder:
         def decodeValue(json: Json, frame: Frame): Result[ApolloParseException, Any] =
             json match
                 case Json.JNull => Result.succeed(default)
-                case other      => leaf(codec, other)(using frame)
+                case other      => codec.decode(other)(using frame)
         Field[Origin, R](
             CompiledField(name = name, fieldType = fieldType, selections = selections, client = true),
             Chunk.empty,
