@@ -39,31 +39,21 @@ object StreamProbe:
     ): A < (Async & Scope) =
         stream.take(1).run.map(_.head)
 
-    /** Fire-and-forget drain: fork a `Scope`-managed fiber that runs `onNext` for
-      * each emission as it is produced. The effect-native form of the deleted
-      * `KyoTestRun.subscribe` — for WS specs that accumulate emissions into a `var`
-      * while they script socket frames and `Async.sleep` between them. The fiber is
-      * `Scope`-managed (via [[Fiber.init]]), so the runner interrupts it on leaf
-      * exit; the returned handle lets a spec join/interrupt it explicitly if needed.
-      */
-    def drain[A](stream: Stream[A, Async & Scope])(onNext: A => Unit)(using
-        Frame,
-        Tag[Emit[Chunk[A]]]
-    ) =
-        Fiber.init(Scope.run(stream.foreach(a => Sync.defer(onNext(a)))))
-
     /** A channel-backed pull handle over a live stream (a watch, a subscription,
       * …): [[Pull.next]] genuinely suspends (on Kyo's own scheduler) until the
-      * stream's next emission has actually landed. Unlike a fire-and-forget drain,
-      * this lets a spec interleave synchronous side effects between *exact*
-      * emissions with no timing guesswork — the effect-native form of the
-      * assert-as-you-go pattern.
+      * stream's next emission has actually landed. This lets a spec interleave
+      * synchronous side effects between *exact* emissions with no timing
+      * guesswork — the effect-native form of the assert-as-you-go pattern.
       *
       * The draining fiber and its backing channel are registered with the leaf's
       * ambient `Scope` (via [[Pull.open]]), so the runner tears them down when the
       * test leaf exits even if a spec never calls [[Pull.cancel]] explicitly —
-      * `cancel` remains available for tests that must stop a watcher MID-leaf and
-      * then assert no further emission arrives.
+      * `cancel` remains available for tests that must stop one stream MID-leaf
+      * while others keep running.
+      *
+      * An absence is proven after a positive barrier, never after a pause: the
+      * spec first pulls a later emission that the unwanted one would have had to
+      * precede, then asserts `tryNext == Absent`.
       */
     final class Pull[A] private[StreamProbe] (channel: Channel[A], interruptDrain: Unit < Sync)(using
         Frame
@@ -82,9 +72,11 @@ object StreamProbe:
             }
 
         /** Non-suspending check for an already-buffered emission — the tool for
-          * asserting a write did *not* cause a re-emission. A `CacheOnly` re-read's
-          * effect on the channel (if any) is synchronous with the triggering write,
-          * so an immediate poll faithfully observes whether one landed.
+          * asserting a write did *not* cause a re-emission. Emissions reach this
+          * handle through a draining fiber, so an unwanted one may not have landed
+          * yet right after the write that would cause it: call this only after a
+          * [[next]] on a later emission the unwanted one would have had to precede.
+          * On a cancelled pull it is always `Absent`.
           */
         def tryNext(using Frame): Maybe[A] < Async =
             Abort.run[Closed](channel.poll).map {
@@ -95,9 +87,9 @@ object StreamProbe:
             }
 
         /** Interrupt the producing fiber and close the channel — the explicit,
-          * mid-leaf teardown a spec uses to prove emissions stop after cancel. Leaf
-          * exit tears both down anyway (both are `Scope`-managed), so an un-cancelled
-          * pull never leaks.
+          * mid-leaf teardown of one stream while others keep running. Leaf exit tears
+          * both down anyway (both are `Scope`-managed), so an un-cancelled pull never
+          * leaks. The interrupt does not wait for the stream's own finalizers.
           */
         def cancel(using Frame): Unit < Sync =
             for
