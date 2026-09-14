@@ -1,5 +1,6 @@
 package kyo.apollo.cache
 
+import kyo.Abort
 import kyo.Absent
 import kyo.Chunk
 import kyo.Maybe
@@ -188,22 +189,26 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             val q       = countryField(GCountry.code ~ CountryCard.fields.spread).toQuery("Q")
             val decoded = q.dataCodec.decode(parse(germanyBody))
             val s       = store()
-            val _       = s.writeOperation(q, decoded)
-
-            // The masked fields landed in the entity record even though the decoded
-            // value carried them only inside the opaque ref.
-            val frag = s.readFragment(CountryCard.fields.cacheFragment, CacheKey("Country", "DE"))
-            assert(frag.name == "Germany")
-            assert(frag.capital == Present("Berlin"))
+            for
+                _ <- s.writeOperation(q, decoded)
+                // The masked fields landed in the entity record even though the decoded
+                // value carried them only inside the opaque ref.
+                frag <- s.readFragment(CountryCard.fields.cacheFragment, CacheKey("Country", "DE"))
+            yield
+                assert(frag.name == "Germany")
+                assert(frag.capital == Present("Berlin"))
+            end for
         }
 
         "write → read round-trips the ref by value" in {
             val q       = countryField(GCountry.code ~ CountryCard.fields.spread).toQuery("Q")
             val decoded = q.dataCodec.decode(parse(germanyBody))
             val s       = store()
-            val _       = s.writeOperation(q, decoded)
-            val back    = s.readOperation(q)
-            assert(back == decoded)
+            for
+                _    <- s.writeOperation(q, decoded)
+                back <- s.readOperation(q)
+            yield assert(back == decoded)
+            end for
         }
 
         "two fragments of the same type with overlapping fields merge into one record" in {
@@ -214,15 +219,17 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
                 """{"country":{"__typename":"Country","code":"DE","name":"Germany","capital":"Berlin","emoji":"DE-FLAG"}}"""
             val decoded = q.dataCodec.decode(parse(body))
             val s       = store()
-            val _       = s.writeOperation(q, decoded)
-
             val cardRef = decoded.country.countryCard
             val flagRef = decoded.country.countryFlag
             assert(s.keyOf(cardRef.typeName, cardRef.raw) == s.keyOf(flagRef.typeName, flagRef.raw))
-            val card = s.readFragment(CountryCard.fields.cacheFragment, CacheKey("Country", "DE"))
-            val flag = s.readFragment(CountryFlag.fields.cacheFragment, CacheKey("Country", "DE"))
-            assert(card.name == "Germany")
-            assert(flag.emoji == "DE-FLAG")
+            for
+                _    <- s.writeOperation(q, decoded)
+                card <- s.readFragment(CountryCard.fields.cacheFragment, CacheKey("Country", "DE"))
+                flag <- s.readFragment(CountryFlag.fields.cacheFragment, CacheKey("Country", "DE"))
+            yield
+                assert(card.name == "Germany")
+                assert(flag.emoji == "DE-FLAG")
+            end for
         }
 
         "a parent selecting a field the fragment also selects stays a single stored field" in {
@@ -230,8 +237,11 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             val decoded = q.dataCodec.decode(parse(germanyBody))
             assert(decoded.country.name == "Germany") // the parent's own, explicit dependency
             val s = store()
-            val _ = s.writeOperation(q, decoded)
-            assert(s.readOperation(q) == decoded)
+            for
+                _    <- s.writeOperation(q, decoded)
+                back <- s.readOperation(q)
+            yield assert(back == decoded)
+            end for
         }
     }
 
@@ -243,31 +253,31 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             val qa = countryField(GCountry.code ~ GCountry.name).toQuery("A")
             val qb = countryField(GCountry.code ~ GCountry.capital).toQuery("B")
             val s  = store()
-
-            val _ = s.writeOperation(
-                qa,
-                qa.dataCodec.decode(parse("""{"country":{"__typename":"Country","code":"DE","name":"Germany"}}"""))
-            )
-            // A's fields alone must NOT satisfy the fragment yet.
-            val premature =
-                try
-                    val _ = s.readFragment(CountryCard.fields.cacheFragment, CacheKey("Country", "DE"))
-                    false
-                catch case _: kyo.apollo.exception.CacheMissException => true
-            assert(premature)
-
-            val changedByB = s.writeOperation(
-                qb,
-                qb.dataCodec.decode(parse("""{"country":{"__typename":"Country","code":"DE","capital":"Berlin"}}"""))
-            )
-            // B extends the record rather than replacing it…
-            assert(changedByB.contains(CacheKey("Country", "DE")))
-            // …and the fragment now assembles across both operations' contributions.
-            val frag = s.readFragment(CountryCard.fields.cacheFragment, CacheKey("Country", "DE"))
-            assert(frag.name == "Germany")
-            assert(frag.capital == Present("Berlin"))
-            // A's own read survives B's write: old fields were unioned, not clobbered.
-            assert(s.readOperation(qa).country.name == "Germany")
+            for
+                _ <- s.writeOperation(
+                    qa,
+                    qa.dataCodec.decode(parse("""{"country":{"__typename":"Country","code":"DE","name":"Germany"}}"""))
+                )
+                // A's fields alone must NOT satisfy the fragment yet.
+                premature <- Abort.run[kyo.apollo.exception.CacheMissException](
+                    s.readFragment(CountryCard.fields.cacheFragment, CacheKey("Country", "DE"))
+                )
+                changedByB <- s.writeOperation(
+                    qb,
+                    qb.dataCodec.decode(parse("""{"country":{"__typename":"Country","code":"DE","capital":"Berlin"}}"""))
+                )
+                // …and the fragment now assembles across both operations' contributions.
+                frag  <- s.readFragment(CountryCard.fields.cacheFragment, CacheKey("Country", "DE"))
+                readA <- s.readOperation(qa)
+            yield
+                assert(premature.isFailure)
+                // B extends the record rather than replacing it…
+                assert(changedByB.contains(CacheKey("Country", "DE")))
+                assert(frag.name == "Germany")
+                assert(frag.capital == Present("Berlin"))
+                // A's own read survives B's write: old fields were unioned, not clobbered.
+                assert(readA.country.name == "Germany")
+            end for
         }
     }
 
@@ -300,14 +310,16 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             )
             val q       = countryField(GCountry.code ~ CountryCard.fields.spread).toQuery("Q")
             val decoded = q.dataCodec.decode(parse(germanyBody))
-            val _       = s.writeOperation(q, decoded)
             val ref     = decoded.country.countryCard
-
-            val key = s.keyOf(ref.typeName, ref.raw)
+            val key     = s.keyOf(ref.typeName, ref.raw)
             assert(key == Present(CacheKey("Country", "Germany")))
-            val frag = s.readFragment(CountryCard.fields.cacheFragment, key.get)
-            assert(frag.name == "Germany")
-            assert(frag.capital == Present("Berlin"))
+            for
+                _    <- s.writeOperation(q, decoded)
+                frag <- s.readFragment(CountryCard.fields.cacheFragment, key.get)
+            yield
+                assert(frag.name == "Germany")
+                assert(frag.capital == Present("Berlin"))
+            end for
         }
 
         "a store with no identity for the type has no key for the ref, never a positional one" in {
@@ -317,9 +329,8 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             val s       = new ApolloStore(MemoryCache())
             val q       = countryField(GCountry.code ~ CountryCard.fields.spread).toQuery("Q")
             val decoded = q.dataCodec.decode(parse(germanyBody))
-            val _       = s.writeOperation(q, decoded)
             val ref     = decoded.country.countryCard
-            assert(s.keyOf(ref.typeName, ref.raw) == Absent)
+            s.writeOperation(q, decoded).map(_ => assert(s.keyOf(ref.typeName, ref.raw) == Absent))
         }
     }
 

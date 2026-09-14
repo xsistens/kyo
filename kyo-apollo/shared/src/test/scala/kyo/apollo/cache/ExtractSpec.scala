@@ -1,7 +1,6 @@
 package kyo.apollo.cache
 
-import kyo.Chunk
-import kyo.Schema
+import kyo.*
 import kyo.apollo.api.*
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.*
@@ -86,59 +85,70 @@ class ExtractSpec extends kyo.test.Test[Any]:
         def variables: Json = Json.JObj(VectorMap("name" -> SchemaJson.encode(newName)))
     end RenameMutation
 
-    private def countryStore(): ApolloStore =
+    private def countryStore()(using Frame): ApolloStore < Sync =
         val s = new ApolloStore(MemoryCache(), cacheKeyGenerator = IdCacheKeyGenerator(List("code")))
         s.writeOperation(
             CountriesQuery(),
             CountriesData(List(Country("Country", "DE", "Germany"), Country("Country", "FR", "France")))
-        )
-        s
+        ).andThen(s)
     end countryStore
+
+    /** The persisted (no optimistic overlay) dump of [[countryStore]]'s records. */
+    private def countryFields()(using Frame): Map[String, Json] < Sync =
+        countryStore().map(_.extract(false)).map {
+            case Json.JObj(fields) => fields
+            case other             => throw new AssertionError(s"expected JObj, got $other")
+        }
 
     "ApolloStore.extract" - {
 
         "empty store extracts to an empty JSON object (does not throw)" in {
             val s = new ApolloStore(MemoryCache())
-            assert(s.extract() == Json.JObj(Map.empty))
+            s.extract().map(json => assert(json == Json.JObj(Map.empty)))
         }
 
         "extract contains a top-level ROOT_QUERY key (translated from QUERY_ROOT)" in {
-            countryStore().extract(false) match
-                case Json.JObj(fields) => assert(fields.contains("ROOT_QUERY"))
-                case other             => assert(false, s"expected JObj, got $other")
+            countryFields().map(fields => assert(fields.contains("ROOT_QUERY")))
         }
 
         "entity records appear under Type:id keys" in {
-            val Json.JObj(fields) = countryStore().extract(false): @unchecked
-            assert(fields.contains("Country:DE") && fields.contains("Country:FR"))
+            countryFields().map(fields => assert(fields.contains("Country:DE") && fields.contains("Country:FR")))
         }
 
         "references serialize as {\"__ref\": key} and a list as a JSON array of refs" in {
-            val rendered = countryStore().extract(false).render
-            assert(rendered.contains("\"__ref\":\"Country:DE\""))
-            assert(rendered.contains("\"__ref\":\"Country:FR\""))
-            // a list field renders as an array whose elements are ref objects
-            assert(rendered.contains("[{\"__ref\":"))
+            countryStore().map(_.extract(false)).map { json =>
+                val rendered = json.render
+                assert(rendered.contains("\"__ref\":\"Country:DE\""))
+                assert(rendered.contains("\"__ref\":\"Country:FR\""))
+                // a list field renders as an array whose elements are ref objects
+                assert(rendered.contains("[{\"__ref\":"))
+            }
         }
 
         "every entity object carries __typename" in {
-            val Json.JObj(fields) = countryStore().extract(false): @unchecked
-            fields("Country:DE") match
-                case Json.JObj(f) => assert(f.get("__typename") == Some(Json.JStr("Country")))
-                case other        => assert(false, s"expected JObj, got $other")
+            countryFields().map { fields =>
+                fields("Country:DE") match
+                    case Json.JObj(f) => assert(f.get("__typename") == Some(Json.JStr("Country")))
+                    case other        => assert(false, s"expected JObj, got $other")
+            }
         }
 
         "includeOptimistic=true overlays pending layers; false omits them" in {
             val s = new ApolloStore(MemoryCache(), cacheKeyGenerator = IdCacheKeyGenerator(List("id")))
-            s.writeOperation(CurrentUserQuery(), UserData(User("User", "1", "Alice")))
-            s.writeOptimisticUpdates(
-                RenameMutation("Bob"),
-                UpdateUserData(User("User", "1", "Bob")),
-                "m1"
-            )
-            assert(s.extract(true).render.contains("\"name\":\"Bob\""))
-            assert(!s.extract(false).render.contains("\"name\":\"Bob\""))
-            assert(s.extract(false).render.contains("\"name\":\"Alice\""))
+            for
+                _ <- s.writeOperation(CurrentUserQuery(), UserData(User("User", "1", "Alice")))
+                _ <- s.writeOptimisticUpdates(
+                    RenameMutation("Bob"),
+                    UpdateUserData(User("User", "1", "Bob")),
+                    "m1"
+                )
+                withLayers    <- s.extract(true)
+                withoutLayers <- s.extract(false)
+            yield
+                assert(withLayers.render.contains("\"name\":\"Bob\""))
+                assert(!withoutLayers.render.contains("\"name\":\"Bob\""))
+                assert(withoutLayers.render.contains("\"name\":\"Alice\""))
+            end for
         }
     }
 end ExtractSpec

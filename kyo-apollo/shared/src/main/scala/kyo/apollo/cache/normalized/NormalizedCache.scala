@@ -1,8 +1,12 @@
 package kyo.apollo.cache.normalized
 
+import kyo.<
 import kyo.Absent
+import kyo.Chunk
+import kyo.Frame
 import kyo.Maybe
 import kyo.Present
+import kyo.Sync
 import kyo.apollo.cache.normalized.api.CacheHeaders
 import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.cache.normalized.api.FieldKey
@@ -10,82 +14,121 @@ import kyo.apollo.cache.normalized.api.Record
 
 /** A pluggable backend that stores normalized [[Record]]s keyed by cache key.
   *
-  * This is the storage seam Phase 04 writes records into and reads them back
-  * out of: [[kyo.apollo.cache.normalized.internal.Normalizer]] produces records, the
-  * store merges and holds them, and
-  * [[kyo.apollo.cache.normalized.internal.CacheBatchReader]] resolves them by key via
-  * [[loadRecord]]. Concrete backends (an in-memory map today, a persistent store
+  * This is the storage seam the store writes records into and reads them back out
+  * of: [[kyo.apollo.cache.normalized.internal.Normalizer]] produces records, the
+  * backend merges and holds them, and
+  * [[kyo.apollo.cache.normalized.internal.CacheBatchReader]] resolves them through a
+  * [[RecordLoader]]. Concrete backends (an in-memory map today, a persistent store
   * later) implement the same contract, so the [[ApolloStore]] coordinator is
   * agnostic to where records live. Mirrors apollo-kotlin's `NormalizedCache`.
   *
-  * Records are merged, never blindly replaced: [[merge]] unions an incoming
-  * record's fields onto whatever is already stored and reports which keys
-  * actually changed, so a re-fetch that returns identical data touches nothing.
+  * The contract is two primitives, not a set of single-record calls whose
+  * consistency is left implicit:
+  *
+  *   - [[read]] hands its function ONE loader over ONE consistent state of the
+  *     store. Every record a read loads — however many batches it takes — comes
+  *     from that state, so a read sees the store either before or after a
+  *     concurrent write, never a mixture of both.
+  *   - [[transact]] is an atomic read-modify-write: its function loads what it
+  *     needs, returns the records to merge, and the backend commits them against
+  *     exactly the state that function saw. Under contention the function is run
+  *     again on the newer state, so it must be pure.
+  *
+  * [[loadRecord]], [[loadRecords]] and [[merge]] are conveniences expressed through
+  * those two, so a decorating backend overrides [[read]] and [[transact]] and
+  * reaches every read and write the store makes.
+  *
+  * Records are merged, never blindly replaced: a commit unions an incoming record's
+  * fields onto whatever is already stored (through the [[RecordMerger]] the store
+  * hands in) and reports which keys actually changed, so a re-fetch that returns
+  * identical data touches nothing.
   */
 trait NormalizedCache:
 
-    /** The record stored under `key`, or `Absent` if absent (or, for a time-based
-      * store, expired).
-      */
-    def loadRecord(key: CacheKey): Maybe[Record]
-
-    /** The records present among `keys`, keyed by cache key. Absent keys are
-      * simply omitted. Overridable for stores that can batch the lookup.
-      */
-    def loadRecords(keys: Iterable[CacheKey]): Map[CacheKey, Record] =
-        keys.iterator.flatMap(key => loadRecord(key).map(key -> _).toOption).toMap
-
-    /** Every record currently held, keyed by [[Record.key]] — the whole-store
-      * snapshot garbage collection sweeps over.
+    /** Run `f` against one loader over one consistent state of the store.
       *
-      * [[ApolloStore.garbageCollect]] needs the full universe of stored keys to
-      * compute the *complement* of the reachable set (unreachable = all − reachable)
-      * without perturbing per-record bookkeeping (an LRU backend's recency, a
-      * time-based backend's expiry). Returning a materialised snapshot lets the
-      * sweep mark reachability against a stable view and remove the rest. Backends
-      * that cannot cheaply enumerate (a remote store) may override to page, but the
-      * in-memory and decorator backends return their map directly.
+      * `load` is the batch seam a persistent backend needs: a reader asks for all
+      * the keys of one level of a selection tree at once. A record that is absent
+      * (or, for a time-based backend, expired) is simply missing from the returned
+      * map. `f` runs once; anything it throws propagates out of the effect.
       */
-    def allRecords(): Map[CacheKey, Record]
+    def read[A](f: RecordLoader => A)(using Frame): A < Sync
 
-    /** Merge `records` into the store and return the set of record keys whose
-      * stored value changed (new records always count; a re-write of identical
-      * fields counts for nothing). `cacheHeaders` may carry write hints such as
-      * [[CacheHeaders.Date]] (expiry stamp) or [[CacheHeaders.DoNotStore]].
+    /** Atomically load, compute and merge: `f` receives a loader over the current
+      * state and returns the records to merge plus a result of its own; the records
+      * are merged through `merger` onto exactly that state, and the keys whose
+      * stored value changed are returned together with `f`'s result.
       *
-      * The returned changed-key set is what [[ApolloStore.publish]] hands to
-      * watchers (Phase 05) so only affected reads re-run.
+      * `f` must be PURE: when another write commits first, the backend runs it again
+      * on the newer state. `cacheHeaders` carries write hints such as
+      * [[CacheHeaders.Date]] (expiry stamp) or [[CacheHeaders.DoNotStore]] (commit
+      * nothing).
       */
-    def merge(records: Iterable[Record], cacheHeaders: CacheHeaders = CacheHeaders.None): Set[CacheKey]
-
-    /** Merge `records` using an explicit [[RecordMerger]] — the policy-aware write
-      * path the [[ApolloStore]] uses so a per-field merge (e.g. connection edge
-      * unioning) is honoured. The default implementation ignores `recordMerger` and
-      * falls back to the plain [[merge]] above, so backends that predate field
-      * policies keep working; a backend that supports custom merging (see
-      * [[MemoryCache]]) overrides this to route through `recordMerger`.
-      */
-    def merge(
-        records: Iterable[Record],
+    def transact[A](
+        f: RecordLoader => (Chunk[Record], A),
         cacheHeaders: CacheHeaders,
-        @annotation.unused recordMerger: RecordMerger
-    ): Set[CacheKey] =
-        merge(records, cacheHeaders)
+        merger: RecordMerger
+    )(using Frame): (Set[CacheKey], A) < Sync
 
-    /** Remove the record stored under `key`. Returns `true` if a record was
-      * present and removed, `false` if there was nothing to remove.
+    /** Remove the records stored under `keys`, returning the keys that were present
+      * and are now gone. Absent keys are skipped.
       */
-    def remove(key: CacheKey): Boolean
+    def remove(keys: Chunk[CacheKey])(using Frame): Set[CacheKey] < Sync
 
     /** Drop every record from the store. */
-    def clearAll(): Unit
+    def clearAll(using Frame): Unit < Sync
+
+    /** Every record currently held, keyed by [[Record.key]] — the whole-store
+      * snapshot garbage collection and the devtools dump sweep over, taken without
+      * perturbing per-record bookkeeping (an LRU backend's recency, a time-based
+      * backend's expiry).
+      */
+    def allRecords(using Frame): Map[CacheKey, Record] < Sync
 
     /** The maximum number of records this backend retains before eviction, when it
       * is bounded — `Absent` for an unbounded store. Surfaced for diagnostics (e.g. the
       * devtools memory view); backends with a size cap override this.
       */
     def sizeLimit: Maybe[Int] = Absent
+
+    /** The record stored under `key`, or `Absent` — one [[read]] of one key. */
+    final def loadRecord(key: CacheKey)(using Frame): Maybe[Record] < Sync =
+        read(loader => Maybe.fromOption(loader.load(Chunk(key)).get(key)))
+
+    /** The records present among `keys`, keyed by cache key — one [[read]] of one
+      * batch. Absent keys are omitted.
+      */
+    final def loadRecords(keys: Chunk[CacheKey])(using Frame): Map[CacheKey, Record] < Sync =
+        read(_.load(keys))
+
+    /** Merge `records` into the store and return the keys whose stored value
+      * changed (new records always count; a re-write of identical fields counts for
+      * nothing) — a [[transact]] that loads nothing.
+      */
+    final def merge(
+        records: Chunk[Record],
+        cacheHeaders: CacheHeaders = CacheHeaders.None,
+        merger: RecordMerger = RecordMerger.default
+    )(using Frame): Set[CacheKey] < Sync =
+        transact(_ => (records, ()), cacheHeaders, merger).map(_._1)
 end NormalizedCache
+
+/** A batch lookup over one consistent state of a [[NormalizedCache]] — what
+  * [[NormalizedCache.read]] and [[NormalizedCache.transact]] hand their function.
+  * Pure over that state: loading the same keys twice returns the same records.
+  */
+trait RecordLoader:
+    /** The records present among `keys`, keyed by cache key; absent keys are
+      * omitted.
+      */
+    def load(keys: Chunk[CacheKey]): Map[CacheKey, Record]
+end RecordLoader
+
+object RecordLoader:
+    /** A loader over a fixed map of records. */
+    def apply(records: Map[CacheKey, Record]): RecordLoader =
+        keys => keys.iterator.flatMap(key => records.get(key).map(key -> _)).toMap
+end RecordLoader
 
 object NormalizedCache:
 

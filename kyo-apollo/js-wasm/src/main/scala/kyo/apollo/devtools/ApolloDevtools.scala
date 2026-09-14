@@ -1,8 +1,11 @@
 package kyo.apollo.devtools
 
+import kyo.<
 import kyo.Absent
+import kyo.AllowUnsafe
 import kyo.Frame
 import kyo.Maybe
+import kyo.Sync
 import kyo.apollo.ApolloClient
 import kyo.apollo.cache.normalized.apolloStore
 import kyo.apollo.devtools.DevtoolsOperationStore.MutationRecord
@@ -78,7 +81,7 @@ object ApolloDevtools:
         name: String,
         ops: DevtoolsOperationStore,
         parse: String => js.Any = graphqlParse
-    ): ApolloClient =
+    )(using Frame): ApolloClient =
         val window = js.Dynamic.global.window
         if js.isUndefined(window) then client
         else
@@ -110,9 +113,16 @@ object ApolloDevtools:
     /** The client's normalized cache as devtools JSON, or an empty object when no
       * normalized cache is installed (so the Cache tab stays empty, not broken).
       */
-    private def extractOf(client: ApolloClient, includeOptimistic: Boolean): Json =
-        try client.apolloStore.extract(includeOptimistic)
+    private def extractOf(client: ApolloClient, includeOptimistic: Boolean)(using Frame): Json =
+        try evalNow(client.apolloStore.extract(includeOptimistic))
         catch case _: Throwable => Json.JObj(Map.empty)
+
+    /** Run a store effect to completion inside a devtools getter. The extension polls
+      * plain synchronous JS functions, so this is the boundary where the store's
+      * `Sync` effects have to be evaluated.
+      */
+    private def evalNow[A](v: A < Sync)(using Frame): A =
+        Sync.Unsafe.evalOrThrow(v)(using summon[Frame], AllowUnsafe.embrace.danger)
 
     /** Build the JS client-shim object the devtools extension reflects on. Pure over
       * its inputs (no window, no client), so it is unit-testable with fakes. The
@@ -239,9 +249,9 @@ object ApolloDevtools:
         ops: DevtoolsOperationStore,
         astSize: Int,
         astCap: Int
-    ): js.Any =
+    )(using Frame): js.Any =
         val recordCount =
-            try client.apolloStore.cache.allRecords().size
+            try evalNow(client.apolloStore.cache.allRecords).size
             catch case _: Throwable => 0
         val cacheLimit: Maybe[Int] =
             try client.apolloStore.cache.sizeLimit

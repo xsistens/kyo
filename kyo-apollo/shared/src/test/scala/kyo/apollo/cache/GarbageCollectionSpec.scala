@@ -1,19 +1,16 @@
 package kyo.apollo.cache
 
-import kyo.Absent
-import kyo.Chunk
-import kyo.Present
-import kyo.Schema
+import kyo.*
 import kyo.apollo.api.*
 import kyo.apollo.cache.TestKeys.*
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.*
+import kyo.apollo.cache.normalized.api.Record
 import kyo.apollo.json.Json
 import kyo.apollo.json.SchemaJson
 import scala.collection.immutable.VectorMap
-import scala.collection.mutable.ListBuffer
 
-/** Phase 07 Task 4: garbage collection, eviction, and TTL/expiration.
+/** Garbage collection, eviction, and TTL/expiration.
   *
   * Three layers of coverage:
   *   - **Reachability GC** on [[ApolloStore]] — `garbageCollect` /
@@ -40,17 +37,16 @@ class GarbageCollectionSpec extends kyo.test.Test[Any]:
 
     // --- reachability GC --------------------------------------------------------
 
-    private def graphStore(): ApolloStore =
+    private def graphStore()(using Frame): ApolloStore < Sync =
         val s = new ApolloStore(MemoryCache())
         s.cache.merge(
-            List(
+            Chunk(
                 rec(CacheKey.QueryRoot, fk("book")      -> ref(CacheKey("Book", "1"))),
                 rec(CacheKey("Book", "1"), fk("title")  -> scalar("Dune"), fk("author") -> ref(CacheKey("Author", "1"))),
                 rec(CacheKey("Author", "1"), fk("name") -> scalar("Herbert")),
                 rec(CacheKey("Orphan", "1"), fk("x")    -> scalar("1"))
             )
-        )
-        s
+        ).andThen(s)
     end graphStore
 
     // --- optimistic pinning -----------------------------------------------------
@@ -87,103 +83,148 @@ class GarbageCollectionSpec extends kyo.test.Test[Any]:
     "garbageCollect / evict / MemoryCache TTL / NormalizedCacheDecorator" - {
 
         "garbageCollect removes records unreachable from a root, transitively keeping the rest" in {
-            val s = graphStore()
-            assert(s.garbageCollect() == Set(CacheKey("Orphan", "1")))
-            assert(s.cache.loadRecord(CacheKey.QueryRoot).isDefined)
-            assert(s.cache.loadRecord(CacheKey("Book", "1")).isDefined)
-            assert(s.cache.loadRecord(CacheKey("Author", "1")).isDefined) // reachable QUERY_ROOT → Book:1 → Author:1
-            assert(s.cache.loadRecord(CacheKey("Orphan", "1")) == Absent)
+            for
+                s       <- graphStore()
+                removed <- s.garbageCollect
+                root    <- s.cache.loadRecord(CacheKey.QueryRoot)
+                book    <- s.cache.loadRecord(CacheKey("Book", "1"))
+                author  <- s.cache.loadRecord(CacheKey("Author", "1"))
+                orphan  <- s.cache.loadRecord(CacheKey("Orphan", "1"))
+            yield
+                assert(removed == Set(CacheKey("Orphan", "1")))
+                assert(root.isDefined)
+                assert(book.isDefined)
+                assert(author.isDefined) // reachable QUERY_ROOT → Book:1 → Author:1
+                assert(orphan == Absent)
+            end for
         }
 
         "garbageCollect keeps records reachable only through a list reference" in {
             val s = new ApolloStore(MemoryCache())
-            s.cache.merge(
-                List(
-                    rec(
-                        CacheKey.QueryRoot,
-                        fk("books") -> RecordValue.RList(Chunk(ref(CacheKey("Book", "1")), ref(CacheKey("Book", "2"))))
-                    ),
-                    rec(CacheKey("Book", "1"), fk("title") -> scalar("A")),
-                    rec(CacheKey("Book", "2"), fk("title") -> scalar("B")),
-                    rec(CacheKey("Orphan", "1"), fk("x")   -> scalar("1"))
+            for
+                _ <- s.cache.merge(
+                    Chunk(
+                        rec(
+                            CacheKey.QueryRoot,
+                            fk("books") -> RecordValue.RList(Chunk(ref(CacheKey("Book", "1")), ref(CacheKey("Book", "2"))))
+                        ),
+                        rec(CacheKey("Book", "1"), fk("title") -> scalar("A")),
+                        rec(CacheKey("Book", "2"), fk("title") -> scalar("B")),
+                        rec(CacheKey("Orphan", "1"), fk("x")   -> scalar("1"))
+                    )
                 )
-            )
-            assert(s.garbageCollect() == Set(CacheKey("Orphan", "1")))
-            assert(s.cache.loadRecord(CacheKey("Book", "1")).isDefined)
-            assert(s.cache.loadRecord(CacheKey("Book", "2")).isDefined)
+                removed <- s.garbageCollect
+                book1   <- s.cache.loadRecord(CacheKey("Book", "1"))
+                book2   <- s.cache.loadRecord(CacheKey("Book", "2"))
+            yield
+                assert(removed == Set(CacheKey("Orphan", "1")))
+                assert(book1.isDefined)
+                assert(book2.isDefined)
+            end for
         }
 
         "garbageCollect on an empty store removes nothing" in {
             val s = new ApolloStore(MemoryCache())
-            assert(s.garbageCollect() == Set.empty[CacheKey])
+            s.garbageCollect.map(removed => assert(removed == Set.empty[CacheKey]))
         }
 
         "garbageCollect does not publish (unreachable records have no watchers)" in {
-            val s         = graphStore()
             var published = false
-            s.addChangedKeysListener(_ => published = true)
-            s.garbageCollect()
-            assert(published == false)
+            for
+                s <- graphStore()
+                _ <- s.addChangedKeysListener(_ => published = true)
+                _ <- s.garbageCollect
+            yield assert(published == false)
+            end for
         }
 
         "removeUnreachableRecords is the sweep helper garbageCollect delegates to" in {
-            val s = graphStore()
-            assert(s.removeUnreachableRecords() == Set(CacheKey("Orphan", "1")))
-            // A second sweep is now a no-op — everything left is reachable.
-            assert(s.removeUnreachableRecords() == Set.empty[CacheKey])
+            for
+                s      <- graphStore()
+                first  <- s.removeUnreachableRecords
+                second <- s.removeUnreachableRecords // a no-op now — everything left is reachable
+            yield
+                assert(first == Set(CacheKey("Orphan", "1")))
+                assert(second == Set.empty[CacheKey])
+            end for
         }
 
         "an optimistic layer pins an otherwise-unreachable record from GC, releasing it on rollback" in {
             val s = new ApolloStore(MemoryCache(), cacheKeyGenerator = IdCacheKeyGenerator(List("id")))
-            // A persisted record reachable from no root — a GC candidate on its own.
-            s.cache.merge(List(rec(CacheKey("User", "1"), fk("name") -> scalar("Alice"))))
-            // An optimistic mutation references User:1, so GC must keep it alive.
-            s.writeOptimisticUpdates(
-                UpdateUserNameMutation("Bob"),
-                UpdateUserData(User("User", "1", "Bob")),
-                "m1"
-            )
-            assert(s.garbageCollect() == Set.empty[CacheKey])
-            assert(s.cache.loadRecord(CacheKey("User", "1")).isDefined)
-            // Once the optimistic layer rolls back, the record is unreachable again.
-            s.rollbackOptimisticUpdates("m1")
-            assert(s.garbageCollect() == Set(CacheKey("User", "1")))
+            for
+                // A persisted record reachable from no root — a GC candidate on its own.
+                _ <- s.cache.merge(Chunk(rec(CacheKey("User", "1"), fk("name") -> scalar("Alice"))))
+                // An optimistic mutation references User:1, so GC must keep it alive.
+                _ <- s.writeOptimisticUpdates(
+                    UpdateUserNameMutation("Bob"),
+                    UpdateUserData(User("User", "1", "Bob")),
+                    "m1"
+                )
+                pinned   <- s.garbageCollect
+                kept     <- s.cache.loadRecord(CacheKey("User", "1"))
+                _        <- s.rollbackOptimisticUpdates("m1")
+                released <- s.garbageCollect // the layer is gone, the record is unreachable again
+            yield
+                assert(pinned == Set.empty[CacheKey])
+                assert(kept.isDefined)
+                assert(released == Set(CacheKey("User", "1")))
+            end for
         }
 
         // --- eviction ---------------------------------------------------------------
 
         "evict removes a single record, publishes its key, and returns it" in {
-            val s    = graphStore()
-            var seen = Option.empty[Set[CacheKey]]
-            s.addChangedKeysListener(keys => seen = Some(keys))
-            assert(s.evict(CacheKey("Author", "1")) == Set(CacheKey("Author", "1")))
-            assert(seen == Some(Set(CacheKey("Author", "1"))))
-            assert(s.cache.loadRecord(CacheKey("Author", "1")) == Absent)
-            assert(s.cache.loadRecord(CacheKey("Book", "1")).isDefined) // referrer untouched without cascade
+            var seen = Maybe.empty[Set[CacheKey]]
+            for
+                s       <- graphStore()
+                _       <- s.addChangedKeysListener(keys => seen = Present(keys))
+                evicted <- s.evict(CacheKey("Author", "1"))
+                author  <- s.cache.loadRecord(CacheKey("Author", "1"))
+                book    <- s.cache.loadRecord(CacheKey("Book", "1"))
+            yield
+                assert(evicted == Set(CacheKey("Author", "1")))
+                assert(seen == Present(Set(CacheKey("Author", "1"))))
+                assert(author == Absent)
+                assert(book.isDefined) // referrer untouched without cascade
+            end for
         }
 
         "evict with cascade removes the referenced subtree" in {
-            val s = graphStore()
-            assert(s.evict(CacheKey("Book", "1"), cascade = true) == Set(CacheKey("Book", "1"), CacheKey("Author", "1")))
-            assert(s.cache.loadRecord(CacheKey("Book", "1")) == Absent)
-            assert(s.cache.loadRecord(CacheKey("Author", "1")) == Absent)
-            assert(s.cache.loadRecord(CacheKey.QueryRoot).isDefined) // the referrer above is not touched
+            for
+                s       <- graphStore()
+                evicted <- s.evict(CacheKey("Book", "1"), cascade = true)
+                book    <- s.cache.loadRecord(CacheKey("Book", "1"))
+                author  <- s.cache.loadRecord(CacheKey("Author", "1"))
+                root    <- s.cache.loadRecord(CacheKey.QueryRoot)
+            yield
+                assert(evicted == Set(CacheKey("Book", "1"), CacheKey("Author", "1")))
+                assert(book == Absent)
+                assert(author == Absent)
+                assert(root.isDefined) // the referrer above is not touched
+            end for
         }
 
         "evict of an absent record returns the empty set and publishes nothing" in {
-            val s         = graphStore()
             var published = false
-            s.addChangedKeysListener(_ => published = true)
-            assert(s.evict(CacheKey("Nope", "1")) == Set.empty[CacheKey])
-            assert(published == false)
+            for
+                s       <- graphStore()
+                _       <- s.addChangedKeysListener(_ => published = true)
+                evicted <- s.evict(CacheKey("Nope", "1"))
+            yield
+                assert(evicted == Set.empty[CacheKey])
+                assert(published == false)
+            end for
         }
 
         // --- MemoryCache: allRecords snapshot ---------------------------------------
 
         "allRecords returns the whole-store snapshot" in {
             val cache = MemoryCache()
-            cache.merge(List(rec(keyA, fk("x") -> scalar("1")), rec(keyB, fk("y") -> scalar("2"))))
-            assert(cache.allRecords().keySet == Set(keyA, keyB))
+            for
+                _   <- cache.merge(Chunk(rec(keyA, fk("x") -> scalar("1")), rec(keyB, fk("y") -> scalar("2"))))
+                all <- cache.allRecords
+            yield assert(all.keySet == Set(keyA, keyB))
+            end for
         }
 
         // --- MemoryCache: per-field TTL (maxAge) ------------------------------------
@@ -191,64 +232,93 @@ class GarbageCollectionSpec extends kyo.test.Test[Any]:
         "a field older than maxAge reads back absent while a fresher field survives" in {
             var now   = 1000L
             val cache = MemoryCache(maxAge = 100L, nowMillis = () => now)
-            cache.merge(List(rec(keyA, fk("x") -> scalar("1")))) // x stamped at 1000
-            now = 1050L
-            cache.merge(List(rec(keyA, fk("y") -> scalar("2")))) // y stamped at 1050
-            now = 1120L // x age 120 > 100 (expired); y age 70 < 100 (alive)
-            val loaded = cache.loadRecord(keyA)
-            assert(loaded.isDefined)
-            assert(loaded.get.fields.keySet == Set(fk("y")))
+            for
+                _      <- cache.merge(Chunk(rec(keyA, fk("x") -> scalar("1")))) // x stamped at 1000
+                _      <- Sync.defer { now = 1050L }
+                _      <- cache.merge(Chunk(rec(keyA, fk("y") -> scalar("2")))) // y stamped at 1050
+                _      <- Sync.defer { now = 1120L }                            // x age 120 > 100 (expired); y age 70 < 100 (alive)
+                loaded <- cache.loadRecord(keyA)
+            yield
+                assert(loaded.isDefined)
+                assert(loaded.get.fields.keySet == Set(fk("y")))
+            end for
         }
 
         "a record whose every field has expired reads back as a whole miss" in {
             var now   = 0L
             val cache = MemoryCache(maxAge = 100L, nowMillis = () => now)
-            cache.merge(List(rec(keyA, fk("x") -> scalar("1"), fk("y") -> scalar("2"))))
-            now = 50L
-            assert(cache.loadRecord(keyA).isDefined) // both fields alive
-            now = 250L
-            assert(cache.loadRecord(keyA) == Absent) // both expired → whole-record miss
+            for
+                _       <- cache.merge(Chunk(rec(keyA, fk("x") -> scalar("1"), fk("y") -> scalar("2"))))
+                _       <- Sync.defer { now = 50L }
+                alive   <- cache.loadRecord(keyA) // both fields alive
+                _       <- Sync.defer { now = 250L }
+                expired <- cache.loadRecord(keyA) // both expired → whole-record miss
+            yield
+                assert(alive.isDefined)
+                assert(expired == Absent)
+            end for
         }
 
         "the Date cache header drives the per-field expiry stamp too" in {
             val now   = 5000L
             val cache = MemoryCache(maxAge = 100L, nowMillis = () => now)
-            cache.merge(List(rec(keyA, fk("x") -> scalar("1"))), CacheHeaders.of(CacheHeaders.Date -> "1000"))
-            assert(cache.loadRecord(keyA) == Absent) // 5000 - 1000 = 4000 > 100
+            for
+                _      <- cache.merge(Chunk(rec(keyA, fk("x") -> scalar("1"))), CacheHeaders.of(CacheHeaders.Date -> "1000"))
+                loaded <- cache.loadRecord(keyA)
+            yield assert(loaded == Absent) // 5000 - 1000 = 4000 > 100
+            end for
         }
 
         "removeExpiredRecords sweeps whole-expired records and reports their keys" in {
             var now   = 0L
             val cache = MemoryCache(maxAge = 100L, nowMillis = () => now)
-            cache.merge(List(rec(keyA, fk("x") -> scalar("1")), rec(keyB, fk("y") -> scalar("2"))))
-            now = 200L
-            assert(cache.removeExpiredRecords() == Set(keyA, keyB))
-            assert(cache.allRecords() == Map.empty[CacheKey, Record])
+            for
+                _       <- cache.merge(Chunk(rec(keyA, fk("x") -> scalar("1")), rec(keyB, fk("y") -> scalar("2"))))
+                _       <- Sync.defer { now = 200L }
+                removed <- cache.removeExpiredRecords
+                all     <- cache.allRecords
+            yield
+                assert(removed == Set(keyA, keyB))
+                assert(all == Map.empty[CacheKey, Record])
+            end for
         }
 
         "removeExpiredRecords trims expired fields in place without removing the record" in {
             var now   = 0L
             val cache = MemoryCache(maxAge = 100L, nowMillis = () => now)
-            cache.merge(List(rec(keyA, fk("x") -> scalar("1")))) // x stamped at 0
-            now = 150L
-            cache.merge(List(rec(keyA, fk("y") -> scalar("2")))) // y stamped at 150
-            now = 160L                                                  // x age 160 > 100 (expired); y age 10 < 100 (alive)
-            assert(cache.removeExpiredRecords() == Set.empty[CacheKey]) // A survives, x trimmed
-            assert(cache.allRecords()(keyA).fields.keySet == Set(fk("y")))
+            for
+                _       <- cache.merge(Chunk(rec(keyA, fk("x") -> scalar("1")))) // x stamped at 0
+                _       <- Sync.defer { now = 150L }
+                _       <- cache.merge(Chunk(rec(keyA, fk("y") -> scalar("2")))) // y stamped at 150
+                _       <- Sync.defer { now = 160L }                             // x age 160 > 100 (expired); y age 10 < 100 (alive)
+                removed <- cache.removeExpiredRecords
+                all     <- cache.allRecords
+            yield
+                assert(removed == Set.empty[CacheKey]) // A survives, x trimmed
+                assert(all(keyA).fields.keySet == Set(fk("y")))
+            end for
         }
 
         "removeExpiredRecords is a no-op when no TTL is configured" in {
             val cache = MemoryCache()
-            cache.merge(List(rec(keyA, fk("x") -> scalar("1"))))
-            assert(cache.removeExpiredRecords() == Set.empty[CacheKey])
-            assert(cache.loadRecord(keyA).isDefined)
+            for
+                _       <- cache.merge(Chunk(rec(keyA, fk("x") -> scalar("1"))))
+                removed <- cache.removeExpiredRecords
+                loaded  <- cache.loadRecord(keyA)
+            yield
+                assert(removed == Set.empty[CacheKey])
+                assert(loaded.isDefined)
+            end for
         }
 
         "with maxAge disabled records round-trip exactly (no field-date metadata)" in {
             val cache  = MemoryCache()
             val record = rec(keyA, fk("x") -> scalar("1"))
-            cache.merge(List(record))
-            assert(cache.loadRecord(keyA) == Present(record))
+            for
+                _      <- cache.merge(Chunk(record))
+                loaded <- cache.loadRecord(keyA)
+            yield assert(loaded == Present(record))
+            end for
         }
 
         // --- NormalizedCacheDecorator persistence seam ------------------------------
@@ -256,26 +326,47 @@ class GarbageCollectionSpec extends kyo.test.Test[Any]:
         "a bare decorator forwards every operation to its delegate" in {
             val backing = MemoryCache()
             val deco    = new NormalizedCacheDecorator(backing) {}
-            deco.merge(List(rec(keyA, fk("x") -> scalar("1"))))
-            assert(backing.loadRecord(keyA).flatMap(_.get(fk("x"))) == Present(scalar("1"))) // written through
-            assert(deco.loadRecord(keyA).flatMap(_.get(fk("x"))) == Present(scalar("1")))    // read through
-            assert(deco.allRecords().keySet == Set(keyA))
-            assert(deco.remove(keyA) == true)
-            assert(backing.loadRecord(keyA) == Absent)
+            for
+                _        <- deco.merge(Chunk(rec(keyA, fk("x") -> scalar("1"))))
+                written  <- backing.loadRecord(keyA)
+                readBack <- deco.loadRecord(keyA)
+                all      <- deco.allRecords
+                removed  <- deco.remove(Chunk(keyA))
+                gone     <- backing.loadRecord(keyA)
+            yield
+                assert(written.flatMap(_.get(fk("x"))) == Present(scalar("1")))  // written through
+                assert(readBack.flatMap(_.get(fk("x"))) == Present(scalar("1"))) // read through
+                assert(all.keySet == Set(keyA))
+                assert(removed == Set(keyA))
+                assert(gone == Absent)
+            end for
         }
 
-        "a decorator subclass can intercept writes while inheriting the rest" in {
+        "a decorator that overrides transact sees every write, including the store's" in {
             val backing   = MemoryCache()
-            val persisted = ListBuffer.empty[CacheKey]
+            var persisted = Chunk.empty[CacheKey]
             class PersistingCache(d: NormalizedCache) extends NormalizedCacheDecorator(d):
-                override def merge(records: Iterable[Record], headers: CacheHeaders): Set[CacheKey] =
-                    records.foreach(r => persisted += r.key)
-                    super.merge(records, headers)
+                override def transact[A](
+                    f: RecordLoader => (Chunk[Record], A),
+                    cacheHeaders: CacheHeaders,
+                    merger: RecordMerger
+                )(using Frame): (Set[CacheKey], A) < Sync =
+                    super.transact(f, cacheHeaders, merger).map { (changed, a) =>
+                        persisted = persisted ++ Chunk.from(changed)
+                        (changed, a)
+                    }
             end PersistingCache
-            val deco = new PersistingCache(backing)
-            deco.merge(List(rec(keyA, fk("x") -> scalar("1"))))
-            assert(persisted.toList == List(keyA))          // intercepted for persistence
-            assert(deco.loadRecord(keyA).isDefined == true) // inherited forwarding still works
+            val deco  = new PersistingCache(backing)
+            val store = new ApolloStore(deco, cacheKeyGenerator = IdCacheKeyGenerator(List("id")))
+            for
+                _      <- deco.merge(Chunk(rec(keyA, fk("x") -> scalar("1"))))
+                _      <- store.writeOptimisticUpdates(UpdateUserNameMutation("Bob"), UpdateUserData(User("User", "1", "Bob")), "m1")
+                _      <- store.rollbackAndWrite(UpdateUserNameMutation("Bob"), UpdateUserData(User("User", "1", "Bob")), "m1")
+                loaded <- deco.loadRecord(keyA)
+            yield
+                assert(persisted.toSet == Set(keyA, CacheKey.MutationRoot, CacheKey("User", "1"))) // intercepted for persistence
+                assert(loaded.isDefined)                                                           // inherited forwarding still works
+            end for
         }
     }
 end GarbageCollectionSpec
