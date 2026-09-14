@@ -149,8 +149,10 @@ object ClientField:
       * the value's injected `__typename` (its Scala class name) matches a registered
       * `TypePolicy` and `V` carries that policy's key field (then it writes into the
       * same `Type:id` record a server query reads); otherwise the object is stored as
-      * a path-keyed record embedded under its parent — the local-state default. Note:
-      * `Schema.rename`d fields and self-referential `V` are unsupported.
+      * a path-keyed record embedded under its parent — the local-state default.
+      * Recursive types (`Node(children: List[Node])`, `A → B → A`) normalize one
+      * level deep; the recursive tail is stored as a blob and still round-trips.
+      * Note: `Schema.rename`d fields are unsupported.
       */
     def create[Origin, V](using tn: TypeName[Origin], sch: kyo.Schema[V]): CreateApplied[Origin, V] =
         new CreateApplied[Origin, V](tn.name, sch)
