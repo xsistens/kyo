@@ -114,7 +114,7 @@ object ApolloParseException:
             case text: String     => text
 
     /** The JSON type of `json` as a message names it ("a string", "null"), never its value. */
-    private[apollo] def jsonType(json: Json): String =
+    private def jsonType(json: Json): String =
         json match
             case Json.JNull                                 => "null"
             case Json.JBool(_)                              => "a boolean"
