@@ -2,7 +2,9 @@ package kyo.apollo.runtime
 
 import kyo.*
 import kyo.apollo.api.GraphQLResponse
+import kyo.apollo.exception.ApolloException
 import kyo.apollo.exception.ApolloNetworkException
+import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.json.Json
 import kyo.apollo.json.JsonPath
 import kyo.apollo.network.ApolloRequest
@@ -17,11 +19,38 @@ import kyo.apollo.network.http.MultipartPart
   * into the retained JSON tree (both the `deferSpec=20220824` `incremental: [{data,
   * path}]` shape and the older single `{data, path}` shape), which is then
   * re-decoded through [[GraphQLResponse.parse]] — deferred fields being `Maybe`,
-  * the partial tree decodes at every stage. Failures stay values (a part whose
-  * accumulated tree does not decode becomes an `ApolloParseException` response, not a
-  * throw); a decoder defect panics.
+  * the partial tree decodes at every stage.
+  *
+  * The delivery is an explicit fold over one cell: a pure step turns the accumulated
+  * state and a part into the next state or a parse failure. A part that does not
+  * fit — a malformed part, an incremental payload without a valid `path`, a path the
+  * accumulated tree does not have — ends the delivery with an `ApolloParseException`
+  * response (`complete = false`), and the parts after it are ignored. A stream that
+  * ends while the last payload still announced `hasNext: true` ends with a
+  * truncation error, read from the same cell. Failures stay values; a decoder
+  * defect panics.
   */
 object IncrementalAssembler:
+
+    /** The accumulated delivery. `awaitingMore` is the last `hasNext` the wire sent
+      * (a server that never sends it leaves it false — no false alarm); `failed` is
+      * set once a part did not fit.
+      */
+    final private case class Acc(
+        data: Json,
+        errors: Chunk[Json],
+        extensions: Map[String, Json],
+        awaitingMore: Boolean,
+        failed: Boolean
+    )
+
+    private object Acc:
+        val empty: Acc = Acc(Json.JObj(Map.empty), Chunk.empty, Map.empty, awaitingMore = false, failed = false)
+
+    /** One applied part: the next state and whether it changed anything worth a
+      * response, or the parse failure that ends the delivery.
+      */
+    private type Applied = Result[ApolloParseException, (Acc, Boolean)]
 
     /** Fold `parts` into responses; the part stream's effects (e.g. the engine's
       * failure row for a body that drops) pass through.
@@ -31,107 +60,144 @@ object IncrementalAssembler:
         parts: Stream[MultipartPart, S]
     )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): Stream[ApolloResponse[D], S & Sync] =
         Stream.unwrap {
-            Sync.defer {
-                var data: Json                    = Json.JObj(Map.empty)
-                var errors: List[Json]            = Nil
-                var extensions: Map[String, Json] = Map.empty
-                // Each incremental payload carries `hasNext`; the terminal one is the
-                // only `false`. `awaitingMore` stays true after a `hasNext: true` part,
-                // so a stream that ends while it is still true was truncated (kyo-http
-                // maps a mid-body drop to a clean EOF, so this protocol signal is the
-                // only way apollo can tell an incomplete delivery from a complete one).
-                // A server that never sends `hasNext` leaves it false — no false alarm.
-                var awaitingMore = false
-
-                // Apply one part to the accumulator; return whether it changed anything
-                // worth emitting a response for.
-                def applyPart(part: Json): Boolean = part match
-                    case Json.JObj(fields) =>
-                        fields.get("hasNext") match
-                            case Some(Json.JBool(b)) => awaitingMore = b
-                            case _                   => ()
-                        var changed = false
-                        fields.get("extensions") match
-                            case Some(Json.JObj(ext)) => extensions = extensions ++ ext
-                            case _                    => ()
-                        fields.get("incremental") match
-                            case Some(Json.JArr(items)) =>
-                                items.foreach {
-                                    case Json.JObj(inc) =>
-                                        val path = inc.get("path").map(JsonPath.parse).getOrElse(Nil)
-                                        // `@defer` patches carry `data` (an object merged at `path`);
-                                        // `@stream` patches carry `items` (list entries appended at
-                                        // `path`, whose final segment is the start index).
-                                        inc.get("data").foreach { d =>
-                                            data = JsonPath.splice(data, path, d)
-                                            changed = true
-                                        }
-                                        inc.get("items") match
-                                            case Some(Json.JArr(newItems)) =>
-                                                data = JsonPath.spliceItems(data, path, newItems.toList)
-                                                changed = true
-                                            case _ => ()
-                                        end match
-                                        // An incremental entry may carry `errors` with no data/items (a
-                                        // deferred/streamed field that resolved to an error); mark it
-                                        // changed so it surfaces even if it rides the terminal part.
-                                        inc.get("errors") match
-                                            case Some(Json.JArr(es)) => errors = errors ++ es.toList; changed = true
-                                            case _                   => ()
-                                    case _ => ()
-                                }
-                            case _ =>
-                                fields.get("data").foreach { d =>
-                                    fields.get("path").map(JsonPath.parse) match
-                                        case Some(path) => data = JsonPath.splice(data, path, d)
-                                        case None       => data = d
-                                    changed = true
-                                }
-                        end match
-                        fields.get("errors") match
-                            case Some(Json.JArr(es)) => errors = errors ++ es.toList; changed = true
-                            case _                   => ()
-                        changed
-                    case _ => false
-
-                // The accumulated state is read when `response()` is called, so each result
-                // is computed eagerly right after its part is applied; only a decoder
-                // defect is a suspended panic.
-                def response(): ApolloResponse[D] < Sync =
-                    val env = Map.newBuilder[String, Json]
-                    env += "data"                                   -> data
-                    if errors.nonEmpty then env += "errors"         -> Json.JArr(Chunk.from(errors))
-                    if extensions.nonEmpty then env += "extensions" -> Json.JObj(extensions)
-                    GraphQLResponse.parse(Json.JObj(env.result()), request.operation) match
-                        case Result.Success(gql) =>
-                            ApolloResponse
-                                .fromGraphQLResponse(request.requestUuid, gql, request.executionContext)
-                                // Still growing while the wire has announced more payloads.
-                                .copy(complete = !awaitingMore)
-                        case Result.Failure(parseFailure) =>
-                            ApolloResponse.fromException(request.requestUuid, parseFailure, request.executionContext)
-                        case Result.Panic(cause) => Abort.panic(cause)
-                    end match
-                end response
-
-                val mapped =
-                    parts.mapChunk { partChunk =>
-                        Kyo.collectAll(partChunk.toList.flatMap(part => if applyPart(part.json) then Seq(response()) else Nil))
-                    }
-                // If the stream ended while a `hasNext: true` was still outstanding, the
-                // incremental delivery was truncated — surface a terminal exception value
-                // rather than presenting the partial data as a complete response.
-                mapped.concat(Stream.unwrap(Sync.defer {
-                    if awaitingMore then
-                        Stream.init(Seq(ApolloResponse.fromException(
-                            request.requestUuid,
-                            ApolloNetworkException(message =
-                                "Incremental delivery stream ended before its final payload (hasNext=false): the response was truncated"
-                            ),
-                            request.executionContext
-                        )))
-                    else Stream.empty[ApolloResponse[D]]
-                }))
+            AtomicRef.init(Acc.empty).map { cell =>
+                parts
+                    .mapChunk(chunk => Kyo.foreach(chunk)(part => step(request, cell, part)).map(_.flattenChunk))
+                    // kyo-http maps a mid-body drop to a clean end of stream, so `hasNext` is the
+                    // only way to tell an incomplete delivery from a complete one.
+                    .concat(Stream.unwrap(cell.get.map { acc =>
+                        if acc.awaitingMore && !acc.failed then Stream.init(Seq(truncated(request)))
+                        else Stream.empty[ApolloResponse[D]]
+                    }))
             }
         }
+
+    private def step[D](request: ApolloRequest[D], cell: AtomicRef[Acc], part: MultipartPart)(using
+        Frame
+    ): Chunk[ApolloResponse[D]] < Sync =
+        cell.get.map { acc =>
+            if acc.failed then Chunk.empty[ApolloResponse[D]]
+            else
+                applyPart(acc, part) match
+                    case Result.Success((next, changed)) =>
+                        cell.set(next).andThen(if changed then response(request, next).map(Chunk(_)) else Chunk.empty[ApolloResponse[D]])
+                    case Result.Failure(error) =>
+                        cell.set(acc.copy(failed = true)).andThen(Chunk(failure(request, error)))
+                    case Result.Panic(cause) => Abort.panic(cause)
+        }
+
+    /** Apply one part to the accumulated state. */
+    private def applyPart(acc: Acc, part: MultipartPart)(using Frame): Applied =
+        part match
+            case MultipartPart.Malformed(error) => Result.fail(error)
+            case MultipartPart.Payload(Json.JObj(fields)) =>
+                val awaitingMore = fields.get("hasNext") match
+                    case Some(Json.JBool(more)) => more
+                    case _                      => acc.awaitingMore
+                val extensions = fields.get("extensions") match
+                    case Some(Json.JObj(ext)) => acc.extensions ++ ext
+                    case _                    => acc.extensions
+                val announced = acc.copy(awaitingMore = awaitingMore, extensions = extensions)
+                val patched: Applied =
+                    fields.get("incremental") match
+                        case Some(Json.JArr(items)) =>
+                            items.foldLeft[Applied](Result.succeed((announced, false))) { (applied, item) =>
+                                applied.flatMap((next, changed) => applyIncremental(next, changed, item))
+                            }
+                        case Some(other) => Result.fail(ApolloParseException(other, "an incremental array"))
+                        case None        => applyPayload(announced, fields)
+                patched.map((next, changed) => withErrors(next, changed, fields.get("errors")))
+            case MultipartPart.Payload(other) =>
+                Result.fail(ApolloParseException(other, "an incremental delivery payload object"))
+
+    /** The initial payload `{data}` seeds the tree; the older single-patch shape
+      * `{data, path}` splices at `path`.
+      */
+    private def applyPayload(acc: Acc, fields: Map[String, Json])(using Frame): Applied =
+        (fields.get("data"), fields.get("path")) match
+            case (Some(data), Some(path)) => pathOf(path).flatMap(segments => spliceData(acc, path, segments, data))
+            case (Some(data), None)       => Result.succeed((acc.copy(data = data), true))
+            case (None, _)                => Result.succeed((acc, false))
+
+    /** Apply one item of an `incremental` array: `@defer` items carry `data` (an
+      * object merged at `path`), `@stream` items carry `items` (list elements placed
+      * at `path`, whose final segment is the start index), and either may carry
+      * `errors`. The `path` is required: without it there is nowhere to put the
+      * payload, and merging it at the root would overwrite unrelated fields.
+      */
+    private def applyIncremental(acc: Acc, changed: Boolean, item: Json)(using Frame): Applied =
+        item match
+            case Json.JObj(inc) =>
+                inc.get("path") match
+                    case None => Result.fail(ApolloParseException(item, "an incremental payload with a path"))
+                    case Some(path) =>
+                        pathOf(path).flatMap { segments =>
+                            val withData: Applied =
+                                inc.get("data") match
+                                    case Some(data) => spliceData(acc, path, segments, data)
+                                    case None       => Result.succeed((acc, changed))
+                            withData
+                                .flatMap { (next, nextChanged) =>
+                                    inc.get("items") match
+                                        case Some(Json.JArr(items)) => spliceItems(next, path, segments, items)
+                                        case Some(other) => Result.fail(ApolloParseException(other, "an array of streamed items"))
+                                        case None        => Result.succeed((next, nextChanged))
+                                }
+                                .map((next, nextChanged) => withErrors(next, nextChanged, inc.get("errors")))
+                        }
+            case other => Result.fail(ApolloParseException(other, "an incremental payload object"))
+
+    private def pathOf(path: Json)(using Frame): Result[ApolloParseException, Chunk[String | Int]] =
+        JsonPath.parse(path) match
+            case Present(segments) => Result.succeed(segments)
+            case Absent            => Result.fail(ApolloParseException(path, "a response path of field names and list indices"))
+
+    private def spliceData(acc: Acc, path: Json, segments: Chunk[String | Int], data: Json)(using Frame): Applied =
+        JsonPath.splice(acc.data, segments, data) match
+            case Present(tree) => Result.succeed((acc.copy(data = tree), true))
+            case Absent        => Result.fail(ApolloParseException(path, "a path that exists in the accumulated response"))
+
+    private def spliceItems(acc: Acc, path: Json, segments: Chunk[String | Int], items: Chunk[Json])(using Frame): Applied =
+        JsonPath.spliceItems(acc.data, segments, items) match
+            case Present(tree) => Result.succeed((acc.copy(data = tree), true))
+            case Absent => Result.fail(ApolloParseException(path, "the path of a list in the accumulated response, ending at its size"))
+
+    /** Accumulate a part's `errors`; an errors-only item (a deferred or streamed field
+      * that resolved to an error) counts as a change so it surfaces even on the
+      * terminal part.
+      */
+    private def withErrors(acc: Acc, changed: Boolean, errors: Option[Json]): (Acc, Boolean) =
+        errors match
+            case Some(Json.JArr(es)) => (acc.copy(errors = acc.errors.concat(es)), true)
+            case _                   => (acc, changed)
+
+    private def response[D](request: ApolloRequest[D], acc: Acc)(using Frame): ApolloResponse[D] < Sync =
+        val envelope =
+            Map("data" -> acc.data)
+                ++ (if acc.errors.isEmpty then Map.empty[String, Json] else Map("errors" -> Json.JArr(acc.errors)))
+                ++ (if acc.extensions.isEmpty then Map.empty[String, Json] else Map("extensions" -> Json.JObj(acc.extensions)))
+        GraphQLResponse.parse(Json.JObj(envelope), request.operation) match
+            case Result.Success(gql) =>
+                ApolloResponse
+                    .fromGraphQLResponse(request.requestUuid, gql, request.executionContext)
+                    // Still growing while the wire has announced more payloads.
+                    .copy(complete = !acc.awaitingMore)
+            case Result.Failure(parseFailure) =>
+                ApolloResponse
+                    .fromException(request.requestUuid, parseFailure, request.executionContext)
+                    .copy(complete = !acc.awaitingMore)
+            case Result.Panic(cause) => Abort.panic(cause)
+        end match
+    end response
+
+    private def failure[D](request: ApolloRequest[D], error: ApolloException): ApolloResponse[D] =
+        ApolloResponse.fromException(request.requestUuid, error, request.executionContext).copy(complete = false)
+
+    private def truncated[D](request: ApolloRequest[D])(using Frame): ApolloResponse[D] =
+        failure(
+            request,
+            ApolloNetworkException(message =
+                "Incremental delivery stream ended before its final payload (hasNext=false): the response was truncated"
+            )
+        )
 end IncrementalAssembler

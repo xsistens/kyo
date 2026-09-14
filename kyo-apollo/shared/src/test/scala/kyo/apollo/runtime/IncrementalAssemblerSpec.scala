@@ -5,9 +5,12 @@ import kyo.apollo.StreamProbe
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
 import kyo.apollo.api.Query
+import kyo.apollo.exception.ApolloNetworkException
+import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.json.Json
 import kyo.apollo.json.JsonParser
 import kyo.apollo.network.ApolloRequest
+import kyo.apollo.network.ApolloResponse
 import kyo.apollo.network.http.MultipartPart
 import scala.collection.immutable.VectorMap
 
@@ -42,7 +45,10 @@ class IncrementalAssemblerSpec extends kyo.test.Test[Any]:
         def variables: Json              = Json.JObj(VectorMap.empty)
     end ListQ
 
-    private def part(s: String): MultipartPart = MultipartPart(JsonParser.parse(s).getOrThrow)
+    private def part(s: String): MultipartPart = MultipartPart.Payload(JsonParser.parse(s).getOrThrow)
+
+    private def isParseFailure(response: ApolloResponse[?]): Boolean =
+        response.error.exists(_.isInstanceOf[ApolloParseException])
 
     "IncrementalAssembler" - {
 
@@ -134,6 +140,104 @@ class IncrementalAssemblerSpec extends kyo.test.Test[Any]:
                 responses =>
                     assert(responses.size == 2)
                     assert(responses(1).data == Present(ListData(List(Item("a"), Item("b"), Item("c")))))
+            }
+        }
+
+        "a stream ending after hasNext:true surfaces a truncation error" in {
+            val parts = Stream.init(Seq(part("""{"data":{"country":{"code":"DE"}},"hasNext":true}""")))
+            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q()), parts)).map { responses =>
+                assert(responses.size == 2)
+                assert(responses(0).complete == false)
+                assert(responses(1).error.exists(_.isInstanceOf[ApolloNetworkException]))
+                assert(responses(1).complete == false)
+            }
+        }
+
+        "complete flips only on the terminal part" in {
+            val parts = Stream.init(
+                Seq(
+                    part("""{"data":{"country":{"code":"DE"}},"hasNext":true}"""),
+                    part(
+                        """{"incremental":[{"data":{"capital":"Berlin"},"path":["country"]}],"hasNext":false}"""
+                    )
+                )
+            )
+            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q()), parts)).map { responses =>
+                assert(responses.size == 2)
+                assert(responses(0).complete == false && responses(1).complete == true)
+            }
+        }
+
+        "a patch whose path does not fit the tree is a parse failure, not a complete response" in {
+            val parts = Stream.init(
+                Seq(
+                    part("""{"data":{"country":{"code":"DE"}},"hasNext":true}"""),
+                    part("""{"incremental":[{"data":{"capital":"Berlin"},"path":["country",0]}],"hasNext":true}"""),
+                    // Would change the data and end the delivery — but the delivery already failed.
+                    part("""{"incremental":[{"data":{"capital":"Berlin"},"path":["country"]}],"hasNext":false}""")
+                )
+            )
+            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q()), parts)).map { responses =>
+                assert(responses.size == 2, s"got $responses")
+                assert(isParseFailure(responses.last))
+                assert(responses.forall(_.complete == false))
+            }
+        }
+
+        "an incremental entry without a path never merges at the root" in {
+            val parts = Stream.init(
+                Seq(
+                    part("""{"data":{"country":{"code":"DE"}},"hasNext":true}"""),
+                    part("""{"incremental":[{"data":{"country":{"code":"XX"}}}],"hasNext":false}""")
+                )
+            )
+            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q()), parts)).map { responses =>
+                assert(responses.size == 2, s"got $responses")
+                assert(responses(0).data == Present(Data(Some(Loc("DE", None)))))
+                assert(isParseFailure(responses.last))
+                assert(responses.forall(r => !r.data.exists(_.country.exists(_.code == "XX"))))
+            }
+        }
+
+        "a malformed path is a parse failure too" in {
+            val parts = Stream.init(
+                Seq(
+                    part("""{"data":{"country":{"code":"DE"}},"hasNext":true}"""),
+                    part("""{"incremental":[{"data":{"capital":"Berlin"},"path":["country",true]}],"hasNext":false}""")
+                )
+            )
+            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q()), parts)).map { responses =>
+                assert(responses.size == 2, s"got $responses")
+                assert(isParseFailure(responses.last))
+            }
+        }
+
+        "a Malformed part ends the delivery with its own ApolloParseException" in {
+            val broken = ApolloParseException(Json.JStr("{not json}"), "a JSON document")
+            val parts = Stream.init(
+                Seq(
+                    part("""{"data":{"country":{"code":"DE"}},"hasNext":true}"""),
+                    MultipartPart.Malformed(broken),
+                    part("""{"incremental":[{"data":{"capital":"Berlin"},"path":["country"]}],"hasNext":false}""")
+                )
+            )
+            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q()), parts)).map { responses =>
+                assert(responses.size == 2, s"got $responses")
+                assert(responses(1).error.exists(_ eq broken))
+                assert(responses(1).complete == false)
+            }
+        }
+
+        "a @stream patch past the tail of the list is a parse failure" in {
+            val parts = Stream.init(
+                Seq(
+                    part("""{"data":{"items":[{"id":"a"}]},"hasNext":true}"""),
+                    part("""{"incremental":[{"items":[{"id":"c"}],"path":["items",2]}],"hasNext":false}""")
+                )
+            )
+            StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(ListQ()), parts)).map { responses =>
+                assert(responses.size == 2, s"got $responses")
+                assert(isParseFailure(responses.last))
             }
         }
     }
