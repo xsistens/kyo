@@ -9,6 +9,7 @@ import kyo.apollo.exception.ApolloNetworkException
 import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.network.HttpHeader
 import kyo.apollo.network.HttpMethod
+import kyo.apollo.network.MarkedChannel
 
 /** The JVM/Native production [[HttpEngine]]: issues requests through kyo-http's
   * `Async` HTTP client (over kyo-net sockets), the counterpart to JS/Wasm's
@@ -119,20 +120,14 @@ final class HttpClientEngine extends HttpEngine:
             statusAndHeaders <- head.get
         yield HttpStreamResponse(statusAndHeaders._1, statusAndHeaders._2, HttpStreamBody.Chunked(bodyStream(chunks)))
 
-    /** The lazy consumer side of the bridge: pull decoded text chunks from the body
-      * channel until the producer's [[Absent]] end-marker. Deliberately `take`-based
-      * (not `streamUntilClosed`) — a bounded channel's `close` hands its backlog to
-      * the closer, so a producer that pushes several chunks then closes would drop
-      * every chunk the consumer had not yet taken (the exact trap the browser
-      * `FetchHttpEngine` documents). An explicit end-marker never drops a chunk.
+    /** The lazy consumer side of the bridge: decoded text chunks from the body channel
+      * until the producer's [[Absent]] end-marker, each delivered the moment it is
+      * taken — the first part of a `@defer` reply must not wait for the next one. An
+      * end-marker, not `close`, so no chunk is dropped ([[MarkedChannel]] has both
+      * traps).
       */
     private def bodyStream(chunks: Channel[Maybe[String]])(using Frame): Stream[String, Async] =
-        Stream.repeatPresent {
-            Abort.run[Closed](chunks.take).map {
-                case Result.Success(Present(text)) => Present(Seq(text))
-                case _                             => Absent
-            }
-        }
+        MarkedChannel.untilEnd(chunks)
 
     /** Run the whole streamed round-trip in the producer fiber: complete `head` with
       * the response status + headers as soon as they land, then decode the live body
