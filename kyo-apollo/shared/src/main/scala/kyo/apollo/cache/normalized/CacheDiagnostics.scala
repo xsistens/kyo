@@ -1,8 +1,13 @@
 package kyo.apollo.cache.normalized
 
+import kyo.<
 import kyo.Absent
+import kyo.Chunk
+import kyo.Frame
+import kyo.Kyo
 import kyo.Maybe
 import kyo.Present
+import kyo.Sync
 import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.cache.normalized.api.FieldKey
 import kyo.apollo.cache.normalized.api.Record
@@ -44,7 +49,7 @@ final case class CacheDiagnostics(sink: Maybe[String => Unit]):
       */
     def enabled: Boolean = sink.isDefined
 
-    /** Report every field of `incoming` that CONTRADICTS a stored value on a
+    /** The warnings for every field of `incoming` that CONTRADICTS a stored value on a
       * positionally-keyed record — the signature of a list whose elements moved.
       *
       * Three conditions, so the signal is not "a field changed": the record is
@@ -52,32 +57,40 @@ final case class CacheDiagnostics(sink: Maybe[String => Unit]):
       * branch mints), the field already had a value, and the new value differs and is not
       * null. A field the incoming write merely ADDS is the ordinary disjoint-selection
       * case and says nothing; a field it repeats identically says nothing either.
+      *
+      * Pure, so a write can compute its warnings against the very state it commits to
+      * (inside [[NormalizedCache.transact]], which may run more than once) and
+      * [[report]] only those of the attempt that landed.
       */
-    private[normalized] def positionalConflicts(existing: Record, incoming: Record): Unit =
-        sink.foreach { emit =>
-            if CacheDiagnostics.isPositional(incoming.key) then
-                val typename = existing.get(FieldKey.Typename) match
-                    case Present(RecordValue.Scalar(Json.JStr(t))) => s"'$t'"
-                    case _                                         => "this type"
-                incoming.fields.foreach { (fieldKey, incomingValue) =>
-                    val old = existing.fields.get(fieldKey)
-                    val contradicted =
-                        fieldKey != FieldKey.Typename &&
-                            incomingValue != RecordValue.Null &&
-                            old.exists(_ != incomingValue)
-                    if contradicted then
-                        emit(
-                            s"kyo-apollo: the write to '${incoming.key.render}' replaced field '${fieldKey.render}' " +
-                                s"(${old.get} -> $incomingValue) on a record addressed BY POSITION. If the " +
-                                s"list was reordered or shortened, the fields this write did NOT mention " +
-                                s"still belong to the element that used to sit here. Declare a cache " +
-                                s"identity for $typename, or select the same field set from every " +
-                                s"operation that writes it."
-                        )
-                    end if
-                }
-            end if
-        }
+    private[normalized] def positionalConflicts(existing: Record, incoming: Record): Chunk[String] =
+        if !enabled || !CacheDiagnostics.isPositional(incoming.key) then Chunk.empty
+        else
+            val typename = existing.get(FieldKey.Typename) match
+                case Present(RecordValue.Scalar(Json.JStr(t))) => s"'$t'"
+                case _                                         => "this type"
+            Chunk.from(incoming.fields).flatMap { (fieldKey, incomingValue) =>
+                val old = existing.fields.get(fieldKey)
+                val contradicted =
+                    fieldKey != FieldKey.Typename &&
+                        incomingValue != RecordValue.Null &&
+                        old.exists(_ != incomingValue)
+                if !contradicted then Chunk.empty
+                else
+                    Chunk(
+                        s"kyo-apollo: the write to '${incoming.key.render}' replaced field '${fieldKey.render}' " +
+                            s"(${old.get} -> $incomingValue) on a record addressed BY POSITION. If the " +
+                            s"list was reordered or shortened, the fields this write did NOT mention " +
+                            s"still belong to the element that used to sit here. Declare a cache " +
+                            s"identity for $typename, or select the same field set from every " +
+                            s"operation that writes it."
+                    )
+                end if
+            }
+
+    /** Hand `warnings` to the sink, in order (nothing when diagnostics are off). */
+    private[normalized] def report(warnings: Chunk[String])(using Frame): Unit < Sync =
+        if warnings.isEmpty then Kyo.unit
+        else sink.fold(Kyo.unit)(emit => Sync.defer(warnings.foreach(emit)))
 end CacheDiagnostics
 
 object CacheDiagnostics:

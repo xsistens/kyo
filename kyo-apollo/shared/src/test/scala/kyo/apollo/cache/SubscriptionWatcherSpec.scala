@@ -236,32 +236,33 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
 
         "nested entities keep their entity keys — never re-keyed under the writer's root" in {
             val store = cachedClient().apolloStore
-            val _     = store.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1)))
-            val changed =
-                store.writeOperation(lobbySubscription("L1"), (lobbyUpdates = Present(lobby(p1, p2))))
-
-            // Reference (Apollo JS): players normalize into `LobbyPlayer:<id>` on every
-            // write path; the lobby's `players` field always references those records.
-            val all = store.cache.allRecords()
-            assert(all.contains(CacheKey("LobbyPlayer", "p1")), s"expected LobbyPlayer:p1 in ${all.keySet}")
-            assert(all.contains(CacheKey("LobbyPlayer", "p2")), s"expected LobbyPlayer:p2 in ${all.keySet}")
-            assert(changed.contains(CacheKey("LobbyView", "L1")))
-            succeed
+            for
+                _       <- store.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1)))
+                changed <- store.writeOperation(lobbySubscription("L1"), (lobbyUpdates = Present(lobby(p1, p2))))
+                all     <- store.cache.allRecords
+            yield
+                // Reference (Apollo JS): players normalize into `LobbyPlayer:<id>` on every
+                // write path; the lobby's `players` field always references those records.
+                assert(all.contains(CacheKey("LobbyPlayer", "p1")), s"expected LobbyPlayer:p1 in ${all.keySet}")
+                assert(all.contains(CacheKey("LobbyPlayer", "p2")), s"expected LobbyPlayer:p2 in ${all.keySet}")
+                assert(changed.contains(CacheKey("LobbyView", "L1")))
+            end for
         }
 
         "a query re-read after the subscription write sees the pushed players" in {
-            val store     = cachedClient().apolloStore
-            val _         = store.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1)))
-            val (_, deps) = store.readOperationWithKeys(lobbyQuery("L1"))
-            val changed =
-                store.writeOperation(lobbySubscription("L1"), (lobbyUpdates = Present(lobby(p1, p2))))
-
-            // The watcher predicate: the subscription's changed keys must intersect the
-            // query read's dependent keys, and the re-read must yield the new list.
-            assert(changed.intersect(deps).nonEmpty, s"changed=$changed deps=$deps")
-            val after = store.readOperation(lobbyQuery("L1"))
-            assert(after.lobby == lobby(p1, p2))
-            succeed
+            val store = cachedClient().apolloStore
+            for
+                _       <- store.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1)))
+                before  <- store.readOperationWithKeys(lobbyQuery("L1"))
+                changed <- store.writeOperation(lobbySubscription("L1"), (lobbyUpdates = Present(lobby(p1, p2))))
+                after   <- store.readOperation(lobbyQuery("L1"))
+            yield
+                // The watcher predicate: the subscription's changed keys must intersect the
+                // query read's dependent keys, and the re-read must yield the new list.
+                val deps = before._2
+                assert(changed.intersect(deps).nonEmpty, s"changed=$changed deps=$deps")
+                assert(after.lobby == lobby(p1, p2))
+            end for
         }
 
         "a fragment write that CREATES an entity record still satisfies a later query read" in {
@@ -275,29 +276,35 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
                 (GPlayer.id ~ GPlayer.color).toFragment
 
             val store = cachedClient().apolloStore
-            val _     = store.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1)))
-            val _     = store.remove(CacheKey("LobbyPlayer", "p1"))
-            val changed =
-                store.writeFragment(playerFragment, CacheKey("LobbyPlayer", "p1"), (id = "p1", color = "Red"))
-            assert(changed.contains(CacheKey("LobbyPlayer", "p1")))
-            assert(store.cache.loadRecord(CacheKey("LobbyPlayer", "p1")).exists(_.get(fk("__typename")).isDefined))
-            assert(store.readOperation(lobbyQuery("L1")).lobby == lobby(p1))
-            succeed
+            for
+                _       <- store.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1)))
+                _       <- store.remove(CacheKey("LobbyPlayer", "p1"))
+                changed <- store.writeFragment(playerFragment, CacheKey("LobbyPlayer", "p1"), (id = "p1", color = "Red"))
+                record  <- store.cache.loadRecord(CacheKey("LobbyPlayer", "p1"))
+                read    <- store.readOperation(lobbyQuery("L1"))
+            yield
+                assert(changed.contains(CacheKey("LobbyPlayer", "p1")))
+                assert(record.exists(_.get(fk("__typename")).isDefined))
+                assert(read.lobby == lobby(p1))
+            end for
         }
 
         "a Maybe = Absent field round-trips as an explicit null, and a push can flip it" in {
             val store = cachedClient().apolloStore
-            // kyo-schema encodes `Absent` as an ABSENT field; without the mapInto
-            // null-repair every later read of the record misses on `startedGameId`.
-            val _ = store.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1)))
-            assert(store.readOperation(lobbyQuery("L1")).lobby.startedGameId == Absent)
-
             // The civolution start-game push: the subscription event carries the id;
             // a query re-read (the redirect observer's input) must see it.
             val started = lobby(p1).copy(startedGameId = Present("G9"))
-            val _       = store.writeOperation(lobbySubscription("L1"), (lobbyUpdates = Present(started)))
-            assert(store.readOperation(lobbyQuery("L1")).lobby.startedGameId == Present("G9"))
-            succeed
+            for
+                // kyo-schema encodes `Absent` as an ABSENT field; without the mapInto
+                // null-repair every later read of the record misses on `startedGameId`.
+                _      <- store.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1)))
+                before <- store.readOperation(lobbyQuery("L1"))
+                _      <- store.writeOperation(lobbySubscription("L1"), (lobbyUpdates = Present(started)))
+                after  <- store.readOperation(lobbyQuery("L1"))
+            yield
+                assert(before.lobby.startedGameId == Absent)
+                assert(after.lobby.startedGameId == Present("G9"))
+            end for
         }
     }
 
@@ -326,8 +333,8 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
             // network instead of reading what is there.
             val client = cachedClient()
             val store  = client.apolloStore
-            val _      = store.writeOperation(wideBadgeQuery("L1"), (lobby = wideLobby))
             for
+                _ <- store.writeOperation(wideBadgeQuery("L1"), (lobby = wideLobby))
                 pull <- StreamProbe.Pull.open(
                     client.query(wideBadgeQuery("L1")).fetchPolicy(FetchPolicy.CacheOnly).watch()
                 )
