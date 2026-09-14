@@ -20,7 +20,7 @@ import kyo.apollo.network.ExecutionContext
 import kyo.apollo.runtime.ResponseStream
 import scala.collection.immutable.VectorMap
 
-/** Phase 07 Task 2: optimistic updates.
+/** Optimistic updates.
   *
   * Two layers of coverage. The *store* layer exercises the overlay directly —
   * [[ApolloStore.writeOptimisticUpdates]] overlaying a mutation-id-tagged layer on
@@ -41,16 +41,15 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
 
     final case class User(__typename: String, id: String, name: String) derives Schema
 
-    private def userField(field: String): CompiledField =
-        CompiledField(
-            field,
-            CompiledNamedType("User"),
-            selections = Chunk(
-                CompiledField("__typename", CompiledNamedType("String")),
-                CompiledField("id", CompiledNamedType("String")),
-                CompiledField("name", CompiledNamedType("String"))
-            )
+    private val userSelections: Chunk[CompiledSelection] =
+        Chunk(
+            CompiledField("__typename", CompiledNamedType("String")),
+            CompiledField("id", CompiledNamedType("String")),
+            CompiledField("name", CompiledNamedType("String"))
         )
+
+    private def userField(field: String): CompiledField =
+        CompiledField(field, CompiledNamedType("User"), selections = userSelections)
 
     final case class UserData(user: User) derives Schema
 
@@ -79,26 +78,30 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
         def variables: Json = Json.JObj(VectorMap("name" -> SchemaJson.encode(newName)))
     end UpdateUserNameMutation
 
-    final case class TwoUsersData(first: User, second: User) derives Schema
+    final case class UserWithFriend(__typename: String, id: String, name: String, friend: User) derives Schema
+    final case class TwoUsersData(first: UserWithFriend) derives Schema
 
-    /** Two entity fields off the root, read in declaration order (`User:1`, then
-      * `User:2`) — the shape whose two loads can straddle a layer change.
+    /** `User:1` and its friend `User:2`, one level apart in the selection tree — so a
+      * read loads them in two separate batches, which a layer change can fall between.
       */
     final case class TwoUsersQuery() extends Query[TwoUsersData]:
-        def name                             = "TwoUsers"
-        def document                         = "query TwoUsers { first { __typename id name } second { __typename id name } }"
+        def name = "TwoUsers"
+        def document =
+            "query TwoUsers { first { __typename id name friend { __typename id name } } }"
         def dataSchema: Schema[TwoUsersData] = summon[Schema[TwoUsersData]]
         def rootField: CompiledField =
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
-                selections = Chunk(userField("first"), userField("second"))
+                selections = Chunk(
+                    CompiledField("first", CompiledNamedType("User"), selections = userSelections :+ userField("friend"))
+                )
             )
         def variables: Json = Json.JObj(VectorMap.empty)
     end TwoUsersQuery
 
     private def twoUsers(first: String, second: String): TwoUsersData =
-        TwoUsersData(User("User", "1", first), User("User", "2", second))
+        TwoUsersData(UserWithFriend("User", "1", first, User("User", "2", second)))
 
     private def userData(name: String): UserData         = UserData(User("User", "1", name))
     private def updateData(name: String): UpdateUserData = UpdateUserData(User("User", "1", name))
@@ -107,94 +110,128 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
 
     // --- store-level overlay ----------------------------------------------------
 
-    private def seededStore(): ApolloStore =
+    private def seededStore()(using Frame): ApolloStore < Sync =
         val s = new ApolloStore(MemoryCache(), cacheKeyGenerator = IdCacheKeyGenerator(List("id")))
-        s.writeOperation(CurrentUserQuery(), userData("Alice"))
-        s
+        s.writeOperation(CurrentUserQuery(), userData("Alice")).andThen(s)
     end seededStore
 
     "optimistic updates" - {
 
         "writeOptimisticUpdates overlays the optimistic value over a read; cache stays pristine" in {
-            val s = seededStore()
-            s.writeOptimisticUpdates(UpdateUserNameMutation("Bob"), updateData("Bob"), "m1")
-            // The read reflects the optimistic overlay...
-            assert(s.readOperation(CurrentUserQuery()) == userData("Bob"))
-            // ...but the backing cache record is untouched.
-            assert(s.cache.loadRecord(CacheKey("User", "1")).flatMap(_.get(fk("name"))) == Present(scalar("Alice")))
+            for
+                s      <- seededStore()
+                _      <- s.writeOptimisticUpdates(UpdateUserNameMutation("Bob"), updateData("Bob"), "m1")
+                read   <- s.readOperation(CurrentUserQuery())
+                record <- s.cache.loadRecord(CacheKey("User", "1"))
+            yield
+                // The read reflects the optimistic overlay...
+                assert(read == userData("Bob"))
+                // ...but the backing cache record is untouched.
+                assert(record.flatMap(_.get(fk("name"))) == Present(scalar("Alice")))
+            end for
         }
 
         "writeOptimisticUpdates publishes the record keys it touches" in {
-            val s    = seededStore()
-            var seen = Option.empty[Set[CacheKey]]
-            s.addChangedKeysListener(keys => seen = Some(keys))
-            val changed = s.writeOptimisticUpdates(UpdateUserNameMutation("Bob"), updateData("Bob"), "m1")
-            assert(changed.contains(CacheKey("User", "1")))
-            assert(seen == Some(changed))
+            var seen = Maybe.empty[Set[CacheKey]]
+            for
+                s       <- seededStore()
+                _       <- s.addChangedKeysListener(keys => seen = Present(keys))
+                changed <- s.writeOptimisticUpdates(UpdateUserNameMutation("Bob"), updateData("Bob"), "m1")
+            yield
+                assert(changed.contains(CacheKey("User", "1")))
+                assert(seen == Present(changed))
+            end for
         }
 
         "rollbackOptimisticUpdates reverts the read and publishes the reverted keys" in {
-            val s = seededStore()
-            s.writeOptimisticUpdates(UpdateUserNameMutation("Bob"), updateData("Bob"), "m1")
-            var seen = Option.empty[Set[CacheKey]]
-            s.addChangedKeysListener(keys => seen = Some(keys))
-            val reverted = s.rollbackOptimisticUpdates("m1")
-            assert(reverted.contains(CacheKey("User", "1")))
-            assert(seen == Some(reverted))
-            assert(s.readOperation(CurrentUserQuery()) == userData("Alice"))
+            var seen = Maybe.empty[Set[CacheKey]]
+            for
+                s        <- seededStore()
+                _        <- s.writeOptimisticUpdates(UpdateUserNameMutation("Bob"), updateData("Bob"), "m1")
+                _        <- s.addChangedKeysListener(keys => seen = Present(keys))
+                reverted <- s.rollbackOptimisticUpdates("m1")
+                read     <- s.readOperation(CurrentUserQuery())
+            yield
+                assert(reverted.contains(CacheKey("User", "1")))
+                assert(seen == Present(reverted))
+                assert(read == userData("Alice"))
+            end for
         }
 
         "rollbackOptimisticUpdates on an unknown mutation id is a no-op" in {
-            val s    = seededStore()
-            var seen = Option.empty[Set[CacheKey]]
-            s.addChangedKeysListener(keys => seen = Some(keys))
-            assert(s.rollbackOptimisticUpdates("nope") == Set.empty[String])
-            assert(seen == None)
+            var seen = Maybe.empty[Set[CacheKey]]
+            for
+                s        <- seededStore()
+                _        <- s.addChangedKeysListener(keys => seen = Present(keys))
+                reverted <- s.rollbackOptimisticUpdates("nope")
+            yield
+                assert(reverted == Set.empty[String])
+                assert(seen == Absent)
+            end for
         }
 
         "rollbackAndWrite drops the optimistic layer and merges the server truth" in {
-            val s = seededStore()
-            s.writeOptimisticUpdates(UpdateUserNameMutation("Bob"), updateData("Bob"), "m1")
-            val changed = s.rollbackAndWrite(UpdateUserNameMutation("Carol"), updateData("Carol"), "m1")
-            assert(changed.contains(CacheKey("User", "1")))
-            // The layer is gone and the persisted cache now holds the real value.
-            assert(s.readOperation(CurrentUserQuery()) == userData("Carol"))
-            assert(s.cache.loadRecord(CacheKey("User", "1")).flatMap(_.get(fk("name"))) == Present(scalar("Carol")))
+            for
+                s       <- seededStore()
+                _       <- s.writeOptimisticUpdates(UpdateUserNameMutation("Bob"), updateData("Bob"), "m1")
+                changed <- s.rollbackAndWrite(UpdateUserNameMutation("Carol"), updateData("Carol"), "m1")
+                read    <- s.readOperation(CurrentUserQuery())
+                record  <- s.cache.loadRecord(CacheKey("User", "1"))
+            yield
+                assert(changed.contains(CacheKey("User", "1")))
+                // The layer is gone and the persisted cache now holds the real value.
+                assert(read == userData("Carol"))
+                assert(record.flatMap(_.get(fk("name"))) == Present(scalar("Carol")))
+            end for
         }
 
         "concurrent optimistic layers stack latest-wins; rolling one back keeps the other" in {
-            val s = seededStore()
-            s.writeOptimisticUpdates(UpdateUserNameMutation("Bob"), updateData("Bob"), "m1")
-            s.writeOptimisticUpdates(UpdateUserNameMutation("Dana"), updateData("Dana"), "m2")
-            // Latest layer (m2) wins.
-            assert(s.readOperation(CurrentUserQuery()) == userData("Dana"))
-            // Drop the top layer: the lower optimistic layer (m1) is now effective.
-            s.rollbackOptimisticUpdates("m2")
-            assert(s.readOperation(CurrentUserQuery()) == userData("Bob"))
-            // Drop the last layer: back to the persisted value.
-            s.rollbackOptimisticUpdates("m1")
-            assert(s.readOperation(CurrentUserQuery()) == userData("Alice"))
+            for
+                s        <- seededStore()
+                _        <- s.writeOptimisticUpdates(UpdateUserNameMutation("Bob"), updateData("Bob"), "m1")
+                _        <- s.writeOptimisticUpdates(UpdateUserNameMutation("Dana"), updateData("Dana"), "m2")
+                latest   <- s.readOperation(CurrentUserQuery())
+                _        <- s.rollbackOptimisticUpdates("m2")
+                lower    <- s.readOperation(CurrentUserQuery())
+                _        <- s.rollbackOptimisticUpdates("m1")
+                pristine <- s.readOperation(CurrentUserQuery())
+            yield
+                // Latest layer (m2) wins.
+                assert(latest == userData("Dana"))
+                // Drop the top layer: the lower optimistic layer (m1) is now effective.
+                assert(lower == userData("Bob"))
+                // Drop the last layer: back to the persisted value.
+                assert(pristine == userData("Alice"))
+            end for
         }
 
         "a read sees one consistent layer stack even when a layer is dropped mid-read" in {
             // One layer overlays both users. The trap fires the rollback of that layer
-            // right after the read has loaded `User:1` and before it loads `User:2` —
-            // the interleaving of a mutation settling while a watcher re-reads. The
-            // read must answer from ONE stack: both users optimistic (the stack as of
-            // the read's entry) or both persisted, never one of each.
+            // right after the read has loaded the batch holding `User:1` and before it
+            // loads the next level's `User:2` — the interleaving of a mutation settling
+            // while a watcher re-reads. The read must answer from ONE stack: both users
+            // optimistic (the stack as of the read's entry) or both persisted, never one
+            // of each.
             val cache = new TrapCache(MemoryCache())
             val s     = new ApolloStore(cache, cacheKeyGenerator = IdCacheKeyGenerator(List("id")))
-            s.writeOperation(TwoUsersQuery(), twoUsers("Alice", "Ann"))
-            s.writeOptimisticUpdates(TwoUsersQuery(), twoUsers("Bob", "Ben"), "m1")
-            cache.arm(CacheKey("User", "1"))(discard(s.rollbackOptimisticUpdates("m1")))
-            val read = s.readOperation(TwoUsersQuery())
-            assert(
-                read == twoUsers("Bob", "Ben") || read == twoUsers("Alice", "Ann"),
-                s"the read mixed two layer stacks: $read"
-            )
-            assert(s.optimisticLayerIds.isEmpty)
-            // The next read starts from the stack after the rollback.
-            assert(s.readOperation(TwoUsersQuery()) == twoUsers("Alice", "Ann"))
+            for
+                _      <- s.writeOperation(TwoUsersQuery(), twoUsers("Alice", "Ann"))
+                _      <- s.writeOptimisticUpdates(TwoUsersQuery(), twoUsers("Bob", "Ben"), "m1")
+                _      <- Sync.defer(cache.arm(CacheKey("User", "1"))(s.rollbackOptimisticUpdates("m1").unit))
+                read   <- s.readOperation(TwoUsersQuery())
+                fired  <- Sync.defer(cache.fired)
+                layers <- s.optimisticLayerIds
+                // The next read starts from the stack after the rollback.
+                next <- s.readOperation(TwoUsersQuery())
+            yield
+                assert(fired, "the trap must have fired inside the read")
+                assert(
+                    read == twoUsers("Bob", "Ben") || read == twoUsers("Alice", "Ann"),
+                    s"the read mixed two layer stacks: $read"
+                )
+                assert(layers.isEmpty)
+                assert(next == twoUsers("Alice", "Ann"))
+            end for
         }
 
         // --- end-to-end through the interceptor chain + watch() -------------------
@@ -228,7 +265,8 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
                 // Network truth ("Bob") replaces the optimistic value; layer is gone.
                 settled <- pull.next
                 _ = assert(name(settled) == Present("Bob"))
-                _ = assert(client.apolloStore.readOperation(CurrentUserQuery()) == userData("Bob"))
+                read <- client.apolloStore.readOperation(CurrentUserQuery())
+                _ = assert(read == userData("Bob"))
             yield ()
             end for
         }
@@ -259,7 +297,8 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
                 // the pristine cache never took the optimistic value.
                 reverted <- pull.next
                 _ = assert(name(reverted) == Present("Alice"))
-                _ = assert(client.apolloStore.readOperation(CurrentUserQuery()) == userData("Alice"))
+                read <- client.apolloStore.readOperation(CurrentUserQuery())
+                _ = assert(read == userData("Alice"))
             yield ()
             end for
         }
@@ -288,17 +327,19 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
                             .execute
                     )
                 ))
-                _ <- arrived.await // the mutation is on the wire, parked on `gate`
-                layersInFlight = store.optimisticLayerIds
-                readInFlight   = store.readOperation(CurrentUserQuery())
-                _ <- fib.interrupt
-                _ <- tornDown.await
-                _ <- gate.release
+                _              <- arrived.await // the mutation is on the wire, parked on `gate`
+                layersInFlight <- store.optimisticLayerIds
+                readInFlight   <- store.readOperation(CurrentUserQuery())
+                _              <- fib.interrupt
+                _              <- tornDown.await
+                _              <- gate.release
+                layersAfter    <- store.optimisticLayerIds
+                readAfter      <- store.readOperation(CurrentUserQuery())
             yield
                 assert(layersInFlight.size == 1, s"the layer must be overlaid while in flight: $layersInFlight")
                 assert(readInFlight == userData("BobOptimistic"))
-                assert(store.optimisticLayerIds.isEmpty, s"interrupt leaked a layer: ${store.optimisticLayerIds}")
-                assert(store.readOperation(CurrentUserQuery()) == userData("Alice"))
+                assert(layersAfter.isEmpty, s"interrupt leaked a layer: $layersAfter")
+                assert(readAfter == userData("Alice"))
             end for
         }
 
@@ -306,15 +347,19 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
             // Building the stream must not touch the store: the layer is acquired only
             // when the stream is consumed, so a stream that is dropped unconsumed can
             // never leave one behind.
-            val store       = seededStore()
-            val interceptor = new CacheInterceptor(store)
             val request = ApolloRequest
                 .builder(UpdateUserNameMutation("Bob"))
                 .addExecutionContext(ExecutionContext.Empty + OptimisticData(updateData("BobOptimistic"), "m1"))
                 .build()
-            discard(interceptor.intercept(request, InertChain))
-            assert(store.optimisticLayerIds.isEmpty, s"building the stream wrote a layer: ${store.optimisticLayerIds}")
-            assert(store.readOperation(CurrentUserQuery()) == userData("Alice"))
+            for
+                store <- seededStore()
+                _ = discard(new CacheInterceptor(store).intercept(request, InertChain))
+                layers <- store.optimisticLayerIds
+                read   <- store.readOperation(CurrentUserQuery())
+            yield
+                assert(layers.isEmpty, s"building the stream wrote a layer: $layers")
+                assert(read == userData("Alice"))
+            end for
         }
 
         "an exception raised below the cache interceptor rolls the layer back" in {
@@ -331,35 +376,47 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
                         .fetchPolicy(FetchPolicy.NetworkOnly)
                         .execute
                 ))
+                layers <- store.optimisticLayerIds
+                read   <- store.readOperation(CurrentUserQuery())
             yield
                 assert(!result.isSuccess, s"the raised exception must surface: $result")
-                assert(store.optimisticLayerIds.isEmpty, s"the exception leaked a layer: ${store.optimisticLayerIds}")
-                assert(store.readOperation(CurrentUserQuery()) == userData("Alice"))
+                assert(layers.isEmpty, s"the exception leaked a layer: $layers")
+                assert(read == userData("Alice"))
             end for
         }
     }
 
-    /** A cache whose `loadRecord(key)` for the armed `key` loads the record and
-      * THEN runs the armed action once, re-entrantly — so an action that changes
-      * the store's optimistic stack lands deterministically between two loads of
-      * the same read, on one thread, on every platform.
+    /** A cache whose read, once armed for `key`, runs the armed action right after the
+      * batch holding `key` has been loaded — inside the read, before its next batch. The
+      * loader a read hands the reader is pure, so the action (a store effect) is
+      * evaluated in place: that is what lands a change to the optimistic stack
+      * deterministically between two levels of one read, on one fiber, on every
+      * platform.
       */
     final private class TrapCache(delegate: NormalizedCache) extends NormalizedCacheDecorator(delegate):
         private given AllowUnsafe = AllowUnsafe.embrace.danger
-        private val trap          = AtomicRef.Unsafe.init(Maybe.empty[(CacheKey, () => Unit)])
+        private val trap          = AtomicRef.Unsafe.init(Maybe.empty[(CacheKey, Unit < Sync)])
+        private val hit           = AtomicBoolean.Unsafe.init(false)
 
-        def arm(key: CacheKey)(action: => Unit): Unit = discard(trap.getAndSet(Present((key, () => action))))
+        def arm(key: CacheKey)(action: => Unit < Sync)(using Frame): Unit =
+            discard(trap.getAndSet(Present((key, Sync.defer(action)))))
 
-        override def loadRecord(key: CacheKey): Maybe[Record] =
-            val record = delegate.loadRecord(key)
-            trap.get() match
-                case Present((armed, action)) if armed == key =>
-                    discard(trap.getAndSet(Absent))
-                    action()
-                case _ => ()
-            end match
-            record
-        end loadRecord
+        def fired: Boolean = hit.get()
+
+        override def read[A](f: RecordLoader => A)(using Frame): A < Sync =
+            delegate.read { loader =>
+                f { keys =>
+                    val loaded = loader.load(keys)
+                    trap.get() match
+                        case Present((armed, action)) if keys.contains(armed) =>
+                            discard(trap.getAndSet(Absent))
+                            hit.set(true)
+                            Sync.Unsafe.evalOrThrow(action)
+                        case _ => ()
+                    end match
+                    loaded
+                }
+            }
     end TrapCache
 
     // --- end-to-end fixtures ----------------------------------------------------

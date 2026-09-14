@@ -1,10 +1,10 @@
 package kyo.apollo.cache
 
 import kyo.Chunk
-import kyo.Maybe
 import kyo.Schema
 import kyo.apollo.api.*
 import kyo.apollo.cache.TestKeys.*
+import kyo.apollo.cache.normalized.RecordLoader
 import kyo.apollo.cache.normalized.api.*
 import kyo.apollo.cache.normalized.internal.CacheBatchReader
 import kyo.apollo.cache.normalized.internal.Normalizer
@@ -60,7 +60,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
         variables: Map[String, Json] = Map.empty,
         resolver: CacheKeyResolver = CacheKeyResolver.default
     ): Json.JObj =
-        new CacheBatchReader(k => Maybe.fromOption(records.get(k)), variables, CacheKey.QueryRoot, resolver)
+        new CacheBatchReader(RecordLoader(records), variables, CacheKey.QueryRoot, resolver)
             .toData(TestQuery(selections).rootField)
 
     // --- Typed round-trip through the operation's Adapter ---------------------
@@ -279,7 +279,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
             val records = Normalizer.normalize(op, data)
             // Round-trip: the linked records reassemble into the same typed value.
             assert(
-                CacheBatchReader.read(op, k => Maybe.fromOption(records.get(k))) == BookData(
+                CacheBatchReader.read(op, RecordLoader(records)) == BookData(
                     Book("42", "Dune")
                 )
             )
@@ -295,7 +295,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
             // Drop the Book record so the reference dangles.
             val partial = Normalizer.normalize(op, data) - CacheKey("Book", "42")
             val _ = intercept[CacheMissException](
-                CacheBatchReader.read(op, k => Maybe.fromOption(partial.get(k)))
+                CacheBatchReader.read(op, RecordLoader(partial))
             )
         }
 
@@ -308,7 +308,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
             )
             val records = Normalizer.normalize(op, data)
             val (typed, keys) =
-                CacheBatchReader.readWithDependentKeys(op, k => Maybe.fromOption(records.get(k)))
+                CacheBatchReader.readWithDependentKeys(op, RecordLoader(records))
             // Data path is identical to `read`; keys are the root plus the linked Book.
             assert(typed == BookData(Book("42", "Dune")))
             assert(keys == Set(CacheKey.QueryRoot, CacheKey("Book", "42")))
@@ -335,5 +335,73 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
                 Normalizer.normalize(op, data, cacheKeyGenerator = IdCacheKeyGenerator(List("code")))
             assert(toData(selections, records) == Json.JObj(data))
         }
+
+        // --- Batching: one load per level of the selection tree ------------------
+
+        "a list of a hundred references is one load, not a hundred" in {
+            // P2-26: the reader used to resolve every reference with its own lookup. The
+            // root is level one, the hundred items level two — two loads in total.
+            val itemKeys = Chunk.from(1 to 100).map(i => CacheKey("Item", i.toString))
+            val records = itemKeys.map(k => k -> Record(k, Map(fk("id") -> RecordValue.Scalar(jstr(k.render))))).toMap +
+                (CacheKey.QueryRoot -> Record(
+                    CacheKey.QueryRoot,
+                    Map(fk("items") -> RecordValue.RList(itemKeys.map(RecordValue.reference)))
+                ))
+            val loader     = CountingLoader(records)
+            val selections = Chunk(listOf(obj("items", "Item", Chunk(leaf("id")))))
+            val data       = new CacheBatchReader(loader, Map.empty, CacheKey.QueryRoot).toData(TestQuery(selections).rootField)
+            assert(data.fields("items").asInstanceOf[Json.JArr].items.size == 100)
+            assert(loader.batches == Chunk(1, 100), s"one load per level, got batch sizes ${loader.batches}")
+        }
+
+        "each further level of references costs exactly one more load" in {
+            // A hundred items, each pointing at its own author: three levels, three loads,
+            // for 201 records.
+            val itemKeys   = Chunk.from(1 to 100).map(i => CacheKey("Item", i.toString))
+            val authorKeys = Chunk.from(1 to 100).map(i => CacheKey("Author", i.toString))
+            val items = itemKeys.zip(authorKeys).map((item, author) =>
+                item -> Record(item, Map(fk("author") -> RecordValue.reference(author)))
+            )
+            val authors = authorKeys.map(k => k -> Record(k, Map(fk("name") -> RecordValue.Scalar(jstr(k.render)))))
+            val records = (items ++ authors).toMap +
+                (CacheKey.QueryRoot -> Record(
+                    CacheKey.QueryRoot,
+                    Map(fk("items") -> RecordValue.RList(itemKeys.map(RecordValue.reference)))
+                ))
+            val loader     = CountingLoader(records)
+            val selections = Chunk(listOf(obj("items", "Item", Chunk(obj("author", "Author", Chunk(leaf("name")))))))
+            val reader     = new CacheBatchReader(loader, Map.empty, CacheKey.QueryRoot)
+            val _          = reader.toData(TestQuery(selections).rootField)
+            assert(loader.batches == Chunk(1, 100, 100), s"one load per level, got batch sizes ${loader.batches}")
+            assert(reader.dependentKeys == Set(CacheKey.QueryRoot) ++ itemKeys ++ authorKeys)
+        }
+
+        "a key reached along several paths is loaded once" in {
+            // Two list entries and a second field all name Book:1: one level-two load of one key.
+            val records = Map(
+                CacheKey.QueryRoot -> Record(
+                    CacheKey.QueryRoot,
+                    Map(
+                        fk("books")    -> RecordValue.RList(Chunk.fill(2)(RecordValue.reference(CacheKey("Book", "1")))),
+                        fk("featured") -> RecordValue.reference(CacheKey("Book", "1"))
+                    )
+                ),
+                CacheKey("Book", "1") -> Record(CacheKey("Book", "1"), Map(fk("title") -> RecordValue.Scalar(jstr("Dune"))))
+            )
+            val loader = CountingLoader(records)
+            val selections =
+                Chunk(listOf(obj("books", "Book", Chunk(leaf("title")))), obj("featured", "Book", Chunk(leaf("title"))))
+            val _ = new CacheBatchReader(loader, Map.empty, CacheKey.QueryRoot).toData(TestQuery(selections).rootField)
+            assert(loader.batches == Chunk(1, 1))
+        }
     }
+
+    /** A loader over fixed records that remembers the size of every batch it served. */
+    final private class CountingLoader(records: Map[CacheKey, Record]) extends RecordLoader:
+        private var sizes       = Chunk.empty[Int]
+        def batches: Chunk[Int] = sizes
+        def load(keys: Chunk[CacheKey]): Map[CacheKey, Record] =
+            sizes = sizes.append(keys.size)
+            RecordLoader(records).load(keys)
+    end CountingLoader
 end CacheBatchReaderSpec

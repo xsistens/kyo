@@ -6,6 +6,7 @@ import kyo.Frame
 import kyo.Maybe
 import kyo.Present
 import kyo.apollo.api.*
+import kyo.apollo.cache.normalized.RecordLoader
 import kyo.apollo.cache.normalized.api.*
 import kyo.apollo.exception.CacheMissException
 import kyo.apollo.json.Json
@@ -23,18 +24,23 @@ import scala.collection.immutable.VectorMap
   * producing partial data — so `CacheFirst`/`NetworkFirst` can fall through to
   * the network and `CacheOnly` can surface the miss as a response value.
   *
+  * Records come from a [[RecordLoader]] in batches, ONE `load` per level of the
+  * selection tree: the root record, then every record the root's selected fields
+  * reference or redirect to, then every record those reference, and so on. A list
+  * of a thousand entities is one load, not a thousand — the round-trip count a
+  * persistent backend pays is the depth of the query, not its width. Once every
+  * level is loaded the response is assembled from the loaded records without
+  * further loads, so the misses it raises and the dependency keys it reports are
+  * exactly those of a record-by-record walk. Mirrors apollo-kotlin's
+  * `CacheBatchReader`.
+  *
   * The assembled [[Json]] map is decoded through the operation's own
   * `dataSchema` (via [[kyo.apollo.json.SchemaJson.decode]], see
   * [[CacheBatchReader.read]]) — the same kyo-schema typed-decode path the HTTP
   * transport uses on a live body, which is what guarantees a `writeOperation` →
   * `readOperation` round-trip yields data equal to the networked value.
   *
-  * Records are supplied through `loadRecord` (a `key -> Option[Record]` lookup)
-  * rather than a concrete store, so the Phase 04 `ApolloStore` plugs its cache in
-  * without this reader depending on it. Mirrors apollo-kotlin's
-  * `CacheBatchReader`.
-  *
-  * @param loadRecord       resolves a record key to its stored [[Record]], if present
+  * @param loader           loads the records present among a batch of keys
   * @param variables        the operation's variables (name → encoded JSON), for
   *                         argument-aware [[FieldKey]]s and redirect resolution
   * @param rootKey          the record key the read starts from (see [[CacheKey.rootKey]])
@@ -45,7 +51,7 @@ import scala.collection.immutable.VectorMap
   *                         to the identity policy
   */
 final class CacheBatchReader(
-    loadRecord: CacheKey => Maybe[Record],
+    loader: RecordLoader,
     variables: Map[String, Json],
     rootKey: CacheKey,
     cacheKeyResolver: CacheKeyResolver = CacheKeyResolver.default,
@@ -60,21 +66,37 @@ final class CacheBatchReader(
       */
     private val visitedKeys = scala.collection.mutable.LinkedHashSet.empty[CacheKey]
 
+    /** Every record the level-wise loads returned, by key, and every key they were
+      * asked for (present or not) — so no key is requested twice.
+      */
+    private val loaded    = scala.collection.mutable.HashMap.empty[CacheKey, Record]
+    private val requested = scala.collection.mutable.HashSet.empty[CacheKey]
+
     /** The set of record keys this reader touched, in first-visit order. Meaningful
       * only after a successful [[toData]] (a miss aborts before the graph is fully
       * walked).
       */
     def dependentKeys: Set[CacheKey] = visitedKeys.toSet
 
-    /** Resolve `key` to its stored [[Record]], recording the key as a dependency on
+    /** Resolve `key` to its loaded [[Record]], recording the key as a dependency on
       * a hit. A miss records nothing — the read is about to abort with a
-      * [[CacheMissException]], so there is no successful graph to depend on.
+      * [[CacheMissException]], so there is no successful graph to depend on. A key no
+      * level asked for (which the level walk never leaves out) is loaded on its own.
       */
     private def resolve(key: CacheKey): Maybe[Record] =
-        val record = loadRecord(key)
+        if !requested.contains(key) then fetch(Chunk(key))
+        val record = Maybe.fromOption(loaded.get(key))
         if record.isDefined then visitedKeys += key
         record
     end resolve
+
+    /** Load the keys among `keys` not requested before, in one batch. */
+    private def fetch(keys: Chunk[CacheKey]): Unit =
+        val fresh = keys.filterNot(requested.contains).distinct
+        if fresh.nonEmpty then
+            requested ++= fresh
+            loaded ++= loader.load(fresh)
+    end fetch
 
     /** The miss for record `key`, or for its field `field`. The exception carries
       * the key's rendered form (the exception model is key-type agnostic), lowered
@@ -88,8 +110,53 @@ final class CacheBatchReader(
       * field is missing.
       */
     def toData(rootField: CompiledField): Json.JObj =
+        loadLevels(Chunk(Pending(rootKey, rootField.selections, rootField.fieldType.leafType.name)))
         val root = resolve(rootKey).getOrElse(throw miss(rootKey))
         readObject(root, rootField.selections, rootField.fieldType.leafType.name)
+    end toData
+
+    /** One object the walk still has to read: the record key it lives under, the
+      * selections read from it, and its static type.
+      */
+    final private case class Pending(key: CacheKey, selections: Chunk[CompiledSelection], parentType: String)
+
+    /** Load the selection tree level by level: one batch for the keys of `level`,
+      * then the objects those records lead to become the next level. A record that is
+      * absent, or a field that is, leads nowhere — the assembly step raises the miss.
+      */
+    @scala.annotation.tailrec
+    private def loadLevels(level: Chunk[Pending]): Unit =
+        if level.nonEmpty then
+            fetch(level.map(_.key))
+            loadLevels(level.flatMap(children))
+
+    /** The objects one level below `pending`, following the same field collection,
+      * redirects and field keys as [[readObject]] / [[readField]] / [[readValue]].
+      */
+    private def children(pending: Pending): Chunk[Pending] =
+        loaded.get(pending.key) match
+            case None => Chunk.empty
+            case Some(record) =>
+                val typename = recordTypename(record).getOrElse(pending.parentType)
+                FieldCollector.collect(pending.selections, typename, injectTypename = false).flatMap { field =>
+                    val childType = field.fieldType.leafType.name
+                    redirect(typename, field) match
+                        case Present(targetKey) => Chunk(Pending(targetKey, field.selections, childType))
+                        case Absent =>
+                            record.get(fieldPolicies.fieldKey(typename, field, variables)) match
+                                case Present(value) => references(value).map(Pending(_, field.selections, childType))
+                                case Absent         => Chunk.empty
+                    end match
+                }
+        end match
+    end children
+
+    /** The record keys a stored value references, lists included. */
+    private def references(value: RecordValue): Chunk[CacheKey] =
+        value match
+            case RecordValue.Reference(ref) => Chunk(ref.key)
+            case RecordValue.RList(items)   => items.flatMap(references)
+            case _                          => Chunk.empty
 
     /** Read one object `record` under `selections` into a [[Json.JObj]]. The
       * object's own stored `__typename` (when present) drives inline-fragment
@@ -144,8 +211,8 @@ final class CacheBatchReader(
                 .orElse(cacheKeyResolver.cacheKeyForField(field, variables))
 
     /** Turn a stored [[RecordValue]] back into JSON: scalars/null pass through,
-      * lists recurse element-wise, and a reference loads and reads its target
-      * record under `field`'s selections.
+      * lists recurse element-wise, and a reference reads its (already loaded)
+      * target record under `field`'s selections.
       */
     private def readValue(value: RecordValue, field: CompiledField): Json = value match
         case RecordValue.Null         => Json.JNull
@@ -165,27 +232,26 @@ object CacheBatchReader:
 
     /** Denormalize `operation`'s records into a typed `D`.
       *
-      * Assembles the response `data` map from the cache (starting at the
+      * Assembles the response `data` map from the loader (starting at the
       * operation's root key) and decodes it through `operation.dataSchema` — the
       * same typed-decode path the HTTP transport uses — so the result equals what
-      * the network would have produced. Throws [[CacheMissException]] if the cache
-      * cannot satisfy every selected field.
+      * the network would have produced. A pure function of the loader's records:
+      * throws [[CacheMissException]] if they cannot satisfy every selected field.
       *
       * @param operation        the operation whose response is being read back
-      * @param loadRecord       resolves a record key to its stored [[Record]]
-      * @param customScalars    codecs for custom scalars (default none)
+      * @param loader           loads the records present among a batch of keys
       * @param variables        the operation's encoded variables (default none)
       * @param cacheKeyResolver read-side redirect policy (default: none)
       * @param fieldPolicies    per-field read-side policies (default identity)
       */
     def read[D](
         operation: Operation[D],
-        loadRecord: CacheKey => Maybe[Record],
+        loader: RecordLoader,
         variables: Map[String, Json] = Map.empty,
         cacheKeyResolver: CacheKeyResolver = CacheKeyResolver.default,
         fieldPolicies: FieldPolicies = FieldPolicies.empty
     )(using Frame): D =
-        readWithDependentKeys(operation, loadRecord, variables, cacheKeyResolver, fieldPolicies)._1
+        readWithDependentKeys(operation, loader, variables, cacheKeyResolver, fieldPolicies)._1
 
     /** Denormalize `operation`'s records into a typed `D` *and* the set of record
       * keys the read depended on.
@@ -199,14 +265,14 @@ object CacheBatchReader:
       */
     def readWithDependentKeys[D](
         operation: Operation[D],
-        loadRecord: CacheKey => Maybe[Record],
+        loader: RecordLoader,
         variables: Map[String, Json] = Map.empty,
         cacheKeyResolver: CacheKeyResolver = CacheKeyResolver.default,
         fieldPolicies: FieldPolicies = FieldPolicies.empty
     )(using Frame): (D, Set[CacheKey]) =
         val rootKey = CacheKey.rootKey(operation)
         val reader =
-            new CacheBatchReader(loadRecord, variables, rootKey, cacheKeyResolver, fieldPolicies)
+            new CacheBatchReader(loader, variables, rootKey, cacheKeyResolver, fieldPolicies)
         val data = reader.toData(operation.rootField)
         (operation.dataCodec.decode(data), reader.dependentKeys)
     end readWithDependentKeys
