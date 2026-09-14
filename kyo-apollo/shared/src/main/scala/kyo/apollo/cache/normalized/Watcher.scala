@@ -66,11 +66,7 @@ extension [D](call: ApolloCall[D])
       * `execute()`/`toFlow` (only `watch()` reads it back).
       */
     def refetchPolicy(policy: RefetchPolicy): ApolloCall[D] =
-        call.withRequest(
-            call.apolloRequest.newBuilder
-                .addExecutionContext(ExecutionContext.Empty + policy)
-                .build()
-        )
+        call.withRequest(_.addExecutionContext(ExecutionContext.Empty + policy))
 
     /** Observe this operation as a live [[ResponseStream]]: it emits the initial
       * result (honoring the call's [[FetchPolicy]]) and then re-emits automatically
@@ -92,8 +88,8 @@ extension [D](call: ApolloCall[D])
       * the publishing fiber — `changedKeys.subscribe` registers it for the stream's
       * `Scope` — and cache re-reads push into the channel via `channel.unsafe.offer`.
       * The two *async* legs (the initial fetch and a network refetch) run as
-      * detached fibers (`Fiber.Unsafe.init`) that drive `call.stream` /
-      * `client.executeAsStream` into the same channel — the idiomatic callback→Kyo
+      * detached fibers (`Fiber.Unsafe.init`) that drive `client.executeAsStream`
+      * into the same channel — the idiomatic callback→Kyo
       * interop, mirroring the WS transport and `kyo-ui`'s reactive bridge. Those
       * fetch streams are finite, so they complete on their own; teardown only flips
       * `active`, closes the channel, and ends the subscription.
@@ -128,19 +124,23 @@ extension [D](call: ApolloCall[D])
       * emitted as the value, as `CacheOnly` would, and so is any later miss until a
       * read succeeds again — a read the write-back cannot satisfy never becomes an
       * endless chain of requests.
+      *
+      * Each consumption of the stream is one watch with one request id, minted when
+      * consumption starts: the initial fetch and every cache re-read carry it. A
+      * network refetch is an execution of its own and mints its own id.
       */
     def watch()(using
         Frame,
         Tag[Emit[Chunk[ApolloResponse[D]]]]
     ): ResponseStream[D] =
         val client  = call.apolloClient
-        val request = call.apolloRequest
+        val builder = call.requestBuilder
         val store   = client.apolloStore
         val refetchPolicy =
-            request.executionContext.get(RefetchPolicy).getOrElse(RefetchPolicy.Default)
+            builder.executionContext.get(RefetchPolicy).getOrElse(RefetchPolicy.Default)
 
         Stream.unwrap {
-            Channel.initUnscoped[ApolloResponse[D]](Int.MaxValue).map { channel =>
+            Kyo.zip(builder.build, Channel.initUnscoped[ApolloResponse[D]](Int.MaxValue)).map { (request, channel) =>
                 given AllowUnsafe = AllowUnsafe.embrace.danger
 
                 val state = AtomicRef.Unsafe.init(WatchState.initial)
@@ -298,9 +298,7 @@ extension [D](call: ApolloCall[D])
                     else if s.inflight then
                         if !state.compareAndSet(s, s.copy(rerun = true)) then bookRefetch()
                     else if state.compareAndSet(s, s.copy(inflight = true, rerun = false)) then
-                        val networked = request.newBuilder
-                            .addExecutionContext(ExecutionContext.Empty + FetchPolicy.NetworkOnly)
-                            .build()
+                        val networked = builder.addExecutionContext(ExecutionContext.Empty + FetchPolicy.NetworkOnly)
                         discard(Fiber.Unsafe.init[Throwable, Unit](
                             Scope.run(
                                 Sync.ensure(finishRefetch())(
@@ -376,7 +374,7 @@ extension [D](call: ApolloCall[D])
                         if before.active then store.releaseRetained(before.keys)
                         discard(channel.unsafe.close())
                     }))
-                    .andThen(Sync.Unsafe.defer(spawn(call.stream)))
+                    .andThen(Sync.Unsafe.defer(spawn(client.executeAsStream(request))))
                     .andThen(channel.streamUntilClosed())
             }
         }

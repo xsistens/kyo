@@ -13,6 +13,7 @@ import kyo.apollo.json.SchemaJson
 import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.HttpHeader
 import kyo.apollo.network.HttpMethod
+import kyo.apollo.network.TestIds
 import scala.collection.immutable.VectorMap
 
 /** Tests that [[HttpRequestComposer]] lowers an [[ApolloRequest]] into the right
@@ -66,7 +67,7 @@ class HttpRequestComposerSpec extends kyo.test.Test[Any]:
     "HttpRequestComposer" - {
 
         "default method is POST with the OperationRequestBody JSON body" in {
-            val request = ApolloRequest(MiniQuery(5))
+            val request = ApolloRequest(MiniQuery(5), TestIds.requestUuid)
             val http    = composer.compose(url, request)
 
             assert(http.method == HttpMethod.Post)
@@ -80,10 +81,8 @@ class HttpRequestComposerSpec extends kyo.test.Test[Any]:
         }
 
         "POST carries JSON content-type / accept headers, then per-request ones" in {
-            val request = ApolloRequest
-                .builder(MiniQuery(1))
-                .addHttpHeader("Authorization", "Bearer t")
-                .build()
+            val request =
+                ApolloRequest(MiniQuery(1), TestIds.requestUuid, httpHeaders = List(HttpHeader("Authorization", "Bearer t")))
             val http = composer.compose(url, request)
 
             assert(
@@ -97,7 +96,7 @@ class HttpRequestComposerSpec extends kyo.test.Test[Any]:
         }
 
         "GET encodes the operation as URL query params and sends no body" in {
-            val request = ApolloRequest.builder(MiniQuery(5)).httpMethod(HttpMethod.Get).build()
+            val request = ApolloRequest(MiniQuery(5), TestIds.requestUuid, httpMethod = Some(HttpMethod.Get))
             val http    = composer.compose(url, request)
 
             assert(http.method == HttpMethod.Get)
@@ -111,13 +110,13 @@ class HttpRequestComposerSpec extends kyo.test.Test[Any]:
         }
 
         "GET appends params with '&' when the URL already has a query string" in {
-            val request = ApolloRequest.builder(MiniQuery(1)).httpMethod(HttpMethod.Get).build()
+            val request = ApolloRequest(MiniQuery(1), TestIds.requestUuid, httpMethod = Some(HttpMethod.Get))
             val http    = composer.compose(url + "?trace=1", request)
             assert(http.url.startsWith(url + "?trace=1&query="))
         }
 
         "APQ POST adds the persistedQuery extension with the document sha256" in {
-            val request = ApolloRequest.builder(MiniQuery(2)).sendApqExtensions(true).build()
+            val request = ApolloRequest(MiniQuery(2), TestIds.requestUuid, sendApqExtensions = true)
             val http    = composer.compose(url, request)
 
             val hash = Sha256.hex(MiniQuery(2).document)
@@ -131,11 +130,8 @@ class HttpRequestComposerSpec extends kyo.test.Test[Any]:
         }
 
         "APQ with sendDocument=false omits the query field from the POST body" in {
-            val request = ApolloRequest
-                .builder(MiniQuery(2))
-                .sendApqExtensions(true)
-                .sendDocument(false)
-                .build()
+            val request =
+                ApolloRequest(MiniQuery(2), TestIds.requestUuid, sendApqExtensions = true, sendDocument = false)
             val http = composer.compose(url, request)
 
             val hash = Sha256.hex(MiniQuery(2).document)
@@ -151,30 +147,30 @@ class HttpRequestComposerSpec extends kyo.test.Test[Any]:
         }
 
         "a @defer operation widens the POST Accept header to multipart/mixed" in {
-            val http = composer.compose(url, ApolloRequest(DeferQuery(1)))
+            val http = composer.compose(url, ApolloRequest(DeferQuery(1), TestIds.requestUuid))
             assert(http.headers.contains(HttpHeader("Accept", deferAccept)))
             assert(!http.headers.contains(HttpHeader("Accept", plainAccept)))
         }
 
         "a @defer operation widens the GET Accept header too" in {
-            val request = ApolloRequest.builder(DeferQuery(1)).httpMethod(HttpMethod.Get).build()
+            val request = ApolloRequest(DeferQuery(1), TestIds.requestUuid, httpMethod = Some(HttpMethod.Get))
             assert(composer.compose(url, request).headers.contains(HttpHeader("Accept", deferAccept)))
         }
 
         "a non-defer operation keeps the plain Accept header" in {
-            val http = composer.compose(url, ApolloRequest(MiniQuery(1)))
+            val http = composer.compose(url, ApolloRequest(MiniQuery(1), TestIds.requestUuid))
             assert(http.headers.contains(HttpHeader("Accept", plainAccept)))
         }
 
         "a request-pinned method overrides the composer default" in {
             val getComposer = HttpRequestComposer(defaultHttpMethod = HttpMethod.Post)
-            val request     = ApolloRequest.builder(MiniQuery(1)).httpMethod(HttpMethod.Get).build()
+            val request     = ApolloRequest(MiniQuery(1), TestIds.requestUuid, httpMethod = Some(HttpMethod.Get))
             assert(getComposer.compose(url, request).method == HttpMethod.Get)
         }
 
         "extensions carry raw JSON through unchanged (Json.JObj round-trips)" in {
             // Sanity that the APQ extension really parses back to the same structure.
-            val request = ApolloRequest.builder(MiniQuery(1)).sendApqExtensions(true).build()
+            val request = ApolloRequest(MiniQuery(1), TestIds.requestUuid, sendApqExtensions = true)
             val body    = kyo.apollo.json.JsonParser.parse(composer.compose(url, request).body.get).getOrThrow
             body match
                 case Json.JObj(fields) =>
