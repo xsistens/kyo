@@ -66,6 +66,6 @@ final class DevtoolsInterceptor(store: DevtoolsOperationStore) extends ApolloInt
             // GraphQL errors keep the devtools' one-line "; " join rather than the
             // newline-joined Apollo-JS parity message the exception itself carries.
             case Present(gql: ApolloGraphQLException) => Some(gql.errors.map(_.message).mkString("; "))
-            case Present(ex)                          => Some(Option(ex.getMessage).getOrElse(ex.toString))
+            case Present(ex)                          => Some(ex.message)
             case Absent                               => None
 end DevtoolsInterceptor

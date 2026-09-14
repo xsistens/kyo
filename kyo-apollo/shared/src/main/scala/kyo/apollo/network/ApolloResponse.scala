@@ -2,6 +2,7 @@ package kyo.apollo.network
 
 import kyo.Absent
 import kyo.Chunk
+import kyo.Frame
 import kyo.Maybe
 import kyo.Present
 import kyo.apollo.api.GraphQLError
@@ -103,7 +104,7 @@ object ApolloResponse:
         requestUuid: Uuid,
         response: GraphQLResponse[D],
         executionContext: ExecutionContext = ExecutionContext.Empty
-    ): ApolloResponse[D] =
+    )(using Frame): ApolloResponse[D] =
         ApolloResponse(
             requestUuid = requestUuid,
             data = response.data,
