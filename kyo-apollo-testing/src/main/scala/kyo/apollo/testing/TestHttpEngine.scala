@@ -2,10 +2,11 @@ package kyo.apollo.testing
 
 import java.util.concurrent.atomic.AtomicReference
 import kyo.*
+import kyo.apollo.exception.ApolloNetworkException
+import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.network.http.HttpEngine
 import kyo.apollo.network.http.HttpRequest
 import kyo.apollo.network.http.HttpResponse
-import scala.concurrent.Future
 
 /** The single, parameterized fake [[HttpEngine]] that collapses the ~11 inline
   * doubles the audit found across the suite (ADR §2b): the capturing engine
@@ -23,15 +24,17 @@ import scala.concurrent.Future
   *     counting).
   *   - [[TestHttpEngine.respondWith]] — a pure `HttpRequest => HttpResponse`
   *     (recording-with-callback, document routing).
-  *   - [[TestHttpEngine.async]] — an effectful `HttpRequest => HttpResponse < Async`.
-  *   - [[TestHttpEngine.failing]] — fails the async round-trip (a simulated
-  *     connection error the transport folds into an `ApolloNetworkException`).
+  *   - [[TestHttpEngine.async]] — an effectful `HttpRequest => HttpResponse`, which may
+  *     abort with an `HttpEngineFailure`.
+  *   - [[TestHttpEngine.failing]] — aborts the round-trip with an
+  *     `ApolloNetworkException` (a simulated connection error the transport folds
+  *     into an `ApolloResponse.error` value).
   *
   * For a reply parked on a gate (observe `Loading` before releasing the
   * response), use [[GatedHttpEngine]] instead — the one gate-on-a-`Promise`
   * engine promoted as-is from `KyoTestSupport`.
   */
-final class TestHttpEngine private (responder: HttpRequest => HttpResponse < Async)
+final class TestHttpEngine private (responder: HttpRequest => HttpResponse < (Async & Abort[HttpEngineFailure]))
     extends HttpEngine:
 
     private var _requests: List[HttpRequest] = Nil
@@ -45,7 +48,7 @@ final class TestHttpEngine private (responder: HttpRequest => HttpResponse < Asy
     /** The most recent request, if any. */
     def lastRequest: Option[HttpRequest] = _requests.lastOption
 
-    def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
+    def execute(request: HttpRequest)(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) =
         _requests = _requests :+ request
         responder(request)
 end TestHttpEngine
@@ -65,15 +68,15 @@ object TestHttpEngine:
         new TestHttpEngine(request => respond(request))
 
     /** Answers each request with an effectful `respond` (e.g. a deferred value). */
-    def async(respond: HttpRequest => HttpResponse < Async): TestHttpEngine =
+    def async(respond: HttpRequest => HttpResponse < (Async & Abort[HttpEngineFailure])): TestHttpEngine =
         new TestHttpEngine(respond)
 
-    /** Fails the round-trip on the async channel with `cause` — a simulated
-      * connection error (no response received). The transport folds it into an
-      * `ApolloNetworkException` value, mirroring a real `fetch` rejection.
+    /** Aborts every round-trip with an `ApolloNetworkException` carrying `cause` — a
+      * simulated connection error (no response received), as the production engines
+      * report one. The transport folds it into an `ApolloResponse.error` value.
       */
     def failing(cause: Throwable)(using Frame): TestHttpEngine =
-        new TestHttpEngine(_ => Async.fromFuture(Future.failed[HttpResponse](cause)))
+        new TestHttpEngine(_ => Abort.fail(ApolloNetworkException(cause = cause)))
 end TestHttpEngine
 
 /** An [[HttpEngine]] that parks every reply on a gate until [[release]] is

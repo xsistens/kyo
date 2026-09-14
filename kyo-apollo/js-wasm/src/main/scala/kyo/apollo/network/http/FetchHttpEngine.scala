@@ -1,6 +1,8 @@
 package kyo.apollo.network.http
 
 import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.apollo.exception.ApolloNetworkException
+import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.network.HttpHeader
 import kyo.apollo.network.HttpMethod
 import org.scalajs.dom
@@ -16,9 +18,9 @@ import scala.scalajs.js.typedarray.*
   * project runs on Node 26). The ordinary [[execute]] reads the whole response
   * body via `Response.text()` — see [[HttpResponse]] for why a buffered `String`.
   * [[executeStreaming]] additionally reads a `multipart/mixed` incremental-delivery
-  * (`@defer`) body as a live chunk stream off the `fetch` body reader. Any `fetch`
-  * rejection surfaces as a failed `Future`, folded into an `ApolloNetworkException`
-  * by [[HttpNetworkTransport]].
+  * (`@defer`) body as a live chunk stream off the `fetch` body reader. A rejected
+  * `fetch` (or body read) becomes the engine's `Abort[HttpEngineFailure]`, an
+  * [[ApolloNetworkException]] carrying the JS error as its `cause`.
   */
 final class FetchHttpEngine extends HttpEngine:
 
@@ -27,10 +29,10 @@ final class FetchHttpEngine extends HttpEngine:
     // `kyo.apollo.network.ExecutionContext` (the request-context bag) by name.
     import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 
-    def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
+    def execute(request: HttpRequest)(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) =
         // Build the `fetch` round-trip as a `Future` (dom.fetch is Promise-based),
-        // then bridge it into `Async`. A rejection surfaces on the async Throwable
-        // channel, which `HttpNetworkTransport` folds into an `ApolloNetworkException`.
+        // then bridge it into `Async`; a rejection is mapped onto the engine row at
+        // that boundary ([[fetched]]).
         //
         // LAZINESS IS LOAD-BEARING: `Async.fromFuture` takes its Future BY VALUE, so
         // wrapping the fetch in it directly would START the request the moment this
@@ -51,11 +53,11 @@ final class FetchHttpEngine extends HttpEngine:
                     body = text
                 )
             }
-            .map(_.get)
+            .map(fiber => fetched(fiber.get))
 
     override def executeStreaming(
         request: HttpRequest
-    )(using Frame): HttpStreamResponse < (Async & Scope) =
+    )(using Frame): HttpStreamResponse < (Async & Scope & Abort[HttpEngineFailure]) =
         // By-name `Fiber.fromFuture` for the same laziness reason as [[execute]].
         Fiber
             .fromFuture {
@@ -76,7 +78,17 @@ final class FetchHttpEngine extends HttpEngine:
                     end if
                 }
             }
-            .map(_.get)
+            .map(fiber => fetched(fiber.get))
+
+    /** The `fetch` boundary: a rejected promise reaches kyo as a panic of the bridged
+      * fiber and becomes the engine failure; an interrupt stays an interrupt.
+      */
+    private def fetched[A](result: A < Async)(using Frame): A < (Async & Abort[HttpEngineFailure]) =
+        Abort.run[Throwable](result).map {
+            case Result.Success(value)                => value
+            case Result.Panic(interrupt: Interrupted) => Abort.panic(interrupt)
+            case Result.Error(rejection)              => Abort.fail(ApolloNetworkException(cause = rejection))
+        }
 
     /** The shared `fetch` `RequestInit` for a request. */
     private[http] def requestInit(request: HttpRequest): dom.RequestInit =
@@ -121,15 +133,16 @@ final class FetchHttpEngine extends HttpEngine:
       * chunk was lost before the consumer attached and `@defer` stalled on Loading.
       * `TextDecoder({stream:true})` keeps a multibyte char intact across a chunk
       * boundary; the `Scope` finalizer cancels the reader when the consumer stops early.
+      * A rejected read (the body dropped) aborts the stream with the engine failure.
       */
-    private def bodyStream(response: dom.Response)(using Frame): Stream[String, Async & Scope] =
+    private def bodyStream(response: dom.Response)(using Frame): Stream[String, Async & Scope & Abort[HttpEngineFailure]] =
         Stream.unwrap {
             Sync.defer(response.body.getReader()).map { reader =>
                 val decoder    = new TextDecoder("utf-8")
                 val streamOpts = js.Dynamic.literal(stream = true).asInstanceOf[js.Object]
                 // One `reader.read()` per pull; `Present(chunk)` emits, `Absent` ends.
-                def pull: Maybe[Seq[String]] < Async =
-                    Async.fromFuture(reader.read(): Future[dom.Chunk[Uint8Array]]).map { chunk =>
+                def pull: Maybe[Seq[String]] < (Async & Abort[HttpEngineFailure]) =
+                    fetched(Async.fromFuture(reader.read(): Future[dom.Chunk[Uint8Array]])).map { chunk =>
                         if chunk.done then Absent
                         else Present(Seq(decoder.decode(chunk.value, streamOpts)))
                     }
