@@ -1,10 +1,9 @@
 package kyo.apollo.network.http
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import java.nio.charset.StandardCharsets
+import kyo.*
 import kyo.apollo.exception.ApolloNetworkException
 import kyo.apollo.exception.HttpEngineFailure
-import kyo.apollo.network.HttpHeader
-import kyo.apollo.network.HttpMethod
 import org.scalajs.dom
 import scala.concurrent.Future
 import scala.scalajs.js
@@ -12,15 +11,16 @@ import scala.scalajs.js.Thenable.Implicits.*
 import scala.scalajs.js.annotation.JSGlobal
 import scala.scalajs.js.typedarray.*
 
-/** The production [[HttpEngine]]: issues requests through the platform `fetch`.
+/** The production [[HttpEngine]] on JS/Wasm: issues requests through the platform
+  * `fetch`.
   *
   * Works in the browser and under Node 18+ (both expose a global `fetch`; this
   * project runs on Node 26). The ordinary [[execute]] reads the whole response
-  * body via `Response.text()` — see [[HttpResponse]] for why a buffered `String`.
-  * [[executeStreaming]] additionally reads a `multipart/mixed` incremental-delivery
-  * (`@defer`) body as a live chunk stream off the `fetch` body reader. A rejected
-  * `fetch` (or body read) becomes the engine's `Abort[HttpEngineFailure]`, an
-  * [[ApolloNetworkException]] carrying the JS error as its `cause`.
+  * body via `Response.text()`. [[executeStreaming]] additionally reads a
+  * `multipart/mixed` incremental-delivery (`@defer`) body as a live chunk stream off
+  * the `fetch` body reader. A rejected `fetch` (or body read) becomes the engine's
+  * `Abort[HttpEngineFailure]`, an [[ApolloNetworkException]] carrying the JS error
+  * as its `cause`.
   */
 final class FetchHttpEngine extends HttpEngine:
 
@@ -29,7 +29,7 @@ final class FetchHttpEngine extends HttpEngine:
     // `kyo.apollo.network.ExecutionContext` (the request-context bag) by name.
     import scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
 
-    def execute(request: HttpRequest)(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) =
+    def execute(request: HttpEngine.Request)(using Frame): HttpEngine.Response < (Async & Abort[HttpEngineFailure]) =
         // Build the `fetch` round-trip as a `Future` (dom.fetch is Promise-based),
         // then bridge it into `Async`; a rejection is mapped onto the engine row at
         // that boundary ([[fetched]]).
@@ -45,36 +45,25 @@ final class FetchHttpEngine extends HttpEngine:
                 // The `: Future[…]` ascriptions force the implicit Thenable→Future bridge on
                 // the Promise-based `fetch` / `text()` results.
                 for
-                    response <- dom.fetch(request.url, requestInit(request)): Future[dom.Response]
+                    response <- dom.fetch(request.url.full, requestInit(request)): Future[dom.Response]
                     text     <- response.text(): Future[String]
-                yield HttpResponse(
-                    statusCode = response.status,
-                    headers = readHeaders(response.headers),
-                    body = text
-                )
+                yield HttpEngine.response(HttpStatus(response.status), text, readHeaders(response.headers))
             }
             .map(fiber => fetched(fiber.get))
 
     override def executeStreaming(
-        request: HttpRequest
-    )(using Frame): HttpStreamResponse < (Async & Scope & Abort[HttpEngineFailure]) =
+        request: HttpEngine.Request
+    )(using Frame): HttpEngine.StreamResponse < (Async & Scope & Abort[HttpEngineFailure]) =
         // By-name `Fiber.fromFuture` for the same laziness reason as [[execute]].
         Fiber
             .fromFuture {
-                dom.fetch(request.url, requestInit(request)).flatMap { response =>
+                dom.fetch(request.url.full, requestInit(request)).flatMap { response =>
+                    val status  = HttpStatus(response.status)
                     val headers = readHeaders(response.headers)
                     if isMultipart(Option(response.headers.get("Content-Type"))) then
-                        Future.successful(
-                            HttpStreamResponse(
-                                response.status,
-                                headers,
-                                HttpStreamBody.Chunked(bodyStream(response))
-                            )
-                        )
+                        Future.successful(HttpEngine.streamResponse(status, HttpStreamBody.Chunked(bodyStream(response)), headers))
                     else
-                        response.text().map { text =>
-                            HttpStreamResponse(response.status, headers, HttpStreamBody.Buffered(text))
-                        }
+                        response.text().map(text => HttpEngine.streamResponse(status, HttpStreamBody.Buffered(text), headers))
                     end if
                 }
             }
@@ -91,34 +80,36 @@ final class FetchHttpEngine extends HttpEngine:
         }
 
     /** The shared `fetch` `RequestInit` for a request. */
-    private[http] def requestInit(request: HttpRequest): dom.RequestInit =
-        val init = new dom.RequestInit {}
-        init.method = request.method match
-            case HttpMethod.Get  => dom.HttpMethod.GET
-            case HttpMethod.Post => dom.HttpMethod.POST
+    private[http] def requestInit(request: HttpEngine.Request): dom.RequestInit =
+        val init      = new dom.RequestInit {}
+        val multipart = request.fields.body.isInstanceOf[HttpRequestBody.Multipart]
+        init.method = request.method.name.asInstanceOf[dom.HttpMethod]
         val headers = new dom.Headers()
-        request.headers.foreach { h =>
+        request.headers.foreach { (name, value) =>
             // For a multipart upload the platform must set `Content-Type` itself (with
             // the generated boundary), so never forward a caller-set one.
-            if request.formBody.isDefined && h.name.equalsIgnoreCase("Content-Type") then ()
-            else headers.append(h.name, h.value)
+            if multipart && name.equalsIgnoreCase("Content-Type") then ()
+            else headers.append(name, value)
         }
         init.headers = headers
-        request.formBody match
-            case Some(form) =>
+        request.fields.body match
+            case HttpRequestBody.Empty      => ()
+            case HttpRequestBody.Text(json) => init.body = json
+            case HttpRequestBody.Multipart(parts) =>
                 val data = new dom.FormData()
-                form.fields.foreach((name, value) => data.append(name, value))
-                form.files.foreach { f =>
-                    // Reconstruct a Blob from the portable byte payload. The bytes are raw
-                    // (signedness is irrelevant to Blob), so an Int8Array view is fine.
-                    val bag = new dom.BlobPropertyBag {}
-                    bag.`type` = f.contentType
-                    val blob = new dom.Blob(js.Array[dom.BlobPart](f.data.toArray.toTypedArray), bag)
-                    data.append(f.fieldName, blob, f.fileName)
+                parts.foreach { part =>
+                    part.filename match
+                        case Absent =>
+                            data.append(part.name, new String(part.data.toArray, StandardCharsets.UTF_8))
+                        case Present(fileName) =>
+                            // Reconstruct a Blob from the portable byte payload. The bytes are raw
+                            // (signedness is irrelevant to Blob), so an Int8Array view is fine.
+                            val bag = new dom.BlobPropertyBag {}
+                            part.contentType.foreach(bag.`type` = _)
+                            val blob = new dom.Blob(js.Array[dom.BlobPart](part.data.toArray.toTypedArray), bag)
+                            data.append(part.name, blob, fileName)
                 }
                 init.body = data
-            case None =>
-                request.body.foreach(b => init.body = b)
         end match
         init
     end requestInit
@@ -160,12 +151,9 @@ final class FetchHttpEngine extends HttpEngine:
     private def isMultipart(contentType: Option[String]): Boolean =
         contentType.exists(_.toLowerCase.contains("multipart/mixed"))
 
-    /** Flatten the response `Headers` (a `[name, value]` iterable) into our list. */
-    private def readHeaders(headers: dom.Headers): List[HttpHeader] =
-        js.Array
-            .from(headers)
-            .toList
-            .map(pair => HttpHeader(pair(0), pair(1)))
+    /** The response `Headers` (a `[name, value]` iterable) as kyo-http headers, in order. */
+    private def readHeaders(headers: dom.Headers): HttpHeaders =
+        js.Array.from(headers).foldLeft(HttpHeaders.empty)((acc, pair) => acc.add(pair(0), pair(1)))
 end FetchHttpEngine
 
 /** Minimal facade for the global `TextDecoder` (absent from scalajs-dom 2.8.1).

@@ -1,10 +1,9 @@
 package kyo.apollo.interceptor
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.exception.HttpEngineFailure
-import kyo.apollo.network.HttpHeader
-import kyo.apollo.network.http.HttpRequest
-import kyo.apollo.network.http.HttpResponse
+import kyo.apollo.network.http.HttpEngine
+import kyo.apollo.network.http.HttpRequestBody
 
 /** A concrete [[HttpInterceptor]] that logs each request as it goes out and its
   * response as it comes back, without altering either — the request is passed
@@ -24,24 +23,28 @@ import kyo.apollo.network.http.HttpResponse
 final class LoggingInterceptor(redact: Set[String] = LoggingInterceptor.sensitiveHeaders) extends HttpInterceptor:
 
     def intercept(
-        request: HttpRequest,
+        request: HttpEngine.Request,
         chain: HttpInterceptorChain
-    )(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) =
+    )(using Frame): HttpEngine.Response < (Async & Abort[HttpEngineFailure]) =
         for
-            _        <- Log.debug(s"--> ${request.method} ${request.url}")
-            _        <- logHeaders(request.headers)
-            _        <- request.body.fold(Kyo.unit)(body => Log.trace(s"    $body"))
+            _ <- Log.debug(s"--> ${request.method.name} ${request.url.full}")
+            _ <- logHeaders(request.headers)
+            _ <- request.fields.body match
+                case HttpRequestBody.Text(body) => Log.trace(s"    $body")
+                case _                          => Kyo.unit
             response <- chain.proceed(request)
-            _        <- Log.debug(s"<-- ${response.statusCode} (${request.method} ${request.url})")
+            _        <- Log.debug(s"<-- ${response.status.code} (${request.method.name} ${request.url.full})")
             _        <- logHeaders(response.headers)
         yield response
     end intercept
 
-    private def logHeaders(headers: List[HttpHeader])(using Frame): Unit < Sync =
-        Kyo.foreachDiscard(headers)(h => Log.trace(s"    ${h.name}: ${shown(h)}"))
+    private def logHeaders(headers: HttpHeaders)(using Frame): Unit < Sync =
+        headers.foldLeft(Kyo.unit: Unit < Sync)((logged, name, value) =>
+            logged.andThen(Log.trace(s"    $name: ${shown(name, value)}"))
+        )
 
-    private def shown(header: HttpHeader): String =
-        if redact.exists(_.equalsIgnoreCase(header.name)) then "<redacted>" else header.value
+    private def shown(name: String, value: String): String =
+        if redact.exists(_.equalsIgnoreCase(name)) then "<redacted>" else value
 end LoggingInterceptor
 
 object LoggingInterceptor:

@@ -164,7 +164,7 @@ class GarbageCollectionSpec extends kyo.test.Test[Any]:
         ApolloClient.init(
             ApolloClient.Config("https://example.com/graphql")
                 .httpEngine(new kyo.apollo.network.http.HttpEngine:
-                    def execute(request: kyo.apollo.network.http.HttpRequest)(using Frame) =
+                    def execute(request: kyo.apollo.network.http.HttpEngine.Request)(using Frame) =
                         Abort.panic(IllegalStateException("GarbageCollectionSpec does not reach the network")))
                 .normalizedCache(cache, IdCacheKeyGenerator(List("id")))
         )

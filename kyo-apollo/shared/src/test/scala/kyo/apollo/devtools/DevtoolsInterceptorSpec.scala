@@ -1,6 +1,6 @@
 package kyo.apollo.devtools
 
-import kyo.{HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.ApolloClient
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.CompiledField
@@ -16,8 +16,6 @@ import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.ApolloResponse
 import kyo.apollo.network.TestIds
 import kyo.apollo.network.http.HttpEngine
-import kyo.apollo.network.http.HttpRequest
-import kyo.apollo.network.http.HttpResponse
 import kyo.apollo.runtime.ResponseStream
 import scala.collection.immutable.VectorMap
 
@@ -156,8 +154,8 @@ class DevtoolsInterceptorSpec extends kyo.test.Test[Any]:
         "each execution of one mutation call is its own entry, under the id minted for it" in {
             val store = new DevtoolsOperationStore()
             val engine: HttpEngine = new HttpEngine:
-                def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
-                    HttpResponse(200, Nil, """{"data":{"login":true}}""")
+                def execute(request: HttpEngine.Request)(using Frame): HttpEngine.Response < Async =
+                    HttpEngine.response(HttpStatus.OK, """{"data":{"login":true}}""")
             val clientConfig = ApolloClient.Config("https://example.com/graphql")
                 .httpEngine(engine)
                 .prependInterceptor(new DevtoolsInterceptor(store))

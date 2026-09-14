@@ -1,6 +1,6 @@
 package kyo.apollo.network.http
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledFragment
@@ -14,7 +14,6 @@ import kyo.apollo.interceptor.DefaultApolloInterceptorChain
 import kyo.apollo.interceptor.NetworkInterceptor
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloRequest
-import kyo.apollo.network.HttpHeader
 import kyo.apollo.network.TestIds
 import scala.collection.immutable.VectorMap
 
@@ -80,15 +79,15 @@ class DeferSpec extends kyo.test.Test[Any]:
             """{"incremental":[{"data":{"capital":"Berlin"},"path":["country"]}],"hasNext":false}""" +
             s"\r\n--$boundary--\r\n"
 
-    private def engineOf(f: HttpRequest => HttpResponse < (Async & Abort[HttpEngineFailure])): HttpEngine =
+    private def engineOf(f: HttpEngine.Request => HttpEngine.Response < (Async & Abort[HttpEngineFailure])): HttpEngine =
         new HttpEngine:
-            def execute(request: HttpRequest)(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) = f(request)
+            def execute(request: HttpEngine.Request)(using Frame): HttpEngine.Response < (Async & Abort[HttpEngineFailure]) = f(request)
 
     private def transport(engine: HttpEngine): HttpNetworkTransport =
         HttpNetworkTransport("https://x/graphql", engine)
 
-    private def respond(status: Int, ct: String, body: String): HttpRequest => HttpResponse < Async =
-        _ => HttpResponse(status, List(HttpHeader("Content-Type", ct)), body)
+    private def respond(status: Int, ct: String, body: String): HttpEngine.Request => HttpEngine.Response < Async =
+        _ => HttpEngine.response(HttpStatus(status), body, HttpHeaders.empty.add("Content-Type", ct))
 
     "transport.executeStreaming" - {
 
@@ -184,15 +183,19 @@ class DeferSpec extends kyo.test.Test[Any]:
                     """{"data":{"country":{"code":"DE"}},"hasNext":true}""" +
                     s"\r\n--$boundary\r\n" // the next delimiter flushes part 1 before the drop
             val streamingEngine = new HttpEngine:
-                def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
-                    HttpResponse(200, List(HttpHeader("Content-Type", contentType)), "")
-                override def executeStreaming(request: HttpRequest)(using
+                def execute(request: HttpEngine.Request)(using Frame): HttpEngine.Response < Async =
+                    HttpEngine.response(HttpStatus.OK, "", HttpHeaders.empty.add("Content-Type", contentType))
+                override def executeStreaming(request: HttpEngine.Request)(using
                     Frame
-                ): HttpStreamResponse < (Async & Scope & Abort[HttpEngineFailure]) =
+                ): HttpEngine.StreamResponse < (Async & Scope & Abort[HttpEngineFailure]) =
                     val drop: Stream[String, Abort[HttpEngineFailure]] =
                         Stream.unwrap(Abort.fail(ApolloNetworkException("mid-stream drop")))
                     val body = Stream.init(Seq(firstEmission)).concat(drop)
-                    HttpStreamResponse(200, List(HttpHeader("Content-Type", contentType)), HttpStreamBody.Chunked(body))
+                    HttpEngine.streamResponse(
+                        HttpStatus.OK,
+                        HttpStreamBody.Chunked(body),
+                        HttpHeaders.empty.add("Content-Type", contentType)
+                    )
                 end executeStreaming
             StreamProbe.collect(transport(streamingEngine).executeStreaming(ApolloRequest(DeferQ(), TestIds.requestUuid))).map { rs =>
                 assert(rs.nonEmpty)

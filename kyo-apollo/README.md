@@ -58,6 +58,34 @@ kyo data types; the standard library appears only as input.**
   membership set with no ordering; kyo has no `Set`, so `scala.collection.immutable.Set`
   stays.
 
+## HTTP layer
+
+The HTTP engine speaks kyo-http's types. An `HttpEngine.Request` is a
+`kyo.HttpRequest["body" ~ HttpRequestBody]` (a `kyo.HttpMethod`, a `kyo.HttpUrl`,
+`kyo.HttpHeaders`), an `HttpEngine.Response` is a `kyo.HttpResponse["body" ~ String]`,
+which is what `kyo.HttpClient` returns for a text body. `ApolloClient.Config.httpHeaders`,
+`ApolloRequest.httpHeaders` and `ApolloHttpException.headers` are `kyo.HttpHeaders`;
+`httpMethod` is a `kyo.HttpMethod`: `GET` puts the operation in the URL, any other
+method (`POST` by default) carries it in the body. A server URL that does not parse
+makes each response an `ApolloNetworkException` whose cause is kyo-http's parse failure.
+
+kyo-apollo keeps its own types only where kyo-http has none:
+
+- **`HttpRequestBody`** (`Empty` | `Text(json)` | `Multipart(parts)`) — kyo-http carries
+  a request body as a route field typed per form (`bodyText`, `bodyMultipart`, none);
+  the engine seam needs one type for the three forms a GraphQL request takes. The parts
+  of a multipart body are `kyo.HttpRequest.Part`s, which hold both the text fields and
+  the files of the graphql-multipart-request-spec. `kyo.HttpFormCodec` does not cover
+  that spec: it encodes `application/x-www-form-urlencoded`, which has no file parts.
+- **`HttpStreamBody`** (`Buffered` | `Chunked`) — kyo-http hands a live response body
+  only inside `HttpClient.sendWith`'s continuation; the engine returns it to the
+  transport as a lazy stream, in an `HttpEngine.StreamResponse`
+  (`kyo.HttpResponse["body" ~ HttpStreamBody]`).
+
+The engine seam itself exists because kyo-http's JS transport is bound to Node sockets
+and does not run in a browser: on JS/Wasm the engine sends through `fetch`, on
+JVM/Native it delegates to `kyo.HttpClient`.
+
 ## Devtools
 
 On Scala.js, `builder.connectToDevtools(name, enabled)` replaces the terminal

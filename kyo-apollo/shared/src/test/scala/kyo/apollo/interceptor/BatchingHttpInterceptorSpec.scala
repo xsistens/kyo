@@ -1,12 +1,10 @@
 package kyo.apollo.interceptor
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.exception.ApolloNetworkException
 import kyo.apollo.exception.HttpEngineFailure
-import kyo.apollo.network.HttpMethod
 import kyo.apollo.network.http.HttpEngine
-import kyo.apollo.network.http.HttpRequest
-import kyo.apollo.network.http.HttpResponse
+import kyo.apollo.network.http.HttpRequestBody
 
 /** Drives [[BatchingHttpInterceptor]] against a recording engine under
   * `Clock.withTimeControl`: the batching window is an `Async.sleep` on the
@@ -29,22 +27,24 @@ class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
       * callers send from their own fibers, so the record is an atomic, appended when
       * the send runs.
       */
-    final class RecordingEngine(respond: HttpRequest => HttpResponse < Abort[HttpEngineFailure]) extends HttpEngine:
-        private val recorded        = AtomicRef.Unsafe.init(List.empty[HttpRequest])(using AllowUnsafe.embrace.danger)
-        def seen: List[HttpRequest] = recorded.get()(using AllowUnsafe.embrace.danger)
-        def execute(request: HttpRequest)(using Frame): HttpResponse < (Async & Abort[HttpEngineFailure]) =
+    final class RecordingEngine(respond: HttpEngine.Request => HttpEngine.Response < Abort[HttpEngineFailure]) extends HttpEngine:
+        private val recorded               = AtomicRef.Unsafe.init(List.empty[HttpEngine.Request])(using AllowUnsafe.embrace.danger)
+        def seen: List[HttpEngine.Request] = recorded.get()(using AllowUnsafe.embrace.danger)
+        def execute(request: HttpEngine.Request)(using Frame): HttpEngine.Response < (Async & Abort[HttpEngineFailure]) =
             recorded.safe.updateAndGet(_ :+ request).andThen(respond(request))
     end RecordingEngine
 
-    private def post(body: String): HttpRequest =
-        HttpRequest(HttpMethod.Post, "https://example.com/graphql", Nil, Some(body))
+    private val url = HttpUrl(Present("https"), "example.com", 443, "/graphql", Absent)
+
+    private def post(body: String): HttpEngine.Request =
+        HttpEngine.request(HttpMethod.POST, url, HttpHeaders.empty, HttpRequestBody.Text(body))
 
     private def batchAwareEngine: RecordingEngine =
         RecordingEngine { req =>
-            req.body match
-                case Some(b) if b.startsWith("[") =>
-                    HttpResponse(200, Nil, """[{"data":{"value":1}},{"data":{"value":2}}]""")
-                case _ => HttpResponse(200, Nil, """{"data":{"value":9}}""")
+            req.fields.body match
+                case HttpRequestBody.Text(b) if b.startsWith("[") =>
+                    HttpEngine.response(HttpStatus.OK, """[{"data":{"value":1}},{"data":{"value":2}}]""")
+                case _ => HttpEngine.response(HttpStatus.OK, """{"data":{"value":9}}""")
         }
 
     /** The interceptor wired the way the client wires it: at position 0 of a chain
@@ -84,9 +84,9 @@ class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
                 rb <- fb.get
             yield
                 assert(engine.seen.length == 1) // one batched round trip
-                assert(engine.seen.head.body == Some("""[{"query":"a"},{"query":"b"}]"""))
-                assert(ra.body == """{"data":{"value":1}}""")
-                assert(rb.body == """{"data":{"value":2}}""")
+                assert(engine.seen.head.fields.body == HttpRequestBody.Text("""[{"query":"a"},{"query":"b"}]"""))
+                assert(ra.fields.body == """{"data":{"value":1}}""")
+                assert(rb.fields.body == """{"data":{"value":2}}""")
             end for
         }
 
@@ -104,9 +104,9 @@ class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
                 rb <- fb.get
             yield
                 assert(engine.seen.length == 1)
-                assert(engine.seen.head.body == Some("""[{"query":"a"},{"query":"b"}]"""))
-                assert(ra.body == """{"data":{"value":1}}""")
-                assert(rb.body == """{"data":{"value":2}}""")
+                assert(engine.seen.head.fields.body == HttpRequestBody.Text("""[{"query":"a"},{"query":"b"}]"""))
+                assert(ra.fields.body == """{"data":{"value":1}}""")
+                assert(rb.fields.body == """{"data":{"value":2}}""")
             end for
         }
 
@@ -121,20 +121,20 @@ class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
                 ra <- fa.get
             yield
                 assert(engine.seen.length == 1)
-                assert(engine.seen.head.body == Some("""{"query":"solo"}""")) // no [ ]
-                assert(ra.body == """{"data":{"value":9}}""")
+                assert(engine.seen.head.fields.body == HttpRequestBody.Text("""{"query":"solo"}""")) // no [ ]
+                assert(ra.fields.body == """{"data":{"value":9}}""")
             end for
         }
 
         "a bodiless GET is forwarded immediately, never batched" in Clock.withTimeControl { control =>
             val engine = batchAwareEngine
-            val get    = HttpRequest(HttpMethod.Get, "https://example.com/graphql?query=x")
+            val get = HttpEngine.request(HttpMethod.GET, url.copy(rawQuery = Present("query=x")), HttpHeaders.empty, HttpRequestBody.Empty)
             for
                 batching <- BatchingHttpInterceptor.init(interval)
                 response <- chainOf(batching, engine).proceed(get)
             yield
                 assert(engine.seen == List(get)) // passed straight through, alone
-                assert(response.body == """{"data":{"value":9}}""")
+                assert(response.fields.body == """{"data":{"value":9}}""")
             end for
         }
 
@@ -155,8 +155,8 @@ class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
             yield
                 // A batch of one: b left unwrapped — a's slot was gone before the window ended.
                 assert(engine.seen.length == 1)
-                assert(engine.seen.head.body == Some("""{"query":"b"}"""))
-                assert(rb.body == """{"data":{"value":9}}""")
+                assert(engine.seen.head.fields.body == HttpRequestBody.Text("""{"query":"b"}"""))
+                assert(rb.fields.body == """{"data":{"value":9}}""")
                 assert(ra.isPanic)
             end for
         }
@@ -188,7 +188,7 @@ class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
         }
 
         "a non-2xx batched response is shared verbatim by every caller" in Clock.withTimeControl { control =>
-            val engine = RecordingEngine(_ => HttpResponse(503, Nil, "unavailable"))
+            val engine = RecordingEngine(_ => HttpEngine.response(HttpStatus(503), "unavailable"))
             for
                 batching <- BatchingHttpInterceptor.init(interval, maxBatchSize = 2)
                 chain = chainOf(batching, engine)
@@ -199,13 +199,13 @@ class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
                 rb <- fb.get
             yield
                 assert(engine.seen.length == 1)
-                assert(ra == HttpResponse(503, Nil, "unavailable"))
-                assert(rb == HttpResponse(503, Nil, "unavailable"))
+                assert(ra == HttpEngine.response(HttpStatus(503), "unavailable"))
+                assert(rb == HttpEngine.response(HttpStatus(503), "unavailable"))
             end for
         }
 
         "a 2xx body that is not an array of the batch size fails every caller" in Clock.withTimeControl { control =>
-            val engine = RecordingEngine(_ => HttpResponse(200, Nil, """[{"data":{"value":1}}]"""))
+            val engine = RecordingEngine(_ => HttpEngine.response(HttpStatus.OK, """[{"data":{"value":1}}]"""))
             for
                 batching <- BatchingHttpInterceptor.init(interval, maxBatchSize = 2)
                 chain = chainOf(batching, engine)

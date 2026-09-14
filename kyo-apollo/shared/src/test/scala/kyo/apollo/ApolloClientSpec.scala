@@ -1,6 +1,6 @@
 package kyo.apollo
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
 import kyo.apollo.api.JsonCodec
@@ -14,11 +14,7 @@ import kyo.apollo.interceptor.AuthorizationHeaderInterceptor
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.ApolloResponse
-import kyo.apollo.network.HttpHeader
-import kyo.apollo.network.HttpMethod
 import kyo.apollo.network.http.HttpEngine
-import kyo.apollo.network.http.HttpRequest
-import kyo.apollo.network.http.HttpResponse
 import kyo.apollo.network.ws.FakeWebSocketConnection
 import kyo.apollo.network.ws.FakeWebSocketEngine
 import kyo.apollo.network.ws.FreshWebSocketEngine
@@ -76,11 +72,11 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
     /** A fake engine that records the last request it saw and returns a canned
       * body/status without any network.
       */
-    final private class CapturingEngine(body: String, status: Int = 200) extends HttpEngine:
-        var lastRequest: Option[HttpRequest] = None
-        def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
-            lastRequest = Some(request)
-            HttpResponse(status, Nil, body)
+    final private class CapturingEngine(body: String, status: HttpStatus = HttpStatus.OK) extends HttpEngine:
+        var lastRequest: Maybe[HttpEngine.Request] = Absent
+        def execute(request: HttpEngine.Request)(using Frame): HttpEngine.Response < Async =
+            lastRequest = Present(request)
+            HttpEngine.response(status, body)
     end CapturingEngine
 
     private val baseConfig = ApolloClient.Config("https://example.com/graphql")
@@ -121,8 +117,8 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
                 assert(response.data == Present(42))
                 assert(response.error == Absent)
                 // Default method is POST with a JSON body carrying the document.
-                assert(engine.lastRequest.map(_.method) == Some(HttpMethod.Post))
-                assert(engine.lastRequest.flatMap(_.body).exists(_.contains("query Value")))
+                assert(engine.lastRequest.map(_.method) == Present(HttpMethod.POST))
+                assert(engine.lastRequest.flatMap(_.fields.body.text).exists(_.contains("query Value")))
             end for
         }
 
@@ -133,7 +129,7 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
                 response <- client.mutation(BumpMutation()).execute
             yield
                 assert(response.data == Present(7))
-                assert(engine.lastRequest.flatMap(_.body).exists(_.contains("mutation Bump")))
+                assert(engine.lastRequest.flatMap(_.fields.body.text).exists(_.contains("mutation Bump")))
             end for
         }
 
@@ -143,13 +139,13 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
                 client <- clientReturning(engine, _.addHttpHeader("X-Client", "base"))
                 _      <- client.query(ValueQuery()).addHttpHeader("X-Call", "extra").execute
             yield
-                val headers = engine.lastRequest.map(_.headers).getOrElse(Nil)
+                val headers = engine.lastRequest.map(_.headers).getOrElse(HttpHeaders.empty)
                 assert(
-                    headers.contains(HttpHeader("X-Client", "base")),
+                    headers.getAll("X-Client").contains("base"),
                     s"client default missing: $headers"
                 )
                 assert(
-                    headers.contains(HttpHeader("X-Call", "extra")),
+                    headers.getAll("X-Call").contains("extra"),
                     s"per-call header missing: $headers"
                 )
             end for
@@ -159,13 +155,13 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
             val engine = CapturingEngine("""{"data":{"value":9}}""")
             for
                 client   <- clientReturning(engine)
-                response <- client.query(ValueQuery()).httpMethod(HttpMethod.Get).execute
+                response <- client.query(ValueQuery()).httpMethod(HttpMethod.GET).execute
             yield
                 assert(response.data == Present(9))
-                assert(engine.lastRequest.map(_.method) == Some(HttpMethod.Get))
-                assert(engine.lastRequest.flatMap(_.body) == None) // GET has no body
+                assert(engine.lastRequest.map(_.method) == Present(HttpMethod.GET))
+                assert(engine.lastRequest.flatMap(_.fields.body.text) == Absent) // GET has no body
                 assert(
-                    engine.lastRequest.exists(_.url.contains("query=")),
+                    engine.lastRequest.exists(_.url.full.contains("query=")),
                     "GET should encode query params"
                 )
             end for
@@ -174,9 +170,9 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
         "the configured default httpMethod(Get) applies to every call" in {
             val engine = CapturingEngine("""{"data":{"value":3}}""")
             for
-                client <- clientReturning(engine, _.httpMethod(HttpMethod.Get))
+                client <- clientReturning(engine, _.httpMethod(HttpMethod.GET))
                 _      <- client.query(ValueQuery()).execute
-            yield assert(engine.lastRequest.map(_.method) == Some(HttpMethod.Get))
+            yield assert(engine.lastRequest.map(_.method) == Present(HttpMethod.GET))
             end for
         }
 
@@ -189,9 +185,9 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
                 )
                 _ <- client.query(ValueQuery()).execute
             yield
-                val headers = engine.lastRequest.map(_.headers).getOrElse(Nil)
+                val headers = engine.lastRequest.map(_.headers).getOrElse(HttpHeaders.empty)
                 assert(
-                    headers.contains(HttpHeader("Authorization", "secret-token")),
+                    headers.getAll("Authorization").contains("secret-token"),
                     s"auth header missing: $headers"
                 )
             end for
@@ -229,7 +225,7 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
         }
 
         "an HTTP error status arrives as a value, not a thrown exception" in {
-            val engine = CapturingEngine("""{"errors":[]}""", status = 500)
+            val engine = CapturingEngine("""{"errors":[]}""", status = HttpStatus(500))
             for
                 client   <- clientReturning(engine)
                 response <- client.query(ValueQuery()).execute
@@ -330,10 +326,10 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
                 plain <- ApolloClient.init(base)
                 other <- ApolloClient.init(base)
                 _     <- plain.query(ValueQuery()).execute
-                plainHeaders = http.lastRequest.map(_.headers).getOrElse(Nil)
+                plainHeaders = http.lastRequest.map(_.headers).getOrElse(HttpHeaders.empty)
                 taggedClient <- ApolloClient.init(tagged)
                 _            <- taggedClient.query(ValueQuery()).execute
-                taggedHeaders = http.lastRequest.map(_.headers).getOrElse(Nil)
+                taggedHeaders = http.lastRequest.map(_.headers).getOrElse(HttpHeaders.empty)
                 // Closing one client leaves a sibling from the same Config untouched.
                 _         <- plain.closeNow
                 afterward <- Scope.run(StreamProbe.collect(plain.subscription(ValueSubscription()).stream))
@@ -343,10 +339,10 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
             yield
                 assert(base.httpHeaders.isEmpty)
                 assert(
-                    !plainHeaders.contains(HttpHeader("X-Extra", "1")),
+                    !plainHeaders.getAll("X-Extra").contains("1"),
                     s"the variant's header reached the original's client: $plainHeaders"
                 )
-                assert(taggedHeaders.contains(HttpHeader("X-Extra", "1")))
+                assert(taggedHeaders.getAll("X-Extra").contains("1"))
                 assert(afterward.size == 1 && closedValue(afterward.head), s"got $afterward")
                 assert(init == """{"type":"connection_init"}""")
                 assert(socket.conns.size == 1)

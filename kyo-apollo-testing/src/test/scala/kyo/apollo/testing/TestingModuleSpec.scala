@@ -1,13 +1,13 @@
 package kyo.apollo.testing
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.cache.normalized.FetchPolicy
 import kyo.apollo.interceptor.ApolloInterceptorChain
 import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.ApolloResponse
-import kyo.apollo.network.HttpMethod
 import kyo.apollo.network.Uuid
-import kyo.apollo.network.http.HttpRequest
+import kyo.apollo.network.http.HttpEngine
+import kyo.apollo.network.http.HttpRequestBody
 import kyo.apollo.runtime.ResponseStream
 
 /** Validates the promoted `kyo.apollo.testing` doubles behave as the specs that once
@@ -37,7 +37,7 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
             yield
                 assert(response.data == Present(7))
                 assert(calls == 1)
-                assert(last.exists(_.body.exists(_.contains("Value"))))
+                assert(last.exists(_.fields.body.text.exists(_.contains("Value"))))
             end for
         }
 
@@ -55,8 +55,8 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
         // --- the doubles count what ran, not what was built -------------------
 
         "a round-trip that is built but never run is neither counted nor answered" in {
-            val request = HttpRequest(HttpMethod.Post, TestApolloClient.DefaultServerUrl, Nil, Some("{}"))
             for
+                request   <- postTo(TestApolloClient.DefaultServerUrl)
                 engine    <- TestHttpEngine.returning("{}")
                 server    <- MockServer.init
                 transport <- QueueTestNetworkTransport.init
@@ -82,14 +82,14 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
         }
 
         "concurrent round-trips are all counted" in {
-            val request = HttpRequest(HttpMethod.Post, TestApolloClient.DefaultServerUrl, Nil, Some("{}"))
             for
-                engine <- TestHttpEngine.returning("{}")
-                start  <- Latch.init(1)
-                fibers <- Kyo.fill(64)(Fiber.init(start.await.andThen(engine.execute(request))))
-                _      <- start.release
-                _      <- Kyo.foreachDiscard(fibers)(_.get)
-                calls  <- engine.calls
+                request <- postTo(TestApolloClient.DefaultServerUrl)
+                engine  <- TestHttpEngine.returning("{}")
+                start   <- Latch.init(1)
+                fibers  <- Kyo.fill(64)(Fiber.init(start.await.andThen(engine.execute(request))))
+                _       <- start.release
+                _       <- Kyo.foreachDiscard(fibers)(_.get)
+                calls   <- engine.calls
             yield assert(calls == 64)
             end for
         }
@@ -111,7 +111,7 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
                 assert(first.data == Present(1))
                 assert(second.data == Present(2))
                 assert(count == 2)
-                assert(taken.body.exists(_.contains("Value")))
+                assert(taken.fields.body.text.exists(_.contains("Value")))
                 assert(!more)
             end for
         }
@@ -194,7 +194,7 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
                 _        <- Sync.defer(engine.release())
                 response <- fiber.get
             yield
-                assert(request.body.exists(_.contains("Value")))
+                assert(request.fields.body.text.exists(_.contains("Value")))
                 assert(!parked, "the reply resolved before the gate was released")
                 assert(engine.requests == List(request))
                 assert(response.data == Present(5))
@@ -257,6 +257,10 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
     }
 
     private val requestId = Uuid("00000000-0000-4000-8000-000000000001")
+
+    /** A JSON POST of `{}` to `url`. */
+    private def postTo(url: String)(using Frame): HttpEngine.Request < Sync =
+        Sync.defer(HttpEngine.request(HttpMethod.POST, HttpUrl.parse(url).getOrThrow, HttpHeaders.empty, HttpRequestBody.Text("{}")))
 
     /** A chain whose continuation answers nothing: a terminal transport never calls it. */
     private object InertChain extends ApolloInterceptorChain:

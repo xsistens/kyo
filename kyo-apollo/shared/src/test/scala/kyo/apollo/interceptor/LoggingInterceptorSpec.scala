@@ -1,12 +1,9 @@
 package kyo.apollo.interceptor
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.cache.LogProbe
-import kyo.apollo.network.HttpHeader
-import kyo.apollo.network.HttpMethod
 import kyo.apollo.network.http.HttpEngine
-import kyo.apollo.network.http.HttpRequest
-import kyo.apollo.network.http.HttpResponse
+import kyo.apollo.network.http.HttpRequestBody
 
 /** Tests the [[LoggingInterceptor]]: it logs through the ambient `Log` when it runs
   * and never when its effect is only built, at `debug` for the request line and
@@ -18,11 +15,16 @@ class LoggingInterceptorSpec extends kyo.test.Test[Any]:
 
     /** An engine that counts its executions and answers 200 with a session cookie. */
     final private class CountingEngine(executed: AtomicInt) extends HttpEngine:
-        def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
-            executed.incrementAndGet.andThen(HttpResponse(200, List(HttpHeader("Set-Cookie", "session=s3cr3t")), "ok"))
+        def execute(request: HttpEngine.Request)(using Frame): HttpEngine.Response < Async =
+            executed.incrementAndGet.andThen(
+                HttpEngine.response(HttpStatus.OK, "ok", HttpHeaders.empty.add("Set-Cookie", "session=s3cr3t"))
+            )
+    end CountingEngine
 
-    private def request(headers: HttpHeader*): HttpRequest =
-        HttpRequest(HttpMethod.Post, "https://example.com/graphql", headers.toList, Some("""{"query":"{ x }"}"""))
+    private val url = HttpUrl(Present("https"), "example.com", 443, "/graphql", Absent)
+
+    private def request(headers: (String, String)*): HttpEngine.Request =
+        HttpEngine.request(HttpMethod.POST, url, HttpHeaders.init(headers), HttpRequestBody.Text("""{"query":"{ x }"}"""))
 
     private def chainOver(engine: HttpEngine): HttpInterceptorChain =
         DefaultHttpInterceptorChain(Chunk(new LoggingInterceptor()), 0, engine)
@@ -34,10 +36,10 @@ class LoggingInterceptorSpec extends kyo.test.Test[Any]:
                 probe    <- LogProbe.init
                 executed <- AtomicInt.init
                 chain = chainOver(CountingEngine(executed))
-                _        <- probe.run(Sync.defer(discard(chain.proceed(request(HttpHeader("X-Trace", "abc"))))))
+                _        <- probe.run(Sync.defer(discard(chain.proceed(request("X-Trace" -> "abc")))))
                 built    <- probe.lines
                 runs     <- executed.get
-                _        <- probe.run(chain.proceed(request(HttpHeader("X-Trace", "abc"))))
+                _        <- probe.run(chain.proceed(request("X-Trace" -> "abc")))
                 afterRun <- probe.lines
             yield
                 assert(runs == 0, s"the engine ran for a request that was only built: $runs")
@@ -50,13 +52,13 @@ class LoggingInterceptorSpec extends kyo.test.Test[Any]:
             for
                 probe    <- LogProbe.init
                 executed <- AtomicInt.init
-                response <- probe.run(chainOver(CountingEngine(executed)).proceed(request(HttpHeader("X-Trace", "abc"))))
+                response <- probe.run(chainOver(CountingEngine(executed)).proceed(request("X-Trace" -> "abc")))
                 lines    <- probe.lines
             yield
                 val debug = lines.filter(_.level == Log.Level.debug).map(_.message)
                 val trace = lines.filter(_.level == Log.Level.trace).map(_.message)
-                assert(response.statusCode == 200 && response.body == "ok")
-                assert(debug == Chunk("--> Post https://example.com/graphql", "<-- 200 (Post https://example.com/graphql)"), s"$debug")
+                assert(response.status == HttpStatus.OK && response.fields.body == "ok")
+                assert(debug == Chunk("--> POST https://example.com/graphql", "<-- 200 (POST https://example.com/graphql)"), s"$debug")
                 assert(trace.exists(_.contains("X-Trace: abc")), s"$trace")
                 assert(trace.exists(_.contains("""{"query":"{ x }"}""")), s"$trace")
             end for
@@ -67,10 +69,10 @@ class LoggingInterceptorSpec extends kyo.test.Test[Any]:
                 probe    <- LogProbe.init
                 executed <- AtomicInt.init
                 _ <- probe.run(chainOver(CountingEngine(executed)).proceed(request(
-                    HttpHeader("Authorization", "Bearer x"),
-                    HttpHeader("cookie", "id=42"),
-                    HttpHeader("PROXY-AUTHORIZATION", "Basic cHJveHk="),
-                    HttpHeader("X-Trace", "abc")
+                    "Authorization"       -> "Bearer x",
+                    "cookie"              -> "id=42",
+                    "PROXY-AUTHORIZATION" -> "Basic cHJveHk=",
+                    "X-Trace"             -> "abc"
                 )))
                 lines <- probe.lines
             yield

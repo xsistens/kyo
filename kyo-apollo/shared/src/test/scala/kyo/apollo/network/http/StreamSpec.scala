@@ -1,6 +1,6 @@
 package kyo.apollo.network.http
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
@@ -11,7 +11,6 @@ import kyo.apollo.interceptor.DefaultApolloInterceptorChain
 import kyo.apollo.interceptor.NetworkInterceptor
 import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloRequest
-import kyo.apollo.network.HttpHeader
 import kyo.apollo.network.TestIds
 import scala.collection.immutable.VectorMap
 
@@ -63,15 +62,15 @@ class StreamSpec extends kyo.test.Test[Any]:
             """{"incremental":[{"items":[{"id":"c"}],"path":["items",2]}],"hasNext":false}""" +
             s"\r\n--$boundary--\r\n"
 
-    private def engineOf(f: HttpRequest => HttpResponse < Async): HttpEngine =
+    private def engineOf(f: HttpEngine.Request => HttpEngine.Response < Async): HttpEngine =
         new HttpEngine:
-            def execute(request: HttpRequest)(using Frame): HttpResponse < Async = f(request)
+            def execute(request: HttpEngine.Request)(using Frame): HttpEngine.Response < Async = f(request)
 
     private def transport(engine: HttpEngine): HttpNetworkTransport =
         HttpNetworkTransport("https://x/graphql", engine)
 
-    private def respond(status: Int, ct: String, body: String): HttpRequest => HttpResponse < Async =
-        _ => HttpResponse(status, List(HttpHeader("Content-Type", ct)), body)
+    private def respond(status: Int, ct: String, body: String): HttpEngine.Request => HttpEngine.Response < Async =
+        _ => HttpEngine.response(HttpStatus(status), body, HttpHeaders.empty.add("Content-Type", ct))
 
     "transport.executeStreaming (@stream)" - {
 

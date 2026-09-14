@@ -3,6 +3,8 @@ package kyo.apollo.network
 import kyo.<
 import kyo.Absent
 import kyo.Frame
+import kyo.HttpHeaders
+import kyo.HttpMethod
 import kyo.Maybe
 import kyo.Present
 import kyo.Sync
@@ -26,7 +28,7 @@ import kyo.apollo.api.Operation
   *
   * @param operation            the operation to execute
   * @param requestUuid          a correlation id echoed onto [[ApolloResponse]]
-  * @param httpHeaders          per-request headers, order-preserving
+  * @param httpHeaders          per-request headers, order-preserving (duplicates kept)
   * @param httpMethod           overrides the client default when set
   * @param sendApqExtensions    emit the APQ `persistedQuery` extension
   * @param sendDocument         include the full `query` document on the wire
@@ -37,8 +39,8 @@ import kyo.apollo.api.Operation
 final case class ApolloRequest[D](
     operation: Operation[D],
     requestUuid: Uuid,
-    httpHeaders: List[HttpHeader] = Nil,
-    httpMethod: Option[HttpMethod] = None,
+    httpHeaders: HttpHeaders = HttpHeaders.empty,
+    httpMethod: Maybe[HttpMethod] = Absent,
     sendApqExtensions: Boolean = false,
     sendDocument: Boolean = true,
     optimisticData: Maybe[D] = Absent,
@@ -63,14 +65,14 @@ object ApolloRequest:
 
     /** Start a fluent builder for `operation` with all defaults applied and no id. */
     def builder[D](operation: Operation[D]): Builder[D] =
-        Builder(operation, Absent, Nil, None, false, true, Absent, ExecutionContext.Empty)
+        Builder(operation, Absent, HttpHeaders.empty, Absent, false, true, Absent, ExecutionContext.Empty)
 
     /** Ergonomic, fluent construction of an [[ApolloRequest]] — the description of an
       * execution that has not started yet.
       *
       * A builder is an immutable value: each setter returns a new builder, so one
       * builder can seed any number of executions (an `ApolloCall` holds one). Calls
-      * chain (`ApolloRequest.builder(op).httpMethod(Post).addHttpHeader(...).build`),
+      * chain (`ApolloRequest.builder(op).httpMethod(HttpMethod.GET).addHttpHeader(...).build`),
       * which reads far better than one large positional/`copy` expression when headers
       * and context accumulate incrementally — this mirrors apollo-kotlin's
       * `ApolloRequest.Builder`.
@@ -81,8 +83,8 @@ object ApolloRequest:
     final class Builder[D] private[ApolloRequest] (
         val operation: Operation[D],
         uuid: Maybe[Uuid],
-        headers: List[HttpHeader],
-        method: Option[HttpMethod],
+        headers: HttpHeaders,
+        method: Maybe[HttpMethod],
         apq: Boolean,
         document: Boolean,
         optimistic: Maybe[D],
@@ -95,13 +97,13 @@ object ApolloRequest:
         /** Pin the id every request this builder builds carries. */
         def requestUuid(value: Uuid): Builder[D] = copy(uuid = Present(value))
 
-        def httpMethod(value: HttpMethod): Builder[D] = copy(method = Some(value))
+        def httpMethod(value: HttpMethod): Builder[D] = copy(method = Present(value))
 
-        def httpHeaders(value: List[HttpHeader]): Builder[D] = copy(headers = value)
+        def httpHeaders(value: HttpHeaders): Builder[D] = copy(headers = value)
 
         /** Append a single header, preserving any already present. */
         def addHttpHeader(name: String, value: String): Builder[D] =
-            copy(headers = headers :+ HttpHeader(name, value))
+            copy(headers = headers.add(name, value))
 
         def sendApqExtensions(value: Boolean): Builder[D] = copy(apq = value)
 
@@ -130,8 +132,8 @@ object ApolloRequest:
 
         private def copy(
             uuid: Maybe[Uuid] = this.uuid,
-            headers: List[HttpHeader] = this.headers,
-            method: Option[HttpMethod] = this.method,
+            headers: HttpHeaders = this.headers,
+            method: Maybe[HttpMethod] = this.method,
             apq: Boolean = this.apq,
             document: Boolean = this.document,
             optimistic: Maybe[D] = this.optimistic,

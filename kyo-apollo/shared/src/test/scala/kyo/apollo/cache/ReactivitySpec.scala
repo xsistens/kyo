@@ -1,6 +1,6 @@
 package kyo.apollo.cache
 
-import kyo.{HttpMethod as _, HttpRequest as _, HttpResponse as _, *}
+import kyo.*
 import kyo.apollo.ApolloClient
 import kyo.apollo.StreamProbe
 import kyo.apollo.api.*
@@ -86,9 +86,9 @@ class ReactivitySpec extends kyo.test.Test[Any]:
       */
     final private class AliceEngine extends kyo.apollo.network.http.HttpEngine:
         def execute(
-            request: kyo.apollo.network.http.HttpRequest
-        )(using Frame): kyo.apollo.network.http.HttpResponse < Async =
-            kyo.apollo.network.http.HttpResponse(200, Nil, aliceBody)
+            request: kyo.apollo.network.http.HttpEngine.Request
+        )(using Frame): kyo.apollo.network.http.HttpEngine.Response < Async =
+            kyo.apollo.network.http.HttpEngine.response(HttpStatus.OK, aliceBody)
         end execute
     end AliceEngine
 
