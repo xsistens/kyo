@@ -48,13 +48,13 @@ import scala.NamedTuple.NamedTuple
 final class ClientField[Origin, R <: AnyNamedTuple, V] private[apollo] (
     parentType: String,
     default: V,
-    slot: SelectionBuilder[Origin, R]
+    slot: SelectionBuilder.Fields[Origin, R]
 ):
 
     /** Embed this field into a selection: `Query.select ~ field.select`, or the
       * chainable `_.name.clientField(field)`.
       */
-    def select: SelectionBuilder[Origin, R] = slot
+    def select: SelectionBuilder.Fields[Origin, R] = slot
 
     // A one-field fragment rooted at the owning object, reading/writing just this
     // field. It reuses the slot's own codec (which keys the value under the field
@@ -196,9 +196,9 @@ object ClientField:
 end ClientField
 
 /** Chainable sugar mirroring the generated selectors: `_.code.name.clientField(favorite)`. */
-extension [Origin, Acc <: AnyNamedTuple](sb: SelectionBuilder[Origin, Acc])
+extension [Origin, Acc <: AnyNamedTuple](sb: SelectionBuilder.Fields[Origin, Acc])
     def clientField[R <: AnyNamedTuple, V](
         field: ClientField[Origin, R, V]
-    ): SelectionBuilder[Origin, Concat[Acc, R]] =
+    ): SelectionBuilder.Fields[Origin, Concat[Acc, R]] =
         sb ~ field.select
 end extension

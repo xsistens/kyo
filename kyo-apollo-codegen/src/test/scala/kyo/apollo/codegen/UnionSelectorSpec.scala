@@ -36,7 +36,10 @@ class UnionSelectorSpec extends kyo.test.Test[Any]:
 
         "each member gets value + lambda `on<Member>` branches delegating to onType" in {
             val src = sourceOf("PlayableItem.scala")
-            assert(src.contains("def onTrack[A](sel: SelectionBuilder[Track, A])"), src)
+            assert(
+                src.contains("def onTrack[A](sel: SelectionBuilder[Track, A]): SelectionBuilder.Fields[PlayableItem, (onTrack: Maybe[A])]"),
+                src
+            )
             assert(src.contains("def onEpisode[A](sel: SelectionBuilder[Episode, A])"), src)
             assert(src.contains("SelectionBuilder.onType(\"Track\", sel)"), src)
             assert(src.contains("SelectionBuilder.onType(\"Episode\", build(SelectionBuilder.empty))"), src)
@@ -44,14 +47,14 @@ class UnionSelectorSpec extends kyo.test.Test[Any]:
 
         "branches are chainable on an accumulated union selection" in {
             val src = sourceOf("PlayableItem.scala")
-            assert(src.contains("extension [Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder[PlayableItem, Acc])"), src)
+            assert(src.contains("extension [Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder.Fields[PlayableItem, Acc])"), src)
             assert(src.contains("sb ~ PlayableItem.onTrack(sub(SelectionBuilder.empty))"), src)
         }
 
         "a union-typed field is an object selector, not a String scalar" in {
             val src = sourceOf("PlaybackState.scala")
             assert(src.contains("final class `item$sel`"), src)
-            assert(src.contains("SelectionBuilder[PlaybackState, (item: Maybe[A])]"), src)
+            assert(src.contains("SelectionBuilder.Deferrable[PlaybackState, (item: Maybe[A])]"), src)
             assert(!src.contains("SelectionBuilder.scalar(\"item\""), src)
         }
     }

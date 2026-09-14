@@ -54,7 +54,7 @@ object CacheIdentity:
       * spliced into without re-declaring them.
       */
     def by[Origin, K <: AnyNamedTuple](
-        select: SelectionBuilder[Origin, Empty] => SelectionBuilder[Origin, K]
+        select: SelectionBuilder.Fields[Origin, Empty] => SelectionBuilder[Origin, K]
     )(using origin: TypeName[Origin]): CacheIdentity[Origin] =
         val fields = select(SelectionBuilder.empty[Origin]).selections.collect { case f: CompiledField => f }
         require(
