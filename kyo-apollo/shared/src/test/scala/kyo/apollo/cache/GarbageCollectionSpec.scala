@@ -326,13 +326,15 @@ class GarbageCollectionSpec extends kyo.test.Test[Any]:
             clientOver(cache).map { client =>
                 val store = client.apolloStore
                 for
-                    _         <- store.writeOperation(UserQuery(), userData("1", "Alice"))
-                    pull      <- StreamProbe.Pull.open(watchUser(client))
+                    _     <- store.writeOperation(UserQuery(), userData("1", "Alice"))
+                    watch <- ObservedWatch.open(client.query(UserQuery()).fetchPolicy(FetchPolicy.CacheOnly))
+                    pull = watch.pull
                     first     <- pull.next
+                    _         <- watch.awaitEstablished // {QUERY_ROOT, User:1} is adopted and retained
                     during    <- AtomicRef.init(Maybe.empty[Set[CacheKey]])
                     _         <- cache.arm(store.garbageCollect.map(removed => during.set(Present(removed))))
                     _         <- store.writeOperation(UserQuery(), userData("2", "Bob"))
-                    second    <- pull.next // offered only after the re-read adopted its key set
+                    second    <- pull.next              // offered only after the re-read adopted its key set
                     collected <- during.get
                     after     <- store.garbageCollect
                     user1     <- store.cache.loadRecord(CacheKey("User", "1"))
