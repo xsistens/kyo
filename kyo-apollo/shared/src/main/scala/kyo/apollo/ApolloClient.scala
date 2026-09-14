@@ -424,7 +424,7 @@ object ApolloClient:
           * (`ApolloClientResource.init` / `.layer`, in the kyo-ui binding) project onto
           * Kyo's `Abort` channel; prefer those over [[build]] in effect code.
           */
-        def buildResult(): Result[ApolloConfigException, ApolloClient] =
+        def buildResult()(using Frame): Result[ApolloConfigException, ApolloClient] =
             _serverUrl match
                 case None =>
                     Result.fail(
@@ -455,6 +455,6 @@ object ApolloClient:
           * `ApolloClientResource.init` / `.layer`, which raise the same failure on
           * `Abort` instead.
           */
-        def build(): ApolloClient = buildResult().getOrThrow
+        def build()(using Frame): ApolloClient = buildResult().getOrThrow
     end Builder
 end ApolloClient

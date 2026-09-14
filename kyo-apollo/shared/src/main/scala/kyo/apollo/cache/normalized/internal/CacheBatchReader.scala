@@ -2,6 +2,7 @@ package kyo.apollo.cache.normalized.internal
 
 import kyo.Absent
 import kyo.Chunk
+import kyo.Frame
 import kyo.Maybe
 import kyo.Present
 import kyo.apollo.api.*
@@ -49,7 +50,7 @@ final class CacheBatchReader(
     rootKey: String,
     cacheKeyResolver: CacheKeyResolver = CacheKeyResolver.default,
     fieldPolicies: FieldPolicies = FieldPolicies.empty
-):
+)(using Frame):
 
     /** Accumulates the key of every [[Record]] successfully resolved during the
       * read (root + each redirect/reference target actually visited). This is the
@@ -177,7 +178,7 @@ object CacheBatchReader:
         variables: Map[String, Json] = Map.empty,
         cacheKeyResolver: CacheKeyResolver = CacheKeyResolver.default,
         fieldPolicies: FieldPolicies = FieldPolicies.empty
-    ): D =
+    )(using Frame): D =
         readWithDependentKeys(operation, loadRecord, variables, cacheKeyResolver, fieldPolicies)._1
 
     /** Denormalize `operation`'s records into a typed `D` *and* the set of record
@@ -196,7 +197,7 @@ object CacheBatchReader:
         variables: Map[String, Json] = Map.empty,
         cacheKeyResolver: CacheKeyResolver = CacheKeyResolver.default,
         fieldPolicies: FieldPolicies = FieldPolicies.empty
-    ): (D, Set[String]) =
+    )(using Frame): (D, Set[String]) =
         val rootKey = CacheKey.rootKey(operation).key
         val reader =
             new CacheBatchReader(loadRecord, variables, rootKey, cacheKeyResolver, fieldPolicies)

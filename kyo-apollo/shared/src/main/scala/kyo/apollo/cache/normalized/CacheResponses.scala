@@ -1,5 +1,6 @@
 package kyo.apollo.cache.normalized
 
+import kyo.Frame
 import kyo.Present
 import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.exception.CacheMissException
@@ -37,7 +38,7 @@ private[normalized] object CacheResponses:
       * non-[[CacheMissException]] cause is wrapped as a whole-root miss so the
       * failure still travels as a value rather than escaping the stream.
       */
-    def miss[D](request: ApolloRequest[D], cause: Throwable): ApolloResponse[D] =
+    def miss[D](request: ApolloRequest[D], cause: Throwable)(using Frame): ApolloResponse[D] =
         val missException = cause match
             case m: CacheMissException => m
             case other =>

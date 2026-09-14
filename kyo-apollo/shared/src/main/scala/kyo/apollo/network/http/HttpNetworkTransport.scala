@@ -5,12 +5,12 @@ import kyo.apollo.api.GraphQLResponse
 import kyo.apollo.exception.ApolloHttpException
 import kyo.apollo.exception.ApolloNetworkException
 import kyo.apollo.exception.ApolloParseException
+import kyo.apollo.json.Json
 import kyo.apollo.json.JsonParser
 import kyo.apollo.network.ApolloRequest
 import kyo.apollo.network.ApolloResponse
 import kyo.apollo.runtime.IncrementalAssembler
 import kyo.apollo.runtime.ResponseStream
-import scala.util.control.NonFatal
 
 /** The terminal HTTP transport: takes an [[ApolloRequest]], sends it over an
   * [[HttpEngine]], and returns a fully-decoded [[ApolloResponse]].
@@ -110,10 +110,12 @@ final class HttpNetworkTransport(
                                 // The server ignored @defer (a plain JSON reply): one response.
                                 resp.body match
                                     case HttpStreamBody.Buffered(text) =>
-                                        Stream.init(Seq(decodeSingle(request, text)))
+                                        Stream.unwrap(decodeSingle(request, text).map(r => Stream.init(Seq(r))))
                                     case HttpStreamBody.Chunked(chunks) =>
                                         Stream.unwrap(
-                                            chunks.run.map(cs => Stream.init(Seq(decodeSingle(request, cs.mkString))))
+                                            chunks.run
+                                                .map(cs => decodeSingle(request, cs.mkString))
+                                                .map(r => Stream.init(Seq(r)))
                                         )
                     case Result.Failure(cause) =>
                         Stream.init(Seq(failure(request, ApolloNetworkException(cause = cause))))
@@ -155,7 +157,7 @@ final class HttpNetworkTransport(
     private def decode[D](
         request: ApolloRequest[D],
         httpResponse: HttpResponse
-    ): ApolloResponse[D] =
+    )(using Frame): ApolloResponse[D] < Sync =
         if httpResponse.isSuccessful then decodeSingle(request, httpResponse.body)
         else
             // GraphQL-over-HTTP: `application/graphql-response+json` means the body IS a
@@ -163,11 +165,11 @@ final class HttpNetworkTransport(
             // server's typed `errors` is far more useful than an opaque status. Only a
             // body that fails to parse (or a legacy `application/json` server, where a
             // non-2xx says nothing about the body) degrades to the status exception.
-            val graphqlBody =
+            val graphqlBody: Maybe[ApolloResponse[D]] < Sync =
                 if isGraphQLResponse(httpResponse.header("Content-Type").getOrElse("")) then
                     decodeGraphQLResponse(request, httpResponse.body)
                 else Absent
-            graphqlBody.getOrElse(
+            graphqlBody.map(_.getOrElse(
                 failure(
                     request,
                     ApolloHttpException(
@@ -176,7 +178,7 @@ final class HttpNetworkTransport(
                         message = s"HTTP request failed with status ${httpResponse.statusCode}"
                     )
                 )
-            )
+            ))
         end if
     end decode
 
@@ -186,40 +188,43 @@ final class HttpNetworkTransport(
     /** Decode `body` as a GraphQL envelope, or [[Absent]] if it is not one. Unlike
       * [[decodeSingle]] a parse failure is not an [[ApolloParseException]] here: on a
       * non-2xx it just means the body was never a GraphQL response, and the caller
-      * falls back to the HTTP status.
+      * falls back to the HTTP status. A decoder defect still panics.
       */
     private def decodeGraphQLResponse[D](
         request: ApolloRequest[D],
         body: String
-    ): Maybe[ApolloResponse[D]] =
-        try
-            val json     = JsonParser.parse(body)
-            val response = GraphQLResponse.parse(json, request.operation)
-            Present(
-                ApolloResponse.fromGraphQLResponse(
-                    request.requestUuid,
-                    response,
-                    request.executionContext
-                )
-            )
-        catch case NonFatal(_) => Absent
+    )(using Frame): Maybe[ApolloResponse[D]] < Sync =
+        parseBody(request, body) match
+            case Result.Success(response) =>
+                Present(ApolloResponse.fromGraphQLResponse(request.requestUuid, response, request.executionContext))
+            case Result.Failure(_)   => Absent
+            case Result.Panic(cause) => Abort.panic(cause)
 
-    /** Parse a single GraphQL response envelope, folding a parse failure to a value. */
+    /** Parse a single GraphQL response envelope: a parse failure becomes an
+      * [[ApolloParseException]] value, a decoder defect panics.
+      */
     private def decodeSingle[D](
         request: ApolloRequest[D],
         body: String
-    ): ApolloResponse[D] =
-        try
-            val json     = JsonParser.parse(body)
-            val response = GraphQLResponse.parse(json, request.operation)
-            ApolloResponse.fromGraphQLResponse(
-                request.requestUuid,
-                response,
-                request.executionContext
-            )
-        catch
-            case NonFatal(cause) =>
-                failure(request, ApolloParseException(cause = cause))
+    )(using Frame): ApolloResponse[D] < Sync =
+        parseBody(request, body) match
+            case Result.Success(response) =>
+                ApolloResponse.fromGraphQLResponse(request.requestUuid, response, request.executionContext)
+            case Result.Failure(parseFailure) => failure(request, parseFailure)
+            case Result.Panic(cause)          => Abort.panic(cause)
+
+    /** Read `body` as JSON and then as a GraphQL envelope of the request's operation.
+      * Text that is not JSON and an envelope of the wrong shape are failures; anything
+      * else the decoders throw is a `Result.Panic`.
+      */
+    private def parseBody[D](
+        request: ApolloRequest[D],
+        body: String
+    )(using Frame): Result[ApolloParseException, GraphQLResponse[D]] =
+        Result
+            .catching[DecodeException](JsonParser.parse(body))
+            .mapFailure(e => ApolloParseException(Json.JStr(body), "a JSON document", e))
+            .flatMap(json => GraphQLResponse.parse(json, request.operation))
 
     private def failure[D](
         request: ApolloRequest[D],
