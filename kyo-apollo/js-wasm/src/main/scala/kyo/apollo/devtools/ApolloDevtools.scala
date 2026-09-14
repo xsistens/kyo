@@ -5,6 +5,7 @@ import kyo.Absent
 import kyo.AllowUnsafe
 import kyo.Frame
 import kyo.Maybe
+import kyo.Scope
 import kyo.Sync
 import kyo.apollo.ApolloClient
 import kyo.apollo.cache.normalized.normalizedStore
@@ -35,7 +36,7 @@ import scala.scalajs.js.annotation.JSGlobal
   *     fixed memory-slot labels (an approximation; see `buildMemoryInternals`)
   *
   * Nothing is installed unless the caller passes `enabled = true`: with `enabled =
-  * false` [[connect]] only builds the client and [[install]] returns it, and
+  * false` [[connect]] only creates the client and [[install]] returns it, and
   * neither touches `window`. The switch has no default, and no bundler constant is
   * read, because only the application's own build knows whether it is a
   * development build.
@@ -79,10 +80,10 @@ object ApolloDevtools:
       */
     private val requiredGraphqlParse: String => js.Any = sdl => graphqlParse(sdl)
 
-    /** Connect `builder`'s client to the browser devtools: prepend the recording
-      * interceptor, build, and install the window hook. This is the terminal build
-      * step — use it in place of `builder.build()`. With `enabled = false` it is
-      * exactly `builder.build()`.
+    /** Create a client for `config` connected to the browser devtools: prepend the
+      * recording interceptor, create the client in the enclosing `Scope`
+      * ([[ApolloClient.init]]), and install the window hook. Use it in place of
+      * `ApolloClient.init(config)`; with `enabled = false` it is exactly that.
       *
       * WARNING: with `enabled = true` the hook exposes the entire normalized cache and
       * every operation's variables to every script in the document; pass `enabled =
@@ -95,16 +96,18 @@ object ApolloDevtools:
       *                `require`d from Node on first use.
       */
     def connect(
-        builder: ApolloClient.Builder,
+        config: ApolloClient.Config,
         name: String,
         enabled: Boolean,
         parse: String => js.Any = requiredGraphqlParse
-    )(using Frame): ApolloClient =
-        if !enabled then builder.build()
+    )(using Frame): ApolloClient < (Sync & Scope) =
+        if !enabled then ApolloClient.init(config)
         else
-            val ops = new DevtoolsOperationStore()
-            builder.prependInterceptor(new DevtoolsInterceptor(ops))
-            install(builder.build(), name, enabled, ops, parse)
+            Sync.defer(new DevtoolsOperationStore()).map { ops =>
+                ApolloClient.init(config.prependInterceptor(new DevtoolsInterceptor(ops))).map { client =>
+                    Sync.defer(install(client, name, enabled, ops, parse))
+                }
+            }
         end if
     end connect
 
@@ -365,19 +368,20 @@ object ApolloDevtools:
     end defineGetter
 end ApolloDevtools
 
-/** Fluent entry point: `builder.serverUrl(...).normalizedCache(...).connectToDevtools("name",
-  * enabled = isDevBuild)` replaces the terminal `.build()` and, when `enabled`, wires the
+/** Fluent entry point: `ApolloClient.Config(url).normalizedCache(...).connectToDevtools("name",
+  * enabled = isDevBuild)` replaces `ApolloClient.init(config)` and, when `enabled`, wires the
   * client to the browser devtools.
   */
-extension (builder: ApolloClient.Builder)
-    /** Build the client and, when `enabled`, install the devtools hook ([[ApolloDevtools.connect]]).
+extension (config: ApolloClient.Config)
+    /** Create the client in the enclosing `Scope` and, when `enabled`, install the devtools
+      * hook ([[ApolloDevtools.connect]]).
       *
       * WARNING: with `enabled = true` the hook exposes the entire normalized cache and
       * every operation's variables to every script in the document; pass `enabled =
       * isDevBuild`.
       */
-    def connectToDevtools(name: String, enabled: Boolean)(using Frame): ApolloClient =
-        ApolloDevtools.connect(builder, name, enabled)
+    def connectToDevtools(name: String, enabled: Boolean)(using Frame): ApolloClient < (Sync & Scope) =
+        ApolloDevtools.connect(config, name, enabled)
 
     /** As [[connectToDevtools]], injecting the app's bundled graphql-js `parse`
       * (so the browser bundle carries a real AST parser for the Queries/Mutations tabs).
@@ -386,6 +390,6 @@ extension (builder: ApolloClient.Builder)
       * every operation's variables to every script in the document; pass `enabled =
       * isDevBuild`.
       */
-    def connectToDevtools(name: String, enabled: Boolean, parse: String => js.Any)(using Frame): ApolloClient =
-        ApolloDevtools.connect(builder, name, enabled, parse)
+    def connectToDevtools(name: String, enabled: Boolean, parse: String => js.Any)(using Frame): ApolloClient < (Sync & Scope) =
+        ApolloDevtools.connect(config, name, enabled, parse)
 end extension

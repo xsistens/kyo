@@ -35,10 +35,8 @@ class ApolloLiveSmokeTest extends BaseCalibanTest:
         for
             interpreter <- Resolvers.get(api())
             server      <- Resolvers.run(interpreter)
-            client = ApolloClient.builder()
-                .serverUrl(s"http://localhost:${server.port}/api/graphql")
-                .build()
-            response <- client.query(Fixtures.ValueQuery()).execute
+            client      <- ApolloClient.init(ApolloClient.Config(s"http://localhost:${server.port}/api/graphql"))
+            response    <- client.query(Fixtures.ValueQuery()).execute
         yield assert(response.data == Present(42))
         end for
     }
@@ -47,10 +45,10 @@ class ApolloLiveSmokeTest extends BaseCalibanTest:
         for
             interpreter <- Resolvers.get(api(10, 20, 30))
             server      <- Resolvers.run(interpreter)
-            client = ApolloClient.builder()
-                .serverUrl(s"http://localhost:${server.port}/api/graphql")
-                .webSocketServerUrl(s"ws://localhost:${server.port}/api/graphql/ws")
-                .build()
+            client <- ApolloClient.init(
+                ApolloClient.Config(s"http://localhost:${server.port}/api/graphql")
+                    .webSocketServerUrl(s"ws://localhost:${server.port}/api/graphql/ws")
+            )
             responses <- StreamProbe.collect(client.subscription(Fixtures.ValueSubscription()).stream.take(3))
         yield
             val values = responses.flatMap(r =>

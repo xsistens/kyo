@@ -94,15 +94,13 @@ class ReactivitySpec extends kyo.test.Test[Any]:
         end execute
     end AliceEngine
 
-    private def cachedClient(): (ApolloClient, AliceEngine) =
+    private def cachedClient()(using Frame): (ApolloClient, AliceEngine) < (Sync & Scope) =
         val engine = AliceEngine()
-        val client = ApolloClient
-            .builder()
-            .serverUrl("https://example.com/graphql")
-            .httpEngine(engine)
-            .normalizedCache(MemoryCache(), IdCacheKeyGenerator(List("id")))
-            .build()
-        (client, engine)
+        ApolloClient.init(
+            ApolloClient.Config("https://example.com/graphql")
+                .httpEngine(engine)
+                .normalizedCache(MemoryCache(), IdCacheKeyGenerator(List("id")))
+        ).map((_, engine))
     end cachedClient
 
     /** Warm the cache with `Alice` (one network round-trip), then hand `body` a
@@ -113,9 +111,9 @@ class ReactivitySpec extends kyo.test.Test[Any]:
     private def watching(
         body: (ApolloClient, StreamProbe.Pull[ApolloResponse[UserData]]) => Unit < (Async & Scope)
     )(using Frame): Unit < (Async & Scope) =
-        val (client, _) = cachedClient()
         for
-            _ <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
+            (client, _) <- cachedClient()
+            _           <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
             pull <- StreamProbe.Pull.open(
                 client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly).watch()
             )
@@ -129,10 +127,10 @@ class ReactivitySpec extends kyo.test.Test[Any]:
         // --- 1. dependency-key capture during reads -----------------------------
 
         "a read captures exactly the record keys it depended on" in {
-            val (client, _) = cachedClient()
             for
-                _    <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                read <- client.apolloStore.readOperationWithKeys(CurrentUserQuery())
+                (client, _) <- cachedClient()
+                _           <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                read        <- client.apolloStore.readOperationWithKeys(CurrentUserQuery())
             yield
                 // The store-level read reports the root plus the id-keyed User it links to.
                 val (data, keys) = read
@@ -154,49 +152,51 @@ class ReactivitySpec extends kyo.test.Test[Any]:
         // --- 2. changedKeys emission on writes ----------------------------------
 
         "every write path publishes its changed keys to a registered listener" in {
-            val (client, _) = cachedClient()
-            val store       = client.apolloStore
-            val batches     = ListBuffer.empty[Set[CacheKey]]
-            for
-                _ <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                _ <- Scope.run {
-                    for
-                        _ <- store.addChangedKeysListener(keys => discard(batches += keys))
-                        // writeOperation on the shared record → publishes User:1.
-                        _ <- store.writeOperation(CurrentUserQuery(), userData("Bob"))
-                        // writeFragment on the same record → publishes User:1.
-                        _ <- store.writeFragment(UserFragment, CacheKey("User", "1"), User("User", "1", "Eve"))
-                        // remove → publishes the removed key.
-                        _ <- store.remove(CacheKey("User", "1"))
-                        // manual/external invalidation → publishes verbatim.
-                        _ <- store.publish(Set(CacheKey("Post", "7")))
-                    yield ()
-                }
-                delivered = batches.toList
-                // After the listener's Scope closed, no further batches arrive.
-                _ <- store.publish(Set(CacheKey("User", "1")))
-            yield
-                assert(delivered == List(
-                    Set(CacheKey("User", "1")),
-                    Set(CacheKey("User", "1")),
-                    Set(CacheKey("User", "1")),
-                    Set(CacheKey("Post", "7"))
-                ))
-                assert(batches.size == 4)
-            end for
+            cachedClient().map { (client, _) =>
+                val store   = client.apolloStore
+                val batches = ListBuffer.empty[Set[CacheKey]]
+                for
+                    _ <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                    _ <- Scope.run {
+                        for
+                            _ <- store.addChangedKeysListener(keys => discard(batches += keys))
+                            // writeOperation on the shared record → publishes User:1.
+                            _ <- store.writeOperation(CurrentUserQuery(), userData("Bob"))
+                            // writeFragment on the same record → publishes User:1.
+                            _ <- store.writeFragment(UserFragment, CacheKey("User", "1"), User("User", "1", "Eve"))
+                            // remove → publishes the removed key.
+                            _ <- store.remove(CacheKey("User", "1"))
+                            // manual/external invalidation → publishes verbatim.
+                            _ <- store.publish(Set(CacheKey("Post", "7")))
+                        yield ()
+                    }
+                    delivered = batches.toList
+                    // After the listener's Scope closed, no further batches arrive.
+                    _ <- store.publish(Set(CacheKey("User", "1")))
+                yield
+                    assert(delivered == List(
+                        Set(CacheKey("User", "1")),
+                        Set(CacheKey("User", "1")),
+                        Set(CacheKey("User", "1")),
+                        Set(CacheKey("Post", "7"))
+                    ))
+                    assert(batches.size == 4)
+                end for
+            }
         }
 
         "re-writing identical data changes nothing and publishes no keys" in {
-            val (client, _) = cachedClient()
-            val batches     = ListBuffer.empty[Set[CacheKey]]
-            for
-                _       <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                _       <- client.apolloStore.addChangedKeysListener(keys => discard(batches += keys))
-                changed <- client.apolloStore.writeOperation(CurrentUserQuery(), userData("Alice"))
-            yield
-                assert(changed.isEmpty, "identical re-write should report no changed keys")
-                assert(batches.isEmpty, "identical re-write should publish nothing")
-            end for
+            cachedClient().map { (client, _) =>
+                val batches = ListBuffer.empty[Set[CacheKey]]
+                for
+                    _       <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                    _       <- client.apolloStore.addChangedKeysListener(keys => discard(batches += keys))
+                    changed <- client.apolloStore.writeOperation(CurrentUserQuery(), userData("Alice"))
+                yield
+                    assert(changed.isEmpty, "identical re-write should report no changed keys")
+                    assert(batches.isEmpty, "identical re-write should publish nothing")
+                end for
+            }
         }
 
         // --- 3-5. one watcher, the whole reactive lifecycle ---------------------
