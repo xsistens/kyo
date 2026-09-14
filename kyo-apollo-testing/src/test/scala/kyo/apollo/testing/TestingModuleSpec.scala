@@ -212,21 +212,16 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
                 .webSocketServerUrl("wss://example.test/graphql")
                 .webSocketEngine(ws)
                 .build()
-            var seen: List[Int] = Nil
+            val subscription = client.subscription(Fixtures.ValueSubscription()).stream
             for
-                _ <- StreamProbe.drain(client.subscription(Fixtures.ValueSubscription()).stream)((r: ApolloResponse[Int]) =>
-                    r.data.foreach(v => seen = seen :+ v)
-                )
-                _ <- settle
-                _ <- Sync.defer(ws.ack())
-                _ <- settle
-                _ <- Sync.defer { ws.next("0", 10); ws.next("0", 20) }
-                _ <- settle
-                _ <- Sync.defer(ws.complete("0"))
-                _ <- settle
+                done <- Fiber.init(Scope.run(StreamProbe.collect(subscription)))
+                _    <- ws.awaitSent(_.contains("connection_init"))
+                _    <- Sync.defer(ws.ack())
+                _    <- ws.awaitSent(_.contains("\"type\":\"subscribe\""))
+                _    <- Sync.defer { ws.next("0", 10); ws.next("0", 20); ws.complete("0") }
+                seen <- done.get // the subscription ends with the complete
             yield
-                assert(seen == List(10, 20))
-                assert(ws.sent.exists(_.contains("connection_init")))
+                assert(seen.flatMap(_.data) == List(10, 20))
                 assert(ws.opens.map(_._1) == List("wss://example.test/graphql"))
             end for
         }
