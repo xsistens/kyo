@@ -196,8 +196,8 @@ extension [Origin, A <: AnyNamedTuple](sb: SelectionBuilder.Bidirectional[Origin
     def toFragment(using origin: TypeName[Origin]): Fragment[A] =
         val typeName = origin.name
         new Fragment[A]:
-            def dataCodec: JsonCodec[A] = sb
-            def rootField: CompiledField =
+            val dataCodec: JsonCodec[A] = sb
+            val rootField: CompiledField =
                 CompiledField(typeName, CompiledNamedType(typeName), selections = sb.selections)
         end new
     end toFragment
@@ -282,6 +282,11 @@ end uniquifyVariables
 /** The name, document, root field and variables of an operation built from a
   * selection whose variables [[uniquifyVariables]] has renamed — everything a built
   * `Query`/`Mutation`/`Subscription` has besides its data codec.
+  *
+  * They are constant for the operation's lifetime, so every read returns the same
+  * value: the document is rendered on first read and at most once (an operation that
+  * only ever reads the cache never renders it), the root field and variables are built
+  * with the operation.
   */
 abstract private class Built(
     kind: String,
@@ -289,11 +294,11 @@ abstract private class Built(
     opName: String,
     parts: (Chunk[CompiledSelection], Chunk[SelectionBuilder.Arg])
 ):
-    def name: String     = opName
-    def document: String = DocumentPrinter.render(kind, opName, parts._2, parts._1)
-    def rootField: CompiledField =
+    val name: String          = opName
+    lazy val document: String = DocumentPrinter.render(kind, opName, parts._2, parts._1)
+    val rootField: CompiledField =
         CompiledField("data", CompiledNamedType(rootType), selections = parts._1)
-    def variables: Json = variablesOf(parts._2)
+    val variables: Json = variablesOf(parts._2)
 end Built
 
 private def buildQuery[D](
