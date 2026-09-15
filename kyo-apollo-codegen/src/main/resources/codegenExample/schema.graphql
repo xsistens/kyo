@@ -1,14 +1,16 @@
-# Reference schema for Phase 08 codegen fixtures.
+# Reference schema for the codegen fixtures and its compile gate.
 #
 # A small "countries" domain (inspired by the public countries.trevorblades.com
 # API) extended with a Mutation and a Subscription so the generator's fixtures
-# cover ALL three GraphQL operation kinds. It also intentionally exercises the
-# features later codegen tasks must handle: a custom scalar (`DateTime`), an
-# `enum` (`Continent`), input object types (`CountryFilter`, `UpdateCountryInput`),
-# list/non-null wrappers, and nullable fields.
+# cover ALL three GraphQL operation kinds. It also intentionally exercises every
+# kind of type the generator emits: a custom scalar (`DateTime`), enums
+# (`Continent`, `Color`), input object types (`CountryFilter`, `UpdateCountryInput`),
+# an interface (`Node`), a union (`SearchResult`), list/non-null wrappers, and
+# nullable fields.
 #
-# Consumed by the operation documents in this same folder and, from Task 6
-# onward, by the `codegenGenerate` task (see docs/architecture/codegen-strategy.md).
+# The `kyo-apollo-codegen-it` project generates from this file on every compile
+# (the `apolloGenerate` task in build.sbt) and compiles the output against
+# kyo-apollo.
 
 "An ISO-8601 timestamp — a custom scalar, mapped to a Scala type via scalarMapping."
 scalar DateTime
@@ -72,6 +74,40 @@ type CountryConnection {
   pageInfo: PageInfo!
 }
 
+"A favorite color. Servers may add values later; a client decodes a name it does not know to `Unknown__`."
+enum Color {
+  RED
+  GREEN
+  BLUE
+}
+
+"Anything with a global id (Relay's `Node`): a field of this type selects through `on<Type>` branches."
+interface Node {
+  id: ID!
+}
+
+"A traveller."
+type User implements Node {
+  id: ID!
+  name: String!
+  "A nullable enum field."
+  favoriteColor: Color
+  "The countries this user visited."
+  visited: [Country!]!
+  "Nicknames, if any; a nullable list of nullable strings."
+  nicknames: [String]
+}
+
+"A travel report about one country."
+type Report implements Node {
+  id: ID!
+  title: String!
+  country: Country!
+}
+
+"A search hit."
+union SearchResult = Country | Report
+
 type Query {
   "All countries, optionally filtered."
   countries(filter: CountryFilter): [Country!]!
@@ -81,6 +117,12 @@ type Query {
   countriesConnection(first: Int, after: String): CountryConnection!
   "A second countries connection (same shape) — lets one query hold two independently-paginated connections, exercising unique variable naming."
   moreCountries(first: Int, after: String): CountryConnection!
+  "Any node by global id, or null if unknown."
+  node(id: ID!): Node
+  "Countries and reports matching `text`."
+  search(text: String!): [SearchResult!]!
+  "The users whose favorite color is `color`."
+  usersByColor(color: Color!): [User!]!
 }
 
 type Mutation {
