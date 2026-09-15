@@ -333,6 +333,10 @@ The vertical an application developer assembles: HTTP services and clients, SQL 
 | [kyo-i18n](kyo-i18n/README.md)               | ✅  | ✅  | ✅     | ✅   | Translate from `.ftl` bundles; active locale as a `Signal` drives reactive `t` leaves; pure Fluent subset  |
 | [kyo-ai](kyo-ai/README.md)                   | ✅  | ✅  | ✅     | ✅   | Typed LLM programs: prompts, tools, thoughts, agents, streaming, provider backends                         |
 | [kyo-caliban](kyo-caliban/README.md)         | ✅  |     |        |      | Caliban GraphQL mounted on kyo-http: typed Kyo effects in resolvers, WebSocket subscriptions               |
+| [kyo-apollo](kyo-apollo/README.md)           | ✅  | ✅  | ✅     | ✅   | GraphQL client: `ApolloClient`, typed `SelectionBuilder` results, `ApolloStore` cache with `watch`, `@defer`/`@stream` |
+| [kyo-apollo-codegen](kyo-apollo-codegen/README.md) | ✅  |     |        |      | Generates kyo-apollo selector objects, enums and input types from a GraphQL schema via `apolloGenerate`   |
+| [kyo-apollo-testing](kyo-apollo-testing/README.md) | ✅  | ✅  |        |      | kyo-apollo test doubles: `TestHttpEngine`, `MockServer`, `MockWebSocketServer`, `StreamProbe` barriers    |
+| [kyo-apollo-itserver](kyo-apollo-itserver/README.md) | ✅  |     |        |      | Unpublished caliban GraphQL server the kyo-apollo end-to-end suite runs against from every platform       |
 
 ### Writing style
 

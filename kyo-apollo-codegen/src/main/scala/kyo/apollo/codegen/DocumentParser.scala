@@ -12,13 +12,13 @@ import scala.util.Using
 /** Parses `.graphql` *operation* documents (queries / mutations / subscriptions)
   * into Caliban's operation AST.
   *
-  * Phase 08 Task 4. This is the operation-document counterpart to
-  * [[SchemaLoader]]: it turns executable `.graphql` files into the
+  * The operation-document counterpart to [[SchemaLoader]]: it turns executable
+  * `.graphql` files into the
   * [[caliban.parsing.adt.Definition.ExecutableDefinition.OperationDefinition]]
-  * (and [[FragmentDefinition]]) ASTs that [[ApolloClientWriter]] walks to derive
-  * per-operation `kyo.apollo.api.Operation` sources. Uses the same
-  * [[caliban.parsing.Parser]] as [[SchemaLoader]] — the reuse boundary ADR-001
-  * committed to — so schema SDL and operation documents share one parser.
+  * (and [[FragmentDefinition]]) ASTs. The generator itself reads no operation
+  * documents ([[ApolloClientWriter]] is schema-driven). Uses the same
+  * [[caliban.parsing.Parser]] as [[SchemaLoader]], so schema SDL and operation
+  * documents share one parser.
   */
 object DocumentParser:
 

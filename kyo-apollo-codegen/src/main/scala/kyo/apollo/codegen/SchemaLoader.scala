@@ -9,9 +9,8 @@ import scala.util.Using
 
 /** Loads a GraphQL *schema* (SDL) into Caliban's typed [[caliban.parsing.adt.Document]] AST.
   *
-  * Phase 08 Task 4. Per ADR-001 ([[docs/architecture/codegen-strategy.md]] /
-  * `[[Caliban-Codegen-Overview]]`) we reuse Caliban's *parse* side out of the box
-  * and emit our own client. The two SDL-file entrypoints ([[fromString]] /
+  * The generator reuses Caliban's *parse* side and emits its own client code. The
+  * two SDL-file entrypoints ([[fromString]] /
   * [[fromFile]]) call [[caliban.parsing.Parser]] directly — no ZIO, so schema
   * loading in tests and the sbt task is a plain, synchronous call. The
   * introspection entrypoint ([[fromIntrospectionUrl]]) delegates to
