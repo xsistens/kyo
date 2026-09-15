@@ -2531,10 +2531,6 @@ lazy val `kyo-caliban` =
         .dependsOn(`kyo-http`)
         .dependsOn(`kyo-zio`)
         .dependsOn(`kyo-zio-test`)
-        // Test-only: the live apollo-over-real-server smoke test (ApolloLiveSmokeTest)
-        // drives the kyo-http-backed apollo engines against a caliban server; brings in
-        // the apollo client + the promoted { value } fixtures.
-        .dependsOn(`kyo-apollo-testing` % Test)
         .withKyoTest
         .settings(
             `kyo-settings`,
@@ -3041,14 +3037,16 @@ lazy val `kyo-i18n` =
         .jsSettings(`js-settings`)
         .wasmSettings(`wasm-settings`)
 
-// Framework-agnostic native Apollo GraphQL client core. JS-only: the HTTP/WebSocket
-// transport issues browser `fetch` through scalajs-dom. Depends only on the value and
-// effect libraries (no kyo-ui), so it builds against trunk on its own.
+// GraphQL client core, framework-agnostic (no kyo-ui). Each row has its own engines:
+// JVM/Native send HTTP and WebSocket traffic through kyo-http (jvm-native), JS/Wasm
+// through the browser's fetch and WebSocket via scalajs-dom (js-wasm).
 lazy val `kyo-apollo` =
     crossProject(JSPlatform, JVMPlatform, NativePlatform, WasmPlatform)
         .crossType(CrossType.Full)
         .in(file("kyo-apollo"))
         .dependsOn(`kyo-core`, `kyo-data`, `kyo-schema`, `kyo-schema-json`, `kyo-http`)
+        // Test-only, client -> server: ApolloCalibanSmokeSpec runs the JVM engines against a caliban server.
+        .jvmConfigure(_.dependsOn(`kyo-caliban`.jvm % Test))
         .withKyoTest
         .settings(`kyo-settings`)
         .jvmSettings(
