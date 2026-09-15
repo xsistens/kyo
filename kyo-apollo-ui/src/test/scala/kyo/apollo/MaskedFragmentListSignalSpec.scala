@@ -1,12 +1,12 @@
 package kyo.apollo
 
+import CountryFixture.awaitSignal
 import kyo.*
 import kyo.apollo.api.*
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.*
+import kyo.apollo.exception.CacheReadFailure
 import kyo.apollo.network.http.HttpEngine
-import kyo.apollo.network.http.HttpRequest
-import kyo.apollo.network.http.HttpResponse
 
 /** `Apollo.fragments` — the masked read for a LIST of refs, through one store
   * listener rather than one per row: it seeds every row from the cache, re-emits
@@ -25,9 +25,9 @@ class MaskedFragmentListSignalSpec extends kyo.test.Test[Any]:
         given TypeName[CountryT] = TypeName("Country")
 
     object GCountry:
-        def code: SelectionBuilder[CountryT, (code: String)] =
+        def code: SelectionBuilder.Deferrable[CountryT, (code: String)] =
             SelectionBuilder.scalar("code", CompiledNamedType("ID").notNull, ScalarCodec.string)
-        def name: SelectionBuilder[CountryT, (name: String)] =
+        def name: SelectionBuilder.Deferrable[CountryT, (name: String)] =
             SelectionBuilder.scalar("name", CompiledNamedType("String").notNull, ScalarCodec.string)
     end GCountry
 
@@ -36,11 +36,13 @@ class MaskedFragmentListSignalSpec extends kyo.test.Test[Any]:
     object CountryCard:
         val fields = Fragment.entity[CountryT](e => e ~ GCountry.name)
 
-    private def countriesField[A](sel: SelectionBuilder[CountryT, A]): SelectionBuilder[RootQuery, (countries: List[A])] =
+    private def countriesField[A](
+        sel: SelectionBuilder.Bidirectional[CountryT, A]
+    ): SelectionBuilder.Deferrable[RootQuery, (countries: Chunk[A])] =
         SelectionBuilder.obj(
             "countries",
             CompiledNamedType("Country").notNull.list.notNull,
-            Nil,
+            Chunk.empty,
             sel,
             SelectionBuilder.Nesting.Listed(SelectionBuilder.Nesting.Leaf)
         )
@@ -49,16 +51,17 @@ class MaskedFragmentListSignalSpec extends kyo.test.Test[Any]:
         countriesField(GCountry.code ~ CountryCard.fields.spread).toQuery("Countries")
 
     final private class StaticEngine(body: String) extends HttpEngine:
-        def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
-            HttpResponse(200, Nil, body)
+        def execute(request: HttpEngine.Request)(using Frame): HttpEngine.Response < Async =
+            HttpEngine.response(HttpStatus.OK, body)
 
-    private def client(body: String): ApolloClient =
-        ApolloClient
-            .builder()
-            .serverUrl("https://example.invalid/graphql")
-            .httpEngine(StaticEngine(body))
-            .normalizedCache(MemoryCache(), CacheIdentity.generator(summon[CacheIdentity[CountryT]]))
-            .build()
+    private val serverUrl = "https://example.invalid/graphql"
+
+    private def client(body: String): ApolloClient < (Sync & Scope) =
+        ApolloClient.init(
+            ApolloClient.Config(serverUrl)
+                .httpEngine(StaticEngine(body))
+                .normalizedCache(MemoryCache(), CacheIdentity.generator(summon[CacheIdentity[CountryT]]))
+        )
 
     private val body =
         """{"data":{"countries":[
@@ -86,121 +89,103 @@ class MaskedFragmentListSignalSpec extends kyo.test.Test[Any]:
             case Entry.Heading(t) => s"— $t —"
             case Entry.Country(_) => "?"
 
+    /** Rename the country behind `ref` with a targeted store write. */
+    private def rename(c: ApolloClient, ref: CountryCard.fields.Ref, name: String)(using
+        Frame
+    ): Unit < (Sync & Abort[CacheReadFailure]) =
+        c.apolloStore.keyOf(ref.typeName, ref.raw).map { key =>
+            c.apolloStore.writeFragment(CountryCard.fields.cacheFragment, key, (name = name)).unit
+        }
+
     "Apollo.fragments" - {
 
         "seeds every row from the records the response landed in, in list order" in {
-            given ApolloClient = client(body)
-            Scope.run {
-                for
-                    data <- summon[ApolloClient].query(countriesQuery).data
-                    refs <- Signal.initRef(data.countries.map(c => Entry.Country(c.countryCard)): Seq[Entry])
-                    sig  <- Apollo.fragmentRows(refs)(refOf)(label, heading)
-                    now  <- sig.current
-                yield assert(now == Seq("Germany", "France", "Italy"))
-            }
+            for
+                c    <- client(body)
+                data <- c.query(countriesQuery).data
+                refs <- Signal.initRef(data.countries.map(e => Entry.Country(e.countryCard)): Seq[Entry])
+                sig <-
+                    given ApolloClient = c
+                    Apollo.fragmentRows(refs)(refOf)(label, heading)
+                now <- sig.current
+            yield assert(now == Seq("Germany", "France", "Italy"))
         }
 
         "re-emits when a targeted write touches ONE of the rows" in {
-            given c: ApolloClient = client(body)
-            Scope.run {
-                for
-                    data <- c.query(countriesQuery).data
-                    refs <- Signal.initRef(data.countries.map(e => Entry.Country(e.countryCard)): Seq[Entry])
-                    sig  <- Apollo.fragmentRows(refs)(refOf)(label, heading)
-                    _ <- Sync.defer {
-                        c.apolloStore.writeFragment(
-                            CountryCard.fields.cacheFragment,
-                            data.countries(1).countryCard.key,
-                            (name = "Frankreich")
-                        )
-                    }
-                    _   <- Async.sleep(50L.millis)
-                    now <- sig.current
-                yield assert(now == Seq("Germany", "Frankreich", "Italy"))
-            }
+            for
+                c    <- client(body)
+                data <- c.query(countriesQuery).data
+                refs <- Signal.initRef(data.countries.map(e => Entry.Country(e.countryCard)): Seq[Entry])
+                sig <-
+                    given ApolloClient = c
+                    Apollo.fragmentRows(refs)(refOf)(label, heading)
+                _   <- rename(c, data.countries(1).countryCard, "Frankreich")
+                now <- awaitSignal(sig)(_ == Seq("Germany", "Frankreich", "Italy"))
+            yield assert(now == Seq("Germany", "Frankreich", "Italy"))
         }
 
         "follows the caller's list when it grows, and watches what the new row depends on" in {
-            given c: ApolloClient = client(body)
-            Scope.run {
-                for
-                    data <- c.query(countriesQuery).data
-                    all = data.countries.map(e => Entry.Country(e.countryCard))
-                    // Start with a first page of one row, then append the rest.
-                    refs  <- Signal.initRef(all.take(1): Seq[Entry])
-                    sig   <- Apollo.fragmentRows(refs)(refOf)(label, heading)
-                    first <- sig.current
-                    _     <- refs.set(all)
-                    _     <- Async.sleep(50L.millis)
-                    grown <- sig.current
-                    // A write to a row that only arrived with the second page must
-                    // still reach the signal: the key set is re-derived per emission.
-                    _ <- Sync.defer {
-                        c.apolloStore.writeFragment(
-                            CountryCard.fields.cacheFragment,
-                            data.countries(2).countryCard.key,
-                            (name = "Italia")
-                        )
-                    }
-                    _     <- Async.sleep(50L.millis)
-                    after <- sig.current
-                yield
-                    assert(first == Seq("Germany"))
-                    assert(grown == Seq("Germany", "France", "Italy"))
-                    assert(after == Seq("Germany", "France", "Italia"))
-            }
+            for
+                c    <- client(body)
+                data <- c.query(countriesQuery).data
+                all = data.countries.map(e => Entry.Country(e.countryCard))
+                // Start with a first page of one row, then append the rest.
+                refs <- Signal.initRef(all.take(1): Seq[Entry])
+                sig <-
+                    given ApolloClient = c
+                    Apollo.fragmentRows(refs)(refOf)(label, heading)
+                first <- sig.current
+                _     <- refs.set(all)
+                grown <- awaitSignal(sig)(_ == Seq("Germany", "France", "Italy"))
+                // A write to a row that only arrived with the second page must
+                // still reach the signal: the key set is re-derived per emission.
+                _     <- rename(c, data.countries(2).countryCard, "Italia")
+                after <- awaitSignal(sig)(_ == Seq("Germany", "France", "Italia"))
+            yield
+                assert(first == Seq("Germany"))
+                assert(grown == Seq("Germany", "France", "Italy"))
+                assert(after == Seq("Germany", "France", "Italia"))
         }
 
         "carries elements that hold no ref through untouched" in {
-            given ApolloClient = client(body)
-            Scope.run {
-                for
-                    data <- summon[ApolloClient].query(countriesQuery).data
-                    mixed = Entry.Heading("Europe") +: data.countries.map(e => Entry.Country(e.countryCard))
-                    refs <- Signal.initRef(mixed: Seq[Entry])
-                    sig  <- Apollo.fragmentRows(refs)(refOf)(label, heading)
-                    now  <- sig.current
-                yield assert(now == Seq("— Europe —", "Germany", "France", "Italy"))
-            }
+            for
+                c    <- client(body)
+                data <- c.query(countriesQuery).data
+                mixed = Entry.Heading("Europe") +: data.countries.map(e => Entry.Country(e.countryCard))
+                refs <- Signal.initRef(mixed: Seq[Entry])
+                sig <-
+                    given ApolloClient = c
+                    Apollo.fragmentRows(refs)(refOf)(label, heading)
+                now <- sig.current
+            yield assert(now == Seq("— Europe —", "Germany", "France", "Italy"))
         }
 
         "the bare-ref form needs no carrier at all" in {
-            given c: ApolloClient = client(body)
-            Scope.run {
-                for
-                    data <- c.query(countriesQuery).data
-                    refs <- Signal.initRef(data.countries.map(_.countryCard): Seq[CountryCard.fields.Ref])
-                    sig  <- Apollo.fragments(CountryCard.fields)(refs)
-                    now  <- sig.current
-                    _ <- Sync.defer {
-                        c.apolloStore.writeFragment(
-                            CountryCard.fields.cacheFragment,
-                            data.countries.head.countryCard.key,
-                            (name = "Deutschland")
-                        )
-                    }
-                    _     <- Async.sleep(50L.millis)
-                    after <- sig.current
-                yield
-                    assert(now.map(_.name) == Seq("Germany", "France", "Italy"))
-                    assert(after.map(_.name) == Seq("Deutschland", "France", "Italy"))
-            }
+            for
+                c    <- client(body)
+                data <- c.query(countriesQuery).data
+                refs <- Signal.initRef(data.countries.map(_.countryCard): Seq[CountryCard.fields.Ref])
+                sig <-
+                    given ApolloClient = c
+                    Apollo.fragments(CountryCard.fields)(refs)
+                now   <- sig.current
+                _     <- rename(c, data.countries.head.countryCard, "Deutschland")
+                after <- awaitSignal(sig)(_.map(_.name) == Seq("Deutschland", "France", "Italy"))
+            yield
+                assert(now.map(_.name) == Seq("Germany", "France", "Italy"))
+                assert(after.map(_.name) == Seq("Deutschland", "France", "Italy"))
         }
 
         "stays total on a cache-less client: each ref's own slice is its value" in {
-            given ApolloClient = ApolloClient
-                .builder()
-                .serverUrl("https://example.invalid/graphql")
-                .httpEngine(StaticEngine(body))
-                .build()
-            Scope.run {
-                for
-                    data <- summon[ApolloClient].query(countriesQuery).data
-                    refs <- Signal.initRef(data.countries.map(e => Entry.Country(e.countryCard)): Seq[Entry])
-                    sig  <- Apollo.fragmentRows(refs)(refOf)(label, heading)
-                    now  <- sig.current
-                yield assert(now == Seq("Germany", "France", "Italy"))
-            }
+            for
+                c    <- ApolloClient.init(ApolloClient.Config(serverUrl).httpEngine(StaticEngine(body)))
+                data <- c.query(countriesQuery).data
+                refs <- Signal.initRef(data.countries.map(e => Entry.Country(e.countryCard)): Seq[Entry])
+                sig <-
+                    given ApolloClient = c
+                    Apollo.fragmentRows(refs)(refOf)(label, heading)
+                now <- sig.current
+            yield assert(now == Seq("Germany", "France", "Italy"))
         }
     }
 end MaskedFragmentListSignalSpec

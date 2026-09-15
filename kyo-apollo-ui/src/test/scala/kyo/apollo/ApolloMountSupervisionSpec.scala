@@ -2,6 +2,7 @@ package kyo.apollo
 
 import java.util.concurrent.CopyOnWriteArrayList
 import kyo.*
+import kyo.apollo.exception.ApolloException
 import kyo.apollo.exception.DefaultApolloException
 import kyo.internal.HtmlRenderer
 import kyo.internal.ReactiveRegion
@@ -80,21 +81,31 @@ class ApolloMountSupervisionSpec extends kyo.test.Test[Any]:
         Scope.run {
             for
                 src          <- Signal.initRef[QueryState[Int]](QueryState.Success(1, fromCache = false))
-                (rec, marks) <- recording("value:1")
+                marker       <- Signal.initRef("open")
+                feed         <- Promise.init[Fiber[Unit, Abort[ApolloException]], Any]
+                (rec, marks) <- recording("value:1", "marker:after")
                 effect =
                     for
                         ref <- Signal.initRef(1)
-                        _ <- Fiber.init(src.observe {
+                        fiber <- Fiber.init(src.observe {
                             case QueryState.Success(d, _, _) => ref.set(d)
                             case QueryState.Failure(ex, _)   => Abort.fail(ex)
                             case _                           => (): Unit
                         })
-                    yield UI.span(ref.map(n => s"value:$n")).id("content"): UI
+                        _ <- feed.completeDiscard(Result.succeed(fiber))
+                    yield UI.div(UI.span(ref.map(n => s"value:$n")), UI.span(marker.map(m => s"marker:$m")))
+                        .id("content"): UI
                 _ <- run(UI.div(UI.mounted(effect).keyed("apollo")), rec)
                 _ <- marks("value:1").get
                 _ <- src.set(QueryState.Failure(DefaultApolloException("socket died")))
-                _ <- Async.sleep(200L.millis)
-            yield assert(rec.count("kyo-mount-error") == 0)
+                // The feed died with the failure…
+                died <- feed.get.map(_.getResult)
+                // …and the node still renders its own content after that: an update of it arrives.
+                _ <- marker.set("after")
+                _ <- marks("marker:after").get
+            yield
+                assert(died.isFailure)
+                assert(rec.count("kyo-mount-error") == 0)
         }
     }
 end ApolloMountSupervisionSpec

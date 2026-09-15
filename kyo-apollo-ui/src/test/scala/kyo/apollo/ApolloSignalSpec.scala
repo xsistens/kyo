@@ -30,7 +30,7 @@ class ApolloSignalSpec extends kyo.test.Test[Any]:
         cacheInfo: Maybe[CacheInfo] = Absent
     ): ApolloResponse[D] =
         ApolloResponse(
-            requestUuid = Uuid.random(),
+            requestUuid = Uuid("00000000-0000-4000-8000-000000000000"),
             data = data,
             error =
                 if error.isDefined then error
@@ -85,7 +85,7 @@ class ApolloSignalSpec extends kyo.test.Test[Any]:
         "project maps an empty response (no data, no errors) to Failure" in {
             ApolloSignal.project(resp[Int]()) match
                 case QueryState.Failure(ex: DefaultApolloException, _) =>
-                    assert(ex.getMessage.contains("did not return any data"))
+                    assert(ex.message.contains("did not return any data"))
                 case other => fail(s"expected Failure(DefaultApolloException), got $other")
         }
 
@@ -93,7 +93,7 @@ class ApolloSignalSpec extends kyo.test.Test[Any]:
             ApolloSignal.project(resp[Int](data = Absent, errors = Chunk(GraphQLError("nope")))) match
                 case QueryState.Failure(ex: ApolloGraphQLException, _) =>
                     // Apollo JS parity: the bare error message, no prefix.
-                    assert(ex.getMessage == "nope")
+                    assert(ex.message == "nope")
                     assert(ex.errors.map(_.message) == Chunk("nope"))
                 case other => fail(s"expected Failure(ApolloGraphQLException), got $other")
         }

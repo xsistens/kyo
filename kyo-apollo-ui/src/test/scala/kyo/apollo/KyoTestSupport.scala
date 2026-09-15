@@ -10,8 +10,6 @@ import kyo.apollo.api.*
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.IdCacheKeyGenerator
 import kyo.apollo.network.http.HttpEngine
-import kyo.apollo.network.http.HttpRequest
-import kyo.apollo.network.http.HttpResponse
 
 /** A `CurrentUser` query + `User` record fixture (mirroring `core`'s
   * `ReactivitySpec`), so a query result and an imperative store write share the
@@ -27,28 +25,42 @@ object CountryFixture:
     final case class User(__typename: String, id: String, name: String) derives Schema, CanEqual
     final case class UserData(user: User) derives Schema, CanEqual
 
-    private def userSelections: List[CompiledSelection] = List(
+    private def userSelections: Chunk[CompiledSelection] = Chunk(
         CompiledField("__typename", CompiledNamedType("String")),
         CompiledField("id", CompiledNamedType("String")),
         CompiledField("name", CompiledNamedType("String"))
     )
 
-    final case class CurrentUserQuery() extends Query[UserData]:
-        def name                         = "CurrentUser"
-        def document                     = "query CurrentUser { user { __typename id name } }"
-        def dataSchema: Schema[UserData] = summon[Schema[UserData]]
+    // Normalizable: the suites write this query's data into the store as well as read it.
+    final case class CurrentUserQuery() extends Query.Normalizable[UserData]:
+        def name                           = "CurrentUser"
+        def document                       = "query CurrentUser { user { __typename id name } }"
+        val dataCodec: JsonCodec[UserData] = JsonCodec.fromSchema[UserData]
         def rootField: CompiledField =
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
                 selections =
-                    List(CompiledField("user", CompiledNamedType("User"), selections = userSelections))
+                    Chunk(CompiledField("user", CompiledNamedType("User"), selections = userSelections))
             )
         // No variables: an empty variables object (matches the new `Operation.variables`).
         def variables: kyo.apollo.json.Json = kyo.apollo.json.Json.JObj(Map.empty)
     end CurrentUserQuery
 
     def userData(name: String): UserData = UserData(User("User", "1", name))
+
+    /** Wait until `signal` holds a value satisfying `p`, and yield that value — a
+      * barrier on the value itself rather than a pause: the observer reads the
+      * current value when it attaches, so a value that is already there, or lands
+      * while it attaches, is not missed.
+      */
+    def awaitSignal[A](signal: Signal[A])(p: A => Boolean)(using Frame): A < Async =
+        Scope.run {
+            Promise.initWith[A, Any] { reached =>
+                Fiber.init(signal.observe(value => if p(value) then reached.completeDiscard(Result.succeed(value)) else Kyo.unit))
+                    .andThen(reached.get)
+            }
+        }
 
     /** A clean `{ data: { user } }` payload naming `capital`/`name` via `name`. */
     def body(name: String): String =
@@ -65,10 +77,13 @@ object CountryFixture:
       * folded by the transport into an `ApolloResponse.error` value.
       */
     final class StaticEngine(responseBody: String, status: Int = 200) extends HttpEngine:
-        var calls = 0
-        def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
-            calls += 1
-            HttpResponse(status, Nil, responseBody)
+        private val received = AtomicInt.Unsafe.init(0)(using AllowUnsafe.embrace.danger).safe
+
+        /** How many requests reached this engine. */
+        def calls(using Frame): Int < Sync = received.get
+
+        def execute(request: HttpEngine.Request)(using Frame): HttpEngine.Response < Async =
+            received.incrementAndGet.andThen(HttpEngine.response(HttpStatus(status), responseBody))
     end StaticEngine
 
     /** Parks every reply on a gate until [[release]] is called, so a watcher's
@@ -77,35 +92,44 @@ object CountryFixture:
       * the response, then `Success` after.
       */
     final class GatedEngine(responseBody: String) extends HttpEngine:
-        private given AllowUnsafe = AllowUnsafe.embrace.danger
-        private given Frame       = Frame.internal
-        private val gate: Fiber.Promise[Unit, Any] =
-            Sync.Unsafe.evalOrThrow(Fiber.Promise.init[Unit, Any])
-        def release(): Unit =
-            given AllowUnsafe = AllowUnsafe.embrace.danger
-            discard(gate.unsafe.completeUnitDiscard())
-        def execute(request: HttpRequest)(using Frame): HttpResponse < Async =
-            gate.get.andThen(HttpResponse(200, Nil, responseBody))
+        private given Frame = Frame.internal
+        private val unsafe  = AllowUnsafe.embrace.danger
+        private val gate    = Fiber.Promise.Unsafe.init[Unit, Any]()(using unsafe).safe
+        private val arrived = Channel.Unsafe.init[Unit](Int.MaxValue)(using summon[Frame], unsafe).safe
+
+        /** Completes once the next request has reached the engine and is parked —
+          * the barrier a test waits on before asserting that a reply is pending,
+          * instead of a pause. Each arrival is handed out once.
+          */
+        def nextRequest(using Frame): Unit < Async =
+            Abort.run[Closed](arrived.take).map(_.getOrThrow)
+
+        /** Release the gate so every parked (and future) reply resolves. Idempotent. */
+        def release(using Frame): Unit < Sync = gate.completeUnitDiscard
+
+        def execute(request: HttpEngine.Request)(using Frame): HttpEngine.Response < Async =
+            Abort.run[Closed](arrived.offer(()))
+                .andThen(gate.get)
+                .andThen(HttpEngine.response(HttpStatus.OK, responseBody))
     end GatedEngine
 
+    private val serverUrl = "https://example.invalid/graphql"
+
     /** A client with no cache — enough for the effect form, whose `.data` /
-      * `.response` run `execute()` straight through the network transport.
+      * `.response` run `execute()` straight through the network transport. Owned by
+      * the enclosing `Scope`.
       */
-    def cacheless(engine: HttpEngine): ApolloClient =
-        ApolloClient
-            .builder()
-            .serverUrl("https://example.invalid/graphql")
-            .httpEngine(engine)
-            .build()
+    def cacheless(engine: HttpEngine)(using Frame): ApolloClient < (Sync & Scope) =
+        ApolloClient.init(ApolloClient.Config(serverUrl).httpEngine(engine))
 
     /** A client with a normalized cache keyed by `id`, so a query read and a store
       * write share the `User:1` record — required by `watch()` / `watchSignal`.
+      * Owned by the enclosing `Scope`.
       */
-    def cached(engine: HttpEngine): ApolloClient =
-        ApolloClient
-            .builder()
-            .serverUrl("https://example.invalid/graphql")
-            .httpEngine(engine)
-            .normalizedCache(MemoryCache(), IdCacheKeyGenerator(List("id")))
-            .build()
+    def cached(engine: HttpEngine)(using Frame): ApolloClient < (Sync & Scope) =
+        ApolloClient.init(
+            ApolloClient.Config(serverUrl)
+                .httpEngine(engine)
+                .normalizedCache(MemoryCache(), IdCacheKeyGenerator(List("id")))
+        )
 end CountryFixture

@@ -19,22 +19,26 @@ class ImplicitClientCallSpec extends kyo.test.Test[Any]:
     "the `.call` bridge with a given ApolloClient" - {
 
         "op.call.data is equivalent to client.query(op).data" in {
-            given client: ApolloClient = cacheless(StaticEngine(body("Alice")))
-            for
-                viaCall   <- Abort.run(CurrentUserQuery().call.data)
-                viaClient <- Abort.run(client.query(CurrentUserQuery()).data)
-            yield viaCall match
-                case Result.Success(data) =>
-                    assert(data == userData("Alice"))
-                    assert(Result.Success(data) == viaClient)
-                case other => fail(s"expected Success(Alice), got $other")
-            end for
+            cacheless(StaticEngine(body("Alice"))).map { client =>
+                given ApolloClient = client
+                for
+                    viaCall   <- Abort.run(CurrentUserQuery().call.data)
+                    viaClient <- Abort.run(client.query(CurrentUserQuery()).data)
+                yield viaCall match
+                    case Result.Success(data) =>
+                        assert(data == userData("Alice"))
+                        assert(Result.Success(data) == viaClient)
+                    case other => fail(s"expected Success(Alice), got $other")
+                end for
+            }
         }
 
         "op.call.fetchPolicy(…).response threads the builder hop" in {
-            given ApolloClient = cacheless(StaticEngine(body("Alice")))
-            for resp <- CurrentUserQuery().call.fetchPolicy(FetchPolicy.NetworkOnly).response
-            yield assert(resp.data == Present(userData("Alice")))
+            cacheless(StaticEngine(body("Alice"))).map { client =>
+                given ApolloClient = client
+                for resp <- CurrentUserQuery().call.fetchPolicy(FetchPolicy.NetworkOnly).response
+                yield assert(resp.data == Present(userData("Alice")))
+            }
         }
     }
 end ImplicitClientCallSpec

@@ -2,9 +2,12 @@ package kyo.apollo
 
 import kyo.*
 import kyo.apollo.api.GraphQLError
+import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.exception.ApolloException
+import kyo.apollo.exception.ApolloExecuteFailure
 import kyo.apollo.exception.ApolloGraphQLException
 import kyo.apollo.exception.ApolloNetworkException
+import kyo.apollo.exception.CacheMissException
 import kyo.apollo.exception.DefaultApolloException
 import kyo.apollo.network.ApolloResponse
 import kyo.apollo.network.Uuid
@@ -28,7 +31,7 @@ class ApolloEffectSpec extends kyo.test.Test[Any]:
         error: Maybe[ApolloException] = Absent
     ): ApolloResponse[D] =
         ApolloResponse(
-            requestUuid = Uuid.random(),
+            requestUuid = Uuid("00000000-0000-4000-8000-000000000000"),
             data = data,
             error =
                 if error.isDefined then error
@@ -64,8 +67,9 @@ class ApolloEffectSpec extends kyo.test.Test[Any]:
             ) match
                 case Left(ex: ApolloGraphQLException) =>
                     // Apollo JS parity (CombinedGraphQLErrors): raw messages joined by
-                    // newline, no prefix — UIs toast getMessage verbatim.
-                    assert(ex.getMessage == "boom\nbang")
+                    // newline, no prefix — UIs toast `message` verbatim (`getMessage` adds
+                    // the KyoException framing).
+                    assert(ex.message == "boom\nbang")
                     assert(ex.errors.map(_.message) == Chunk("boom", "bang"))
                 case other => fail(s"expected Left(ApolloGraphQLException), got $other")
         }
@@ -86,6 +90,38 @@ class ApolloEffectSpec extends kyo.test.Test[Any]:
             ApolloEffect.asApolloException(cause) match
                 case wrapped: DefaultApolloException => assert(wrapped.getCause == cause)
                 case other                           => fail(s"expected DefaultApolloException, got $other")
+        }
+    }
+
+    "ApolloEffect.asExecuteFailure (the row a registered refetch carries)" - {
+
+        "an execute failure passes through unchanged" in {
+            val boom = ApolloNetworkException("connection dropped")
+            for result <- Abort.run[ApolloExecuteFailure](ApolloEffect.asExecuteFailure(Abort.fail(boom): Int < Abort[ApolloException]))
+            yield assert(result == Result.Failure(boom))
+        }
+
+        "any other failure becomes a DefaultApolloException carrying it as the cause" in {
+            val miss = CacheMissException(CacheKey("User", "1"))
+            for result <- Abort.run[ApolloExecuteFailure](ApolloEffect.asExecuteFailure(Abort.fail(miss): Int < Abort[ApolloException]))
+            yield result match
+                case Result.Failure(wrapped: DefaultApolloException) =>
+                    assert(wrapped.getCause == miss)
+                    assert(wrapped.message == miss.message)
+                case other => fail(s"expected Failure(DefaultApolloException), got $other")
+        }
+
+        "a success and a panic are left as they are" in {
+            val defect = new IllegalStateException("defect")
+            for
+                success <- Abort.run[ApolloExecuteFailure](ApolloEffect.asExecuteFailure(42: Int < Abort[ApolloException]))
+                panic <- Abort.run[Throwable](
+                    ApolloEffect.asExecuteFailure(Abort.panic(defect): Int < Abort[ApolloException])
+                )
+            yield
+                assert(success == Result.Success(42))
+                assert(panic == Result.Panic(defect))
+            end for
         }
     }
 end ApolloEffectSpec
