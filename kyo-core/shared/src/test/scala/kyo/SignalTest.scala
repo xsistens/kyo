@@ -561,8 +561,8 @@ class SignalTest extends kyo.test.Test[Any]:
         }
 
         "a constant input never drives a change" in {
-            // Regression: a constant's `next` used to complete immediately, so it won every arm of the race,
-            // firing `combineLatest(ref, const).next` with nothing to report and busy-looping `observe` into an OOM.
+            // A constant's `next` must never complete: a constant has no changes to report. Completing it would win
+            // every arm of the race, firing `combineLatest(ref, const).next` with nothing and busy-looping `observe`.
             for
                 refA <- Signal.initRef(0)
                 cl = refA.combineLatest(Signal.initConst(99))
@@ -574,31 +574,36 @@ class SignalTest extends kyo.test.Test[Any]:
             yield assert(v == (1, 99))
         }
 
+        /** A set that lands before `next` has registered is missed, and the leaf then hangs on the waiter.
+          *
+          * A barrier on `waiters` cannot prevent it either. `awaitAny` cancels its losing branch
+          * without unregistering, so the untouched signal keeps that waiter and the count cannot tell a stale one
+          * from a live registration: `>=` is satisfied by stale waiters alone, and an exact count would never be
+          * satisfied at all when a loser was cancelled before it registered.
+          *
+          * Driving the source upward until the waiter reports needs no barrier. A set that arrives early is simply
+          * missed and the next one is not, so what is asserted is what the leaf is named for: a change on the OTHER
+          * signal reaches a combined waiter, twice in a row, carrying the unchanged value of the first.
+          */
         "successive other changes each emit" in {
             for
                 refA <- Signal.initRef(0)
                 refB <- Signal.initRef(0)
                 cl = refA.combineLatest(refB)
-                // First emit: refB fires. cl.next races refA.next and refB.next as two
-                // independent fibers; assert refA has its single waiter (no ghosts yet),
-                // then wait for refB's subscriber too before firing refB. Syncing only on
-                // refA can leave refB's subscriber unregistered when set(1) swaps in a fresh
-                // next-promise, which loses the emit and hangs f1 under contention.
-                f1 <- Fiber.initUnscoped(cl.next)
-                _  <- assertEventually(refA.waiters.map(_ == 1))
-                _  <- assertEventually(refB.waiters.map(_ >= 1))
-                _  <- refB.set(1)
-                v1 <- f1.get
-                // Second emit: refB fires again.
-                // After f1 resolved via refB, refA has a ghost waiter (masked next
-                // from the race that was cancelled without removing the onComplete).
-                // refB has a fresh promise (0 waiters) because refB.set fired it.
-                // Wait on refB to confirm the second awaitAny is subscribed to refB.
-                f2 <- Fiber.initUnscoped(cl.next)
-                _  <- assertEventually(refB.waiters.map(_ >= 1))
-                _  <- refB.set(2)
-                v2 <- f2.get
-            yield assert(v1 == (0, 1) && v2 == (0, 2))
+                seen <- AtomicRef.init(Chunk.empty[(Int, Int)])
+                f1   <- Fiber.initUnscoped(cl.next.map(recordValue(seen, _)))
+                _    <- fireUntilSeen(refB, seen, want = 1, from = 1)
+                f2   <- Fiber.initUnscoped(cl.next.map(recordValue(seen, _)))
+                last <- fireUntilSeen(refB, seen, want = 2, from = 2)
+                vs   <- seen.get
+                _    <- f1.interrupt
+                _    <- f2.interrupt
+            yield
+                assert(vs.size == 2, s"each of the two waiters should have reported one emit, got $vs")
+                assert(vs.forall(_._1 == 0), s"refA never changed, so every emit must carry its initial value: $vs")
+                assert(vs.forall(_._2 >= 1), s"every emit must carry a value refB was actually set to: $vs")
+                assert(vs.last._2 <= last, s"the last emit cannot carry a value beyond the last one set: $vs, last=$last")
+            end for
         }
 
         "interleaved self,other,self,other produces four emits" in {
@@ -627,6 +632,18 @@ class SignalTest extends kyo.test.Test[Any]:
             yield assert(vs == Chunk((1, 0), (1, 1), (2, 1), (2, 2)))
         }
 
+        /** What this leaf is named for is that the source keeps working once concurrent waiters have completed, and
+          * that is what it asserts: two waiters both complete on a change to one signal, a third registered
+          * afterwards completes on a change to the other, and every reported pair carries values that were actually
+          * set.
+          *
+          * DELIBERATELY NOT ASSERTED: that the two concurrent waiters observe the SAME change. That holds only if
+          * both finished registering before the fire, which is unobservable here. A waiter count cannot stand in for
+          * it, because it cannot distinguish a live registration from an `awaitAny` loser cancelled without
+          * unregistering, so it can pass with no live waiter and hang the leaf.
+          * Firing until each waiter reports keeps the source honest without asserting a coincidence the API does not
+          * promise.
+          */
         "source remains usable after concurrent waiters complete" in {
             for
                 refA <- Signal.initRef(0)
@@ -684,6 +701,15 @@ class SignalTest extends kyo.test.Test[Any]:
             yield ()
         }
 
+        /** A liveness leaf: all three waiters must complete. It asserts nothing about WHICH change each observed,
+          * because `awaitAny` yields no value, and nothing about the two concurrent ones seeing the same change,
+          * which is not observable from here.
+          *
+          * A waiter-count barrier cannot establish that they are listening: a cancelled `awaitAny` loser stays
+          * registered, so a count cannot tell a live registration from a stale one, and the leaf would fire into a
+          * signal nobody is listening to and then hang on `get`. Firing until the completion count moves
+          * makes an early set harmless, because the next one is a fresh change.
+          */
         "source remains usable after concurrent waiters complete" in {
             for
                 r0 <- Signal.initRef(0)
@@ -976,6 +1002,27 @@ class SignalTest extends kyo.test.Test[Any]:
             if i >= maxTries then Loop.done(false)
             else cond.map(c => if c then Loop.done(true) else Async.sleep(1.millis).andThen(Loop.continue))
         }
+
+    /** Sets `ref` to successive values until `seen` holds at least `want` entries, returning the last value set.
+      *
+      * A `next` waiter that has not finished registering misses a set entirely, and no count of waiters can tell that
+      * state apart from a registered one, because a cancelled `awaitAny` loser stays registered. Firing again is what
+      * makes the miss harmless: each new value is a real change, so the first set that lands after registration is
+      * observed. The returned value bounds what the waiter can have seen.
+      */
+    private def fireUntil(ref: SignalRef[Int], cond: Boolean < Async, from: Int)(using Frame): Int < Async =
+        Loop.indexed(from) { (attempt, v) =>
+            if attempt >= 20 then Loop.done(v)
+            else
+                ref.set(v).andThen(pollUntil(cond, maxTries = 200)).map { ok =>
+                    if ok then Loop.done(v) else Loop.continue(v + 1)
+                }
+        }
+
+    private def fireUntilSeen(ref: SignalRef[Int], seen: AtomicRef[Chunk[(Int, Int)]], want: Int, from: Int)(using
+        Frame
+    ): Int < Async =
+        fireUntil(ref, seen.get.map(_.size >= want), from)
 
     private def recordValue[A](seen: AtomicRef[Chunk[A]], v: A)(using Frame): Unit < Async =
         seen.updateAndGet(_.append(v)).unit

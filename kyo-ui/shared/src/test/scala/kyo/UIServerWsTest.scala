@@ -25,6 +25,13 @@ import kyo.internal.UIServer
   */
 class UIServerWsTest extends kyo.test.Test[Any]:
 
+    /** Consumes the frame every session opens with: the `SessionReady` announcement the server sends before it subscribes. Subscribing
+      * repaints nothing, because the SSR page already carries the current content, so no render frame follows it. A leaf starts its
+      * interaction after this, so the frame it later takes is the one its own event produced.
+      */
+    private def awaitSessionStart(clientWs: HttpWebSocket)(using Frame): Unit < (Async & Abort[Closed]) =
+        clientWs.take().unit
+
     private def mediaType(value: String): Drag.MediaType = Drag.MediaType.parse(value).get
 
     private def dragText(representations: (String, String)*): Drag.Item.Text =
@@ -113,6 +120,7 @@ class UIServerWsTest extends kyo.test.Test[Any]:
                     (serverWs: HttpWebSocket) => UIServer.serveSession(serverWs, app),
                     (clientWs: HttpWebSocket) =>
                         for
+                            _ <- awaitSessionStart(clientWs)
                             // Subscribe repaints nothing: the SSR page already carries the region's current
                             // content, so this socket stays silent until an event produces a frame. The barrier
                             // is the subscription itself, which parks on the region's signal.
@@ -156,7 +164,8 @@ class UIServerWsTest extends kyo.test.Test[Any]:
                     (serverWs: HttpWebSocket) => Sync.ensure(serverEnded.set(true))(UIServer.serveSession(serverWs, app)),
                     (clientWs: HttpWebSocket) =>
                         for
-                            // Subscribe repaints nothing, so there is no frame to await here. That the server
+                            _ <- awaitSessionStart(clientWs)
+                            // Subscribe repaints nothing, so no frame follows the announcement. That the server
                             // subscription is live is witnessed directly instead: it parks on the test-held leaf,
                             // so leafRef has exactly one waiter.
                             _ <- assertEventually(leafRef.waiters.map(_ == 1))
@@ -751,6 +760,7 @@ class UIServerWsTest extends kyo.test.Test[Any]:
                     serverWs => UIServer.serveSession(serverWs, app),
                     clientWs =>
                         for
+                            _ <- awaitSessionStart(clientWs)
                             // Subscribe repaints nothing, so the barrier is the subscription's own park on `ref`.
                             _     <- assertEventually(ref.waiters.map(_ >= 1))
                             _     <- clientWs.put(HttpWebSocket.Payload.Text(Json.encode[UIEvent](start)))
@@ -794,6 +804,7 @@ class UIServerWsTest extends kyo.test.Test[Any]:
                     serverWs => UIServer.serveSession(serverWs, app),
                     clientWs =>
                         for
+                            _ <- awaitSessionStart(clientWs)
                             // Subscribe repaints nothing, so the barrier is the subscription's own park on `ref`.
                             _ <- assertEventually(ref.waiters.map(_ >= 1))
                             _ <- clientWs.put(HttpWebSocket.Payload.Text(Json.encode[UIEvent](invalidStart)))
@@ -829,6 +840,7 @@ class UIServerWsTest extends kyo.test.Test[Any]:
                     (serverWs: HttpWebSocket) => UIServer.serveSession(serverWs, app),
                     (clientWs: HttpWebSocket) =>
                         for
+                            _ <- awaitSessionStart(clientWs)
                             // Subscribe repaints nothing, so the barrier is the subscription's own park on `ref`.
                             _ <- assertEventually(ref.waiters.map(_ >= 1))
                             clickEvent = UIEvent.Click(Seq("0"), MouseEventData(UI.Modifiers.none, Absent))
