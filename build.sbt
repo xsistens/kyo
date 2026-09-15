@@ -589,7 +589,6 @@ lazy val kyoNative = project
         `kyo-ui`.native,
         `kyo-ui-components`.native,
         `kyo-apollo`.native,
-        `kyo-apollo-testing`.native,
         `kyo-apollo-ui`.native,
         `kyo-markdown`.native,
         `kyo-i18n`.native,
@@ -663,7 +662,6 @@ lazy val kyoWasm = project
         `kyo-ui`.wasm,
         `kyo-ui-components`.wasm,
         `kyo-apollo`.wasm,
-        `kyo-apollo-testing`.wasm,
         `kyo-apollo-ui`.wasm,
         `kyo-markdown`.wasm,
         `kyo-i18n`.wasm,
@@ -3073,20 +3071,20 @@ lazy val `kyo-apollo` =
             libraryDependencies += "org.scala-js" %%% "scalajs-dom" % "2.8.1"
         )
 
-// Promoted fake transports / scripted sockets / stream probes that apps and specs
-// depend on instead of re-declaring inline doubles. Cross-published everywhere the
-// apollo core is (JS/JVM/Native/Wasm); all doubles are portable native-kyo now.
+// Test doubles for kyo-apollo users: scripted HTTP engine and transport, mock
+// WebSocket server, stream probes. No platform-specific code, so a row exists only
+// where something consumes the module: JVM for kyo-apollo-codegen-it's tests, JS for
+// Scala.js applications and their specs, which drive a client without a network.
+// Native and Wasm have no consumer and no rows.
 lazy val `kyo-apollo-testing` =
-    crossProject(JSPlatform, JVMPlatform, NativePlatform, WasmPlatform)
+    crossProject(JSPlatform, JVMPlatform)
         .crossType(CrossType.Pure)
         .in(file("kyo-apollo-testing"))
         .dependsOn(`kyo-apollo`, `kyo-core`, `kyo-data`, `kyo-schema`)
         .withKyoTest
         .settings(`kyo-settings`)
         .jvmSettings(mimaCheck(false))
-        .nativeSettings(`native-settings`, `openssl-native-settings`)
         .jsSettings(`js-settings`)
-        .wasmSettings(`wasm-settings`)
 
 // Build-time generator emitting kyo-apollo selectors and schema types from a GraphQL
 // schema. Plain JVM, reuses Caliban's parser. Does not depend on the apollo core: it emits
