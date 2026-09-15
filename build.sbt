@@ -428,6 +428,7 @@ lazy val kyoJVM: Project = project
         `kyo-apollo-codegen`.jvm,
         `kyo-markdown`.jvm,
         `kyo-i18n`.jvm,
+        `kyo-apollo-codegen-it`.jvm,
         `kyo-case-app`.jvm,
         `kyo-pod`.jvm,
         `kyo-examples`.jvm,
@@ -3089,9 +3090,10 @@ lazy val `kyo-apollo-testing` =
         .jsSettings(`js-settings`)
         .wasmSettings(`wasm-settings`)
 
-// Build-time generator emitting typed `apollo.api.Operation` sources from a GraphQL
-// schema + documents. Plain JVM (runs inside sbt), reuses Caliban's parser. Does not
-// depend on the apollo core: it emits against that API's shape, never shares its classpath.
+// Build-time generator emitting kyo-apollo selectors and schema types from a GraphQL
+// schema. Plain JVM, reuses Caliban's parser. Does not depend on the apollo core: it emits
+// against that API's shape, never shares its classpath — `kyo-apollo-codegen-it` compiles
+// the emitted code against kyo-apollo, so a drift between the two fails the build.
 lazy val `kyo-apollo-codegen` =
     crossProject(JVMPlatform)
         .crossType(CrossType.Pure)
@@ -3100,7 +3102,67 @@ lazy val `kyo-apollo-codegen` =
         .settings(`kyo-settings`)
         .jvmSettings(
             mimaCheck(false),
-            libraryDependencies += "com.github.ghostdogpr" %% "caliban-tools" % "3.1.2"
+            libraryDependencies += "com.github.ghostdogpr" %% "caliban-tools" % "3.1.2",
+            // The forked generator JVM: scala-library's LazyVals would otherwise print JDK 25's
+            // sun.misc.Unsafe deprecation warning on every apolloGenerate run.
+            Compile / run / javaOptions += "--sun-misc-unsafe-memory-access=allow"
+        )
+
+lazy val apolloSchema = settingKey[File]("GraphQL schema SDL apolloGenerate generates kyo-apollo selectors from.")
+lazy val apolloPackage = settingKey[String]("Package the sources apolloGenerate emits declare.")
+lazy val apolloScalarMappings =
+    settingKey[Map[String, String]]("GraphQL custom scalar name -> fully-qualified Scala type, for apolloGenerate.")
+lazy val apolloClientFields =
+    settingKey[Seq[String]]("Local @client fields for apolloGenerate, each written `Type.field: ScalaType = default`.")
+lazy val apolloGenerate =
+    taskKey[Seq[File]]("Generate kyo-apollo selectors and schema types from apolloSchema into Compile / sourceManaged.")
+
+// Runs kyo.apollo.codegen.CodegenRunner through the codegen project's own runner and classpath:
+// a cold build compiles the generator first, and the generator stays out of the meta-build
+// (kyo-settings forks `run`, so each generation is a short-lived JVM, not a class loader in sbt).
+// The generator writes only changed files and deletes the sources of types that left the
+// schema, so running it on every compile triggers no recompilation. A project adds
+// `apolloCodegenSettings` and sets `apolloSchema` and `apolloPackage`.
+lazy val apolloCodegenSettings = Seq(
+    apolloScalarMappings := Map.empty,
+    apolloClientFields   := Seq.empty,
+    apolloGenerate := {
+        val classpath = (`kyo-apollo-codegen`.jvm / Compile / fullClasspath).value.map(_.data)
+        val generator = (`kyo-apollo-codegen`.jvm / Compile / run / runner).value
+        val out       = (Compile / sourceManaged).value / "kyo-apollo-codegen"
+        val options =
+            Seq("--schema", apolloSchema.value.getAbsolutePath, "--out", out.getAbsolutePath, "--package", apolloPackage.value) ++
+                apolloScalarMappings.value.toSeq.sorted.flatMap { case (name, tpe) => Seq("--scalar", s"$name=$tpe") } ++
+                apolloClientFields.value.flatMap(field => Seq("--client-field", field))
+        generator.run("kyo.apollo.codegen.CodegenRunner", classpath, options, streams.value.log).get
+        (out ** "*.scala").get
+    },
+    Compile / sourceGenerators += apolloGenerate.taskValue
+)
+
+// Compile gate for kyo-apollo-codegen: generates from the bundled example schema on every
+// compile and compiles the output against kyo-apollo; its tests drive the generated
+// selectors through the real client. Not published.
+lazy val `kyo-apollo-codegen-it` =
+    crossProject(JVMPlatform)
+        .crossType(CrossType.Pure)
+        .in(file("kyo-apollo-codegen/it"))
+        .dependsOn(`kyo-apollo`, `kyo-apollo-testing` % Test)
+        .withKyoTest
+        .settings(`kyo-settings`, apolloCodegenSettings)
+        .jvmSettings(
+            mimaCheck(false),
+            publish / skip := true,
+            apolloSchema :=
+                (LocalRootProject / baseDirectory).value / "kyo-apollo-codegen" / "src" / "main" / "resources" /
+                    "codegenExample" / "schema.graphql",
+            apolloPackage        := "kyo.apollo.codegen.it.generated",
+            apolloScalarMappings := Map("DateTime" -> "java.time.Instant"),
+            apolloClientFields := Seq(
+                "Country.isFavorite: Boolean = false",
+                "Country.tags: Chunk[String] = Chunk.empty",
+                "Query.cartOpen: Boolean = false"
+            )
         )
 
 // A standalone caliban GraphQL server (JVM-only, caliban is JVM-only) used as the shared
