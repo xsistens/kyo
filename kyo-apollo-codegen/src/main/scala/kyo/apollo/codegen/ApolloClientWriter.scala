@@ -1,8 +1,8 @@
 package kyo.apollo.codegen
 
 import caliban.parsing.adt.Definition.TypeSystemDefinition.TypeDefinition.EnumTypeDefinition
+import caliban.parsing.adt.Definition.TypeSystemDefinition.TypeDefinition.FieldDefinition
 import caliban.parsing.adt.Definition.TypeSystemDefinition.TypeDefinition.InputObjectTypeDefinition
-import caliban.parsing.adt.Definition.TypeSystemDefinition.TypeDefinition.UnionTypeDefinition
 import caliban.parsing.adt.Document
 import caliban.parsing.adt.Type
 
@@ -49,14 +49,18 @@ final case class GeneratedSource(
   * There are two entry points, both schema-wide and document-independent:
   *
   *   - [[writeSchemaTypes]] emits the shared schema types once per run: each
-  *     GraphQL `enum` → a Scala 3 `enum` + a string-transform `given Schema`; each
-  *     input object → a case class `derives Schema`; and, when custom scalars are
-  *     mapped, a `CustomScalars` object holding a `given Schema` per mapped scalar.
+  *     GraphQL `enum` → a Scala 3 `enum` with an `Unknown__(raw)` case + a
+  *     string-transform `given Schema`; each input object → a case class
+  *     `derives Schema`; and, when custom scalars are mapped, a `CustomScalars`
+  *     object holding a `given Schema` per mapped scalar.
   *   - [[writeSelectors]] emits the inline-query selector layer: a phantom `Origin`
-  *     marker + a selector `object` per GraphQL object type, and the
-  *     `Queries`/`Mutations`/`Subscriptions` roots. Each field becomes a
+  *     marker + a selector `object` per GraphQL object, interface and union type,
+  *     and the `Queries`/`Mutations`/`Subscriptions` roots. Each field becomes a
   *     `SelectionBuilder`-returning method, so a query is written as ordinary Scala
   *     with a named-tuple result — no per-operation codegen.
+  *
+  * A type reference the schema does not declare stops generation with a
+  * [[CodegenException.UnknownType]]; nothing is guessed.
   */
 object ApolloClientWriter:
 
@@ -126,8 +130,8 @@ object ApolloClientWriter:
         new Emitter(schema, config).emitSchemaTypes
 
     /** Emit the inline-query selector layer for the whole schema (Phase 3): a
-      * phantom `Origin` marker + a selector `object` per GraphQL object type, and
-      * `Queries`/`Mutations`/`Subscriptions` root objects. Each object field becomes
+      * phantom `Origin` marker + a selector `object` per GraphQL object, interface
+      * and union type, and `Queries`/`Mutations`/`Subscriptions` root objects. Each object field becomes
       * a `SelectionBuilder`-returning selector method, so a query is written as
       * ordinary Scala (`Queries.country(code)(Country.name ~ Country.capital)`) with
       * full autocomplete and a named-tuple result — no per-query codegen. Schema-wide
@@ -163,12 +167,21 @@ object ApolloClientWriter:
         private val inputNames: Set[String]  = schema.inputObjectTypeDefinitions.map(_.name).toSet
         private val unionMembers: Map[String, List[String]] =
             schema.unionTypeDefinitions.map(u => u.name -> u.memberTypes).toMap
+        private val interfaceNames: Set[String] = schema.interfaceTypeDefinitions.map(_.name).toSet
 
-        /** A leaf that takes a nested selection: an object type or a union (whose
-          * selection is composed of `on<Member>` inline-fragment branches).
+        /** The object types implementing interface `name`, in declaration order. Only
+          * object types get an `on<Type>` branch: a branch matches the response's
+          * `__typename`, which always names a concrete object type, never an interface.
+          */
+        private def implementorsOf(name: String): List[String] =
+            schema.objectTypeDefinitions.filter(_.implements.exists(_.name == name)).map(_.name)
+
+        /** A leaf that takes a nested selection: an object type, a union (whose
+          * selection is composed of `on<Member>` inline-fragment branches) or an
+          * interface (its own fields plus `on<Implementor>` branches).
           */
         private def isComposite(leafName: String): Boolean =
-            objectNames(leafName) || unionMembers.contains(leafName)
+            objectNames(leafName) || unionMembers.contains(leafName) || interfaceNames(leafName)
         private val customScalarNames: Set[String] =
             schema.scalarTypeDefinitions.map(_.name).toSet.diff(BuiltInScalars.keySet)
 
@@ -203,7 +216,8 @@ object ApolloClientWriter:
 
         /** Every type a field may have. */
         private val outputTypeNames: Set[String] =
-            BuiltInScalars.keySet ++ customScalarNames ++ enumNames ++ objectNames ++ unionMembers.keySet
+            BuiltInScalars.keySet ++ customScalarNames ++ enumNames ++ objectNames ++ unionMembers.keySet ++
+                interfaceNames
 
         /** Fail on the first field, argument or input field whose type the schema does
           * not declare (or, for an argument or input field, is not an input type),
@@ -224,10 +238,13 @@ object ApolloClientWriter:
                     if outputTypeNames(name) then throw CodegenException.NotAnInputType(name, coordinate)
                     else throw CodegenException.UnknownType(name, coordinate)
             end checkInput
-            schema.objectTypeDefinitions.foreach { obj =>
-                obj.fields.foreach { f =>
-                    checkOutput(f.ofType, s"${obj.name}.${f.name}")
-                    f.args.foreach(a => checkInput(a.ofType, s"${obj.name}.${f.name}(${a.name}:)"))
+            val fieldOwners =
+                schema.objectTypeDefinitions.map(o => o.name -> o.fields) ++
+                    schema.interfaceTypeDefinitions.map(i => i.name -> i.fields)
+            fieldOwners.foreach { (owner, fields) =>
+                fields.foreach { f =>
+                    checkOutput(f.ofType, s"$owner.${f.name}")
+                    f.args.foreach(a => checkInput(a.ofType, s"$owner.${f.name}(${a.name}:)"))
                 }
             }
             schema.inputObjectTypeDefinitions.foreach { in =>
@@ -265,25 +282,50 @@ object ApolloClientWriter:
         /** A GraphQL enum → a Scala 3 `enum` plus a `given Schema` that (de)serialises
           * it by its GraphQL name (a JSON string). NOT a sum-type `derives Schema`:
           * that emits a tagged union and breaks the Scala.js linker at kyo RC5.
+          *
+          * GraphQL enums grow: a server may add a value that a client generated earlier
+          * does not know. Every enum therefore ends in `case Unknown__(raw: String)`
+          * (Apollo Kotlin's `UNKNOWN__`), which a name outside the known cases decodes
+          * to and which encodes back as that name. Scala generates neither `values` nor
+          * `valueOf` for an enum with a parameterized case, so both are emitted over the
+          * known cases only: `values` lists them, `valueOf` finds one by name or is
+          * `Absent` (never `Unknown__`, never a throw). The lookup table's `$` suffix
+          * cannot collide with a case, as no GraphQL name contains `$`.
           */
         private def emitEnum(e: EnumTypeDefinition): GeneratedSource =
+            val name  = e.name
             val cases = e.enumValuesDefinition.map(v => sanitize(v.enumValue)).mkString(", ")
             val contents =
                 s"""package ${config.packageName}
            |
+           |import kyo.Chunk
+           |import kyo.Maybe
            |import kyo.Schema
            |
-           |// GENERATED by apollo-codegen from enum `${e.name}`. DO NOT EDIT.
-           |enum ${e.name}:
+           |// GENERATED by apollo-codegen from enum `$name`. DO NOT EDIT.
+           |enum $name derives CanEqual:
            |  case $cases
+           |  /** A value the server sent that this client's schema does not know, by its GraphQL name. */
+           |  case Unknown__(raw: String)
            |
-           |object ${e.name}:
+           |object $name:
+           |  /** The cases the schema declared, in declaration order; never `Unknown__`. */
+           |  val values: Chunk[$name] = Chunk($cases)
+           |
+           |  private val byName$$: Map[String, $name] = values.map(v => v.toString -> v).toMap
+           |
+           |  /** The declared case named `name`, or `Absent`; never `Unknown__`. */
+           |  def valueOf(name: String): Maybe[$name] = Maybe.fromOption(byName$$.get(name))
+           |
            |  /** GraphQL enums are bare-name strings on the wire — a string transform,
            |    * not sum-type derivation (which breaks the Scala.js linker at kyo RC5). */
-           |  given Schema[${e.name}] =
-           |    Schema.stringSchema.transform[${e.name}](${e.name}.valueOf)(_.toString)
+           |  given Schema[$name] =
+           |    Schema.stringSchema.transform[$name](raw => valueOf(raw).getOrElse(Unknown__(raw))) {
+           |      case Unknown__(raw) => raw
+           |      case known          => known.toString
+           |    }
            |""".stripMargin
-            GeneratedSource(s"${e.name}.scala", config.packageName, contents)
+            GeneratedSource(s"$name.scala", config.packageName, contents)
         end emitEnum
 
         /** A GraphQL input object → a case class `derives Schema` (its codec is
@@ -366,69 +408,63 @@ object ApolloClientWriter:
             )
         end rootSelectorMap
 
-        /** All selector sources: one selector object per non-root object type, plus the
-          * `Queries`/`Mutations`/`Subscriptions` roots.
+        /** All selector sources: one selector object per non-root object type, interface
+          * and union, plus the `Queries`/`Mutations`/`Subscriptions` roots.
+          *
+          * An interface is emitted like a union with fields: `on<Implementor>` branches
+          * for its object implementors next to direct selectors for the fields every
+          * implementor shares, so `Node.onUser(User.name) ~ Node.id` (or, chained,
+          * `_.onUser(_.name).id`) selects through it.
           */
         def emitSelectors: List[GeneratedSource] =
             validateClientFields()
             val roots = rootSelectorMap
-            schema.objectTypeDefinitions.map { obj =>
-                val fields = obj.fields.map(f =>
-                    FieldSpec(f.name, f.ofType, f.args.map(a => ArgSpec(a.name, a.ofType)))
-                )
+            def specs(fields: List[FieldDefinition]): List[FieldSpec] =
+                fields.map(f => FieldSpec(f.name, f.ofType, f.args.map(a => ArgSpec(a.name, a.ofType))))
+            val objects = schema.objectTypeDefinitions.map { obj =>
                 roots.get(obj.name) match
                     // Roots use the universal `RootQuery`/… markers from `core` (imported via
                     // the wildcard), so no per-schema phantom trait is emitted for them.
                     case Some((origin, objectName)) =>
-                        renderSelectorObject(objectName, origin, obj.name, fields, emitTrait = false)
-                    case None => renderSelectorObject(obj.name, obj.name, obj.name, fields, emitTrait = true)
+                        renderSelectorObject(objectName, origin, obj.name, specs(obj.fields), Nil, emitTrait = false)
+                    case None =>
+                        renderSelectorObject(obj.name, obj.name, obj.name, specs(obj.fields), Nil, emitTrait = true)
                 end match
-            } ++ schema.unionTypeDefinitions.map(renderUnionObject)
+            }
+            val interfaces = schema.interfaceTypeDefinitions.map { i =>
+                renderSelectorObject(i.name, i.name, i.name, specs(i.fields), implementorsOf(i.name), emitTrait = true)
+            }
+            val unions = schema.unionTypeDefinitions.map { u =>
+                renderSelectorObject(u.name, u.name, u.name, Nil, u.memberTypes, emitTrait = true)
+            }
+            objects ++ interfaces ++ unions
         end emitSelectors
 
-        /** Render the selector object of a GraphQL union: its own phantom `Origin`
-          * marker plus one `on<Member>` inline-fragment branch per member type. A
-          * branch decodes to `Maybe[A]` (`Present` iff the object's `__typename` is
-          * that member), and branches compose with `~`/chaining like fields, so a
-          * union selection reads `PlayableItem.onTrack(_.name) ~
-          * PlayableItem.onEpisode(_.name)` or, chained inside a parent lambda,
-          * `_.item(_.onTrack(_.name).onEpisode(_.name))`. Both the value form and
-          * the lambda form are plain overloads — no `$sel` indirection, because
-          * branches take no arguments (so no default-argument collision exists).
+        /** The `on<Member>` inline-fragment branch of a union or interface `origin` onto
+          * object type `member`. A branch decodes to `Maybe[A]` (`Present` iff the
+          * object's `__typename` is that member), and branches compose with
+          * `~`/chaining like fields, so a union selection reads
+          * `PlayableItem.onTrack(_.name) ~ PlayableItem.onEpisode(_.name)` or, chained
+          * inside a parent lambda, `_.item(_.onTrack(_.name).onEpisode(_.name))`. Both
+          * the value form and the lambda form are plain overloads — no `$sel`
+          * indirection, because branches take no arguments (so no default-argument
+          * collision exists).
           */
-        private def renderUnionObject(u: UnionTypeDefinition): GeneratedSource =
-            val name = u.name
-            val branches = u.memberTypes.map { member =>
-                val label = s"on$member"
-                s"""def $label[A](sel: SelectionBuilder.Bidirectional[$member, A]): SelectionBuilder.Fields[$name, ($label: Maybe[A])] =
-           |  SelectionBuilder.onType("$member", sel)
-           |
-           |def $label[A](build: SelectionBuilder.Fields[$member, scala.NamedTuple.Empty] => SelectionBuilder.Bidirectional[$member, A]): SelectionBuilder.Fields[$name, ($label: Maybe[A])] =
-           |  SelectionBuilder.onType("$member", build(SelectionBuilder.empty))""".stripMargin
-            }.mkString("\n\n")
-            val chainAccessors = u.memberTypes.map { member =>
-                val label = s"on$member"
-                s"""def $label[B](sub: SelectionBuilder.Fields[$member, scala.NamedTuple.Empty] => SelectionBuilder.Bidirectional[$member, B]): SelectionBuilder.Fields[$name, scala.NamedTuple.Concat[Acc, ($label: Maybe[B])]] =
-           |  sb ~ $name.$label(sub(SelectionBuilder.empty))""".stripMargin
-            }.mkString("\n")
-            val chainBlock =
-                s"""extension [Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder.Fields[$name, Acc])
-           |${indent(chainAccessors, 2)}""".stripMargin
-            val body = s"given TypeName[$name] = TypeName(\"$name\")\n\n$branches\n\n$chainBlock"
-            val contents =
-                s"""package ${config.packageName}
-           |
-           |import kyo.Maybe
-           |import kyo.apollo.api.*
-           |
-           |// GENERATED by apollo-codegen: union selectors for `$name`. DO NOT EDIT.
-           |sealed trait $name
-           |
-           |object $name:
-           |${indent(body, 2)}
-           |""".stripMargin
-            GeneratedSource(s"$name.scala", config.packageName, contents)
-        end renderUnionObject
+        private def branchMethods(origin: String, member: String): String =
+            val label = s"on$member"
+            s"""def $label[A](sel: SelectionBuilder.Bidirectional[$member, A]): SelectionBuilder.Fields[$origin, ($label: Maybe[A])] =
+         |  SelectionBuilder.onType("$member", sel)
+         |
+         |def $label[A](build: SelectionBuilder.Fields[$member, scala.NamedTuple.Empty] => SelectionBuilder.Bidirectional[$member, A]): SelectionBuilder.Fields[$origin, ($label: Maybe[A])] =
+         |  SelectionBuilder.onType("$member", build(SelectionBuilder.empty))""".stripMargin
+        end branchMethods
+
+        /** The chainable form of [[branchMethods]]: `sb.on<Member>(sub)` appends the branch. */
+        private def branchChainAccessor(origin: String, member: String): String =
+            val label = s"on$member"
+            s"""def $label[B](sub: SelectionBuilder.Fields[$member, scala.NamedTuple.Empty] => SelectionBuilder.Bidirectional[$member, B]): SelectionBuilder.Fields[$origin, scala.NamedTuple.Concat[Acc, ($label: Maybe[B])]] =
+         |  sb ~ $origin.$label(sub(SelectionBuilder.empty))""".stripMargin
+        end branchChainAccessor
 
         /** The `SchemaIdentities` source, or nothing when the schema has no non-root
           * object types (there would be no identities to collect).
@@ -469,16 +505,22 @@ object ApolloClientWriter:
 
         /** Render an `object <objectName>` of selector methods rooted in `originName`,
           * optionally preceded by its own `sealed trait <originName>` phantom marker
-          * (object types own theirs; the operation roots share `core`'s).
+          * (object, interface and union types own theirs; the operation roots share
+          * `core`'s). `branches` are the object types an `on<Type>` inline-fragment
+          * branch is emitted for: the implementors of an interface, the members of a
+          * union, none for an object type.
           */
         private def renderSelectorObject(
             objectName: String,
             originName: String,
             gqlType: String,
             fields: List[FieldSpec],
+            branches: List[String],
             emitTrait: Boolean
         ): GeneratedSource =
-            val methods = fields.map(selectorMethod(originName, _)).mkString("\n\n")
+            val methods =
+                (fields.map(selectorMethod(originName, _)) ++ branches.map(branchMethods(originName, _)))
+                    .mkString("\n\n")
             // Non-root object types (those owning a phantom trait) also get a `select`
             // entry point + one chainable accessor per field, so `Country.select.code`
             // and the lambda `_.code` read fields without repeating the type name.
@@ -491,7 +533,7 @@ object ApolloClientWriter:
             // block, appended for both object types and the operation roots.
             val clientBlock = clientAccessorBlock(originName, gqlType).map("\n\n" + _).getOrElse("")
             val serverBody =
-                if emitTrait then s"$typeNameGiven$methods\n\n${chainingBlock(originName, fields)}"
+                if emitTrait then s"$typeNameGiven$methods\n\n${chainingBlock(originName, fields, branches)}"
                 else methods
             val objectBody = s"$serverBody$clientBlock"
             val scalaTypes =
@@ -601,10 +643,10 @@ object ApolloClientWriter:
           * a match type fails to reduce once frozen in a `val`. The lambda form roots
           * in `empty` too but only ever appears inline, where reduction succeeds.
           */
-        private def chainingBlock(originName: String, fields: List[FieldSpec]): String =
+        private def chainingBlock(originName: String, fields: List[FieldSpec], branches: List[String]): String =
             val parts     = fields.map(chainAccessor(originName, _))
             val classes   = parts.flatMap(_._1)
-            val accessors = parts.map(_._2).mkString("\n")
+            val accessors = (parts.map(_._2) ++ branches.map(branchChainAccessor(originName, _))).mkString("\n")
             val ext =
                 s"""extension [Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder.Fields[$originName, Acc])
          |${indent(accessors, 2)}""".stripMargin
@@ -859,6 +901,7 @@ object ApolloClientWriter:
                     else if inputNames(name) then name // input case class emitted by writeSchemaTypes.
                     else if objectNames(name) then name
                     else if unionMembers.contains(name) then name // union marker trait emitted by emitSelectors.
+                    else if interfaceNames(name) then name        // interface marker trait emitted by emitSelectors.
                     else throw new IllegalStateException(s"no Scala type for `$name`, which passed type validation")
 
         /** Whether a GraphQL type reference is non-null (a required variable). */

@@ -3,10 +3,9 @@ package kyo.apollo.codegen
 /** Guards union emission: a GraphQL `union` gets its own selector source (a
   * phantom marker trait + one `on<Member>` inline-fragment branch per member,
   * value + lambda overloads, plus chainable accessors), and a field whose leaf
-  * type is a union is emitted as an OBJECT selector (nested selection) — not
-  * the scalar-`String` fallback unknown leaves get. Surfaced by the
-  * spotify-showcase schema (`union PlayableItem = Track | Episode`); the
-  * countries schema has no unions, so this path was previously dead.
+  * type is a union is emitted as an OBJECT selector (nested selection), never a
+  * scalar. Surfaced by the spotify-showcase schema (`union PlayableItem = Track |
+  * Episode`).
   */
 class UnionSelectorSpec extends kyo.test.Test[Any]:
 
