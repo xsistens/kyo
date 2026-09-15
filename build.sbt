@@ -3101,7 +3101,10 @@ lazy val `kyo-apollo-codegen` =
             libraryDependencies += "com.github.ghostdogpr" %% "caliban-tools" % "3.1.2",
             // The forked generator JVM: scala-library's LazyVals would otherwise print JDK 25's
             // sun.misc.Unsafe deprecation warning on every apolloGenerate run.
-            Compile / run / javaOptions += "--sun-misc-unsafe-memory-access=allow"
+            Compile / run / javaOptions += "--sun-misc-unsafe-memory-access=allow",
+            // The README's examples use generated sources, which this classpath never has;
+            // kyo-apollo-codegen-it validates it instead.
+            doctestSources := Seq.empty
         )
 
 lazy val apolloSchema = settingKey[File]("GraphQL schema SDL apolloGenerate generates kyo-apollo selectors from.")
@@ -3138,7 +3141,8 @@ lazy val apolloCodegenSettings = Seq(
 
 // Compile gate for kyo-apollo-codegen: generates from the bundled example schema on every
 // compile and compiles the output against kyo-apollo; its tests drive the generated
-// selectors through the real client. Not published.
+// selectors through the real client, and its doctest compiles kyo-apollo-codegen/README.md
+// against the generated sources. Not published.
 lazy val `kyo-apollo-codegen-it` =
     crossProject(JVMPlatform)
         .crossType(CrossType.Pure)
@@ -3158,7 +3162,8 @@ lazy val `kyo-apollo-codegen-it` =
                 "Country.isFavorite: Boolean = false",
                 "Country.tags: Chunk[String] = Chunk.empty",
                 "Query.cartOpen: Boolean = false"
-            )
+            ),
+            doctestSources := Seq((LocalRootProject / baseDirectory).value / "kyo-apollo-codegen" / "README.md")
         )
 
 // A standalone caliban GraphQL server (JVM-only, caliban is JVM-only) used as the shared
