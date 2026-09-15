@@ -3,7 +3,7 @@
 A GraphQL client for kyo, modelled on Apollo Client / apollo-kotlin: an inline
 selection DSL (`SelectionBuilder`), a normalized cache with declarative
 policies, incremental delivery (`@defer` / `@stream`), and `kyo-apollo-codegen`
-for schema-driven selector objects. See `docs/` for the design notes.
+for schema-driven selector objects.
 
 ## What a selection can do
 
