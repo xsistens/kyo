@@ -147,7 +147,7 @@ object QueryState:
       * one-shot `.response` or a subscription stream without re-deriving the
       * exception/errors/absent-data taxonomy.
       */
-    def of[D](response: ApolloResponse[D]): QueryState[D] = ApolloSignal.project(response)
+    def of[D](response: ApolloResponse[D])(using Frame): QueryState[D] = ApolloSignal.project(response)
 end QueryState
 
 /** Where the failure of a live operation's UPDATE goes: a `QueryState.Failure` that arrives after
@@ -311,7 +311,7 @@ object ApolloSignal:
       * [[QueryState.Failure]] carrying a [[DefaultApolloException]].
       * Total — a `Signal` needs a value for every emission, so there is no throw.
       */
-    private[kyo] def project[D](response: ApolloResponse[D]): QueryState[D] =
+    private[kyo] def project[D](response: ApolloResponse[D])(using Frame): QueryState[D] =
         response.error match
             case Present(gql: ApolloGraphQLException) =>
                 response.data match

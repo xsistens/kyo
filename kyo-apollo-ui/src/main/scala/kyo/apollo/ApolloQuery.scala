@@ -6,10 +6,10 @@ package kyo.apollo
 // `<` / `Async` / `Abort` / `Scope` / `Signal` / `Frame`.
 import kyo.*
 import kyo.apollo.ApolloCall
+import kyo.apollo.api.Operation
 import kyo.apollo.cache.normalized.FetchPolicy
 import kyo.apollo.cache.normalized.apolloStore
 import kyo.apollo.exception.ApolloException
-import kyo.apollo.exception.CacheMissException
 import kyo.apollo.exception.DefaultApolloException
 import kyo.apollo.network.ApolloResponse
 
@@ -269,29 +269,34 @@ final class RawQueryHandle[D] private[apollo] (
     /** Feed a subscription's events into this query's cached data — react's
       * `subscribeToMore`. Consumes `sub` as a live stream; for each event, reads the
       * current query data from the store, applies `merge(prev, event)`, and writes
-      * the result back — which re-emits [[state]]. If the query has no cached data
-      * yet, that event is skipped. Scope-bound: the subscription tears down when the
-      * enclosing `Scope` closes.
+      * the result back as one atomic store update — which re-emits [[state]]. If the
+      * query has no cached data yet, that event is skipped. `merge` must be pure: when
+      * another write lands between the read and the write, it is applied again to the
+      * newer data. Scope-bound: the subscription tears down when the enclosing `Scope`
+      * closes.
+      *
+      * A `.map` projection's operation decodes only and cannot be written back, so
+      * for such a query no event is merged; that is logged at debug level once.
       */
     def subscribeToMore[E](sub: ApolloCall[E])(merge: (D, E) => D)(using
         Frame,
         Tag[Emit[Chunk[ApolloResponse[E]]]]
     ): Unit < (Async & Scope) =
         val store = call.apolloClient.apolloStore
-        val op    = call.apolloRequest.operation
-        Fiber
-            .init(Scope.run(sub.stream.foreach { resp =>
-                resp.data match
-                    case Present(event) =>
-                        Sync.defer {
-                            try
-                                val current = store.readOperation(op)
-                                val _       = store.writeOperation(op, merge(current, event))
-                            catch case _: CacheMissException => ()
-                        }
-                    case Absent => Sync.defer(())
-            }))
-            .unit
+        call.requestBuilder.operation match
+            case op: Operation.Normalizable[D] =>
+                Fiber
+                    .init(Scope.run(sub.stream.foreach { resp =>
+                        resp.data match
+                            case Present(event) => store.updateOperation(op)(merge(_, event)).unit
+                            case Absent         => Kyo.unit
+                    }))
+                    .unit
+            case op =>
+                Log.debug(
+                    s"subscribeToMore: ${op.name} decodes only (a .map projection), so its cached data cannot be written and no event is merged"
+                )
+        end match
     end subscribeToMore
 
 end RawQueryHandle
@@ -337,12 +342,13 @@ private[apollo] def buildQueryHandle[D](
         activity <- Signal.initRef[Maybe[NetworkStatus]](Absent)
         handle = new RawQueryHandle(state, call, activity)
         // Register this live query so `client.refetchQueries` / `client.resetStore`
-        // can force a network refetch of it; de-register on Scope teardown.
-        dispose = call.apolloClient.activeQueries
-            .register(call.apolloRequest.operation.name, handle.refetch.unit)
-        // Tie any running poll loop AND the registration to this handle's Scope.
+        // can force a network refetch of it; the registration ends with this Scope.
+        // The registry takes the execute row only: a NetworkOnly refetch fails with
+        // nothing else, and `asExecuteFailure` states that in the type.
+        _ <- call.apolloClient.activeQueries
+            .register(call.requestBuilder.operation.name, ApolloEffect.asExecuteFailure(handle.refetch.unit))
+        // Tie any running poll loop to this handle's Scope.
         _ <- Scope.ensure(handle.stopPolling)
-        _ <- Scope.ensure(Sync.defer(dispose()))
     yield handle
 
 /** The result of [[useLazyQuery]] — react-apollo's `useLazyQuery` shape: a

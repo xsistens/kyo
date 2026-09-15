@@ -96,7 +96,7 @@ object MutationState:
       * `data` → [[Success]]; `data` with GraphQL `errors` → [[PartialData]]; absent
       * `data` → [[Failure]]. Total — a `Signal` needs a value for every emission.
       */
-    private[kyo] def fromResponse[D](resp: ApolloResponse[D]): MutationState[D] =
+    private[kyo] def fromResponse[D](resp: ApolloResponse[D])(using Frame): MutationState[D] =
         resp.error match
             case Present(gql: ApolloGraphQLException) =>
                 resp.data match

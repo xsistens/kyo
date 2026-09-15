@@ -8,6 +8,7 @@ import kyo.*
 import kyo.apollo.ApolloCall
 import kyo.apollo.ApolloClient
 import kyo.apollo.exception.ApolloException
+import kyo.apollo.exception.ApolloExecuteFailure
 import kyo.apollo.exception.ApolloGraphQLException
 import kyo.apollo.exception.DefaultApolloException
 import kyo.apollo.network.ApolloResponse
@@ -69,7 +70,7 @@ extension [D](call: ApolloCall[D])
         Frame,
         Tag[Emit[Chunk[ApolloResponse[D]]]]
     ): D < (Async & Abort[ApolloException]) =
-        val policy = call.apolloRequest.executionContext.get(ErrorPolicy).getOrElse(ErrorPolicy.Default)
+        val policy = call.requestBuilder.executionContext.get(ErrorPolicy).getOrElse(ErrorPolicy.Default)
         call.response.map(resp => Abort.get(ApolloEffect.projectData(resp, policy)))
     end data
 
@@ -96,9 +97,9 @@ extension [D](call: ApolloCall[D])
         Abort.run[Throwable](Scope.run(call.execute)).map {
             case Result.Success(resp) => resp
             case Result.Failure(cause) =>
-                ApolloResponse.fromException[D](Uuid.random(), ApolloEffect.asApolloException(cause))
+                Uuid.random.map(ApolloResponse.fromException[D](_, ApolloEffect.asApolloException(cause)))
             case Result.Panic(cause) =>
-                ApolloResponse.fromException[D](Uuid.random(), ApolloEffect.asApolloException(cause))
+                Uuid.random.map(ApolloResponse.fromException[D](_, ApolloEffect.asApolloException(cause)))
         }
 
 end extension
@@ -123,7 +124,7 @@ object ApolloEffect:
     private[kyo] def projectData[D](
         resp: ApolloResponse[D],
         errorPolicy: ErrorPolicy = ErrorPolicy.None
-    ): Either[ApolloException, D] =
+    )(using Frame): Either[ApolloException, D] =
         def noData = DefaultApolloException("The server did not return any data")
         resp.error match
             case Present(gql: ApolloGraphQLException) =>
@@ -142,7 +143,7 @@ object ApolloEffect:
       * wiring failure, since ordinary transport errors already arrive as response
       * values.
       */
-    private[kyo] def asApolloException(cause: Throwable): ApolloException =
+    private[kyo] def asApolloException(cause: Throwable)(using Frame): ApolloException =
         cause match
             case ae: ApolloException => ae
             case other =>
@@ -150,24 +151,35 @@ object ApolloEffect:
                     "Apollo call failed before producing a response",
                     other
                 )
+
+    /** Narrow `effect`'s failures to the execute row a refetch registered with the
+      * client's [[ActiveQueryRegistry]] must carry: an [[ApolloExecuteFailure]] passes
+      * through unchanged, any other [[ApolloException]] (a cache read failure, which a
+      * `NetworkOnly` fetch does not produce) becomes a [[DefaultApolloException]]
+      * carrying it as the cause, and a panic stays a panic.
+      */
+    private[kyo] def asExecuteFailure[A, S](effect: A < (S & Abort[ApolloException]))(using
+        Frame
+    ): A < (S & Abort[ApolloExecuteFailure]) =
+        Abort.recover[ApolloException] { (e: ApolloException) =>
+            e match
+                case execute: ApolloExecuteFailure => Abort.fail(execute)
+                case other                         => Abort.fail(DefaultApolloException(other.message, other))
+        }(effect)
 end ApolloEffect
 
-/** `Scope`-managed acquisition of an [[kyo.apollo.ApolloClient]].
+/** `Scope`-owned creation of an [[kyo.apollo.ApolloClient]].
   *
-  * Ties client lifecycle — in particular the shared subscription WebSocket the
-  * client tears down in `close()` — to a Kyo `Scope`, so the socket is released
-  * deterministically (LIFO, exactly once) when the enclosing scope exits, rather
-  * than relying on a caller to remember `close()`.
+  * A client owns the shared subscription WebSocket; creating it through
+  * [[ApolloClient.init]] ties that socket to the enclosing `Scope`, which closes the
+  * client when it exits — rather than relying on a caller to remember `close`.
   */
 object ApolloClientResource:
 
-    /** Acquire a client whose `close()` is registered with the current `Scope`.
-      *
-      * `build` is evaluated at acquisition; the resulting client's `close()` runs
-      * on scope teardown. Yields `ApolloClient < (Async & Scope)` — bind it inside
-      * a `Scope.run { … }` and the WebSocket transport is cleaned up when that
-      * block completes, even on failure.
+    /** Create a client for `config` owned by the current `Scope` — bind it inside a
+      * `Scope.run { … }` and the WebSocket transport is cleaned up when that block
+      * completes, even on failure. The same as [[ApolloClient.init]].
       */
-    def acquire(build: => ApolloClient)(using Frame): ApolloClient < (Async & Scope) =
-        Scope.acquireRelease(build)(client => client.closeAndAwait)
+    def acquire(config: ApolloClient.Config)(using Frame): ApolloClient < (Sync & Scope) =
+        ApolloClient.init(config)
 end ApolloClientResource

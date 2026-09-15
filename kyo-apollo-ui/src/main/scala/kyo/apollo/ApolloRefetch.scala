@@ -23,7 +23,7 @@ extension (client: ApolloClient)
       * `state`). Names are GraphQL operation names (e.g. `"GetTodos"`).
       */
     def refetchQueries(names: String*)(using Frame): Unit < (Async & Abort[ApolloException]) =
-        Kyo.foreachDiscard(client.activeQueries.selected(names.toSet))(refetch => refetch)
+        client.activeQueries.selected(names.toSet).map(Kyo.foreachDiscard(_)(refetch => refetch))
 
     /** react-apollo's `client.resetStore`: clear the whole normalized cache, run any
       * registered reset hooks, then refetch every active query from the network so
@@ -31,9 +31,8 @@ extension (client: ApolloClient)
       * without this the watchers would not re-emit.)
       */
     def resetStore(using Frame): Unit < (Async & Abort[ApolloException]) =
-        Sync
-            .defer(client.apolloStore.clearAll())
-            .andThen(Kyo.foreachDiscard(client.activeQueries.resetHookEffects)(hook => hook))
-            .andThen(Kyo.foreachDiscard(client.activeQueries.selected(Set.empty))(refetch => refetch))
+        client.apolloStore.clearAll
+            .andThen(client.activeQueries.resetHookEffects.map(Kyo.foreachDiscard(_)(hook => hook)))
+            .andThen(client.activeQueries.selected(Set.empty).map(Kyo.foreachDiscard(_)(refetch => refetch)))
 
 end extension

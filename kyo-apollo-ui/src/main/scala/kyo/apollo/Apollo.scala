@@ -1,24 +1,27 @@
 package kyo.apollo
 
 import kyo.*
+import kyo.apollo.cache.normalized.ApolloStore
 import kyo.apollo.cache.normalized.FetchPolicy
 import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.cache.normalized.api.EmbeddedFragment
 import kyo.apollo.cache.normalized.api.EntityFragment
 import kyo.apollo.cache.normalized.api.Fragment
 import kyo.apollo.cache.normalized.apolloStore
+import kyo.apollo.cache.normalized.normalizedStore
 import kyo.apollo.cache.normalized.watch
-import kyo.apollo.exception.ApolloConfigException
 import kyo.apollo.exception.ApolloException
-import kyo.apollo.exception.CacheMissException
+import kyo.apollo.exception.ApolloParseException
+import kyo.apollo.exception.CacheReadFailure
 import kyo.apollo.exception.DefaultApolloException
 import kyo.apollo.network.ApolloResponse
 import scala.NamedTuple.AnyNamedTuple
+import scala.annotation.tailrec
 
 /** The `Apollo` namespace — the constructor entry points of the `kyo-ui` binding.
   *
   * Every operation that turns a prepared [[ApolloCall]] (or a [[Fragment]], or a
-  * builder configuration) into a running/reactive result lives here as
+  * client configuration) into a running/reactive result lives here as
   * `Apollo.<verb>(…)`: the query/mutation/fragment/pagination handles, the reactive
   * `Signal` builders (`watchSignal`/`pollingSignal`/`subscribe`), and client
   * construction (`client`/`clientLayer`). Fluent per-call configuration
@@ -108,7 +111,7 @@ object Apollo:
                 run = (input: I) =>
                     val call = build(input)
                     val policy =
-                        call.apolloRequest.executionContext.get(ErrorPolicy).getOrElse(ErrorPolicy.Default)
+                        call.requestBuilder.executionContext.get(ErrorPolicy).getOrElse(ErrorPolicy.Default)
                     // Arm `Loading`, run ONCE via `.response` (total — keeps partial data), then
                     // project the response into `state` AND yield the strict `.data` outcome
                     // (honoring `errorPolicy`), re-raising on `Abort` after recording it.
@@ -129,7 +132,9 @@ object Apollo:
     /** Reactively read one cached entity as a [[Signal]] of [[Maybe]] — react-apollo's
       * `useFragment`. Seeds the current value and re-reads on every change to a key
       * the read depended on; the change listener is dropped when the enclosing `Scope`
-      * is released. The [[ApolloClient]] is taken as a `given`.
+      * is released. Until then the keys of the last read stay retained in the store,
+      * so a garbage collection keeps what the signal shows. The [[ApolloClient]] is
+      * taken as a `given`.
       */
     def fragment[D](fragment: Fragment[D], cacheKey: CacheKey)(using
         client: ApolloClient,
@@ -137,41 +142,15 @@ object Apollo:
         canEqual: CanEqual[D, D]
     ): Signal[Maybe[D]] < (Async & Scope) =
         val store = client.apolloStore
-        // A plain (non-effect) read: the denormalized value + the keys it depended on,
-        // or Absent + just the entity key on a cache miss.
-        def read(): (Maybe[D], Set[String]) =
-            try
-                val (data, keys) = store.readFragmentWithKeys(fragment, cacheKey)
-                (Maybe(data), keys + cacheKey.key)
-            catch case _: CacheMissException => (Maybe.empty, Set(cacheKey.key))
-
-        val (initial, initialKeys) = read()
-        Signal.initRef[Maybe[D]](initial).map { ref =>
-            Channel.initUnscoped[Set[String]](Int.MaxValue).map { channel =>
-                given AllowUnsafe = AllowUnsafe.embrace.danger
-                // Push every change notification into the channel (synchronous callback).
-                val unsubscribe = store.addChangedKeysListener { changed =>
-                    val _ = channel.unsafe.offer(changed)
-                }
-                // Consume: when a change touches a key this read depends on, re-read and
-                // update the signal (tracking the new dependent-key set).
-                var watched = initialKeys
-                val consume = channel.streamUntilClosed().foreach { changed =>
-                    if changed.exists(watched) then
-                        val (next, keys) = read()
-                        watched = keys
-                        ref.set(next)
-                    else Sync.defer(())
-                }
-                // Teardown on Scope exit: drop the listener and close the channel (which
-                // ends `streamUntilClosed`, so the consume fiber completes).
-                Scope
-                    .ensure(Sync.defer {
-                        unsubscribe()
-                        val _ = channel.unsafe.close()
-                    })
-                    .andThen(UI.fork(consume))
-                    .andThen(ref)
+        // The denormalized value and the keys it depended on, or Absent and just the
+        // entity key on a cache miss. A decode defect is not a miss: it stays a panic.
+        val read: (Maybe[D], Set[CacheKey]) < Sync =
+            Abort.recover[CacheReadFailure](_ => (Maybe.empty[D], Set(cacheKey)))(
+                store.readFragmentWithKeys(fragment, cacheKey).map((data, keys) => (Maybe(data), keys + cacheKey))
+            )
+        read.map { (initial, initialKeys) =>
+            Signal.initRef[Maybe[D]](initial).map { ref =>
+                watchStore(store, initialKeys)(read.map(Present(_)))(next => ref.set(next)).andThen(ref)
             }
         }
     end fragment
@@ -182,76 +161,90 @@ object Apollo:
       * can pass it here (or to the component that declared the fragment) but never
       * read through it.
       *
-      * Total, unlike the [[Fragment]]+[[CacheKey]] overload's `Maybe`: the ref was
-      * decoded from a response that contained the fragment's fields, so there is
-      * always something to render — the signal seeds from the entity record when
-      * the cache has it and from the ref's own captured slice when it does not
-      * (evicted, or a cache-less client). Later cache changes touching a dependent
-      * key re-read and re-emit; a re-read that misses keeps the last value rather
-      * than blanking a working view.
+      * No `Maybe`, unlike the [[Fragment]]+[[CacheKey]] overload: the ref captured
+      * the response slice the fragment selected, so there is always something to
+      * render — the signal seeds from the entity record when the cache has it and
+      * from the ref's own slice when it does not (evicted, a type the store's key
+      * generator gives no identity, or a cache-less client). Later cache changes
+      * touching a dependent key re-read and re-emit; a re-read that misses keeps the
+      * last value rather than blanking a working view. A slice that does not decode
+      * as the fragment's fields aborts with an [[ApolloParseException]].
       */
     def fragment[Origin, D <: AnyNamedTuple](ref: EntityFragment[Origin, D]#Ref)(using
         client: ApolloClient,
         frame: Frame,
         canEqual: CanEqual[D, D]
-    ): Signal[D] < (Async & Scope) =
-        val definition = ref.definition
+    ): Signal[D] < (Async & Scope & Abort[ApolloParseException]) =
         // A cache-less client has no store to watch — the ref's captured slice IS
-        // the data, so the signal degenerates to a constant. This is what keeps the
-        // masked read total instead of inheriting `apolloStore`'s throw.
-        val maybeStore =
-            try Some(client.apolloStore)
-            catch case _: IllegalStateException => None
-        maybeStore match
-            case None        => Signal.initRef[D](ref.decoded)
-            case Some(store) => fragmentSignal(ref, definition, store)
+        // the data, so the signal degenerates to a constant.
+        client.normalizedStore match
+            case Absent         => Abort.get(ref.decoded).map(Signal.initRef[D](_))
+            case Present(store) => fragmentSignal(ref, store)
     end fragment
 
     private def fragmentSignal[Origin, D <: AnyNamedTuple](
         ref: EntityFragment[Origin, D]#Ref,
-        definition: EntityFragment[Origin, D],
-        store: kyo.apollo.cache.normalized.ApolloStore
+        store: ApolloStore
     )(using
         frame: Frame,
         canEqual: CanEqual[D, D]
-    ): Signal[D] < (Async & Scope) =
-        def read(): Maybe[(D, Set[String])] =
-            try
-                val (data, keys) = store.readFragmentWithKeys(definition.cacheFragment, ref.key)
-                Present((data, keys + ref.key.key))
-            catch case _: CacheMissException => Absent
-
-        val (initial, initialKeys) = read() match
-            case Present((data, keys)) => (data, keys)
-            case Absent                => (ref.decoded, Set(ref.key.key))
-        Signal.initRef[D](initial).map { signalRef =>
-            Channel.initUnscoped[Set[String]](Int.MaxValue).map { channel =>
-                given AllowUnsafe = AllowUnsafe.embrace.danger
-                val unsubscribe = store.addChangedKeysListener { changed =>
-                    val _ = channel.unsafe.offer(changed)
+    ): Signal[D] < (Async & Scope & Abort[ApolloParseException]) =
+        // The ref's record key comes from the generator that normalized the response.
+        Abort.run[CacheReadFailure](store.keyOf(ref.typeName, ref.raw)).map {
+            case Result.Success(key) =>
+                // The record's value and the keys it depended on; Absent on a miss.
+                val read: Maybe[(D, Set[CacheKey])] < Sync =
+                    Abort.recover[CacheReadFailure](_ => Maybe.empty[(D, Set[CacheKey])])(
+                        store.readFragmentWithKeys(ref.definition.cacheFragment, key)
+                            .map((data, keys) => Maybe((data, keys + key)))
+                    )
+                read.map {
+                    case Present((data, keys)) => (data, keys)
+                    case Absent                => Abort.get(ref.decoded).map((_, Set(key)))
+                }.map { (initial, initialKeys) =>
+                    Signal.initRef[D](initial).map { out =>
+                        // A miss keeps the last value (an eviction mid-life) and the
+                        // dependent keys, so a re-population re-emits.
+                        watchStore(store, initialKeys)(read)(next => out.set(next)).andThen(out)
+                    }
                 }
-                var watched = initialKeys
-                val consume = channel.streamUntilClosed().foreach { changed =>
-                    if changed.exists(watched) then
-                        read() match
-                            case Present((next, keys)) =>
-                                watched = keys
-                                signalRef.set(next)
-                            // Keep the last value on a miss (an eviction mid-life); the
-                            // dependent-key set keeps watching, so a re-population re-emits.
-                            case Absent => Sync.defer(())
-                    else Sync.defer(())
-                }
-                Scope
-                    .ensure(Sync.defer {
-                        unsubscribe()
-                        val _ = channel.unsafe.close()
-                    })
-                    .andThen(UI.fork(consume))
-                    .andThen(signalRef)
-            }
+            // The store's generator gives this type no identity, so there is no record
+            // to watch: the ref's slice is the data.
+            case Result.Failure(_)    => Abort.get(ref.decoded).map(Signal.initRef[D](_))
+            case Result.Panic(defect) => Abort.panic(defect)
         }
     end fragmentSignal
+
+    /** Keep a fragment signal current with `store`: every change that touches a key
+      * the last read depended on runs `reread`, which answers the next value and its
+      * keys (handed to `publish` and watched from then on), or `Absent` to keep the
+      * last value and the keys. The watched keys start at `initialKeys` and stay
+      * retained in the store until the enclosing `Scope` closes, which also drops the
+      * change listener and ends the consumer.
+      */
+    private def watchStore[V](store: ApolloStore, initialKeys: Set[CacheKey])(
+        reread: Maybe[(V, Set[CacheKey])] < Sync
+    )(publish: V => Unit < Sync)(using Frame): Unit < (Async & Scope) =
+        RetainedKeys.init(store, initialKeys).map { retained =>
+            Channel.initUnscoped[Set[CacheKey]](Int.MaxValue).map { channel =>
+                val consume =
+                    channel.streamUntilClosed().fold(initialKeys) { (watched, changed) =>
+                        if !changed.exists(watched) then watched
+                        else
+                            reread.map {
+                                case Present((next, keys)) => retained.hold(keys).andThen(publish(next)).andThen(keys)
+                                case Absent                => watched
+                            }
+                    }
+                // Closing the channel ends `streamUntilClosed`, so the consumer completes.
+                Scope
+                    .ensure(channel.close)
+                    .andThen(store.addChangedKeysListener(changed => Abort.run[Closed](channel.offer(changed)).unit))
+                    .andThen(UI.fork(consume))
+                    .unit
+            }
+        }
+    end watchStore
 
     /** Reactively read a LIST of masked refs — [[fragment]] for a collection, and
       * the shape a table of masked rows actually has.
@@ -281,8 +274,10 @@ object Apollo:
       * Total in the same way [[fragment]] is: a row seeds from the entity record when
       * the cache has it, from the last value it read when a later re-read misses (an
       * eviction mid-life), and from the ref's own captured slice when it never had
-      * one. A cache-less client has no store to watch, so the values are the refs'
-      * slices and only the list moves.
+      * one or its type has no identity in the store. A cache-less client has no store
+      * to watch, so the values are the refs' slices and only the list moves. A slice
+      * that does not decode aborts the seed, or fails the driver later, with an
+      * [[ApolloParseException]].
       */
     private def fragmentList[Origin, D <: AnyNamedTuple, A, B](items: Signal[Seq[A]])(
         refOf: A => Maybe[EntityFragment[Origin, D]#Ref]
@@ -291,82 +286,72 @@ object Apollo:
         frame: Frame,
         canEqualD: CanEqual[D, D],
         canEqualB: CanEqual[B, B]
-    ): Signal[Seq[B]] < (Async & Scope) =
-        val maybeStore =
-            try Some(client.apolloStore)
-            catch case _: IllegalStateException => None
+    ): Signal[Seq[B]] < (Async & Scope & Abort[ApolloParseException]) =
+        val maybeStore = client.normalizedStore
 
-        // One row: the store's value plus the keys it depended on, or None on a miss.
-        def read(ref: EntityFragment[Origin, D]#Ref): Option[(D, Set[String])] =
-            maybeStore.flatMap { store =>
-                try
-                    val (data, keys) = store.readFragmentWithKeys(ref.definition.cacheFragment, ref.key)
-                    Some((data, keys + ref.key.key))
-                catch case _: CacheMissException => None
-            }
+        // What one element reads from the store. The reads are effects, so every row
+        // is read first and the projection over the reads stays pure.
+        def readRow(a: A): Apollo.RowRead[Origin, D] < Sync =
+            refOf(a) match
+                case Absent => Apollo.RowRead.Plain()
+                case Present(ref) =>
+                    maybeStore match
+                        case Absent => Apollo.RowRead.Unkeyed(ref)
+                        case Present(store) =>
+                            Abort.run[CacheReadFailure](store.keyOf(ref.typeName, ref.raw)).map {
+                                case Result.Success(key) =>
+                                    Abort.recover[CacheReadFailure](_ => Apollo.RowRead.Miss(key, ref))(
+                                        store.readFragmentWithKeys(ref.definition.cacheFragment, key)
+                                            .map((data, keys) => Apollo.RowRead.Hit(key, data, keys + key))
+                                    )
+                                case Result.Failure(_)    => Apollo.RowRead.Unkeyed(ref)
+                                case Result.Panic(defect) => Abort.panic(defect)
+                            }
 
-        // Pure, so it can run inside `AtomicRef.updateAndGet` (which may retry) and so
-        // the two drivers below cannot interleave a half-updated key set.
-        def project(as: Seq[A])(prev: Apollo.FragmentList[D, B]): Apollo.FragmentList[D, B] =
-            var keys  = Set.empty[String]
-            var known = prev.last
-            val rows = as.map { a =>
-                refOf(a) match
-                    case Absent => row(a, Absent)
-                    case Present(ref) =>
-                        val id = ref.key.key
-                        val d = read(ref) match
-                            case Some((data, ks)) =>
-                                keys = keys ++ ks
-                                known = known.updated(id, data)
-                                data
-                            case None =>
-                                keys = keys + id
-                                known.getOrElse(id, ref.decoded)
-                        row(a, Present(d))
-            }
-            // Values are remembered only for rows still in the list, so a list that
-            // scrolls forever does not accumulate the ones that left.
-            val live = as.flatMap(a => refOf(a).map(_.key.key)).toSet
-            Apollo.FragmentList(keys, known.view.filterKeys(live).toMap, rows)
-        end project
+        def reproject(as: Seq[A], last: Map[CacheKey, D]): Apollo.FragmentList[D, B] < (Sync & Abort[ApolloParseException]) =
+            Kyo.foreach(as)(a => readRow(a).map((a, _))).map(reads => Abort.get(Apollo.projectRows(reads, last)(row)))
 
         items.current.map { initial =>
-            AtomicRef.init(project(initial)(Apollo.FragmentList(Set.empty, Map.empty, Seq.empty[B]))).map { state =>
-                state.get.map { seeded =>
-                    Signal.initRef[Seq[B]](seeded.rows).map { out =>
-                        def reproject: Unit < Async =
-                            items.current.map(as => state.updateAndGet(project(as)).map(s => out.set(s.rows)))
-
-                        // The list driver. Seeded with `initial`, so the value already
-                        // projected above is not projected a second time.
-                        val follow = items.observe(Present(initial), Signal.defaultRepairInterval)(_ => reproject)
-
-                        maybeStore match
-                            case None => UI.fork(follow).andThen(out)
-                            case Some(store) =>
-                                Channel.initUnscoped[Set[String]](Int.MaxValue).map { channel =>
-                                    given AllowUnsafe = AllowUnsafe.embrace.danger
-                                    val unsubscribe = store.addChangedKeysListener { changed =>
-                                        val _ = channel.unsafe.offer(changed)
-                                    }
-                                    val consume = channel.streamUntilClosed().foreach { changed =>
-                                        state.get.map { s =>
-                                            if changed.exists(s.watched) then reproject
-                                            else Sync.defer(())
+            reproject(initial, Map.empty).map { seeded =>
+                Signal.initRef[Seq[B]](seeded.rows).map { out =>
+                    maybeStore match
+                        case Absent =>
+                            // The list driver alone. Seeded with `initial`, so the value
+                            // already projected above is not projected a second time.
+                            UI.fork(items.observe(Present(initial), Signal.defaultRepairInterval) { as =>
+                                reproject(as, Map.empty).map(next => out.set(next.rows))
+                            }).andThen(out)
+                        case Present(store) =>
+                            RetainedKeys.init(store, seeded.watched).map { retained =>
+                                // `Absent` says the list moved, `Present` names the keys a
+                                // write changed. ONE consumer re-projects for both, so two
+                                // re-projections never race to install their key sets.
+                                Channel.initUnscoped[Maybe[Set[CacheKey]]](Int.MaxValue).map { channel =>
+                                    def offer(event: Maybe[Set[CacheKey]]): Unit < Sync =
+                                        Abort.run[Closed](channel.offer(event)).unit
+                                    val consume =
+                                        channel.streamUntilClosed().fold(seeded) { (state, event) =>
+                                            val affected = event match
+                                                case Absent           => true
+                                                case Present(changed) => changed.exists(state.watched)
+                                            if !affected then state
+                                            else
+                                                items.current.map(as => reproject(as, state.last)).map { next =>
+                                                    retained.hold(next.watched).andThen(out.set(next.rows)).andThen(next)
+                                                }
+                                            end if
                                         }
-                                    }
                                     Scope
-                                        .ensure(Sync.defer {
-                                            unsubscribe()
-                                            val _ = channel.unsafe.close()
-                                        })
+                                        .ensure(channel.close)
+                                        .andThen(store.addChangedKeysListener(changed => offer(Present(changed))))
                                         .andThen(UI.fork(consume))
-                                        .andThen(UI.fork(follow))
+                                        .andThen(UI.fork(items.observe(Present(initial), Signal.defaultRepairInterval)(_ =>
+                                            offer(Absent)
+                                        )))
                                         .andThen(out)
                                 }
-                        end match
-                    }
+                            }
+                    end match
                 }
             }
         }
@@ -392,7 +377,7 @@ object Apollo:
         frame: Frame,
         canEqualD: CanEqual[D, D],
         canEqualB: CanEqual[B, B]
-    ): Signal[Seq[B]] < (Async & Scope) =
+    ): Signal[Seq[B]] < (Async & Scope & Abort[ApolloParseException]) =
         fragmentList(items)(refOf) { (a, d) =>
             d match
                 case Present(v) => row(a, v)
@@ -413,7 +398,7 @@ object Apollo:
         client: ApolloClient,
         frame: Frame,
         canEqualD: CanEqual[D, D]
-    ): Signal[Seq[D]] < (Async & Scope) =
+    ): Signal[Seq[D]] < (Async & Scope & Abort[ApolloParseException]) =
         // `refOf` answers `Present` for every element, so the core never reaches the
         // Absent branch; there is no value of `D` to put there and none is needed.
         fragmentList[Origin, D, fragment.Ref, D](refs)(Present(_)) { (_, d) =>
@@ -423,13 +408,15 @@ object Apollo:
     /** Read a masked embedded fragment's ref — the value-carrying counterpart of
       * the entity overload. The object has no cache identity, so there is nothing
       * to watch: the signal is constant, and updates arrive the way the value did —
-      * through the parent's reactivity re-rendering the child with a fresh ref.
+      * through the parent's reactivity re-rendering the child with a fresh ref. A
+      * value that does not decode as the fragment's fields aborts with an
+      * [[ApolloParseException]].
       */
     def fragment[Origin, D <: AnyNamedTuple](ref: EmbeddedFragment[Origin, D]#Ref)(using
         frame: Frame,
         canEqual: CanEqual[D, D]
-    ): Signal[D] < Sync =
-        Signal.initRef[D](ref.value)
+    ): Signal[D] < (Sync & Abort[ApolloParseException]) =
+        Abort.get(ref.value).map(Signal.initRef[D](_))
 
     // --- Pagination ----------------------------------------------------------
 
@@ -500,16 +487,16 @@ object Apollo:
         Signal.initRef[C](initial).map { cursors =>
             val refetch: C => Unit < (Async & Abort[ApolloException]) =
                 c => page(c).fetchPolicy(FetchPolicy.NetworkOnly).data.unit
-            val advance: ((C, D) => Option[C]) => (Unit < (Async & Abort[ApolloException])) =
+            val advance: ((C, D) => Maybe[C]) => (Unit < (Async & Abort[ApolloException])) =
                 reduce =>
                     cursors.current.map { c =>
                         state.current.map { qs =>
-                            val next: Option[C] = PaginatedQuery.dataOf(qs) match
-                                case Some(d) => reduce(c, d)
-                                case None    => None
+                            val next: Maybe[C] = PaginatedQuery.dataOf(qs) match
+                                case Present(d) => reduce(c, d)
+                                case Absent     => Absent
                             next match
-                                case Some(c2) => cursors.set(c2).andThen(refetch(c2))
-                                case None     => ()
+                                case Present(c2) => cursors.set(c2).andThen(refetch(c2))
+                                case Absent      => ()
                         }
                     }
             new PaginatedQuery(state, advance)
@@ -559,22 +546,22 @@ object Apollo:
                 )
             )
         yield
-            val advance: ((C, D) => Option[C]) => (Unit < (Async & Abort[ApolloException])) =
+            val advance: ((C, D) => Maybe[C]) => (Unit < (Async & Abort[ApolloException])) =
                 reduce =>
                     values.current.map {
                         case Absent => ()
                         case Present(v) =>
                             cursors.current.map { c =>
                                 ref.current.map { qs =>
-                                    val next: Option[C] = PaginatedQuery.dataOf(qs) match
-                                        case Some(d) => reduce(c, d)
-                                        case None    => None
+                                    val next: Maybe[C] = PaginatedQuery.dataOf(qs) match
+                                        case Present(d) => reduce(c, d)
+                                        case Absent     => Absent
                                     next match
-                                        case Some(c2) =>
+                                        case Present(c2) =>
                                             cursors.set(c2).andThen(
                                                 page(v, c2).fetchPolicy(FetchPolicy.NetworkOnly).data.unit
                                             )
-                                        case None => ()
+                                        case Absent => ()
                                     end match
                                 }
                             }
@@ -584,33 +571,33 @@ object Apollo:
     end paginatedQuery
 
     /** Prepare a paginated query with a single connection — the sugar over the
-      * general form. `page(None)` is the first page; `page(Some(cursor))` each next
-      * one. Yields a flat [[PaginatedQueryHandle]] whose `fetchMore` advances it.
+      * general form. `page(Absent)` is the first page; `page(Present(cursor))` each
+      * next one. Yields a flat [[PaginatedQueryHandle]] whose `fetchMore` advances it.
       */
-    def paginatedQuery[D](page: Option[String] => ApolloCall[D])(
-        cursorOf: D => Option[String]
+    def paginatedQuery[D](page: Maybe[String] => ApolloCall[D])(
+        cursorOf: D => Maybe[String]
     )(using
         Frame,
         Tag[Emit[Chunk[ApolloResponse[D]]]],
         CanEqual[D, D]
     ): PaginatedQueryHandle[D] < (Async & Scope) =
-        paginatedQuery[D, Option[String]](initial = None)(page).map(_.singleConnection(cursorOf))
+        paginatedQuery[D, Maybe[String]](initial = Absent)(page).map(_.singleConnection(cursorOf))
 
     /** The single-connection sugar with a live `skip` — [[paginatedQuery]]'s gate,
       * yielding the flat handle rather than making the caller re-assemble one.
       */
     def paginatedQuery[D](
-        page: Option[String] => ApolloCall[D],
+        page: Maybe[String] => ApolloCall[D],
         skip: Signal[Boolean],
         mode: SkipMode
     )(
-        cursorOf: D => Option[String]
+        cursorOf: D => Maybe[String]
     )(using
         Frame,
         Tag[Emit[Chunk[ApolloResponse[D]]]],
         CanEqual[D, D]
     ): PaginatedQueryHandle[D] < (Async & Scope) =
-        paginatedQuery[D, Option[String]](None, skip, mode)(page).map(_.singleConnection(cursorOf))
+        paginatedQuery[D, Maybe[String]](Absent, skip, mode)(page).map(_.singleConnection(cursorOf))
 
     // --- Preloading ------------------------------------------------------------
 
@@ -776,39 +763,112 @@ object Apollo:
 
     // --- Client construction -------------------------------------------------
 
-    /** The blessed effectful client constructor: configure a fresh
-      * [[ApolloClient.Builder]], validate it without throwing
-      * ([[ApolloClient.Builder.buildResult]] → `Abort`), and acquire the built client
-      * on the current `Scope` (so its socket is released on teardown) — a `def init`
-      * shape returning `… < (Async & Scope & Abort[ApolloConfigException])`,
-      * mirroring `HttpServer.init`.
+    /** The blessed effectful client constructor: create a client for `config` owned
+      * by the current `Scope` (so its socket is released on teardown) — a `def init`
+      * shape, mirroring `HttpServer.init`. The configuration is a value whose one
+      * required field is `serverUrl`, so an incomplete one does not compile.
       *
       * {{{
-      * Apollo.client(_.serverUrl(url).webSocketServerUrl(wsUrl))
+      * Apollo.client(ApolloClient.Config(url).webSocketServerUrl(wsUrl))
       * }}}
       */
-    def client(
-        configure: ApolloClient.Builder => ApolloClient.Builder
-    )(using Frame): ApolloClient < (Async & Scope & Abort[ApolloConfigException]) =
-        Abort.get(configure(ApolloClient.builder()).buildResult()).map(ApolloClientResource.acquire(_))
+    def client(config: ApolloClient.Config)(using Frame): ApolloClient < (Sync & Scope) =
+        ApolloClientResource.acquire(config)
 
     /** The same construction as [[client]], packaged as a [[kyo.Layer]] so the client
       * is provided once at the app root through `Env[ApolloClient]` (the single blessed
       * provision channel) rather than threaded by hand.
       */
-    def clientLayer(
-        configure: ApolloClient.Builder => ApolloClient.Builder
-    )(using Frame): Layer[ApolloClient, Async & Scope & Abort[ApolloConfigException]] =
-        Layer(client(configure))
+    def clientLayer(config: ApolloClient.Config)(using Frame): Layer[ApolloClient, Sync & Scope] =
+        Layer(client(config))
 
     /** What [[fragments]] carries between emissions: the union of the dependent keys of
       * every row (so a change that touches none of them costs one set intersection), the
-      * last value read per row (so a re-read that misses keeps a working view instead of
-      * blanking it), and the projected rows themselves.
-      *
-      * One value in one `AtomicRef` and not three vars, because the list driver and the
-      * store driver are separate fibers and either may project.
+      * last value read per entity record (so a re-read that misses keeps a working view
+      * instead of blanking it), and the projected rows themselves.
       */
-    final private case class FragmentList[D, B](watched: Set[String], last: Map[String, D], rows: Seq[B])
+    final private case class FragmentList[D, B](watched: Set[CacheKey], last: Map[CacheKey, D], rows: Seq[B])
+
+    /** What one list element read from the store: no ref ([[Plain]]), a ref whose type
+      * has no identity in the store or whose client has no store ([[Unkeyed]]: its
+      * slice is the data), or a ref whose record was found ([[Hit]], with the keys the
+      * read depended on) or missed ([[Miss]]).
+      */
+    private enum RowRead[Origin, D <: AnyNamedTuple]:
+        case Plain()
+        case Unkeyed(ref: EntityFragment[Origin, D]#Ref)
+        case Hit(key: CacheKey, data: D, keys: Set[CacheKey])
+        case Miss(key: CacheKey, ref: EntityFragment[Origin, D]#Ref)
+    end RowRead
+
+    /** Project a list's rows from what they read: the keys to watch, the values to
+      * remember (only for rows still in the list, so a list that scrolls forever does
+      * not accumulate the ones that left), and each element's view value. A row whose
+      * re-read missed shows the last value its record had; one that never had a value
+      * shows its ref's own slice, which fails the projection if it does not decode.
+      */
+    private def projectRows[Origin, D <: AnyNamedTuple, A, B](
+        reads: Seq[(A, RowRead[Origin, D])],
+        last: Map[CacheKey, D]
+    )(row: (A, Maybe[D]) => B)(using Frame): Result[ApolloParseException, FragmentList[D, B]] =
+        val watched = reads.foldLeft(Set.empty[CacheKey]) { case (keys, (_, read)) =>
+            read match
+                case RowRead.Hit(_, _, dependent) => keys ++ dependent
+                case RowRead.Miss(key, _)         => keys + key
+                case _                            => keys
+        }
+        val remembered = reads.foldLeft(Map.empty[CacheKey, D]) { case (known, (_, read)) =>
+            read match
+                case RowRead.Hit(key, data, _) => known.updated(key, data)
+                case RowRead.Miss(key, _)      => last.get(key).fold(known)(known.updated(key, _))
+                case _                         => known
+        }
+        def present(a: A, data: Result[ApolloParseException, D]): Result[ApolloParseException, B] =
+            data.map(d => row(a, Present(d)))
+        Result.collect(reads.map { (a, read) =>
+            read match
+                case RowRead.Plain()         => Result.succeed(row(a, Absent))
+                case RowRead.Unkeyed(ref)    => present(a, ref.decoded)
+                case RowRead.Hit(_, data, _) => present(a, Result.succeed(data))
+                case RowRead.Miss(key, ref)  => present(a, remembered.get(key).fold(ref.decoded)(Result.succeed(_)))
+        }).map(rows => FragmentList(watched, remembered, rows))
+    end projectRows
+
+    /** The keys a fragment signal watches, retained in its store for as long as the
+      * signal lives: a garbage collection keeps the records the last read depended on
+      * even when no operation root reaches them any more.
+      *
+      * `held` is `Absent` once the enclosing `Scope` has closed. A [[hold]] moves the
+      * retain hand over hand through [[ApolloStore.swapRetained]], so a key the signal
+      * still watches never counts as unretained, and a hold that arrives after the
+      * teardown retains nothing.
+      */
+    final private class RetainedKeys private (store: ApolloStore, held: AtomicRef.Unsafe[Maybe[Set[CacheKey]]]):
+
+        def hold(keys: Set[CacheKey])(using Frame): Unit < Sync =
+            Sync.Unsafe.defer(discard(store.swapRetained(keys)(install(keys))))
+
+        @tailrec private def install(keys: Set[CacheKey])(using AllowUnsafe): Maybe[Set[CacheKey]] =
+            val current = held.get()
+            current match
+                case Absent => Absent
+                case Present(replaced) =>
+                    if held.compareAndSet(current, Present(keys)) then Present(replaced) else install(keys)
+            end match
+        end install
+
+        private def release(using Frame): Unit < Sync =
+            Sync.Unsafe.defer(held.getAndSet(Absent).foreach(keys => store.releaseRetained(keys)))
+    end RetainedKeys
+
+    private object RetainedKeys:
+        /** Retain `keys` until the enclosing `Scope` closes. */
+        def init(store: ApolloStore, keys: Set[CacheKey])(using Frame): RetainedKeys < (Sync & Scope) =
+            val nothingHeld: Maybe[Set[CacheKey]] = Present(Set.empty)
+            Sync.Unsafe.defer(new RetainedKeys(store, AtomicRef.Unsafe.init(nothingHeld))).map { retained =>
+                Scope.ensure(retained.release).andThen(retained.hold(keys)).andThen(retained)
+            }
+        end init
+    end RetainedKeys
 
 end Apollo

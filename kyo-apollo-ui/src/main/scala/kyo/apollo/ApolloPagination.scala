@@ -48,8 +48,8 @@ import scala.compiletime.constValueTuple
   *
   * Scope.run:
   *   for
-  *     // cursor state = a named tuple, one Option[String] slot per connection
-  *     paged <- usePaginatedQuery(initial = (users = Option.empty[String], posts = Option.empty[String]))(
+  *     // cursor state = a named tuple, one Maybe[String] slot per connection
+  *     paged <- usePaginatedQuery(initial = (users = Maybe.empty[String], posts = Maybe.empty[String]))(
   *                c => client.query(feeds(c.users, c.posts)))
   *     // one call → a named tuple of handles; `set` derived from each name
   *     nav = paged.connections((
@@ -75,11 +75,11 @@ import scala.compiletime.constValueTuple
   *                  the other connections untouched), and re-issue the query
   *                  `NetworkOnly` (whose write-back merges the page and re-emits
   *                  [[PaginatedQuery.state]]). A no-op when the connection's
-  *                  `cursorOf` yields `None` (nothing loaded, or the caller
+  *                  `cursorOf` yields `Absent` (nothing loaded, or the caller
   *                  encoded "no next page"). Raises an
   *                  [[kyo.apollo.exception.ApolloException]] on `Abort`.
   * @param hasNext  `true` while this connection's `cursorOf` yields a next cursor.
-  *                 Encode `hasNextPage` into `cursorOf` (return `None` at the end)
+  *                 Encode `hasNextPage` into `cursorOf` (return `Absent` at the end)
   *                 for accurate button-gating.
   */
 final case class ConnectionHandle[D](
@@ -97,46 +97,38 @@ final case class ConnectionHandle[D](
   */
 final class PaginatedQuery[D, C] private[apollo] (
     val state: Signal[QueryState[D]],
-    // Apply a reducer over (current cursors, latest data): `Some(next)` re-issues
-    // the query for `next` and stores it; `None` is a no-op. Kept as a closure so
+    // Apply a reducer over (current cursors, latest data): `Present(next)` re-issues
+    // the query for `next` and stores it; `Absent` is a no-op. Kept as a closure so
     // the shared `SignalRef[C]` stays private to `usePaginatedQuery`.
-    private val advance: ((C, D) => Option[C]) => (Unit < (Async & Abort[ApolloException]))
+    private val advance: ((C, D) => Maybe[C]) => (Unit < (Async & Abort[ApolloException]))
 ):
 
     /** Declare a connection by its two lenses and get a sub-handle whose
       * `fetchMore` advances only this connection.
       *
       * @param cursorOf reads this connection's next-page cursor from the query data
-      *                 (its `pageInfo.endCursor`); `None` parks `fetchMore`.
+      *                 (its `pageInfo.endCursor`); `Absent` parks `fetchMore`.
       * @param set      writes a new cursor into this connection's slot of the shared
       *                 cursor state, preserving the other slots (e.g.
       *                 `(c, cur) => c.copy(users = cur)`).
       */
     def connection(
-        cursorOf: D => Option[String],
-        set: (C, Option[String]) => C
+        cursorOf: D => Maybe[String],
+        set: (C, Maybe[String]) => C
     )(using Frame): ConnectionHandle[D] =
         ConnectionHandle(
-            fetchMore = advance { (c, d) =>
-                cursorOf(d) match
-                    case Some(cur) => Some(set(c, Some(cur)))
-                    case None      => None
-            },
-            hasNext = state.map(qs =>
-                PaginatedQuery.dataOf(qs) match
-                    case Some(d) => cursorOf(d).isDefined
-                    case None    => false
-            )
+            fetchMore = advance((c, d) => cursorOf(d).map(cur => set(c, Present(cur)))),
+            hasNext = state.map(qs => PaginatedQuery.dataOf(qs).exists(d => cursorOf(d).isDefined))
         )
 end PaginatedQuery
 
 object PaginatedQuery:
 
-    /** The data of a state that carries a renderable payload, else `None`. */
-    private[apollo] def dataOf[D](qs: QueryState[D]): Option[D] = qs match
-        case QueryState.Success(d, _, _)  => Some(d)
-        case QueryState.PartialData(d, _) => Some(d)
-        case _                            => None
+    /** The data of a state that carries a renderable payload, else `Absent`. */
+    private[apollo] def dataOf[D](qs: QueryState[D]): Maybe[D] = qs match
+        case QueryState.Success(d, _, _)  => Present(d)
+        case QueryState.PartialData(d, _) => Present(d)
+        case _                            => Absent
 end PaginatedQuery
 
 /** Prepare a paginated query over a cursor state `C` — the general, N-connection
@@ -152,7 +144,7 @@ end PaginatedQuery
   * `Scope`, so binding the handle inside a `Scope.run { … }` tears the
   * subscription down when the block exits.
   *
-  * @param initial the starting cursor state (typically all-`None` — first pages).
+  * @param initial the starting cursor state (typically all-`Absent` — first pages).
   * @param page    re-issues the operation for a cursor state; the same operation
   *                with only the cursor arguments varying, so pages share their
   *                connection slots in the cache. `C` must have a `CanEqual`.
@@ -172,7 +164,7 @@ final case class PaginatedQueryHandle[D](
     fetchMore: Unit < (Async & Abort[ApolloException])
 )
 
-extension [D](paged: PaginatedQuery[D, Option[String]])
+extension [D](paged: PaginatedQuery[D, Maybe[String]])
     /** Flatten a general [[PaginatedQuery]] whose cursor state IS the one connection's
       * cursor into the [[PaginatedQueryHandle]] the sugar returns.
       *
@@ -185,18 +177,18 @@ extension [D](paged: PaginatedQuery[D, Option[String]])
       * argument list would be `Signal[Maybe[V]]` too, and overload resolution has
       * nothing left to separate them by.
       */
-    def singleConnection(cursorOf: D => Option[String])(using Frame): PaginatedQueryHandle[D] =
+    def singleConnection(cursorOf: D => Maybe[String])(using Frame): PaginatedQueryHandle[D] =
         PaginatedQueryHandle(paged.state, paged.connection(cursorOf, (_, cur) => cur).fetchMore)
 end extension
 
 /** Prepare a paginated query with a single connection — the sugar over the
-  * general form. `page(None)` is the first page; `page(Some(cursor))` each next
+  * general form. `page(Absent)` is the first page; `page(Present(cursor))` each next
   * one. Yields a flat [[PaginatedQueryHandle]] whose `fetchMore` advances that one
   * connection.
   *
   * {{{
   * usePaginatedQuery(after =>
-  *   client.query(Queries.countriesConnection(first = Some(2), after = after)(
+  *   client.query(Queries.countriesConnection(first = Present(2), after = after)(
   *     _.edges(_.node(_.code.name).cursor).pageInfo(_.endCursor.hasNextPage)))
   * )(cursorOf = _.countriesConnection.pageInfo.endCursor)
   * }}}
@@ -204,19 +196,20 @@ end extension
 // `Apollo.paginatedQuery(page)(cursorOf)` (the single-connection sugar) constructs a
 // flat [[PaginatedQueryHandle]]; see [[Apollo]].
 
-extension [A <: AnyNamedTuple](sb: SelectionBuilder[RootQuery, A])
+extension [A <: AnyNamedTuple](sb: SelectionBuilder.Bidirectional[RootQuery, A])
     /** Paginate this single-connection query the react-apollo way, with no explicit
       * page plumbing — the ergonomic entry point to Step 6.
       *
       * `.paginated` reads the client from a `given ApolloClient` (like `.call`) and
       * derives the page builder from the selection itself (via
       * [[kyo.apollo.api.pagedBy]], which swaps only the `cursorArg` variable's
-      * value), so the caller never threads an `after` handle:
+      * value), so the caller never threads an `after` handle. The selection must be
+      * bidirectional: merging a page into the cached list writes it.
       *
       * {{{
       * given ApolloClient = client
       * Scope.run:
-      *   Queries.countriesConnection(first = Some(2), after = None)(
+      *   Queries.countriesConnection(first = Present(2), after = Absent)(
       *     _.edges(_.node(_.code.name).cursor).pageInfo(_.endCursor.hasNextPage)
       *   ).paginated(_.countriesConnection.pageInfo.endCursor).map: paged =>
       *     render(paged.state)                     // Signal[QueryState] — all loaded edges
@@ -228,27 +221,27 @@ extension [A <: AnyNamedTuple](sb: SelectionBuilder[RootQuery, A])
       * `.paginated` targets the one `cursorArg` and is the single-connection sugar.
       *
       * @param cursorOf  reads the next-page cursor from the data (the connection's
-      *                  `pageInfo.endCursor`); return `None` to stop (encode
+      *                  `pageInfo.endCursor`); return `Absent` to stop (encode
       *                  `hasNextPage`).
       * @param cursorArg the pagination cursor argument's name (Relay `after`).
       */
-    def paginated(cursorOf: A => Option[String], cursorArg: String = "after")(using
+    def paginated(cursorOf: A => Maybe[String], cursorArg: String = "after")(using
         client: ApolloClient,
         frame: Frame,
         tag: Tag[Emit[Chunk[ApolloResponse[A]]]],
         canEqual: CanEqual[A, A]
     ): PaginatedQueryHandle[A] < (Async & Scope) =
         val page = sb.pagedBy(cursorArg)
-        Apollo.paginatedQuery((after: Option[String]) => client.query(page(after)))(cursorOf)
+        Apollo.paginatedQuery((after: Maybe[String]) => client.query(page(after)))(cursorOf)
 end extension
 
 /** Build a `cursorOf` from a Relay `pageInfo` — yield its `endCursor` while
-  * `hasNextPage` is true, else `None`. So a connection's `fetchMore` becomes a
+  * `hasNextPage` is true, else `Absent`. So a connection's `fetchMore` becomes a
   * clean no-op at the last page instead of an idempotent re-fetch, and its
   * [[ConnectionHandle.hasNext]] flips to `false`.
   *
   * `f` projects the query data onto the connection's `pageInfo` selection, which
-  * must include `endCursor: Option[String]` and `hasNextPage: Boolean`. The fields
+  * must include `endCursor: Maybe[String]` and `hasNextPage: Boolean`. The fields
   * are read by name, so any order and extra `pageInfo` fields are fine. Pair with
   * [[usePaginatedQuery]], [[PaginatedQuery.connection]], or [[connections]]:
   *
@@ -258,7 +251,7 @@ end extension
   *   posts = relayCursor(_.postsConnection.pageInfo)))
   * }}}
   */
-inline def relayCursor[D, P <: AnyNamedTuple](f: D => P): D => Option[String] =
+inline def relayCursor[D, P <: AnyNamedTuple](f: D => P): D => Maybe[String] =
     val names = constValueTuple[Names[P]].toArray.map(_.asInstanceOf[String])
     val ecIdx = names.indexOf("endCursor")
     val hnIdx = names.indexOf("hasNextPage")
@@ -268,6 +261,6 @@ inline def relayCursor[D, P <: AnyNamedTuple](f: D => P): D => Option[String] =
     )
     d =>
         val pi = f(d).asInstanceOf[Tuple].toArray
-        if pi(hnIdx).asInstanceOf[Boolean] then pi(ecIdx).asInstanceOf[Option[String]]
-        else None
+        if pi(hnIdx).asInstanceOf[Boolean] then pi(ecIdx).asInstanceOf[Maybe[String]]
+        else Absent
 end relayCursor
