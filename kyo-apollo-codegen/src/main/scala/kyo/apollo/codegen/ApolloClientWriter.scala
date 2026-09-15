@@ -43,8 +43,8 @@ final case class GeneratedSource(
 )
 
 /** The schema-driven emitter: turns a parsed GraphQL SDL into typed Scala sources
-  * targeting THIS project's `core` API (option (b) of ADR-001 — a custom writer,
-  * NOT a bridge over `caliban.client`).
+  * targeting the kyo-apollo API (a custom writer, not a bridge over
+  * `caliban.client`).
   *
   * There are two entry points, both schema-wide and document-independent:
   *
@@ -118,8 +118,8 @@ object ApolloClientWriter:
         "export"
     )
 
-    /** Emit the shared schema types referenced by generated operations, once per
-      * run (Task 5): a Scala 3 `enum` + string-transform `given Schema` per GraphQL
+    /** Emit the shared schema types referenced by the generated selectors, once per
+      * run: a Scala 3 `enum` + string-transform `given Schema` per GraphQL
       * enum, a case class `derives Schema` per input object, and — when any custom
       * scalar is mapped — a `CustomScalars` object of `given Schema`s. These are
       * schema-wide (independent of which operations use them), so they are emitted
@@ -129,7 +129,7 @@ object ApolloClientWriter:
     def writeSchemaTypes(schema: Document, config: CodegenConfig): List[GeneratedSource] =
         new Emitter(schema, config).emitSchemaTypes
 
-    /** Emit the inline-query selector layer for the whole schema (Phase 3): a
+    /** Emit the inline-query selector layer for the whole schema: a
       * phantom `Origin` marker + a selector `object` per GraphQL object, interface
       * and union type, and `Queries`/`Mutations`/`Subscriptions` root objects. Each object field becomes
       * a `SelectionBuilder`-returning selector method, so a query is written as
@@ -269,7 +269,7 @@ object ApolloClientWriter:
                 scalaType = scalaTypeOf(gqlType)
             )
 
-        // -- schema-type emission (Task 5) ----------------------------------------
+        // -- schema-type emission -------------------------------------------------
 
         /** All shared schema types: enums, input objects, and the custom-scalar
           * `given Schema`s (when any custom scalar is mapped).
@@ -390,7 +390,7 @@ object ApolloClientWriter:
             val used = mappedScalarTypes.exists(t => scalaTypes.exists(_.contains(t)))
             if used then s"\nimport ${config.packageName}.CustomScalars.given" else ""
 
-        // -- selector emission (Phase 3) ------------------------------------------
+        // -- selector emission ----------------------------------------------------
 
         /** A field of an object type, reduced to what selector emission needs. */
         final private case class ArgSpec(name: String, ofType: Type)
@@ -491,7 +491,7 @@ object ApolloClientWriter:
                |    *
                |    * {{{
                |    * import CacheIdentities.given
-               |    * Apollo.client(_.serverUrl(url).normalizedCache(MemoryCache(), SchemaIdentities.generator))
+               |    * ApolloClient.init(ApolloClient.Config(url).normalizedCache(MemoryCache(), SchemaIdentities.generator))
                |    * }}}
                |    *
                |    * Types without a declared identity fall back to default id-based keying.
