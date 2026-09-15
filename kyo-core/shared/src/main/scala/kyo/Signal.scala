@@ -171,35 +171,6 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
         loop(baseline)
     end observe
 
-    /** Runs `f` for every change AFTER subscription, skipping the initial current value.
-      *
-      * Identical to [[observe]] except that the value current at subscription time is not delivered: the first emission is the first value
-      * that differs from it. Same per-value [[Scope]] semantics and the same delivery tiers. This variant uses
-      * [[Signal.defaultRepairInterval]].
-      */
-    /** Observation of a projected view of this signal, deduplicated on the PROJECTION rather than on this signal's own values.
-      *
-      * This is what a derived signal's observation needs. `map` delegates to its source's loop, and that loop compares SOURCE values, so
-      * every observer of a derived signal wakes AND delivers on every source change even when its own image is unchanged: a thousand rows
-      * deriving `selected.map(_ == row.id)` from one selection signal each run a full per-value `Scope` teardown and setup for a value that
-      * did not move. Comparing images instead confines that to the rows whose image actually changed.
-      *
-      * The per-value `Scope` follows the IMAGE: it opens when the image changes and stays open while the image holds, so a source change
-      * that leaves the image alone no longer releases what `g` set up for it.
-      *
-      * Structurally the repairing loop of [[observe]], with `proj(cur)` where that one has `cur`; [[SignalRef]] overrides it the same way,
-      * so a projected observation of a ref keeps the exact protocol. A projection over an already-derived signal (a `map` of a `map`) falls
-      * back to this repairing loop, exactly as an ordinary observation of one does.
-      *
-      * @param proj
-      *   The view to observe; called on each source value and compared for equality against the last delivered image
-      * @param baseline
-      *   The image already processed by the caller: `g` is not run while the current image still equals it
-      * @param repairInterval
-      *   How often a parked observation re-reads `current` to reconcile a missed wakeup on the repair path
-      * @param g
-      *   The per-image setup, run inside a fresh `Scope`
-      */
     /** PROTOTYPE — fiber-free observation for trivial, non-suspending sinks.
       *
       * `cb` is invoked on the WRITER's own stack, inside the `set` that changed the projected image
@@ -222,22 +193,66 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
         Frame
     ): Maybe[() => Unit] = Absent
 
+    /** Observation of a projected view of this signal, deduplicated on the PROJECTION rather than on this signal's own values.
+      *
+      * This is what a derived signal's observation needs. `map` delegates to its source's loop, and that loop compares SOURCE values, so
+      * every observer of a derived signal wakes AND delivers on every source change even when its own image is unchanged: a thousand rows
+      * deriving `selected.map(_ == row.id)` from one selection signal each run a full per-value `Scope` teardown and setup for a value that
+      * did not move. Comparing images instead confines that to the rows whose image actually changed.
+      *
+      * The per-value `Scope` follows the IMAGE: it opens when the image changes and stays open while the image holds, so a source change
+      * that leaves the image alone no longer releases what `g` set up for it.
+      *
+      * Structurally the repairing loop of [[observe]], with `proj(cur)` where that one has `cur`; [[SignalRef]] overrides it the same way,
+      * so a projected observation of a ref keeps the exact protocol. A projection over an already-derived signal (a `map` of a `map`) falls
+      * back to this repairing loop, exactly as an ordinary observation of one does.
+      *
+      * A wakeup that finds the source value unchanged does not project again: the loop also keeps the source value it last projected and
+      * calls `proj` only for a value that differs from it. Images need not be `==` for equal source values (a rendered UI tree never is),
+      * so re-projecting on every repair timer would count each tick as a change and rerun `g` once per `repairInterval`. `proj` must
+      * therefore be a pure function of the source value: state it reads besides that value is not picked up by a tick. The kept source value
+      * is dropped once an image's `Scope` has closed, so a source that returns to it during the close is projected and compared again.
+      *
+      * @param proj
+      *   The view to observe, a pure function of the source value; called only for a source value that differs from the last one projected,
+      *   and compared for equality against the last delivered image
+      * @param baseline
+      *   The image already processed by the caller: `g` is not run while the current image still equals it
+      * @param repairInterval
+      *   How often a parked observation re-reads `current` to reconcile a missed wakeup on the repair path
+      * @param g
+      *   The per-image setup, run inside a fresh `Scope`
+      */
     def observeProjected[B, S](proj: A => B, baseline: Maybe[B], repairInterval: Duration)(
         g: B => Unit < (S & Async & Scope)
     )(using CanEqual[B, B], Frame): Unit < (S & Async) =
         def await: Unit < Async =
             Async.race(Seq(nextWith(_ => ()), Async.sleep(repairInterval))).unit
-        def holdUntilChanged(b: B): Unit < (S & Async) =
-            await.andThen(currentWith(c => if proj(c) == b then holdUntilChanged(b) else (): Unit < (S & Async)))
-        def loop(last: Maybe[B]): Unit < (S & Async) =
+        // `src` projects to `b`: a wakeup with an unchanged source waits again without calling `proj`.
+        def holdUntilChanged(src: A, b: B): Unit < (S & Async) =
+            await.andThen(currentWith { c =>
+                if c == src then holdUntilChanged(src, b)
+                else if proj(c) == b then holdUntilChanged(c, b)
+                else (): Unit < (S & Async)
+            })
+        // `seen` projects to `last`; dropped once a Scope has closed.
+        def loop(seen: Maybe[A], last: Maybe[B]): Unit < (S & Async) =
             currentWith { cur =>
-                val b = proj(cur)
-                if last.exists(_ == b) then await.andThen(loop(last))
-                else Scope.run(g(b).andThen(holdUntilChanged(b))).andThen(loop(Present(b)))
+                if seen.exists(_ == cur) then await.andThen(loop(seen, last))
+                else
+                    val b = proj(cur)
+                    if last.exists(_ == b) then await.andThen(loop(Present(cur), last))
+                    else Scope.run(g(b).andThen(holdUntilChanged(cur, b))).andThen(loop(Absent, Present(b)))
             }
-        loop(baseline)
+        loop(Absent, baseline)
     end observeProjected
 
+    /** Runs `f` for every change AFTER subscription, skipping the initial current value.
+      *
+      * Identical to [[observe]] except that the value current at subscription time is not delivered: the first emission is the first value
+      * that differs from it. Same per-value [[Scope]] semantics and the same delivery tiers. This variant uses
+      * [[Signal.defaultRepairInterval]].
+      */
     final def observeChanges[S](f: A => Unit < (S & Async & Scope))(using Frame): Unit < (S & Async) =
         observeChanges(Signal.defaultRepairInterval)(f)
 
@@ -260,10 +275,11 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
         Signal._initRawF(
             [C, S] => g => self.currentWith(a => g(f(a))),
             [C, S] => g => self.nextWith(a => g(f(a))),
-            // Observed through the source's projected loop, which compares IMAGES. Delegating to the source's
-            // plain `observe` compared source values, so a source change delivered to every derived observer
-            // even when its own image held still, and re-created each one's per-value Scope for nothing. The
-            // baseline is now used directly: it is already in image space, so no translation is needed.
+            // Observed through the source's projected loop, which projects only when the SOURCE moved and
+            // delivers only when the IMAGE moved. Delegating to the source's plain `observe` compared source
+            // values, so a source change delivered to every derived observer even when its own image held
+            // still, and re-created each one's per-value Scope for nothing. The baseline is already in image
+            // space, so it is passed through as is.
             [S] => (baseline, ri, g) => self.observeProjected[B, S](f, baseline, ri)(g),
             // Projections compose down the chain rather than stopping at this map: a projected observation
             // of `x.map(f)` becomes one of `x` through `proj ∘ f`. That is what keeps a chain rooted in a
