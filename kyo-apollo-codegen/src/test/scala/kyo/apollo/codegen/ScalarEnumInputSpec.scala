@@ -40,7 +40,7 @@ class ScalarEnumInputSpec extends kyo.test.Test[Any]:
             val src = schemaTypes(CodegenConfig(packageName = "kyo.apollo.example.generated"))
                 .getOrElse("Continent.scala", fail("Continent.scala not emitted"))
             assert(src.contains("package kyo.apollo.example.generated"), src)
-            assert(src.contains("enum Continent:"), src)
+            assert(src.contains("enum Continent derives CanEqual:"), src)
             assert(
                 src.contains(
                     "case AFRICA, ANTARCTICA, ASIA, EUROPE, NORTH_AMERICA, OCEANIA, SOUTH_AMERICA"
@@ -50,10 +50,23 @@ class ScalarEnumInputSpec extends kyo.test.Test[Any]:
             assert(src.contains("object Continent:"), src)
             // (de)serialised by GraphQL name via a string transform (NOT sum-type derivation).
             assert(src.contains("given Schema[Continent] ="), src)
+            assert(src.contains("Schema.stringSchema.transform[Continent]"), src)
+            assert(!src.contains("transform[Continent](Continent.valueOf)"), src)
+        }
+
+        "enum: a value the schema does not know decodes to Unknown__ and encodes as its name" in {
+            val src = schemaTypes(CodegenConfig(packageName = "kyo.apollo.example.generated"))
+                .getOrElse("Continent.scala", fail("Continent.scala not emitted"))
+            assert(src.contains("case Unknown__(raw: String)"), src)
             assert(
-                src.contains("Schema.stringSchema.transform[Continent](Continent.valueOf)(_.toString)"),
+                src.contains(
+                    "val values: Chunk[Continent] = Chunk(AFRICA, ANTARCTICA, ASIA, EUROPE, NORTH_AMERICA, OCEANIA, SOUTH_AMERICA)"
+                ),
                 src
             )
+            assert(src.contains("def valueOf(name: String): Maybe[Continent]"), src)
+            assert(src.contains("valueOf(raw).getOrElse(Unknown__(raw))"), src)
+            assert(src.contains("case Unknown__(raw) => raw"), src)
         }
 
         // -- input objects ----------------------------------------------------------
