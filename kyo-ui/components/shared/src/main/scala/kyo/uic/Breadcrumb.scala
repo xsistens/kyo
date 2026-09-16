@@ -126,7 +126,7 @@ final case class Breadcrumb private (
         end match
         val iconSlot: List[UI] = it.icon.toList.map(g => GlyphSvg(g, "p-breadcrumb-item-icon"))
         val labelSlot: List[UI] = it.text match
-            case TextValue.Dyn(s)   => List(s.render(t => span.cssClass("p-breadcrumb-item-label")(t)))
+            case TextValue.Dyn(s)   => List(span.cssClass("p-breadcrumb-item-label")(s))
             case TextValue.Const(t) => if t.isEmpty then Nil else List(span.cssClass("p-breadcrumb-item-label")(t))
         val linked = anchor((iconSlot ++ labelSlot).map(toChild)*)
         // The click handler sits on a display-contents wrapper so kyo does not

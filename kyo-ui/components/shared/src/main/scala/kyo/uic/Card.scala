@@ -103,11 +103,11 @@ final case class Card private (
         else
             val titleUI: List[UI] = titleText.toList.map {
                 case TextValue.Const(t) => div.cssClass("p-card-title")(t): UI
-                case TextValue.Dyn(s)   => s.render(t => div.cssClass("p-card-title")(t))
+                case TextValue.Dyn(s)   => div.cssClass("p-card-title")(s)
             }
             val subtitleUI: List[UI] = subtitleText.toList.map {
                 case TextValue.Const(t) => div.cssClass("p-card-subtitle")(t): UI
-                case TextValue.Dyn(s)   => s.render(t => div.cssClass("p-card-subtitle")(t))
+                case TextValue.Dyn(s)   => div.cssClass("p-card-subtitle")(s)
             }
             val caption: UI = div.cssClass("p-card-caption")((titleUI ++ subtitleUI).map(toChild)*)
             if !hasExtras && !headerInteractiveFlag then List(caption)
@@ -118,7 +118,7 @@ final case class Card private (
                 val additionalUI: List[UI] =
                     additionalTextV.toList.map {
                         case TextValue.Const(t) => div.cssClass("p-uic-card-additional")(t): UI
-                        case TextValue.Dyn(s)   => s.render(t => div.cssClass("p-uic-card-additional")(t))
+                        case TextValue.Dyn(s)   => div.cssClass("p-uic-card-additional")(s)
                     }
                 val actionUI: List[UI] =
                     headerActionV.toList.map(ac => div.cssClass("p-uic-card-action")(toChild(ac)))

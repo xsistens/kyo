@@ -216,7 +216,7 @@ final case class MegaMenu private (
                 val heading: UI = g.labelV match
                     case TextValue.Const(t) => li.cssClass("p-megamenu-submenu-label").role("presentation")(t)
                     case TextValue.Dyn(s) =>
-                        li.cssClass("p-megamenu-submenu-label").role("presentation")(toChild(s.render(t => stringToUI(t))))
+                        li.cssClass("p-megamenu-submenu-label").role("presentation")(s)
                 val rows: List[UI] = g.itemsV.map { it =>
                     if it.separatorFlag then li.cssClass("p-megamenu-separator").role("separator")
                     else

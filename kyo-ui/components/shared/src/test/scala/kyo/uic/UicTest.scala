@@ -36,6 +36,35 @@ abstract class UicTest extends kyo.test.Test[Any]:
                     case Absent      => Chunk.empty
             case _ => Chunk.empty
 
+    /** Every reactive node in the tree, in walk order, WITHOUT resolving it away.
+      *
+      * `elements` deliberately looks through a `Reactive`, because a reader never sees the boundary. A suite that
+      * pins a slot as a text CHANNEL has to see it: `UI.Ast.Reactive.text` is the single field
+      * `kyo.internal.ReactiveUI.bindTextRegion` keys on, and a region that carries it is bound straight to the
+      * backend's text write instead of running a fiber, a Scope and a re-walk to change one string. The rendered
+      * HTML is the same either way, so the golden render cannot tell the two apart and this is the only place the
+      * difference is visible.
+      */
+    private[uic] def reactiveNodes(node: UI)(using Frame): Chunk[UI.Ast.Reactive[?]] < Sync =
+        node match
+            case e: UI.Ast.Element       => Kyo.foreach(e.children)(reactiveNodes).map(_.flattenChunk)
+            case f: UI.Ast.Fragment[?]   => Kyo.foreach(f.children)(reactiveNodes).map(_.flattenChunk)
+            case k: UI.Ast.KeyedChild[?] => reactiveNodes(k.child)
+            case r: UI.Ast.Reactive[?] =>
+                r.signal.current(using r.frame).map(reactiveNodes).map(Chunk(r) ++ _)
+            case f: UI.Ast.Foreach[?, ?] =>
+                f.applyTyped([T] =>
+                    (signal: Signal[Chunk[T]], _: Maybe[T => String], render: (Int, T) => UI) =>
+                        signal.current(using f.frame).map { items =>
+                            Kyo.foreach(items.zipWithIndex) { (item, i) => reactiveNodes(render(i, item)) }
+                                .map(_.flattenChunk)
+                    })
+            case m: UI.Ast.Mounted =>
+                m.placeholderUI match
+                    case Present(ui) => reactiveNodes(ui)
+                    case Absent      => Chunk.empty
+            case _ => Chunk.empty
+
     /** How many reactive regions sit between `node` and the nearest element carrying `cls`.
       *
       * One is what a control that reads several refs wants. Nesting a render inside another leaves

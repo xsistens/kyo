@@ -98,7 +98,7 @@ final case class ConfirmDialog private (
                 val messageUI: List[UI] =
                     messageV.toList.map {
                         case TextValue.Const(t) => span.cssClass("p-confirmdialog-message")(t): UI
-                        case TextValue.Dyn(s)   => s.render(t => span.cssClass("p-confirmdialog-message")(t))
+                        case TextValue.Dyn(s)   => span.cssClass("p-confirmdialog-message")(s)
                     }
 
                 var accept = labelButton(acceptLabelV)

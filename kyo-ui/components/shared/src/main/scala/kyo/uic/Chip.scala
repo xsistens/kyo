@@ -74,7 +74,7 @@ final case class Chip private (
             case _                    => Nil
         val labelChild: List[UI] = labelV.toList.map {
             case TextValue.Const(l) => div.cssClass("p-chip-label")(l): UI
-            case TextValue.Dyn(s)   => s.render(t => div.cssClass("p-chip-label")(t))
+            case TextValue.Dyn(s)   => div.cssClass("p-chip-label")(s)
         }
         val removeChild: List[UI] =
             if !removableFlag then Nil

@@ -254,7 +254,7 @@ final case class Password private (
                     case _ => ("p-password-meter-strong", 100.0, strongLabelV)
                 val labelText: UI = label match
                     case TextValue.Const(t) => div.cssClass("p-password-meter-text")(t)
-                    case TextValue.Dyn(s)   => s.render(t => div.cssClass("p-password-meter-text")(t))
+                    case TextValue.Dyn(s)   => div.cssClass("p-password-meter-text")(s)
                 List(
                     div.cssClass("p-password-content").cssClass("p-uic-password-feedback")(
                         div.cssClass("p-password-meter")(

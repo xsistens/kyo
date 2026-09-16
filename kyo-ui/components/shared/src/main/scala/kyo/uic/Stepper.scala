@@ -159,7 +159,7 @@ final case class Stepper private (
         end if
         val titleSlot: UI = st.title match
             case TextValue.Const(t) => span.cssClass("p-step-title")(t): UI
-            case TextValue.Dyn(s)   => s.render(t => span.cssClass("p-step-title")(t))
+            case TextValue.Dyn(s)   => span.cssClass("p-step-title")(s)
         val headerEl: UI = header(
             toChild(span.cssClass("p-step-number")((i + 1).toString)),
             toChild(titleSlot)

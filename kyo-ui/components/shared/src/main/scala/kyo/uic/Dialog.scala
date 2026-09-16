@@ -184,7 +184,7 @@ final case class Dialog private (
                     case Absent =>
                         headerText.toList.map {
                             case TextValue.Const(t) => span.cssClass("p-dialog-title")(t): UI
-                            case TextValue.Dyn(s)   => s.render(t => span.cssClass("p-dialog-title")(t))
+                            case TextValue.Dyn(s)   => span.cssClass("p-dialog-title")(s)
                         }
 
                 // The header, optionally wired as a draggable pointer surface. When drag

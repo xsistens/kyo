@@ -192,7 +192,7 @@ final case class ToggleButton private (
                 // Prime: the current-state label, or a non-breaking space when no labels are set.
                 val labelUI: UI = (if isChecked then onLabelV else offLabelV) match
                     case Present(TextValue.Const(t)) => span.cssClass("p-togglebutton-label")(t): UI
-                    case Present(TextValue.Dyn(s))   => s.render(t => span.cssClass("p-togglebutton-label")(t))
+                    case Present(TextValue.Dyn(s))   => span.cssClass("p-togglebutton-label")(s): UI
                     case _                           => span.cssClass("p-togglebutton-label")("\u00A0"): UI
                 iconSlot :+ labelUI
 

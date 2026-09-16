@@ -79,15 +79,19 @@ final case class Tag private (
         val iconChild: List[UI] = iconV.toList.map(g => GlyphSvg(g, "p-tag-icon"))
         val labelChild: List[UI] = labelV.toList.map {
             case TextValue.Const(t) => span.cssClass("p-tag-label")(t)
-            case TextValue.Dyn(s)   => s.render(t => span.cssClass("p-tag-label")(t))
+            // The signal goes in as the label's CHILD, not as a region around the span: a
+            // `Signal[String]` child lifts to a `Reactive` carrying its string signal, which
+            // `ReactiveUI.bindTextRegion` binds straight to the text write. A region around
+            // the span would rebuild the span on every emission to change one character.
+            case TextValue.Dyn(s) => span.cssClass("p-tag-label")(s)
         }
         el((iconChild ++ labelChild ++ kids).map(toChild)*)
     end render
 end Tag
 
 object Tag:
-    /** A tag labelled `label`. A `Signal[String]` re-renders the label in place on emission (e.g. a locale-
-      * driven `I18n.t` leaf).
+    /** A tag labelled `label`. A `Signal[String]` patches the label text IN PLACE on emission (kyo-ui's text
+      * channel — no region, no re-render of the label span), e.g. a locale-driven `I18n.t` leaf or a counter.
       */
     def apply(label: String | Signal[String]): Tag = new Tag(labelV = Present(ReactiveValue(label)))
 

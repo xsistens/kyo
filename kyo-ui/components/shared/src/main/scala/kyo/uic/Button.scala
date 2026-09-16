@@ -331,7 +331,7 @@ final case class Button private (
             else icon.toList.map(g => GlyphSvg(g, "p-button-icon", "p-button-icon-left"))
         val textChild: List[UI] = label match
             case Present(TextValue.Const(t)) => List(span.cssClass("p-button-label")(t))
-            case Present(TextValue.Dyn(s))   => List(s.render(t => span.cssClass("p-button-label")(t)))
+            case Present(TextValue.Dyn(s))   => List(span.cssClass("p-button-label")(s))
             case Absent                      => Nil
         val endIconChild: List[UI] =
             endIconV.toList.map(g => GlyphSvg(g, "p-button-icon", "p-button-icon-right"))

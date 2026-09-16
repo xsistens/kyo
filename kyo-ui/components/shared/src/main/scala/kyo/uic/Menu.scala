@@ -149,7 +149,7 @@ final case class Menu private (
                 text match
                     case TextValue.Const(t) => li.cssClass("p-menu-submenu-label").role("presentation")(t)
                     case TextValue.Dyn(s) =>
-                        li.cssClass("p-menu-submenu-label").role("presentation")(toChild(s.render(t => stringToUI(t))))
+                        li.cssClass("p-menu-submenu-label").role("presentation")(s)
             case (MenuRow.Item(it), i) =>
                 // The row IS the menu item, not scaffolding around one: it is what
                 // `aria-activedescendant` names, what carries the disabled state, and the only

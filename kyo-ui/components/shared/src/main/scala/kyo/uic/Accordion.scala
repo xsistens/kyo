@@ -221,7 +221,7 @@ final case class Accordion private (
             case Absent =>
                 p.header match
                     case TextValue.Const(t) => stringToUI(t)
-                    case TextValue.Dyn(s)   => s.render(t => stringToUI(t))
+                    case TextValue.Dyn(s)   => signalStringToUI(s)
 
         // The button stays a DIRECT child of the shell so Prime's `.p-accordionpanel[...]
         // > .p-accordionheader` rules (active background, chevron color, first/last radii)
@@ -275,7 +275,7 @@ final case class Accordion private (
             case Absent =>
                 p.header match
                     case TextValue.Const(t) => stringToUI(t)
-                    case TextValue.Dyn(s)   => s.render(t => stringToUI(t))
+                    case TextValue.Dyn(s)   => signalStringToUI(s)
 
         var header = button
             .cssClass("p-accordionheader")
