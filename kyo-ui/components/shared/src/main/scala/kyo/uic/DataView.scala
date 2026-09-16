@@ -27,6 +27,14 @@ end DataViewLayout
   * with a [[SelectButton]]). `paginate(rows)(pageRef)` slices the items and
   * embeds the paginator bound two-way to the 0-based page ref.
   *
+  * A list that GROWS — a stream of pages, a search that refines — supplies the
+  * data as `items(Signal[Chunk[A]])` instead. The rows then become a kyo-ui list
+  * region reconciled per emission, so an appended page renders the new cards and
+  * leaves the ones already on screen alone; the build-time `Seq` form rebuilds
+  * every card on every emission, because the whole component is re-created to
+  * carry the new data. [[itemKey]] moves that reconciliation from position to
+  * identity, which is what a reorder or a mid-list insertion needs.
+  *
   * `loading(true)` renders PrimeReact's busy state: the sheet's
   * `.p-dataview-loading-overlay` (composed with `.p-overlay-mask` for the
   * dimmed backdrop) over the content, holding a [[ProgressSpinner]] — the
@@ -40,6 +48,8 @@ end DataViewLayout
   */
 final case class DataView[A] private (
     itemsV: List[A] = Nil,
+    itemsSigV: Maybe[Signal[Chunk[A]]] = Absent,
+    itemKeyF: Maybe[A => String] = Absent,
     itemF: Maybe[A => UI] = Absent,
     gridItemF: Maybe[A => UI] = Absent,
     layoutV: DataViewLayout = DataViewLayout.List,
@@ -52,8 +62,37 @@ final case class DataView[A] private (
 ) extends Node, HasEmptyContent:
     type Self = DataView[A]
 
-    /** Appends data items. */
-    def items(is: Seq[A]): DataView[A] = copy(itemsV = itemsV ++ is.toList)
+    /** Appends data items, fixed at build time. Clears a previously set items SIGNAL: the two sources are
+      * exclusive and the last one set wins, because a component that silently merged a static block with a
+      * live one would have no answer for what an emission does to the static rows.
+      */
+    def items(is: Seq[A]): DataView[A] = copy(itemsV = itemsV ++ is.toList, itemsSigV = Absent)
+
+    /** Reactive items: the list is carried as a signal and the rows are reconciled per emission through
+      * kyo-ui's list region (`Signal.foreach`), instead of the whole content being rebuilt.
+      *
+      * This is the form for data that arrives over time — a stream of pages, a query that refines. With the
+      * build-time [[items(Seq)]] form an emission means rebuilding the component, so every card is
+      * re-rendered even though only the tail changed; here an appended page renders the appended rows and
+      * leaves the rows already on screen untouched. Without [[itemKey]] rows are matched by POSITION, which
+      * is right for appends and wrong for reorders and mid-list insertions.
+      *
+      * Two limits worth knowing before reaching for it. Clears a previously set static list (the sources are
+      * exclusive, last one wins), and a [[paginate]]d DataView falls back to the build-time path — the page
+      * slice is build-time arithmetic over the whole list, so the rows cannot be a list region at all; the
+      * signal then drives a plain region around the component, which is the same cost as rebuilding.
+      */
+    def items(sig: Signal[Chunk[A]]): DataView[A] = copy(itemsSigV = Present(sig), itemsV = Nil)
+
+    /** A stable key per row, which switches reactive reconciliation from position to identity
+      * (`Signal.foreachKeyed`): a row whose key survives a list change keeps its live subscriptions and its
+      * DOM instead of being re-rendered into the position it moved to.
+      *
+      * Only the [[items(Signal)]] source reconciles, so this has no effect on a static list or on a
+      * paginated one. The key must be an actual identity for the data — kyo-ui warns on duplicates, and a
+      * key that collides applies a row's update to the wrong record.
+      */
+    def itemKey(f: A => String): DataView[A] = copy(itemKeyF = Present(f))
 
     /** Item template for the list layout (and the grid fallback). */
     def itemTemplate(f: A => UI): DataView[A] = copy(itemF = Present(f))
@@ -84,10 +123,24 @@ final case class DataView[A] private (
       * class channel, with no re-render of the data list.
       */
     def loading(v: Boolean | Signal[Boolean]): DataView[A] = copy(loadingV = Present(ReactiveValue(v)))
+
+    /** The paginated fallback for a reactive source.
+      *
+      * A page slice is arithmetic over the WHOLE list (`totalRecords`, the clamped page count, the
+      * `slice`), all of it build-time work the row region cannot do. So a paginated reactive DataView
+      * resolves its signal into a plain region and renders the build-time path underneath — an honest
+      * whole-component rebuild per emission rather than a keyed list that is not keyed. The paginator's own
+      * page region nests inside it, which is the one place in this component where two regions stack: the
+      * inner one is re-created by every emission of the outer, so it cannot outlive the list it sliced.
+      */
     private[uic] def render(using Frame): UI =
-        pageRef match
-            case Present(ref) => ref.render(body)
-            case Absent       => body(0)
+        (itemsSigV, pageSizeV) match
+            case (Present(sig), Present(_)) =>
+                sig.render(items => copy(itemsSigV = Absent, itemsV = items.toList).render)
+            case _ =>
+                pageRef match
+                    case Present(ref) => ref.render(body)
+                    case Absent       => body(0)
 
     private def body(page: Int)(using Frame): UI =
         val (paged, paginatorUI) = pageSizeV match
@@ -108,10 +161,23 @@ final case class DataView[A] private (
             case DataViewLayout.Grid => gridItemF.orElse(itemF)
             case DataViewLayout.List => itemF.orElse(gridItemF)
 
-        val contentChildren: List[UI] =
-            if paged.isEmpty then
-                List(EmptyContent.render(emptyContentV, "No records found")(c => div.cssClass("p-dataview-empty-message")(c)))
-            else template.toList.flatMap(f => paged.map(f))
+        def emptyMessage: UI =
+            EmptyContent.render(emptyContentV, "No records found")(c => div.cssClass("p-dataview-empty-message")(c))
+
+        val contentChildren: List[UI] = itemsSigV match
+            case Present(sig) =>
+                // The rows are a list region; the empty state gets its OWN region over the narrowest
+                // projection there is (`isEmpty`), so `emptyContent` survives without putting the rows
+                // behind a region that repaints them whenever the list changes length.
+                val rows: List[UI] = template.toList.map { f =>
+                    itemKeyF match
+                        case Present(key) => sig.foreachKeyed(key)(f)
+                        case Absent       => sig.foreach(f)
+                }
+                rows :+ sig.map(_.isEmpty).render(isEmpty => if isEmpty then emptyMessage else UI.empty)
+            case Absent =>
+                if paged.isEmpty then List(emptyMessage)
+                else template.toList.flatMap(f => paged.map(f))
 
         val headerSlot: List[UI] = headerV.toList.map(h => div.cssClass("p-dataview-header")(toChild(h)))
         val contentEl: UI        = div.cssClass("p-dataview-content")(contentChildren.map(toChild)*)

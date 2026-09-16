@@ -1290,6 +1290,12 @@ def x(using Frame) = uic.headerGroup("G")(uic.Column[R]("Name")(_.name))"""
         typeCheck(
             preamble + """def x(r: SignalRef[Int])(using Frame): uic.DataView[String] = uic.DataView[String]().items(Seq("a")).itemTemplate(s => span(s)).gridItemTemplate(s => span(s)).layout(uic.DataViewLayout.Grid).header(span("h")).footer(span("f")).paginate(5)(r).emptyContent("none")"""
         )
+        // The reactive item source is the same setter name on a different argument type, so the overload has
+        // to stay reachable from autocomplete alongside the Seq form.
+        typeCheck(
+            preamble + """def x(s: Signal[Chunk[String]])(using Frame): uic.DataView[String] = uic.DataView[String]().items(s).itemKey(identity).itemTemplate(t => span(t))"""
+        )
+        typeCheckFailure(preamble + """def x(s: Signal[Seq[String]])(using Frame) = uic.DataView[String]().items(s)""")
         typeCheck(
             preamble + """def x(r: SignalRef[Int])(using Frame): uic.Stepper = uic.Stepper().active(r).linear(true).step("One")(p("c1")).step("Two")(p("c2"))"""
         )
