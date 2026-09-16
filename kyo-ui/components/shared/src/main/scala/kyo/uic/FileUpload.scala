@@ -138,7 +138,7 @@ final case class FileUpload private (
             case Absent =>
                 fileLabelV match
                     case Present(TextValue.Const(t)) => span.cssClass("p-fileupload-filelabel")(t)
-                    case Present(TextValue.Dyn(s))   => s.render(t => span.cssClass("p-fileupload-filelabel")(t))
+                    case Present(TextValue.Dyn(s))   => span.cssClass("p-fileupload-filelabel")(s)
                     case Absent                      => span.cssClass("p-fileupload-filelabel")("No file chosen")
 
     /** Resolves the reactive validity slots, then builds. The boundary sits HERE, inside
@@ -162,7 +162,7 @@ final case class FileUpload private (
         if disabledFlag then choose = choose.cssClass("p-disabled")
         val chooseLabelEl: UI = chooseLabelV match
             case TextValue.Const(t) => span.cssClass("p-button-label")(t)
-            case TextValue.Dyn(s)   => s.render(t => span.cssClass("p-button-label")(t))
+            case TextValue.Dyn(s)   => span.cssClass("p-button-label")(s)
         val chooseEl: UI = choose(
             toChild(GlyphSvg(Icons.plus, "p-button-icon")),
             toChild(chooseLabelEl)

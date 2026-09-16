@@ -149,7 +149,12 @@ final case class MeterGroup private (
                                     span.cssClass("p-metergroup-label-marker").style(_.bg(colorOf(m, i)))
                             val labelText: UI = m.label match
                                 case TextValue.Dyn(sig) =>
-                                    sig.render(t => span.cssClass("p-metergroup-label-text")(s"$t (${math.round(pct(m.value))}%)"))
+                                    // The percentage is build-time (the meter value is not reactive), so the
+                                    // whole label is a projection of the one string signal and goes in as a
+                                    // text child — patched in place instead of rebuilding the span.
+                                    span.cssClass("p-metergroup-label-text")(
+                                        sig.map(t => s"$t (${math.round(pct(m.value))}%)")
+                                    )
                                 case TextValue.Const(t) =>
                                     span.cssClass("p-metergroup-label-text")(s"$t (${math.round(pct(m.value))}%)")
                             List(lead, labelText)

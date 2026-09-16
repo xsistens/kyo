@@ -93,11 +93,11 @@ final case class Toast private (
                 val textParts: List[UI] =
                     summaryV.toList.map {
                         case TextValue.Const(t) => span.cssClass("p-toast-summary")(t): UI
-                        case TextValue.Dyn(s)   => s.render(t => span.cssClass("p-toast-summary")(t))
+                        case TextValue.Dyn(s)   => span.cssClass("p-toast-summary")(s)
                     } ++
                         detailV.toList.map {
                             case TextValue.Const(t) => div.cssClass("p-toast-detail")(t): UI
-                            case TextValue.Dyn(s)   => s.render(t => div.cssClass("p-toast-detail")(t))
+                            case TextValue.Dyn(s)   => div.cssClass("p-toast-detail")(s)
                         } ++
                         kids
                 val text: UI = div.cssClass("p-toast-message-text")(textParts.map(toChild)*)

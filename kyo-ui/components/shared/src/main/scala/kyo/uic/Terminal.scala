@@ -97,7 +97,7 @@ final case class Terminal private (
         val welcome: List[UI] =
             welcomeMessageV.toList.map {
                 case TextValue.Const(t) => div.cssClass("p-terminal-welcome-message")(t): UI
-                case TextValue.Dyn(s)   => s.render(t => div.cssClass("p-terminal-welcome-message")(t))
+                case TextValue.Dyn(s)   => div.cssClass("p-terminal-welcome-message")(s)
             }
 
         val lastIdx = history.size - 1

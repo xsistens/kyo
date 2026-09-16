@@ -369,10 +369,12 @@ final case class MultiSelect[A] private (
                             val text = t.replace("{0}", selected.size.toString)
                             List(span(if text.isEmpty then " " else text))
                         case TextValue.Dyn(s) =>
-                            List(s.render { raw =>
+                            // The count is build-time, so the whole label is a projection of the one
+                            // string signal: it goes in as a text child and is patched in place.
+                            List(span(s.map { raw =>
                                 val text = raw.replace("{0}", selected.size.toString)
-                                span(if text.isEmpty then " " else text)
-                            })
+                                if text.isEmpty then " " else text
+                            }))
                 case _ =>
                     val text =
                         if selected.isEmpty then placeholder.getOrElse("")

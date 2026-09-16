@@ -101,15 +101,17 @@ final case class Panel private (
         end match
 
         // The header slot content: a custom UI wins over the plain title text.
-        def titleEl(t: String): UI =
+        // The shell without its child, so a signal title can go in as a text CHILD (kyo-ui's
+        // text channel patches it in place) instead of a region rebuilding the heading span.
+        def titleShell =
             span
                 .cssClass("p-panel-title")
                 .role("heading")
-                .aria("level", headerLevelV.token.drop(1))(t)
+                .aria("level", headerLevelV.token.drop(1))
         val titleSlot: List[UI] = (headerUIV, headerText) match
             case (Present(u), _)                       => List(span.cssClass("p-panel-title")(toChild(u)))
-            case (Absent, Present(TextValue.Const(t))) => List(titleEl(t))
-            case (Absent, Present(TextValue.Dyn(s)))   => List(s.render(titleEl))
+            case (Absent, Present(TextValue.Const(t))) => List(titleShell(t))
+            case (Absent, Present(TextValue.Dyn(s)))   => List(titleShell(s))
             case _                                     => Nil
 
         val toggleRefV: Maybe[SignalRef[Boolean]] =

@@ -240,7 +240,7 @@ final case class PickList[A] private (
                 lb = lb.itemTemplate(li =>
                     byKey.get(li.id).map(f).getOrElse(li.text match
                         case TextValue.Const(t) => stringToUI(t)
-                        case TextValue.Dyn(s)   => s.render(t => stringToUI(t)))
+                        case TextValue.Dyn(s)   => signalStringToUI(s))
                 )
             }
             div.cssClass("p-picklist-list-container").cssClass(cls)(
