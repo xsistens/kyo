@@ -41,6 +41,12 @@ private[kyo] case class ReactiveUI(
     // render-walk-paint loop. Carried through normalize rather than re-derived, because "this renders to a lone
     // text node" is knowable at the lift site and only guessable afterwards.
     textSignal: Maybe[Signal[String]] = Absent,
+    // Present on a region built by `Signal.render` (UI.Ast.Reactive.source): the signal BEFORE the projection
+    // to UI, with the projection. Subscribe observes this instead of the projected signal, so an emission whose
+    // value is unchanged is dropped by `observe` itself rather than re-rendering a subtree that can only be
+    // compared as UI — and a UI built from handler closures never compares equal. Foreach carries the same pair
+    // for its rows; this is that treatment for the single-value region.
+    sourceSpec: Maybe[UI.Ast.Reactive.Source[?]] = Absent,
     // Source position of the AST node this was normalized from: file, line, enclosing method, snippet. Carried
     // for [[Devtools]], which needs a name for a region and has only a path otherwise — and a path ("3.1.0")
     // says nothing to a reader. Free to carry: every UI node already holds a macro-derived `Frame`, and the
@@ -237,7 +243,7 @@ private[kyo] object ReactiveUI:
                             (_, freshHdl) <- walkStatic(currentUI, path, svg, contentContext, contentParentContext, mountDispatch)
                             result        <- freshHdl(targetPath, event)
                         yield result
-                }.copy(renderedValue = Present(current), textSignal = ui.text)
+                }.copy(renderedValue = Present(current), textSignal = ui.text, sourceSpec = ui.source)
                 end for
 
             case ui: Foreach[?, ?] @unchecked =>
@@ -2023,10 +2029,21 @@ private[kyo] object ReactiveUI:
                         )
                     yield ()
 
+                // What the region's fiber listens to. With a source present that is VALUE space: `observe`
+                // drops an emission whose value equals the last delivered one, so a record that ticks once a
+                // second stops reaching the regions drawing the slices of it that did not move. Without a
+                // source (a lifted `Signal[UI]`, where no value exists before the UI) it stays the projected
+                // signal and the only available comparison is the UI itself, exactly as before.
+                def observed(paint: UI => Unit < (Async & Scope)): Unit < Async =
+                    rui.sourceSpec match
+                        case Present(src) =>
+                            src.applyTyped([T] => (values: Signal[T], project: T => UI) => values.observe(v => paint(project(v))))
+                        case Absent => signal.observe(paint)
+
                 startOwnedFiber {
                     Abort.run[Throwable] {
                         var first = true
-                        signal.observe { current =>
+                        observed { current =>
                             val isFirst = first
                             first = false
                             if isFirst && renderedSnapshot.exists(_.equals(current)) then

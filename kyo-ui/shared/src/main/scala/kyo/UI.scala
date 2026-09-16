@@ -71,8 +71,19 @@ object UI:
     // ---- Signal extensions ----
 
     extension [A](signal: Signal[A])
-        /** Projects a signal into a reactive subtree: `f` maps each emitted value to a `C`, and the region re-renders on every emission. */
-        def render[C <: UI](f: A => C)(using Frame): Reactive[C] = Reactive[C](signal.map(a => f(a): UI))
+        /** Projects a signal into a reactive subtree: `f` maps each emitted value to a `C`, and the region re-renders whenever the signal
+          * emits a value different from the last one it rendered.
+          *
+          * The node keeps `signal` and `f` beside the projected `Signal[UI]` ([[kyo.UI.Ast.Reactive.Source]]) so that the comparison
+          * happens on the VALUE. Comparing the projection instead cannot work: `f` allocates fresh handler closures on every call, so two
+          * trees built from the same value are never equal, and a source that re-emits an unchanged value would repaint. `f` must
+          * therefore be a pure function of its value — one that reads mutable state on the side is no longer refreshed by an emission
+          * that carries the same value.
+          */
+        def render[C <: UI](f: A => C)(using Frame): Reactive[C] =
+            val project: A => UI = a => f(a): UI
+            Reactive[C](signal.map(project), source = Present(Reactive.Source(signal, project)))
+    end extension
 
     extension [A](signal: Signal[Chunk[A]])
         /** Renders one child per element of the collection signal, re-rendering when the chunk changes. Elements are reconciled by
@@ -2058,8 +2069,36 @@ object UI:
           * "some UI", so the engine would have to re-derive that fact per emission — which is exactly the expensive path this exists to
           * skip. `ReactiveUI` binds such a region straight to the backend's text write; everything else about the node is unchanged, so
           * a backend that offers no such write simply re-renders the region as before.
+          *
+          * `source` is the same memory for the general case: the signal before the projection to UI, with the projection. Subscribe
+          * observes THAT, so an emission carrying an unchanged value never reaches the render function. Both fields are accelerators —
+          * `signal` stays the node's content for the first paint, for event dispatch and for the server transport, and a node built
+          * without them (a lifted `Signal[UI]`, where no value exists before the UI) behaves exactly as it did.
           */
-        case class Reactive[C <: UI](signal: Signal[UI], text: Maybe[Signal[String]] = Absent)(using val frame: Frame) extends UI
+        case class Reactive[C <: UI](
+            signal: Signal[UI],
+            text: Maybe[Signal[String]] = Absent,
+            source: Maybe[Reactive.Source[?]] = Absent
+        )(using val frame: Frame) extends UI
+
+        object Reactive:
+            /** The signal a region was projected FROM, with the projection that turns one of its values into UI. The same idea as `text`,
+              * for the general case, and the same pair [[kyo.UI.Ast.Foreach]] keeps for its rows.
+              *
+              * Why the node cannot make do with `signal` alone: the only comparison available there is UI against UI, and a subtree built
+              * from closures is never equal to the last one, so every emission repaints — including the ones a projection made
+              * irrelevant. `a.map(slice).render(f)` observed in UI space compares the ROOT's values (projections compose down the chain,
+              * see `Signal.map`) against an image that is never equal; observed here it compares `slice`, which is a value.
+              */
+            case class Source[A](signal: Signal[A], render: A => UI):
+                /** Apply a polymorphic continuation with the typed members of this source.
+                  *
+                  * Callers that match on `Source[?]` (existential) lose the type parameter. This re-introduces A in a single cast that is
+                  * sound because signal and render were constructed with the same A.
+                  */
+                private[kyo] def applyTyped[B](k: [T] => (Signal[T], T => UI) => B): B = k[A](signal, render)
+            end Source
+        end Reactive
 
         /** A keyed list driven by a `Signal[Chunk[A]]`: renders one child per element, reconciling by `key` when present. The type
           * parameter `C` is a phantom bound that records the content type at the construction site; it erases to `UI` at runtime.
