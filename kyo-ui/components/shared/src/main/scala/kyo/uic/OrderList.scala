@@ -177,7 +177,7 @@ final case class OrderList[A] private (
             lb = lb.itemTemplate(li =>
                 byKey.get(li.id).map(f).getOrElse(li.text match
                     case TextValue.Const(t) => stringToUI(t)
-                    case TextValue.Dyn(s)   => s.render(t => stringToUI(t)))
+                    case TextValue.Dyn(s)   => signalStringToUI(s))
             )
         }
         val listUI: UI = lb.resolved(sel, "", cursor.map(_.highlight), focused)

@@ -72,7 +72,7 @@ final case class Badge private (
         hostClassesV.foreach(c => el = el.cssClass(c))
         valueV match
             case Present(TextValue.Const(v)) => el(v)
-            case Present(TextValue.Dyn(s))   => el(toChild(s.render(t => stringToUI(t))))
+            case Present(TextValue.Dyn(s))   => el(s)
             case Absent                      => el()
         end match
     end render

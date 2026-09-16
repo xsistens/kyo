@@ -54,7 +54,7 @@ final case class Tooltip private (
             case Absent =>
                 textV match
                     case Present(TextValue.Const(t)) => stringToUI(t)
-                    case Present(TextValue.Dyn(s))   => s.render(t => stringToUI(t))
+                    case Present(TextValue.Dyn(s))   => signalStringToUI(s)
                     case Absent                      => stringToUI("")
         val box: UI =
             div

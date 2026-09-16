@@ -36,7 +36,7 @@ final case class Label private (
         val b3   = forIdV.map(b2.forId).getOrElse(b2)
         text match
             case TextValue.Const(t) => b3(t)
-            case TextValue.Dyn(s)   => s.render(t => b3(t))
+            case TextValue.Dyn(s)   => b3(s)
     end render
 end Label
 

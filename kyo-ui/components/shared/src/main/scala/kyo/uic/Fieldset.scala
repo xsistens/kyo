@@ -80,7 +80,7 @@ final case class Fieldset private (
 
         def labelSpan: UI = legendV match
             case Present(TextValue.Const(v)) => span.cssClass("p-fieldset-legend-label")(v)
-            case Present(TextValue.Dyn(s))   => s.render(t => span.cssClass("p-fieldset-legend-label")(t))
+            case Present(TextValue.Dyn(s))   => span.cssClass("p-fieldset-legend-label")(s)
             case Absent                      => span.cssClass("p-fieldset-legend-label")("")
 
         val legendUI: List[UI] =

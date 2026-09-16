@@ -207,10 +207,10 @@ final case class Galleria private (
                     img(ImgSrc.Path(current.src), current.alt).cssClass("p-uic-galleria-image")
 
             val titleSlot: List[UI] = current.titleDyn match
-                case Present(sig) => List(sig.render(t => div.cssClass("p-uic-galleria-title")(t)))
+                case Present(sig) => List(div.cssClass("p-uic-galleria-title")(sig))
                 case Absent       => current.title.toList.map(t => div.cssClass("p-uic-galleria-title")(t): UI)
             val subtitleSlot: List[UI] = current.subtitleDyn match
-                case Present(sig) => List(sig.render(t => p.cssClass("p-uic-galleria-subtitle")(t)))
+                case Present(sig) => List(p.cssClass("p-uic-galleria-subtitle")(sig))
                 case Absent       => current.subtitle.toList.map(s => p.cssClass("p-uic-galleria-subtitle")(s): UI)
             val caption: List[UI] =
                 if titleSlot.nonEmpty || subtitleSlot.nonEmpty then

@@ -460,7 +460,7 @@ final case class Listbox private (
             case Absent =>
                 it.text match
                     case TextValue.Const(t) => stringToUI(t)
-                    case TextValue.Dyn(s)   => s.render(t => stringToUI(t))
+                    case TextValue.Dyn(s)   => signalStringToUI(s)
         row(((checkSlot ++ iconSlot :+ labelSlot) ++ extraSlot).map(toChild)*)
     end renderOption
 

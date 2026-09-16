@@ -148,7 +148,7 @@ final case class Drawer private (
                     case Absent =>
                         headerText.toList.map {
                             case TextValue.Const(t) => div.cssClass("p-drawer-title")(t): UI
-                            case TextValue.Dyn(s)   => s.render(t => div.cssClass("p-drawer-title")(t))
+                            case TextValue.Dyn(s)   => div.cssClass("p-drawer-title")(s)
                         }
 
                 val closeBtn: List[UI] =

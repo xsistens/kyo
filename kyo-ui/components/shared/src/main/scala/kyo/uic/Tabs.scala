@@ -258,7 +258,7 @@ final case class Tabs private (
                 else Nil
             val textSlot: UI = t.text match
                 case TextValue.Const(x) => span(x): UI
-                case TextValue.Dyn(s)   => s.render(x => span(x))
+                case TextValue.Dyn(s)   => span(s): UI
             val content: List[UI] =
                 (iconSlot :+ textSlot) ++ countSlot ++ barSlot
             val kids = content.map(toChild)

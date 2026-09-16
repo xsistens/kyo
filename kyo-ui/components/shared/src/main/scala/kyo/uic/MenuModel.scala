@@ -367,7 +367,7 @@ private[uic] object MenuRender:
         val icon: List[UI] = it.iconV.toList.map(g => GlyphSvg(g, s"p-$prefix-item-icon", "p-icon"))
         val label: UI = it.labelV match
             case TextValue.Const(t) => span.cssClass(s"p-$prefix-item-label")(t)
-            case TextValue.Dyn(s)   => s.render(t => span.cssClass(s"p-$prefix-item-label")(t))
+            case TextValue.Dyn(s)   => span.cssClass(s"p-$prefix-item-label")(s)
         val subIcon: List[UI] =
             submenuIcon.toList.map(g => GlyphSvg(g, s"p-$prefix-submenu-icon", "p-icon"))
         div.cssClass(s"p-$prefix-item-content")(
