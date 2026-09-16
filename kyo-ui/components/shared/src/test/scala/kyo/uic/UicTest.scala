@@ -29,12 +29,26 @@ abstract class UicTest extends kyo.test.Test[Any]:
                 r.signal.current(using r.frame).map(elements)
             case f: UI.Ast.Fragment[?] =>
                 Kyo.foreach(f.children)(elements).map(_.flatten)
+            case f: UI.Ast.Foreach[?, ?] => foreachElements(f)
             case k: UI.Ast.KeyedChild[?] => elements(k.child)
             case m: UI.Ast.Mounted =>
                 m.placeholderUI match
                     case Present(ui) => elements(ui)
                     case Absent      => Chunk.empty
             case _ => Chunk.empty
+
+    /** A keyed list region resolved to the elements it currently renders.
+      *
+      * Same reasoning as `Reactive` above: a list region is a subscription boundary, not a node the client sees, so a
+      * walk that stopped here would miss every row a component renders through one. Split out because recovering the
+      * element type costs a polymorphic continuation, which does not fit inside a match arm.
+      */
+    private def foreachElements(f: UI.Ast.Foreach[?, ?])(using Frame): Chunk[UI.Ast.Element] < Sync =
+        f.applyTyped([T] =>
+            (signal: Signal[Chunk[T]], _: Maybe[T => String], render: (Int, T) => UI) =>
+                signal.current(using f.frame).map { items =>
+                    Kyo.foreach(items.zipWithIndex) { (item, i) => elements(render(i, item)) }.map(_.flatten)
+            })
 
     /** Every reactive node in the tree, in walk order, WITHOUT resolving it away.
       *
@@ -62,6 +76,24 @@ abstract class UicTest extends kyo.test.Test[Any]:
             case m: UI.Ast.Mounted =>
                 m.placeholderUI match
                     case Present(ui) => reactiveNodes(ui)
+                    case Absent      => Chunk.empty
+            case _ => Chunk.empty
+
+    /** The list regions in the tree, kept rather than resolved, for the suites that pin a slot as a reconciled list
+      * rather than a block of children rebuilt per emission. Same reasoning as [[reactiveNodes]]: the two render the
+      * same HTML, so the boundary is the only place the difference shows. The walk descends THROUGH a `Reactive`,
+      * since a component may put its list behind a region of its own (a paginator's page region).
+      */
+    private[uic] def foreachNodes(node: UI)(using Frame): Chunk[UI.Ast.Foreach[?, ?]] < Sync =
+        node match
+            case e: UI.Ast.Element       => Kyo.foreach(e.children)(foreachNodes).map(_.flattenChunk)
+            case f: UI.Ast.Fragment[?]   => Kyo.foreach(f.children)(foreachNodes).map(_.flattenChunk)
+            case k: UI.Ast.KeyedChild[?] => foreachNodes(k.child)
+            case r: UI.Ast.Reactive[?]   => r.signal.current(using r.frame).map(foreachNodes)
+            case f: UI.Ast.Foreach[?, ?] => Kyo.lift(Chunk(f))
+            case m: UI.Ast.Mounted =>
+                m.placeholderUI match
+                    case Present(ui) => foreachNodes(ui)
                     case Absent      => Chunk.empty
             case _ => Chunk.empty
 
