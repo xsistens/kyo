@@ -570,8 +570,12 @@ private[kyo] object DragProtocol:
         result.map(_ => message)
     end validate
 
-    private val browserTimestampMin = Instant.parse("0001-01-01T00:00:00Z").getOrThrow
-    private val browserTimestampMax = Instant.parse("9999-12-31T23:59:59.999999999Z").getOrThrow
+    // Years 0001 and 9999, as epoch seconds rather than parsed text. This object initializes on the first event
+    // of ANY kind, and off the JVM a parse builds a formatter, which initializes `java.util.Locale`, which loads
+    // every locale the CLDR database holds: 130 ms of a page's first click and tens of megabytes it keeps, in an
+    // app that never drags anything.
+    private[kyo] val browserTimestampMin = Instant.fromJava(java.time.Instant.ofEpochSecond(-62135596800L))
+    private[kyo] val browserTimestampMax = Instant.fromJava(java.time.Instant.ofEpochSecond(253402300799L, 999999999L))
 
     /** Validates an untrusted event and converts drag-start items exactly once. */
     private[kyo] def validateEventAndDomain(event: UIEvent, limits: Limits): Result[ValidationFailure, ValidatedEvent] =
