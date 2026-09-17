@@ -8,7 +8,7 @@ import scala.scalajs.js
 /** Mount-scoped registry of live HTML reactive range anchors. */
 final private[kyo] class DomReactiveRegions private (
     private val document: dom.Document,
-    private val ranges: mutable.HashMap[String, DomReactiveRegions.Endpoints]
+    private val ranges: DomReactiveRegions.RangeTable
 ):
 
     private var open = true
@@ -173,15 +173,15 @@ final private[kyo] class DomReactiveRegions private (
       */
     private[kyo] def firstElementAt(path: Seq[String]): Maybe[dom.Element] =
         var found = Maybe.empty[dom.Element]
-        ranges.foreachEntry { (id, endpoints) =>
-            if found.isEmpty && ReactiveRegion.pathOf(id).contains(path) then
-                var current = DomReactiveRegions.next(endpoints.start)
-                while found.isEmpty && current.nonEmpty && (current.get ne endpoints.end) do
-                    current.get match
-                        case element: dom.Element => found = Present(element)
-                        case _                    => ()
-                    current = DomReactiveRegions.next(current.get)
-                end while
+        // Nested ranges that share the path hold the same content, so the outermost answers for all of them.
+        ranges.atPath(path, innermost = false).foreach { endpoints =>
+            var current = DomReactiveRegions.next(endpoints.start)
+            while found.isEmpty && current.nonEmpty && (current.get ne endpoints.end) do
+                current.get match
+                    case element: dom.Element => found = Present(element)
+                    case _                    => ()
+                current = DomReactiveRegions.next(current.get)
+            end while
         }
         found
     end firstElementAt
@@ -194,10 +194,11 @@ final private[kyo] class DomReactiveRegions private (
       * is replaced by a single fresh text node.
       */
     private[kyo] def setTextAt(path: Seq[String], value: String): Boolean =
-        var written = false
-        ranges.foreachEntry { (id, endpoints) =>
-            if !written && ReactiveRegion.pathOf(id).contains(path) then
-                written = true
+        // The innermost range of the path: only a leaf region binds its text, and writing through an outer range
+        // would take the inner one's markers for content and delete them.
+        ranges.atPath(path, innermost = true) match
+            case Absent => false
+            case Present(endpoints) =>
                 val first = DomReactiveRegions.next(endpoints.start)
                 first match
                     case Present(node: dom.Text) if DomReactiveRegions.next(node).exists(_ eq endpoints.end) =>
@@ -213,12 +214,16 @@ final private[kyo] class DomReactiveRegions private (
                             discard(parent.insertBefore(document.createTextNode(value), endpoints.end))
                         }
                 end match
-        }
-        written
+                true
+        end match
     end setTextAt
 
     private[kyo] def size(using Frame): Int < Sync =
         Sync.defer(ranges.size)
+
+    /** How many paths the path index holds. It is derived from the ranges, so it can never exceed [[size]]. */
+    private[kyo] def indexedPaths(using Frame): Int < Sync =
+        Sync.defer(ranges.indexedPaths)
 
     private[kyo] def contains(regionId: String)(using Frame): Boolean < Sync =
         Sync.defer(ranges.contains(regionId))
@@ -433,6 +438,73 @@ private[kyo] object DomReactiveRegions:
 
     final private case class Endpoints(start: dom.Comment, end: dom.Comment)
 
+    /** The live ranges by id, and the ids of each path.
+      *
+      * A range id encodes its path ([[ReactiveRegion.htmlId]]), so the range of a path is found by ENCODING the path
+      * once and reading the table. Decoding every held id to compare paths costs the size of the registry times the
+      * length of an id, per lookup: a bound text write in a thousand-row table spent 4.4 million hex-digit decodes
+      * finding its one text node.
+      *
+      * One path can own several ranges: a region nested transparently in another shares its path and differs only
+      * in the depth suffix. `byBase` keeps those together under the depth-less id, in no particular order; the
+      * depth is read off the id when one is picked. Every mutation goes through here so the two maps cannot drift.
+      */
+    final private class RangeTable private (byId: mutable.HashMap[String, Endpoints]):
+
+        private val byBase = mutable.HashMap.empty[String, mutable.ArrayBuffer[String]]
+        byId.keysIterator.foreach(index)
+
+        private def index(id: String): Unit =
+            val ids = byBase.getOrElseUpdate(ReactiveRegion.baseIdOf(id), mutable.ArrayBuffer.empty[String])
+            if !ids.contains(id) then ids += id
+
+        def indexedPaths: Int                            = byBase.size
+        def size: Int                                    = byId.size
+        def contains(id: String): Boolean                = byId.contains(id)
+        def get(id: String): Option[Endpoints]           = byId.get(id)
+        def apply(id: String): Endpoints                 = byId(id)
+        def getOrElse(id: String, default: => Endpoints) = byId.getOrElse(id, default)
+        def iterator: Iterator[(String, Endpoints)]      = byId.iterator
+
+        def addAll(ranges: mutable.HashMap[String, Endpoints]): Unit =
+            ranges.foreachEntry { (id, endpoints) =>
+                byId.update(id, endpoints)
+                index(id)
+            }
+
+        def remove(id: String): Unit =
+            if byId.remove(id).nonEmpty then
+                val base = ReactiveRegion.baseIdOf(id)
+                byBase.get(base).foreach { ids =>
+                    ids -= id
+                    if ids.isEmpty then discard(byBase.remove(base))
+                }
+
+        def clear(): Unit =
+            byId.clear()
+            byBase.clear()
+
+        /** The range that owns `path`: the most deeply nested one when `innermost`, the outermost otherwise. */
+        def atPath(path: Seq[String], innermost: Boolean): Maybe[Endpoints] =
+            byBase.get(ReactiveRegion.htmlId(path)) match
+                case None => Absent
+                case Some(ids) =>
+                    var best = ids(0)
+                    var i    = 1
+                    while i < ids.length do
+                        // Depth suffixes are fixed-width hex, and the bare id is a prefix of every suffixed one,
+                        // so string order IS depth order.
+                        val id = ids(i)
+                        if (id > best) == innermost then best = id
+                        i += 1
+                    end while
+                    Present(byId(best))
+        end atPath
+    end RangeTable
+
+    private object RangeTable:
+        def apply(ranges: mutable.HashMap[String, Endpoints]): RangeTable = new RangeTable(ranges)
+
     /** Everything a range morph reconciles against.
       *
       * `start` and `end` are the live anchors: the range is the sibling run strictly between them, which is why the
@@ -466,7 +538,7 @@ private[kyo] object DomReactiveRegions:
 
     def init(root: dom.Element)(using Frame): DomReactiveRegions < (Sync & Scope) =
         for
-            registry <- Sync.defer(new DomReactiveRegions(ownerDocument(root), scan(ownerDocument(root), root)))
+            registry <- Sync.defer(new DomReactiveRegions(ownerDocument(root), RangeTable(scan(ownerDocument(root), root))))
             _        <- Scope.ensure(registry.close)
         yield registry
 

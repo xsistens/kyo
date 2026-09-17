@@ -280,4 +280,160 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
         end for
     }
 
+    // Path-addressed lookups. A range id ENCODES its path, so the registry finds the range of a path by encoding
+    // the path once and reading the table, never by decoding every id it holds.
+
+    private def idOf(path: String*): String = kyo.internal.ReactiveRegion.htmlId(path)
+
+    "a text write finds its range among a thousand and keeps the text node" in {
+        val html = (0 until 1000).map { i =>
+            val id = idOf("0", i.toString, "1")
+            s"<p><!--kyo-rs:$id-->v$i<!--kyo-re:$id--></p>"
+        }.mkString
+        val root = host(html)
+        Scope.run {
+            DomReactiveRegions.init(root).map { regions =>
+                val target = root.children(617).childNodes(1)
+                val wrote  = regions.setTextAt(Seq("0", "617", "1"), "changed")
+                val missed = regions.setTextAt(Seq("0", "1000", "1"), "nobody")
+                assert(wrote)
+                assert(!missed)
+                assert(root.children(617).childNodes(1) eq target)
+                assert(root.children(617).textContent == "changed")
+                assert(root.children(616).textContent == "v616")
+                assert(root.children(618).textContent == "v618")
+            }
+        }
+    }
+
+    "a text write under transparent nesting lands in the innermost range" in {
+        val inner = One + "n00000001"
+        val root  = host(s"<!--kyo-rs:$One--><!--kyo-rs:$inner-->x<!--kyo-re:$inner--><!--kyo-re:$One-->")
+        Scope.run {
+            for
+                regions <- DomReactiveRegions.init(root)
+                wrote = regions.setTextAt(Seq("1"), "y")
+                size <- regions.size
+                // The outer range is still patchable, which it is not once its inner markers were deleted.
+                _ <- regions.replace(inner, "z")
+            yield
+                assert(wrote)
+                assert(size == 2)
+                assert(root.textContent == "z")
+                assert(root.childNodes.length == 5)
+        }
+    }
+
+    "a text write never takes the outer of two ranges that share a path" in {
+        // Which of the two a table hands out first is an accident of hashing, so one pair proves nothing: over
+        // sixty-four pairs an implementation that takes whichever comes first deletes inner markers somewhere.
+        val html = (0 until 64).map { i =>
+            val outer = idOf("p", i.toString)
+            val inner = outer + "n00000001"
+            s"<p><!--kyo-rs:$outer--><!--kyo-rs:$inner-->v<!--kyo-re:$inner--><!--kyo-re:$outer--></p>"
+        }.mkString
+        val root = host(html)
+        Scope.run {
+            for
+                regions <- DomReactiveRegions.init(root)
+                wrote = (0 until 64).forall(i => regions.setTextAt(Seq("p", i.toString), s"w$i"))
+                size <- regions.size
+            yield
+                assert(wrote)
+                assert(size == 128)
+                assert((0 until 64).forall(i => root.children(i).childNodes.length == 5))
+                assert((0 until 64).forall(i => root.children(i).textContent == s"w$i"))
+        }
+    }
+
+    "the first element of a path resolves through either nesting level" in {
+        val inner = One + "n00000001"
+        val root  = host(s"<!--kyo-rs:$One--><!--kyo-rs:$inner-->t<b id='hit'></b><!--kyo-re:$inner--><!--kyo-re:$One-->")
+        Scope.run {
+            DomReactiveRegions.init(root).map { regions =>
+                assert(regions.firstElementAt(Seq("1")).map(_.id) == Present("hit"))
+                assert(regions.firstElementAt(Seq("2")).isEmpty)
+            }
+        }
+    }
+
+    "path lookups follow the registry through a replacement" in {
+        val root = host(
+            s"<!--kyo-rs:$Outer--><div><!--kyo-rs:$Old-->old<!--kyo-re:$Old--></div><!--kyo-re:$Outer-->"
+        )
+        Scope.run {
+            for
+                regions <- DomReactiveRegions.init(root)
+                _       <- regions.replace(Outer, s"<section><!--kyo-rs:$New-->new<!--kyo-re:$New--></section>")
+            yield
+                assert(!regions.setTextAt(Seq("d"), "stale"))
+                assert(regions.setTextAt(Seq("n"), "fresh"))
+                assert(root.textContent == "fresh")
+        }
+    }
+
+    "path lookups find nothing once the registry is closed" in {
+        val root = host(s"<!--kyo-rs:$One-->x<!--kyo-re:$One-->")
+        for
+            saved   <- AtomicRef.init(Absent: Maybe[DomReactiveRegions])
+            _       <- Scope.run(DomReactiveRegions.init(root).map(regions => saved.set(Present(regions))))
+            regions <- saved.get.map(_.get)
+        yield
+            assert(!regions.setTextAt(Seq("1"), "late"))
+            assert(root.textContent == "x")
+        end for
+    }
+
+    "the client encodes a path to the id the server encodes it to" in {
+        // `__kyoResolveEl` reads the client registry by the id `__kyoRangeIdOf` builds, so the two encoders agreeing
+        // is what that lookup rests on.
+        val js     = kyo.internal.HtmlRenderer.clientJs("/")
+        val from   = js.indexOf("function __kyoRangeIdOf(p){")
+        val until  = js.indexOf("function __kyoFirstElIn", from)
+        val encode = scala.scalajs.js.eval(s"(${js.substring(from, until)})").asInstanceOf[scala.scalajs.js.Function1[String, String]]
+        val paths = Seq(
+            Seq.empty[String],
+            Seq("0"),
+            Seq("2", "0", "17", "1"),
+            Seq("row-42", "k"),
+            Seq("ü", "\u4e2d", "a b")
+        )
+        assert(from >= 0 && until > from)
+        assert(paths.forall(path => encode(path.mkString(".")) == idOf(path*)))
+    }
+
+    "the path index shrinks with the ranges it indexes" in {
+        // Every round retires the ranges of the round before it and registers fresh ids, one of them nested
+        // transparently. An index that only ever gained entries would hold a path per round at the end.
+        val root = host(s"<!--kyo-rs:$Outer--><!--kyo-re:$Outer-->")
+        for
+            saved <- AtomicRef.init(Absent: Maybe[DomReactiveRegions])
+            counts <- Scope.run {
+                for
+                    regions <- DomReactiveRegions.init(root)
+                    _       <- saved.set(Present(regions))
+                    _ <- Kyo.foreachDiscard(0 until 200) { round =>
+                        val plain = idOf("round", round.toString)
+                        val outer = idOf("nested", round.toString)
+                        val inner = outer + "n00000001"
+                        regions.replace(
+                            Outer,
+                            s"<i><!--kyo-rs:$plain-->a<!--kyo-re:$plain--></i>" +
+                                s"<b><!--kyo-rs:$outer--><!--kyo-rs:$inner-->b<!--kyo-re:$inner--><!--kyo-re:$outer--></b>"
+                        )
+                    }
+                    size  <- regions.size
+                    paths <- regions.indexedPaths
+                yield (size, paths, regions.setTextAt(Seq("round", "0"), "stale"), regions.setTextAt(Seq("round", "199"), "live"))
+            }
+            regions     <- saved.get.map(_.get)
+            closedSize  <- regions.size
+            closedPaths <- regions.indexedPaths
+        yield
+            // Outer, the plain range, and the nested pair: four ranges under three paths.
+            assert(counts == (4, 3, false, true))
+            assert(closedSize == 0 && closedPaths == 0)
+        end for
+    }
+
 end DomReactiveRegionsTest

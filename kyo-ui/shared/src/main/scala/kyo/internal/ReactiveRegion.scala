@@ -164,6 +164,14 @@ private[kyo] object ReactiveRegion:
         val space = payload.indexOf(' ')
         if space < 0 then payload else payload.substring(0, space)
 
+    /** An id without its transparent-nesting suffix: the id of the same path at depth zero.
+      *
+      * Ids are hex apart from the leading `r` and the `n` that opens the suffix, so the first `n` is the cut.
+      */
+    private[kyo] def baseIdOf(id: String): String =
+        val nestingAt = id.indexOf('n', 1)
+        if nestingAt < 0 then id else id.substring(0, nestingAt)
+
     private[kyo] def htmlId(path: Seq[String]): String =
         htmlId(RegionIdentity.root(path))
 

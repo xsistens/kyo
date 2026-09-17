@@ -53,6 +53,8 @@ private[kyo] object DomTestEnv:
             js.Dynamic.global.globalThis.Element = window.Element
             js.Dynamic.global.globalThis.HTMLElement = window.HTMLElement
             js.Dynamic.global.globalThis.Node = window.Node
+            js.Dynamic.global.globalThis.Text = window.asInstanceOf[js.Dynamic].Text
+            js.Dynamic.global.globalThis.Comment = window.asInstanceOf[js.Dynamic].Comment
         end if
     end install
 
