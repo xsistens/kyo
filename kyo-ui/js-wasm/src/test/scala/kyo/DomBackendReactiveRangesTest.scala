@@ -519,4 +519,49 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
         )
     end mixedTableTopology
 
+    "bound row labels keep writing through swap, removal, insertion and a row repaint" in {
+        // The benchmark table in small: every row holds a bound text region, and a list patch must leave the
+        // registry addressing each of them, whether the row stayed, moved, arrived, or was painted again. A
+        // registry that lost a row's range shows up here as a label that silently stops changing.
+        final case class Row(id: String, label: SignalRef[String]) derives CanEqual
+        def text(id: String): String =
+            Maybe(dom.document.getElementById(s"lbl-$id")).map(_.textContent).getOrElse("<gone>")
+        for
+            labels <- Kyo.foreach(Chunk("a", "b", "c", "d", "e"))(id => Signal.initRef(s"${id}0").map(Row(id, _)))
+            extra  <- Signal.initRef("f0").map(Row("f", _))
+            again  <- Signal.initRef("c1").map(Row("c", _))
+            rows   <- Signal.initRef(labels)
+            byId = labels.map(r => r.id -> r).toMap
+            ui = UI.div(
+                UI.ul(rows.foreachKeyed(_.id)(row => UI.li(UI.span(row.label: Signal[String]).id(s"lbl-${row.id}")))).id("bound-list")
+            )
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && text("e") == "e0"))
+            // swap the ends
+            _ <- rows.set(Chunk(byId("e"), byId("b"), byId("c"), byId("d"), byId("a")))
+            _ <- assertEventually(Sync.defer(dom.document.getElementById("bound-list").textContent == "e0b0c0d0a0"))
+            _ <- byId("a").label.set("a1")
+            _ <- byId("b").label.set("b1")
+            _ <- assertEventually(Sync.defer(text("a") == "a1" && text("b") == "b1"))
+            // remove one, insert one, repaint one (same key, a different row value)
+            _ <- rows.set(Chunk(byId("e"), extra, again, byId("d"), byId("a")))
+            _ <- assertEventually(Sync.defer(dom.document.getElementById("bound-list").textContent == "e0f0c1d0a1"))
+            _ <- byId("b").label.set("b2")
+            _ <- extra.label.set("f1")
+            _ <- again.label.set("c2")
+            _ <- byId("d").label.set("d1")
+            _ <- assertEventually(Sync.defer(text("f") == "f1" && text("c") == "c2" && text("d") == "d1"))
+            // and the list still patches afterwards
+            _       <- rows.set(Chunk(byId("a"), byId("d")))
+            _       <- assertEventually(Sync.defer(dom.document.getElementById("bound-list").textContent == "a1d1"))
+            _       <- byId("a").label.set("a2")
+            _       <- assertEventually(Sync.defer(text("a") == "a2"))
+            removed <- Sync.defer(text("b"))
+            _       <- fiber.interrupt
+            _       <- fiber.getResult
+        yield assert(removed == "<gone>")
+        end for
+    }
+
 end DomBackendReactiveRangesTest
