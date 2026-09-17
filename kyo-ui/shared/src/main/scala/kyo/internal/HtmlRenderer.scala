@@ -1888,16 +1888,35 @@ private[kyo] object HtmlRenderer:
            |  return segs.join(".");
            |}
            |function __kyoPathSel(p){var bs=String.fromCharCode(92),q=String.fromCharCode(34);var s=String(p).split(bs).join(bs+bs).split(q).join(bs+q);return '[data-kyo-path='+q+s+q+']';}
+           |// The id a path encodes to at nesting depth zero (ReactiveRegion.htmlId), so the common lookup is one
+           |// table read instead of a decode of every id the registry holds.
+           |function __kyoRangeIdOf(p){
+           |  var segs=p===""?[]:String(p).split("."),id="r";
+           |  function hex(v,w){var h=v.toString(16);while(h.length<w)h="0"+h;return h;}
+           |  for(var i=0;i<segs.length;i++){
+           |    id+=hex(segs[i].length,8);
+           |    for(var k=0;k<segs[i].length;k++)id+=hex(segs[i].charCodeAt(k),4);
+           |  }
+           |  return id;
+           |}
+           |function __kyoFirstElIn(pair){
+           |  var n=pair.start.nextSibling;
+           |  while(n&&n!==pair.end){if(n.nodeType===1)return n;n=n.nextSibling;}
+           |  return null;
+           |}
            |// Path-addressed command/measure target: the element carrying the path, else the first element inside
            |// the reactive range that owns the path (a range is delimited by comments, so it has no element of its own).
            |function __kyoResolveEl(p){
            |  var el=document.querySelector(__kyoPathSel(p));
            |  if(el)return el;
+           |  if(!__kyoRanges)return null;
+           |  var direct=__kyoRanges.get(__kyoRangeIdOf(p));
+           |  if(direct)return __kyoFirstElIn(direct);
+           |  // Only a range nested transparently (depth suffix) or a segment that itself holds a dot gets here.
            |  var found=null;
-           |  if(__kyoRanges)__kyoRanges.forEach(function(pair,id){
+           |  __kyoRanges.forEach(function(pair,id){
            |    if(found||__kyoRangeIdPath(id)!==p)return;
-           |    var n=pair.start.nextSibling;
-           |    while(n&&n!==pair.end){if(n.nodeType===1&&!found)found=n;n=n.nextSibling;}
+           |    found=__kyoFirstElIn(pair);
            |  });
            |  return found;
            |}
