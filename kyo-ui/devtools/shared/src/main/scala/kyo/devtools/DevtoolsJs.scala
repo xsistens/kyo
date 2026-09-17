@@ -40,7 +40,7 @@ object DevtoolsJs:
           |var TIERS={idle:"#9ca3af",active:"#60a5fa",warm:"#f59e0b",hot:"#ef4444",wasted:"#f43f5e"};
           |var opts={badges:true,flash:true,threshold:0,onlyWasted:false,maxBadges:200};
           |var rows=[],meta={o:false,h:[]},byKey={},prevTotals={},flashUntil={},labels={},frozen=false;
-          |var host,root,layer,panel,pill,popover,pinned=null,frame=0,markers={},markersFresh=false,nodes={};
+          |var host,root,layer,panel,pill,popover,toggle,pinned=null,frame=0,markers={},markersFresh=false,nodes={};
           |
           |function css(){return ""+
           |":host{all:initial}"+
@@ -78,6 +78,16 @@ object DevtoolsJs:
           |".pill{position:fixed;right:12px;bottom:12px;pointer-events:auto;cursor:pointer;z-index:4;"+
           |"background:rgba(15,23,42,.92);color:#cbd5e1;border:1px solid #334155;border-radius:999px;"+
           |"padding:4px 10px;font-size:11px;font-variant-numeric:tabular-nums}"+
+          |// The overlay's own off switch, and the one control that has to be findable without reading
+          |// anything first. Bottom LEFT, opposite the pill, because the pill's corner belongs to the panel
+          |// that unfolds from it — and this button has to keep standing in the one state where every other
+          |// mark of the tool is gone from the page.
+          |".toggle{position:fixed;left:12px;bottom:12px;pointer-events:auto;cursor:pointer;z-index:4;"+
+          |"background:rgba(15,23,42,.92);color:#cbd5e1;border:1px solid #334155;border-radius:999px;"+
+          |"padding:4px 10px;font-size:11px;user-select:none;white-space:nowrap;"+
+          |"box-shadow:0 1px 4px rgba(0,0,0,.45)}"+
+          |".toggle:hover{background:rgba(30,41,59,.97);color:#f8fafc}"+
+          |".toggle.off{color:#64748b;background:rgba(15,23,42,.72)}"+
           |".panel{position:fixed;right:12px;bottom:12px;pointer-events:auto;z-index:4;width:340px;"+
           |"max-height:60vh;overflow:auto;background:rgba(15,23,42,.97);color:#e5e7eb;border:1px solid #334155;"+
           |"border-radius:8px;font-size:11px;box-shadow:0 10px 30px rgba(0,0,0,.5)}"+
@@ -310,6 +320,16 @@ object DevtoolsJs:
           |
           |// ---- panel ----------------------------------------------------------------------------------
           |
+          |// The switch and the panel's "Zähler" button are two handles on ONE piece of state, so the switch
+          |// is repainted from `opts` rather than from a flag of its own — flipping it in the panel moves the
+          |// button in the corner, and the reader is never shown two answers to the same question.
+          |function paintToggle(){
+          |  if(!toggle)return;
+          |  toggle.className="toggle"+(opts.badges?"":" off");
+          |  toggle.textContent=(opts.badges?"◉":"○")+" Zähler";
+          |  toggle.title=opts.badges?"Zähler ausblenden":"Zähler einblenden";
+          |}
+          |
           |function paintPanel(){
           |  var total=0,wasted=0,repaints=0,i;
           |  for(i=0;i<rows.length;i++){total+=rows[i].r;wasted+=rows[i].w;repaints+=rows[i].t;}
@@ -324,7 +344,7 @@ object DevtoolsJs:
           |  html.push('<header><strong>kyo-ui renders</strong><span class="grow"></span>'+
           |    '<button data-cmd="freeze" class="'+(frozen?"on":"")+'">'+(frozen?"Weiter":"Pause")+'</button>'+
           |    (window.__kyoDev.onCommand?'<button data-cmd="reset">Reset</button>':"")+
-          |    '<button data-opt="badges" class="'+(opts.badges?"on":"")+'">Badges</button>'+
+          |    '<button data-opt="badges" class="'+(opts.badges?"on":"")+'">Zähler</button>'+
           |    '<button data-opt="onlyWasted" class="'+(opts.onlyWasted?"on":"")+'">\u26a0</button>'+
           |    '<button data-cmd="close">\u2715</button></header>');
           |  html.push('<div style="padding:6px 8px">'+spark(meta.h||[],320,28,TIERS.active)+'</div>');
@@ -372,6 +392,12 @@ object DevtoolsJs:
           |  root.appendChild(pill);
           |  panel=document.createElement("div");panel.className="panel";panel.style.display="none";
           |  root.appendChild(panel);
+          |  // Its own content is one text node, so a click on it targets the element that carries the
+          |  // attribute and the root's single delegated handler reads it without a `closest` walk.
+          |  toggle=document.createElement("div");toggle.className="toggle";
+          |  toggle.setAttribute("data-opt","badges");
+          |  root.appendChild(toggle);
+          |  paintToggle();
           |  pill.addEventListener("click",function(){panel.style.display="block";pill.style.display="none";paintPanel();});
           |  root.addEventListener("click",onClick);
           |  // A click anywhere in the page closes an open card. It has to be on the document, because a click
@@ -403,7 +429,13 @@ object DevtoolsJs:
           |  if(cmd==="freeze"){frozen=!frozen;paintPanel();return;}
           |  if(cmd){if(window.__kyoDev.onCommand)window.__kyoDev.onCommand(cmd);return;}
           |  var opt=t.getAttribute&&t.getAttribute("data-opt");
-          |  if(opt){opts[opt]=!opts[opt];paintPanel();return;}
+          |  // Repainted here and not left to the next tick: the badges are the thing the reader just asked
+          |  // to see or not see, and a switch that answers two frames later reads as a switch that stuck.
+          |  // An open card goes with them — it is anchored to a badge that is about to be removed, and an
+          |  // unanchored card points at whatever is now underneath it.
+          |  if(opt){opts[opt]=!opts[opt];
+          |    if(!opts.badges){pinned=null;hidePopover();}
+          |    paintBadges();paintToggle();paintPanel();return;}
           |  var badge=t.closest&&t.closest(".badge");
           |  if(badge){var k=badge.getAttribute("data-k");
           |    pinned=pinned&&pinned.key===k?null:{key:k};
@@ -437,11 +469,11 @@ object DevtoolsJs:
           |  if(!host)return;
           |  document.removeEventListener("click",onDocClick,true);
           |  host.parentNode&&host.parentNode.removeChild(host);
-          |  host=root=layer=panel=pill=popover=null;rows=[];byKey={};labels={};nodes={};pinned=null;
+          |  host=root=layer=panel=pill=popover=toggle=null;rows=[];byKey={};labels={};nodes={};pinned=null;
           |}
           |
           |window.__kyoDev={install:install,push:push,uninstall:uninstall,onCommand:null,
-          |  setOption:function(k,v){opts[k]=v;paintPanel();}};
+          |  setOption:function(k,v){opts[k]=v;if(host){paintBadges();paintToggle();paintPanel();}}};
           |})();
           |""".stripMargin
 

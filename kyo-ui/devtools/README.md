@@ -64,11 +64,18 @@ Three layers, so the always-visible part stays quiet:
   **rate**, not the total, so a region that rendered once at load fades out and a busy one stands out. Above
   a wasted-render ratio of 50% the badge turns red regardless of rate — two wasted renders a second is a
   better find than twenty justified ones.
-- **A popover** on hover or click with everything above, including the source snippet, and links to the
-  parent and child regions.
+  Hovering a badge outlines the region it counts; the outline stays while that region's card is open.
+- **A popover** opened by clicking a badge, with everything above, including the source snippet, and links to
+  the parent and child regions. The same click closes it, and so does a click anywhere else on the page.
 - **A panel**, collapsed to a pill showing the page's total rate and wasted share. Expanded it ranks the top
   offenders, carries a page-wide renders/second band for "it stuttered a second ago, what was that", and
   holds the display controls.
+
+Bottom left, opposite the pill, sits a **Zähler** switch that takes the badges and outlines off the page and
+puts them back. It is the one control that stays visible in the off state — the corner is deliberately not
+the pill's, which belongs to the panel that unfolds from it — and it shares its state with the panel's own
+`Zähler` button, so the two never show different answers. Reading a dense view with the counters over it, or
+taking a screenshot of the app rather than of the tool, is a click and not a reload.
 
 The overlay lives in a shadow root on a fixed, pointer-transparent host outside the app's container. It is
 not built from kyo-ui, owns no reactive region, and therefore cannot appear in its own statistics.
