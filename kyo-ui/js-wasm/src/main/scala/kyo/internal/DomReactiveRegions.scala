@@ -225,6 +225,14 @@ final private[kyo] class DomReactiveRegions private (
     private[kyo] def indexedPaths(using Frame): Int < Sync =
         Sync.defer(ranges.indexedPaths)
 
+    /** The ids registered right now. */
+    private[kyo] def ids(using Frame): Set[String] < Sync =
+        Sync.defer(ranges.iterator.map(_._1).toSet)
+
+    /** How many entries the registry has written or dropped so far: what a patch cost it, as a number. */
+    private[kyo] def registryWrites(using Frame): Int < Sync =
+        Sync.defer(ranges.writes)
+
     private[kyo] def contains(regionId: String)(using Frame): Boolean < Sync =
         Sync.defer(ranges.contains(regionId))
 
@@ -249,9 +257,14 @@ final private[kyo] class DomReactiveRegions private (
       *
       * `reconcile` answers whether it took the job. `false` must mean it changed nothing, since the caller then
       * falls back to a whole-list repaint over the very same range.
+      *
+      * The registry follows the patch through the [[DomReactiveRegions.PatchScope]] the reconciler reports to, and
+      * so pays for the rows that changed. A row the patch only MOVES keeps its marker nodes, and the entries naming
+      * them stay true; re-reading the whole range instead tore down and rebuilt a thousand entries to swap two
+      * rows of a thousand.
       */
     private[kyo] def withRegionFragment(regionId: String, html: String)(
-        reconcile: DomReactiveRegions.MorphTarget => Boolean
+        reconcile: (DomReactiveRegions.MorphTarget, DomReactiveRegions.PatchScope) => Boolean
     )(using Frame): Boolean < Sync =
         Sync.defer {
             ensureOpen()
@@ -266,9 +279,6 @@ final private[kyo] class DomReactiveRegions private (
                     range.setEndBefore(endpoints.end)
                     val fragment = range.createContextualFragment(html)
                     val incoming = DomReactiveRegions.scan(document, fragment)
-                    val removed = ranges.iterator.collect {
-                        case (id, nested) if id != regionId && intersects(range, nested.start) => id
-                    }.toSet
                     val target = DomReactiveRegions.MorphTarget(
                         parent,
                         endpoints.start,
@@ -278,10 +288,11 @@ final private[kyo] class DomReactiveRegions private (
                         childElements(fragment),
                         incoming.isEmpty
                     )
-                    val took = reconcile(target)
+                    val scope = new DomReactiveRegions.PatchScope(regionId)
+                    val took  = reconcile(target, scope)
                     if took then
-                        removed.foreach(ranges.remove)
-                        ranges.addAll(rescanRange(regionId, endpoints))
+                        scope.retired.foreach(ranges.remove)
+                        ranges.addAll(scope.found)
                     took
             end match
         }
@@ -297,32 +308,7 @@ final private[kyo] class DomReactiveRegions private (
         Frame
     ): mutable.HashMap[String, DomReactiveRegions.Endpoints] =
         val found = mutable.HashMap.empty[String, DomReactiveRegions.Endpoints]
-        val open  = mutable.ArrayBuffer.empty[(String, dom.Comment)]
-        def visit(node: dom.Node): Unit =
-            DomReactiveRegions.startMarkerId(node) match
-                case Present(id) => open += ((id, node.asInstanceOf[dom.Comment]))
-                case Absent =>
-                    DomReactiveRegions.endMarkerId(node).foreach { id =>
-                        if open.isEmpty || open.last._1 != id then
-                            fail(s"Crossed reactive ranges after morphing $regionId: found $id")
-                        val (_, start) = open.remove(open.length - 1)
-                        found.update(id, DomReactiveRegions.Endpoints(start, node.asInstanceOf[dom.Comment]))
-                    }
-            end match
-            var child = DomReactiveRegions.firstChild(node)
-            while child.nonEmpty do
-                val next = DomReactiveRegions.next(child.get)
-                visit(child.get)
-                child = next
-            end while
-        end visit
-        var node = DomReactiveRegions.next(endpoints.start)
-        while node.nonEmpty && !(node.get eq endpoints.end) do
-            val next = DomReactiveRegions.next(node.get)
-            visit(node.get)
-            node = next
-        end while
-        if open.nonEmpty then fail(s"Reactive range start marker has no end after morphing $regionId: ${open.last._1}")
+        DomReactiveRegions.scanSiblings(regionId, DomReactiveRegions.next(endpoints.start), endpoints.end, found)
         found
     end rescanRange
 
@@ -458,6 +444,8 @@ private[kyo] object DomReactiveRegions:
             val ids = byBase.getOrElseUpdate(ReactiveRegion.baseIdOf(id), mutable.ArrayBuffer.empty[String])
             if !ids.contains(id) then ids += id
 
+        private var written                              = 0
+        def writes: Int                                  = written
         def indexedPaths: Int                            = byBase.size
         def size: Int                                    = byId.size
         def contains(id: String): Boolean                = byId.contains(id)
@@ -470,10 +458,12 @@ private[kyo] object DomReactiveRegions:
             ranges.foreachEntry { (id, endpoints) =>
                 byId.update(id, endpoints)
                 index(id)
+                written += 1
             }
 
         def remove(id: String): Unit =
             if byId.remove(id).nonEmpty then
+                written += 1
                 val base = ReactiveRegion.baseIdOf(id)
                 byBase.get(base).foreach { ids =>
                     ids -= id
@@ -504,6 +494,100 @@ private[kyo] object DomReactiveRegions:
 
     private object RangeTable:
         def apply(ranges: mutable.HashMap[String, Endpoints]): RangeTable = new RangeTable(ranges)
+
+    /** What a row-level patch tells the registry, so the registry follows the patch instead of re-reading the list.
+      *
+      * `retire` must be called BEFORE the patch mutates a logical child it is about to repaint or remove: a morph
+      * is free to drop markers, and a dropped marker's id can no longer be read off the DOM afterwards. `placed`
+      * is called AFTER a child was repainted or inserted, with the sibling run the result occupies, and reads the
+      * ranges standing there at that moment; marker nodes keep their identity through any later move, so reading
+      * early is as good as reading at the end.
+      */
+    final private[kyo] class PatchScope private[DomReactiveRegions] (regionId: String)(using Frame):
+        private[DomReactiveRegions] val retired = mutable.ArrayBuffer.empty[String]
+        private[DomReactiveRegions] val found   = mutable.HashMap.empty[String, Endpoints]
+
+        /** Every range inside the logical child starting at `first`, the child's own markers included. */
+        def retire(first: dom.Node): Unit =
+            eachSpanNode(first)(collectStartIds(_, retired))
+
+        /** The ranges in the sibling run from `first` up to, not including, `until`. */
+        def placed(first: dom.Node, until: dom.Node): Unit =
+            scanSiblings(regionId, if first == null then Absent else Present(first), until, found)
+    end PatchScope
+
+    private def collectStartIds(node: dom.Node, into: mutable.ArrayBuffer[String]): Unit =
+        startMarkerId(node).foreach(into += _)
+        var child = firstChild(node)
+        while child.nonEmpty do
+            collectStartIds(child.get, into)
+            child = next(child.get)
+    end collectStartIds
+
+    /** Read the ranges of the sibling run `[first, until)` off the DOM, nested ones included.
+      *
+      * A run is walked rather than a payload trusted because a morph keeps the markers of a range that survived
+      * and clones or drops the rest: what stands in the DOM is the only account that cannot drift.
+      */
+    private def scanSiblings(
+        regionId: String,
+        first: Maybe[dom.Node],
+        until: dom.Node,
+        found: mutable.HashMap[String, Endpoints]
+    )(using Frame): Unit =
+        val open = mutable.ArrayBuffer.empty[(String, dom.Comment)]
+        def visit(node: dom.Node): Unit =
+            startMarkerId(node) match
+                case Present(id) => open += ((id, node.asInstanceOf[dom.Comment]))
+                case Absent =>
+                    endMarkerId(node).foreach { id =>
+                        if open.isEmpty || open.last._1 != id then
+                            fail(s"Crossed reactive ranges after morphing $regionId: found $id")
+                        val (_, start) = open.remove(open.length - 1)
+                        found.update(id, Endpoints(start, node.asInstanceOf[dom.Comment]))
+                    }
+            end match
+            var child = firstChild(node)
+            while child.nonEmpty do
+                val following = next(child.get)
+                visit(child.get)
+                child = following
+            end while
+        end visit
+        var node = first
+        while node.nonEmpty && !(node.get eq until) do
+            val following = next(node.get)
+            visit(node.get)
+            node = following
+        end while
+        if open.nonEmpty then fail(s"Reactive range start marker has no end after morphing $regionId: ${open.last._1}")
+    end scanSiblings
+
+    /** The matching close marker for the span `open` starts, `Absent` when the run is unbalanced (the caller then
+      * treats the comment as an ordinary node). Ids are unique among siblings, so a direct match suffices.
+      */
+    private[kyo] def spanClose(open: dom.Node, id: String): Maybe[dom.Node] =
+        var node   = open.nextSibling
+        var result = Maybe.empty[dom.Node]
+        while result.isEmpty && node != null do
+            if endMarkerId(node).contains(id) then result = Present(node)
+            node = node.nextSibling
+        end while
+        result
+    end spanClose
+
+    /** Apply `f` to every node of the logical child starting at `first`, its markers included. */
+    private[kyo] def eachSpanNode(first: dom.Node)(f: dom.Node => Unit): Unit =
+        val last = startMarkerId(first).flatMap(spanClose(first, _)).getOrElse(first)
+        var node = first
+        var stop = false
+        while !stop && node != null do
+            val following = node.nextSibling
+            stop = node eq last
+            f(node)
+            node = following
+        end while
+    end eachSpanNode
 
     /** Everything a range morph reconciles against.
       *

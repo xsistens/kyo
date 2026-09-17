@@ -436,4 +436,125 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
         end for
     }
 
+    // Row-level patches. The registry follows what the reconciler reports instead of re-reading the list, so what
+    // it ends up holding has to equal what a fresh read of the same DOM finds, and a row that only moved must cost
+    // it nothing.
+
+    private val ListId = idOf("l")
+
+    private def rowHtml(i: Int, label: String): String =
+        val id = idOf("l", i.toString, label)
+        s"<li data-kyo-path='l.$i'><!--kyo-rs:$id-->$label<!--kyo-re:$id--></li>"
+
+    private def listHost(rows: Int): dom.Element =
+        host(s"<ul><!--kyo-rs:$ListId-->${(0 until rows).map(rowHtml(_, "a")).mkString}<!--kyo-re:$ListId--></ul>")
+
+    private def freshIds(root: dom.Element)(using Frame): Set[String] < (Sync & Scope) =
+        DomReactiveRegions.init(root).map(_.ids)
+
+    "a row patch leaves the registry holding what a fresh read of the DOM finds" in {
+        val root                     = listHost(50)
+        val ul                       = root.firstElementChild
+        def row(i: Int): dom.Element = ul.querySelector(s"[data-kyo-path='l.$i']")
+        Scope.run {
+            for
+                regions <- DomReactiveRegions.init(root)
+                removed <- regions.withRegionFragment(ListId, "") { (_, scope) =>
+                    scope.retire(row(10))
+                    discard(ul.removeChild(row(10)))
+                    true
+                }
+                afterRemove  <- regions.ids
+                expectRemove <- freshIds(root)
+                swapped <- regions.withRegionFragment(ListId, "") { (target, _) =>
+                    val (first, last) = (row(1), row(48))
+                    val afterLast     = last.nextSibling
+                    discard(ul.insertBefore(last, first))
+                    discard(ul.insertBefore(first, afterLast))
+                    true
+                }
+                afterSwap  <- regions.ids
+                expectSwap <- freshIds(root)
+                repainted <- regions.withRegionFragment(ListId, rowHtml(5, "b")) { (target, scope) =>
+                    val live  = row(5)
+                    val until = live.nextSibling
+                    scope.retire(live)
+                    val fresh = dom.document.importNode(target.fragment.firstChild, true)
+                    discard(ul.insertBefore(fresh, live))
+                    discard(ul.removeChild(live))
+                    scope.placed(fresh, until)
+                    true
+                }
+                afterRepaint  <- regions.ids
+                expectRepaint <- freshIds(root)
+                inserted <- regions.withRegionFragment(ListId, rowHtml(77, "c")) { (target, scope) =>
+                    val fresh = dom.document.importNode(target.fragment.firstChild, true)
+                    discard(ul.insertBefore(fresh, target.end))
+                    scope.placed(fresh, target.end)
+                    true
+                }
+                afterInsert  <- regions.ids
+                expectInsert <- freshIds(root)
+            yield
+                assert(removed && swapped && repainted && inserted)
+                assert(afterRemove == expectRemove && afterRemove.size == 50)
+                assert(afterSwap == expectSwap)
+                assert(afterRepaint == expectRepaint)
+                assert(afterRepaint.contains(idOf("l", "5", "b")) && !afterRepaint.contains(idOf("l", "5", "a")))
+                assert(afterInsert == expectInsert && afterInsert.size == 51)
+                assert(regions.setTextAt(Seq("l", "48", "a"), "moved"))
+                assert(!regions.setTextAt(Seq("l", "10", "a"), "gone"))
+                assert(regions.setTextAt(Seq("l", "77", "c"), "new"))
+        }
+    }
+
+    "a row patch costs the registry the rows it changed" in {
+        val root                     = listHost(1000)
+        val ul                       = root.firstElementChild
+        def row(i: Int): dom.Element = ul.querySelector(s"[data-kyo-path='l.$i']")
+        Scope.run {
+            for
+                regions <- DomReactiveRegions.init(root)
+                before  <- regions.registryWrites
+                _ <- regions.withRegionFragment(ListId, "") { (_, _) =>
+                    val (first, last) = (row(1), row(998))
+                    val afterLast     = last.nextSibling
+                    discard(ul.insertBefore(last, first))
+                    discard(ul.insertBefore(first, afterLast))
+                    true
+                }
+                swapped <- regions.registryWrites
+                _ <- regions.withRegionFragment(ListId, "") { (_, scope) =>
+                    scope.retire(row(500))
+                    discard(ul.removeChild(row(500)))
+                    true
+                }
+                removed <- regions.registryWrites
+                paths   <- regions.indexedPaths
+            yield
+                // Re-reading the list wrote two thousand entries for either patch: every row out, every row back.
+                assert(swapped - before == 0)
+                assert(removed - swapped == 1)
+                assert(paths == 1000)
+        }
+    }
+
+    "a declined row patch leaves the registry alone" in {
+        val root = listHost(3)
+        Scope.run {
+            for
+                regions <- DomReactiveRegions.init(root)
+                before  <- regions.ids
+                writes  <- regions.registryWrites
+                took <- regions.withRegionFragment(ListId, rowHtml(9, "z")) { (_, scope) =>
+                    false
+                }
+                after       <- regions.ids
+                writesAfter <- regions.registryWrites
+            yield
+                assert(!took)
+                assert(before == after && writes == writesAfter)
+        }
+    }
+
 end DomReactiveRegionsTest
