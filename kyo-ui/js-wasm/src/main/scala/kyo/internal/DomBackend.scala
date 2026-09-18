@@ -1122,9 +1122,7 @@ private[kyo] object DomBackend:
                         parentContext,
                         ReactiveRegion.tableContent(rows.iterator.map(_.ui))
                     )
-                    Kyo.foreach(Chunk.from(rows.filter(_.changed))) { row =>
-                        HtmlRenderer.renderRow(row.ui, path :+ row.key, contentContext.child(row.key), host)
-                    }.map(_.mkString).flatMap { changed =>
+                    HtmlRenderer.renderRows(rows, path, contentContext, host).flatMap { changed =>
                         Sync.defer(open).flatMap { isOpen =>
                             if !isOpen then Kyo.unit
                             else
