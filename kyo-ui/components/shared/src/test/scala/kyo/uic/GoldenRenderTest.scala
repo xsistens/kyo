@@ -3786,16 +3786,16 @@ class GoldenRenderTest extends UicTest:
                     out  <- dpHtml(uic.DatePicker().referenceDate("2026-07-01"), oref)
                 yield out.mkString
         yield
+            // The event attribute opens the tag (it is half of the path decision), so the title is matched as a
+            // clickable button and as a month or year title separately.
             assert(
-                date.contains(
-                    """class="p-datepicker-select-month" aria-label="Choose Month" data-kyo-prop-type="button" data-kyo-ev="click""""
-                ),
+                """<button data-kyo-ev="click" data-kyo-path="[^"]*" class="p-datepicker-select-month" aria-label="Choose Month" data-kyo-prop-type="button"""".r
+                    .findFirstIn(date).nonEmpty,
                 "date view: month title is a clickable BUTTON"
             )
             assert(
-                date.contains(
-                    """class="p-datepicker-select-year" aria-label="Choose Year" data-kyo-prop-type="button" data-kyo-ev="click""""
-                ),
+                """<button data-kyo-ev="click" data-kyo-path="[^"]*" class="p-datepicker-select-year" aria-label="Choose Year" data-kyo-prop-type="button"""".r
+                    .findFirstIn(date).nonEmpty,
                 "date view: year title is a clickable BUTTON"
             )
             assert(date.contains("p-datepicker-day-view"), "date view: day grid")
@@ -3811,7 +3811,8 @@ class GoldenRenderTest extends UicTest:
             assert(yearV.contains("2020 - 2029"), "year view: decade range text")
             assert(!yearV.contains("p-datepicker-month-view"), "year view: no month grid")
             assert(
-                noRefs.contains("""aria-label="Choose Month" data-kyo-prop-type="button" data-kyo-ev="click""""),
+                """<button data-kyo-ev="click" data-kyo-path="[^"]*" class="p-datepicker-select-month" aria-label="Choose Month" data-kyo-prop-type="button"""".r
+                    .findFirstIn(noRefs).nonEmpty,
                 "no currentView ref: the mount mints one, so the title button is live rather than disabled"
             )
         end for
@@ -6391,7 +6392,7 @@ class GoldenRenderTest extends UicTest:
       */
     private def tagWithClass(html: String, cls: String): String =
         openTag.findAllMatchIn(html).find { m =>
-            """\sclass="([^"]*)"""".r.findFirstMatchIn(m.group(2)).exists(_.group(1).split(" ").contains(cls))
+            """(?:^|\s)class="([^"]*)"""".r.findFirstMatchIn(m.group(2)).exists(_.group(1).split(" ").contains(cls))
         }.map(_.group(0)).getOrElse(throw new AssertionError(s"no element with class $cls"))
     private val evAttr = """data-kyo-ev="([^"]*)"""".r
 

@@ -1684,7 +1684,8 @@ private[kyo] object DomBackend:
                         val mouse = MouseEventData(
                             modifiers = UI.Modifiers(me.ctrlKey, me.altKey, me.shiftKey, me.metaKey),
                             targetId = targetId,
-                            position = Present(UI.Point(me.clientX, me.clientY))
+                            position = Present(UI.Point(me.clientX, me.clientY)),
+                            self = e.target.asInstanceOf[dom.Element] eq target
                         )
                         // Prevent the browser's default navigation only when the anchor carries a kyo
                         // click handler (so the handler, not the href, drives the action). A plain href
