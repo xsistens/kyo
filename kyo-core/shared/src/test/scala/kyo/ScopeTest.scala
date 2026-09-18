@@ -832,4 +832,64 @@ class ScopeTest extends kyo.test.Test[Any]:
             }
         }
     }
+
+    "Finalizer.Awaitable.Unsafe.initInline" - {
+        import AllowUnsafe.embrace.danger
+
+        "close then await runs the finalizers on the awaiting fiber, newest first" in {
+            val fin = Scope.Finalizer.Awaitable.Unsafe.initInline()
+            AtomicRef.init(List.empty[Int]).map { order =>
+                for
+                    _           <- fin.ensure(_ => order.getAndUpdate(1 :: _).unit)
+                    _           <- fin.ensure(_ => order.getAndUpdate(2 :: _).unit)
+                    _           <- fin.close(Absent)
+                    beforeAwait <- order.get
+                    _           <- fin.await
+                    _           <- fin.await
+                    afterAwait  <- order.get
+                yield
+                    assert(beforeAwait.isEmpty)
+                    assert(afterAwait == List(1, 2))
+            }
+        }
+
+        "an await parked before the close is completed by the close" in {
+            val fin = Scope.Finalizer.Awaitable.Unsafe.initInline()
+            AtomicInt.init(0).map { runs =>
+                for
+                    _      <- fin.ensure(_ => runs.incrementAndGet.unit)
+                    waiter <- Fiber.initUnscoped(fin.await)
+                    _      <- Async.sleep(10.millis)
+                    _      <- fin.close(Absent)
+                    _      <- waiter.get
+                    _      <- fin.await
+                    n      <- runs.get
+                yield assert(n == 1)
+            }
+        }
+
+        "ensure after close panics like the queued finalizer" in {
+            val fin = Scope.Finalizer.Awaitable.Unsafe.initInline()
+            for
+                _ <- fin.close(Absent)
+                _ <- fin.await
+                r <- Abort.run[Throwable](fin.ensure(_ => ()))
+            yield assert(r.isPanic)
+            end for
+        }
+
+        "a failing finalizer does not stop the others" in {
+            val fin = Scope.Finalizer.Awaitable.Unsafe.initInline()
+            AtomicInt.init(0).map { runs =>
+                for
+                    _ <- fin.ensure(_ => runs.incrementAndGet.unit)
+                    _ <- fin.ensure(_ => Abort.fail(new Exception("boom")))
+                    _ <- fin.ensure(_ => runs.incrementAndGet.unit)
+                    _ <- fin.close(Absent)
+                    _ <- fin.await
+                    n <- runs.get
+                yield assert(n == 2)
+            }
+        }
+    }
 end ScopeTest

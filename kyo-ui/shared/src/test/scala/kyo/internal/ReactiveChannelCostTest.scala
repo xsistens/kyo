@@ -2,6 +2,7 @@ package kyo.internal
 
 import java.util.concurrent.atomic.AtomicInteger
 import kyo.*
+import kyo.UI.foreachKeyed
 
 /** The COST of the reactive channel binding, as invariants rather than timings.
   *
@@ -145,6 +146,26 @@ class ReactiveChannelCostTest extends kyo.test.Test[Any]:
             // SOURCE values instead would deliver to all thousand every time, which is the original 04_select
             // cost and produces byte-identical output.
             yield assert(after3 == 2 && after8 == 4, s"first=$after3 second=$after8 (expected 2 then 4)")
+        }
+    }
+
+    "an evicted keyed row releases its channel bindings" in {
+        Scope.run {
+            for
+                sel  <- Signal.initRef(false)
+                rows <- Signal.initRef(Chunk.from(0 until fanOut))
+                rec = new Recording
+                ui  = UI.div(rows.foreachKeyed(_.toString)(_ => UI.span("x").cssClass("hot", sel: Signal[Boolean])))
+                root <- ReactiveUI.normalize(ui, Seq.empty)
+                _    <- ReactiveUI.subscribe(root, rec.exchange)
+                _    <- Async.sleep(50.millis)
+                _    <- rows.set(Chunk.from(0 until fanOut / 2))
+                _    <- Async.sleep(100.millis)
+                _    <- sel.set(true)
+                after = rec.patches.get
+            // A row's releases live in its ReleaseSink, run by the registry when the row is evicted: the half
+            // that left must not be written to, and the half that stayed must, before `set` returns.
+            yield assert(after == fanOut / 2, s"expected ${fanOut / 2} patches after evicting half the rows, got $after")
         }
     }
 
