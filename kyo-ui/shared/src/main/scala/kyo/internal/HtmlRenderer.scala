@@ -12,7 +12,7 @@ private[kyo] object HtmlRenderer:
     // costs nothing on the render(...) path (cssRules stays Absent there).
     private type CssCollector = scala.collection.mutable.LinkedHashMap[String, String]
 
-    /** Render a UI tree to HTML with data-kyo-path attributes. */
+    /** Render a UI tree to HTML; the elements a client addresses carry `data-kyo-path` (see [[carriesPath]]). */
     def render(ui: UI, path: Seq[String])(using Frame): String < Sync =
         // Every descendant extends the path with `:+`, and `Seq.empty` is a List, whose `:+` copies the
         // whole prefix per node. Normalizing once at the entry makes those appends Vector appends; paths
@@ -180,7 +180,8 @@ private[kyo] object HtmlRenderer:
             namespace,
             cssRules,
             parentContext,
-            ReactiveRegion.BoundaryMode.Emit
+            ReactiveRegion.BoundaryMode.Emit,
+            keyedRoot = true
         )
     end renderRowInto
 
@@ -395,7 +396,8 @@ private[kyo] object HtmlRenderer:
         namespace: ReactiveRegion.Namespace,
         cssRules: Maybe[CssCollector] = Absent,
         parentContext: ReactiveRegion.ParentContext,
-        boundaryMode: ReactiveRegion.BoundaryMode
+        boundaryMode: ReactiveRegion.BoundaryMode,
+        keyedRoot: Boolean = false
     )(using AllowUnsafe, Frame): Unit =
         ui match
             case dd: Dropdown =>
@@ -409,9 +411,15 @@ private[kyo] object HtmlRenderer:
                     // Reactive classes currently true, folded into the class list so SSR is correct. Empty when
                     // none are bound, so the `class` attribute is byte-identical there.
                     def openTag(extraClasses: Seq[String]): Unit =
-                        discard(sb.append('<').append(tag).append(" data-kyo-path=\""))
-                        appendPath(sb, path)
-                        discard(sb.append('"'))
+                        discard(sb.append('<').append(tag))
+                        // The event attribute first: whether one was written is half of the path decision, and
+                        // it is known only by walking the handlers, which this does once.
+                        val events = renderEventAttr(sb, elem)
+                        if events || carriesPath(elem, namespace, keyedRoot) then
+                            discard(sb.append(" data-kyo-path=\""))
+                            appendPath(sb, path)
+                            discard(sb.append('"'))
+                        end if
                         renderCommonAttrs(
                             sb,
                             if extraClasses.isEmpty then elem.attrs
@@ -419,7 +427,6 @@ private[kyo] object HtmlRenderer:
                             elem.isInstanceOf[Svg.SvgElement],
                             cssRules
                         )
-                        renderEventAttr(sb, elem)
                     end openTag
                     openTag(reactiveTrueClasses(elem.attrs))
                     renderElementAttrs(sb, elem)
@@ -495,7 +502,7 @@ private[kyo] object HtmlRenderer:
                 }
 
             case KeyedChild(_, child) =>
-                renderTo(sb, child, path, context, namespace, cssRules, parentContext, boundaryMode)
+                renderTo(sb, child, path, context, namespace, cssRules, parentContext, boundaryMode, keyedRoot = true)
 
             case r: Reactive[?] =>
                 val region  = ReactiveRegion.from(context, namespace)
@@ -529,6 +536,7 @@ private[kyo] object HtmlRenderer:
                             val content = ReactiveRegion.tableContent(rendered.iterator.map(_._2))
                             val host    = ReactiveRegion.renderHost(region, parentContext, content)
                             openInitialHost(sb, host)
+                            val keyed = keyFn.nonEmpty
                             rendered.foreach { (key, child) =>
                                 renderTo(
                                     sb,
@@ -538,7 +546,8 @@ private[kyo] object HtmlRenderer:
                                     ReactiveRegion.namespace(host),
                                     cssRules,
                                     ReactiveRegion.contentParent(host),
-                                    ReactiveRegion.BoundaryMode.Emit
+                                    ReactiveRegion.BoundaryMode.Emit,
+                                    keyedRoot = keyed
                                 )
                             }
                             closeInitialHost(sb, host)
@@ -1106,7 +1115,10 @@ private[kyo] object HtmlRenderer:
         case Present(_: Bound.Ref[?]) => true
         case _                        => false
 
-    private def renderEventAttr(sb: StringBuilder, elem: Element): Unit =
+    /** Writes `data-kyo-ev` with every event the element's handlers and bindings make the client forward, and
+      * answers whether there was one.
+      */
+    private def renderEventAttr(sb: StringBuilder, elem: Element): Boolean =
         // Written as they are found: the attribute opens with the first event and closes at the end, so a
         // plain element allocates nothing here.
         var first = true
@@ -1157,8 +1169,41 @@ private[kyo] object HtmlRenderer:
         // fileselect marker so the client's change branch reads all files instead of the legacy single-file path.
         if attrs.onFileSelect.nonEmpty then add("fileselect")
         if !first then sb.append('"')
-        ()
+        !first
     end renderEventAttr
+
+    /** Whether an element renders its `data-kyo-path`.
+      *
+      * The attribute is what a client reads to name an element to the server and to find one the server named,
+      * and it is read on exactly these: an element that declares a handler (the event's path; reported by
+      * [[renderEventAttr]] as it writes `data-kyo-ev`, so the two cannot drift apart), a control (the
+      * dispatcher's target facts — disabled, submitting button, "a control below"), a keyed row root (the key the
+      * reconciliation and a list patch match rows by), an element with a reactive attribute or class (patched in
+      * place by path), an element the client-side machinery addresses (focus seeding and restore, focus groups,
+      * enter and leave transitions, portals, drag, scroll-auto, JS props), an element the application gave an
+      * `id` to, and every SVG element (a region update replaces a lowered SVG node by its path). A plain element —
+      * a `td` holding text, a layout `div` — is named by nobody, and most elements of a large page are plain: on
+      * a list row the attribute was a third of the bytes. An event inside a plain element reports the nearest
+      * carrying ancestor, which is where the dispatcher's bubble arrives anyway; the one question that asks
+      * whether the click landed on that element itself travels as `MouseEventData.self`. The path-addressed
+      * `UI.Commands.command` and `requestMeasure` reach a carrying element only, which is why an `id` counts: it
+      * is how an application says it means to address an element that has nothing else to be addressed for.
+      */
+    private[kyo] def carriesPath(elem: Element, namespace: ReactiveRegion.Namespace, keyedRoot: Boolean): Boolean =
+        keyedRoot ||
+            namespace == ReactiveRegion.Namespace.Svg ||
+            elem.isInstanceOf[Svg.SvgElement] ||
+            elem.isInstanceOf[Focusable] ||
+            addressedByClient(elem.attrs)
+
+    private def addressedByClient(attrs: Attrs): Boolean =
+        attrs.identifier.nonEmpty ||
+            attrs.reactiveAttrs.nonEmpty || attrs.reactiveBoolAttrs.nonEmpty || attrs.reactiveClasses.nonEmpty ||
+            attrs.tabIndex.nonEmpty || attrs.focusTrap.nonEmpty || attrs.focusGroup.nonEmpty ||
+            attrs.focusAuto.nonEmpty || attrs.focusRestore.nonEmpty ||
+            attrs.dragSource.nonEmpty || attrs.dropTarget.nonEmpty || attrs.scrollAuto.nonEmpty ||
+            attrs.enterTransition.nonEmpty || attrs.leaveTransition.nonEmpty || attrs.portal.nonEmpty ||
+            attrs.jsProps.nonEmpty
 
     // ---- Helpers ----
 
@@ -2285,8 +2330,9 @@ private[kyo] object HtmlRenderer:
            |    if(id!==exceptId)el.hidden=true;
            |  });
            |}
-           |// Build a mouse payload, omitting targetId when absent (null JSON would break Maybe[String] decode).
-           |function mkMouse(mods,tid,pos){var m={modifiers:mods};if(tid)m.targetId=tid;if(pos)m.position=pos;return m;}
+           |// Build a mouse payload, omitting targetId when absent (null JSON would break Maybe[String] decode). `self`
+           |// is false only when the DOM target sat inside the element the path names (see MouseEventData.self).
+           |function mkMouse(mods,tid,pos,self){var m={modifiers:mods};if(tid)m.targetId=tid;if(pos)m.position=pos;if(self===false)m.self=false;return m;}
            |// Viewport coordinates of a pointer event; the events without a pointer (focus, blur, submit) pass no third argument.
            |function mkPos(e){return {x:e.clientX,y:e.clientY};}
            |// Build a keyboard payload, omitting targetId when absent.
@@ -2339,7 +2385,7 @@ private[kyo] object HtmlRenderer:
            |    // ctrl/cmd/shift/alt click is the user asking the browser for a new tab, so the default is
            |    // theirs, while the handler runs either way.
            |    var kmod=e.ctrlKey||e.metaKey||e.shiftKey||e.altKey||e.button!==0;
-           |    var mid=e.target&&e.target.id?e.target.id:null;if(!kmod&&el.tagName&&el.tagName.toLowerCase()==='a'&&he(el,"click"))e.preventDefault();post({Click:{path:p,mouse:mkMouse({ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},mid,mkPos(e))}});window._kyoClickSubmit=true;setTimeout(function(){window._kyoClickSubmit=false},0);
+           |    var mid=e.target&&e.target.id?e.target.id:null;if(!kmod&&el.tagName&&el.tagName.toLowerCase()==='a'&&he(el,"click"))e.preventDefault();post({Click:{path:p,mouse:mkMouse({ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},mid,mkPos(e),e.target===el)}});window._kyoClickSubmit=true;setTimeout(function(){window._kyoClickSubmit=false},0);
            |  }
            |  // Right-click: preventDefault suppresses the native menu only when a handler was declared.
            |  else if(t==="contextmenu"&&he(el,"contextmenu")){e.preventDefault();var cmid=e.target&&e.target.id?e.target.id:null;post({ContextMenu:{path:p,mouse:mkMouse({ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},cmid,mkPos(e))}});}
