@@ -16,7 +16,7 @@ class HtmlRendererReactiveRangesTest extends UITest:
                 Seq("", "😀", "\"--\u0000")
             )
         yield
-            val id = "r0000000000000002d83dde00000000040022002d002d0000"
+            val id = "r..$d83d$de00.$0022$002d$002d$0000"
             assert(html == s"<!--kyo-rs:$id-->value<!--kyo-re:$id-->")
             assert(!html.contains("data-kyo-reactive"))
     }
@@ -33,7 +33,7 @@ class HtmlRendererReactiveRangesTest extends UITest:
                 Seq.empty
             )
         yield
-            val id    = "r000000010031"
+            val id    = "r.1"
             val start = s"<!--kyo-rs:$id-->"
             val end   = s"<!--kyo-re:$id-->"
             val host  = s"<tbody data-kyo-range-host=\"$id\">$start"
@@ -109,7 +109,7 @@ class HtmlRendererReactiveRangesTest extends UITest:
             initial     <- kyo.internal.HtmlRenderer.render(UI.input.value(ref), Seq("field"))
             replacement <- kyo.internal.HtmlRenderer.renderRegion(UI.input.value(ref), Seq("field"))
         yield
-            val id = "r00000005006600690065006c0064"
+            val id = "r.field"
             assert(initial.startsWith(s"<!--kyo-rs:$id--><input"))
             assert(initial.endsWith(s"<!--kyo-re:$id-->"))
             assert(!replacement.contains("kyo-rs:"))
@@ -153,7 +153,7 @@ class HtmlRendererReactiveRangesTest extends UITest:
             initial     <- kyo.internal.HtmlRenderer.render(dropdown, Seq("dropdown"))
             replacement <- kyo.internal.HtmlRenderer.renderRegion(dropdown, Seq("dropdown"))
         yield
-            val id = "r0000000800640072006f00700064006f0077006e"
+            val id = "r.dropdown"
             assert(initial.startsWith(s"<!--kyo-rs:$id--><div"))
             assert(initial.endsWith(s"<!--kyo-re:$id-->"))
             assert(!replacement.contains("kyo-rs:"))
@@ -179,10 +179,10 @@ class HtmlRendererReactiveRangesTest extends UITest:
             val keyedIds  = "<!--kyo-rs:([^>]*)-->".r.findAllMatchIn(keyedHtml).map(_.group(1)).toSeq
             assert(nestedIds.size == 3)
             assert(nestedIds.distinct.size == 3)
-            assert(nestedIds(1).endsWith("n00000001"))
-            assert(nestedIds(2).endsWith("n00000002"))
+            assert(nestedIds(1).endsWith("~1"))
+            assert(nestedIds(2).endsWith("~2"))
             assert(keyedIds.size == 1)
-            assert(keyedIds.head.endsWith("00000000"))
+            assert(keyedIds.head.endsWith("."))
             assert(!nestedIds.contains(keyedIds.head))
     }
 
