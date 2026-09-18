@@ -33,23 +33,30 @@ class UnionSelectorSpec extends kyo.test.Test[Any]:
             assert(src.contains("given TypeName[PlayableItem] = TypeName(\"PlayableItem\")"), src)
         }
 
-        "each member gets value + lambda `on<Member>` branches delegating to onType" in {
+        "each member gets an `on<Member>` selector object: a SelectionList over the member plus the value form" in {
             val src = sourceOf("PlayableItem.scala")
             assert(
                 src.contains(
-                    "def onTrack[A](sel: SelectionBuilder.Bidirectional[Track, A]): SelectionBuilder.Fields[PlayableItem, (onTrack: Maybe[A])]"
+                    "final class `onTrack$sel` extends SelectionList[Track.type, Track, [B <: scala.NamedTuple.AnyNamedTuple] =>> SelectionBuilder.Fields[PlayableItem, (onTrack: Maybe[B])]]:"
                 ),
                 src
             )
-            assert(src.contains("def onEpisode[A](sel: SelectionBuilder.Bidirectional[Episode, A])"), src)
+            assert(src.contains("protected def selector: Track.type = Track"), src)
+            assert(
+                src.contains(
+                    "def apply[A](sel: SelectionBuilder.Bidirectional[Track, A]): SelectionBuilder.Fields[PlayableItem, (onTrack: Maybe[A])]"
+                ),
+                src
+            )
             assert(src.contains("SelectionBuilder.onType(\"Track\", sel)"), src)
-            assert(src.contains("SelectionBuilder.onType(\"Episode\", build(SelectionBuilder.empty))"), src)
+            assert(src.contains("def onEpisode: `onEpisode$sel` ="), src)
         }
 
-        "branches are chainable on an accumulated union selection" in {
+        "the selector object is what a lambda receives: no accumulator extension block" in {
             val src = sourceOf("PlayableItem.scala")
-            assert(src.contains("extension [Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder.Fields[PlayableItem, Acc])"), src)
-            assert(src.contains("sb ~ PlayableItem.onTrack(sub(SelectionBuilder.empty))"), src)
+            assert(!src.contains("extension ["), src)
+            assert(!src.contains("SelectionBuilder.empty"), src)
+            assert(src.contains("given SelectorOf.Aux[PlayableItem, PlayableItem.type] = SelectorOf(PlayableItem)"), src)
         }
 
         "a union-typed field is an object selector, not a String scalar" in {

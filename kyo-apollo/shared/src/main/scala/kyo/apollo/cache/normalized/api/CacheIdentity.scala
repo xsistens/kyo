@@ -3,9 +3,10 @@ package kyo.apollo.cache.normalized.api
 import kyo.Chunk
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.SelectionBuilder
+import kyo.apollo.api.SelectionList
+import kyo.apollo.api.SelectorOf
 import kyo.apollo.api.TypeName
 import scala.NamedTuple.AnyNamedTuple
-import scala.NamedTuple.Empty
 import scala.compiletime.erasedValue
 import scala.compiletime.summonFrom
 
@@ -48,21 +49,26 @@ end CacheIdentity
 object CacheIdentity:
 
     /** Declare `Origin`'s identity by selecting its key field(s) with the
-      * generated selectors — `CacheIdentity.by(_.code)`; a composite key chains
-      * (`by(_.isbn.edition)`). The captured [[CompiledField]]s carry the schema
-      * field type, so a spread can force the key fields into any document it is
-      * spliced into without re-declaring them.
+      * generated selectors — `CacheIdentity.by[Country](_.code)`; a composite key
+      * lists them (`by[Book](_.isbn, _.edition)`). `Origin` is named: the key
+      * lambdas receive its selector object, which is found from the marker alone. The captured [[CompiledField]]s carry the
+      * schema field type, so a spread can force the key fields into any document
+      * it is spliced into without re-declaring them.
       */
-    def by[Origin, K <: AnyNamedTuple](
-        select: SelectionBuilder.Fields[Origin, Empty] => SelectionBuilder[Origin, K]
-    )(using origin: TypeName[Origin]): CacheIdentity[Origin] =
-        val fields = select(SelectionBuilder.empty[Origin]).selections.collect { case f: CompiledField => f }
-        require(
-            fields.nonEmpty,
-            s"CacheIdentity.by[${origin.name}] must select at least one key field"
-        )
-        new CacheIdentity(origin.name, fields)
-    end by
+    def by[Origin](using sel: SelectorOf[Origin], origin: TypeName[Origin]): ByBuilder[Origin, sel.S] =
+        new ByBuilder[Origin, sel.S](sel.selector)
+
+    final class ByBuilder[Origin, S](protected val selector: S)(using origin: TypeName[Origin])
+        extends SelectionList[S, Origin, [K <: AnyNamedTuple] =>> CacheIdentity[Origin]]:
+        protected def fromFields[K <: AnyNamedTuple](select: SelectionBuilder.Fields[Origin, K]): CacheIdentity[Origin] =
+            val fields = select.selections.collect { case f: CompiledField => f }
+            require(
+                fields.nonEmpty,
+                s"CacheIdentity.by[${origin.name}] must select at least one key field"
+            )
+            new CacheIdentity(origin.name, fields)
+        end fromFields
+    end ByBuilder
 
     /** Declare `Origin` as a '''singleton''' type: one record per app, keyed by
       * the bare typename (Apollo Client's `keyFields: []`). For one-per-viewer

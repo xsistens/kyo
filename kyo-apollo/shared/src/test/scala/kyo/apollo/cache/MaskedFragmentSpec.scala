@@ -30,11 +30,13 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
 
     sealed trait CountryT
     object CountryT:
-        given TypeName[CountryT] = TypeName("Country")
+        given TypeName[CountryT]                      = TypeName("Country")
+        given SelectorOf.Aux[CountryT, GCountry.type] = SelectorOf(GCountry)
 
     sealed trait PageInfoT
     object PageInfoT:
-        given TypeName[PageInfoT] = TypeName("PageInfo")
+        given TypeName[PageInfoT]                       = TypeName("PageInfo")
+        given SelectorOf.Aux[PageInfoT, GPageInfo.type] = SelectorOf(GPageInfo)
 
     object GCountry:
         def code: SelectionBuilder.Deferrable[CountryT, (code: String)] =
@@ -62,18 +64,18 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             )
     end GPageInfo
 
-    given CacheIdentity[CountryT] = CacheIdentity.by(e => e ~ GCountry.code)
+    given CacheIdentity[CountryT] = CacheIdentity.by[CountryT](_.code)
 
     // --- colocated fragments, declared the way components would -----------------
 
     object CountryCard:
-        val fields = Fragment.entity[CountryT](e => e ~ GCountry.name ~ GCountry.capital)
+        val fields = Fragment.entity[CountryT](_.name, _.capital)
 
     object CountryFlag:
-        val fields = Fragment.entity[CountryT](e => e ~ GCountry.emoji)
+        val fields = Fragment.entity[CountryT](_.emoji)
 
     object PageBadge:
-        val fields = Fragment.embedded[PageInfoT](e => e ~ GPageInfo.hasNextPage ~ GPageInfo.endCursor)
+        val fields = Fragment.embedded[PageInfoT](_.hasNextPage, _.endCursor)
 
     // --- root query plumbing -----------------------------------------------------
 

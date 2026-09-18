@@ -3,7 +3,6 @@ package kyo.apollo.cache.normalized.api
 import kyo.apollo.api.*
 import kyo.apollo.json.Json
 import scala.NamedTuple.AnyNamedTuple
-import scala.NamedTuple.Empty
 import scala.collection.immutable.VectorMap
 
 /** A compiled selection fragment — a reusable subset of an operation's selection
@@ -56,31 +55,33 @@ end Fragment
 
 object Fragment:
 
-    /** Build a [[Fragment]] from a chainable selection — the ergonomic entry point.
+    /** Build a [[Fragment]] from a list of field selections — the ergonomic entry
+      * point.
       *
-      * `Fragment.of[Country](_.code.name.capital)` derives the fragment's codec and
-      * `rootField` from the generated selectors (the same machinery `toQuery` uses),
-      * so no hand-written `CompiledField` / `Schema` is needed. The GraphQL type the
-      * fragment applies to comes from `given TypeName[Origin]`, which codegen emits
-      * beside the phantom marker — naming it a second time as a string was redundant
-      * and let a typo through to runtime.
+      * `Fragment.of[Country](_.code, _.name, _.capital)` derives the fragment's
+      * codec and `rootField` from the generated selectors (the same machinery
+      * `toQuery` uses), so no hand-written `CompiledField` / `Schema` is needed.
+      * The GraphQL type the fragment applies to comes from `given TypeName[Origin]`,
+      * which codegen emits beside the phantom marker — naming it a second time as a
+      * string was redundant and let a typo through to runtime.
       *
       * The `Origin` type argument is supplied; the result type `D` is inferred from
-      * the selection, so only `Origin` is named. Returns a [[Builder]] whose `apply`
-      * takes the selection and delegates to [[kyo.apollo.api.toFragment]].
+      * the selection, so only `Origin` is named. Returns a [[Builder]] — a
+      * [[kyo.apollo.api.SelectionList]] whose `apply` takes one lambda per field
+      * and delegates to [[kyo.apollo.api.toFragment]].
       *
       * @tparam Origin the phantom selection origin (e.g. `Country`)
       */
-    def of[Origin](using TypeName[Origin]): Builder[Origin] = new Builder[Origin]
+    def of[Origin](using sel: SelectorOf[Origin], tn: TypeName[Origin]): Builder[Origin, sel.S] =
+        new Builder[Origin, sel.S](sel.selector)
 
     /** The partially-applied [[of]] — carries `Origin` so the selection infers `D`.
-      * `Fragment.of[Country](_.code.name)` is `of[Country].apply(_.code.name)`.
+      * `Fragment.of[Country](_.code, _.name)` is `of[Country].apply(_.code, _.name)`.
       */
-    final class Builder[Origin](using TypeName[Origin]):
-        def apply[D <: AnyNamedTuple](
-            build: SelectionBuilder.Fields[Origin, Empty] => SelectionBuilder.Fields[Origin, D]
-        ): Fragment[D] =
-            build(SelectionBuilder.empty[Origin]).toFragment
+    final class Builder[Origin, S](protected val selector: S)(using TypeName[Origin])
+        extends SelectionList[S, Origin, Fragment]:
+        protected def fromFields[D <: AnyNamedTuple](sel: SelectionBuilder.Fields[Origin, D]): Fragment[D] =
+            sel.toFragment
     end Builder
 
     /** Declare a colocated, masked fragment on an entity type — see
@@ -92,21 +93,28 @@ object Fragment:
       *
       * {{{
       * object CountryCard:
-      *     val fields = Fragment.entity[Country](_.name.capital)
+      *     val fields = Fragment.entity[Country](
+      *         _.name,
+      *         _.capital,
+      *     )
       * }}}
       */
-    def entity[Origin](using CacheIdentity[Origin], TypeName[Origin], kyo.Frame): EntityBuilder[Origin] =
-        new EntityBuilder[Origin]
-
-    final class EntityBuilder[Origin](using
+    def entity[Origin](using
+        sel: SelectorOf[Origin],
         identity: CacheIdentity[Origin],
         origin: TypeName[Origin],
         frame: kyo.Frame
-    ):
-        def apply[D <: AnyNamedTuple](
-            build: SelectionBuilder.Fields[Origin, Empty] => SelectionBuilder.Fields[Origin, D]
+    ): EntityBuilder[Origin, sel.S] =
+        new EntityBuilder[Origin, sel.S](sel.selector)
+
+    final class EntityBuilder[Origin, S](protected val selector: S)(using
+        identity: CacheIdentity[Origin],
+        origin: TypeName[Origin],
+        frame: kyo.Frame
+    ) extends SelectionList[S, Origin, [D <: AnyNamedTuple] =>> EntityFragment[Origin, D]]:
+        protected def fromFields[D <: AnyNamedTuple](
+            selection: SelectionBuilder.Fields[Origin, D]
         ): EntityFragment[Origin, D] =
-            val selection = build(SelectionBuilder.empty[Origin])
             EntityFragment(
                 fragmentName = frame.className,
                 typeName = origin.name,
@@ -114,7 +122,6 @@ object Fragment:
                 selection = selection,
                 cacheFragment = selection.toFragment
             )
-        end apply
     end EntityBuilder
 
     /** Declare a colocated, masked fragment on an object with no independent
@@ -122,17 +129,24 @@ object Fragment:
       * [[CacheIdentity]] is required: the ref carries the value, and updates
       * flow through the parent's reactivity.
       */
-    def embedded[Origin](using TypeName[Origin], kyo.Frame): EmbeddedBuilder[Origin] =
-        new EmbeddedBuilder[Origin]
+    def embedded[Origin](using
+        sel: SelectorOf[Origin],
+        origin: TypeName[Origin],
+        frame: kyo.Frame
+    ): EmbeddedBuilder[Origin, sel.S] =
+        new EmbeddedBuilder[Origin, sel.S](sel.selector)
 
-    final class EmbeddedBuilder[Origin](using origin: TypeName[Origin], frame: kyo.Frame):
-        def apply[D <: AnyNamedTuple](
-            build: SelectionBuilder.Fields[Origin, Empty] => SelectionBuilder.Fields[Origin, D]
+    final class EmbeddedBuilder[Origin, S](protected val selector: S)(using
+        origin: TypeName[Origin],
+        frame: kyo.Frame
+    ) extends SelectionList[S, Origin, [D <: AnyNamedTuple] =>> EmbeddedFragment[Origin, D]]:
+        protected def fromFields[D <: AnyNamedTuple](
+            selection: SelectionBuilder.Fields[Origin, D]
         ): EmbeddedFragment[Origin, D] =
             EmbeddedFragment(
                 fragmentName = frame.className,
                 typeName = origin.name,
-                selection = build(SelectionBuilder.empty[Origin])
+                selection = selection
             )
     end EmbeddedBuilder
 end Fragment

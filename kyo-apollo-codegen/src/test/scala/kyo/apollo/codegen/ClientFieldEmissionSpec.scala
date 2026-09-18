@@ -57,16 +57,17 @@ class ClientFieldEmissionSpec extends kyo.test.Test[Any]:
             )
         }
 
-        "selector objects gain chainable accessors delegating to ClientFields" in {
-            val country = sourceText(ApolloClientWriter.writeSelectors(schema, cfg), "Country.scala")
+        "selector objects gain accessors delegating to ClientFields, on object types and the roots" in {
+            val sources = ApolloClientWriter.writeSelectors(schema, cfg)
+            val country = sourceText(sources, "Country.scala")
             assert(
-                country.contains(
-                    "def isFavorite: SelectionBuilder.Fields[Country, scala.NamedTuple.Concat[Acc, (isFavorite: Boolean)]]"
-                ),
+                country.contains("def isFavorite: SelectionBuilder.Fields[Country, (isFavorite: Boolean)] ="),
                 country
             )
-            assert(country.contains("sb.clientField(ClientFields.Country.isFavorite)"), country)
-            assert(country.contains("import kyo.apollo.*"), country)
+            assert(country.contains("ClientFields.Country.isFavorite.select"), country)
+            val queries = sourceText(sources, "Queries.scala")
+            assert(queries.contains("def cartOpen: SelectionBuilder.Fields[RootQuery, (cartOpen: Boolean)] ="), queries)
+            assert(queries.contains("ClientFields.Query.cartOpen.select"), queries)
         }
 
         "no client fields → no ClientFields source and no client import" in {

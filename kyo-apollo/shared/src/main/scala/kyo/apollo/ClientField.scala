@@ -10,7 +10,6 @@ import kyo.apollo.exception.CacheReadFailure
 import kyo.apollo.json.Json
 import kyo.apollo.json.SchemaJson
 import scala.NamedTuple.AnyNamedTuple
-import scala.NamedTuple.Concat
 import scala.NamedTuple.NamedTuple
 
 /** A local `@client` field — the single unit of client-side state management:
@@ -32,16 +31,17 @@ import scala.NamedTuple.NamedTuple
   *
   * {{{
   * val favorite = ClientField.create[Country, Boolean]("isFavorite", default = false)
-  * Queries.country("DE")(_.code.name ~ favorite.select)   // ⇒ (code, name, isFavorite)
-  * favorite.write(client, "DE", true)                     // re-emits every watcher of Country:DE
+  * Queries.country("DE")(_.code, _.name, _ => favorite.select)   // ⇒ (code, name, isFavorite)
+  * favorite.write(client, "DE", true)                            // re-emits every watcher of Country:DE
   *
   * val cartOpen = ClientField.create[RootQuery, Boolean]("cartOpen", default = false)
-  * cartOpen.writeRoot(client, true)                       // global state on QUERY_ROOT
+  * cartOpen.writeRoot(client, true)                              // global state on QUERY_ROOT
   * }}}
   *
-  * Codegen can generate these descriptors and chainable `_.code.isFavorite`
-  * accessors from declarations such as `Country.isFavorite: Boolean = false` — the
-  * `apolloClientFields` setting / `--client-field` option of the codegen module.
+  * Codegen can generate these descriptors and selector-object accessors
+  * (`_.isFavorite` next to the server fields) from declarations such as
+  * `Country.isFavorite: Boolean = false` — the `apolloClientFields` setting /
+  * `--client-field` option of the codegen module.
   *
   * @tparam Origin the GraphQL object type the field hangs off (phantom marker)
   * @tparam R      the 1-slot named tuple `(label: V)` this contributes to a selection
@@ -53,8 +53,8 @@ final class ClientField[Origin, R <: AnyNamedTuple, V] private[apollo] (
     slot: SelectionBuilder.Fields[Origin, R]
 ):
 
-    /** Embed this field into a selection: `Query.select ~ field.select`, or the
-      * chainable `_.name.clientField(field)`.
+    /** Embed this field into a selection: as a list entry (`_ => field.select`)
+      * or under `~` (`Country.name ~ field.select`).
       */
     def select: SelectionBuilder.Fields[Origin, R] = slot
 
@@ -189,11 +189,3 @@ object ClientField:
     end CreateApplied
 
 end ClientField
-
-/** Chainable sugar mirroring the generated selectors: `_.code.name.clientField(favorite)`. */
-extension [Origin, Acc <: AnyNamedTuple](sb: SelectionBuilder.Fields[Origin, Acc])
-    def clientField[R <: AnyNamedTuple, V](
-        field: ClientField[Origin, R, V]
-    ): SelectionBuilder.Fields[Origin, Concat[Acc, R]] =
-        sb ~ field.select
-end extension

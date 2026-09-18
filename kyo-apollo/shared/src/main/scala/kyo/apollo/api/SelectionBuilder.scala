@@ -12,7 +12,6 @@ import kyo.discard
 import scala.NamedTuple.AnyNamedTuple
 import scala.NamedTuple.Concat
 import scala.NamedTuple.DropNames
-import scala.NamedTuple.Empty
 import scala.NamedTuple.NamedTuple
 import scala.NamedTuple.Names
 import scala.annotation.implicitNotFound
@@ -300,22 +299,6 @@ object SelectionBuilder:
         private[api] def streamLast(initialCount: Int, condition: Maybe[String]): Deferrable[Origin, R] =
             CombineDeferrable[Origin, R](left, right.streamLast(initialCount, condition))
     end CombineDeferrable
-
-    /** The empty selection: the neutral starting point of a chainable selection
-      * (`Country.select.code.name`). Selects no fields (arity 0), so combining it
-      * with `~` reduces away — `Concat[Empty, B] =:= B` at the type level and
-      * `EmptyTuple ++ row =:= row` at runtime — leaving exactly the chained field.
-      */
-    final private class EmptySel[Origin] extends Fields[Origin, Empty]:
-        private[api] val arity: Int                                                     = 0
-        val selections: Chunk[CompiledSelection]                                        = Chunk.empty
-        private[api] val argEntries: Chunk[Arg]                                         = Chunk.empty
-        private[api] def encodeInto(value: Product, offset: Int, out: RowBuilder): Unit = ()
-        private[api] def decodeInto(row: Map[String, Json], out: Array[Any], offset: Int)(using
-            Frame
-        ): Result[ApolloParseException, Unit] =
-            Result.unit
-    end EmptySel
 
     /** A `@defer`ed inline group. Contributes its child's fields to the *parent*
       * object (an anonymous [[CompiledFragment]] with a `@defer` directive, spliced
@@ -605,14 +588,6 @@ object SelectionBuilder:
             private[api] def encodeInto(value: Product, offset: Int, out: RowBuilder): Unit =
                 discard(out ++= encodeValue(value.productElement(offset)))
 
-    /** The empty selection for `Origin`: selects nothing, and is the neutral
-      * starting point a chainable selection folds fields onto — the lambda form
-      * `_.code.name` of a generated selector is applied to it, so it reads
-      * `SelectionBuilder.empty ~ Country.code ~ Country.name`. It has no field to
-      * defer or stream.
-      */
-    def empty[Origin]: Fields[Origin, Empty] = EmptySel()
-
     /** Combine two named-tuple selections (backs `~` with a right operand that is not a single field). */
     private[api] def combine[Origin, A <: AnyNamedTuple, B <: AnyNamedTuple](
         a: Fields[Origin, A],
@@ -674,12 +649,13 @@ type DeferLast[A <: AnyNamedTuple] =
     NamedTuple[Names[A], Tuple.Append[Tuple.Init[DropNames[A]], Maybe[Tuple.Last[DropNames[A]]]]]
 
 extension [Origin, A <: AnyNamedTuple](sb: SelectionBuilder.Deferrable[Origin, A])
-    /** Defer the last-added field of a chained/combined selection: its value becomes
-      * `Maybe[…]` (absent until the deferred payload arrives) with its name unchanged,
-      * and an auto-derived `@defer(label:)` — the field's response name — rides the
-      * document. No string needed. Chainable: `_.a.b.deferred.c.deferred` defers `b`
-      * and `c`; standalone via `~`: `Country.code ~ Country.capital.deferred`. The
-      * result's last operand is a `@defer` group, so it does not defer again.
+    /** Defer a field: its value becomes `Maybe[…]` (absent until the deferred
+      * payload arrives) with its name unchanged, and an auto-derived
+      * `@defer(label:)` — the field's response name — rides the document. No
+      * string needed. In a list, mark the entry: `Queries.country(code)(_.code,
+      * _.capital.deferred)`; on a `~` combination it defers the last-added field:
+      * `Country.code ~ Country.capital.deferred`. The result's last operand is a
+      * `@defer` group, so it does not defer again.
       */
     def deferred: SelectionBuilder.Fields[Origin, DeferLast[A]] =
         sb.deferLast[DeferLast[A]]

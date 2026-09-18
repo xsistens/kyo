@@ -189,7 +189,8 @@ end extension
   * {{{
   * usePaginatedQuery(after =>
   *   client.query(Queries.countriesConnection(first = Present(2), after = after)(
-  *     _.edges(_.node(_.code.name).cursor).pageInfo(_.endCursor.hasNextPage)))
+  *     _.edges(_.node(_.code, _.name), _.cursor),
+  *     _.pageInfo(_.endCursor, _.hasNextPage)))
   * )(cursorOf = _.countriesConnection.pageInfo.endCursor)
   * }}}
   */
@@ -210,7 +211,8 @@ extension [A <: AnyNamedTuple](sb: SelectionBuilder.Bidirectional[RootQuery, A])
       * given ApolloClient = client
       * Scope.run:
       *   Queries.countriesConnection(first = Present(2), after = Absent)(
-      *     _.edges(_.node(_.code.name).cursor).pageInfo(_.endCursor.hasNextPage)
+      *     _.edges(_.node(_.code, _.name), _.cursor),
+      *     _.pageInfo(_.endCursor, _.hasNextPage),
       *   ).paginated(_.countriesConnection.pageInfo.endCursor).map: paged =>
       *     render(paged.state)                     // Signal[QueryState] — all loaded edges
       *     button("More").onClick(paged.fetchMore) // next page → merge → re-emit

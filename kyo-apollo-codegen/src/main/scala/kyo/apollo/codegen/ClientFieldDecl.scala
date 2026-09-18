@@ -2,8 +2,8 @@ package kyo.apollo.codegen
 
 /** A single local `@client` field declaration — pure metadata about code the
   * generator emits. [[ApolloClientWriter]] turns each into a `ClientField.create`
-  * descriptor (under the generated `ClientFields` object) plus a chained accessor
-  * (`_.code.name.<field>`) next to the server selectors.
+  * descriptor (under the generated `ClientFields` object) plus a selector accessor
+  * (`_.<field>`) next to the server selectors.
   *
   * @param onType  the GraphQL object type the field hangs off (`"Country"`, or
   *                `"Query"`/`"Mutation"`/`"Subscription"` for global state on the

@@ -133,15 +133,15 @@ object ApolloClientWriter:
       * phantom `Origin` marker + a selector `object` per GraphQL object, interface
       * and union type, and `Queries`/`Mutations`/`Subscriptions` root objects. Each object field becomes
       * a `SelectionBuilder`-returning selector method, so a query is written as
-      * ordinary Scala (`Queries.country(code)(Country.name ~ Country.capital)`) with
-      * full autocomplete and a named-tuple result — no per-query codegen. Schema-wide
+      * ordinary Scala (`Queries.country(code)(_.name, _.capital)`) with full
+      * autocomplete and a named-tuple result — no per-query codegen. Schema-wide
       * and document-independent, like [[writeSchemaTypes]].
       */
     def writeSelectors(schema: Document, config: CodegenConfig): List[GeneratedSource] =
         new Emitter(schema, config).emitSelectors
 
     /** Emit the `ClientFields` object of local `@client` field descriptors declared
-      * in [[CodegenConfig.clientFields]] (empty when none). The matching chainable
+      * in [[CodegenConfig.clientFields]] (empty when none). The matching selector
       * accessors are emitted by [[writeSelectors]] into each selector object.
       */
     def writeClientFields(schema: Document, config: CodegenConfig): List[GeneratedSource] =
@@ -413,8 +413,8 @@ object ApolloClientWriter:
           *
           * An interface is emitted like a union with fields: `on<Implementor>` branches
           * for its object implementors next to direct selectors for the fields every
-          * implementor shares, so `Node.onUser(User.name) ~ Node.id` (or, chained,
-          * `_.onUser(_.name).id`) selects through it.
+          * implementor shares, so `Node.onUser(User.name) ~ Node.id` (or, listed,
+          * `_.node(_.onUser(_.name), _.id)`) selects through it.
           */
         def emitSelectors: List[GeneratedSource] =
             validateClientFields()
@@ -442,29 +442,31 @@ object ApolloClientWriter:
 
         /** The `on<Member>` inline-fragment branch of a union or interface `origin` onto
           * object type `member`. A branch decodes to `Maybe[A]` (`Present` iff the
-          * object's `__typename` is that member), and branches compose with
-          * `~`/chaining like fields, so a union selection reads
-          * `PlayableItem.onTrack(_.name) ~ PlayableItem.onEpisode(_.name)` or, chained
-          * inside a parent lambda, `_.item(_.onTrack(_.name).onEpisode(_.name))`. Both
-          * the value form and the lambda form are plain overloads — no `$sel`
-          * indirection, because branches take no arguments (so no default-argument
-          * collision exists).
+          * object's `__typename` is that member), and branches compose like fields —
+          * as list entries, `_.item(_.onTrack(_.name), _.onEpisode(_.name))`, or under
+          * `~`, `PlayableItem.onTrack(Track.name) ~ PlayableItem.onEpisode(Episode.name)`.
+          * Same shape as an object field's `` `field$sel` ``: a per-branch selector
+          * object carrying the `SelectionList` arities plus the value form.
           */
         private def branchMethods(origin: String, member: String): String =
-            val label = s"on$member"
-            s"""def $label[A](sel: SelectionBuilder.Bidirectional[$member, A]): SelectionBuilder.Fields[$origin, ($label: Maybe[A])] =
-         |  SelectionBuilder.onType("$member", sel)
+            val label                 = s"on$member"
+            val selClass              = s"`$label$$sel`"
+            def returnType(a: String) = s"SelectionBuilder.Fields[$origin, ($label: Maybe[$a])]"
+            s"""final class $selClass extends SelectionList[$member.type, $member, [B <: scala.NamedTuple.AnyNamedTuple] =>> ${returnType(
+                  "B"
+              )}]:
+         |  protected def selector: $member.type = $member
+         |  protected def fromFields[B <: scala.NamedTuple.AnyNamedTuple](sel: SelectionBuilder.Fields[$member, B]): ${returnType(
+                  "B"
+              )} =
+         |    SelectionBuilder.onType("$member", sel)
+         |  // Value form: a prebuilt selection (`$member.<field> ~ …`, or a `mapInto` projection) passed directly.
+         |  def apply[A](sel: SelectionBuilder.Bidirectional[$member, A]): ${returnType("A")} =
+         |    SelectionBuilder.onType("$member", sel)
          |
-         |def $label[A](build: SelectionBuilder.Fields[$member, scala.NamedTuple.Empty] => SelectionBuilder.Bidirectional[$member, A]): SelectionBuilder.Fields[$origin, ($label: Maybe[A])] =
-         |  SelectionBuilder.onType("$member", build(SelectionBuilder.empty))""".stripMargin
+         |def $label: $selClass =
+         |  new $selClass""".stripMargin
         end branchMethods
-
-        /** The chainable form of [[branchMethods]]: `sb.on<Member>(sub)` appends the branch. */
-        private def branchChainAccessor(origin: String, member: String): String =
-            val label = s"on$member"
-            s"""def $label[B](sub: SelectionBuilder.Fields[$member, scala.NamedTuple.Empty] => SelectionBuilder.Bidirectional[$member, B]): SelectionBuilder.Fields[$origin, scala.NamedTuple.Concat[Acc, ($label: Maybe[B])]] =
-         |  sb ~ $origin.$label(sub(SelectionBuilder.empty))""".stripMargin
-        end branchChainAccessor
 
         /** The `SchemaIdentities` source, or nothing when the schema has no non-root
           * object types (there would be no identities to collect).
@@ -509,6 +511,15 @@ object ApolloClientWriter:
           * `core`'s). `branches` are the object types an `on<Type>` inline-fragment
           * branch is emitted for: the implementors of an interface, the members of a
           * union, none for an object type.
+          *
+          * The object IS the selector every lambda receives: a nested selection
+          * `_.images(_.url, _.width)` applies `_.url` to `Image`, so completion lists
+          * exactly `Image`'s members and no import is needed. Non-root objects carry a
+          * `given SelectorOf` so the library's entry points (`Fragment.entity[Album]`,
+          * `CacheIdentity.by`) find the object from the marker alone. Every object is
+          * itself a `SelectionList`, so a factored selection reads `Image(_.url, _.width)`
+          * and an operation with several root fields
+          * `Queries(_.me(_.id), _.featured(_.name)).toQuery(...)`.
           */
         private def renderSelectorObject(
             objectName: String,
@@ -521,49 +532,61 @@ object ApolloClientWriter:
             val methods =
                 (fields.map(selectorMethod(originName, _)) ++ branches.map(branchMethods(originName, _)))
                     .mkString("\n\n")
-            // Non-root object types (those owning a phantom trait) also get a `select`
-            // entry point + one chainable accessor per field, so `Country.select.code`
-            // and the lambda `_.code` read fields without repeating the type name.
-            // They also carry a `given TypeName[Origin]` (in the trait's companion, so
-            // it is auto-summoned) that names the type at runtime for `ClientField`
-            // (local `@client` state); the operation roots get theirs from `core`.
-            val typeNameGiven =
-                if emitTrait then s"given TypeName[$originName] = TypeName(\"$originName\")\n\n" else ""
-            // Client `@client` accessors (`_.code.isFavorite`) as a separate extension
-            // block, appended for both object types and the operation roots.
-            val clientBlock = clientAccessorBlock(originName, gqlType).map("\n\n" + _).getOrElse("")
-            val serverBody =
-                if emitTrait then s"$typeNameGiven$methods\n\n${chainingBlock(originName, fields, branches)}"
-                else methods
-            val objectBody = s"$serverBody$clientBlock"
+            // Every selector object is a `SelectionList` over itself, so a factored
+            // selection is written the same way as an inline one — `Image(_.url,
+            // _.width)` is a `Fields[Image, (url: …, width: …)]` value — and a root
+            // object lists an operation's root fields. Non-root object types also
+            // carry a `given TypeName[Origin]` (in the trait's companion, so it is
+            // auto-summoned) that names the type at runtime for `ClientField` (local
+            // `@client` state), and the `given SelectorOf` the library's list entry
+            // points summon; the operation roots get their `TypeName` from `core`.
+            val listMembers =
+                s"""protected def selector: $objectName.type = this
+             |protected def fromFields[D <: scala.NamedTuple.AnyNamedTuple](sel: SelectionBuilder.Fields[$originName, D]): SelectionBuilder.Fields[$originName, D] =
+             |  sel
+             |
+             |""".stripMargin
+            val givens =
+                if emitTrait then
+                    s"""given TypeName[$originName] = TypeName("$originName")
+             |given SelectorOf.Aux[$originName, $objectName.type] = SelectorOf($objectName)
+             |
+             |""".stripMargin + listMembers
+                else listMembers
+            // Client `@client` accessors (`_.isFavorite`) next to the server fields, for
+            // both object types and the operation roots.
+            val clientBlock = clientAccessors(originName, gqlType).map("\n\n" + _).getOrElse("")
+            val objectBody  = s"$givens$methods$clientBlock"
             val scalaTypes =
                 fields.flatMap(f => scalaTypeOf(f.ofType) :: f.args.map(a => scalaTypeOf(a.ofType)))
             val scalarImport = customScalarImport(scalaTypes)
-            // Client accessors call `sb.clientField(...)` and reference `ClientFields`,
-            // both reachable through `kyo.apollo.*` (the extension lives in `core`).
-            val clientImport = if clientFieldsFor(gqlType).nonEmpty then "\nimport kyo.apollo.*" else ""
             val traitDecl    = if emitTrait then s"sealed trait $originName\n\n" else ""
+            val objectDecl =
+                s"object $objectName extends SelectionList[$objectName.type, $originName, [D <: scala.NamedTuple.AnyNamedTuple] =>> SelectionBuilder.Fields[$originName, D]]:"
             // `Maybe`/`Chunk`/`Absent` for nullable/list fields and argument defaults.
             val kyoImports = kyoTypeImports(objectBody)
             val contents =
                 s"""package ${config.packageName}
            |
-           |import kyo.apollo.api.*$kyoImports$scalarImport$clientImport
+           |import kyo.apollo.api.*$kyoImports$scalarImport
            |
            |// GENERATED by apollo-codegen: schema selectors for `$objectName`. DO NOT EDIT.
-           |${traitDecl}object $objectName:
+           |$traitDecl$objectDecl
            |${indent(objectBody, 2)}
            |""".stripMargin
             GeneratedSource(s"$objectName.scala", config.packageName, contents)
         end renderSelectorObject
 
         /** A single selector method: a scalar leaf field becomes a `def` returning a
-          * `SelectionBuilder.Deferrable`; an object field takes a nested selection and
-          * wraps its result named tuple per the field's list/nullable structure. Both
-          * are single fields, so `.deferred`/`.streamed` apply to them.
+          * `SelectionBuilder.Deferrable`; an object field returns a per-field selector
+          * object (`` `field$sel` ``) that takes the nested selection — as a list of
+          * lambdas over the leaf's selector object (`_.images(_.url, _.width)`) or as a
+          * prebuilt value (`Album.images(Image.url ~ Image.width)`) — and wraps its
+          * result named tuple per the field's list/nullable structure. Both are single
+          * fields, so `.deferred`/`.streamed` apply to them.
           */
         private def selectorMethod(originName: String, field: FieldSpec): String =
-            val label    = accessorLabel(field.name)
+            val label    = sanitize(field.name)
             val leafName = Type.innerType(field.ofType)
             val argParams = field.args.map { a =>
                 val default = if isNonNull(a.ofType) then "" else " = Absent"
@@ -580,41 +603,38 @@ object ApolloClientWriter:
                     s"Chunk(${entries.mkString(", ")})"
 
             if isComposite(leafName) then
-                // `A` is deliberately unbounded so a `mapInto`-projected child selection
-                // (whose result is not a named tuple) still nests here; the child must
-                // encode, so a decode-only `map` projection does not.
                 val argClause = if field.args.isEmpty then "" else s"(${argParams.mkString(", ")})"
-                val returnType =
-                    s"SelectionBuilder.Deferrable[$originName, ($label: ${wrappedTypeExpr(field.ofType, "A")})]"
+                def returnType(a: String) =
+                    s"SelectionBuilder.Deferrable[$originName, ($label: ${wrappedTypeExpr(field.ofType, a)})]"
                 val compiled = compiledTypeExpr(field.ofType)
                 val nesting  = nestingExpr(field.ofType)
                 // Scala forbids two overloads that BOTH declare default arguments, so the
-                // field's optional args cannot live on an overloaded method. Instead the
-                // args live on a single, non-overloaded selector method that returns a
-                // per-field selector object; the two ways to pass a selection are then
+                // field's optional args cannot live next to the selection overloads.
+                // Instead the args live on a single, non-overloaded selector method that
+                // returns a per-field selector object; the selection forms are then
                 // overloads of THAT object's `apply` (which carry no args → no default
-                // collision). Both forms keep the arg defaults, so `Queries.country("DE")`
-                // works with the value form (`Country.code ~ …`) and the lambda form
-                // (`_.code.name`) identically — no more explicit `Absent` on the lambda.
+                // collision): the `SelectionList` arities for the lambda list, plus one
+                // value form. `Queries.country("DE")` works with both identically.
                 // The `$sel` suffix cannot clash with any field (GraphQL names exclude
                 // `$`); backticks keep it valid when the field name is a reserved word.
                 val selClass = s"`${field.name}$$sel`"
-                // `A` is deliberately unbounded so a `mapInto`-projected child selection
-                // (whose result is not a named tuple) still nests here; the child must
-                // encode, so a decode-only `map` projection does not.
                 // Extending `FieldSelector` lets the selector value double as a typed
                 // field handle for library configuration (`ConnectionFieldPolicy.of`).
+                // The value form's `A` is deliberately unbounded so a `mapInto`-projected
+                // child selection (whose result is not a named tuple) still nests here;
+                // the child must encode, so a decode-only `map` projection does not.
                 val selDef =
-                    s"""final class $selClass(selArgs: Chunk[SelectionBuilder.Arg]) extends FieldSelector[$originName, $leafName]:
+                    s"""final class $selClass(selArgs: Chunk[SelectionBuilder.Arg]) extends FieldSelector[$originName, $leafName]
+             |    with SelectionList[$leafName.type, $leafName, [B <: scala.NamedTuple.AnyNamedTuple] =>> ${returnType("B")}]:
              |  def fieldName: String = "${field.name}"
-             |  // Value form: a prebuilt selection (`Country.code ~ …`) passed directly.
-             |  def apply[A](sel: SelectionBuilder.Bidirectional[$leafName, A]): $returnType =
+             |  protected def selector: $leafName.type = $leafName
+             |  protected def fromFields[B <: scala.NamedTuple.AnyNamedTuple](sel: SelectionBuilder.Fields[$leafName, B]): ${returnType(
+                          "B"
+                      )} =
              |    SelectionBuilder.obj("${field.name}", $compiled, selArgs, sel, $nesting)
-             |  // Lambda form: folds fields onto the empty selection (`_.code.name`). A
-             |  // `SelectionBuilder` value is never a `Function1`, so overload resolution
-             |  // picks value vs. lambda unambiguously.
-             |  def apply[A](build: SelectionBuilder.Fields[$leafName, scala.NamedTuple.Empty] => SelectionBuilder.Bidirectional[$leafName, A]): $returnType =
-             |    SelectionBuilder.obj("${field.name}", $compiled, selArgs, build(SelectionBuilder.empty), $nesting)""".stripMargin
+             |  // Value form: a prebuilt selection (`$leafName.<field> ~ …`, or a `mapInto` projection) passed directly.
+             |  def apply[A](sel: SelectionBuilder.Bidirectional[$leafName, A]): ${returnType("A")} =
+             |    SelectionBuilder.obj("${field.name}", $compiled, selArgs, sel, $nesting)""".stripMargin
                 val outerDef =
                     s"def $label$argClause: $selClass =\n  new $selClass($argList)"
                 s"$selDef\n\n$outerDef"
@@ -629,94 +649,6 @@ object ApolloClientWriter:
                 s"def $label$paramLists: $returnType =\n  $body"
             end if
         end selectorMethod
-
-        /** The chainable-selection block appended to a non-root selector object: an
-          * `extension` on `SelectionBuilder.Fields[Origin, Acc]` carrying one accessor per
-          * field. Each accessor folds its field onto the accumulated selection via
-          * `~`, so a chain reads a field's siblings off the first field —
-          * `Country.code.name.capital` (a factorable value, same type as
-          * `Country.code ~ Country.name ~ Country.capital`) and the inline lambda
-          * `_.code.name` both accumulate `Concat[Acc, (field: T)]` step by step.
-          *
-          * There is deliberately no `select`/empty entry point as a public value: a
-          * chain rooted in `SelectionBuilder.empty` types as `Concat[Empty, …]`, which
-          * a match type fails to reduce once frozen in a `val`. The lambda form roots
-          * in `empty` too but only ever appears inline, where reduction succeeds.
-          */
-        private def chainingBlock(originName: String, fields: List[FieldSpec], branches: List[String]): String =
-            val parts     = fields.map(chainAccessor(originName, _))
-            val classes   = parts.flatMap(_._1)
-            val accessors = (parts.map(_._2) ++ branches.map(branchChainAccessor(originName, _))).mkString("\n")
-            val ext =
-                s"""extension [Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder.Fields[$originName, Acc])
-         |${indent(accessors, 2)}""".stripMargin
-            if classes.isEmpty then ext
-            else classes.mkString("\n\n") + "\n\n" + ext
-        end chainingBlock
-
-        /** One chainable accessor: `sb.field` appends `field` to the accumulated
-          * selection. Scalar leaves add `(field: T)`; object leaves take a nested
-          * chainable builder `sub` and add `(field: Wrap[B])`. Both reuse the plain
-          * `Origin.field` selector under `~`, keeping wire output identical.
-          *
-          * Fields with DEFAULTED args need one indirection: an extension method
-          * desugars into the same `object Origin` namespace as the plain selector
-          * `def field(args…)`, and Scala forbids two overloads that BOTH declare
-          * default arguments. Same Option-D trick as the `` `field$sel` `` selector
-          * classes — hoist the args onto the sole `apply` of a dedicated
-          * `` `field$chain` `` class reached through a parameterless accessor. The
-          * call site keeps the exact `_.field(args…)(sub)` shape. Returns the
-          * optional chain-class declaration plus the accessor.
-          */
-        private def chainAccessor(originName: String, field: FieldSpec): (Option[String], String) =
-            val label    = accessorLabel(field.name)
-            val leafName = Type.innerType(field.ofType)
-            val argParams = field.args.map { a =>
-                val default = if isNonNull(a.ofType) then "" else " = Absent"
-                s"${sanitize(a.name)}: ${scalaTypeOf(a.ofType)}$default"
-            }
-            val argClause = if field.args.isEmpty then "" else s"(${argParams.mkString(", ")})"
-            val argNames =
-                if field.args.isEmpty then ""
-                else s"(${field.args.map(a => sanitize(a.name)).mkString(", ")})"
-            val hasDefaultedArgs = field.args.exists(a => !isNonNull(a.ofType))
-            if isComposite(leafName) then
-                val chained =
-                    s"scala.NamedTuple.Concat[Acc, ($label: ${wrappedTypeExpr(field.ofType, "B")})]"
-                if hasDefaultedArgs then
-                    val cls =
-                        s"""final class `$label$$chain`[Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder.Fields[$originName, Acc]):
-               |  def apply[B]$argClause(sub: SelectionBuilder.Fields[$leafName, scala.NamedTuple.Empty] => SelectionBuilder.Bidirectional[$leafName, B]): SelectionBuilder.Deferrable[$originName, $chained] =
-               |    sb ~ $originName.$label$argNames(sub(SelectionBuilder.empty))""".stripMargin
-                    val acc =
-                        s"""def $label: `$label$$chain`[Acc] =
-               |  new `$label$$chain`(sb)""".stripMargin
-                    (Some(cls), acc)
-                else
-                    val acc =
-                        s"""def $label[B]$argClause(sub: SelectionBuilder.Fields[$leafName, scala.NamedTuple.Empty] => SelectionBuilder.Bidirectional[$leafName, B]): SelectionBuilder.Deferrable[$originName, $chained] =
-               |  sb ~ $originName.$label$argNames(sub(SelectionBuilder.empty))""".stripMargin
-                    (None, acc)
-                end if
-            else
-                val chained = s"scala.NamedTuple.Concat[Acc, ($label: ${scalaTypeOf(field.ofType)})]"
-                if hasDefaultedArgs then
-                    val cls =
-                        s"""final class `$label$$chain`[Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder.Fields[$originName, Acc]):
-               |  def apply$argClause: SelectionBuilder.Deferrable[$originName, $chained] =
-               |    sb ~ $originName.$label$argNames""".stripMargin
-                    val acc =
-                        s"""def $label: `$label$$chain`[Acc] =
-               |  new `$label$$chain`(sb)""".stripMargin
-                    (Some(cls), acc)
-                else
-                    val acc =
-                        s"""def $label$argClause: SelectionBuilder.Deferrable[$originName, $chained] =
-               |  sb ~ $originName.$label$argNames""".stripMargin
-                    (None, acc)
-                end if
-            end if
-        end chainAccessor
 
         /** The `ScalarCodec` expression for a scalar/enum/input/custom-scalar type
           * reference, honouring list/nullable wrappers.
@@ -757,27 +689,27 @@ object ApolloClientWriter:
                     throw CodegenException.ClientFieldClash(t, decl.name)
             }
 
-        /** The chainable client accessors for `gqlType` (`_.code.name.isFavorite`),
-          * a separate `extension` block on the selector object, or `None` if it has no
-          * client fields.
+        /** The client-field accessors for `gqlType` (`_.isFavorite`), emitted next to
+          * the server fields of the selector object, or `None` if it has none. Each
+          * returns the descriptor's one-slot selection, so a client field is listed
+          * like any other field and pruned from the printed document like any
+          * `@client` field.
           */
-        private def clientAccessorBlock(originName: String, gqlType: String): Option[String] =
+        private def clientAccessors(originName: String, gqlType: String): Option[String] =
             val cfs = clientFieldsFor(gqlType)
             if cfs.isEmpty then None
             else
-                val accessors = cfs
-                    .map { decl =>
-                        val label = accessorLabel(decl.name)
-                        s"""def $label: SelectionBuilder.Fields[$originName, scala.NamedTuple.Concat[Acc, ($label: ${decl.tpe})]] =
-               |  sb.clientField(ClientFields.$gqlType.$label)""".stripMargin
-                    }
-                    .mkString("\n")
                 Some(
-                    s"""extension [Acc <: scala.NamedTuple.AnyNamedTuple](sb: SelectionBuilder.Fields[$originName, Acc])
-             |${indent(accessors, 2)}""".stripMargin
+                    cfs
+                        .map { decl =>
+                            val label = sanitize(decl.name)
+                            s"""def $label: SelectionBuilder.Fields[$originName, ($label: ${decl.tpe})] =
+                   |  ClientFields.$gqlType.$label.select""".stripMargin
+                        }
+                        .mkString("\n")
                 )
             end if
-        end clientAccessorBlock
+        end clientAccessors
 
         /** The `ClientFields` object holding every client-field descriptor, grouped by
           * GraphQL type (`ClientFields.Country.isFavorite`), or nothing when none are
@@ -923,18 +855,6 @@ object ApolloClientWriter:
         /** A valid Scala identifier for a GraphQL name (backticking reserved words). */
         private def sanitize(name: String): String =
             if ReservedWords(name) then s"`$name`" else name
-
-        /** The Scala accessor name for a selection field. Reserves `deferred` and
-          * `streamed` for the `.deferred` / `.streamed` incremental-delivery markers
-          * (generic extensions in the same namespace as the chain accessors): a schema
-          * field literally named `deferred`/`streamed` is emitted as `deferred$`/
-          * `streamed$`. Collision-proof because `$` can never appear in a GraphQL name,
-          * and the wire name (`field.name`) is unchanged — only the Scala accessor is
-          * aliased, exactly like the `field$sel` convention.
-          */
-        private def accessorLabel(name: String): String =
-            val s = sanitize(name)
-            if s == "deferred" || s == "streamed" then s"$s$$" else s
 
         private def escape(s: String): String =
             s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\t", "\\t")

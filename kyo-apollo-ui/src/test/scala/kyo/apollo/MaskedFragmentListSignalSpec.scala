@@ -22,7 +22,8 @@ class MaskedFragmentListSignalSpec extends kyo.test.Test[Any]:
 
     sealed trait CountryT
     object CountryT:
-        given TypeName[CountryT] = TypeName("Country")
+        given TypeName[CountryT]                      = TypeName("Country")
+        given SelectorOf.Aux[CountryT, GCountry.type] = SelectorOf(GCountry)
 
     object GCountry:
         def code: SelectionBuilder.Deferrable[CountryT, (code: String)] =
@@ -31,10 +32,10 @@ class MaskedFragmentListSignalSpec extends kyo.test.Test[Any]:
             SelectionBuilder.scalar("name", CompiledNamedType("String").notNull, ScalarCodec.string)
     end GCountry
 
-    given CacheIdentity[CountryT] = CacheIdentity.by(e => e ~ GCountry.code)
+    given CacheIdentity[CountryT] = CacheIdentity.by[CountryT](_.code)
 
     object CountryCard:
-        val fields = Fragment.entity[CountryT](e => e ~ GCountry.name)
+        val fields = Fragment.entity[CountryT](_.name)
 
     private def countriesField[A](
         sel: SelectionBuilder.Bidirectional[CountryT, A]

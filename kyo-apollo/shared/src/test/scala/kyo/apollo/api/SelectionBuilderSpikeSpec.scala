@@ -7,7 +7,6 @@ import kyo.Present
 import kyo.apollo.cache.normalized.api.*
 import kyo.apollo.json.Json
 import scala.NamedTuple.AnyNamedTuple
-import scala.NamedTuple.Empty
 import scala.collection.immutable.VectorMap
 
 /** Spike / Go-No-Go gate for the inline `SelectionBuilder` design.
@@ -34,9 +33,8 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
     sealed trait Continent
 
     object Country:
-        given TypeName[Country] = TypeName("Country")
-
-        def select: SelectionBuilder.Fields[Country, Empty] = SelectionBuilder.empty[Country]
+        given TypeName[Country]                     = TypeName("Country")
+        given SelectorOf.Aux[Country, Country.type] = SelectorOf(Country)
 
         def code: SelectionBuilder.Deferrable[Country, (code: String)] =
             SelectionBuilder.scalar("code", CompiledNamedType("ID").notNull, ScalarCodec.id)
@@ -66,7 +64,7 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
     end Continent
 
     object CountryName:
-        val fields = Fragment.embedded[Country](_ ~ Country.name)
+        val fields = Fragment.embedded[Country](_.name)
 
     object Queries:
         def country[A <: AnyNamedTuple](code: String)(
@@ -322,8 +320,8 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
 
         "capabilities are types, not runtime checks" - {
 
-            "deferring needs a selected field: the empty selection has no .deferred" in {
-                typeCheckFailure("Country.select.deferred")("value deferred is not a member of")
+            "deferring needs a selected field: a selector object has no .deferred" in {
+                typeCheckFailure("Country.deferred")("value deferred is not a member of")
             }
 
             "a @defer group is not a list field: it has no .streamed" in {
@@ -369,11 +367,11 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
             }
 
             "what a field selection can do still compiles, and keeps its runtime shape" in {
-                typeCheck("Country.select ~ Country.code ~ Country.capital.deferred")
+                typeCheck("Country.code ~ Country.capital.deferred")
                 typeCheck("(Country.code ~ Country.name).deferred ~ Country.capital.deferred")
                 typeCheck("Continent.countries(Country.name).streamed(2).deferred")
                 typeCheck("defer(\"details\", Country.name ~ Country.capital) ~ Country.code")
-                val deferred  = (Country.select ~ Country.code ~ Country.capital).deferred
+                val deferred  = (Country.code ~ Country.capital).deferred
                 val fragments = deferred.selections.collect { case f: CompiledFragment => f }
                 assert(fragments.map(_.defer.map(_.label)) == Chunk(Present("capital")))
                 val result: (code: String, capital: Maybe[Maybe[String]]) =

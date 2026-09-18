@@ -301,10 +301,11 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
                 sealed trait FeedRoot
                 sealed trait FeedConn
                 sealed trait FeedEdge
-                given TypeName[FeedRoot] = TypeName("Query")
-                given TypeName[FeedConn] = TypeName("FeedConnection")
-                given TypeName[FeedEdge] = TypeName("FeedEdge")
-                given CacheIdentity[FeedEdge] = CacheIdentity.by(_ =>
+                given TypeName[FeedRoot]             = TypeName("Query")
+                given TypeName[FeedConn]             = TypeName("FeedConnection")
+                given TypeName[FeedEdge]             = TypeName("FeedEdge")
+                given SelectorOf.Aux[FeedEdge, Unit] = SelectorOf(())
+                given CacheIdentity[FeedEdge] = CacheIdentity.by[FeedEdge](_ =>
                     SelectionBuilder.scalar[FeedEdge, (cursor: String), String](
                         "cursor",
                         CompiledNamedType("String").notNull,

@@ -38,21 +38,21 @@ class InterfaceSelectorSpec extends kyo.test.Test[Any]:
         "the fields every implementor shares are direct selectors on the interface" in {
             val src = sourceOf("Node.scala")
             assert(src.contains("def id: SelectionBuilder.Deferrable[Node, (id: String)]"), src)
-            assert(src.contains("def id: SelectionBuilder.Deferrable[Node, scala.NamedTuple.Concat[Acc, (id: String)]]"), src)
+            assert(!src.contains("Concat[Acc"), src)
         }
 
-        "each object implementor gets value + lambda `on<Implementor>` branches, chainable" in {
+        "each object implementor gets an `on<Implementor>` selector object; a narrower interface only its own" in {
             val src = sourceOf("Node.scala")
             assert(
                 src.contains(
-                    "def onUser[A](sel: SelectionBuilder.Bidirectional[User, A]): SelectionBuilder.Fields[Node, (onUser: Maybe[A])]"
+                    "def apply[A](sel: SelectionBuilder.Bidirectional[User, A]): SelectionBuilder.Fields[Node, (onUser: Maybe[A])]"
                 ),
                 src
             )
-            assert(src.contains("SelectionBuilder.onType(\"Post\", build(SelectionBuilder.empty))"), src)
-            assert(src.contains("sb ~ Node.onUser(sub(SelectionBuilder.empty))"), src)
+            assert(src.contains("final class `onPost$sel` extends SelectionList[Post.type, Post,"), src)
+            assert(src.contains("SelectionBuilder.onType(\"Post\", sel)"), src)
             val named = sourceOf("Named.scala")
-            assert(named.contains("def onUser["), named)
+            assert(named.contains("def onUser: `onUser$sel` ="), named)
             assert(!named.contains("onPost"), named)
         }
 

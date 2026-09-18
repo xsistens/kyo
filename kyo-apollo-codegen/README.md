@@ -66,13 +66,13 @@ is one line on stderr and a non-zero exit.
 
 | Schema | Generated Scala |
 |--------|-----------------|
-| `type Country { ... }` | `sealed trait Country` and `object Country` with one selector per field, plus the same selectors chained on a selection (`_.code.name`) |
+| `type Country { ... }` | `sealed trait Country` and `object Country` with one selector per field; the object is what a selection lambda receives (`_.code`) |
 | `type Query`, `Mutation`, `Subscription` | `object Queries`, `Mutations`, `Subscriptions`, one method per root field, with the field's arguments |
 | `interface Node`, `union SearchResult` | a selector object whose `on<Type>` branches select the fields of each implementing or member type |
 | `enum Color { RED GREEN BLUE }` | `enum Color` with an extra `Unknown__(raw)` case, `values: Chunk[Color]` and `valueOf(name): Maybe[Color]` |
 | `input UpdateCountryInput { ... }` | `final case class UpdateCountryInput(...) derives Schema` |
 | a mapped `scalar DateTime` | a `given Schema` for the mapped Scala type in `CustomScalars` |
-| every `--client-field` | a descriptor in `ClientFields` and a chained accessor next to the server fields |
+| every `--client-field` | a descriptor in `ClientFields` and a selector next to the server fields |
 | all object types | `SchemaIdentities.generator`, a cache key generator over the `CacheIdentity` givens in scope |
 
 A nullable field decodes to `Maybe`, a list field to `Chunk`, and an optional argument
@@ -80,14 +80,19 @@ defaults to `Absent`.
 
 ## Writing operations
 
-A root field takes the fields to select, either as a function that chains them onto
-the empty selection or as a selection value combined with `~`. `toQuery()`,
-`toMutation()` and `toSubscription()` turn a root selection into an operation:
+A root field takes the fields to select as a list, one function per field, or as a
+single selection value combined with `~`. Each function receives the type's selector
+object (`Country`), so `_.` completes to its fields. `toQuery()`, `toMutation()` and
+`toSubscription()` turn a root selection into an operation:
 
 ```scala
 import kyo.apollo.api.*
 
-val germany = Queries.country("DE")(_.code.name.capital).toQuery()
+val germany = Queries.country("DE")(
+    _.code,
+    _.name,
+    _.capital
+).toQuery()
 
 val nameAndCapital = Country.name ~ Country.capital
 val europe =
@@ -108,11 +113,30 @@ val europeIsTyped: Query.Normalizable[(countries: Chunk[(name: String, capital: 
 `(country: Maybe[(code: String, name: String, capital: Maybe[String])])`, and `europe`
 has `(countries: Chunk[(name: String, capital: Maybe[String])])`.
 
+An operation with several root fields lists them on the root object itself:
+
+```scala
+val home = Queries(
+    _.country("DE")(_.name),
+    _.countries(filter = Absent)(_.code)
+).toQuery("Home")
+```
+
+<!-- doctest:scope=inherited
+```scala
+val homeIsTyped: Query.Normalizable[(country: Maybe[(name: String)], countries: Chunk[(code: String)])] = home
+```
+-->
+
 A field of an object type takes its own selection, so nesting follows the schema:
 
 ```scala
 val firstPage = Queries.countriesConnection(first = Present(10))(
-    _.edges(_.cursor.node(_.code.name)).pageInfo(_.endCursor.hasNextPage)
+    _.edges(
+        _.cursor,
+        _.node(_.code, _.name)
+    ),
+    _.pageInfo(_.endCursor, _.hasNextPage)
 ).toQuery()
 ```
 
@@ -121,9 +145,16 @@ Each branch decodes to `Maybe`, and exactly one is `Present` for a given object;
 interface's own fields sit next to the branches:
 
 ```scala
-val hits = Queries.search("ber")(_.onCountry(_.code.name).onReport(_.title)).toQuery()
+val hits = Queries.search("ber")(
+    _.onCountry(_.code, _.name),
+    _.onReport(_.title)
+).toQuery()
 
-val someNode = Queries.node("u1")(_.onUser(_.name.favoriteColor).onReport(_.title).id).toQuery()
+val someNode = Queries.node("u1")(
+    _.onUser(_.name, _.favoriteColor),
+    _.onReport(_.title),
+    _.id
+).toQuery()
 ```
 
 Mutations take generated input objects, and subscriptions stream the selected fields
@@ -133,10 +164,14 @@ of every event. A mapped custom scalar decodes to its Scala type, here
 ```scala
 val moveCapital = Mutations.updateCountry(
     UpdateCountryInput(code = "DE", capital = Present("Berlin"), emoji = Absent)
-)(_.code.capital).toMutation()
+)(_.code, _.capital).toMutation()
 
 val europeanUpdates =
-    Subscriptions.countryUpdated(continent = Present(Continent.EUROPE))(_.code.capital.updatedAt).toSubscription()
+    Subscriptions.countryUpdated(continent = Present(Continent.EUROPE))(
+        _.code,
+        _.capital,
+        _.updatedAt
+    ).toSubscription()
 ```
 
 ## Enums a server can extend
@@ -165,11 +200,11 @@ does not know rather than an `Unknown__`.
 
 A `@client` field lives only in the normalized cache: it is left out of the document
 the server receives, and a read that finds no value returns the declared default.
-`--client-field "Country.isFavorite: Boolean = false"` generates an accessor that
-chains like a server field:
+`--client-field "Country.isFavorite: Boolean = false"` generates a selector that is
+listed like a server field:
 
 ```scala
-val withFavorite = Queries.country("DE")(_.code.name.isFavorite).toQuery()
+val withFavorite = Queries.country("DE")(_.code, _.name, _.isFavorite).toQuery()
 ```
 
 A normalized cache keys records by identity. Declare the identity of a type as a
@@ -181,7 +216,7 @@ import kyo.apollo.ApolloClient
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.CacheIdentity
 
-given CacheIdentity[Country] = CacheIdentity.by(_.code)
+given CacheIdentity[Country] = CacheIdentity.by[Country](_.code)
 
 val cachedConfig =
     ApolloClient.Config("https://countries.example/graphql").normalizedCache(MemoryCache(), SchemaIdentities.generator)
