@@ -1328,13 +1328,10 @@ private[kyo] object HtmlRenderer:
           |function kyoMaskNormalize(mask,val){var ts=kyoMaskParse(mask);return kyoMaskFormat(ts,kyoMaskRaw(ts,val));}""".stripMargin
 
     private[kyo] val reactiveRangesJs: String =
-        """function kyoRangeId(id){
-          |  if(typeof id!=="string"||!/^r[0-9a-f]*(?:n[0-9a-f]{8})?$/.test(id))return false;
-          |  var suffix=id.indexOf("n",1),end=suffix<0?id.length:suffix;
-          |  if(suffix>=0&&id.slice(suffix+1)==="00000000")return false;
-          |  var i=1;while(i<end){if(i+8>end)return false;var n=parseInt(id.slice(i,i+8),16);i+=8;
-          |    if(!isFinite(n)||i+n*4>end)return false;i+=n*4;}
-          |  return i===end;
+        """// Twin of ReactiveRegion.isValidHtmlId: `r`, a dot and a segment per path segment (verbatim [0-9A-Za-z_],
+          |// `$` + 4 hex for any other UTF-16 unit), then an optional `~` and a decimal depth without a leading zero.
+          |function kyoRangeId(id){
+          |  return typeof id==="string"&&/^r(?:\.(?:[0-9A-Za-z_]|\$[0-9a-f]{4})*)*(?:~[1-9][0-9]*)?$/.test(id);
           |}
           |function kyoRangeFail(message){throw new Error("kyo-ui reactive range: "+message);}
           |// A marker payload may carry a flag section after its id (a mount slot, and the m the client stamps on once
@@ -1855,9 +1852,9 @@ private[kyo] object HtmlRenderer:
            |  }else if(op.ReadDropFile||op.ReadDropDirectory||op.CancelDropRead){
            |    try{__dragRt.serveDropRead(op);}catch(error){kyoClientError(error);}
            |  }else if(op.PatchList){
-          |    try{__kyoApplyList(op.PatchList.regionId,op.PatchList.keys,op.PatchList.changedKeys,op.PatchList.changed);}
-          |    catch(error){kyoClientError(error);}
-          |  }else if(op.ReplaceRange){
+           |    try{__kyoApplyList(op.PatchList.regionId,op.PatchList.keys,op.PatchList.changedKeys,op.PatchList.changed);}
+           |    catch(error){kyoClientError(error);}
+           |  }else if(op.ReplaceRange){
            |    try{kyoRangeReplace(op.ReplaceRange.regionId,op.ReplaceRange.html);}catch(error){kyoClientError(error);}
            |  }else if(op.Replace){
            |    var p=op.Replace.path.join(".");
@@ -1965,19 +1962,20 @@ private[kyo] object HtmlRenderer:
            |  if(verb==="focus"){var fs='input,textarea,select,button,a[href],[tabindex],[contenteditable]';var ft=(el.matches&&el.matches(fs))?el:(el.querySelector?el.querySelector(fs):null);if(ft&&typeof ft.focus==="function")ft.focus();}
            |  else if(verb==="scrollIntoView"){if(typeof el.scrollIntoView==="function")el.scrollIntoView({block:"nearest"});}
            |}
-           |// A reactive range's id encodes its own path (ReactiveRegion.htmlId: 8 hex digits of segment length,
-           |// then 4 hex digits per UTF-16 unit, optional 'n' + depth suffix), so the path is read back out of the
-           |// id rather than re-encoded here. Returns null for anything that is not a range id.
+           |// A reactive range's id encodes its own path (ReactiveRegion.htmlId: `.` and the segment per path segment,
+           |// a unit outside [0-9A-Za-z_] written as `$$` + 4 hex, optional `~` + depth suffix), so the path is read
+           |// back out of the id rather than re-encoded here. Returns null for anything that is not a range id.
            |function __kyoRangeIdPath(id){
-           |  if(!id||id.charAt(0)!=="r")return null;
-           |  var end=id.indexOf("n",1);if(end<0)end=id.length;
-           |  var i=1,segs=[];
+           |  if(!kyoRangeId(id))return null;
+           |  var end=id.indexOf("~");if(end<0)end=id.length;
+           |  var segs=[],i=1;
            |  while(i<end){
-           |    if(i+8>end)return null;
-           |    var len=parseInt(id.substring(i,i+8),16);i+=8;
-           |    var s="";
-           |    for(var k=0;k<len;k++){if(i+4>end)return null;s+=String.fromCharCode(parseInt(id.substring(i,i+4),16));i+=4;}
-           |    segs.push(s);
+           |    var j=i+1,s="";
+           |    while(j<end&&id.charAt(j)!=="."){
+           |      if(id.charAt(j)==="$$"){s+=String.fromCharCode(parseInt(id.substring(j+1,j+5),16));j+=5;}
+           |      else{s+=id.charAt(j);j++;}
+           |    }
+           |    segs.push(s);i=j;
            |  }
            |  return segs.join(".");
            |}
@@ -1986,10 +1984,13 @@ private[kyo] object HtmlRenderer:
            |// table read instead of a decode of every id the registry holds.
            |function __kyoRangeIdOf(p){
            |  var segs=p===""?[]:String(p).split("."),id="r";
-           |  function hex(v,w){var h=v.toString(16);while(h.length<w)h="0"+h;return h;}
            |  for(var i=0;i<segs.length;i++){
-           |    id+=hex(segs[i].length,8);
-           |    for(var k=0;k<segs[i].length;k++)id+=hex(segs[i].charCodeAt(k),4);
+           |    id+=".";var s=segs[i];
+           |    for(var k=0;k<s.length;k++){
+           |      var c=s.charAt(k);
+           |      if(/[0-9A-Za-z_]/.test(c))id+=c;
+           |      else{var h=s.charCodeAt(k).toString(16);while(h.length<4)h="0"+h;id+="$$"+h;}
+           |    }
            |  }
            |  return id;
            |}

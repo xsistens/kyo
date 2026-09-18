@@ -9,11 +9,11 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
 
     override def config = super.config.sequential
 
-    private val One   = "r000000010031"
-    private val Two   = "r000000010032"
-    private val Outer = "r00000001006f"
-    private val Old   = "r000000010064"
-    private val New   = "r00000001006e"
+    private val One   = "r.1"
+    private val Two   = "r.2"
+    private val Outer = "r.o"
+    private val Old   = "r.d"
+    private val New   = "r.n"
 
     private def host(html: String): dom.Element =
         val root = dom.document.createElement("div")
@@ -307,7 +307,7 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
     }
 
     "a text write under transparent nesting lands in the innermost range" in {
-        val inner = One + "n00000001"
+        val inner = One + "~1"
         val root  = host(s"<!--kyo-rs:$One--><!--kyo-rs:$inner-->x<!--kyo-re:$inner--><!--kyo-re:$One-->")
         Scope.run {
             for
@@ -329,7 +329,7 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
         // sixty-four pairs an implementation that takes whichever comes first deletes inner markers somewhere.
         val html = (0 until 64).map { i =>
             val outer = idOf("p", i.toString)
-            val inner = outer + "n00000001"
+            val inner = outer + "~1"
             s"<p><!--kyo-rs:$outer--><!--kyo-rs:$inner-->v<!--kyo-re:$inner--><!--kyo-re:$outer--></p>"
         }.mkString
         val root = host(html)
@@ -347,7 +347,7 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
     }
 
     "the first element of a path resolves through either nesting level" in {
-        val inner = One + "n00000001"
+        val inner = One + "~1"
         val root  = host(s"<!--kyo-rs:$One--><!--kyo-rs:$inner-->t<b id='hit'></b><!--kyo-re:$inner--><!--kyo-re:$One-->")
         Scope.run {
             DomReactiveRegions.init(root).map { regions =>
@@ -415,7 +415,7 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
                     _ <- Kyo.foreachDiscard(0 until 200) { round =>
                         val plain = idOf("round", round.toString)
                         val outer = idOf("nested", round.toString)
-                        val inner = outer + "n00000001"
+                        val inner = outer + "~1"
                         regions.replace(
                             Outer,
                             s"<i><!--kyo-rs:$plain-->a<!--kyo-re:$plain--></i>" +
