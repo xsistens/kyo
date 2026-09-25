@@ -39,7 +39,7 @@ import scala.collection.immutable.HashMap
   */
 opaque type Tag[A] = String | Tag.internal.Dynamic
 
-object Tag:
+object Tag extends kyo.internal.TagPlatformSpecific:
 
     import internal.*
 
@@ -173,28 +173,24 @@ object Tag:
         def show: String =
             self.tpe.toString()
 
-        /** Fast-path optimization for type equality checking.
+        /** Compare two encoded tags exactly. Which pre-check is worth making before reading the contents differs by an order of magnitude
+          * between platforms, so the comparison itself lives in `TagPlatformSpecific`, whose two halves carry the measurements.
           *
-          * Since the set of statically derived tags is bounded and fixed at compile time, hash code collisions between different types are
-          * extremely unlikely. This method checks for these common cases before falling back to the more expensive full type-based checking
-          * if any of the tags are dynamic.
-          *
-          * This method runs on the kernel's per-operation dispatch path, so it goes through `TagHash` and must not recompute a content hash
-          * per call. `TagHash` is the JVM's memoized `String.hashCode` here and a memo table on JS, which has none. Content-stable
-          * cross-process hashing is `hash`'s job, not this method's.
+          * `eq` answers equal tags before that: a statically derived tag is a string literal, so equal encodings are the same interned
+          * object, and only unequal pairs reach the comparison. It cannot answer alone, because it means value equality on JS and
+          * reference identity on the JVM.
           */
-        private def fastPathEqual[B](that: Tag[B]): Boolean =
-            (self eq that) || {
-                self match
-                    case self: String =>
-                        that match
-                            case that: String =>
-                                TagHash.of(self) == TagHash.of(that)
-                            case _ =>
-                                false
-                    case _ =>
-                        false
-            }
+        private def fastPathEqual[B](that: Tag[B]): Boolean = (self eq that) || {
+            self match
+                case self: String =>
+                    that match
+                        case that: String =>
+                            equalEncodings(self, that)
+                        case _ =>
+                            false
+                case _ =>
+                    false
+        }
 
         /** Checks if this Tag represents a concrete class type (without type parameters).
           *
@@ -243,7 +239,7 @@ object Tag:
                         case NothingEntry                 => "scala.Nothing"
                         case NullEntry                    => "scala.Null"
                         case LiteralEntry(widened, value) => value
-                        case IntersectionEntry(set) =>
+                        case IntersectionEntry(set)       =>
                             val b = new ChunkBuilder[String]
                             set.foreach(id => b.addOne(render(owner, id)))
                             "(" + b.result().sorted.mkString(" & ") + ")"
@@ -257,7 +253,7 @@ object Tag:
                             if params.isEmpty then
                                 s"($name >: ${render(owner, lower)} <: ${render(owner, upper)})"
                             else
-                                val size = variances.size
+                                val size                                                = variances.size
                                 @tailrec def loop(idx: Int, acc: Chunk[String]): String =
                                     if idx == size then acc.mkString(", ")
                                     else loop(idx + 1, acc.append(variances(idx).show + render(owner, params(idx))))
@@ -266,7 +262,7 @@ object Tag:
                             if params.isEmpty then
                                 className
                             else
-                                val size = params.size
+                                val size                                                = params.size
                                 @tailrec def loop(idx: Int, acc: Chunk[String]): String =
                                     if idx == size then acc.mkString(", ")
                                     else loop(idx + 1, acc.append(variances(idx).show + render(owner, params(idx))))
@@ -333,7 +329,10 @@ object Tag:
             else Runtime.getRuntime().availableProcessors() * 8
 
         private val cacheEntries = 128
-        private val cacheSlots   = Array.ofDim[Long](threadSlots, cacheEntries)
+        final private case class Comparison(a: Tag[Any], b: Tag[Any], mode: Mode, result: Boolean)
+        private val cacheSlots: Array[Array[Maybe[Comparison]]] = Array.fill(threadSlots) {
+            Array.fill[Maybe[Comparison]](cacheEntries)(Absent)
+        }
 
         private def dynamicHashCode(tag: String, map: Map[Entry.Id, Any]): Int =
             val builder = new java.lang.StringBuilder(tag)
@@ -356,66 +355,36 @@ object Tag:
             case Equality extends Mode(31)
             case Subtype  extends Mode(37)
 
-        /** Determines if one type is a subtype or equal to another, with caching for performance.
+        /** Cache type checks only when the actual compared tags and comparison mode match.
           *
-          * This method uses a thread-local caching strategy to optimize repeated subtype checks. The cache is implemented as an array of
-          * longs for efficiency, where each entry represents a specific type check pair (a <:< b or a =:= b):
-          *
-          *   - Each long value packs both type hash codes together: subtype hash in the upper 32 bits and supertype hash in the lower 32
-          *     bits
-          *   - This combined hash is then scrambled using xor-shift operations to improve distribution and specialize it to either equality
-          *     or sub type checking.
-          *   - The sign of the stored long indicates the result: positive for true, negative for false
-          *   - Zero indicates an unused cache entry
-          *
-          * The implementation has two distinct types of potential collisions:
-          *
-          *   1. Thread slot collisions: Multiple threads may map to the same cache slot based on thread hash code. These collisions only
-          *      affect performance through cache thrashing, not correctness. The cache deliberately avoids synchronization mechanisms, as
-          *      any race conditions would only result in redundant calculations rather than incorrect results.
-          *   2. Type pair hash collisions: Different (tagA, tagB) pairs could theoretically generate the same 64-bit hash. The risk of
-          *      these true hash conflicts is extremely low due to:
-          *      - The large 63-bit effective hash space with over 9 quintillion possible values (1 bit reserved for the result flag)
-          *      - Effective xor-shift mixing that distributes bits throughout the hash
-          *      - The composite nature of the hash (requiring collisions in both subtype and supertype components)
-          *
-          * In the extremely rare case of a true hash collision between different type pairs, an incorrect cached result could be returned.
-          * However, the probability is negligible in practical applications, making this a reasonable tradeoff for the significant
-          * performance benefits of the caching system.
-          *
-          * @param a
-          *   The potential subtype
-          * @param b
-          *   The potential supertype
-          * @return
-          *   true if a is a subtype of b, false otherwise
+          * Hashes choose the slot; they never authorize reuse. A slot holds one immutable comparison, so a racing
+          * replacement can cost a reader its hit but cannot hand it one pair's result under another pair's identity.
+          * The entry's fields are final, which is what lets an unsynchronized slot carry it: a reader that observes
+          * the reference at all observes it fully constructed, and a reader that observes a stale one simply misses.
           */
         def checkTypes[A, B](a: Tag[A], b: Tag[B], mode: Mode): Boolean =
-            // Cache key from memoized hashCodes: this is a per-call in-process key, so it goes through
-            // `TagHash` and must not recompute a content hash (the constraint on fastPathEqual applies here too).
+            // Use memoized hashes to select a slot, then verify the actual compared tags before reusing a result.
             var hash = (TagHash.of(a).toLong << 32) | (TagHash.of(b) & 0xffffffffL)
             hash += mode.factor
             hash ^= (hash >>> 30)
             hash *= 0xbf58476d1ce4e5b9L
             hash ^= (hash >>> 27)
             hash &= Long.MaxValue
-            val idx    = (hash & (cacheEntries - 1)).toInt
-            val cache  = cacheSlots(Thread.currentThread().hashCode & (threadSlots - 1))
-            val cached = cache(idx)
-            if hash == cached then
-                true
-            else if hash == -cached then
-                false
-            else
-                val aTpe = a.tpe
-                val bTpe = b.tpe
-                val res =
-                    mode match
-                        case Mode.Equality => isSameType(aTpe, bTpe, aTpe.entryId, bTpe.entryId)
-                        case Mode.Subtype  => isSubType(aTpe, bTpe, aTpe.entryId, bTpe.entryId)
-                cache(idx) = if res then hash else -hash
-                res
-            end if
+            val idx   = (hash & (cacheEntries - 1)).toInt
+            val cache = cacheSlots(Thread.currentThread().hashCode & (threadSlots - 1))
+            cache(idx) match
+                case Present(cached) if (a eq cached.a) && (b eq cached.b) && mode == cached.mode =>
+                    cached.result
+                case _ =>
+                    val aTpe   = a.tpe
+                    val bTpe   = b.tpe
+                    val result =
+                        mode match
+                            case Mode.Equality => isSameType(aTpe, bTpe, aTpe.entryId, bTpe.entryId)
+                            case Mode.Subtype  => isSubType(aTpe, bTpe, aTpe.entryId, bTpe.entryId)
+                    cache(idx) = Present(Comparison(a.erased, b.erased, mode, result))
+                    result
+            end match
         end checkTypes
 
         private def isSubType(aOwner: Type[?], bOwner: Type[?], aId: Entry.Id, bId: Entry.Id): Boolean =
@@ -459,7 +428,7 @@ object Tag:
 
                     case LambdaEntry(aParams, aLower, aUpper, aBody) =>
                         bEntry match
-                            case AnyEntry => true
+                            case AnyEntry                                    => true
                             case LambdaEntry(bParams, bLower, bUpper, bBody) =>
                                 aParams.size == bParams.size &&
                                 Span.forallZip(aLower, bLower) { (aLowerId, bLowerId) =>
@@ -535,8 +504,7 @@ object Tag:
                 end match
         end isSubType
 
-        private def isSameString(a: String, b: String): Boolean =
-            (a eq b) || (a.hashCode() == b.hashCode() && a.equals(b))
+        private def isSameString(a: String, b: String): Boolean = (a eq b) || (a.hashCode() == b.hashCode() && a.equals(b))
 
         private def isSameType(aOwner: Type[?], bOwner: Type[?], aId: Entry.Id, bId: Entry.Id): Boolean =
             if !aOwner.staticDB.contains(aId) then
@@ -643,7 +611,7 @@ object Tag:
 
         private val decodeFunction: java.util.function.Function[String, Type[?]] =
             (encoded: String) =>
-                val lines = encoded.drop(1).linesIterator // discard concreteFlag
+                val lines    = encoded.drop(1).linesIterator // discard concreteFlag
                 val staticDb =
                     HashMap.empty[Entry.Id, Entry] ++
                         lines.map { encoded =>

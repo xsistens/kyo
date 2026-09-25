@@ -155,7 +155,18 @@ Use `exec` for one-shot commands where you just need the exit code and output. U
 
 Each entry in `execStream`'s output is a `LogEntry(source, content)` where `source` is `Source.Stdout` or `Source.Stderr`, so you can separate streams if needed. This works identically on both backends.
 
-To attach to the container's main process instead of launching a new exec process, call `c.attach`. The returned `AttachSession` is the same bidirectional shape as `execInteractive`: `write` sends strings or bytes to stdin, `read` streams tagged stdout/stderr entries, and `resize` changes the pseudo-terminal size when the container was created with `allocateTty(true)`.
+To attach to the container's main process instead of launching a new exec process, call `c.attach`. The returned `AttachSession` is the same bidirectional shape as `execInteractive`: `write` sends strings or bytes to stdin, and `resize` changes the pseudo-terminal size when the container was created with `allocateTty(true)`.
+
+A session's output is one ordered sequence of byte chunks, each tagged with the stream it came from. Read it whichever way suits the process:
+
+```scala doctest:expect=skipped
+session.output // exact bytes, tagged Stdout or Stderr, in arrival order
+session.stdout // the stdout bytes of that sequence
+session.stderr // the stderr bytes of that sequence
+session.read   // LogEntry per non-empty line, joined across chunks and decoded as UTF-8
+```
+
+Every view consumes from the same sequence, so each chunk is delivered once. Bytes stay exact unless you ask for `read`, which is the line-oriented view: a program that streams binary (an archive, a framed protocol) uses `output` or `stdout`.
 
 ### Logs
 
@@ -229,6 +240,19 @@ On the HTTP backend, `copyTo` stages the source through a newly created temporar
 
 kyo-pod ships typed fixtures for popular services. Each nested module under `ContainerPredef` provides a `Container.Config` with sensible defaults, a healthcheck that drives the container's own CLI tool (rather than a port-only probe that would pass during the temporary-listener phase before init scripts run), and accessors for the connection URL and credentials. These are container fixtures only; connect with whichever client library you prefer.
 
+Choosing a fixture does not cost you the general surface. Each fixture's `Config` carries the `Container.Config` it layers onto, so a name, labels, mounts, networks and resource limits are all still yours:
+
+```scala
+import kyo.*
+
+val cfg = ContainerPredef.Postgres.Config.default
+    .name("orders-it")
+    .label("suite", "orders")
+    .withContainer(_.memory(512L * 1024 * 1024))
+```
+
+The fixture owns what makes it a Postgres container (the image, the `POSTGRES_*` environment, the published port, the server command, the healthcheck) and applies those on top of what you set. Naming and labelling matter most for a container started with `initUnscoped`, which outlives the process that created it: without an identity of its own, the only handle left is the daemon-assigned name, and a teardown filtered by image reaches every other container running that image, including another process's database.
+
 ### Postgres
 
 PostgreSQL fixture. Defaults to `postgres:16-alpine` with user/password/database = `"test"`/`"test"`/`"test"`. The container runs `postgres -c fsync=off` for test-speed; healthcheck issues `psql -c "SELECT 1"` so the handle is only returned once init scripts have created `POSTGRES_DB`.
@@ -238,11 +262,14 @@ import kyo.*
 
 ContainerPredef.Postgres.initWith(ContainerPredef.Postgres.Config.default) { pg =>
     for
-        url <- pg.jdbcUrl // jdbc:postgresql://127.0.0.1:<port>/test
-        _   <- pg.psql("CREATE TABLE t (id int)")
+        url  <- pg.url     // postgres://test:test@127.0.0.1:<port>/test
+        jdbc <- pg.jdbcUrl // jdbc:postgresql://127.0.0.1:<port>/test
+        _    <- pg.psql("CREATE TABLE t (id int)")
     yield ()
 }
 ```
+
+> **Note:** `url` is the wire-protocol form, which is what a driver that speaks the Postgres protocol directly takes, [kyo-sql](../kyo-sql/README.md) among them; `jdbcUrl` is for a JDBC driver and fails on the scheme alone anywhere JDBC is not involved. Both read the mapped host port and the container's own host off the handle, so neither has to be reassembled by hand.
 
 ### MySQL
 
@@ -253,7 +280,7 @@ import kyo.*
 
 ContainerPredef.MySQL.initWith(ContainerPredef.MySQL.Config.default) { db =>
     for
-        url <- db.jdbcUrl // jdbc:mysql://127.0.0.1:<port>/test
+        url <- db.url // mysql://test:test@127.0.0.1:<port>/test
         r   <- db.mysql("SELECT 1")
     yield r.stdout.trim
 }
@@ -337,7 +364,14 @@ The HTTP backend (UnixSocket) speaks the Docker Engine API directly, so no `dock
 
 All three variants also accept a `Meter` for concurrency limiting. See [Concurrency Control](#concurrency-control).
 
-`Container.currentBackendDescription` returns a human-readable diagnostic string (for example `"HttpContainerBackend(socket=/var/run/docker.sock, apiVersion=v1.43, runtime=docker)"`).
+`Container.currentBackendDescription` returns a human-readable diagnostic string, for example:
+
+```
+HttpContainerBackend(socket=/var/run/docker.sock, apiVersion=v1.43, runtime=podman,
+                     cli=CONTAINER_HOST=unix:///var/run/docker.sock podman ps)
+```
+
+The runtime is the daemon's own answer (`GET /version`), not a guess from the socket path: podman serves the Docker Engine API and `/var/run/docker.sock` is commonly a symlink to the podman machine's socket, so the path is a poor witness. The `cli=` part is the command that reaches the same daemon from a shell, and it names the variable that runtime actually reads: podman reads `CONTAINER_HOST` and ignores `DOCKER_HOST`. It is there because kyo-pod probes and picks a socket that works, which is not necessarily the endpoint your CLI is configured for; when `podman ps` shows nothing and your code is managing containers, that line is the reconciliation.
 
 ## Networks
 

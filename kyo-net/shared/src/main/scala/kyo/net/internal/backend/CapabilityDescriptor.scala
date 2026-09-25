@@ -17,7 +17,7 @@ import kyo.*
   * either method would not compile there.
   *
   * @see
-  *   [[CapabilityOutcome]] for what a probe reports, and `CapabilityProbe` (jvm-native) for the FFI failure classification.
+  *   [[CapabilityOutcome]] for what a probe reports, and `CapabilityProbe` for the FFI failure classification.
   */
 private[net] trait CapabilityDescriptor:
 
@@ -53,7 +53,7 @@ private[net] trait CapabilityDescriptor:
     final def probe(using AllowUnsafe): CapabilityOutcome =
         memo match
             case Present(outcome) => outcome
-            case Absent =>
+            case Absent           =>
                 val outcome =
                     try doProbe
                     catch case t: Throwable => CapabilityOutcome.ProbeFailed(t)

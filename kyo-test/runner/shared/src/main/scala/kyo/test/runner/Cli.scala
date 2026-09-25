@@ -18,7 +18,7 @@ final class SystemExitException(val code: Int)(using Frame) extends kyo.KyoExcep
   *
   * Discovers `kyo.test.Test` subclasses via the platform-specific service-loader mechanism (on JVM: reads `META-INF/services/kyo.test.Test`
   * files from the classpath; on JS/Native: returns empty, since service-loader is a JVM concept). Parses command-line arguments via
-  * [[Args]], builds a [[RunConfig]], and delegates execution to the pure-Kyo `kyo.test.runner.TestRunner`.
+  * `Args`, builds a [[RunConfig]], and delegates execution to the pure-Kyo `kyo.test.runner.TestRunner`.
   *
   * Exit codes:
   *   - `0`: all leaves passed (or no leaves ran, or no suites discovered)
@@ -37,7 +37,7 @@ final class SystemExitException(val code: Int)(using Frame) extends kyo.KyoExcep
   * @see
   *   [[kyo.test.RunConfig]] the configuration object assembled from parsed arguments
   * @see
-  *   [[kyo.test.TestFilter]] populated from `--include`, `--exclude`, and `--tag` flags
+  *   [[kyo.test.TestFilter]] populated from `--filter=<glob>`, `--tag=<name>` and `--exclude-tag=<name>` flags
   */
 object Cli:
 

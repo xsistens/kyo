@@ -17,10 +17,11 @@ on:
     branches:
       - main
 
-# Without this, rapid pushes each hold a slot to completion while validating a commit that
-# is already stale, which is expensive when the job runs ~50 minutes.
+# A pull request keys on the PR number, so a new commit supersedes the run validating the previous
+# one. A push to main keys on the commit, so every main commit is validated rather than only the
+# newest.
 concurrency:
-  group: checks-${{ github.event.pull_request.number || github.ref }}
+  group: checks-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 jobs:
@@ -30,9 +31,12 @@ jobs:
     # with the staged natives below built for whichever host runs the job. The x64 pool
     # carries most of the repo's jobs and has roughly twice the p90 queue wait.
     runs-on: ubuntu-24.04-arm
-    # The job runs ~50 minutes, nearly all of it doctest. Uncapped, a hang would hold a slot
-    # for GitHub's 360-minute default, which is the resource this job is shaped to conserve.
-    timeout-minutes: 120
+    # Measured with the class-name check on all four platforms: 108 to 112 minutes on main with a warm
+    # doctest cache, and about 131 on a run whose classpath change misses every cached block. The JS,
+    # Native and Wasm rows took 67 to 74 of those minutes, so the job should now take about 40 warm and
+    # 60 cold. The cap leaves room for the cold run. Uncapped, a hang would hold a slot for GitHub's
+    # 360-minute default, which is the resource this job is shaped to conserve.
+    timeout-minutes: 90
     env:
       # No -Xmx here: the checked-in .jvmopts governs the driver heap (12G). The sbt launcher
       # appends .jvmopts after JAVA_OPTS on the java command line, so the last -Xmx wins and one
@@ -77,17 +81,46 @@ jobs:
         uses: rhysd/actionlint@v1.7.12
 
       # --- then formatting (~3m) ---
-      - uses: coursier/cache-action@v8.1.1
-      - uses: coursier/setup-action@v3.0.2
+      # Same key namespace as .github/actions/setup, rather than coursier/cache-action's own. That action
+      # mints a cache entry per job name, each around 1.6 GB and each holding the same coursier tree the
+      # deps-<os>- entries already hold. Three of them resident at once take roughly half of GitHub's 10 GB
+      # per-repo budget, and eviction is what pushed the deps and kyo-browser entries out: a run on
+      # 2026-09-19 missed even the bare deps-windows-x64- and kyo-browser-windows-x64- prefixes, so the leg
+      # refetched every dependency and redownloaded chrome-headless-shell inside a test with a 60s timeout.
+      # Sharing the namespace both removes that pressure and warms this job from the far more frequent ci runs.
+      # This job runs on ubuntu-24.04-arm, which is the linux-arm64 pole.
+      #
+      # restore, not the full cache action: a key is immutable once written, so a job that saves first owns
+      # it. This job resolves scalafmt, actionlint and the doctest set, which is not the whole dependency
+      # tree a ci leg on this pole pulls, and minting the key from it would lock out the fuller save for
+      # that hash. The ci legs are the writers; every consumer here restores.
+      - uses: actions/cache/restore@v6
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/Library/Caches/Coursier
+            ~/AppData/Local/Coursier/Cache
+            ~/.sbt
+            ~/.ivy2/cache
+          key: deps-linux-arm64-${{ hashFiles('build.sbt', 'project/build.properties', 'project/plugins.sbt', 'project/*.scala') }}
+          restore-keys: deps-linux-arm64-
+      - uses: coursier/setup-action@v3.0.3
         with:
           jvm: corretto:25
           apps: sbt
 
+      # scalafmtAll aggregates from the CURRENT project, and build.sbt makes that kyoJVM unless
+      # -Dplatform says otherwise, so a bare `sbt scalafmtAll` only ever reaches the JVM project set:
+      # every js/, native/ and js-wasm/ source stays unformatted and undetected. All four aggregates
+      # exist in every session regardless of -Dplatform, so naming them covers the whole tree in one
+      # project load (seconds, not a fourfold job).
       - name: Check formatting
         run: |
-          sbt scalafmtAll scalafmtSbt
+          sbt kyoJVM/scalafmtAll kyoJS/scalafmtAll kyoNative/scalafmtAll kyoWasm/scalafmtAll scalafmtSbt
           if ! git diff --quiet; then
-            echo "::error::Files are not formatted. Run 'sbt scalafmtAll scalafmtSbt' locally."
+            echo "::error::Files are not formatted. Run 'sbt kyoJVM/scalafmtAll kyoJS/scalafmtAll kyoNative/scalafmtAll kyoWasm/scalafmtAll scalafmtSbt' locally."
             git diff
             exit 1
           fi
@@ -98,17 +131,13 @@ jobs:
       - name: Install liburing (Linux)
         run: bash scripts/apt-install.sh liburing-dev
 
-      # libaeron (build-time only): `sbt doctest` compiles kyo-aeron's C shim (kyo_aeron.c), which
-      # statically links -laeron_driver_static from the gitignored staged tree. Same reason as liburing
-      # above: this workflow does not use .github/actions/setup, so the staging step is repeated here.
-      # The runner is pinned to ubuntu-24.04-arm, so the os-arch is always linux-aarch64.
-      - name: Prepare libaeron
-        shell: bash
-        run: |
-          # The Aeron driver links -luuid on Linux, and the package providing the libuuid.so link
-          # target is not preinstalled.
-          bash scripts/apt-install.sh --if-missing cmake uuid-dev
-          bash kyo-aeron/scripts/build-aeron.sh linux-aarch64
+      # libaeron, SQLite and DoltLite (build-time only): `sbt doctest` compiles kyo-aeron's C shim
+      # (kyo_aeron.c), which statically links -laeron_driver_static, and kyo-sql's shims together with
+      # their vendored engines, all from gitignored staged trees. Same reason as liburing above: this
+      # workflow does not use .github/actions/setup, so the staging is repeated here.
+      - uses: ./.github/actions/stage-natives
+        with:
+          boringssl: 'false'
 
       # Doctest result cache. Entries are keyed by SHA-256 over the block body, the scope closure
       # (preceding blocks and the predef), the classpath fingerprint, the Scala version and the
@@ -133,9 +162,35 @@ jobs:
       # main writes, PRs only restore. A cache written on a PR run is scoped to that PR's merge
       # ref, readable by nothing but re-runs of the same PR, so it would cost upload time for no
       # reuse. A PR gets its hits from the default branch's cache.
+      #
+      # `always()` because every block's result is its own file, written as it compiles: a doctest
+      # step that fails or times out part-way still leaves the blocks it finished, and the next main
+      # run reuses them instead of recompiling the whole build's READMEs.
       - name: Save doctest cache
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@v6
         with:
           path: .doctest-cache
           key: doctest-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}
+
+      # Last, and after the cache save, because doctest has already compiled every module: the step pays
+      # for scaladoc alone (~6 min) rather than a second full build, and a broken link cannot cost the
+      # next run its doctest hits.
+      #
+      # JVM covers every shared source. JS and Wasm render no scaladoc at all. Native does, but
+      # `kyoNative / update` cannot resolve the aggregate's own dependencies, so a Native row would fail
+      # on that rather than on a link.
+      - name: Scaladoc links
+        run: sbt kyoJVM/doc
+
+      # Two modules declaring one fully qualified name is silent everywhere else: the JVM classloader and
+      # both the Scala.js and Scala Native linkers keep the first class on the classpath and drop the rest.
+      #
+      # JVM only. It reuses what doctest compiled (~2 min) and also covers the sbt plugins. The JS, Native
+      # and Wasm rows compile every module of their platform from nothing, 67 to 74 min together on
+      # ubuntu-24.04-arm, more than half of this job. A name declared only in `js`, `js-wasm`, `native` or
+      # `wasm` sources is therefore not checked in CI.
+      - name: Class names
+        run: |
+          sbt 'checkClassNames --self-test'
+          sbt 'checkClassNames JVM'

@@ -35,7 +35,7 @@ import scala.util.control.NonFatal
   *
   * The companion object provides these creation methods:
   *
-  *   - `Signal.initRef[A]`: creates a mutable `Signal.Ref[A]` initialized with a starting value
+  *   - `Signal.initRef[A]`: creates a mutable `SignalRef[A]` initialized with a starting value
   *   - `Signal.initConst[A]`: creates an immutable `Signal[A]` that always returns the same value
   *   - `Signal.initRaw[A]`: (low-level API) creates a custom `Signal[A]` by directly implementing its fundamental operations, primarily
   *     intended for implementing signal combinators and custom signal types
@@ -374,7 +374,7 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                             .andThen(self.currentWith { a2 =>
                                 (if a2 == a then inner else f(a2)).currentWith(g)
                             })
-                }
+                    }
         )
 
     /** Pairs this signal with another, waiting for both to change before emitting.
@@ -513,13 +513,13 @@ object Signal:
 
     /** Creates a new mutable signal reference with an initial value.
       *
-      * This method initializes a new `Signal.Ref[A]` that can be modified over time. The reference starts with the provided initial value
+      * This method initializes a new `SignalRef[A]` that can be modified over time. The reference starts with the provided initial value
       * and can be updated using methods like `set`, `getAndSet`, etc.
       *
       * @param initial
       *   The starting value for the signal reference
       * @return
-      *   A new mutable `Signal.Ref[A]`
+      *   A new mutable `SignalRef[A]`
       * @tparam A
       *   The type of value contained in the signal. Must have an instance of `CanEqual[A, A]`
       */
@@ -533,7 +533,7 @@ object Signal:
 
     /** Creates a new mutable signal reference with an initial value and applies a transformation function.
       *
-      * This method initializes a new `Signal.Ref[A]` that can be modified over time, and immediately applies a transformation function to
+      * This method initializes a new `SignalRef[A]` that can be modified over time, and immediately applies a transformation function to
       * it. The reference starts with the provided initial value and the transformation is applied within the same atomic operation.
       *
       * @param initial
@@ -559,7 +559,7 @@ object Signal:
 
     /** Creates a new immutable signal with a constant value.
       *
-      * This method creates a signal that always returns the same value. Unlike `Signal.Ref`, this signal cannot be modified after creation.
+      * This method creates a signal that always returns the same value. Unlike `SignalRef`, this signal cannot be modified after creation.
       * This is useful for cases where you need a signal interface but the value never changes.
       *
       * Since the value never changes, `next`/`nextWith` never complete. Read a constant with `current`/`currentWith`, and expect it to sit
@@ -616,7 +616,7 @@ object Signal:
     /** Creates a new immutable signal with a constant value and applies a transformation function.
       *
       * This method creates a signal that always returns the same value and immediately applies a transformation function to it. Unlike
-      * `Signal.Ref`, this signal cannot be modified after creation.
+      * `SignalRef`, this signal cannot be modified after creation.
       *
       * @param value
       *   The constant value for the signal
@@ -1060,11 +1060,12 @@ object Signal:
           *   - An `AtomicRef[Promise]` managing change notifications
           *
           * Methods like `set`, `getAndSet`, and `compareAndSet` update the current value atomically and check if it has actually changed
-          * using `CanEqual`. When values differ, `onUpdate` is triggered: the current promise is atomically replaced with a new masked
-          * promise, then completed with the new value. This ensures the next promise is always ready before notifying of changes.
+          * using `CanEqual`. When values differ, `onUpdate` is triggered: the current promise is atomically replaced with a new
+          * uninterruptible promise, then completed with the new value. This ensures the next promise is always ready before notifying of
+          * changes.
           *
-          * Promises are masked to prevent interrupt propagation between observers - if one observer is interrupted, the interruption won't
-          * affect other observers waiting on the same signal. This ensures notification chains remain independent.
+          * Promises are uninterruptible to prevent interrupt propagation between observers: if one observer is interrupted, the
+          * interruption won't affect other observers waiting on the same signal.
           */
         final class Unsafe[A] private (
             currentRef: AtomicRef.Unsafe[A],
@@ -1136,7 +1137,7 @@ object Signal:
                 // caller), version increment, promise swap+complete. `SignalRef.observe`'s register/validate
                 // protocol relies on exactly this order for losslessness (see the override).
                 discard(versionRef.incrementAndGet())
-                nextPromise.getAndSet(Promise.Unsafe.initMasked())
+                nextPromise.getAndSet(Promise.Unsafe.initUninterruptible())
                     .completeDiscard(Result.succeed(value))
             end onUpdate
 
@@ -1259,11 +1260,7 @@ object Signal:
             def init[A](initial: A)(using AllowUnsafe, CanEqual[A, A]): Unsafe[A] =
                 Unsafe(
                     AtomicRef.Unsafe.init(initial),
-                    // Use initMasked so that interrupting one subscriber cannot propagate through the
-                    // signal's next-promise and accidentally interrupt other subscribers waiting on the
-                    // same signal. All subsequent promises (created in onUpdate) are already masked for
-                    // the same reason; the initial promise must be consistent.
-                    AtomicRef.Unsafe.init(Promise.Unsafe.initMasked()),
+                    AtomicRef.Unsafe.init(Promise.Unsafe.initUninterruptible()),
                     AtomicLong.Unsafe.init(0L)
                 )
         end Unsafe

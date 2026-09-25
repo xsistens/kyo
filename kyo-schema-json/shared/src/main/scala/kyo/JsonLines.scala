@@ -213,7 +213,7 @@ object JsonLines:
       *
       * The two cases are the two things a size breach can mean, and they are separate states rather than one state carrying a flag. A
       * terminated line over the ceiling has a known boundary, so framing skips to it and carries on: that breach is a failure element
-      * inside [[Continued]]. A pending residual over the ceiling has no boundary to skip to, so framing is over, and [[Halted]] carries no
+      * inside [[Framed.Continued]]. A pending residual over the ceiling has no boundary to skip to, so framing is over, and [[Framed.Halted]] carries no
       * framer for exactly that reason.
       */
     enum Framed:
@@ -343,7 +343,7 @@ object JsonLines:
                 case -1 =>
                     settle(held.add(span), offset, nextIndex, Chunk.empty)
                 case nl =>
-                    val (index, lines) = resolveSpanning(held, offset, span, nl)
+                    val (index, lines)                            = resolveSpanning(held, offset, span, nl)
                     val (start, restOffset, restIndex, restLines) =
                         emitFrom(span, nl + 1, offset + held.size + nl + 1, index, lines)
                     settle(Pending.empty.add(span.slice(start, span.size)), restOffset, restIndex, restLines)

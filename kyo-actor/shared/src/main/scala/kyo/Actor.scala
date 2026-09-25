@@ -86,7 +86,7 @@ sealed abstract class Actor[+E, A, B](
             }
         }
 
-    /** Sends a request to a [[respond]] actor and awaits the reply, strand-safe via the lifecycle-aware [[ask]].
+    /** Sends a request to a `respond` actor and awaits the reply, strand-safe via the lifecycle-aware [[ask]].
       *
       * Available only when the actor's message type `A` is an `Ask[Req, Resp]` envelope, witnessed by the `A =:= Actor.Ask[Req, Resp]`
       * evidence. It builds the envelope, wiring the framework's reply `Subject`, and delegates to the member `ask`. For
@@ -108,6 +108,10 @@ sealed abstract class Actor[+E, A, B](
       * the actor's lifetime.
       */
     private[kyo] def pendingReplies: Int = _pending.size
+
+    /** Exposed for tests that need a handle to a specific reply, to observe it or complete it.
+      */
+    private[kyo] def inFlightReplies: Chunk[Promise[Any, Abort[Closed]]] = _pending.snapshot
 
     /** Returns the fiber executing this actor's message processing.
       *
@@ -179,6 +183,10 @@ object Actor:
 
         def size: Int = waiters.size
 
+        def snapshot: Chunk[Promise[Any, Abort[Closed]]] =
+            // toArray erases the element type; the set's declared type makes the cast safe
+            Chunk.from(waiters.toArray()).asInstanceOf[Chunk[Promise[Any, Abort[Closed]]]]
+
         /** Fails every still-registered reply with `Closed`. Called once when the actor's consumer fiber ends. */
         def terminate(using frame: Frame)(using AllowUnsafe): Unit =
             terminated.set(true)
@@ -210,7 +218,7 @@ object Actor:
         def awaitReply[C, E](reply: Promise[C, Abort[Closed]], send: => Unit < (Async & Abort[Closed]))(
             onTerminated: => C < (Async & Abort[Closed | E])
         )(using frame: Frame): C < (Async & Abort[Closed | E]) =
-            val entry = reply.asInstanceOf[Promise[Any, Abort[Closed]]]
+            val entry                 = reply.asInstanceOf[Promise[Any, Abort[Closed]]]
             val register: Unit < Sync =
                 Sync.Unsafe.defer {
                     discard(waiters.add(entry))
@@ -387,7 +395,7 @@ object Actor:
         for
             self     <- Actor.self[A]
             listener <- hub.listen(bufferSize, filter)
-            _ <- Fiber.init {
+            _        <- Fiber.init {
                 Loop.foreach {
                     Abort.run[Closed](listener.take).map {
                         case Result.Success(event) =>
@@ -602,7 +610,7 @@ object Actor:
             }
         }
 
-    /** Envelope for a framework-owned request/reply actor created with [[respond]].
+    /** Envelope for a framework-owned request/reply actor created with `respond`.
       *
       * @param request
       *   The request payload
@@ -633,7 +641,7 @@ object Actor:
 
     /** Runs the actor as a stateful request/reply loop, threading `State` across requests.
       *
-      * The stateful analogue of [[respond]]: the handler receives each request with the current state and returns the reply plus the next
+      * The stateful analogue of `respond`: the handler receives each request with the current state and returns the reply plus the next
       * state; the framework sends the reply (so it cannot be forgotten) and continues with the next state. This gives the request/reply loop
       * local state and access to effects between requests without reaching for `Var`. The actor processes one request at a time in FIFO order
       * and runs until its mailbox closes. For early termination or to observe a final result, use [[receiveLoop]] with a manual reply via the

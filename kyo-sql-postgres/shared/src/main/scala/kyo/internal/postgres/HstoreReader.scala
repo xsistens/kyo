@@ -28,7 +28,7 @@ import kyo.SqlDecodeInsufficientBytesException
   * read through `simpleQuery` would otherwise be handed to the binary header parser and report an entry count taken from four ASCII bytes.
   *
   * The hstore OID is not fixed across PG installations because hstore is a contrib extension; callers identify the OID at session startup
-  * via `pg_type` lookup. [[kyo.internal.postgres.PostgresRowReader.mapStart]] dispatches to this reader for any non-JSON / non-JSONB OID,
+  * via `pg_type` lookup. `kyo.internal.postgres.PostgresRowReader.mapStart` dispatches to this reader for any non-JSON / non-JSONB OID,
   * leaving JSON object decoding to [[kyo.internal.JsonReader]] + [[kyo.internal.reader.JsonStructureCounter]].
   *
   * After [[openMap]], call [[nextKey]] / [[nextValue]] (or [[nextValueBytes]]) in strict alternation per entry. [[hasNext]] returns true
@@ -56,7 +56,7 @@ final class HstoreReader(bytes: Span[Byte], format: Format, readerFrame: Frame):
     /** Whether there are unread entries left in the map. */
     def hasNext: Boolean = entriesRemaining > 0
 
-    /** Parses the value's header, or its whole rendering under [[Format.Text]], and returns the entry count.
+    /** Parses the value's header, or its whole rendering under `Format.Text`, and returns the entry count.
       *
       * @return
       *   number of key/value pairs in the hstore
@@ -169,11 +169,10 @@ final class HstoreReader(bytes: Span[Byte], format: Format, readerFrame: Frame):
     end openTextMap
 
     private def readInt32BE(): Int =
-        val v =
-            ((bytes(pos) & 0xff) << 24) |
-                ((bytes(pos + 1) & 0xff) << 16) |
-                ((bytes(pos + 2) & 0xff) << 8) |
-                (bytes(pos + 3) & 0xff)
+        val v = ((bytes(pos) & 0xff) << 24) |
+            ((bytes(pos + 1) & 0xff) << 16) |
+            ((bytes(pos + 2) & 0xff) << 8) |
+            (bytes(pos + 3) & 0xff)
         pos += 4
         v
     end readInt32BE
@@ -234,7 +233,7 @@ object HstoreReader:
             i += 2
             skipSpaces()
             val (value, valueQuoted) = readToken()
-            val entry =
+            val entry                =
                 if !valueQuoted && value.equalsIgnoreCase("NULL") then Maybe.empty[Span[Byte]]
                 else Maybe.Present(Span.from(value.getBytes(StandardCharsets.UTF_8)))
             builder.addOne((key, entry))

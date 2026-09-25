@@ -6,8 +6,11 @@ import kyo.Async
 import kyo.Chunk
 import kyo.Frame
 import kyo.Maybe
+import kyo.Result
+import kyo.Scope
 import kyo.SqlClient
 import kyo.SqlConfig
+import kyo.SqlConnectionException
 import kyo.SqlException
 import kyo.internal.BackendPlatformSpecific
 
@@ -79,8 +82,22 @@ abstract class Backend:
       *
       * A backend does not resolve the URL's own declarations: `init` merges them under `config`, and the merged value is the settings the
       * returned client was opened under.
+      *
+      * The row carries [[kyo.Scope]] because [[kyo.db.Runtime.init]] registers the pool's release against the ambient scope as the pool is
+      * allocated, which is the only point at which no stop can land between the pool existing and something owing its close. Register
+      * nothing else against that scope: an unscoped entry runs this under a scope that closes only when the acquisition does NOT reach its
+      * end, so anything registered there for the returned client's lifetime would never fire.
       */
-    def open(url: SqlConfig.Url, config: SqlConfig)(using Frame): SqlClient < (Async & Abort[SqlException])
+    def open(url: SqlConfig.Url, config: SqlConfig)(using Frame): SqlClient < (Async & Abort[SqlException] & Scope)
+
+    /** Reads `raw` into the URL this backend will be opened with.
+      *
+      * Defaults to the network form, `scheme://[user[:password]@]host:port/db[?options]`, which [[kyo.SqlConfig.Url.parse]] implements. An
+      * embedded engine overrides this, naming a file path that has no host, port, or credentials. The scheme is resolved first, from the
+      * text before `://`, and only then is the rest handed to the backend that claims it.
+      */
+    def parseUrl(raw: String)(using Frame): Result[SqlConnectionException, SqlConfig.Url] =
+        SqlConfig.Url.parse(raw)
 
 end Backend
 

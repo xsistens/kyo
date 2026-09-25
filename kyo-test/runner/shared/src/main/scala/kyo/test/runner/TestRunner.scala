@@ -41,8 +41,8 @@ import scala.concurrent.Future
 
 /** Pure-Kyo runner for the V3 (next) self-contained framework.
   *
-  * The ENTIRE run, discovery AND execution, is one Kyo computation. Discovery is a synchronous `Sync` walk (per RI-008 discovery is
-  * inherently sequential): each probe allocates its own [[TestContext]], instantiates the suite single-threaded, and reads the synchronous
+  * The ENTIRE run, discovery AND execution, is one Kyo computation. Discovery is a synchronous `Sync` walk (discovery is
+  * inherently sequential): each probe allocates its own [[kyo.test.internal.TestContext]], instantiates the suite single-threaded, and reads the synchronous
   * `peekRegisteredLeaf` / `peekWasGroup` accessors. Execution fans out through the process-global
   * `kyo.test.runner.internal.LeafPool`: each leaf's `Chunk[(Chunk[String], TestResult)] < Async` computation is submitted via
   * `LeafPool.submit` and the suite awaits the returned promises in INPUT ORDER. The pool drains its bounded channel with `LeafPool.globalK` detached worker fibers, so total
@@ -98,13 +98,13 @@ object TestRunner:
             else config
 
         val reporter: TestReporter = resolveReporter(effectiveConfig)
-        val suiteInfo = SuiteInfo(
+        val suiteInfo              = SuiteInfo(
             name = simpleName(suite),
             className = suite.getName,
             expectedLeafCount = Maybe.empty
         )
         // Under the process-global pool there is no per-suite K. The meaningful run-start figure is the pool's
-        // global bound, LeafPool.globalK (Q-002 resolution): reporting the suite's requested parallelism would
+        // global bound, LeafPool.globalK: reporting the suite's requested parallelism would
         // mislead, since the pool, not the suite, sets the real degree of concurrency.
         if !effectiveConfig.countOnly then
             reporter.onRunStart(kyo.test.RunInfo(suiteCount = 1, parallelism = LeafPool.globalK))
@@ -147,7 +147,7 @@ object TestRunner:
                     // computation (on the pool worker) at REAL leaf start/finish (more accurate than fire-at-fork).
                     def leafComp(path: Chunk[String], builderOpt: Maybe[TestBuilder]): Chunk[(Chunk[String], TestResult)] < Async =
                         val rawBuilder = builderOpt.getOrElse(TestBuilder(path.lastMaybe.getOrElse("")))
-                        val builder =
+                        val builder    =
                             rawBuilder.timeout match
                                 case Maybe.Absent if effectiveConfig.timeout != Duration.Infinity =>
                                     rawBuilder.copy(timeout = Maybe(effectiveConfig.timeout))
@@ -202,11 +202,12 @@ object TestRunner:
                         // after-leaf leak only lands as a failed leaf if it was enqueued before THIS drain point. A fiber that
                         // asserts after all suites are scored cannot become an event; it still emits the stderr warning.
                         val leakedAfter = AssertScope.drainLeakedAfterClose()
-                        val synthetic = leakedAfter.map { case (leakPath, failure) =>
+                        val synthetic   = leakedAfter.map { case (leakPath, failure) =>
                             (
                                 leakPath :+ "(leaked fiber assertion)",
                                 TestResult.Failed(
-                                    "leaked fiber assertion (a fiber outlived its test and failed an assert; timing-sensitive):\n" + failure.diagram,
+                                    "leaked fiber assertion (a fiber outlived its test and failed an assert; timing-sensitive):\n" +
+                                        failure.diagram,
                                     Maybe(failure.getCause),
                                     Duration.Zero
                                 )
@@ -235,7 +236,7 @@ object TestRunner:
         Abort.run[Throwable](pipeline).map {
             case Result.Success(report) => report
             case Result.Failure(t)      => constructorFailureReport(suiteInfo, reporter, effectiveConfig, t)
-            case panic: Result.Panic =>
+            case panic: Result.Panic    =>
                 java.lang.System.err.println(s"[kyo-test] unexpected panic during run: ${panic.exception}")
                 constructorFailureReport(suiteInfo, reporter, effectiveConfig, panic.exception)
         }
@@ -280,7 +281,7 @@ object TestRunner:
         }
 
     /** Discover all (namePath, cursor, builderOpt) tuples under `prefix`. The DFS probes one cursor at a time (discovery is inherently
-      * sequential, RI-008), descending into groups and stopping at the first past-end (neither leaf nor group) sibling.
+      * sequential), descending into groups and stopping at the first past-end (neither leaf nor group) sibling.
       */
     private def walkNode(
         suite: Class[? <: TestBase[?]],
@@ -474,10 +475,11 @@ object TestRunner:
                     if leaked.nonEmpty then
                         base match
                             case _: TestResult.Failed | _: TestResult.TimedOut | _: TestResult.Cancelled => base
-                            case _ =>
-                                val first = leaked.head
+                            case _                                                                       =>
+                                val first   = leaked.head
                                 val labeled =
-                                    "detached-fiber assertion (a fiber spawned by this leaf failed an assert before the leaf was scored; timing-sensitive):\n" + first.diagram
+                                    "detached-fiber assertion (a fiber spawned by this leaf failed an assert before the leaf was scored; timing-sensitive):\n" +
+                                        first.diagram
                                 TestResult.Failed(labeled, first.cause, elapsed)
                     else base
                 // No-assertion flip: a leaf that passed with an empty drain AND zero evaluation counter is a bug.
@@ -515,18 +517,18 @@ object TestRunner:
       */
     private def resultToTestResult(result: Result[Throwable, Unit], elapsed: Duration): TestResult =
         result match
-            case Result.Success(_)          => TestResult.Passed(elapsed)
-            case Result.Failure(_: Timeout) => TestResult.TimedOut(elapsed)
+            case Result.Success(_)                   => TestResult.Passed(elapsed)
+            case Result.Failure(_: Timeout)          => TestResult.TimedOut(elapsed)
             case Result.Failure(af: AssertionFailed) =>
                 TestResult.Failed(af.diagram, Maybe(af.getCause), elapsed)
             case Result.Failure(tc: TestCancelled) => TestResult.Cancelled(tc.reason, elapsed)
             case Result.Failure(t)                 => TestResult.Failed(t.toString, Maybe(t), elapsed)
-            case panic: Result.Panic =>
+            case panic: Result.Panic               =>
                 panic.exception match
                     case af: AssertionFailed => TestResult.Failed(af.diagram, Maybe(af.getCause), elapsed)
                     case tc: TestCancelled   => TestResult.Cancelled(tc.reason, elapsed)
                     case _: Timeout          => TestResult.TimedOut(elapsed)
-                    case t =>
+                    case t                   =>
                         java.lang.System.err.println(s"[kyo-test] unexpected panic in leaf: $t")
                         TestResult.Failed(t.toString, Maybe(t), elapsed)
     end resultToTestResult

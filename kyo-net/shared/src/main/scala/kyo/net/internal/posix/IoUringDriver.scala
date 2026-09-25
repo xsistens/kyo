@@ -120,6 +120,17 @@ final private[net] class IoUringDriver private[posix] (
     // drained inline at the top of each reap cycle). The per-field comments name each field's owning carrier; no raw type is shared unsafely.
     private val pending = new ConcurrentHashMap[Long, PendingOp]()
 
+    // JS only: the reap task of a chain that parked instead of taking another turn, Absent while the chain runs.
+    //
+    // On Node the fused submit-and-wait is a `koffi.callAsync` request on a libuv worker, and Node does not exit while one is outstanding, so a
+    // chain that re-arms with nothing outstanding keeps an idle application alive forever. JVM and Native park a thread the process owns, which
+    // holds nothing open, so they always re-arm.
+    //
+    // No atomic and no recheck after the store: on JS the scheduler, every submit and every `@Ffi.blocking` completion run on the Node main
+    // thread, and the JS scheduler always defers to the macrotask queue, so the store and the read in `wakeReapLoop` cannot interleave.
+    // `private[posix]` so a test can park a task and observe the resume.
+    private[posix] var idleTask: Maybe[Task] = Absent
+
     // Cross-carrier submission handoff: every SQ operation (get_sqe + prep + submit) and every TLS engine op for every connection on this driver
     // runs on the single reap carrier, which drains this queue at the top of each reap cycle (see [[submitEngineOp]] / [[runCycle]]). One producer
     // for the io_uring submission ring; no two engine ops overlap on the same engine because one carrier runs them in FIFO order.
@@ -635,7 +646,7 @@ final private[net] class IoUringDriver private[posix] (
         val buf =
             handle.rawPending match
                 case Present(b) => b
-                case Absent =>
+                case Absent     =>
                     val b = new GrowableByteBuffer
                     handle.rawPending = Present(b)
                     b
@@ -660,7 +671,7 @@ final private[net] class IoUringDriver private[posix] (
             () // a send SQE is already outstanding; its onRawSendComplete re-flushes any bytes appended meanwhile
         else
             handle.rawPending match
-                case Absent => () // nothing buffered
+                case Absent       => () // nothing buffered
                 case Present(buf) =>
                     val unsentLen = buf.size - handle.rawPendingSent
                     if unsentLen <= 0 then
@@ -749,7 +760,7 @@ final private[net] class IoUringDriver private[posix] (
         val buf =
             handle.pendingCipher match
                 case Present(b) => b
-                case Absent =>
+                case Absent     =>
                     val b = new GrowableByteBuffer
                     handle.pendingCipher = Present(b)
                     b
@@ -798,7 +809,7 @@ final private[net] class IoUringDriver private[posix] (
             ()
         else
             handle.pendingCipher match
-                case Absent => () // nothing buffered (e.g. an engine that produced no ciphertext this write)
+                case Absent       => () // nothing buffered (e.g. an engine that produced no ciphertext this write)
                 case Present(buf) =>
                     val unsentLen = buf.size - handle.pendingCipherSent
                     if unsentLen <= 0 then
@@ -869,7 +880,7 @@ final private[net] class IoUringDriver private[posix] (
         // The one outstanding send has reaped: clear the guard FIRST so the re-flush below (or a later write's flush) can submit the next SQE.
         handle.sendInFlight = false
         handle.pendingCipher match
-            case Absent => () // tail already cleared (e.g. by a concurrent close)
+            case Absent       => () // tail already cleared (e.g. by a concurrent close)
             case Present(buf) =>
                 if res < 0 && -res == PosixConstants.EINTR && sendEintrCount(handle) < maxTransientIoRetries then
                     // EINTR send CQE: a signal interrupted the send before any byte moved (POSIX send(2)); nothing was transferred, so re-flush the
@@ -928,7 +939,7 @@ final private[net] class IoUringDriver private[posix] (
         // The one outstanding send has reaped: clear the guard FIRST so the re-flush below can submit the next SQE.
         handle.rawSendInFlight = false
         handle.rawPending match
-            case Absent => () // tail already cleared (e.g. by a concurrent close)
+            case Absent       => () // tail already cleared (e.g. by a concurrent close)
             case Present(buf) =>
                 if res < 0 && -res == PosixConstants.EINTR && sendEintrCount(handle) < maxTransientIoRetries then
                     // EINTR send CQE: a signal interrupted the send before any byte moved (POSIX send(2)); nothing was transferred, so re-flush the
@@ -1007,10 +1018,14 @@ final private[net] class IoUringDriver private[posix] (
       */
     override def closeListener(handle: PosixHandle, closeFd: () => Unit)(using AllowUnsafe, Frame): Unit =
         submitEngineOp { () =>
-            cancel(handle)
-            handle.requestClose()
-            flushSubmits()
-            closeFd()
+            // The engine drain contains a throwing op and carries on, so `closeFd` is in a `finally`: a throw from the cancel's inline
+            // promise callbacks must not leave the listen fd open with its release never reported.
+            try
+                cancel(handle)
+                handle.requestClose()
+                flushSubmits()
+            finally closeFd()
+            end try
         }
     end closeListener
 
@@ -1536,6 +1551,7 @@ final private[net] class IoUringDriver private[posix] (
                 val cad = new StringBuilder
                 closeAfterDrain.forEach((k, _) => discard(cad.append(k).append(' ')))
                 s"closed=${closedFlag.get()} reapExited=${reapExited.get()} ringExited=${ringExited.get()} reapCycles=$diagReapCycles " +
+                    s"idle=${idleTask.isDefined} " +
                     s"pending(${pending.size})=[$pend] inFlight=[$infl] closeAfterDrain(${closeAfterDrain.size})=[$cad] " +
                     s"pendingCloses=${pendingCloses.size} stalledSends=${stalledSends.size} " +
                     s"cancelSubmitted=${diagCancelSubmitted.get()} cancelParked=${diagCancelParked.get()} " +
@@ -1597,6 +1613,14 @@ final private[net] class IoUringDriver private[posix] (
       * reap carrier is already running cost only a coalesced counter increment and at most one spurious early return from the next park.
       */
     private def wakeReapLoop()(using AllowUnsafe): Unit =
+        // A parked chain has no wait to cut short, so the wake is a re-arm instead. Taken before the eventfd write so the work just offered is
+        // never left with neither a running turn nor a scheduled one. See idleTask for why this needs no atomic.
+        if kyo.internal.Platform.isJS then
+            val parked = idleTask
+            if parked.isDefined then
+                idleTask = Absent
+                reArm(parked.get)
+        end if
         if wakeFd >= 0 && acquireWake() then
             try discard(uring.kyo_uring_eventfd_write(wakeFd))
             finally releaseWake()
@@ -1788,9 +1812,38 @@ final private[net] class IoUringDriver private[posix] (
             // Every benign turn re-arms ops parked on a full SQ: the fused submit+wait freed the slots, and SQ space is freed by submitting,
             // not by reaping, so they must not wait for an unrelated CQE.
             reArmStalled()
-            reArm(task)
+            // A turn that leaves the driver with nothing outstanding would wait for a completion no submission can produce, and on Node that
+            // wait is what keeps the process alive (see idleTask). Park the chain instead: tested after this turn's drain, so what it reads is
+            // the state the next turn would start from, and every path that gives work goes through `wakeReapLoop`, which resumes the task.
+            if kyo.internal.Platform.isJS && idleNow then idleTask = Present(task)
+            else reArm(task)
         end if
     end afterWait
+
+    /** Whether the driver has nothing outstanding: no submitted operation awaiting its completion, no cancel awaiting one, no close
+      * obligation, no queued engine op, and nothing parked on a full submission queue.
+      *
+      * Read on the reap carrier after a turn's drain. `pending` and `pendingCloses` are the pair [[start]]'s diagnostics probe calls `pending`,
+      * and the three stalled queues plus `closeAfterDrain` are the same set `runCycle` refuses to park indefinitely on, for the same reason:
+      * each is re-driven by a turn rather than by a completion, so parking on one would strand it.
+      *
+      * `cancelTargets` is here because a cancel is keyed there and NOT in `pending`, and the kernel does not order a cancel's completion
+      * against its target's. So the target can reap and leave `pending` empty with the cancel's own completion still owed, and parking then
+      * would be parking with a completion in the ring. Nothing strands if it does, since the deferred close is discharged on the target's
+      * completion and a late cancel receipt is a no-op, but this method would report idle with a completion still owed.
+      *
+      * `inFlight` is deliberately not among them. Its entries can sit at zero for a handle that has no operation outstanding, so it reports
+      * activity that `pending` does not, and a driver keyed on it would never park. Nothing is lost: `register` increments both, so a handle
+      * with work outstanding has an entry in `pending` by construction.
+      *
+      * A server process stays alive here for a different reason than in the poller, where a listener sits in `activeFds` continuously. Accept
+      * is single-shot, so a listener between one accept's completion and the handler's next `awaitAccept` is genuinely idle and the chain
+      * parks. What carries the process across that gap is the re-arm itself: it arrives through `submitEngineOp` as a macrotask, which is work
+      * Node is already counting.
+      */
+    private[posix] def idleNow: Boolean =
+        pending.isEmpty && pendingCloses.isEmpty && engineQueue.isEmpty && cancelTargets.isEmpty &&
+            stalledSends.isEmpty && stalledSubmits.isEmpty && stalledCancels.isEmpty && closeAfterDrain.isEmpty
 
     /** Re-arm the next turn onto a DIFFERENT carrier, so the one that just ran the turn is free to run the completions it produced.
       *
@@ -1815,8 +1868,8 @@ final private[net] class IoUringDriver private[posix] (
       * submitEngineOp either lands in this drain or runs its own under the shared claim. Then drainAfterReapExit, which fails every still-queued
       * op through the driver-closed rejection rather than dropping it, and fires the single-owner ring teardown.
       *
-      * Routing the CRASH path through here is what makes a crashed loop release the ring: previously it completed the
-      * done-promise with the ring, cqePtr and wake eventfd still held.
+      * Routing the CRASH path through here is what makes a crashed loop release the ring rather than completing the done-promise with the
+      * ring, cqePtr and wake eventfd still held.
       */
     private def terminal(donePromise: Promise.Unsafe[Unit, Any], result: Result[Nothing, Unit < Any])(using AllowUnsafe, Frame): Unit =
         closedFlag.set(true)
@@ -1924,8 +1977,8 @@ final private[net] class IoUringDriver private[posix] (
                 batch.poll() match
                     case PendingOp.Read(promise, h, eintrRetries, handshakeOwned, armedPostUpgrade, _) =>
                         submitRecv(h, promise, eintrRetries, handshakeOwned, armedPostUpgrade)
-                    case PendingOp.Accept(promise, h, noAddr, noLen) => submitAccept(promise, h, noAddr, noLen)
-                    case PendingOp.Connect(promise, h)               => submitConnect(promise, h)
+                    case PendingOp.Accept(promise, h, noAddr, noLen)               => submitAccept(promise, h, noAddr, noLen)
+                    case PendingOp.Connect(promise, h)                             => submitConnect(promise, h)
                     case PendingOp.Write(_, _, _, _) | PendingOp.TlsWrite(_, _, _) =>
                         () // sends park in stalledSends / the in-flight send tail, never here
                 end match
@@ -2064,7 +2117,7 @@ final private[net] class IoUringDriver private[posix] (
                                             try
                                                 val buf         = if armedForStaging then recvStagingFor(h) else h.readBuffer
                                                 var fatalRecord = false
-                                                val plain = feedAndDecrypt(
+                                                val plain       = feedAndDecrypt(
                                                     engine,
                                                     buf,
                                                     res,
@@ -2176,7 +2229,7 @@ final private[net] class IoUringDriver private[posix] (
                                                 // (shared across every close reason for this handle) synchronously, so checking pendingCloses here
                                                 // would also misfire for an unrelated concurrent close racing a read that decoded cleanly.
                                                 var fatalRecord = false
-                                                val plain = feedAndDecrypt(
+                                                val plain       = feedAndDecrypt(
                                                     engine,
                                                     staging,
                                                     res,
@@ -2442,7 +2495,7 @@ final private[net] class IoUringDriver private[posix] (
       */
     override def onInboundClosedDuringRead(handle: PosixHandle, bytes: Span[Byte])(using AllowUnsafe, Frame): Unit =
         if handle.upgrading then
-            val arr = bytes.toArrayUnsafe
+            val arr       = bytes.toArrayUnsafe
             val delivered = handle.lastPlaintextRead.get() match
                 case p @ Present(last) if last eq arr => handle.lastPlaintextRead.compareAndSet(p, Absent)
                 case _                                => false
@@ -2453,7 +2506,7 @@ final private[net] class IoUringDriver private[posix] (
                             val cipherBuf = Buffer.fromArray[Byte](arr)
                             try
                                 var fatalRecord = false
-                                val plain = feedAndDecrypt(
+                                val plain       = feedAndDecrypt(
                                     engine,
                                     cipherBuf,
                                     arr.length,
@@ -2582,7 +2635,7 @@ final private[net] class IoUringDriver private[posix] (
     private def drainEngineOps()(using AllowUnsafe, Frame): Unit =
         engineQueue.poll() match
             case null => ()
-            case op =>
+            case op   =>
                 try op()
                 catch
                     // Contain ANY throw (not just NonFatal): the engine FIFO must not let one connection's
@@ -2647,7 +2700,7 @@ final private[net] class IoUringDriver private[posix] (
     private def recvStagingFor(handle: PosixHandle)(using AllowUnsafe): Buffer[Byte] =
         handle.recvStaging match
             case Present(buf) => buf
-            case Absent =>
+            case Absent       =>
                 val buf = Buffer.alloc[Byte](handle.readBufferSize)
                 handle.recvStaging = Present(buf)
                 // Ownership tag (see PosixHandle.recvStagingOwnerId): stamped once, at allocation, with the SAME handle whose field this is.
@@ -2663,7 +2716,7 @@ final private[net] class IoUringDriver private[posix] (
     private def flushMirrorFor(handle: PosixHandle, size: Int)(using AllowUnsafe): Buffer[Byte] =
         handle.flushMirror match
             case Present(buf) if buf.size >= size => buf
-            case _ =>
+            case _                                =>
                 handle.flushMirror.foreach(_.close())
                 val buf = Buffer.alloc[Byte](size)
                 handle.flushMirror = Present(buf)

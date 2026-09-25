@@ -11,9 +11,63 @@ import kyo.internal.ProtobufWriter
 import kyo.internal.StructureValueReader
 import kyo.internal.StructureValueWriter
 
+// --- sums declared as members of a class ---
+
+trait MELevels:
+    enum Level derives CanEqual, Schema:
+        case One, Two
+end MELevels
+
+object MELevelsInTrait extends MELevels
+
+object MEObject:
+    class Inner:
+        enum Level derives CanEqual, Schema:
+            case One, Two
+end MEObject
+
+class MEClass:
+    class Inner:
+        enum Level derives CanEqual, Schema:
+            case One, Two
+end MEClass
+
+// Nothing here derives a schema, so each derivation happens at the test's site, outside this class.
+class MEHolder:
+    enum Level derives CanEqual:
+        case One, Two
+        case Custom(value: Int)
+
+    sealed trait Signal derives CanEqual
+    case object Start              extends Signal
+    case object Stop               extends Signal
+    case class Pause(seconds: Int) extends Signal
+end MEHolder
+
+sealed trait MEScattered
+class MEScatteredHost:
+    case object Inside extends MEScattered
+
 class SchemaTest extends kyo.test.Test[Any]:
 
     given CanEqual[Any, Any] = CanEqual.derived
+
+    enum MemberLevel derives CanEqual, Schema:
+        case One, Two
+
+    enum MemberShape derives CanEqual, Schema:
+        case Point
+        case Circle(radius: Int)
+        case Origin
+    end MemberShape
+
+    case class MemberTask(name: String, level: MemberLevel, shape: MemberShape) derives CanEqual, Schema
+
+    private val noFields = Structure.Value.Record(Chunk.empty)
+
+    private def assertLevels[L](one: L, two: L)(using Schema[L], kyo.test.AssertScope): Unit =
+        assert(Structure.encode[L](two) == Structure.Value.VariantCase("Two", noFields))
+        assert(Structure.decode[L](Structure.Value.VariantCase("One", noFields)) == Result.succeed(one))
 
     // =========================================================================
     // apply
@@ -310,7 +364,7 @@ class SchemaTest extends kyo.test.Test[Any]:
         "multiple examples accumulate in order" in {
             val u1 = MTUser("Alice", 30, "alice@example.com", "111")
             val u2 = MTUser("Bob", 25, "bob@example.com", "222")
-            val s = Schema[MTUser]
+            val s  = Schema[MTUser]
                 .example(u1)
                 .example(u2)
             assert(s.examples == Seq(u1, u2))
@@ -318,7 +372,7 @@ class SchemaTest extends kyo.test.Test[Any]:
 
         "metadata survives transform chain" in {
             val user = MTUser("Alice", 30, "alice@example.com", "123-45-6789")
-            val s = Schema[MTUser]
+            val s    = Schema[MTUser]
                 .doc("A user")
                 .doc(_.name)("User name")
                 .example(user)
@@ -361,7 +415,7 @@ class SchemaTest extends kyo.test.Test[Any]:
 
         "all metadata in one chain" in {
             val user = MTUser("Alice", 30, "alice@example.com", "123-45-6789")
-            val s = Schema[MTUser]
+            val s    = Schema[MTUser]
                 .doc("A registered user")
                 .doc(_.name)("The user's full name")
                 .doc(_.email)("Primary contact email")
@@ -418,14 +472,14 @@ class SchemaTest extends kyo.test.Test[Any]:
 
         "schema includes examples" in {
             val user = MTUser("Alice", 30, "alice@example.com", "123-45-6789")
-            val s = Schema[MTUser]
+            val s    = Schema[MTUser]
                 .example(user)
             assert(s.examples == Seq(user))
         }
 
         "metadata survives transform chain into describe" in {
             val user = MTUser("Alice", 30, "alice@example.com", "123-45-6789")
-            val s = Schema[MTUser]
+            val s    = Schema[MTUser]
                 .doc("A user")
                 .doc(_.name)("User name")
                 .example(user)
@@ -468,7 +522,7 @@ class SchemaTest extends kyo.test.Test[Any]:
         "multiple examples are accessible in order" in {
             val u1 = MTUser("Alice", 30, "alice@example.com", "111")
             val u2 = MTUser("Bob", 25, "bob@example.com", "222")
-            val s = Schema[MTUser]
+            val s  = Schema[MTUser]
                 .example(u1)
                 .example(u2)
             assert(s.examples == Seq(u1, u2))
@@ -614,7 +668,7 @@ class SchemaTest extends kyo.test.Test[Any]:
 
         "combined metadata all appear in JsonSchema" in {
             val example = PersonFull("Alice", 30, "oldVal")
-            val schema = Json.jsonSchema(using
+            val schema  = Json.jsonSchema(using
                 Schema[PersonFull]
                     .doc("root doc")
                     .doc(_.name)("name field")
@@ -711,7 +765,7 @@ class SchemaTest extends kyo.test.Test[Any]:
 
         "check multiple second fails" in {
             val longName = "x" * 101
-            val m = Schema[MTPerson]
+            val m        = Schema[MTPerson]
                 .check(_.name)(_.nonEmpty, "name required")
                 .check(_.name)(_.length < 100, "name too long")
             val errors = m.validate(MTPerson(longName, 25))
@@ -1104,7 +1158,7 @@ class SchemaTest extends kyo.test.Test[Any]:
 
         "same predicate on different types both report invalid email" in {
             val validEmail: String => Boolean = _.contains("@")
-            val userValidator = Schema[MTUser]
+            val userValidator                 = Schema[MTUser]
                 .check(_.email)(validEmail, "invalid email")
             val contactValidator = Schema[MTContact]
                 .check(_.email)(validEmail, "invalid email")
@@ -1118,7 +1172,7 @@ class SchemaTest extends kyo.test.Test[Any]:
 
         "error paths correct for both types" in {
             val validEmail: String => Boolean = _.contains("@")
-            val userValidator = Schema[MTUser]
+            val userValidator                 = Schema[MTUser]
                 .check(_.email)(validEmail, "invalid email")
             val contactValidator = Schema[MTContact]
                 .check(_.email)(validEmail, "invalid email")
@@ -1130,7 +1184,7 @@ class SchemaTest extends kyo.test.Test[Any]:
 
         "shared predicate val applied to check" in {
             val nonEmpty: String => Boolean = _.nonEmpty
-            val m = Schema[MTPerson]
+            val m                           = Schema[MTPerson]
                 .check(_.name)(nonEmpty, "name required")
             val errors = m.validate(MTPerson("", 30))
             assert(errors.size == 1)
@@ -1147,7 +1201,7 @@ class SchemaTest extends kyo.test.Test[Any]:
         "separate validators can have different check sets" in {
             val nonEmpty: String => Boolean   = _.nonEmpty
             val validEmail: String => Boolean = _.contains("@")
-            val userValidator = Schema[MTUser]
+            val userValidator                 = Schema[MTUser]
                 .check(_.name)(nonEmpty, "name required")
                 .check(_.email)(validEmail, "invalid email")
                 .check(_.age)(_ >= 0, "age non-negative")
@@ -1695,62 +1749,56 @@ class SchemaTest extends kyo.test.Test[Any]:
         // === fold (typed polymorphic) ===
 
         "fold over fields" in {
-            val m = Schema[MTPerson]
+            val m      = Schema[MTPerson]
             val result = m.fold(alice)(Map.empty[String, String]) {
-                [N <: String, V] =>
-                    (acc: Map[String, String], field: Field[N, V], value: V) =>
-                        acc + (field.name -> value.toString)
+                [N <: String, V] => (acc: Map[String, String], field: Field[N, V], value: V) =>
+                    acc + (field.name -> value.toString)
             }
             assert(result == Map("name" -> "Alice", "age" -> "30"))
         }
 
         "fold field name" in {
-            val m = Schema[MTPerson]
+            val m     = Schema[MTPerson]
             val names = m.fold(alice)(List.empty[String]) {
-                [N <: String, V] =>
-                    (acc: List[String], field: Field[N, V], _: V) =>
-                        acc :+ field.name
+                [N <: String, V] => (acc: List[String], field: Field[N, V], _: V) =>
+                    acc :+ field.name
             }
             assert(names == List("name", "age"))
         }
 
         "fold accumulates" in {
-            val m = Schema[MTPerson]
+            val m     = Schema[MTPerson]
             val count = m.fold(alice)(0) {
-                [N <: String, V] =>
-                    (acc: Int, _: Field[N, V], _: V) =>
-                        acc + 1
+                [N <: String, V] => (acc: Int, _: Field[N, V], _: V) =>
+                    acc + 1
             }
             assert(count == 2)
         }
 
         "fold with three fields" in {
-            val m = Schema[MTThreeField]
+            val m      = Schema[MTThreeField]
             val result = m.fold(MTThreeField(1, "two", true))(Map.empty[String, String]) {
-                [N <: String, V] =>
-                    (acc: Map[String, String], field: Field[N, V], value: V) =>
-                        acc + (field.name -> value.toString)
+                [N <: String, V] => (acc: Map[String, String], field: Field[N, V], value: V) =>
+                    acc + (field.name -> value.toString)
             }
             assert(result == Map("x" -> "1", "y" -> "two", "z" -> "true"))
         }
 
         "fold init passthrough" in {
             // Even though fold iterates, verify it starts from init
-            val m = Schema[MTPerson]
+            val m      = Schema[MTPerson]
             val result = m.fold(alice)(42) {
-                [N <: String, V] =>
-                    (acc: Int, _: Field[N, V], _: V) =>
-                        acc + 1
+                [N <: String, V] => (acc: Int, _: Field[N, V], _: V) =>
+                    acc + 1
             }
             assert(result == 44) // 42 + 1 (name) + 1 (age)
         }
 
         "fold nested type" in {
-            val m = Schema[MTSmallTeam]
+            val m      = Schema[MTSmallTeam]
             val result = m.fold(team1)(Map.empty[String, String]) {
-                [N <: String, V] =>
-                    (acc: Map[String, String], field: Field[N, V], value: V) =>
-                        acc + (field.name -> value.toString)
+                [N <: String, V] => (acc: Map[String, String], field: Field[N, V], value: V) =>
+                    acc + (field.name -> value.toString)
             }
             assert(result("lead") == alice.toString)
             assert(result("size") == "5")
@@ -1759,11 +1807,10 @@ class SchemaTest extends kyo.test.Test[Any]:
         // === fold with schema transformations (rename/add) ===
 
         "fold after rename" in {
-            val m = Schema[MTPerson].rename("name", "fullName")
+            val m      = Schema[MTPerson].rename("name", "fullName")
             val result = m.fold(alice)(Map.empty[String, String]) {
-                [N <: String, V] =>
-                    (acc: Map[String, String], field: Field[N, V], value: V) =>
-                        acc + (field.name -> value.toString)
+                [N <: String, V] => (acc: Map[String, String], field: Field[N, V], value: V) =>
+                    acc + (field.name -> value.toString)
             }
             assert(result.contains("fullName"))
             assert(result("fullName") == "Alice")
@@ -1772,11 +1819,10 @@ class SchemaTest extends kyo.test.Test[Any]:
         }
 
         "fold after add" in {
-            val m = Schema[MTPerson].add("greeting")((p: MTPerson) => s"Hello ${p.name}")
+            val m      = Schema[MTPerson].add("greeting")((p: MTPerson) => s"Hello ${p.name}")
             val result = m.fold(alice)(Map.empty[String, String]) {
-                [N <: String, V] =>
-                    (acc: Map[String, String], field: Field[N, V], value: V) =>
-                        acc + (field.name -> value.toString)
+                [N <: String, V] => (acc: Map[String, String], field: Field[N, V], value: V) =>
+                    acc + (field.name -> value.toString)
             }
             assert(result("greeting") == "Hello Alice")
             assert(result("name") == "Alice")
@@ -1785,73 +1831,66 @@ class SchemaTest extends kyo.test.Test[Any]:
         // === fold field metadata ===
 
         "fold field name accessible" in {
-            val m = Schema[MTPerson]
+            val m     = Schema[MTPerson]
             val names = m.fold(alice)(List.empty[String]) {
-                [N <: String, V] =>
-                    (acc: List[String], field: Field[N, V], _: V) =>
-                        acc :+ field.name
+                [N <: String, V] => (acc: List[String], field: Field[N, V], _: V) =>
+                    acc :+ field.name
             }
             assert(names == List("name", "age"))
         }
 
         "fold field tag accessible" in {
-            val m = Schema[MTPerson]
+            val m    = Schema[MTPerson]
             val tags = m.fold(alice)(List.empty[Tag[Any]]) {
-                [N <: String, V] =>
-                    (acc: List[Tag[Any]], field: Field[N, V], _: V) =>
-                        acc :+ field.tag.erased
+                [N <: String, V] => (acc: List[Tag[Any]], field: Field[N, V], _: V) =>
+                    acc :+ field.tag.erased
             }
             assert(tags.size == 2)
         }
 
         "fold field tag for string" in {
-            val m = Schema[MTPerson]
+            val m    = Schema[MTPerson]
             val tags = m.fold(alice)(Map.empty[String, Tag[Any]]) {
-                [N <: String, V] =>
-                    (acc: Map[String, Tag[Any]], field: Field[N, V], _: V) =>
-                        acc + (field.name -> field.tag.erased)
+                [N <: String, V] => (acc: Map[String, Tag[Any]], field: Field[N, V], _: V) =>
+                    acc + (field.name -> field.tag.erased)
             }
             assert(tags("name") =:= Tag[String])
         }
 
         "fold field tag for int" in {
-            val m = Schema[MTPerson]
+            val m    = Schema[MTPerson]
             val tags = m.fold(alice)(Map.empty[String, Tag[Any]]) {
-                [N <: String, V] =>
-                    (acc: Map[String, Tag[Any]], field: Field[N, V], _: V) =>
-                        acc + (field.name -> field.tag.erased)
+                [N <: String, V] => (acc: Map[String, Tag[Any]], field: Field[N, V], _: V) =>
+                    acc + (field.name -> field.tag.erased)
             }
             assert(tags("age") =:= Tag[Int])
         }
 
         "fold field default present" in {
-            val m      = Schema[MTDebugConfig]
-            val config = MTDebugConfig("localhost")
+            val m        = Schema[MTDebugConfig]
+            val config   = MTDebugConfig("localhost")
             val defaults = m.fold(config)(Map.empty[String, Boolean]) {
-                [N <: String, V] =>
-                    (acc: Map[String, Boolean], field: Field[N, V], _: V) =>
-                        acc + (field.name -> field.default.nonEmpty)
+                [N <: String, V] => (acc: Map[String, Boolean], field: Field[N, V], _: V) =>
+                    acc + (field.name -> field.default.nonEmpty)
             }
             assert(defaults("port") == true)
         }
 
         "fold field default absent" in {
-            val m = Schema[MTPerson]
+            val m        = Schema[MTPerson]
             val defaults = m.fold(alice)(Map.empty[String, Boolean]) {
-                [N <: String, V] =>
-                    (acc: Map[String, Boolean], field: Field[N, V], _: V) =>
-                        acc + (field.name -> field.default.nonEmpty)
+                [N <: String, V] => (acc: Map[String, Boolean], field: Field[N, V], _: V) =>
+                    acc + (field.name -> field.default.nonEmpty)
             }
             assert(defaults("name") == false)
             assert(defaults("age") == false)
         }
 
         "fold produces field map" in {
-            val m = Schema[MTPerson]
+            val m      = Schema[MTPerson]
             val tagMap = m.fold(alice)(Map.empty[String, Tag[Any]]) {
-                [N <: String, V] =>
-                    (acc: Map[String, Tag[Any]], field: Field[N, V], _: V) =>
-                        acc + (field.name -> field.tag.erased)
+                [N <: String, V] => (acc: Map[String, Tag[Any]], field: Field[N, V], _: V) =>
+                    acc + (field.name -> field.tag.erased)
             }
             assert(tagMap.size == 2)
             assert(tagMap.contains("name"))
@@ -1861,34 +1900,31 @@ class SchemaTest extends kyo.test.Test[Any]:
         }
 
         "fold field metadata complete" in {
-            val m = Schema[MTPerson]
+            val m      = Schema[MTPerson]
             val fields = m.fold(alice)(List.empty[Field[?, ?]]) {
-                [N <: String, V] =>
-                    (acc: List[Field[?, ?]], field: Field[N, V], _: V) =>
-                        acc :+ field
+                [N <: String, V] => (acc: List[Field[?, ?]], field: Field[N, V], _: V) =>
+                    acc :+ field
             }
             assert(fields.forall(f => f.name != null && f.name.nonEmpty))
             assert(fields.size == 2)
         }
 
         "fold with nested type tag" in {
-            val m = Schema[MTSmallTeam]
+            val m    = Schema[MTSmallTeam]
             val tags = m.fold(team1)(Map.empty[String, Tag[Any]]) {
-                [N <: String, V] =>
-                    (acc: Map[String, Tag[Any]], field: Field[N, V], _: V) =>
-                        acc + (field.name -> field.tag.erased)
+                [N <: String, V] => (acc: Map[String, Tag[Any]], field: Field[N, V], _: V) =>
+                    acc + (field.name -> field.tag.erased)
             }
             assert(tags("lead") =:= Tag[MTPerson])
             assert(tags("size") =:= Tag[Int])
         }
 
         "fold field count matches" in {
-            val m = Schema[MTThreeField]
-            val v = MTThreeField(1, "two", true)
+            val m     = Schema[MTThreeField]
+            val v     = MTThreeField(1, "two", true)
             val count = m.fold(v)(0) {
-                [N <: String, V] =>
-                    (acc: Int, _: Field[N, V], _: V) =>
-                        acc + 1
+                [N <: String, V] => (acc: Int, _: Field[N, V], _: V) =>
+                    acc + 1
             }
             assert(count == 3)
         }
@@ -1896,52 +1932,47 @@ class SchemaTest extends kyo.test.Test[Any]:
         // === fold type-safe access ===
 
         "fold type-safe access" in {
-            val m = Schema[MTPerson]
+            val m      = Schema[MTPerson]
             val result = m.fold(alice)(List.empty[String]) {
-                [N <: String, V] =>
-                    (acc: List[String], field: Field[N, V], value: V) =>
-                        acc :+ s"${field.name}=${value}"
+                [N <: String, V] => (acc: List[String], field: Field[N, V], value: V) =>
+                    acc :+ s"${field.name}=${value}"
             }
             assert(result == List("name=Alice", "age=30"))
         }
 
         "fold type-safe field name" in {
-            val m = Schema[MTPerson]
+            val m     = Schema[MTPerson]
             val names = m.fold(alice)(List.empty[String]) {
-                [N <: String, V] =>
-                    (acc: List[String], field: Field[N, V], _: V) =>
-                        acc :+ field.name
+                [N <: String, V] => (acc: List[String], field: Field[N, V], _: V) =>
+                    acc :+ field.name
             }
             assert(names == List("name", "age"))
         }
 
         "fold type-safe field tag" in {
-            val m = Schema[MTPerson]
+            val m    = Schema[MTPerson]
             val tags = m.fold(alice)(Map.empty[String, Tag[Any]]) {
-                [N <: String, V] =>
-                    (acc: Map[String, Tag[Any]], field: Field[N, V], _: V) =>
-                        acc + (field.name -> field.tag.erased)
+                [N <: String, V] => (acc: Map[String, Tag[Any]], field: Field[N, V], _: V) =>
+                    acc + (field.name -> field.tag.erased)
             }
             assert(tags("name") =:= Tag[String])
             assert(tags("age") =:= Tag[Int])
         }
 
         "fold type-safe accumulates" in {
-            val m = Schema[MTThreeField]
+            val m     = Schema[MTThreeField]
             val count = m.fold(MTThreeField(1, "two", true))(0) {
-                [N <: String, V] =>
-                    (acc: Int, _: Field[N, V], _: V) =>
-                        acc + 1
+                [N <: String, V] => (acc: Int, _: Field[N, V], _: V) =>
+                    acc + 1
             }
             assert(count == 3)
         }
 
         "fold type-safe produces typed map" in {
-            val m = Schema[MTPerson]
+            val m      = Schema[MTPerson]
             val result = m.fold(alice)(Map.empty[String, String]) {
-                [N <: String, V] =>
-                    (acc: Map[String, String], field: Field[N, V], value: V) =>
-                        acc + (field.name -> value.toString)
+                [N <: String, V] => (acc: Map[String, String], field: Field[N, V], value: V) =>
+                    acc + (field.name -> value.toString)
             }
             assert(result == Map("name" -> "Alice", "age" -> "30"))
         }
@@ -1949,11 +1980,10 @@ class SchemaTest extends kyo.test.Test[Any]:
         // === boundary shapes: empty and large case classes ===
 
         "empty case class fold" in {
-            val m = Schema[MTEmpty]
+            val m     = Schema[MTEmpty]
             val count = m.fold(MTEmpty())(0) {
-                [N <: String, V] =>
-                    (acc: Int, _: Field[N, V], _: V) =>
-                        acc + 1
+                [N <: String, V] => (acc: Int, _: Field[N, V], _: V) =>
+                    acc + 1
             }
             assert(count == 0)
         }
@@ -1970,12 +2000,11 @@ class SchemaTest extends kyo.test.Test[Any]:
         }
 
         "large case class fold" in {
-            val m     = Schema[MTLarge]
-            val large = MTLarge(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+            val m      = Schema[MTLarge]
+            val large  = MTLarge(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
             val result = m.fold(large)(Map.empty[String, String]) {
-                [N <: String, V] =>
-                    (acc: Map[String, String], field: Field[N, V], value: V) =>
-                        acc + (field.name -> value.toString)
+                [N <: String, V] => (acc: Map[String, String], field: Field[N, V], value: V) =>
+                    acc + (field.name -> value.toString)
             }
             assert(result.size == 10)
             assert(result("a") == "1")
@@ -1997,17 +2026,15 @@ class SchemaTest extends kyo.test.Test[Any]:
         "fold works with different types" in {
             // fold on MTPerson
             val personLog = Schema[MTPerson].fold(MTPerson("Alice", 30))("[user]") {
-                [N <: String, V] =>
-                    (acc: String, field: Field[N, V], v: V) =>
-                        s"$acc ${field.name}=$v"
+                [N <: String, V] => (acc: String, field: Field[N, V], v: V) =>
+                    s"$acc ${field.name}=$v"
             }
             assert(personLog == "[user] name=Alice age=30")
 
             // fold on MTProduct
             val productLog = Schema[MTProduct].fold(MTProduct("Widget", 9.99, "W001"))("[product]") {
-                [N <: String, V] =>
-                    (acc: String, field: Field[N, V], v: V) =>
-                        s"$acc ${field.name}=$v"
+                [N <: String, V] => (acc: String, field: Field[N, V], v: V) =>
+                    s"$acc ${field.name}=$v"
             }
             assert(productLog == "[product] name=Widget price=9.99 sku=W001")
         }
@@ -2059,13 +2086,12 @@ class SchemaTest extends kyo.test.Test[Any]:
         "fold iterates all fields and accumulates null/empty checks" in {
             given CanEqual[Null, Any] = CanEqual.derived
             val account               = MTAccount("Alice", "alice@test.com", "pro", 50)
-            val nullCheck = Schema[MTAccount].fold(account)(List.empty[String]) {
-                [N <: String, V] =>
-                    (acc: List[String], field: Field[N, V], value: V) =>
-                        value match
-                            case null                   => acc :+ s"${field.name} is null"
-                            case s: String if s.isEmpty => acc :+ s"${field.name} is empty"
-                            case _                      => acc
+            val nullCheck             = Schema[MTAccount].fold(account)(List.empty[String]) {
+                [N <: String, V] => (acc: List[String], field: Field[N, V], value: V) =>
+                    value match
+                        case null                   => acc :+ s"${field.name} is null"
+                        case s: String if s.isEmpty => acc :+ s"${field.name} is empty"
+                        case _                      => acc
             }
             assert(nullCheck.isEmpty)
         }
@@ -2073,13 +2099,12 @@ class SchemaTest extends kyo.test.Test[Any]:
         "fold detects null field values" in {
             given CanEqual[Null, Any] = CanEqual.derived
             val bad                   = MTAccount("", null, "free", 0)
-            val issues = Schema[MTAccount].fold(bad)(List.empty[String]) {
-                [N <: String, V] =>
-                    (acc: List[String], field: Field[N, V], value: V) =>
-                        value match
-                            case null                   => acc :+ s"${field.name} is null"
-                            case s: String if s.isEmpty => acc :+ s"${field.name} is empty"
-                            case _                      => acc
+            val issues                = Schema[MTAccount].fold(bad)(List.empty[String]) {
+                [N <: String, V] => (acc: List[String], field: Field[N, V], value: V) =>
+                    value match
+                        case null                   => acc :+ s"${field.name} is null"
+                        case s: String if s.isEmpty => acc :+ s"${field.name} is empty"
+                        case _                      => acc
             }
             assert(issues.contains("name is empty"))
             assert(issues.contains("email is null"))
@@ -2089,13 +2114,12 @@ class SchemaTest extends kyo.test.Test[Any]:
         "fold detects empty string field values" in {
             given CanEqual[Null, Any] = CanEqual.derived
             val bad                   = MTAccount("", "alice@test.com", "free", 0)
-            val issues = Schema[MTAccount].fold(bad)(List.empty[String]) {
-                [N <: String, V] =>
-                    (acc: List[String], field: Field[N, V], value: V) =>
-                        value match
-                            case null                   => acc :+ s"${field.name} is null"
-                            case s: String if s.isEmpty => acc :+ s"${field.name} is empty"
-                            case _                      => acc
+            val issues                = Schema[MTAccount].fold(bad)(List.empty[String]) {
+                [N <: String, V] => (acc: List[String], field: Field[N, V], value: V) =>
+                    value match
+                        case null                   => acc :+ s"${field.name} is null"
+                        case s: String if s.isEmpty => acc :+ s"${field.name} is empty"
+                        case _                      => acc
             }
             assert(issues == List("name is empty"))
         }
@@ -2123,7 +2147,7 @@ class SchemaTest extends kyo.test.Test[Any]:
         val schema      = Schema[Cart]
         val strict      = schema.denyUnknownFields
         val withDefault = schema.default(_.note)(Maybe("hello"))
-        val withWhen = schema.omit(_.items).when {
+        val withWhen    = schema.omit(_.items).when {
             case Structure.Value.Sequence(values) => values.isEmpty
             case _                                => false
         }
@@ -2294,7 +2318,7 @@ class SchemaTest extends kyo.test.Test[Any]:
 
         "present field does not evaluate supplier" in {
             var evaluations = 0
-            val schema = Schema[DefaultPrimitive].default(_.name) {
+            val schema      = Schema[DefaultPrimitive].default(_.name) {
                 evaluations += 1
                 "generated"
             }
@@ -2305,7 +2329,7 @@ class SchemaTest extends kyo.test.Test[Any]:
 
         "missing field evaluates supplier exactly once per decode" in {
             var evaluations = 0
-            val schema = Schema[DefaultPrimitive].default(_.name) {
+            val schema      = Schema[DefaultPrimitive].default(_.name) {
                 evaluations += 1
                 s"generated-$evaluations"
             }
@@ -2317,7 +2341,7 @@ class SchemaTest extends kyo.test.Test[Any]:
         }
 
         "unconfigured missing required field still fails" in {
-            val result = Schema[DefaultPrimitive].decodeString[Json]("""{"id":1}""")
+            val result       = Schema[DefaultPrimitive].decodeString[Json]("""{"id":1}""")
             val missingField = result match
                 case Result.Failure(_: MissingFieldException) => true
                 case _                                        => false
@@ -2342,7 +2366,7 @@ class SchemaTest extends kyo.test.Test[Any]:
 
         "drop composition does not evaluate an unused supplier" in {
             var evaluations = 0
-            val schema = Schema[DefaultDrop]
+            val schema      = Schema[DefaultDrop]
                 .default(_.removed) {
                     evaluations += 1
                     Maybe("configured")
@@ -2367,7 +2391,7 @@ class SchemaTest extends kyo.test.Test[Any]:
 
         "default targeting a flattened parent evaluates only when child fields are absent" in {
             var evaluations = 0
-            val schema = Schema[StrictFlattenParent]
+            val schema      = Schema[StrictFlattenParent]
                 .default(_.child) {
                     evaluations += 1
                     StrictFlattenChild("fallback", 9)
@@ -2627,18 +2651,125 @@ class SchemaTest extends kyo.test.Test[Any]:
         assert(back.byId.is(value.byId), s"round-trip failed: $back (encoded: $out)")
     }
 
-    // Boundary pinned by getkyo/kyo#1748: binding the array-form given for a String key (instead of
-    // the object-form default) omits on encode but fails to decode, because the injected empty value
-    // is chosen from the declared key type and the array-form reader expects the other shape. It
-    // fails loud, never silently. When #1748 is fixed this flips to a round-trip assertion.
-    "empty String-key Dict bound to the array-form given fails to decode under omitEmptyCollections" in {
+    "empty Map[String, V] field is omitted under omitEmptyCollections and round-trips" in {
+        val schema = Schema[MTStringMapRecord].omitEmptyCollections
+        val value  = MTStringMapRecord("alice", Map.empty[String, Int], 7)
+        val out    = schema.encodeString[Json](value)
+        assert(out == """{"name":"alice","count":7}""", s"empty String-key Map must be omitted: $out")
+        val back = schema.decodeString[Json](out)
+        assert(back == Result.succeed(value), s"round-trip failed: $back (encoded: $out)")
+    }
+
+    "empty Map[Int, V] field (non-String key) is omitted under omitEmptyCollections and round-trips" in {
+        val schema = Schema[MTIntMapRecord].omitEmptyCollections
+        val value  = MTIntMapRecord("alice", Map.empty[Int, String], 7)
+        val out    = schema.encodeString[Json](value)
+        assert(out == """{"name":"alice","count":7}""", s"empty non-String-key Map must be omitted: $out")
+        val back = schema.decodeString[Json](out)
+        assert(back == Result.succeed(value), s"round-trip failed: $back (encoded: $out)")
+    }
+
+    // The wire form of a mapping field belongs to the bound given, not to the declared key type: the
+    // object-form and array-form givens of Dict, OrderedDict, and Map each declare a byte-identical
+    // structure, so an injected empty value chosen from the key type is a guess. These four leaves
+    // bind the array form for a String key, the binding no key-type guess can serve (getkyo/kyo#1748).
+
+    "empty String-key Dict bound to the array-form given round-trips under omitEmptyCollections" in {
         given arrayForm: Schema[Dict[String, Int]] = Schema.dictSchema[String, Int]
         val schema                                 = Schema.derived[MTStringDictRecord].omitEmptyCollections
         val value                                  = MTStringDictRecord("alice", Dict.empty[String, Int], 7)
         val out                                    = schema.encodeString[Json](value)
         assert(out == """{"name":"alice","count":7}""", s"empty field must still be omitted on encode: $out")
-        val decoded = schema.decodeString[Json](out)
-        assert(decoded.isFailure, s"decode must fail loud on the array-form String-key binding, got: $decoded")
+        val back = schema.decodeString[Json](out).getOrThrow
+        assert(back.name == value.name && back.count == value.count, s"round-trip failed: $back (encoded: $out)")
+        assert(back.tags.is(value.tags), s"round-trip failed: $back (encoded: $out)")
+    }
+
+    // A mapping's framing is part of what the bound given encodes, so a transform, which materializes
+    // the value into a Structure.Value tree and replays it, has to replay the framing it was given. It
+    // cannot re-derive it: a map node carries none and the two givens declare the same structure.
+
+    "a non-empty String-key Dict bound to the array-form given keeps the array wire form under a transform" in {
+        given arrayForm: Schema[Dict[String, Int]] = Schema.dictSchema[String, Int]
+        val schema                                 = Schema.derived[MTStringDictRecord].omitEmptyCollections
+        val value                                  = MTStringDictRecord("alice", Dict("x" -> 1), 7)
+        val out                                    = schema.encodeString[Json](value)
+        assert(
+            out == """{"name":"alice","tags":[{"key":"x","value":1}],"count":7}""",
+            s"the bound given's array wire form must be what is written: $out"
+        )
+        val back = schema.decodeString[Json](out).getOrThrow
+        assert(back.name == value.name && back.count == value.count, s"round-trip failed: $back (encoded: $out)")
+        assert(back.tags.is(value.tags), s"round-trip failed: $back (encoded: $out)")
+    }
+
+    // Not an omit-policy defect: any transform replays the tree, so a rename reaches the same path.
+    "a rename keeps a String-key Dict's array wire form" in {
+        given arrayForm: Schema[Dict[String, Int]] = Schema.dictSchema[String, Int]
+        val schema                                 = Schema[MTStringDictRecord].rename(_.name, "who")
+        val value                                  = MTStringDictRecord("alice", Dict("x" -> 1), 7)
+        val out                                    = schema.encodeString[Json](value)
+        assert(
+            out == """{"tags":[{"key":"x","value":1}],"count":7,"who":"alice"}""",
+            s"the bound given's array wire form must survive a rename: $out"
+        )
+        val back = schema.decodeString[Json](out).getOrThrow
+        assert(back.name == value.name && back.count == value.count, s"round-trip failed: $back (encoded: $out)")
+        assert(back.tags.is(value.tags), s"round-trip failed: $back (encoded: $out)")
+    }
+
+    "the default String-key Dict given keeps the object wire form under a transform" in {
+        val schema = Schema[MTStringDictRecord].rename(_.name, "who")
+        val value  = MTStringDictRecord("alice", Dict("x" -> 1), 7)
+        val out    = schema.encodeString[Json](value)
+        assert(out == """{"tags":{"x":1},"count":7,"who":"alice"}""", s"the object form is the default given's form: $out")
+        val back = schema.decodeString[Json](out).getOrThrow
+        assert(back.tags.is(value.tags), s"round-trip failed: $back (encoded: $out)")
+    }
+
+    "a non-empty String-key Map bound to the array-form given keeps the array wire form under a transform" in {
+        given arrayForm: Schema[Map[String, Int]] = Schema.mapSchema[String, Int]
+        val schema                                = Schema.derived[MTStringMapRecord].omitEmptyCollections
+        val value                                 = MTStringMapRecord("alice", Map("x" -> 1), 7)
+        val out                                   = schema.encodeString[Json](value)
+        assert(
+            out == """{"name":"alice","tags":[{"key":"x","value":1}],"count":7}""",
+            s"the bound given's array wire form must be what is written: $out"
+        )
+        val back = schema.decodeString[Json](out)
+        assert(back == Result.succeed(value), s"round-trip failed: $back (encoded: $out)")
+    }
+
+    "empty String-key OrderedDict bound to the array-form given round-trips under omitEmptyCollections" in {
+        given arrayForm: Schema[OrderedDict[String, Int]] = Schema.orderedDictSchema[String, Int]
+        val schema                                        = Schema.derived[MTOrderedDictRecord].omitEmptyCollections
+        val value                                         = MTOrderedDictRecord("alice", OrderedDict.empty[String, Int], 7)
+        val out                                           = schema.encodeString[Json](value)
+        assert(out == """{"name":"alice","count":7}""", s"empty field must still be omitted on encode: $out")
+        val back = schema.decodeString[Json](out).getOrThrow
+        assert(back.name == value.name && back.count == value.count, s"round-trip failed: $back (encoded: $out)")
+        assert(back.settings.is(value.settings), s"round-trip failed: $back (encoded: $out)")
+    }
+
+    "empty String-key Map bound to the array-form given round-trips under omitEmptyCollections" in {
+        given arrayForm: Schema[Map[String, Int]] = Schema.mapSchema[String, Int]
+        val schema                                = Schema.derived[MTStringMapRecord].omitEmptyCollections
+        val value                                 = MTStringMapRecord("alice", Map.empty[String, Int], 7)
+        val out                                   = schema.encodeString[Json](value)
+        assert(out == """{"name":"alice","count":7}""", s"empty field must still be omitted on encode: $out")
+        val back = schema.decodeString[Json](out)
+        assert(back == Result.succeed(value), s"round-trip failed: $back (encoded: $out)")
+    }
+
+    "per-field .omit(_.f).whenEmpty round-trips a String-key Dict bound to the array-form given" in {
+        given arrayForm: Schema[Dict[String, Int]] = Schema.dictSchema[String, Int]
+        val schema                                 = Schema[MTStringDictRecord].omit(_.tags).whenEmpty
+        val value                                  = MTStringDictRecord("alice", Dict.empty[String, Int], 7)
+        val out                                    = schema.encodeString[Json](value)
+        assert(out == """{"name":"alice","count":7}""", s"per-field WhenEmpty must omit the empty field: $out")
+        val back = schema.decodeString[Json](out).getOrThrow
+        assert(back.name == value.name && back.count == value.count, s"round-trip failed: $back (encoded: $out)")
+        assert(back.tags.is(value.tags), s"round-trip failed: $back (encoded: $out)")
     }
 
     "non-empty OrderedDict field is NOT omitted under omitEmptyCollections and keeps insertion order" in {
@@ -3042,7 +3173,7 @@ class SchemaTest extends kyo.test.Test[Any]:
         end match
 
         val value = Structure.Value.Record(Chunk[(String, Structure.Value)](
-            "note" -> Structure.Value.Str("n"),
+            "note"    -> Structure.Value.Str("n"),
             "payload" -> Structure.Value.Record(Chunk[(String, Structure.Value)](
                 "active" -> Structure.Value.Bool(true),
                 "tags"   -> Structure.Value.Sequence(Chunk(Structure.Value.Str("a")))
@@ -3054,7 +3185,7 @@ class SchemaTest extends kyo.test.Test[Any]:
     }
 
     "withStructure leaves the base schema untouched" in {
-        val base = summon[Schema[Structure.Value]]
+        val base  = summon[Schema[Structure.Value]]
         val shape =
             Structure.Type.Product(
                 "Solo",
@@ -3243,7 +3374,7 @@ class SchemaTest extends kyo.test.Test[Any]:
 
         "enum with 25 cases (an arity boundary) round-trips every case distinctly through Json and Protobuf" in {
             val schema = Schema[EDMany]
-            val all = List(
+            val all    = List(
                 EDMany.M0,
                 EDMany.M1,
                 EDMany.M2,
@@ -3403,9 +3534,9 @@ class SchemaTest extends kyo.test.Test[Any]:
         }
 
         "Protobuf Strict conformance rejects a non-scalar (enum) map key through the generic Schema.encode entry point, not only Protobuf.encode" in {
-            val schema     = Schema[EDMapKeyHolder]
-            val value      = EDMapKeyHolder(Map(EDMixed.Named("k") -> 1))
-            val viaGeneric = Result.catching[SchemaNotSerializableException](schema.encode[Protobuf](value))
+            val schema       = Schema[EDMapKeyHolder]
+            val value        = EDMapKeyHolder(Map(EDMixed.Named("k") -> 1))
+            val viaGeneric   = Result.catching[SchemaNotSerializableException](schema.encode[Protobuf](value))
             val viaCompanion =
                 Result.catching[SchemaNotSerializableException](Protobuf.encode(value)(using summon[Protobuf], schema, summon[Frame]))
             assert(
@@ -3631,6 +3762,95 @@ class SchemaTest extends kyo.test.Test[Any]:
             assert(errs.nonEmpty)
             val msg = errs.map(_.message).mkString("\n")
             assert(msg.contains("case field 'n'"), s"message: $msg")
+        }
+    }
+
+    "an enum declared as a member of a class" - {
+
+        "encodes a case as its variant" in {
+            assert(Structure.encode[MemberLevel](MemberLevel.Two) == Structure.Value.VariantCase("Two", noFields))
+        }
+
+        "decodes a case" in {
+            val decoded = Structure.decode[MemberLevel](Structure.Value.VariantCase("One", noFields))
+            assert(decoded == Result.succeed(MemberLevel.One), s"decoded $decoded")
+        }
+
+        "as a member of a trait" in {
+            assertLevels(MELevelsInTrait.Level.One, MELevelsInTrait.Level.Two)
+        }
+
+        "as a member of a class nested in an object" in {
+            val inner = new MEObject.Inner
+            assertLevels(inner.Level.One, inner.Level.Two)
+        }
+
+        "as a member of a class nested in a class" in {
+            val outer = new MEClass
+            val inner = new outer.Inner
+            assertLevels(inner.Level.One, inner.Level.Two)
+        }
+
+        "a case with a payload beside cases without one" in {
+            val circle = MemberShape.Circle(3)
+            assert(Structure.encode[MemberShape](circle) == Structure.Value.VariantCase(
+                "Circle",
+                Structure.Value.Record(Chunk("radius" -> Structure.Value.Integer(3)))
+            ))
+            Chunk(MemberShape.Point, circle, MemberShape.Origin).foreach { shape =>
+                val decoded = Structure.decode[MemberShape](Structure.encode[MemberShape](shape))
+                assert(decoded == Result.succeed(shape), s"decoded $decoded")
+            }
+        }
+
+        "a case class field of a member enum type" in {
+            val task    = MemberTask("ship", MemberLevel.Two, MemberShape.Origin)
+            val encoded = Structure.encode(task)
+            assert(encoded == Structure.Value.Record(Chunk(
+                "name"  -> Structure.Value.Str("ship"),
+                "level" -> Structure.Value.VariantCase("Two", noFields),
+                "shape" -> Structure.Value.VariantCase("Origin", noFields)
+            )))
+            assert(Structure.decode[MemberTask](encoded) == Result.succeed(task))
+        }
+
+        "derived at a site outside the class" in {
+            val holder                 = new MEHolder
+            given Schema[holder.Level] = Schema.derived[holder.Level]
+            assertLevels(holder.Level.One, holder.Level.Two)
+            val custom = holder.Level.Custom(7)
+            assert(Structure.decode[holder.Level](Structure.encode[holder.Level](custom)) == Result.succeed(custom))
+        }
+    }
+
+    "a case with no path from the sum type is a compile error naming the case" - {
+
+        "a case declared inside a class the sum is not in" in {
+            val errs = scala.compiletime.testing.typeCheckErrors("kyo.Schema.derived[kyo.MEScattered]")
+            val msg  = errs.map(_.message).mkString("\n")
+            assert(msg.contains("its case Inside is declared inside MEScatteredHost, which is not an object"), s"message: $msg")
+        }
+
+        "a member enum reached through a type projection" in {
+            val errs = scala.compiletime.testing.typeCheckErrors("kyo.Schema.derived[kyo.MEHolder#Level]")
+            val msg  = errs.map(_.message).mkString("\n")
+            assert(msg.contains("its case One cannot be selected from kyo.MEHolder"), s"message: $msg")
+        }
+    }
+
+    "an enum local to a method" in {
+        enum Level derives CanEqual, Schema:
+            case One, Two
+        assertLevels(Level.One, Level.Two)
+    }
+
+    "a sealed trait declared as a member of a class, derived at a site outside the class" in {
+        val holder                  = new MEHolder
+        given Schema[holder.Signal] = Schema.derived[holder.Signal]
+        assert(Structure.encode[holder.Signal](holder.Stop) == Structure.Value.VariantCase("Stop", noFields))
+        Chunk[holder.Signal](holder.Start, holder.Stop, holder.Pause(5)).foreach { signal =>
+            val decoded = Structure.decode[holder.Signal](Structure.encode[holder.Signal](signal))
+            assert(decoded == Result.succeed(signal), s"decoded $decoded")
         }
     }
 

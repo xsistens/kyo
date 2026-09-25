@@ -211,7 +211,7 @@ object UI:
       * @see
       *   [[kyo.UI.Ast.RawHtml]] for the AST node this factory returns
       * @see
-      *   [[kyo.UI.text]] for the safe alternative that HTML-escapes its argument
+      *   `kyo.UI.text` for the safe alternative that HTML-escapes its argument
       */
     def rawHtml(html: String)(using Frame): UI = Ast.RawHtml(html)
 
@@ -559,6 +559,22 @@ object UI:
       */
     def runHandlers(basePath: String)(ui: => UI < Async)(using Frame): Seq[HttpHandler[?, ?, ?]] < Sync =
         UIServer.handlers(basePath)(ui)
+
+    /** Server-push for an app of many pages: every path under `basePath` is a page, and `ui` builds the page for its [[Request]]. The
+      * served document carries `head` (title, meta, links, the app's css), and a link to another path under `basePath` is an ordinary
+      * page load, so back, forward and reload land on the page of the URL.
+      *
+      * The GET evaluates `ui` for the request it serves. The page's client opens the session socket with its own path and query, and the
+      * session evaluates `ui` again for that same request, so the SSR page and the live session agree. Paths under `basePath/_kyo` are the
+      * framework's.
+      */
+    def runHandlers(basePath: String, head: PageHead)(ui: Request => UI < Async)(using Frame): Seq[HttpHandler[?, ?, ?]] < Sync =
+        UIServer.handlers(basePath, head)(ui)
+
+    /** The page a request-aware [[runHandlers]] is serving: `path` is relative to the base path (`/` for the base itself, never ending in
+      * `/` otherwise) and `query` holds the first value of each query parameter, decoded.
+      */
+    final case class Request(path: String, query: Map[String, String]) derives CanEqual
 
     /** Scrolls the element with `id` into the client viewport, from inside an event handler.
       *
@@ -1089,7 +1105,7 @@ object UI:
       * validation boundary: any client can submit any value, and server-side checks still apply.
       *
       * @see
-      *   [[kyo.UI.ConstrainedInput.inputFilter]] for the setter
+      *   `kyo.UI.ConstrainedInput.inputFilter` for the setter
       */
     enum InputFilter derives CanEqual:
         case Digits                 // "digits"
@@ -2518,10 +2534,10 @@ object UI:
             selected: Maybe[Boolean] = Absent
         )(using val frame: Frame) extends Block:
             type Self = Opt
-            def withAttrs(a: Attrs): Opt      = copy(attrs = a)
-            def apply(cs: HtmlChildVal*): Opt = copy(children = children ++ Chunk.from(cs.map(_.value)))
-            def value(v: String): Opt         = copy(value = Present(v))
-            def selected(v: Boolean): Opt     = copy(selected = Present(v))
+            def withAttrs(a: Attrs): Opt                     = copy(attrs = a)
+            def apply(cs: HtmlChildVal*): Opt                = copy(children = children ++ Chunk.from(cs.map(_.value)))
+            def value(v: String): Opt                        = copy(value = Present(v))
+            def selected(v: Boolean): Opt                    = copy(selected = Present(v))
             def selected(v: Signal[Boolean]): Reactive[Self] =
                 given Frame = frame
                 Reactive[Self](v.map(b => this.selected(b): UI))

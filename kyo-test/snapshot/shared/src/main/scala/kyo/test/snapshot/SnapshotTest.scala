@@ -46,7 +46,7 @@ import kyo.test.snapshot.internal.SnapshotStore
   * @see
   *   [[kyo.test.AssertionFailed]] thrown when a snapshot exists but does not match the rendered value
   * @see
-  *   [[kyo.test.TestResult.Failed]] the leaf outcome produced when assertSnapshot fails
+  *   `kyo.test.TestResult.Failed` the leaf outcome produced when assertSnapshot fails
   */
 abstract class SnapshotTestBase[S] extends TestBase[S]:
 
@@ -147,7 +147,7 @@ abstract class SnapshotTestBase[S] extends TestBase[S]:
         storeAndCompare[A](codec, path, norm) { (storedValue, textDiff) =>
             val ops = Changeset[A](storedValue, norm)(using schema, frame).operations
             if ops.nonEmpty then
-                val paths = snapshotChangedPaths(ops)
+                val paths   = snapshotChangedPaths(ops)
                 val diagram = textDiff match
                     case Maybe.Present(diff) => s"changed fields: ${paths.mkString(", ")}\n\n$diff"
                     case Maybe.Absent        => s"changed fields: ${paths.mkString(", ")}"
@@ -368,6 +368,6 @@ end SnapshotTestBase
   * @see
   *   [[kyo.test.AssertionFailed]] thrown when a snapshot exists but does not match the rendered value
   * @see
-  *   [[kyo.test.TestResult.Failed]] the leaf outcome produced when assertSnapshot fails
+  *   `kyo.test.TestResult.Failed` the leaf outcome produced when assertSnapshot fails
   */
 abstract class SnapshotTest[S] extends SnapshotTestBase[S] with SuiteFingerprintMarker

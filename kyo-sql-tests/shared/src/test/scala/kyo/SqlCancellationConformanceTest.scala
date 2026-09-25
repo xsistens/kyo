@@ -47,7 +47,7 @@ class SqlCancellationConformanceTest extends SqlBackendTest:
                 _               <- client.executeRaw(s"INSERT INTO cancel_probe VALUES $values")
                 discardedBefore <- client.runtime.pool.metrics.connectionsDiscarded.get
                 timedOutBefore  <- client.runtime.pool.metrics.cancelsTimedOut.get
-                _ <-
+                _               <-
                     Latch.initWith(1) { started =>
                         // The consumer holds the session in-flight: it takes the first row, signals the driver, then parks
                         // forever. The open cursor with rows still server-side is what raises the in-flight flag the reclaim
@@ -78,11 +78,13 @@ class SqlCancellationConformanceTest extends SqlBackendTest:
                                                     )
                                                     assert(
                                                         discardedAfter - discardedBefore == 0L,
-                                                        s"the interrupted session must be reclaimed, not discarded (discarded delta ${discardedAfter - discardedBefore})"
+                                                        s"the interrupted session must be reclaimed, not discarded (discarded delta ${discardedAfter -
+                                                                discardedBefore})"
                                                     )
                                                     assert(
                                                         timedOutAfter - timedOutBefore == 0L,
-                                                        s"the reclaim must finish inside the cancel budget (timed-out delta ${timedOutAfter - timedOutBefore})"
+                                                        s"the reclaim must finish inside the cancel budget (timed-out delta ${timedOutAfter -
+                                                                timedOutBefore})"
                                                     )
                                                 }
                                             }
@@ -96,6 +98,53 @@ class SqlCancellationConformanceTest extends SqlBackendTest:
             end for
         }
     }
+
+    /** Bounds for the transaction leaf, where a regression is a session that answers nothing rather than one that answers wrongly. Both bounds
+      * only turn a wedge into a red leaf; what the leaf asserts on is the row the second session read back.
+      */
+    private val lockConfig = SqlConfig(
+        maxConnections = 4,
+        acquireTimeout = 15.seconds,
+        queryTimeout = 15.seconds,
+        metricsScope = Present("kyo.sql.conformance.cancellation.transaction")
+    )
+
+    "a transaction the interrupt abandoned stops holding its rows against every other session" -
+        forEachBackend(lockConfig, timeout = Present(90.seconds)) { (backend, client, schema) =>
+            // The leaf above interrupts a statement; this one interrupts a fiber that is INSIDE a transaction, with a
+            // row already written under it and nothing in flight on the wire. Nothing in the abandoned computation can
+            // roll that transaction back, since an interrupt abandons the continuation rather than raising, so the
+            // session's fate is the pool's to decide, and a session returned to the pool with the transaction still
+            // open holds that row against every other session until something ends it.
+            //
+            // The second session is a second CLIENT on the same database rather than a second connection of this pool,
+            // because the reclaim is free to hand the same connection back, and a lock is invisible to the session
+            // holding it.
+            val bigint = backend.columnType(SqlTestBackend.ColumnType.BigInt)
+            for
+                _       <- client.executeRaw(s"CREATE TABLE tx_lock_probe (id $bigint PRIMARY KEY, v $bigint NOT NULL)")
+                _       <- client.executeRaw("INSERT INTO tx_lock_probe VALUES (1, 0)")
+                other   <- SqlClient.initUnscoped(schema.url, lockConfig)
+                _       <- Scope.ensure(other.close)
+                written <- Latch.init(1)
+                holder  <- Fiber.initUnscoped {
+                    Abort.run[SqlException] {
+                        client.transaction {
+                            client.executeRaw("UPDATE tx_lock_probe SET v = 1 WHERE id = 1")
+                                .andThen(written.release)
+                                .andThen(Async.never)
+                        }
+                    }
+                }
+                _           <- written.await
+                interrupted <- holder.interrupt
+                _           <- other.executeRaw("UPDATE tx_lock_probe SET v = 2 WHERE id = 1")
+                v           <- other.query("SELECT v FROM tx_lock_probe WHERE id = 1").flatMap(oneLong)
+            yield
+                assert(interrupted, "the fiber inside the transaction must be interruptible")
+                assert(v == 2L, s"the second session must write the row the abandoned transaction held, and read back 2, got $v")
+            end for
+        }
 
     /** Permits available in the client's single slot channel paired with the capacity they return to when every lease resolves.
       *

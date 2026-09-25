@@ -237,10 +237,10 @@ abstract private[kyo] class ContainerBackend(val meter: Meter):
       */
     final private[kyo] def verifyBuildProduced(tags: Chunk[String])(using Frame): Unit < (Async & Abort[ContainerException]) =
         tags.headOption match
-            case None => Kyo.unit
+            case None      => Kyo.unit
             case Some(tag) =>
                 Abort.run[ContainerException](imageInspect(ContainerImage(tag))).map {
-                    case Result.Success(_) => ()
+                    case Result.Success(_)                                 => ()
                     case Result.Failure(_: ContainerImageMissingException) =>
                         Abort.fail(ContainerBuildFailedException(
                             tag,
@@ -248,7 +248,7 @@ abstract private[kyo] class ContainerBackend(val meter: Meter):
                             new RuntimeException(s"tagged image '$tag' absent after build")
                         ))
                     case Result.Failure(e) => Abort.fail(e)
-                    case Result.Panic(e) =>
+                    case Result.Panic(e)   =>
                         Abort.fail(ContainerBuildFailedException(tag, "unexpected error verifying build", e))
                 }
 
@@ -376,7 +376,7 @@ private[kyo] object ContainerBackend:
     def parseInstant(s: Option[String]): Maybe[Instant] =
         s match
             case None | Some("") | Some("0001-01-01T00:00:00Z") => Absent
-            case Some(v) =>
+            case Some(v)                                        =>
                 Instant.parse(v).toMaybe.orElse {
                     Result.catching[java.time.format.DateTimeParseException](
                         Instant.fromJava(java.time.OffsetDateTime.parse(v).toInstant)
@@ -454,6 +454,47 @@ private[kyo] object ContainerBackend:
         }
     end registryAuthFromConfig
 
+    /** Depth of the channel an attach session's single ordered output stream is pumped through (see [[attachOutput]]), clamped `>= 1`
+      * (`-Dkyo.internal.ContainerBackend.attachOutputCapacity`).
+      *
+      * The pump puts each payload slice into this channel, so the depth bounds how far the attached process may run ahead of the consumer
+      * before the put parks and the read side backpressures down to the connection. It counts slices, not bytes: one frame is one slice, so
+      * a chatty process fills it in slices rather than in fixed memory. Deep enough that an interactive session does not stall on a consumer
+      * that takes promptly, small enough that an abandoned session cannot accumulate output without bound.
+      */
+    private[kyo] object attachOutputCapacity extends StaticFlag[Int](64, n => Right(Math.max(1, n)))
+
+    /** Start the output pump of an attach session and return the session's `output` stream (see [[Container.AttachSession]]).
+      *
+      * One fiber, bound to the session's `Scope`, moves `source` (the demultiplexed output) into a bounded channel. Each chunk is therefore
+      * taken by exactly one consumer however the caller slices its consumption, parsing state inside `source` (a frame split across reads)
+      * lives in the single pump instead of being restarted per consumption, and a full channel backpressures the runtime. The channel is
+      * closed for writes when the pump ends for any reason, so a consumer drains what was delivered and then sees the end; if the pump failed,
+      * the returned stream fails with that error after the delivered chunks.
+      */
+    private[kyo] def attachOutput(
+        source: Stream[Container.AttachSession.Output, Async & Abort[ContainerException]],
+        capacity: Int
+    )(using Frame): Stream[Container.AttachSession.Output, Async & Abort[ContainerException]] < (Sync & Scope) =
+        Channel.init[Container.AttachSession.Output](capacity).map { channel =>
+            Fiber.init {
+                Sync.Unsafe.ensure(discard(channel.unsafe.closeAwaitEmpty())) {
+                    Abort.run[Closed](source.foreach(chunk => channel.put(chunk))).unit
+                }
+            }.map { pump =>
+                channel.streamUntilClosed().concat(
+                    Stream[Container.AttachSession.Output, Async & Abort[ContainerException]](
+                        pump.getResult.map {
+                            case Result.Success(_) => ()
+                            case Result.Failure(e) => Abort.fail(e)
+                            case Result.Panic(e)   => Abort.fail(ContainerBackendException("attach session output failed", e))
+                        }
+                    )
+                )
+            }
+        }
+    end attachOutput
+
     /** Run a CLI command, apply a transform to its stdout, and return the result.
       *
       * Redirects stderr to stdout so that error noise does not contaminate the output captured for parsing. Returns `Absent` when:
@@ -473,7 +514,7 @@ private[kyo] object ContainerBackend:
             case Result.Success((output, ExitCode.Success)) => transform(output.trim)
             case Result.Success((_, _))                     => Absent
             case Result.Failure(_: CommandException)        => Absent
-            case Result.Panic(ex) =>
+            case Result.Panic(ex)                           =>
                 Log.debug(s"CLI command failed unexpectedly: ${ex.getMessage}").andThen(
                     Absent: Maybe[A]
                 )
@@ -492,7 +533,7 @@ private[kyo] object ContainerBackend:
         Abort.run[ContainerException](HttpContainerBackend.detect(meter, apiVersion)).map {
             case Result.Success(backend) => backend: ContainerBackend
             case Result.Failure(_)       => detectShell(meter, streamBufferSize)
-            case Result.Panic(ex) =>
+            case Result.Panic(ex)        =>
                 Log.warn("Unexpected error during HTTP backend detection", ex).andThen(
                     detectShell(meter, streamBufferSize)
                 )

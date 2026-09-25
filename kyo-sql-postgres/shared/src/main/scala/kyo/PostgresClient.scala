@@ -110,7 +110,11 @@ final class PostgresClient private[kyo] (runtime: Runtime[PostgresSqlConnection]
     def notifications(channel: String)(using Frame): Stream[PostgresClient.Notification, Async & Abort[SqlException] & Scope] =
         Stream[PostgresClient.Notification, Async & Abort[SqlException] & Scope](
             self.useConfig { config =>
-                PostgresSqlConnection.notificationStream(runtime.pool, self.url.address, self.url.password, channel, config).emit
+                // Narrowed here rather than held narrowed on the client: the client's address is the SPI's, and only
+                // this listener needs the host and port a network address carries.
+                SqlConfig.Address.requireNetwork(self.url.address).map { address =>
+                    PostgresSqlConnection.notificationStream(runtime.pool, address, self.url.password, channel, config)
+                }.flatMap(_.emit)
             }
         )
 
@@ -301,17 +305,22 @@ object PostgresClient:
     private[kyo] def openUnscoped(url: SqlConfig.Url, config: SqlConfig)(using
         Frame
     ): PostgresClient < (Async & Abort[SqlException]) =
-        opened(url, config)
+        Scope.runUnowned(opened(url, config))
 
     /** Validates the PostgreSQL settings, then assembles the carrier through [[kyo.db.Runtime.init]] and wraps it in a client.
       *
       * `Runtime.init` merges the URL's options under `config`, builds the pool over the connection factory, and warms it up behind a bracket
       * that closes whatever it opened on any failure edge, so a caller never receives a half-open client to clean up.
+      *
+      * The search path is rendered here purely to reach its refusal. A pool that opens nothing at warm-up would otherwise carry a malformed
+      * value until the first statement asked for a connection, reporting a config mistake as a failure to connect.
       */
-    private def opened(url: SqlConfig.Url, config: SqlConfig)(using Frame): PostgresClient < (Async & Abort[SqlException]) =
-        sanitizeTypeNames(PostgresConfig.of(config).typeNames).andThen {
+    private[kyo] def opened(url: SqlConfig.Url, config: SqlConfig)(using Frame): PostgresClient < (Async & Abort[SqlException] & Scope) =
+        val settings = PostgresConfig.of(config)
+        sanitizeTypeNames(settings.typeNames).andThen(settings.searchPathValue).andThen {
             Runtime.init(url, config, PostgresSqlConnection.factory(url.options)).map(rt => new PostgresClient(rt))
         }
+    end opened
 
     /** Validates that each type name in `names` does not contain characters that would break SQL literal interpolation.
       *

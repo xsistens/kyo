@@ -2,9 +2,16 @@ package kyo
 
 import Record.*
 
+enum FTLight derives CanEqual, Schema:
+    case Green, Red
+    case Blinking(times: Int)
+
 class FocusTest extends kyo.test.Test[Any]:
 
     given CanEqual[Any, Any] = CanEqual.derived
+
+    enum MemberLight derives CanEqual, Schema:
+        case Green, Red
 
     val person     = MTPerson("Alice", 30)
     val address    = MTAddress("123 Main St", "Portland", "97201")
@@ -93,7 +100,7 @@ class FocusTest extends kyo.test.Test[Any]:
         }
 
         "set deeply nested" in {
-            val result = Schema[MTCompany].focus(_.hq.lead.address.city).set(company, "Seattle")
+            val result   = Schema[MTCompany].focus(_.hq.lead.address.city).set(company, "Seattle")
             val expected = MTCompany(
                 "Acme",
                 MTTeam("Engineering", MTPersonAddr("Alice", 30, MTAddress("123 Main St", "Seattle", "97201")), List(personAddr))
@@ -458,6 +465,19 @@ class FocusTest extends kyo.test.Test[Any]:
             assert(result == rectDrw)
         }
 
+        "an enum value selects that case only" in {
+            val green = Schema[FTLight].focus(_.Green)
+            assert(green.get(FTLight.Green) == Maybe(FTLight.Green))
+            assert(green.get(FTLight.Red) == Maybe.empty)
+            assert(green.get(FTLight.Blinking(2)) == Maybe.empty)
+        }
+
+        "an enum value of an enum declared as a member of a class selects that case only" in {
+            val green = Schema[MemberLight].focus(_.Green)
+            assert(green.get(MemberLight.Green) == Maybe(MemberLight.Green))
+            assert(green.get(MemberLight.Red) == Maybe.empty)
+        }
+
     }
 
     // --- path ---
@@ -567,7 +587,7 @@ class FocusTest extends kyo.test.Test[Any]:
         }
 
         "Schema.check on collection detects invalid elements" in {
-            val schema = Schema[MTEachOrder].check(_.items.forall(_.price > 0), "price must be positive")
+            val schema   = Schema[MTEachOrder].check(_.items.forall(_.price > 0), "price must be positive")
             val badOrder = MTEachOrder(
                 1,
                 Seq(
@@ -582,7 +602,7 @@ class FocusTest extends kyo.test.Test[Any]:
         }
 
         "Schema.check detects failing collection element" in {
-            val schema = Schema[MTEachOrder].check(_.items.forall(_.price > 0), "price must be positive")
+            val schema   = Schema[MTEachOrder].check(_.items.forall(_.price > 0), "price must be positive")
             val badOrder = MTEachOrder(
                 1,
                 Seq(
@@ -735,7 +755,7 @@ class FocusTest extends kyo.test.Test[Any]:
         }
 
         "Schema.check on collection detects any failing element" in {
-            val schema = Schema[MTEachOrder].check(_.items.forall(_.price > 0), "price must be positive")
+            val schema   = Schema[MTEachOrder].check(_.items.forall(_.price > 0), "price must be positive")
             val badOrder = MTEachOrder(
                 1,
                 Seq(

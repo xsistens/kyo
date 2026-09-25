@@ -666,7 +666,7 @@ class BrowserIsolateTest extends BrowserTest:
             Browser.use { parent =>
                 val parentCtx = parent.browserContextId match
                     case Present(id) => id
-                    case Absent =>
+                    case Absent      =>
                         fail("Parent tab from Browser.run must have a Present browserContextId")
                 Browser.withNewTab {
                     Browser.use { child =>
@@ -710,7 +710,7 @@ class BrowserIsolateTest extends BrowserTest:
                     )
                 yield tab.browserContextId match
                     case Present(id) => fail(s"Expected Absent but got Present($id)")
-                    case Absent =>
+                    case Absent      =>
                         assert(tab.browserContextId == Absent, "browserContextId must be Absent for a tab constructed without a context")
                 end for
             }
@@ -747,7 +747,7 @@ class BrowserIsolateTest extends BrowserTest:
 
     "isolate.clone preserves cookies across forks" in {
         withBrowserOnLocalhost {
-            Browser.setCookie("ck", "cv", "localhost").andThen {
+            Browser.setCookie("ck", "cv", "127.0.0.1").andThen {
                 Browser.isolate.clone.use {
                     Async.zip(
                         Browser.cookies.map(cs => cs.exists(c => c.name == "ck" && c.value == "cv")),
@@ -1112,7 +1112,7 @@ class BrowserIsolateTest extends BrowserTest:
 
     "withFork preserves cookies set in the parent tab" in {
         withBrowserOnLocalhost {
-            Browser.setCookie("forkCookie", "forkVal", "localhost").andThen {
+            Browser.setCookie("forkCookie", "forkVal", "127.0.0.1").andThen {
                 Browser.withFork {
                     Browser.cookies.map { cs =>
                         val found = cs.exists(c => c.name == "forkCookie" && c.value == "forkVal")
@@ -1277,7 +1277,7 @@ class BrowserIsolateTest extends BrowserTest:
                 Browser.use { parent =>
                     val client = parent.backend
                     Browser.goto(p).andThen(CdpBackend.getTargets(client)).map { before =>
-                        val beforeIds = before.targetInfos.map(_.targetId).toSet
+                        val beforeIds                               = before.targetInfos.map(_.targetId).toSet
                         val timedOutWork: Unit < (Async & Abort[E]) =
                             Async.timeout(300.millis) {
                                 Browser.run(wsUrl) {
@@ -1330,7 +1330,7 @@ class BrowserIsolateTest extends BrowserTest:
                 Browser.use { parent =>
                     val client = parent.backend
                     Browser.goto(p).andThen(CdpBackend.getTargets(client)).map { before =>
-                        val beforeIds = before.targetInfos.map(_.targetId).toSet
+                        val beforeIds                               = before.targetInfos.map(_.targetId).toSet
                         val timedOutWork: Unit < (Async & Abort[E]) =
                             Async.timeout(300.millis) {
                                 Browser.run(wsUrl) {

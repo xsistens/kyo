@@ -80,7 +80,7 @@ final class MysqlChannel(
                 Abort.run[Closed](conn.outbound.safe.put(bytes)).flatMap {
                     case Result.Success(_) => ()
                     case Result.Failure(_) => Abort.fail(SqlConnectionClosedException("writing"))
-                    case Result.Panic(t) =>
+                    case Result.Panic(t)   =>
                         Abort.fail(SqlConnectionWritePanicException(t))
                 }
             }
@@ -100,7 +100,7 @@ final class MysqlChannel(
             ).flatMap {
                 case Result.Success(msg) => msg
                 case Result.Failure(e)   => Abort.fail(SqlConnectionProtocolDecodeException("message", e))
-                case Result.Panic(t) =>
+                case Result.Panic(t)     =>
                     Abort.fail(SqlConnectionProtocolDecodeException("message", t))
             }
         }
@@ -113,7 +113,7 @@ final class MysqlChannel(
             Abort.run[SqlDecodeException](unmarshallers.handshakeV10.read(reader)).flatMap {
                 case Result.Success(hs) => hs
                 case Result.Failure(e)  => Abort.fail(SqlConnectionProtocolDecodeException("Handshake", e))
-                case Result.Panic(t) =>
+                case Result.Panic(t)    =>
                     Abort.fail(SqlConnectionProtocolDecodeException("Handshake", t))
             }
         }
@@ -189,8 +189,7 @@ final class MysqlChannel(
             case Maybe.Present(latch) =>
                 // A LOCAL INFILE cleanup is in-flight. Block until it releases the latch,
                 // then re-check whether the channel was marked corrupted during cleanup.
-                // Async.mask makes this wait uninterruptible so the caller cannot skip it.
-                Async.mask { latch.await }.andThen(checkCorrupted())
+                Async.uninterruptible { latch.await }.andThen(checkCorrupted())
             case Maybe.Absent =>
                 _corrupted.get.flatMap {
                     case Maybe.Present(operation) =>

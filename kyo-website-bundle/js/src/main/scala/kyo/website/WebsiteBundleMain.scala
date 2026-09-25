@@ -156,7 +156,7 @@ object WebsiteBundleMain:
             // click lands on a `.sidebar-section` link, while a module tap leaves the drawer open so its
             // sections expand in place.
             navOpenRef <- Signal.initRef(false)
-            _ <- UIWindow.onClick { e =>
+            _          <- UIWindow.onClick { e =>
                 e.targetClosest(".sidebar-section") match
                     case Present(_) => navOpenRef.updateAndGet(_ => false).unit
                     case Absent     => Kyo.unit
@@ -194,7 +194,7 @@ object WebsiteBundleMain:
             // searchIndex on success; a fetch failure leaves the title-only seed in place.
             searchIndex <- Signal.initRef(titleIndex(island.content, prefix))
             _           <- Fiber.initUnscoped(refreshSearchIndex(searchIndex, prefix))
-            _ <- navFiber(
+            _           <- navFiber(
                 route,
                 knownPrefixes,
                 knownSlugs,
@@ -261,8 +261,8 @@ object WebsiteBundleMain:
         for
             dark <- UIWindow.prefersColorScheme.current
             next <- Sync.defer {
-                val root = dom.document.documentElement
-                val attr = root.getAttribute("data-theme")
+                val root          = dom.document.documentElement
+                val attr          = root.getAttribute("data-theme")
                 val effectiveDark =
                     if attr == "dark" then true
                     else if attr == "light" then false
@@ -414,20 +414,20 @@ object WebsiteBundleMain:
     /** The four route kinds the nav fiber dispatches on, named so the classification is a pure,
       * testable decision separate from the effectful branch bodies in [[navFiber]].
       *
-      *   - [[Landing]]: the root `/` (zero path segments).
-      *   - [[Module]]: a `/<prefix>/<slug>/` page whose last segment names a known module.
-      *   - [[Intro]]: a single-segment `/<knownPrefix>/` route naming a real tree.
-      *   - [[OffTree]]: anything else (an unknown prefix, OR a multi-segment route whose last segment
+      *   - [[RouteKind.Landing]]: the root `/` (zero path segments).
+      *   - [[RouteKind.Module]]: a `/<prefix>/<slug>/` page whose last segment names a known module.
+      *   - [[RouteKind.Intro]]: a single-segment `/<knownPrefix>/` route naming a real tree.
+      *   - [[RouteKind.OffTree]]: anything else (an unknown prefix, OR a multi-segment route whose last segment
       *     is not a known module slug), which hands off to a full browser navigation.
       */
     private[website] enum RouteKind derives CanEqual:
         case Landing, Module, Intro, OffTree
 
     /** Classify a route's path segments into a [[RouteKind]], the pure decision [[navFiber]] dispatches
-      * on. A multi-segment route is a [[Module]] ONLY when its last segment is a known module slug;
-      * an unknown multi-segment slug (e.g. `/latest/does-not-exist/`) is [[OffTree]] so it full-
+      * on. A multi-segment route is a [[RouteKind.Module]] ONLY when its last segment is a known module slug;
+      * an unknown multi-segment slug (e.g. `/latest/does-not-exist/`) is [[RouteKind.OffTree]] so it full-
       * navigates to a clean server 404 instead of fetching a missing `content.html` into a broken docs
-      * shell. A single-segment route is an [[Intro]] only when it names a known prefix.
+      * shell. A single-segment route is an [[RouteKind.Intro]] only when it names a known prefix.
       */
     private[website] def classifyRoute(
         segments: Array[String],
@@ -538,7 +538,7 @@ object WebsiteBundleMain:
                 for
                     article <- Sync.defer(Maybe.fromOption(articleCache.get(nextRoute))).flatMap {
                         case Present(a) => Sync.defer(a)
-                        case Absent =>
+                        case Absent     =>
                             DocsClient.fetchArticle(nextRoute).map { a =>
                                 seedArticleCache(nextRoute, a)
                                 a
@@ -576,7 +576,7 @@ object WebsiteBundleMain:
     private def updateHead(route: String, island: DocsClient.DocsIsland)(using Frame): Unit < Sync =
         val segments = route.split('/').filter(_.nonEmpty)
         val label    = island.content.version.label
-        val title =
+        val title    =
             if segments.isEmpty then "Kyo | Build with AI. Ship something that holds."
             else if segments.length >= 2 then s"${segments(segments.length - 1)} | Kyo docs $label"
             else s"Overview | Kyo docs $label"

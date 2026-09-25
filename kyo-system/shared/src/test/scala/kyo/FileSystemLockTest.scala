@@ -1,10 +1,16 @@
 package kyo
 
-/** Shared behavioral contract for [[FileSystem.Read]] lock implementations. */
-abstract class FileSystemLockTest extends kyo.test.Test[Any]:
+/** Shared behavioral contract for [[FileSystem.Read]] lock implementations.
+  *
+  * `S >: Async` bounds the backend effect as described on [[FileSystemReadTest]].
+  */
+abstract class FileSystemLockTest[S >: Async] extends kyo.test.Test[Any]:
 
+    /** Runs one assertion against a fresh backend and a path to lock. See [[FileSystemReadTest.withFileSystem]] for
+      * why the suite cannot fix the backend effect.
+      */
     protected def withFileSystem(
-        use: (FileSystem.Read[Sync], Path) => Unit < (Async & Sync & Scope & Abort[FileSystemException])
+        use: (FileSystem.Read[S], Path) => Unit < (S & Async & Sync & Scope & Abort[FileSystemException])
     )(using Frame): Unit < (Async & Sync & Scope & Abort[FileSystemException])
 
     private def assertImmediate(first: Path.LockMode, second: Path.LockMode, expected: Boolean)(using
@@ -102,7 +108,9 @@ abstract class FileSystemLockTest extends kyo.test.Test[Any]:
             }
         }
 
-        "cancelled waiter leaves no ownership claim" in {
+        // The waiter is joined while the outer lock is still held: an interrupt does not wait for the fiber to stop, and a waiter
+        // still running when the outer lock is released could take the lock and hold it until it unwinds.
+        "cancelled waiter leaves no ownership claim".times(50) in {
             withFileSystem { (fileSystem, path) =>
                 Scope.run {
                     fileSystem.lock(path, Path.LockMode.Exclusive, Path.LockWait.Immediate).map { _ =>
@@ -114,6 +122,7 @@ abstract class FileSystemLockTest extends kyo.test.Test[Any]:
                             ).map { waiter =>
                                 started.await.andThen(waiter.interrupt).map { interrupted =>
                                     assert(interrupted)
+                                    waiter.getResult.unit
                                 }
                             }
                         }
@@ -123,6 +132,37 @@ abstract class FileSystemLockTest extends kyo.test.Test[Any]:
                         assert(lock.mode == Path.LockMode.Exclusive)
                     })
                 }
+            }
+        }
+
+        // Finalizers run in reverse registration order: `gate` holds the unwinding in front of the lock's release, and `released`,
+        // registered before the lock, fires only after that release ran. The drain that runs an interrupted scope's async
+        // finalizers is not awaited by the fiber's result, so `released` rather than `getResult` orders the last check.
+        "an interrupted holder keeps its lock until its scope has unwound" in {
+            withFileSystem { (fileSystem, path) =>
+                for
+                    claimed  <- Latch.init(1)
+                    gate     <- Latch.init(1)
+                    released <- Latch.init(1)
+                    holder   <- Fiber.initUnscoped(
+                        Scope.run(
+                            Scope.ensure(released.release)
+                                .andThen(fileSystem.lock(path, Path.LockMode.Exclusive, Path.LockWait.Immediate))
+                                .andThen(Scope.ensure(gate.await))
+                                .andThen(claimed.release)
+                                .andThen(Async.never)
+                        )
+                    )
+                    _      <- claimed.await
+                    _      <- holder.interrupt
+                    during <- Scope.run(fileSystem.tryLock(path, Path.LockMode.Exclusive))
+                    _      <- gate.release
+                    _      <- released.await
+                    after  <- Scope.run(fileSystem.tryLock(path, Path.LockMode.Exclusive))
+                yield
+                    assert(during.isEmpty, "the lock was free before the interrupted holder's scope unwound")
+                    assert(after.isDefined, "the lock stayed held after the interrupted holder's scope unwound")
+                end for
             }
         }
 
@@ -182,8 +222,8 @@ abstract class FileSystemLockTest extends kyo.test.Test[Any]:
 
         "expiry before a retry prevents another acquisition attempt" in {
             Clock.withTimeControl { control =>
-                val path  = Path("deadline-retry.bin")
-                val token = Path.LockOwnership.fresh()
+                val path      = Path("deadline-retry.bin")
+                val token     = Path.LockOwnership.fresh()
                 val available = new Path.Lock:
                     def mode: Path.LockMode                                          = Path.LockMode.Exclusive
                     def ownership: Path.LockOwnership                                = token
@@ -198,7 +238,10 @@ abstract class FileSystemLockTest extends kyo.test.Test[Any]:
                                     case _ => Present(available)
                                 }
                                 Fiber.initUnscoped(
-                                    Abort.run[FileLockException](Scope.run(FileSystem.awaitLock(
+                                    // Pinned to Async rather than inferred: the synthetic attempt never touches the
+                                    // backend, so inferring the suite's own S would put an undischargeable effect
+                                    // inside the fiber.
+                                    Abort.run[FileLockException](Scope.run(FileSystem.awaitLock[Async](
                                         path,
                                         Path.LockWait.Until(deadline)
                                     )(attempt)))

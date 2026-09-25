@@ -26,6 +26,12 @@ private[kyo] object PathWatch:
         derives CanEqual
     final private case class ScanPanic(error: Throwable)
 
+    /** A scan that found the root itself gone or not a directory. The scan already knows why it failed, so the poll
+      * invalidates on it directly; a re-check of the root after the fact could find it restored and misreport the
+      * invalidation as `error`.
+      */
+    final private case class RootInvalid(error: FileWatchException)
+
     private def watchFailure(root: Path, error: FileSystemException)(using Frame): FileWatchException =
         error match
             case watch: FileWatchException => watch
@@ -33,7 +39,7 @@ private[kyo] object PathWatch:
 
     private def scan[S](service: FileSystem.Read[S], root: Path, options: WatchOptions)(using
         Frame
-    ): Result[FileWatchException, Map[Path, Snapshot]] < S =
+    ): Result[FileWatchException | RootInvalid, Map[Path, Snapshot]] < S =
         def hash(bytes: Span[Byte]): Int =
             var value = 1
             var index = 0
@@ -77,7 +83,7 @@ private[kyo] object PathWatch:
                         end if
                     }
                     Abort.run[FileReadException | FileStructureException | ScanPanic](observe).map {
-                        case Result.Success(next) => next
+                        case Result.Success(next)  => next
                         case Result.Failure(error) =>
                             Abort.run[FileReadException](service.exists(child, options.followLinks)).map {
                                 case Result.Success(false)      => acc
@@ -91,22 +97,23 @@ private[kyo] object PathWatch:
             }
 
         val read = service.exists(root, options.followLinks).map {
-            case false => Abort.fail[FileWatchException](FileWatchInvalidatedException(root))
-            case true =>
+            case false => Abort.fail[RootInvalid](RootInvalid(FileWatchInvalidatedException(root)))
+            case true  =>
                 service.isDirectory(root).map {
                     case false =>
-                        Abort.fail[FileReadException](
+                        Abort.fail[RootInvalid](RootInvalid(
                             FileIOException(root, FileSystemOperation.Watch, new java.io.IOException("watched path is not a directory"))
-                        )
+                        ))
                     case true =>
                         if options.followLinks then
                             service.realPath(root).map(real => children(root, options.depth == WatchDepth.Recursive, Set(real)))
                         else children(root, options.depth == WatchDepth.Recursive, Set.empty)
                 }
         }
-        Abort.run[FileReadException | FileStructureException | FileWatchException | ScanPanic](read).map {
+        Abort.run[FileReadException | FileStructureException | RootInvalid | ScanPanic](read).map {
             case Result.Success(snapshot)                   => Result.Success(snapshot)
             case Result.Failure(scanPanic: ScanPanic)       => Result.Panic(scanPanic.error)
+            case Result.Failure(invalid: RootInvalid)       => Result.Failure(invalid)
             case Result.Failure(error: FileSystemException) => Result.Failure(watchFailure(root, error))
             case Result.Panic(error)                        => Result.Panic(error)
         }
@@ -118,8 +125,8 @@ private[kyo] object PathWatch:
         val moved   = scala.collection.mutable.ArrayBuffer.empty[(Path, Path)]
         var old     = 0
         while old < removed.size do
-            val from     = removed(old)
-            val identity = before(from).identity
+            val from       = removed(old)
+            val identity   = before(from).identity
             val candidates = identity.fold(Seq.empty[(Path, Int)])(id =>
                 created.zipWithIndex.filter((to, _) => after(to).identity.contains(id))
             )
@@ -165,9 +172,9 @@ private[kyo] object PathWatch:
     ): Maybe[PathChange] =
         def selected(path: Path): Boolean = matches(root, options, caseSensitivity, path)
         change match
-            case PathChange.Created(path)  => if selected(path) then Present(change) else Absent
-            case PathChange.Modified(path) => if selected(path) then Present(change) else Absent
-            case PathChange.Removed(path)  => if selected(path) then Present(change) else Absent
+            case PathChange.Created(path)   => if selected(path) then Present(change) else Absent
+            case PathChange.Modified(path)  => if selected(path) then Present(change) else Absent
+            case PathChange.Removed(path)   => if selected(path) then Present(change) else Absent
             case PathChange.Moved(from, to) =>
                 (selected(from), selected(to)) match
                     case (true, true)  => Present(change)
@@ -192,16 +199,17 @@ private[kyo] object PathWatch:
                     case MatchCase.Sensitive         => Glob.CaseSensitivity.Sensitive
                     case MatchCase.Insensitive       => Glob.CaseSensitivity.Insensitive
                 scan(service, root, options).map {
-                    case Result.Failure(error) => Abort.fail(error)
-                    case Result.Panic(error)   => Abort.panic[FileWatchException](error)
-                    case Result.Success(initial) =>
+                    case Result.Failure(RootInvalid(error))        => Abort.fail(error)
+                    case Result.Failure(error: FileWatchException) => Abort.fail(error)
+                    case Result.Panic(error)                       => Abort.panic[FileWatchException](error)
+                    case Result.Success(initial)                   =>
                         Channel.init[Result[FileWatchException, PathChange]](options.capacity).map { channel =>
                             AtomicInt.init(0).map { pending =>
                                 AtomicBoolean.init(false).map { overflowed =>
                                     def overflow: Unit < Sync =
                                         overflowed.compareAndSet(false, true).map {
                                             case false => ()
-                                            case true =>
+                                            case true  =>
                                                 Abort.run[Closed](channel.drain).andThen {
                                                     pending.set(1).andThen {
                                                         Abort.run[Closed](channel.offer(Result.Success(PathChange.Overflow(root)))).map {
@@ -213,7 +221,7 @@ private[kyo] object PathWatch:
                                         }
                                     def offer(event: PathChange): Unit < Sync =
                                         overflowed.get.map {
-                                            case true => ()
+                                            case true  => ()
                                             case false =>
                                                 pending.incrementAndGet.map { count =>
                                                     if count > options.capacity then overflow
@@ -252,7 +260,7 @@ private[kyo] object PathWatch:
                                     def terminate(error: FileWatchException): Unit < (S & Sync) =
                                         Abort.run[FileReadException](service.exists(root, options.followLinks)).map {
                                             case Result.Success(false) => invalidate
-                                            case Result.Success(true) =>
+                                            case Result.Success(true)  =>
                                                 Abort.run[FileReadException](service.isDirectory(root)).map {
                                                     case Result.Success(false)      => invalidate
                                                     case Result.Success(true)       => fail(error)
@@ -265,15 +273,16 @@ private[kyo] object PathWatch:
                                     def poll(previous: Map[Path, Snapshot], deferredRemoval: Boolean): Unit < (S & Async) =
                                         scan(service, root, options).map {
                                             case Result.Success(current) =>
-                                                val detected = changes(previous, current)
+                                                val detected    = changes(previous, current)
                                                 val removalOnly = detected.nonEmpty && detected.forall {
                                                     case PathChange.Removed(_) => true
                                                     case _                     => false
                                                 }
                                                 if removalOnly && !deferredRemoval then loop(previous, true)
                                                 else publish(detected).andThen(loop(current, false))
-                                            case Result.Failure(error) => terminate(error)
-                                            case Result.Panic(error)   => panic(error)
+                                            case Result.Failure(_: RootInvalid)            => invalidate
+                                            case Result.Failure(error: FileWatchException) => terminate(error)
+                                            case Result.Panic(error)                       => panic(error)
                                         }
                                     // Async.sleep, not Clock.sleep: the latter hands back the timer Fiber rather than
                                     // suspending on it, so discarding it would leave this loop free-running.
@@ -293,8 +302,8 @@ private[kyo] object PathWatch:
                                                 Stream:
                                                     def pull: Unit < (Emit[Chunk[PathChange]] & Async & Abort[FileWatchException]) =
                                                         Abort.run[Closed](channel.take).map {
-                                                            case Result.Failure(_)   => ()
-                                                            case Result.Panic(error) => Abort.panic[FileWatchException](error)
+                                                            case Result.Failure(_)      => ()
+                                                            case Result.Panic(error)    => Abort.panic[FileWatchException](error)
                                                             case Result.Success(result) =>
                                                                 pending.decrementAndGet.andThen {
                                                                     result match

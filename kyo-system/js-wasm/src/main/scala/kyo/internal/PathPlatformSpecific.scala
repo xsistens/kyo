@@ -276,17 +276,17 @@ private[kyo] object NodePathLock:
         cleanup: Result[FileLockException, Unit]
     )(using Frame): Result[FileLockException, A] =
         cleanup match
-            case Result.Success(_) => primary
+            case Result.Success(_)       => primary
             case Result.Failure(cleanup) =>
                 primary match
                     case Result.Success(_)       => Result.fail(cleanup)
                     case Result.Failure(primary) => Result.fail(FileLockCleanupException(target, primary, cleanup))
-                    case Result.Panic(primary) =>
+                    case Result.Panic(primary)   =>
                         primary.addSuppressed(cleanup)
                         Result.panic(primary)
             case Result.Panic(cleanup) =>
                 primary match
-                    case Result.Success(_) => Result.panic(cleanup)
+                    case Result.Success(_)       => Result.panic(cleanup)
                     case Result.Failure(primary) =>
                         cleanup.addSuppressed(primary)
                         Result.panic(cleanup)
@@ -330,8 +330,8 @@ private[kyo] object NodePathLock:
         owner: Owner,
         beforeCleanup: String => Unit
     )(using Frame): Result[FileLockException, Boolean] =
-        val temporary      = publicationPath(path, owner)
-        var temporaryOwned = false
+        val temporary                                     = publicationPath(path, owner)
+        var temporaryOwned                                = false
         val published: Result[FileLockException, Boolean] =
             try
                 if publicationBlocked(path) then Result.succeed(false)
@@ -357,7 +357,7 @@ private[kyo] object NodePathLock:
                     case e: Throwable                                                 => Result.panic(e)
         cleanup match
             case Result.Success(_) => published
-            case cleanupFailure =>
+            case cleanupFailure    =>
                 published match
                     case Result.Success(true) =>
                         withCleanup(target, cleanupFailure, releaseOwned(target, path, owner)) match
@@ -374,7 +374,7 @@ private[kyo] object NodePathLock:
         try
             val parent = NodePath.dirname(gate)
             val name   = NodePath.basename(gate)
-            def gates = NodeFs.readdirSync(parent).toSeq
+            def gates  = NodeFs.readdirSync(parent).toSeq
                 .filter(value => value == name || value.startsWith(name + ".reclaim."))
                 .map(NodePath.join(parent, _))
             gates.foreach(reclaimIfProvenDead(_))
@@ -427,18 +427,18 @@ private[kyo] object NodePathLock:
         beforeGateRelease: (String, String) => Unit = (_, _) => (),
         beforePublishCleanup: String => Unit = _ => ()
     )(using AllowUnsafe, Frame): Result[FileLockException, Path.RawLock] =
-        val base                                 = pathStr + sentinelSuffix
-        val gate                                 = base + ".gate"
-        val gateOwner                            = currentOwner()
-        var gateAcquired                         = false
-        var createdClaim: Maybe[(String, Owner)] = Absent
+        val base                                              = pathStr + sentinelSuffix
+        val gate                                              = base + ".gate"
+        val gateOwner                                         = currentOwner()
+        var gateAcquired                                      = false
+        var createdClaim: Maybe[(String, Owner)]              = Absent
         val acquired: Result[FileLockException, Path.RawLock] =
             try
                 acquireGate(target, gate, gateOwner, beforePublishCleanup) match
                     case Result.Failure(error) => Result.fail(error)
                     case Result.Panic(error)   => Result.panic(error)
                     case Result.Success(false) => Result.fail(FileLockUnavailableException(target))
-                    case Result.Success(true) =>
+                    case Result.Success(true)  =>
                         gateAcquired = true
                         claimPublications(base).foreach(reclaimPublicationIfProvenDead)
                         val result =
@@ -475,7 +475,7 @@ private[kyo] object NodePathLock:
         if !gateAcquired then acquired
         else
             releaseOwned(target, gate, gateOwner) match
-                case Result.Success(_) => acquired
+                case Result.Success(_)     => acquired
                 case Result.Failure(error) =>
                     val gateFailure: Result[FileLockException, Path.RawLock] = Result.fail(error)
                     createdClaim match
@@ -1138,13 +1138,17 @@ final private[kyo] class NodeWriteHandle(fd: Int, path: Path) extends Path.Write
             val uint8 = bytesToUint8Array(arr)
             // A short write leaves the tail of the buffer unwritten, so what is left is retried from where
             // it stopped. This is the loop NioWriteHandle runs against the channel, written against the
-            // buffer offset because the file offset belongs to the descriptor.
+            // buffer offset because the file offset belongs to the descriptor. A write taking no bytes
+            // returns the offset it stalled at, since the retry would offer the same bytes there.
             @scala.annotation.tailrec
-            def loop(offset: Int): Unit =
-                if offset < arr.length then
-                    loop(offset + NodeFs.writeSync(fd, uint8, offset, arr.length - offset))
-            loop(0)
-            Result.unit
+            def loop(offset: Int): Int =
+                if offset >= arr.length then offset
+                else
+                    val n = NodeFs.writeSync(fd, uint8, offset, arr.length - offset)
+                    if n <= 0 then offset else loop(offset + n)
+            val written = loop(0)
+            if written < arr.length then Result.fail(FileWriteStalledException(path, (arr.length - written).bytes))
+            else Result.unit
         catch
             case e: js.JavaScriptException =>
                 Result.fail(NodeError.translateWrite(path, e))
@@ -1200,9 +1204,12 @@ final private[kyo] class NodeRawChannel(fd: Int, path: Path) extends Path.RawCha
         try
             val uint8   = bytesToUint8Array(bytes)
             var written = 0
-            while written < bytes.length do
-                written += NodeFs.writeSync(fd, uint8, written, bytes.length - written, (pos + written).toDouble)
-            Result.unit
+            var stalled = false
+            while written < bytes.length && !stalled do
+                val n = NodeFs.writeSync(fd, uint8, written, bytes.length - written, (pos + written).toDouble)
+                if n <= 0 then stalled = true else written += n
+            if stalled then Result.fail(FileWriteStalledException(path, (bytes.length - written).bytes))
+            else Result.unit
         catch
             case e: js.JavaScriptException => Result.fail(NodeError.translateWrite(path, e))
             case e: Throwable              => Result.panic(e)
@@ -1295,7 +1302,7 @@ abstract private[kyo] class PathPlatformSpecific extends PathDirectories:
             else
                 // Don't prepend separator for Windows drive-letter paths (e.g. "C:")
                 val hasDrive = nonEmpty.headOption.exists(s => s.length == 2 && s(1) == ':')
-                val raw =
+                val raw      =
                     if isAbs && !hasDrive then "/" + nonEmpty.mkString("/")
                     else if hasDrive then
                         // A drive designator head is the volume root, matching the JVM/Native

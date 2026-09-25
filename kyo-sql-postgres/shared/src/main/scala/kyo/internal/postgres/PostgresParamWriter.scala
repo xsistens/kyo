@@ -18,7 +18,7 @@ import kyo.internal.postgres.types.PostgresEncoder
 /** Maps `Codec.Writer` primitive calls to PostgreSQL `BoundParam` instances.
   *
   * Each primitive method appends one [[BoundParam]] to an internal buffer. The OID and wire-format selection mirrors the
-  * [[PostgresEncoder]] singletons exactly, so the byte output is byte-for-byte identical to calling those encoders directly.
+  * `PostgresEncoder` singletons exactly, so the byte output is byte-for-byte identical to calling those encoders directly.
   *
   * After all writes, retrieve the accumulated params via [[params]].
   *
@@ -133,7 +133,7 @@ final class PostgresParamWriter(registry: TypeRegistry, binaryElements: Boolean 
       * makes the server type-check the NULL against it. Declaring `INT4` for a NULL bound into a `TEXT` column is a mismatch the server
       * rejects, naming a type the caller never wrote.
       *
-      * [[PostgresEncoder.nullUnspecified]] declares oid 0, the protocol's "no type named here", which leaves the target column to drive
+      * `PostgresEncoder.nullUnspecified` declares oid 0, the protocol's "no type named here", which leaves the target column to drive
       * inference. That is what makes an absent cell bindable at all, binding it through the OID rather than writing `NULL` into the statement
       * text, so the statement text does not vary by whether a value is present.
       */
@@ -195,8 +195,8 @@ final class PostgresParamWriter(registry: TypeRegistry, binaryElements: Boolean 
         oidOpt match
             case Present(typeOid) =>
                 val enc = new PostgresEncoder[Span[Byte]]:
-                    def oid: Int       = typeOid
-                    def format: Format = wireFormat
+                    def oid: Int                                                  = typeOid
+                    def format: Format                                            = wireFormat
                     def write(value: Span[Byte], buf: PostgresBufferWriter): Unit =
                         buf.writeBytes(value)
                 _params += BoundParam(bytes, enc)
@@ -277,7 +277,7 @@ final class PostgresParamWriter(registry: TypeRegistry, binaryElements: Boolean 
       * announced.
       */
     override def encodeElement[A](column: SqlSchema.Column[A], value: A, typeName: String, format: SqlCodec.Format): Span[Byte] =
-        given Frame = frame
+        given Frame       = frame
         val elementParams =
             PostgresParamWriter.write(column, value, registry, binaryElements = format == SqlCodec.Format.Binary)
         encodeSingleElement(typeName, elementParams, format, PostgresEncoder.dialectId)(

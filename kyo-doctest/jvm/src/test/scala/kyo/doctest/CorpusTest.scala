@@ -11,6 +11,10 @@ import kyo.doctest.internal.MarkdownParser
   */
 class CorpusTest extends kyo.test.Test[Any]:
 
+    // Every leaf compiles its fixture's blocks with the Scala compiler in this process, and the first to do so pays the compiler's
+    // warm-up: seconds here, and past the default two minutes on a loaded CI runner where other suites compile beside it.
+    override def timeout: Duration = 5.minutes
+
     // JVM classpath so the compiler can resolve types.
     private def testClasspath(using Frame): Chunk[kyo.Path] < Sync =
         for
@@ -338,10 +342,10 @@ class CorpusTest extends kyo.test.Test[Any]:
         System.property[String]("kyo.doctest.readme").flatMap { overrideProp =>
             overrideProp match
                 case Present(p) => kyo.Path(p)
-                case Absent =>
+                case Absent     =>
                     kyo.System.property[String]("user.dir").flatMap { maybeCwd =>
-                        val cwdStr = maybeCwd.getOrElse(".")
-                        val cwd    = kyo.Path(cwdStr)
+                        val cwdStr                                                              = maybeCwd.getOrElse(".")
+                        val cwd                                                                 = kyo.Path(cwdStr)
                         def loop(dir: kyo.Path): kyo.Path < (Sync & Abort[FileSystemException]) =
                             // Check if this dir contains kyo-doctest/README.md as a sibling subdir.
                             val sibling = dir / "kyo-doctest" / "README.md"

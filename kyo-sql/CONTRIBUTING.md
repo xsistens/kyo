@@ -1,6 +1,6 @@
 # Contributing to kyo-sql
 
-Module-specific guide for kyo-sql and its backend modules (`kyo-sql-postgres`, `kyo-sql-mysql`, and any engine added later). Read the repository-root [CONTRIBUTING.md](../CONTRIBUTING.md) first: it carries the conventions, naming rules, type vocabulary, test patterns, and the unsafe-boundary tiers that apply across all of Kyo. This document records what is specific to kyo-sql: what the module promises across engines, how each promise is held, and the discipline that keeps an engine's quirks from leaking into a caller.
+Module-specific guide for kyo-sql and its backend modules (`kyo-sql-postgres`, `kyo-sql-mysql`, `kyo-sql-sqlite`, `kyo-sql-dolt`, and any engine added later). Read the repository-root [CONTRIBUTING.md](../CONTRIBUTING.md) first: it carries the conventions, naming rules, type vocabulary, test patterns, and the unsafe-boundary tiers that apply across all of Kyo. This document records what is specific to kyo-sql: what the module promises across engines, how each promise is held, and the discipline that keeps an engine's quirks from leaking into a caller.
 
 ## The headline invariant
 
@@ -31,13 +31,13 @@ Note the scope of that table: it is what a caller observes **through a neutral t
 
 Conformance governs observables reached through neutral types. It says nothing about how an engine is spoken to, and that is the bulk of the work:
 
-- **The wire protocol.** Message framing, packet layout, the extended and simple query flows, pipelining. PostgreSQL and MySQL share nothing here.
-- **Authentication.** SCRAM-SHA-256, `caching_sha2_password`, `sha256_password`, `mysql_native_password`, and each engine's TLS negotiation.
+- **How the engine is reached at all.** For the two servers this is a wire protocol: message framing, packet layout, the extended and simple query flows, pipelining, and PostgreSQL and MySQL share nothing here. For SQLite it is an FFI boundary onto the C library, which is why `kyo-sql-sqlite` takes `kyo-ffi` where the others take `kyo-net`.
+- **Authentication.** SCRAM-SHA-256, `caching_sha2_password`, `sha256_password`, `mysql_native_password`, and each engine's TLS negotiation. An embedded engine has none of this, and its absence is a capability the descriptor declares rather than a gap.
 - **The type tables.** OIDs on one side, type bytes plus flags and collation on the other, and the mapping from each to the neutral vocabulary.
 - **The dialect.** `SqlIdiom` generates genuinely different SQL per engine, and that is its job.
 - **Connection lifecycle.** What a reset means, what a clean session is, how prepared statements are cached and released.
 - **Engine-only types.** `inet`, `cidr`, `macaddr`, `tsvector`, ranges, arrays on one side; `GEOMETRY`, `SET`, `ENUM`, `BIT` on the other, with their wire layouts and decoders.
-- **Engine-only public API.** `PostgresClient.copyIn`, `copyOut`, `notifications`, `parameters`; `MysqlClient.loadLocalInfile`.
+- **Engine-only public API.** `PostgresClient.copyIn`, `copyOut`, `notifications`, `parameters`; `MysqlClient.loadLocalInfile`; `Dolt`'s whole version-control surface. `SqliteClient` adds none: what distinguishes that engine is an absence of things, reported as a typed refusal rather than as a method.
 
 That last one is worth stating plainly, because a rule about conformance can read as though engine-specific API were a smell. It is not. A caller who holds a `PostgresClient` rather than a `SqlClient` has **chosen** engine-specific behavior, and the type says so at every use site. Extending that surface is ordinary work, and its tests belong in the backend module.
 
@@ -218,6 +218,25 @@ The last row is the one that is not about spelling, and it is the widest: the en
 
 Hence the rule that a text-protocol value is **parsed and re-rendered** rather than handed back. It looks redundant and is not: parsing is what makes the answer independent of how the connection happens to be configured. When you meet a new setting of this kind, the options are to pin it at connect or to normalize what it produced, and doing neither is the bug.
 
+### The prepared-statement cache is a claim about the server, and it needs maintaining
+
+A cache hit skips Parse/Describe and binds the handle directly, which asserts that the server still holds it. Nothing about holding the entry makes that true, and when it stops being true the entry survives the failure, so the SQL fails for the life of the connection rather than once. Worse, the failure does not land on whoever caused it: `reset` takes a lease of its own, so the scrubbed session goes back to the pool and the next borrower pays.
+
+Two mechanisms, and they cover different causes.
+
+- **Drop the cache exactly where the scrub releases the statements**, which is narrower than it sounds and is the part that is easy to get wrong. `DISCARD ALL` includes `DEALLOCATE ALL` and `COM_RESET_CONNECTION` releases prepared statements, so after either one the server holds none of them. But a scrub that FAILED released nothing: `DiscardAll` runs `PreventInTransactionBlock` first, so a `DISCARD ALL` inside a block is refused before it touches a statement. Dropping there strands every statement the server still holds, because their names go with the cache, and the next call registers a second set beside them. So drop once the scrub has RETURNED, not on both edges. On MySQL the drop has to sit between `COM_RESET_CONNECTION` and the `SET` pin that follows it, because only the first of those releases anything and the pin can fail on its own. Drop by replacing the whole cache, never entry by entry: the eviction hook queues a close per entry, and the statements are already gone.
+
+  The edge this leaves uncovered is an interrupt or an expired read bound between the scrub executing and its reply being read: the cache then outlives the statements. That is what the re-prepare below repairs on PostgreSQL, and what the reclaim's destroy covers on MySQL. A driver without a re-prepare would have to close that edge some other way.
+- **Re-prepare once when the server complains**, for the causes the driver never sees, an external pooler's reset query or DDL invalidating a plan. PostgreSQL-only: on the MySQL lineage the scrub is the whole cause, so once the cache is dropped where the scrub releases the statements, the only one left is an external pooler. The decision is about cause, not testability; a stub connection fed an `ERR 1243` packet would reach the code either way.
+
+Three constraints bind any retry of this kind:
+
+1. **Match the RAISE SITE, not the SQLSTATE.** A retry is safe only because the condition is raised before the portal exists, which is a property of the C routine that raised it. PostgreSQL's `42804` shares a plausible-looking shape and is raised during re-analysis, which runs for statements SPI created too, so it can fire after rows have already gone to the client.
+2. **Gate on the server's own transaction status**, read off the `ReadyForQuery` status byte. PostgreSQL aborts the whole block on a statement error, so a retry inside a failed block answers `25P02` and the caller reads that in place of what happened. The adapter's `transactionOpen` flag is NOT that gate: a caller who opened the block with `executeRaw("BEGIN")` never touched the adapter's transaction methods.
+3. **Re-binding must be idempotent**, which holds because every bound parameter re-encodes from the value it holds. It is a stated requirement on `SqlCodec.Writer`, since a user-supplied encoder over a mutable value could break it and the failure is invisible: the bytes are wrong only on the attempt nobody sees.
+
+Where recovery would change what the caller observes, report instead. The PostgreSQL pipeline is the case: its batch goes out as one write and the server skips only to the failed slot's own `Sync`, so the later slots have already run by the time the client learns slot i was stale. It drops the entry and surfaces the error, so the next call heals.
+
 ## What the driver cannot fix: the caller's own DDL
 
 Some behavior is decided by how a column was declared, and kyo-sql generates no DDL. Those are real divergences that no driver change reaches, and the honest handling is to say so rather than let the conformance suite imply they are solved.
@@ -236,6 +255,22 @@ One more is not DDL-decided but belongs with them, because it is equally unreach
 Measured, and the obvious guess about its blast radius is wrong. Rows with a present ordering key agree exactly, because the aggregates ignore absent values and so cannot see where the absent rows sit. What differs is the absent row's OWN window value: where it sorts last its frame holds every earlier row, and where it sorts first its frame holds only itself. A placement the caller named EXPLICITLY is refused rather than dropped, because silently ignoring an instruction is worse than not rendering; the unnamed default is the carve-out, gated in the battery on `windowRangeOffsetHonoursAbsentPlacement`.
 
 So when a behavior turns out to be schema-decided: pin it in the descriptor so the battery is honest, and document it for callers. Do not describe it as fixed, and do not let a conformance leaf passing on a pinned fixture stand in for a guarantee the driver does not make.
+
+## What a schema is, per engine
+
+A statement can qualify a table with a schema, and every engine renders that the same way: the two names quoted separately with a period between them, through `kyo.db.Idiom.qualifiedTable`. The default hook is correct everywhere, so no dialect overrides it. What the engines disagree about is what the qualifier NAMES, and the disagreement decides where a second schema comes from:
+
+| lineage | backends | a schema is | reaching a second one |
+|---|---|---|---|
+| PostgreSQL | `kyo-sql-postgres` | a schema inside the database | `CREATE SCHEMA`; every session sees it |
+| MySQL | `kyo-sql-mysql`, `kyo-sql-dolt` | a database on the server | `CREATE DATABASE`; every session sees it |
+| SQLite | `kyo-sql-sqlite`, `kyo-sql-doltlite` | `main`, `temp`, or an attached database | `ATTACH`, which is **per connection** |
+
+The last row is the one that shapes code. A server holds its schemas in the database, so one statement provisions them for a whole pool. The SQLite lineage attaches per connection, so a statement run through the pool configures the one connection that served it and leaves the rest answering "no such table" for a name that just worked. That is why attachment is a connect-time extension (`SqliteAttach`) rather than something a caller runs, and why `SqlTestBackend.secondSchema` answers `Absent` on that lineage: the conformance leaves that need two schemas cannot provision them there through a statement.
+
+The two Dolt backends sit in different rows. `DoltDialect extends MysqlDialect` and `DoltLiteDialect extends SqliteDialect`: they share the `Dolt` version-control API and nothing about schemas, so a claim that holds for one of them says nothing about the other.
+
+**A schema belongs in the statement, not in the session.** `SET search_path` and `USE` are per connection, so under a pool they reach one session and leave the others resolving elsewhere; because the same table name usually exists in both schemas, the result is wrong rows rather than an error. A rendered qualifier cannot fail that way. The session-level settings that remain (`PostgresConfig.searchPath`) exist for the text the renderer never sees, `sql"..."`, `executeRaw` and migrations, and they are part of the pool's identity: `SqlConnectionPool.Endpoint` keys on the config's extensions so two search paths never share connections.
 
 ## Testing
 

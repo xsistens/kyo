@@ -164,8 +164,8 @@ import scala.quoted.*
             $focus.getter.asInstanceOf[A => Maybe[Any]](root) match
                 case Maybe.Present(currentParent) =>
                     ${
-                        val typedParent   = '{ currentParent.asInstanceOf[Nominal] }
-                        val typedNewValue = '{ newValue }
+                        val typedParent      = '{ currentParent.asInstanceOf[Nominal] }
+                        val typedNewValue    = '{ newValue }
                         val args: List[Term] = caseFields.map: field =>
                             if field.name == fieldName then
                                 typedNewValue.asTerm
@@ -173,7 +173,7 @@ import scala.quoted.*
                                 Select.unique(typedParent.asTerm, field.name)
 
                         val companion = Ref(sym.companionModule)
-                        val typeArgs = nominalType match
+                        val typeArgs  = nominalType match
                             case AppliedType(_, targs) => targs
                             case _                     => List.empty
                         val constructorCall = Select.overloaded(companion, "apply", typeArgs, args)
@@ -212,8 +212,8 @@ import scala.quoted.*
             $focus.getter.asInstanceOf[A => Maybe[Any]](root) match
                 case Maybe.Present(currentParent) =>
                     ${
-                        val typedParent   = '{ currentParent.asInstanceOf[Nominal] }
-                        val typedNewValue = '{ newValue }
+                        val typedParent      = '{ currentParent.asInstanceOf[Nominal] }
+                        val typedNewValue    = '{ newValue }
                         val args: List[Term] = caseFields.map: field =>
                             if field.name == originalName then
                                 typedNewValue.asTerm
@@ -221,7 +221,7 @@ import scala.quoted.*
                                 Select.unique(typedParent.asTerm, field.name)
 
                         val companion = Ref(sym.companionModule)
-                        val typeArgs = nominalType match
+                        val typeArgs  = nominalType match
                             case AppliedType(_, targs) => targs
                             case _                     => List.empty
                         val constructorCall = Select.overloaded(companion, "apply", typeArgs, args)
@@ -358,7 +358,7 @@ import scala.quoted.*
       */
     private def captureAnnotations(using Quotes)(sym: quotes.reflect.Symbol): Expr[Chunk[Any]] =
         import quotes.reflect.*
-        val policy = summonAnnotationPolicy
+        val policy                = summonAnnotationPolicy
         val kept: List[Expr[Any]] = sym.annotations.flatMap { term =>
             val fqn      = term.tpe.typeSymbol.fullName
             val isMarker = term.tpe <:< TypeRepr.of[kyo.schema.SchemaAnnotation]
@@ -393,7 +393,7 @@ import scala.quoted.*
         val accessorAnnots             = caseField.annotations
         val ctorTypeSyms               = ctorAnnots.map(_.tpe.typeSymbol)
         val mergedAnnots               = ctorAnnots ++ accessorAnnots.filterNot(a => ctorTypeSyms.contains(a.tpe.typeSymbol))
-        val kept: List[Expr[Any]] = mergedAnnots.flatMap { term =>
+        val kept: List[Expr[Any]]      = mergedAnnots.flatMap { term =>
             val fqn      = term.tpe.typeSymbol.fullName
             val isMarker = term.tpe <:< TypeRepr.of[kyo.schema.SchemaAnnotation]
             if isMarker || policyAdmits(policy, fqn) then reifyAnnotation(term)
@@ -417,7 +417,7 @@ import scala.quoted.*
             case Inlined(_, _, inner)                                  => extractStrings(inner)
             case Select(_, "empty") | TypeApply(Select(_, "empty"), _) => Some(Nil)
             case Typed(inner, _)                                       => extractStrings(inner)
-            case Repeated(elems, _) =>
+            case Repeated(elems, _)                                    =>
                 val ss = elems.flatMap { case Literal(StringConstant(s)) => Some(s); case _ => None }
                 if ss.length == elems.length then Some(ss) else None
             case Apply(_, List(Typed(Repeated(elems, _), _))) =>
@@ -452,11 +452,11 @@ import scala.quoted.*
         end followRhs
 
         def decodePolicy(term: Term): Option[kyo.schema.AnnotationPolicy] = term match
-            case Inlined(_, _, inner) => decodePolicy(inner)
-            case Typed(inner, _)      => decodePolicy(inner)
+            case Inlined(_, _, inner)                                                    => decodePolicy(inner)
+            case Typed(inner, _)                                                         => decodePolicy(inner)
             case Apply(_, args) if term.tpe <:< TypeRepr.of[kyo.schema.AnnotationPolicy] =>
                 val named = args.collect { case NamedArg(n, t) => n -> t }.toMap
-                val inc = named.get("include").flatMap(extractStrings)
+                val inc   = named.get("include").flatMap(extractStrings)
                     .map(kyo.Chunk.from[String])
                     .getOrElse(kyo.schema.AnnotationPolicy.default.include)
                 val exc = named.get("exclude").flatMap(extractStrings)
@@ -464,7 +464,7 @@ import scala.quoted.*
                     .getOrElse(kyo.schema.AnnotationPolicy.default.exclude)
                 Some(kyo.schema.AnnotationPolicy(inc, exc))
             case Block(_, last) => decodePolicy(last)
-            case _ =>
+            case _              =>
                 val sym      = term.symbol
                 val ownerFqn = sym.owner.fullName
                 if ownerFqn == "kyo.schema.AnnotationPolicy" || ownerFqn == "kyo.schema.AnnotationPolicy$" then
@@ -476,14 +476,14 @@ import scala.quoted.*
                 end if
 
         Expr.summon[kyo.schema.AnnotationPolicy] match
-            case None => kyo.schema.AnnotationPolicy.default
+            case None             => kyo.schema.AnnotationPolicy.default
             case Some(policyExpr) =>
                 val term     = policyExpr.asTerm
                 val givenSym = term.symbol
                 val body     = followRhs(givenSym).getOrElse(term)
                 decodePolicy(body) match
                     case Some(policy) => policy
-                    case None =>
+                    case None         =>
                         report.errorAndAbort(
                             "A custom AnnotationPolicy must be provided as an `inline given` so its value is " +
                                 "readable at derivation time, e.g. `inline given AnnotationPolicy = AnnotationPolicy.markersOnly`. " +
@@ -762,7 +762,7 @@ import scala.quoted.*
 
         sym.annotations.foreach { term =>
             if term.tpe <:< TypeRepr.of[kyo.schema.doc] then
-                firstStringArg(term).foreach(txt => typeDocOpt = Some(Expr(txt)))
+                typeDocOpt = Some(Expr(docText(term)))
         }
 
         fields.zipWithIndex.foreach { (f, idx) =>
@@ -778,9 +778,8 @@ import scala.quoted.*
                 else if term.tpe <:< TypeRepr.of[kyo.schema.transient] then
                     droppedExprs = Expr(f.name) :: droppedExprs
                 else if term.tpe <:< TypeRepr.of[kyo.schema.doc] then
-                    firstStringArg(term).foreach { txt =>
-                        fieldDocPairs = '{ (Seq($wireExpr), ${ Expr(txt) }) } :: fieldDocPairs
-                    }
+                    val txt = Expr(docText(term))
+                    fieldDocPairs = '{ (Seq($wireExpr), $txt) } :: fieldDocPairs
                 else if term.tpe <:< TypeRepr.of[kyo.schema.alias] then
                     varargStrings(term).foreach { a =>
                         aliasPairs = '{ (${ Expr(a) }, $wireExpr) } :: aliasPairs
@@ -797,7 +796,7 @@ import scala.quoted.*
                         case scala.None =>
                             val mode      = omitModeName(term)
                             val fieldType = tpe.memberType(f).dealias
-                            val isOpt = fieldType match
+                            val isOpt     = fieldType match
                                 case AppliedType(tycon, _) =>
                                     tycon.typeSymbol == maybeSym || tycon.typeSymbol == optionSym
                                 case _ => false
@@ -1004,7 +1003,7 @@ import scala.quoted.*
                             // wire-functional for the Protobuf codec and surfaced by fieldNumberAudit.
                             fieldIdPairs = '{ (Seq(${ Expr(f.name) }), ${ Expr(n) }) } :: fieldIdPairs
                         case scala.None =>
-                            // A non-constant pin hard-fails rather than silently skipping like @rename and @doc do:
+                            // A non-constant pin hard-fails rather than silently skipping like @rename does:
                             // with no compile-time number, encode would fall back to the hash-derived field number
                             // and silently break the Protobuf wire interop the pin exists to guarantee.
                             report.errorAndAbort(
@@ -1154,12 +1153,12 @@ import scala.quoted.*
             else if term.tpe <:< TypeRepr.of[kyo.schema.untagged] then
                 representationOpt = Some('{ kyo.Schema.UnionRepresentation.Untagged })
             else if term.tpe <:< TypeRepr.of[kyo.schema.doc] then
-                firstStringArg(term).foreach(txt => docOpt = Some(Expr(txt)))
+                docOpt = Some(Expr(docText(term)))
         }
 
         // Variant-level: @rename and @alias on each child symbol.
         children.foreach { child =>
-            val childName = child.name.stripSuffix("$")
+            val childName      = child.name.stripSuffix("$")
             val childRenameOpt = child.annotations.collectFirst {
                 case term if term.tpe <:< TypeRepr.of[kyo.schema.rename] =>
                     firstStringArg(term)
@@ -1260,6 +1259,33 @@ import scala.quoted.*
       * T` before the macro sees it, `asExprOf[T]` is safe and produces an `Expr[T]` whose runtime
       * value is the singleton object the user named in the annotation.
       */
+    /** The text of a `@doc` annotation, its argument folded to a constant: a string literal, a concatenation of constants (the shape of
+      * a description split across lines), or a constant `final val`. Anything else is a compile error: a doc the macro cannot read would
+      * otherwise be dropped from the schema without a word.
+      */
+    private def docText(using Quotes)(annotation: quotes.reflect.Term): String =
+        import quotes.reflect.*
+        def fold(term: Term): Option[String] =
+            term match
+                case Literal(StringConstant(s))            => Some(s)
+                case NamedArg(_, arg)                      => fold(arg)
+                case Typed(arg, _)                         => fold(arg)
+                case Inlined(_, Nil, arg)                  => fold(arg)
+                case Apply(Select(left, "+"), List(right)) => fold(left).flatMap(l => fold(right).map(l + _))
+                case _                                     =>
+                    term.tpe.widenTermRefByName match
+                        case ConstantType(StringConstant(s)) => Some(s)
+                        case _                               => None
+        annotation match
+            case Apply(_, List(arg)) =>
+                fold(arg).getOrElse(report.errorAndAbort(
+                    "@doc expects a constant string: a literal, a concatenation of literals, or a constant final val",
+                    arg.pos
+                ))
+            case other => report.errorAndAbort("@doc expects a constant string argument", other.pos)
+        end match
+    end docText
+
     private def liftObjectArg[T: Type](using Quotes)(argTerm: quotes.reflect.Term): Expr[T] =
         import quotes.reflect.*
         argTerm.asExprOf[T]
@@ -1351,7 +1377,7 @@ import scala.quoted.*
         val fnTerm     = construct.asTerm
         val paramTypes = fnTerm.tpe.widen.dealias match
             case AppliedType(tycon, args) if tycon.typeSymbol.fullName.startsWith("scala.Function") => args.init
-            case other =>
+            case other                                                                              =>
                 report.errorAndAbort(
                     s"Schema.derivedVia expects a function over ${tpe.show}'s case fields; got ${other.show}."
                 )
@@ -1375,7 +1401,7 @@ import scala.quoted.*
                 )
         }
 
-        val typeNameExpr = Expr(sym.name)
+        val typeNameExpr                                 = Expr(sym.name)
         val sourceFieldsExpr: Expr[Seq[kyo.Field[?, ?]]] = Expr.summon[kyo.Fields[A]] match
             case Some(fieldsExpr) => '{ $fieldsExpr.fields }
             case None             => '{ Seq.empty[kyo.Field[?, ?]] }
@@ -1408,11 +1434,11 @@ import scala.quoted.*
       */
     private def flattenUnion(using Quotes)(tpe: quotes.reflect.TypeRepr): List[quotes.reflect.TypeRepr] =
         import quotes.reflect.*
-        val acc  = scala.collection.mutable.ListBuffer.empty[TypeRepr]
-        val seen = scala.collection.mutable.ListBuffer.empty[String]
+        val acc                   = scala.collection.mutable.ListBuffer.empty[TypeRepr]
+        val seen                  = scala.collection.mutable.ListBuffer.empty[String]
         def go(t: TypeRepr): Unit = t.dealias match
             case OrType(l, r) => go(l); go(r)
-            case other =>
+            case other        =>
                 val key = other.show
                 if !seen.contains(key) then
                     seen += key
@@ -1444,7 +1470,7 @@ import scala.quoted.*
         val labelCounts = memberNames.groupBy(identity).filter(_._2.size > 1)
         if labelCounts.nonEmpty then
             val collisions = labelCounts.keys.toList.sorted.mkString(", ")
-            val involved = memberNames.zip(members).collect {
+            val involved   = memberNames.zip(members).collect {
                 case (label, member) if labelCounts.contains(label) =>
                     s"${member.show} (label \"$label\")"
             }.mkString(", ")
@@ -1460,11 +1486,13 @@ import scala.quoted.*
 
         // _uself: Schema[A] (lazy), one _u$idx: Schema[Any] (lazy) per member,
         // one _unb$idx: Array[Byte] per member for the fieldBytes write envelope.
-        val selfSym = Symbol.newVal(owner, "_uself", TypeRepr.of[Schema[A]], Flags.Lazy, Symbol.noSymbol)
-        val variantSyms: List[Symbol] =
-            (0 until n).toList.map(idx => Symbol.newVal(owner, s"_u$idx", TypeRepr.of[Schema[Any]], Flags.Lazy, Symbol.noSymbol))
-        val nameByteSyms: List[Symbol] =
-            (0 until n).toList.map(idx => Symbol.newVal(owner, s"_unb$idx", TypeRepr.of[Array[Byte]], Flags.EmptyFlags, Symbol.noSymbol))
+        val selfSym                   = Symbol.newVal(owner, "_uself", TypeRepr.of[Schema[A]], Flags.Lazy, Symbol.noSymbol)
+        val variantSyms: List[Symbol] = (0 until n).toList.map(idx =>
+            Symbol.newVal(owner, s"_u$idx", TypeRepr.of[Schema[Any]], Flags.Lazy, Symbol.noSymbol)
+        )
+        val nameByteSyms: List[Symbol] = (0 until n).toList.map(idx =>
+            Symbol.newVal(owner, s"_unb$idx", TypeRepr.of[Array[Byte]], Flags.EmptyFlags, Symbol.noSymbol)
+        )
 
         val selfRef: Term = Ref(selfSym)
 
@@ -1481,7 +1509,7 @@ import scala.quoted.*
                     case '[t] => '{ $v.asInstanceOf[Any].isInstanceOf[t] }.asTerm
                 val mName    = Expr(memberNames(idx))
                 val mFieldId = Expr(kyo.internal.CodecMacro.fieldId(memberNames(idx)))
-                val arm = '{
+                val arm      = '{
                     $w.variantStart($mName, $mName, ${ Ref(nameByteSyms(idx)).asExprOf[Array[Byte]] }, $mFieldId)
                     ${ Ref(variantSyms(idx)).asExprOf[Schema[Any]] }.serializeWrite($v, $w)
                     $w.variantEnd()
@@ -1551,7 +1579,7 @@ import scala.quoted.*
         val selfRefExpr: Expr[Schema[A]] = selfRef.asExprOf[Schema[A]]
         val writeFn                      = writeFnExpr[A](writeBody)
         val readFn                       = readFnExpr[A](readBody)
-        val selfRhs: Expr[Schema[A]] = '{
+        val selfRhs: Expr[Schema[A]]     = '{
             Schema.init[A](
                 writeFn = $writeFn,
                 readFn = $readFn,
@@ -1708,8 +1736,8 @@ import scala.quoted.*
         // structure. summonInline inline-expands a no-derives nested codec (and at runtime
         // re-constructs it); hoisting fires it once per distinct field type and memoizes it per
         // instance, instead of 3x per field plus a per-call reconstruction at every field site.
-        val hoistOwner     = Symbol.spliceOwner
-        val hoistedSchemas = scala.collection.mutable.ListBuffer.empty[(TypeRepr, Symbol)]
+        val hoistOwner                            = Symbol.spliceOwner
+        val hoistedSchemas                        = scala.collection.mutable.ListBuffer.empty[(TypeRepr, Symbol)]
         def hoistedSchemaSym(t: TypeRepr): Symbol =
             hoistedSchemas.find((tt, _) => tt =:= t).map(_._2).getOrElse {
                 val schemaTpe = t.asType match
@@ -1785,7 +1813,7 @@ import scala.quoted.*
             // key method: the JSON writer's ASCII fast path, the Protobuf field tag, and the MsgPack
             // key-encoding switch). Dynamic `Map` keys and the hand-written sum discriminator keys stay
             // on `field`, which carries the raw String for escaping.
-            val header: Term = '{ $w.objectStart(${ Expr(typeName) }, ${ Expr(n) }) }.asTerm
+            val header: Term         = '{ $w.objectStart(${ Expr(typeName) }, ${ Expr(n) }) }.asTerm
             val perField: List[Term] = fields.zipWithIndex.map { (f, idx) =>
                 // Field header tag MUST be the hash-based field ID (CodecMacro.fieldId), NOT the
                 // positional index. Computed at macro time as a literal; identical to the runtime's
@@ -1961,8 +1989,8 @@ import scala.quoted.*
                     // (field decoding, defaults, the required-field bitmap) is shared verbatim.
                     val construct: Term = constructVia match
                         case Some(build) => build(ctorArgs, r)
-                        case None =>
-                            val ctor: Term = Select(New(TypeTree.of[a]), sym.primaryConstructor)
+                        case None        =>
+                            val ctor: Term   = Select(New(TypeTree.of[a]), sym.primaryConstructor)
                             val typeArgsList = tpe match
                                 case AppliedType(_, targs) => targs
                                 case _                     => List.empty
@@ -1972,7 +2000,7 @@ import scala.quoted.*
                     val resultSym = Symbol.newVal(owner, "_result", tpe, Flags.EmptyFlags, Symbol.noSymbol)
                     val resultDef = ValDef(resultSym, Some(construct))
 
-                    val nExpr = Expr(n)
+                    val nExpr                     = Expr(n)
                     val allStmts: List[Statement] =
                         List(
                             '{ kyo.discard($r.objectStart()) }.asTerm,
@@ -1995,13 +2023,9 @@ import scala.quoted.*
             // Read each field's @doc off the PRIMARY-CONSTRUCTOR PARAMETER symbol (the case-field getter
             // carries no annotation). Built once before the fields loop so the per-field emission stays
             // branch-free: one buildProductSchema per derivation, no per-field annotation read.
-            val docSym = TypeRepr.of[kyo.schema.doc].typeSymbol
+            val docSym                        = TypeRepr.of[kyo.schema.doc].typeSymbol
             val ctorDocs: Map[String, String] =
-                sym.primaryConstructor.paramSymss.flatten.flatMap { p =>
-                    p.getAnnotation(docSym).collect {
-                        case Apply(_, List(Literal(StringConstant(s)))) => p.name -> s
-                    }
-                }.toMap
+                sym.primaryConstructor.paramSymss.flatten.flatMap(p => p.getAnnotation(docSym).map(a => p.name -> docText(a))).toMap
             val fieldStructures: List[Expr[Structure.Field]] = fields.zipWithIndex.map { (f, idx) =>
                 val rawType  = tpe.memberType(f)
                 val isOpt    = isMaybeFlags(idx) || isOptionFlags(idx)
@@ -2009,7 +2033,7 @@ import scala.quoted.*
                 val optExpr  = Expr(isOpt)
                 val defVal   = defaultStructureValuesExpr
                 val idxExpr  = Expr(idx)
-                val docExpr = ctorDocs.get(f.name) match
+                val docExpr  = ctorDocs.get(f.name) match
                     case Some(s) => '{ kyo.Maybe(${ Expr(s) }) }
                     case None    => '{ kyo.Maybe.empty[String] }
                 rawType.asType match
@@ -2052,9 +2076,9 @@ import scala.quoted.*
 
         // Build the Schema.init term first so every fieldSchemaExprTyped / structure call has
         // populated `hoistedSchemas`, then prepend the hoisted lazy vals as a wrapping block.
-        val cfg     = desugarProductConfig[A](sym, tpe)
-        val writeFn = writeFnExpr[A](writeBody)
-        val readFn  = readFnExpr[A](readBody)
+        val cfg                  = desugarProductConfig[A](sym, tpe)
+        val writeFn              = writeFnExpr[A](writeBody)
+        val readFn               = readFnExpr[A](readBody)
         val schemaInitTerm: Term =
             '{
                 Schema.init[A](
@@ -2096,72 +2120,65 @@ import scala.quoted.*
 
     /** Emits a `Schema[T]` for a sealed-trait variant child: a case-class variant delegates to the fully-static
       * [[emitProductSchemaStatic]] (per-field direct dispatch, no runtime walk); a case-object /
-      * no-arg variant emits the same trivial empty-object Schema.
+      * enum-value variant emits the trivial empty-object Schema. `childRef` is the case's reference from
+      * [[MacroUtils.sumCaseReference]].
       */
     private def emitVariantSchemaStatic[T: Type](using
         Quotes
     )(
-        childType: quotes.reflect.TypeRepr,
+        childRef: quotes.reflect.TypeRepr,
         child: quotes.reflect.Symbol,
         parentSelf: Option[(quotes.reflect.TypeRepr, quotes.reflect.Term)] = None
     ): Expr[Schema[T]] =
         import quotes.reflect.*
-        given CanEqual[Symbol, Symbol] = CanEqual.derived
 
-        val childSym        = childType.typeSymbol
-        val childName       = child.name.stripSuffix("$")
-        val isSingletonCase = !child.isType || child.flags.is(Flags.Module)
+        val childName = child.name.stripSuffix("$")
 
-        // Sealed intermediate child in a multi-level hierarchy: derive its own Schema[T], which routes
-        // back through the static sealed emitter, so the parent sum delegates to it instead of
-        // mis-treating it as a zero-field product. The child qualifies when it is itself a sealed
-        // parent, whether written as a trait or as an abstract class; a `sealed case class` child is
-        // constructible and takes the product path below.
-        if childSym.flags.is(Flags.Sealed) && !child.flags.is(Flags.Module) && !isConstructibleCaseClass(childSym) &&
-            (childSym.flags.is(Flags.Trait) || childSym.flags.is(Flags.Abstract))
-        then
-            '{ kyo.Schema.derived[T] }
-        else if isSingletonCase && childSym.caseFields.isEmpty then
-            // Case object variant: serialize as empty object
-            val singletonRef: Expr[T] =
-                if child.flags.is(Flags.Module) && child.companionModule != Symbol.noSymbol then
-                    Ref(child.companionModule).asExprOf[T]
-                else
-                    val parentSym = child.owner
-                    if parentSym.companionModule != Symbol.noSymbol then
-                        Select.unique(Ref(parentSym.companionModule), child.name).asExprOf[T]
-                    else
-                        Ref(child).asExprOf[T]
-                    end if
-            '{
-                kyo.Schema.init[T](
-                    writeFn = (_, w) =>
-                        w.objectStart(${ Expr(childName) }, 0)
-                        w.objectEnd()
-                    ,
-                    readFn = r =>
-                        kyo.discard(r.objectStart())
-                        r.objectEnd()
-                        $singletonRef
-                    ,
-                    structure = kyo.Structure.Type.Product(
-                        ${ Expr(childName) },
-                        kyo.Tag[Any],
-                        kyo.Chunk.empty,
-                        kyo.Chunk.empty,
-                        kyo.Chunk.empty
+        childRef match
+            case singleton: TermRef =>
+                // Case object or enum value variant: serialize as empty object
+                val singletonRef: Expr[T] = Ref.term(singleton).asExprOf[T]
+                '{
+                    kyo.Schema.init[T](
+                        writeFn = (_, w) =>
+                            w.objectStart(${ Expr(childName) }, 0)
+                            w.objectEnd()
+                        ,
+                        readFn = r =>
+                            kyo.discard(r.objectStart())
+                            r.objectEnd()
+                            $singletonRef
+                        ,
+                        structure = kyo.Structure.Type.Product(
+                            ${ Expr(childName) },
+                            kyo.Tag[Any],
+                            kyo.Chunk.empty,
+                            kyo.Chunk.empty,
+                            kyo.Chunk.empty
+                        )
                     )
-                )
-            }
-        else
-            emitProductSchemaStatic[T](
-                childType,
-                childSym,
-                sourceFields = '{ Seq.empty[kyo.Field[?, ?]] },
-                focusedType = childType,
-                parentSelf = parentSelf
-            )
-        end if
+                }
+            case childType =>
+                val childSym = childType.typeSymbol
+                // Sealed intermediate child in a multi-level hierarchy: derive its own Schema[T], which routes
+                // back through the static sealed emitter, so the parent sum delegates to it instead of
+                // mis-treating it as a zero-field product. The child qualifies when it is itself a sealed
+                // parent, whether written as a trait or as an abstract class; a `sealed case class` child is
+                // constructible and takes the product path below.
+                if childSym.flags.is(Flags.Sealed) && !isConstructibleCaseClass(childSym) &&
+                    (childSym.flags.is(Flags.Trait) || childSym.flags.is(Flags.Abstract))
+                then
+                    '{ kyo.Schema.derived[T] }
+                else
+                    emitProductSchemaStatic[T](
+                        childType,
+                        childSym,
+                        sourceFields = '{ Seq.empty[kyo.Field[?, ?]] },
+                        focusedType = childType,
+                        parentSelf = parentSelf
+                    )
+                end if
+        end match
     end emitVariantSchemaStatic
 
     /** Emits a fully-static `Schema[A]` for a sealed trait or enum: no runtime walk,
@@ -2195,14 +2212,11 @@ import scala.quoted.*
             report.errorAndAbort(s"Cannot derive Schema for sealed trait ${sym.name}: no case class or object variants found.")
         val n = children.length
 
-        val childNames: List[String] = children.map(_.name.stripSuffix("$"))
-        val childTypes: List[TypeRepr] = children.map { child =>
-            if child.isType then child.typeRef
-            else if child.flags.is(Flags.Module) then child.termRef.widen
-            else child.typeRef
-        }
+        val childNames: List[String]   = children.map(_.name.stripSuffix("$"))
+        val childRefs: List[TypeRepr]  = children.map(MacroUtils.sumCaseReference(tpe, sym, _))
+        val childTypes: List[TypeRepr] = childRefs.map(MacroUtils.sumCaseType)
 
-        val tagExpr = summonSchemaTag(tpe)
+        val tagExpr                  = summonSchemaTag(tpe)
         val enumValues: List[String] = children.zip(childNames).collect {
             case (child, nm) if child.flags.is(Flags.Module) || !child.isClassDef => nm
         }
@@ -2210,33 +2224,24 @@ import scala.quoted.*
         val owner = Symbol.spliceOwner
 
         // _self: Schema[A] plus one _v_i: Schema[Any] per variant; mutually referenced lazy vals.
-        val selfSym = Symbol.newVal(owner, "_self", TypeRepr.of[Schema[A]], Flags.Lazy, Symbol.noSymbol)
-        val variantSyms: List[Symbol] =
-            (0 until n).toList.map(idx => Symbol.newVal(owner, s"_v$idx", TypeRepr.of[Schema[Any]], Flags.Lazy, Symbol.noSymbol))
-        val nameByteSyms: List[Symbol] =
-            (0 until n).toList.map(idx => Symbol.newVal(owner, s"_nb$idx", TypeRepr.of[Array[Byte]], Flags.EmptyFlags, Symbol.noSymbol))
+        val selfSym                   = Symbol.newVal(owner, "_self", TypeRepr.of[Schema[A]], Flags.Lazy, Symbol.noSymbol)
+        val variantSyms: List[Symbol] = (0 until n).toList.map(idx =>
+            Symbol.newVal(owner, s"_v$idx", TypeRepr.of[Schema[Any]], Flags.Lazy, Symbol.noSymbol)
+        )
+        val nameByteSyms: List[Symbol] = (0 until n).toList.map(idx =>
+            Symbol.newVal(owner, s"_nb$idx", TypeRepr.of[Array[Byte]], Flags.EmptyFlags, Symbol.noSymbol)
+        )
 
         val selfRef: Term = Ref(selfSym)
 
-        // Variant instance check: `v eq Singleton` for objects, `v.isInstanceOf[Child]` for classes.
+        // Variant instance check: `v eq Singleton` for case objects and enum values, `v.isInstanceOf[Child]` for classes.
         def variantCheck(idx: Int, v: Expr[A]): Expr[Boolean] =
-            val child = children(idx)
-            if !child.isType then
-                val singletonRef: Expr[AnyRef] =
-                    if child.flags.is(Flags.Module) && child.companionModule != Symbol.noSymbol then
-                        Ref(child.companionModule).asExprOf[AnyRef]
-                    else
-                        val parentSym = child.owner
-                        if parentSym.companionModule != Symbol.noSymbol then
-                            Select.unique(Ref(parentSym.companionModule), child.name).asExprOf[AnyRef]
-                        else
-                            Ref(child).asExprOf[AnyRef]
-                        end if
-                '{ $v.asInstanceOf[AnyRef] eq $singletonRef }
-            else
-                childTypes(idx).asType match
-                    case '[t] => '{ $v.isInstanceOf[t] }
-            end if
+            childRefs(idx) match
+                case singleton: TermRef =>
+                    '{ $v.asInstanceOf[AnyRef] eq ${ Ref.term(singleton).asExprOf[AnyRef] } }
+                case childType =>
+                    childType.asType match
+                        case '[t] => '{ $v.isInstanceOf[t] }
         end variantCheck
 
         def writeBody(v: Expr[A], w: Expr[Writer]): Expr[Unit] =
@@ -2246,7 +2251,7 @@ import scala.quoted.*
                 }.asTerm
             ) { (idx, elseTerm) =>
                 val cond = variantCheck(idx, v).asTerm
-                val arm = '{
+                val arm  = '{
                     $w.variantStart(
                         ${ Expr(typeName) },
                         ${ Expr(childNames(idx)) },
@@ -2327,9 +2332,9 @@ import scala.quoted.*
             }
             '{ kyo.Chunk.from[kyo.Codec.Reader => Any](Array[kyo.Codec.Reader => Any](${ Varargs(perVariant) }*)) }
         end variantDecodersExpr
-        val cfg     = desugarSumConfig(sym, tpe, children)
-        val writeFn = writeFnExpr[A](writeBody)
-        val readFn  = readFnExpr[A](readBody)
+        val cfg                      = desugarSumConfig(sym, tpe, children)
+        val writeFn                  = writeFnExpr[A](writeBody)
+        val readFn                   = readFnExpr[A](readBody)
         val selfRhs: Expr[Schema[A]] = '{
             Schema.init[A](
                 writeFn = $writeFn,
@@ -2349,7 +2354,7 @@ import scala.quoted.*
         val variantDefs: List[ValDef] = children.zip(childTypes).zipWithIndex.map { case ((child, childType), idx) =>
             childType.asType match
                 case '[t] =>
-                    val vSchema = emitVariantSchemaStatic[t](childType, child, parentSelf = Some((tpe, selfRef)))
+                    val vSchema = emitVariantSchemaStatic[t](childRefs(idx), child, parentSelf = Some((tpe, selfRef)))
                     val rhs     = '{ $vSchema.asInstanceOf[Schema[Any]] }.asTerm
                     ValDef(variantSyms(idx), Some(rhs.changeOwner(variantSyms(idx))))
         }

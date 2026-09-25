@@ -337,7 +337,7 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
                 _ <- assertEventually(Sync.defer(diagnostics.installed), installBudget)
                 _ <- Sync.defer {
                     val button = dom.document.getElementById("active-handler")
-                    val event = scalajs.Dynamic.newInstance(dom.window.asInstanceOf[scalajs.Dynamic].MouseEvent)(
+                    val event  = scalajs.Dynamic.newInstance(dom.window.asInstanceOf[scalajs.Dynamic].MouseEvent)(
                         "click",
                         scalajs.Dynamic.literal(bubbles = true)
                     )
@@ -347,6 +347,10 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
                 _ <- fiber.interrupt
                 _ <- finalized.await
                 _ <- fiber.getResult
+                // The fiber's result settles once its abandonment has released what it held; the mount scope's own
+                // finalizers, the join among them, run detached from it, so the chronology is complete only once the
+                // join has been recorded.
+                _ <- assertEventually(Sync.defer(chronology.contains("drain-joined")))
             yield
                 val channelClose = chronology.indexOf("channel-close")
                 val interrupt    = chronology.indexOf("drain-interrupt")

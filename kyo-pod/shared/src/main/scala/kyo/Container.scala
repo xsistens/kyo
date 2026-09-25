@@ -95,7 +95,7 @@ final class Container private[kyo] (
         else
             pendingExit.get.map {
                 case Present(_) => ()
-                case Absent =>
+                case Absent     =>
                     Latch.init(1).map { latch =>
                         // autoRemove-tracking observer: the container may live for hours, so pass
                         // `Duration.Infinity`. If the caller wants an upper bound they cancel the
@@ -176,7 +176,7 @@ final class Container private[kyo] (
     def awaitHealthy(using Frame): Unit < (Async & Abort[ContainerException]) =
         healthState.get.map { state =>
             state.check match
-                case Absent => ()
+                case Absent      => ()
                 case Present(hc) =>
                     Retry[ContainerException](hc.schedule)(hc.check(this)).andThen {
                         healthState.set(ContainerHealthState(Present(hc))).unit
@@ -455,20 +455,23 @@ object Container:
     def init(config: Config)(using Frame): Container < (Async & Abort[ContainerException] & Scope) =
         init(config, Retry.defaultSchedule)
 
-    /** As `init(config)`, but retries the image-vanished race on the given schedule.
+    /** As `init(config)`, but retries the image-vanished race and registry outages on the given schedule.
       *
       * @param retrySchedule
-      *   covers the image-vanished race noted on `init`: a concurrent operation removing the image after
-      *   `imageEnsure` and before `create`, which the HTTP backend surfaces as a 404 /
-      *   `ContainerImageMissingException`. A permanently absent image fails fast (the up-front `imageEnsure`
-      *   is not retried), as do `create` conflicts and other errors.
+      *   covers two transient conditions. The image-vanished race noted on `init`: a concurrent operation
+      *   removing the image after `imageEnsure` and before `create`, which the HTTP backend surfaces as a
+      *   404 / `ContainerImageMissingException`. And a registry that could not answer, which arrives as
+      *   `ContainerRegistryUnavailableException` from either backend. A permanently absent image fails
+      *   fast, as do auth rejections, `create` conflicts, and other errors.
       */
     def init(config: Config, retrySchedule: Schedule)(using Frame): Container < (Async & Abort[ContainerException] & Scope) =
         currentBackend.map { b =>
-            // Ensure the image up front. A permanently absent image (or auth/registry error) fails here,
-            // fast: retrying a genuinely absent image never helps. Only the transient post-ensure race is
-            // retried below.
-            b.imageEnsure(config.image, Absent, Absent).andThen {
+            // Ensure the image up front so a permanently absent image (or an auth rejection) fails here, fast:
+            // retrying either never helps. A registry that could not answer asserts neither, and is the one
+            // up-front failure worth another attempt, so it alone is retried.
+            Retry[ContainerRegistryUnavailableException](retrySchedule) {
+                b.imageEnsure(config.image, Absent, Absent)
+            }.andThen {
                 // The image was present, but under concurrent suites another operation can remove it before
                 // `create` runs (the HTTP backend's create then returns 404 / ImageMissing, since unlike
                 // `docker run` it does not auto-pull). Retry re-ensures (re-pulling the vanished image) then
@@ -551,7 +554,7 @@ object Container:
         healthCheck: HealthCheck = HealthCheck.running
     )(using Frame): Container < (Async & Abort[ContainerException] & Scope) =
         val portBindings = Chunk.from(ports.map { case (container, host) => Config.PortBinding(container, host) })
-        val config = Config.default.copy(
+        val config       = Config.default.copy(
             image = image,
             command = command,
             name = name,
@@ -578,15 +581,18 @@ object Container:
     def initUnscoped(config: Config)(using Frame): Container < (Async & Abort[ContainerException]) =
         initUnscoped(config, Retry.defaultSchedule)
 
-    /** As `initUnscoped(config)`, but retries the image-vanished race on the given schedule (see `init`). */
+    /** As `initUnscoped(config)`, but retries the image-vanished race and registry outages on the given schedule (see `init`). */
     def initUnscoped(config: Config, retrySchedule: Schedule)(using Frame): Container < (Async & Abort[ContainerException]) =
         currentBackend.map { b =>
             AtomicRef.init(ContainerHealthState(Absent)).map { healthRef =>
                 AtomicRef.init(Absent: Maybe[Fiber[ExitCode, Abort[ContainerException]]]).map { pendingRef =>
-                    // Ensure the image up front so a permanently absent image fails fast (no retry). Then
-                    // retry the create-side image-vanished race (see `init`), re-pulling on each attempt;
-                    // scoped to ImageMissing so create conflicts and other errors propagate at once.
-                    b.imageEnsure(config.image, Absent, Absent).andThen {
+                    // Ensure the image up front so a permanently absent image fails fast, retrying only a
+                    // registry that could not answer (see `init`). Then retry the create-side image-vanished
+                    // race, re-pulling on each attempt; scoped to ImageMissing so create conflicts and other
+                    // errors propagate at once.
+                    Retry[ContainerRegistryUnavailableException](retrySchedule) {
+                        b.imageEnsure(config.image, Absent, Absent)
+                    }.andThen {
                         Retry[ContainerImageMissingException](retrySchedule) {
                             b.imageEnsure(config.image, Absent, Absent).andThen(b.create(config))
                         }
@@ -1168,7 +1174,7 @@ object Container:
                 def check(container: Container)(using Frame): Unit < (Async & Abort[ContainerException]) =
                     container.backend.state(container.id).map {
                         case State.Running => ()
-                        case other =>
+                        case other         =>
                             Abort.fail(ContainerHealthCheckException(
                                 container.id,
                                 s"container is in state $other, expected Running",
@@ -1199,8 +1205,8 @@ object Container:
                         // Compose the failure detail with whichever streams produced output, so the
                         // recent-errors buffer captures the actual failure reason (not just the exit code).
                         def detail(prefix: String): String =
-                            val out = result.stdout.trim
-                            val err = result.stderr.trim
+                            val out   = result.stdout.trim
+                            val err   = result.stderr.trim
                             val parts =
                                 Seq(prefix) ++
                                     (if out.nonEmpty then Seq(s"stdout: $out") else Seq.empty) ++
@@ -1397,6 +1403,11 @@ object Container:
 
     /** Bidirectional connection to a container's stdin/stdout/stderr. Obtained from [[Container.attach]] or [[Container.execInteractive]];
       * the underlying connection is registered with the enclosing [[Scope]] and closes on scope exit.
+      *
+      * The process output is one ordered sequence of byte chunks, each tagged with the stream it came from ([[output]]). Every view of it
+      * ([[stdout]], [[stderr]], [[read]]) consumes from that same sequence, so each chunk is delivered once, and consuming a view again
+      * continues where the previous consumption stopped. Bytes are exact: nothing is decoded or split unless the caller asks for the
+      * line-oriented [[read]]. With a TTY every byte is stdout.
       */
     // CanEqual not derived — contains function-like methods (write, read, resize)
     abstract class AttachSession:
@@ -1406,11 +1417,33 @@ object Container:
         /** Send raw bytes to the container's stdin. */
         def write(data: Chunk[Byte])(using Frame): Unit < (Async & Abort[ContainerException])
 
-        /** Stream container output as [[LogEntry]] values; each entry's `source` distinguishes stdout from stderr. */
-        def read(using Frame): Stream[LogEntry, Async & Abort[ContainerException]]
+        /** The process output as exact byte chunks in the order the runtime delivered them, each tagged with its stream. Ends when the process
+          * closes its output (or the session closes).
+          */
+        def output(using Frame): Stream[AttachSession.Output, Async & Abort[ContainerException]]
+
+        /** The stdout bytes of [[output]]; stderr chunks met along the way are discarded. */
+        def stdout(using Frame): Stream[Span[Byte], Async & Abort[ContainerException]] =
+            output.collectPure(chunk => if chunk.source == LogEntry.Source.Stdout then Present(chunk.bytes) else Absent)
+
+        /** The stderr bytes of [[output]]; stdout chunks met along the way are discarded. */
+        def stderr(using Frame): Stream[Span[Byte], Async & Abort[ContainerException]] =
+            output.collectPure(chunk => if chunk.source == LogEntry.Source.Stderr then Present(chunk.bytes) else Absent)
+
+        /** Stream container output as [[LogEntry]] values, one per non-empty line; each entry's `source` distinguishes stdout from stderr.
+          * Lines are joined across chunk boundaries per stream before they are decoded as UTF-8, and a last line without a trailing newline is
+          * emitted when the output ends.
+          */
+        def read(using Frame): Stream[LogEntry, Async & Abort[ContainerException]] =
+            internal.AttachOutput.lines(output)
 
         /** Resize the attached pseudo-terminal — only meaningful when the container was created with `allocateTty(true)`. */
         def resize(width: Int, height: Int)(using Frame): Unit < (Async & Abort[ContainerException])
+    end AttachSession
+
+    object AttachSession:
+        /** One chunk of process output: exact bytes and the stream they came from. */
+        final case class Output(source: LogEntry.Source, bytes: Span[Byte])
     end AttachSession
 
     // --- Info ---
@@ -2233,7 +2266,7 @@ object Container:
             case Result.Success(info) if info.pid > 0 =>
                 hostPidBelongsTo(id, info.pid).map {
                     case false => false
-                    case true =>
+                    case true  =>
                         Abort.run[CommandException](hostKillCommand(info.pid).redirectErrorStream(true).textWithExitCode).map {
                             case Result.Success((_, ExitCode.Success)) =>
                                 Log.warn(
@@ -2291,8 +2324,17 @@ object Container:
             case BackendConfig.AutoDetect(meter, apiVersion, streamBufferSize) =>
                 ContainerBackend.detect(meter, apiVersion, streamBufferSize)
             case BackendConfig.UnixSocket(path, meter, apiVersion) =>
+                // Explicit socket, same runtime question: ask the daemon rather than reading its family off the
+                // path, so the diagnostic and the libpod feature gating are right here too.
                 val backend = new HttpContainerBackend(path.toString, apiVersion, meter)
-                backend.detect().andThen(backend)
+                // Explicit socket, same runtime question: ask the daemon rather than reading its family off
+                // the path, so the diagnostic and the libpod feature gating are right here too. Recorded on
+                // this backend rather than returned in a new one, which leaks containers (see
+                // HttpContainerBackend.recordProbedRuntime).
+                backend.detect().andThen(HttpContainerBackend.probeRuntime(backend)).map { runtime =>
+                    backend.recordProbedRuntime(runtime)
+                    backend
+                }
             case BackendConfig.Shell(cmd, meter, streamBufferSize) =>
                 val backend = new ShellBackend(cmd, meter, streamBufferSize)
                 backend.detect().andThen(backend)
@@ -2371,7 +2413,7 @@ object Container:
                                                 case Present((delay, nextSchedule)) =>
                                                     Async.sleep(delay).andThen(loop(nextSchedule, nextAttempts, updatedErrors))
                                                 case Absent =>
-                                                    val elapsed = now.toJava.toEpochMilli - startTime.toJava.toEpochMilli
+                                                    val elapsed    = now.toJava.toEpochMilli - startTime.toJava.toEpochMilli
                                                     val elapsedStr =
                                                         if elapsed >= elapsedMillisFormatThreshold then s"${elapsed / 1000}s"
                                                         else s"${elapsed}ms"
@@ -2551,7 +2593,7 @@ object Container:
             Kyo.foreachDiscard(hostPorts) { hostPort =>
                 Loop(portMappingMinPoll.toMillis) { pollMs =>
                     probeHostPort(container.host, hostPort).map {
-                        case true => Loop.done(())
+                        case true  => Loop.done(())
                         case false =>
                             Clock.now.map { now =>
                                 if now.toJava.toEpochMilli >= deadlineMs then
@@ -2596,7 +2638,7 @@ object Container:
                     Clock.now.map { now =>
                         val nowMs = now.toJava.toEpochMilli
                         if nowMs >= deadlineMs then
-                            val elapsedMs = nowMs - startedAt.toJava.toEpochMilli
+                            val elapsedMs  = nowMs - startedAt.toJava.toEpochMilli
                             val configured =
                                 container.config.ports.map(p => s"${p.containerPort}/${p.protocol.cliName}").mkString(", ")
                             val observed =

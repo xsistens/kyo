@@ -1,4 +1,5 @@
 import kyo.*
+import kyo.kernel.Bracket
 import scala.collection.mutable.ArrayBuffer
 
 class BatchTest extends kyo.test.Test[Any]:
@@ -7,7 +8,7 @@ class BatchTest extends kyo.test.Test[Any]:
 
     class TestSource[A, B, S](f: Seq[A] => Seq[B] < S):
         private val callsBuffer = ArrayBuffer[Seq[A]]()
-        private val source = Batch.sourceSeq[A, B, S] { seq =>
+        private val source      = Batch.sourceSeq[A, B, S] { seq =>
             callsBuffer += seq
             f(seq)
         }
@@ -60,7 +61,7 @@ class BatchTest extends kyo.test.Test[Any]:
     "one eval, multiple sources" in {
         val source1 = TestSource[Int, String, Any](seq => seq.map(_.toString))
         val source2 = TestSource[Int, Int, Any](seq => seq.map(_ * 2))
-        val result =
+        val result  =
             for
                 a <- Batch.eval(Seq(1, 2, 3))
                 b <- source1(a)
@@ -81,7 +82,7 @@ class BatchTest extends kyo.test.Test[Any]:
     "multiple eval, multiple sources" in {
         val source1 = TestSource[Int, String, Any](seq => seq.map(_.toString))
         val source2 = TestSource[Int, Int, Any](seq => seq.map(_ * 2))
-        val result =
+        val result  =
             for
                 a <- Batch.eval(Seq(1, 2, 3))
                 b <- Batch.eval(Seq(4, 5, 6))
@@ -156,7 +157,7 @@ class BatchTest extends kyo.test.Test[Any]:
     "large batch" in {
         val largeSeq = (1 to n).toSeq
         val source   = TestSource[Int, Int, Any](seq => seq.map(_ * 2))
-        val result =
+        val result   =
             for
                 a <- Batch.eval(largeSeq)
                 b <- source(a)
@@ -328,7 +329,7 @@ class BatchTest extends kyo.test.Test[Any]:
         "simple effect with source" in {
             var counter = 0
             val source  = TestSource[Int, String, Any](seq => seq.map(_.toString))
-            val result =
+            val result  =
                 for
                     a <- Batch.eval(Seq(1, 2, 3))
                     _ = counter += 1
@@ -405,7 +406,7 @@ class BatchTest extends kyo.test.Test[Any]:
             var sideEffect = 0
             val source1    = TestSource[Int, Int, Any](seq => seq.map(_ * 2))
             val source2    = TestSource[Int, String, Any](seq => seq.map(x => s"result: $x"))
-            val result =
+            val result     =
                 for
                     a <- Batch.eval(Seq(1, 2, 3))
                     b <- Env.use[Int](env => a * env)
@@ -487,7 +488,7 @@ class BatchTest extends kyo.test.Test[Any]:
     "Batch.source" - {
         "with individual effect suspensions" in {
             var counter = 0
-            val source = Batch.source[Int, String, Env[Int]] { seq =>
+            val source  = Batch.source[Int, String, Env[Int]] { seq =>
                 val map = seq.map(i =>
                     i -> Env.use[Int](env =>
                         counter += 1
@@ -514,7 +515,7 @@ class BatchTest extends kyo.test.Test[Any]:
         "with conditional effect suspensions" in {
             var evenCounter = 0
             var oddCounter  = 0
-            val source = Batch.source[Int, String, Env[Int] & Var[Int]] { seq =>
+            val source      = Batch.source[Int, String, Env[Int] & Var[Int]] { seq =>
                 val map = seq.map { i =>
                     i -> {
                         if i % 2 == 0 then
@@ -651,7 +652,7 @@ class BatchTest extends kyo.test.Test[Any]:
 
         "with multiple effects" in {
             var sideEffect = 0
-            val result = Batch.foreach(Seq(1, 2, 3)) { x =>
+            val result     = Batch.foreach(Seq(1, 2, 3)) { x =>
                 for
                     a <- Env.use[Int](env => x * env)
                     _ = sideEffect += 1
@@ -846,6 +847,24 @@ class BatchTest extends kyo.test.Test[Any]:
                     (2, 2, 3, 5),
                     (2, 2, 4, 6)
                 ))
+            }
+        }
+    }
+
+    "brackets" - {
+        "a bracket opened inside a batched computation survives into the item that carries it" in {
+            var opens  = 0
+            var closes = 0
+            val source = TestSource[Int, Int, Any](_.map(_ * 10))
+            val result =
+                for
+                    a <- Batch.eval(Seq(1, 2))
+                    b <- Bracket({ opens += 1; a })(r => source(r))((_, _) => closes += 1)
+                yield b
+            Batch.run(result).map { seq =>
+                assert(seq == Seq(10, 20))
+                assert(opens == 2)
+                assert(closes == 2)
             }
         }
     }

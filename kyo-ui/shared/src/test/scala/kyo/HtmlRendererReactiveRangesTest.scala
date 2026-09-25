@@ -10,7 +10,7 @@ class HtmlRendererReactiveRangesTest extends UITest:
 
     "HTML reactive regions render as safe logical comment ranges" in {
         for
-            ref <- Signal.initRef("value")
+            ref  <- Signal.initRef("value")
             html <- kyo.internal.HtmlRenderer.render(
                 ref.map(value => Text(value)),
                 Seq("", "😀", "\"--\u0000")
@@ -93,7 +93,7 @@ class HtmlRendererReactiveRangesTest extends UITest:
     "foreach authored tbody remains a table child with sibling anchors" in {
         for
             sections <- Signal.initRef(Chunk("section"))
-            html <- kyo.internal.HtmlRenderer.render(
+            html     <- kyo.internal.HtmlRenderer.render(
                 UI.table(sections.foreach(value => UI.tbody(UI.tr(UI.td(value))).id(value))),
                 Seq.empty
             )
@@ -121,7 +121,7 @@ class HtmlRendererReactiveRangesTest extends UITest:
         for
             outer <- Signal.initRef(0)
             rows  <- Signal.initRef(Chunk("A"))
-            html <- kyo.internal.HtmlRenderer.render(
+            html  <- kyo.internal.HtmlRenderer.render(
                 UI.table(
                     outer.map(_ =>
                         UI.fragment(
@@ -163,9 +163,9 @@ class HtmlRendererReactiveRangesTest extends UITest:
 
     "directly nested reactive regions receive distinct logical ids" in {
         for
-            outer  <- Signal.initRef(true)
-            middle <- Signal.initRef(true)
-            inner  <- Signal.initRef("value")
+            outer      <- Signal.initRef(true)
+            middle     <- Signal.initRef(true)
+            inner      <- Signal.initRef("value")
             nestedHtml <- kyo.internal.HtmlRenderer.render(
                 outer.map(_ => (middle.map(_ => (inner.map(value => Text(value)): UI)): UI)),
                 Seq("nested")
@@ -289,7 +289,7 @@ class HtmlRendererReactiveRangesTest extends UITest:
                 _                 <- Browser.assertText(Selector.id("deep-value"), "deep-two")
                 _                 <- Browser.click(Selector.id("section"))
                 _                 <- Browser.assertText(Selector.id("authored-body"), "authored")
-                authoredState <- Browser.evalJson[String](
+                authoredState     <- Browser.evalJson[String](
                     "document.getElementById('authored-body').parentElement.id+':' + document.getElementById('authored-body').dataset.state"
                 )
                 foreachAuthoredState <- Browser.evalJson[String](
@@ -298,8 +298,8 @@ class HtmlRendererReactiveRangesTest extends UITest:
                 nestedAuthoredState <- Browser.evalJson[String](
                     "document.getElementById('nested-authored-body').parentElement.id+':' + document.getElementById('nested-authored-body').dataset.state"
                 )
-                _ <- Browser.click(Selector.id("rows"))
-                _ <- Browser.assertText(Selector.id("transition-row"), "row")
+                _        <- Browser.click(Selector.id("rows"))
+                _        <- Browser.assertText(Selector.id("transition-row"), "row")
                 rowState <- Browser.evalJson[String](
                     "document.getElementById('transition-row').closest('tbody').parentElement.id"
                 )
@@ -388,6 +388,8 @@ class HtmlRendererReactiveRangesTest extends UITest:
                         "table.querySelectorAll(':scope > tbody > tbody').length].join(':');})()"
                 )
             for
+                // the first read waits for the pushed row, as the later ones do, rather than reading the table as the page lands
+                _        <- Browser.assertText(Selector.id("server-mixed-A"), "A")
                 initial  <- topology
                 _        <- Browser.click(Selector.id("server-mixed-add"))
                 _        <- Browser.assertText(Selector.id("server-mixed-B"), "B")

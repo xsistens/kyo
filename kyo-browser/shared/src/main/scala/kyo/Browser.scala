@@ -4,6 +4,7 @@ import kyo.internal.*
 import kyo.internal.CdpTypes.*
 import kyo.internal.cdp.Accessibility
 import kyo.internal.cdp.PageDownload
+import kyo.kernel.ContextEffect
 import kyo.kernel.Isolate
 
 /** Drive a real browser (Chrome) from Kyo code.
@@ -105,7 +106,7 @@ import kyo.kernel.Isolate
   * #### Concurrent forks: Browser.isolate
   *
   * `Browser <: Env[BrowserTab] & Async`, but the opaque type hides the `Env` so two fibers cannot accidentally share a tab. Concurrent
-  * combinators like [[kyo.Async.zip]] / [[kyo.Async.foreach]] / [[kyo.Loop.foreach]] require an `Isolate[Browser, ...]` to fork the
+  * combinators like [[kyo.Async.zip]] / [[kyo.Async.foreach]] / [[kyo.kernel.Loop.foreach]] require an `Isolate[Browser, ...]` to fork the
   * `Browser` effect across fibers; the compiler refuses to derive one automatically because there is no safe default split for a single CDP
   * session. `Browser.isolate` provides the two safe ones and you pick the right semantics explicitly.
   *
@@ -154,12 +155,12 @@ object Browser:
 
     /** Selects which Chrome-for-Testing artifact [[chromeForTestingLaunchConfig]] downloads.
       *
-      *   - [[HeadlessShell]] (default): `chrome-headless-shell`, Google's standalone headless build of Chrome (the same code path as
+      *   - [[ChromeForTestingBuild.HeadlessShell]] (default): `chrome-headless-shell`, Google's standalone headless build of Chrome (the same code path as
       *     `chrome --headless=new`, packaged without the GUI compositor / GPU stack / extension loader). ~120 MB compressed, faster
       *     startup, smaller memory footprint, fully CDP-compatible. This is Puppeteer's default since v22.
-      *   - [[Chrome]]: the full `chrome` binary, ~190 MB compressed, with the GUI compositor included. Required for headed mode
+      *   - [[ChromeForTestingBuild.Chrome]]: the full `chrome` binary, ~190 MB compressed, with the GUI compositor included. Required for headed mode
       *     (`headless = false`) and for any feature that needs the UI surface (e.g. visible-window debugging). Behaves identically to
-      *     [[HeadlessShell]] when launched with `headless = true`.
+      *     [[ChromeForTestingBuild.HeadlessShell]] when launched with `headless = true`.
       */
     enum ChromeForTestingBuild derives CanEqual:
         case HeadlessShell
@@ -285,6 +286,10 @@ object Browser:
       * Intended for test suites that drive many short browser sessions. Not a substitute for `Browser.run(launch)` in production code,
       * where one-off browser sessions are normal.
       *
+      * When the shared Chrome is found gone before `f` starts (its launch failed, or the connection or tab setup lost it), Chrome is
+      * relaunched and the call retried once. When it is lost while `f` runs, the call fails with the [[BrowserConnectionLostException]]
+      * and is not retried, since `f` may already have acted on state outside the browser; the next call gets a relaunched Chrome.
+      *
       * @param session
       *   session-time configuration installed for the inner computation. Launch-time fields cannot be overridden here: the shared Chrome
       *   was launched once with the canonical config at process start.
@@ -292,10 +297,8 @@ object Browser:
     def runShared[A, S](session: Maybe[Browser.SessionConfig] = Absent)(f: A < (Browser & S))(using
         Frame
     ): A < (Async & Abort[BrowserReadException | BrowserSetupException] & S) =
-        // Browser.run(url) already wraps its body in Scope.run; runShared inherits that absorption.
         // configLocal propagation mirrors Browser.run(launch, session): Present(sc) overrides via withConfig; Absent inherits outer Local.
-        // withUrl (not init) so a dead shared Chrome is invalidated and relaunched once instead of cascading the dead URL to every caller.
-        val body = SharedChrome.withUrl(url => Browser.run(url)(f))
+        val body = SharedChrome.run(_ => f)
         session match
             case Absent      => body
             case Present(sc) => withConfig(sc)(body)
@@ -316,7 +319,8 @@ object Browser:
       *   the page content of an error response, typical for bot-detection 4xx pages (some package registries serve a useful challenge body
       *   alongside a 403), auth-walled 401 pages whose content you want to inspect, or scraping flows that treat the error page as data.
       *   The default fails loud because, for most automation, a 4xx/5xx mid-flow is a real bug: silently returning would leave subsequent
-      *   assertions to fail with confusing element-not-found errors against the error page.
+      *   assertions to fail with confusing element-not-found errors against the error page. This governs HTTP responses only: a navigation
+      *   that fails below HTTP (DNS failure, refused or reset connection) raises regardless, because it has no response body to read.
       */
     def goto(
         url: String,
@@ -600,7 +604,7 @@ object Browser:
 
     /** Like [[press(key)]] but holds the supplied `modifiers` (`shift`, `ctrl`, `alt`, `meta`) for both keyDown and keyUp. Modifiers OR
       * with `KeyInfo.mapKey(key).modifierBit`. Construct via the named-arg case-class apply, e.g. `KeyModifiers(shift = true)`, or via
-      * the [[KeyModifiers.of]] factory.
+      * the [[kyo.internal.KeyModifiers.of]] factory.
       */
     def press(
         key: Key,
@@ -609,15 +613,15 @@ object Browser:
         Frame
     ): Unit < (Browser & Abort[BrowserReadException]) =
         Env.use[BrowserTab] { tab =>
-            val info = KeyInfo.mapKey(key)
-            val s    = tab.session
+            val info       = KeyInfo.mapKey(key)
+            val s          = tab.session
             val callerMods =
                 (if modifiers.shift then 8 else 0) |
                     (if modifiers.ctrl then 2 else 0) |
                     (if modifiers.alt then 1 else 0) |
                     (if modifiers.meta then 4 else 0)
-            val totalMods = info.modifierBit | callerMods
-            val mods      = if totalMods > 0 then Present(totalMods) else Absent
+            val totalMods                                                 = info.modifierBit | callerMods
+            val mods                                                      = if totalMods > 0 then Present(totalMods) else Absent
             val markIfTab: Unit < (Browser & Abort[BrowserReadException]) =
                 if info.keyName == "Tab" then ProbesJs.markActiveElementForTabAdvance else ()
             val inner = markIfTab.andThen(
@@ -654,8 +658,8 @@ object Browser:
     /** Presses `key` while `selector` is focused, with the given `modifiers` held for both keyDown and keyUp. Modifiers OR with
       * `KeyInfo.mapKey(key).modifierBit`, so `press(sel, Key.Shift)` is unchanged.
       *
-      * `modifiers` defaults to [[KeyModifiers.none]]; supply a non-default value via the named-arg case-class apply, e.g.
-      * `KeyModifiers(shift = true)`, or the [[KeyModifiers.of]] factory.
+      * `modifiers` defaults to [[kyo.internal.KeyModifiers.none]]; supply a non-default value via the named-arg case-class apply, e.g.
+      * `KeyModifiers(shift = true)`, or the [[kyo.internal.KeyModifiers.of]] factory.
       *
       * Note: a disabled element does NOT block `press`. Real browsers still fire `keydown` / `keyup` against disabled inputs (the page's
       * keyboard handlers can observe focus + key state regardless), so the actionability gate skips the disabled probe for `press`.
@@ -706,15 +710,15 @@ object Browser:
             Actionability.withActionable(selector, requireFillable = false, requireEnabled = false) { _ =>
                 val inner = ProbesJs.focusElementIfNotFocused(selector).andThen {
                     Env.use[BrowserTab] { tab =>
-                        val info = KeyInfo.mapKey(key)
-                        val s    = tab.session
+                        val info       = KeyInfo.mapKey(key)
+                        val s          = tab.session
                         val callerMods =
                             (if modifiers.shift then 8 else 0) |
                                 (if modifiers.ctrl then 2 else 0) |
                                 (if modifiers.alt then 1 else 0) |
                                 (if modifiers.meta then 4 else 0)
-                        val totalMods = info.modifierBit | callerMods
-                        val mods      = if totalMods > 0 then Present(totalMods) else Absent
+                        val totalMods                                                 = info.modifierBit | callerMods
+                        val mods                                                      = if totalMods > 0 then Present(totalMods) else Absent
                         val markIfTab: Unit < (Browser & Abort[BrowserReadException]) =
                             if info.keyName == "Tab" then ProbesJs.markActiveElementForTabAdvance else ()
                         markIfTab.andThen(
@@ -1501,7 +1505,7 @@ object Browser:
                     )
                 )
             case raw if raw.startsWith("V:") => raw.substring(2)
-            case other =>
+            case other                       =>
                 Abort.fail(BrowserAssertionTimedOutException("value", "string", other))
         }
     end value
@@ -1619,15 +1623,15 @@ object Browser:
       * Uses `SettleRead.settle` to wait for layout stability before the CDP box-model read.
       */
     def boundingRect(selector: Selector)(using Frame): Maybe[Browser.Bounds] < (Browser & Abort[BrowserReadException]) =
-        val jsExpr = SelectorJs.resolveElementJs(Selector.toNode(selector))
+        val jsExpr    = SelectorJs.resolveElementJs(Selector.toNode(selector))
         val valueExpr =
             s"""(() => { const el = $jsExpr; if (!el) return '{"present":false}'; const r = el.getBoundingClientRect(); return JSON.stringify({present:true, x:r.x, y:r.y, w:r.width, h:r.height}); })()"""
         SettleRead.settle("boundingRect", valueExpr) { raw =>
             Json.decode[PresentFlagWire](raw) match
                 case Result.Success(w) if !w.present => Maybe.empty[Browser.Bounds]
-                case Result.Success(_) =>
+                case Result.Success(_)               =>
                     Resolver.resolveOne(selector).map {
-                        case Absent => Maybe.empty[Browser.Bounds]
+                        case Absent       => Maybe.empty[Browser.Bounds]
                         case Present(ref) =>
                             Env.use[BrowserTab] { tab =>
                                 Abort.recover[BrowserProtocolErrorException] { _ => Maybe.empty[Browser.Bounds] } {
@@ -1679,7 +1683,7 @@ object Browser:
       * stabilizes. Aborts `BrowserElementNotFoundException` when no element matches (twin: `isVisible`).
       */
     def inViewport(selector: Selector)(using Frame): Boolean < (Browser & Abort[BrowserReadException]) =
-        val jsExpr = SelectorJs.resolveElementJs(Selector.toNode(selector))
+        val jsExpr    = SelectorJs.resolveElementJs(Selector.toNode(selector))
         val valueExpr =
             s"""(() => { const el = $jsExpr; if (!el) return '{"present":false}'; const r = el.getBoundingClientRect(); const iv = r.right > 0 && r.bottom > 0 && r.left < window.innerWidth && r.top < window.innerHeight; return JSON.stringify({present:true, value:iv}); })()"""
         SettleRead.settle("inViewport", valueExpr) { raw =>
@@ -1730,7 +1734,7 @@ object Browser:
       */
     def element(selector: Selector)(using Frame): Maybe[Browser.ElementInfo] < (Browser & Abort[BrowserReadException]) =
         installDiscover.andThen {
-            val jsExpr = SelectorJs.resolveElementJs(Selector.toNode(selector))
+            val jsExpr    = SelectorJs.resolveElementJs(Selector.toNode(selector))
             val valueExpr =
                 s"""(() => { const el = $jsExpr; if (!el) return '{"present":false}'; return JSON.stringify({present:true, info:window.__kyoDiscoverProbe(el)}); })()"""
             SettleRead.settle("element", valueExpr)(decodeElementInfoMaybe("element"))
@@ -1787,7 +1791,7 @@ object Browser:
     )(raw: String)(using Frame): Maybe[Browser.ElementInfo] < (Browser & Abort[BrowserReadException]) =
         Json.decode[ElementInfoEnvelope](raw) match
             case Result.Success(env) if !env.present => Maybe.empty[Browser.ElementInfo]
-            case Result.Success(env) =>
+            case Result.Success(env)                 =>
                 env.info match
                     case Present(w) => Present(toElementInfo(w))
                     case Absent     => Abort.fail(BrowserProtocolErrorException.decodeFailure(callee, raw))
@@ -1822,7 +1826,7 @@ object Browser:
 
     private def findAxNode(selector: Selector)(using Frame): Maybe[Browser.AxNode] < (Browser & Abort[BrowserReadException]) =
         Resolver.resolveOne(selector).map {
-            case Absent => Maybe.empty[Browser.AxNode]
+            case Absent       => Maybe.empty[Browser.AxNode]
             case Present(ref) =>
                 Env.use[BrowserTab] { tab =>
                     activeIFrameLocal.use { active =>
@@ -2128,7 +2132,7 @@ object Browser:
     )(using Frame): Image < (Browser & Abort[BrowserReadException]) =
         if marks.size > maxMarks then Abort.fail(BrowserCaptureLimitExceededException("screenshotMarks", maxMarks, marks.size))
         else
-            val badges = marks.zipWithIndex.map((m, i) => s"""{x:${m.bounds.x},y:${m.bounds.y},n:${i + 1}}""").mkString("[", ",", "]")
+            val badges   = marks.zipWithIndex.map((m, i) => s"""{x:${m.bounds.x},y:${m.bounds.y},n:${i + 1}}""").mkString("[", ",", "]")
             val injectJs = s"""(() => {
                 const root = document.createElement('div');
                 const token = String((window.__kyoOverlayToken = (window.__kyoOverlayToken || 0) + 1));
@@ -2152,9 +2156,7 @@ object Browser:
             HoldStill.withFrozenPage {
                 Browser.use { tab =>
                     Scope.run {
-                        Scope.acquireRelease(BrowserEval.evalJs(injectJs)) { token =>
-                            Browser.releaseHook(tab)(BrowserEval.evalJs(removeJs(token)).unit)
-                        }.andThen {
+                        BrowserEval.acquireJs(injectJs)(removeJs).andThen {
                             HoldStill.holdStillFrame {
                                 CdpBackend.captureScreenshot(
                                     tab.session,
@@ -2168,7 +2170,8 @@ object Browser:
 
     /** Applies a transparent default background for `body`'s duration when `enabled`. Sets
       * `Emulation.setDefaultBackgroundColorOverride` to `{r:0,g:0,b:0,a:0}` on enter and clears it on exit (success, failure, or
-      * interruption) via `Scope.acquireRelease`. A no-op when `enabled` is false.
+      * interruption). The override is on the browser before its reply arrives, so the clear is owed from the reply on: see
+      * [[kyo.internal.CdpBackend.acquire]]. A no-op when `enabled` is false.
       */
     private def withTransparentBackground[A, S](enabled: Boolean)(
         body: => A < (Browser & Abort[BrowserReadException] & S)
@@ -2177,18 +2180,13 @@ object Browser:
         else
             Env.use[BrowserTab] { tab =>
                 Scope.run {
-                    Scope.acquireRelease(
-                        CdpBackend.setDefaultBackgroundColorOverride(
-                            tab.session,
-                            SetDefaultBackgroundColorOverrideParams(Present(RgbaColor(0, 0, 0, Present(0.0))))
-                        )
+                    tab.session.acquire[SetDefaultBackgroundColorOverrideParams, Unit](
+                        "Emulation.setDefaultBackgroundColorOverride",
+                        SetDefaultBackgroundColorOverrideParams(Present(RgbaColor(0, 0, 0, Present(0.0))))
                     )(_ =>
-                        Browser.releaseHook(tab)(
-                            CdpBackend.setDefaultBackgroundColorOverride(
-                                tab.session,
-                                SetDefaultBackgroundColorOverrideParams(Absent)
-                            )
-                        )
+                        Abort.run[BrowserReadException](
+                            CdpBackend.setDefaultBackgroundColorOverride(tab.session, SetDefaultBackgroundColorOverrideParams(Absent))
+                        ).unit
                     ).andThen(body)
                 }
             }
@@ -2260,13 +2258,7 @@ object Browser:
         Env.use[BrowserTab] { tab =>
             Scope.run {
                 tab.viewportOverride.get.map { prior =>
-                    Scope.acquireRelease(
-                        MutationSettlement.afterAction {
-                            tab.viewportOverride.set(Present(BrowserTab.ViewportOverride(width, height, deviceScaleFactor))).andThen(
-                                CdpBackend.setDeviceMetricsOverride(tab.session, ViewportParams(width, height, deviceScaleFactor))
-                            )
-                        }(Absent)
-                    ) { _ =>
+                    val restore =
                         tab.viewportOverride.set(prior).andThen(
                             prior match
                                 case Present(vo) =>
@@ -2274,6 +2266,18 @@ object Browser:
                                 case Absent =>
                                     CdpBackend.clearDeviceMetricsOverride(tab.session)
                         )
+                    // The override is owed its restore on this scope; the restore registers as the override's reply
+                    // arrives, so `finalizer` is named here rather than read from the settlement wait's inner scope.
+                    ContextEffect.suspendWith(Tag[Scope]) { finalizer =>
+                        MutationSettlement.afterAction {
+                            tab.viewportOverride.set(Present(BrowserTab.ViewportOverride(width, height, deviceScaleFactor))).andThen(
+                                tab.session.acquire[ViewportParams, Unit](
+                                    finalizer,
+                                    "Emulation.setDeviceMetricsOverride",
+                                    ViewportParams(width, height, deviceScaleFactor)
+                                )(_ => restore)
+                            )
+                        }(Absent)
                     }.andThen(body)
                 }
             }
@@ -2286,8 +2290,9 @@ object Browser:
       * the empty-string clear for [[Browser.ColorScheme.NoPreference]] since W3C dropped that value) and is omitted when `Absent`;
       * `prefers-reduced-motion` is sent as `reduce` only when `reducedMotion = true` and is omitted otherwise. So a color-scheme-only
       * call leaves the page's real `prefers-reduced-motion` untouched, and `reducedMotion = false` means "do not emulate reduced
-      * motion", not "force no-preference". The override is cached on the tab and re-applied on exit via `Scope.acquireRelease` inside
-      * an inner `Scope.run`, so nested calls compose in LIFO order and the restore fires on success, failure, AND interruption. When no
+      * motion", not "force no-preference". The override is cached on the tab and its restore is owed to an inner `Scope.run` from the
+      * moment the override's reply arrives, so nested calls compose in LIFO order and the restore fires on success, failure, AND
+      * interruption, including an interruption at that reply. When no
       * prior override was active the restore clears all media emulation with an empty `Emulation.setEmulatedMedia` send, so the host's
       * real media values return rather than a forced override. The apply settles via `MutationSettlement.afterAction` so any
       * media-query re-layout has quiesced before `body` starts.
@@ -2301,17 +2306,7 @@ object Browser:
             val params = emulatedMediaParams(media.map(_.wire), colorScheme.map(_.wire), reducedMotion)
             Scope.run {
                 tab.emulationOverride.get.map { prior =>
-                    Scope.acquireRelease(
-                        MutationSettlement.afterAction {
-                            tab.emulationOverride.set(Present(BrowserTab.EmulatedMediaState(
-                                colorScheme.map(_.wire),
-                                media.map(_.wire),
-                                reducedMotion
-                            ))).andThen(
-                                CdpBackend.setEmulatedMedia(tab.session, params)
-                            )
-                        }(Absent)
-                    ) { _ =>
+                    val restore =
                         tab.emulationOverride.set(prior).andThen(
                             prior match
                                 case Present(s) =>
@@ -2324,6 +2319,18 @@ object Browser:
                                     // features list with empty media drops every prefers-* override back to the environment value.
                                     CdpBackend.setEmulatedMedia(tab.session, clearEmulatedMediaParams)
                         )
+                    ContextEffect.suspendWith(Tag[Scope]) { finalizer =>
+                        MutationSettlement.afterAction {
+                            tab.emulationOverride.set(Present(BrowserTab.EmulatedMediaState(
+                                colorScheme.map(_.wire),
+                                media.map(_.wire),
+                                reducedMotion
+                            ))).andThen(
+                                tab.session.acquire[SetEmulatedMediaParams, Unit](finalizer, "Emulation.setEmulatedMedia", params)(_ =>
+                                    restore
+                                )
+                            )
+                        }(Absent)
                     }.andThen(body)
                 }
             }
@@ -2549,7 +2556,7 @@ object Browser:
     ): A < (Browser & Abort[BrowserReadException]) =
         BrowserEval.evalJsChecked(s"JSON.stringify(($js))").map { json =>
             Json.decode[A](json) match
-                case Result.Success(a) => a
+                case Result.Success(a)   => a
                 case Result.Failure(err) =>
                     Abort.fail(BrowserDecodingException("evalJson", err.toString))
         }
@@ -2615,7 +2622,7 @@ object Browser:
             case "warn"  => Browser.ConsoleLevel.Warn
             case "error" => Browser.ConsoleLevel.Error
             case "debug" => Browser.ConsoleLevel.Debug
-            case other =>
+            case other   =>
                 Abort.fail(BrowserProtocolErrorException.decodeFailure(
                     "consoleLogs",
                     s"unknown level '$other' (expected log|info|warn|error|debug)"
@@ -2654,7 +2661,7 @@ object Browser:
             case other =>
                 Abort.fail(BrowserProtocolErrorException.decodeFailure("recordConsole", s"unknown console type '$other'"))
         levelE.map { lv =>
-            val text = wire.args.flatMap(a => a.value.orElse(a.description).toChunk).mkString(" ")
+            val text     = wire.args.flatMap(a => a.value.orElse(a.description).toChunk).mkString(" ")
             val location = wire.stackTrace.flatMap(st =>
                 Maybe.fromOption(st.callFrames.headOption).flatMap(cf => cf.url.map(u => u + ":" + cf.lineNumber.getOrElse(0)))
             )
@@ -2886,7 +2893,7 @@ object Browser:
         Frame
     ): Unit < (Browser & Abort[BrowserReadException]) =
         ensureInterceptEnabled.andThen {
-            val escapedUrl = JsStringUtil.escapeJsString(url)
+            val escapedUrl  = JsStringUtil.escapeJsString(url)
             val wireHeaders =
                 Chunk.from(headers).map((n, v) => MockHeader(n, v))
             val envelopeJson = JsStringUtil.escapeJsString(Json.encode(MockResponseEnvelope(status, body, wireHeaders)))
@@ -3007,9 +3014,7 @@ object Browser:
         Env.use[BrowserTab] { tab =>
             Scope.run {
                 tab.downloadPolicy.get.map { prior =>
-                    Scope.acquireRelease(
-                        setDownloadBehavior(Browser.DownloadBehavior.Allow, Present(toPath))
-                    ) { _ =>
+                    val restore =
                         tab.downloadPolicy.set(prior).andThen(
                             prior match
                                 case Present((behavior, p)) =>
@@ -3017,7 +3022,13 @@ object Browser:
                                 case Absent =>
                                     PageDownload.setDownloadBehavior(tab.session, Browser.DownloadBehavior.Deny.toInternal, Absent)
                         )
-                    }.andThen(body)
+                    recordDownloadPolicy(tab, Browser.DownloadBehavior.Allow, Present(toPath)).andThen(
+                        PageDownload.acquireDownloadBehavior(
+                            tab.session,
+                            Browser.DownloadBehavior.Allow.toInternal,
+                            Present(toPath)
+                        )(restore)
+                    ).andThen(body)
                 }
             }
         }
@@ -3036,6 +3047,15 @@ object Browser:
         Frame
     ): Unit < (Browser & Abort[BrowserReadException]) =
         Env.use[BrowserTab] { tab =>
+            recordDownloadPolicy(tab, behavior, toPath).andThen(
+                PageDownload.setDownloadBehavior(tab.session, behavior.toInternal, toPath)
+            )
+        }
+
+    private def recordDownloadPolicy(tab: BrowserTab, behavior: Browser.DownloadBehavior, toPath: Maybe[String])(using
+        Frame
+    ): Unit < (Sync & Abort[BrowserReadException]) =
+        locally {
             val validate: Unit < Abort[BrowserReadException] = toPath match
                 case Present(p) if !isAbsolutePath(p) =>
                     Abort.fail(BrowserInvalidArgumentException("setDownloadBehavior", s"toPath must be absolute, got '$p'"))
@@ -3054,13 +3074,11 @@ object Browser:
             // Cache write FIRST (post-validate), then issue the CDP call. Skip caching the "Deny + Absent" tear-down state because that
             // matches the implicit "no override active" semantics of Absent in the cache, keeping the restore-to-Absent path correct.
             validate.andThen {
-                val updateCache: Unit < Sync =
-                    if behavior == Browser.DownloadBehavior.Deny && toPath.isEmpty then tab.downloadPolicy.set(Absent)
-                    else tab.downloadPolicy.set(Present((behavior, toPath)))
-                updateCache.andThen(PageDownload.setDownloadBehavior(tab.session, behavior.toInternal, toPath))
+                if behavior == Browser.DownloadBehavior.Deny && toPath.isEmpty then tab.downloadPolicy.set(Absent)
+                else tab.downloadPolicy.set(Present((behavior, toPath)))
             }
         }
-    end setDownloadBehavior
+    end recordDownloadPolicy
 
     /** Subscribes to download events for the duration of `action`. `f` is invoked for each `Page.downloadWillBegin` /
       * `Page.downloadProgress` event observed on the current tab.
@@ -3324,8 +3342,8 @@ object Browser:
         Isolate[S, Sync, S]
     ): (Chunk[Browser.ScreenshotFrame], A) < (Browser & Async & Abort[BrowserReadException] & S) =
         Env.use[BrowserTab] { tab =>
-            val session = tab.session
-            val sidKey  = tab.sessionId.value
+            val session    = tab.session
+            val sidKey     = tab.sessionId.value
             val wireFormat = format match
                 case Browser.ScreenshotFormat.Png  => "png"
                 case Browser.ScreenshotFormat.Jpeg => "jpeg"
@@ -3681,11 +3699,11 @@ object Browser:
             Scope.run {
                 for
                     created <- CdpBackend.createTarget(parent.session, CreateTargetParams("about:blank", parentCtx))
-                    _ <- Scope.ensure(
+                    _       <- Scope.ensure(
                         CdpBackend.closeTarget(parent.session, CloseTargetParams(created.targetId))
                     )
                     attached <- CdpBackend.attachToTarget(parent.session, AttachParams(created.targetId, flatten = true))
-                    tab <- BrowserTabSetup.mkBrowserTab(
+                    tab      <- BrowserTabSetup.mkBrowserTab(
                         TargetId(created.targetId),
                         SessionId(attached.sessionId),
                         parent.session,
@@ -3770,26 +3788,26 @@ object Browser:
 
         /** Creates an isolate that gives each fork a cloned tab (same URL + storage).
           *
-          * Snapshot is captured in `capture`. Tab creation and restoration happen in `isolate` (inside `Scope.run`). `Env.run` strips the
-          * `Env[BrowserTab]` component of the opaque Browser type. The `Isolate.Keep` channel includes `Abort[BrowserReadException]` so
-          * typed Aborts from snapshot capture, child tab creation, snapshot restore, or the user computation flow through the Isolate ABI
-          * directly, without throw-tunneling.
+          * `capture` only reads the parent tab; the snapshot is taken in `isolate` as each fork begins.
+          * The forking scope is parked while its forks start, so the snapshot observes the parent tab as it
+          * stood at the fork. `Isolate.Keep` includes
+          * `Abort[BrowserReadException]` so typed Aborts from any phase (snapshot capture, child tab creation, restore, user computation)
+          * flow through the Isolate ABI directly, without throw-tunneling.
           */
         def clone(using Frame): Isolate[Browser, Async & Abort[BrowserReadException], Any] =
             new Isolate[Browser, Async & Abort[BrowserReadException], Any]:
-                type State        = (BrowserTab, BrowserSnapshot.BrowserSnapshot)
+                type State        = BrowserTab
                 type Transform[A] = A
-                def capture[A, S2](f: ((BrowserTab, BrowserSnapshot.BrowserSnapshot)) => A < S2)(using Frame) =
-                    Env.use[BrowserTab] { tab =>
-                        BrowserSnapshot.captureSnapshot(tab).map(snapshot => f((tab, snapshot)))
-                    }
-                def isolate[A, S2](state: (BrowserTab, BrowserSnapshot.BrowserSnapshot), v: A < (S2 & Browser))(using Frame) =
-                    val (parent, snapshot) = state
+                def capture[A, S2](f: BrowserTab => A < S2)(using Frame) =
+                    Env.use[BrowserTab](f)
+                def isolate[A, S2](state: BrowserTab, v: A < (S2 & Browser))(using Frame) =
                     Scope.run {
-                        BrowserTabSetup.createChildTab(parent).map { tab =>
-                            BrowserSnapshot.restoreSnapshot(tab, snapshot).andThen {
-                                // Reset activeIFrameLocal; handle is session-pinned to parent tab.
-                                activeIFrameLocal.let(Maybe.empty[IFrameHandle])(Env.run(tab)(v))
+                        BrowserSnapshot.captureSnapshot(state).map { snapshot =>
+                            BrowserTabSetup.createChildTab(state).map { tab =>
+                                BrowserSnapshot.restoreSnapshot(tab, snapshot).andThen {
+                                    // handle is session-pinned to parent tab.
+                                    activeIFrameLocal.let(Maybe.empty[IFrameHandle])(Env.run(tab)(v))
+                                }
                             }
                         }
                     }
@@ -3858,7 +3876,7 @@ object Browser:
 
     /** Emulated `prefers-color-scheme` value for [[withEmulation]].
       *
-      * [[NoPreference]] clears the override: the W3C dropped `no-preference` as a settable value for this feature, so it maps to the
+      * [[ColorScheme.NoPreference]] clears the override: the W3C dropped `no-preference` as a settable value for this feature, so it maps to the
       * empty-string clear sent to `Emulation.setEmulatedMedia`.
       */
     enum ColorScheme derives CanEqual:
@@ -3932,7 +3950,7 @@ object Browser:
       *
       * Field shape mirrors the CDP `AXNode` wire surface. The `properties` map carries common AX state (`disabled`, `checked`, `expanded`,
       * …) plus `"backendDOMNodeId"` keyed to the underlying DOM node's CDP backend id (stringified) when the node maps to a DOM element.
-      * The `"backendDOMNodeId"` entry is the join key used by [[role]] / [[accessibleName]] to align a [[Selector]]-resolved [[NodeRef]]
+      * The `"backendDOMNodeId"` entry is the join key used by [[role]] / [[accessibleName]] to align a [[Selector]]-resolved `NodeRef`
       * with its AX-tree entry.
       */
     final case class AxNode(
@@ -3995,10 +4013,10 @@ object Browser:
 
     /** How Chrome should handle downloads triggered by the page.
       *
-      *   - [[Allow]]: Chrome saves the file (to the path supplied to [[allowDownloads]] / [[setDownloadBehavior]] if given) and emits
+      *   - [[DownloadBehavior.Allow]]: Chrome saves the file (to the path supplied to [[allowDownloads]] / [[setDownloadBehavior]] if given) and emits
       *     `Page.downloadWillBegin` / `Page.downloadProgress` events.
-      *   - [[Deny]]: Chrome drops the download; no file is written and no events are emitted.
-      *   - [[Default]]: restores Chrome's normal behaviour (no explicit policy; no events).
+      *   - [[DownloadBehavior.Deny]]: Chrome drops the download; no file is written and no events are emitted.
+      *   - [[DownloadBehavior.Default]]: restores Chrome's normal behaviour (no explicit policy; no events).
       */
     enum DownloadBehavior derives CanEqual:
         case Allow, Deny, Default
@@ -4021,8 +4039,8 @@ object Browser:
 
     /** A download lifecycle event emitted while an [[onDownload]] subscription is active.
       *
-      *   - [[WillBegin]]: fires once when Chrome resolves the download's URL and filename.
-      *   - [[Progress]]: fires repeatedly until the download finishes, with `state` advancing through `"inProgress"` → `"completed"` (or
+      *   - [[DownloadEvent.WillBegin]]: fires once when Chrome resolves the download's URL and filename.
+      *   - [[DownloadEvent.Progress]]: fires repeatedly until the download finishes, with `state` advancing through `"inProgress"` → `"completed"` (or
       *     `"canceled"`).
       *
       * Both events carry the same `guid` for a given download, so handlers can correlate them.
@@ -4443,7 +4461,7 @@ object Browser:
             case SelectorNode.Aria(role, "")        => role
             case SelectorNode.Aria(role, name)      => s"""$role("$name")"""
             case SelectorNode.Within(parent, child) => s"${selectorNodeDescription(parent)}.find(${selectorNodeDescription(child)})"
-            case SelectorNode.FirstOf(selectors) =>
+            case SelectorNode.FirstOf(selectors)    =>
                 val parts = selectors.toSeq.map(selectorNodeDescription)
                 if parts.isEmpty then "or()"
                 else parts.tail.foldLeft(parts.head)((acc, p) => s"$acc.or($p)")

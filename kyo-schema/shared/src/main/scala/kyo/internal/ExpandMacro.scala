@@ -32,8 +32,9 @@ object ExpandMacro:
 
         val dealiased = tpe.dealias
 
-        // Structural types and `~` applications are passed through as-is.
-        if MacroUtils.isStructuralType(dealiased) then dealiased
+        // Structural types and `~` applications are passed through as-is. So is a singleton such as an
+        // enum value's type: its type symbol is the enum's, but it denotes one case, not the sum.
+        if MacroUtils.isStructuralType(dealiased) || dealiased.isSingleton then dealiased
         else
             val sym = dealiased.typeSymbol
 
@@ -42,13 +43,10 @@ object ExpandMacro:
                 val children = sym.children
                 if children.nonEmpty then
                     val tildeType = TypeRepr.of[Record.~]
-                    val variants = children.map: child =>
+                    val variants  = children.map: child =>
                         val childName = child.name
                         val nameType  = ConstantType(StringConstant(childName))
-                        val childType =
-                            if child.isType then child.typeRef
-                            else if child.flags.is(Flags.Module) then child.termRef.widen
-                            else child.typeRef
+                        val childType = MacroUtils.sumCaseType(MacroUtils.sumCaseReference(dealiased, sym, child))
                         tildeType.appliedTo(List(nameType, childType))
                     variants.reduce(OrType(_, _))
                 else if sym.flags.is(Flags.Case) then
@@ -74,7 +72,7 @@ object ExpandMacro:
     private def expandAsCaseClass(using Quotes)(dealiased: quotes.reflect.TypeRepr, sym: quotes.reflect.Symbol): quotes.reflect.TypeRepr =
         import quotes.reflect.*
         val tildeType = TypeRepr.of[Record.~]
-        val fields = sym.caseFields.map: field =>
+        val fields    = sym.caseFields.map: field =>
             val fieldName = field.name
             val fieldType = dealiased.memberType(field)
             val nameType  = ConstantType(StringConstant(fieldName))

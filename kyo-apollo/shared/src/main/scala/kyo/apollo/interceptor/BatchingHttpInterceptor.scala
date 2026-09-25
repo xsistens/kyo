@@ -48,7 +48,7 @@ import kyo.apollo.network.http.HttpRequestBody
   *
   * The wire round trip always runs in a caller's fiber, never in the window
   * fiber: the window (or the size cap) only cuts the batch and hands it to its
-  * first member, the *lead*, which sends under `Async.mask` and completes the
+  * first member, the *lead*, which sends under `Async.uninterruptible` and completes the
   * other members. Batches from consecutive windows therefore travel concurrently,
   * and an interrupt aimed at the lead cannot lose the batch: it is deferred past
   * the send, and if it lands before the send starts, the remaining members are
@@ -83,15 +83,15 @@ final class BatchingHttpInterceptor private (
             turn    <- Promise.init[Turn, Abort[HttpEngineFailure]]
             claimed <- AtomicBoolean.init
             me = Pending(request, json, chain, turn, claimed)
-            queued <- pending.updateAndGet(_.map(_.append(me)))
+            queued   <- pending.updateAndGet(_.map(_.append(me)))
             response <- queued match
-                case Absent => Abort.panic(closed)
+                case Absent         => Abort.panic(closed)
                 case Present(batch) =>
                     kick(batch.length).andThen {
                         Sync.ensure(outcome => outcome.fold(())(_ => withdraw(me))) {
                             turn.get.map {
                                 case Turn.Done(response) => response
-                                case Turn.Lead(batch)    => Async.mask(claim(me).andThen(send(batch)))
+                                case Turn.Lead(batch)    => Async.uninterruptible(claim(me).andThen(send(batch)))
                             }
                         }
                     }

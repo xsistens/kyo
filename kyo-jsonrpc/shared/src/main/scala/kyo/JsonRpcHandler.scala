@@ -12,12 +12,12 @@ import kyo.Sync
   * Obtain an instance via [[JsonRpcHandler.init]], which starts the inbound dispatch loop and
   * attaches the outbound sender. Calling code interacts with the peer through the typed extension
   * methods on this type:
-  *  - [[call]]: send a request and await the typed response.
-  *  - [[notify]]: send a fire-and-forget notification.
-  *  - [[callWithProgress]]: send a request and receive incremental progress notifications.
-  *  - [[callPartialResults]]: send a request and stream partial results as a `Stream[T, ...]`.
-  *  - [[cancel]]: send a cancellation notification for an in-flight request.
-  *  - [[close]] / [[closeNow]]: tear down the handler.
+  *  - `call`: send a request and await the typed response.
+  *  - `notify`: send a fire-and-forget notification.
+  *  - `callWithProgress`: send a request and receive incremental progress notifications.
+  *  - `callPartialResults`: send a request and stream partial results as a `Stream[T, ...]`.
+  *  - `cancel`: send a cancellation notification for an in-flight request.
+  *  - `close` / `closeNow`: tear down the handler.
   *
   * The handler is `Scope`-managed; it closes automatically when the enclosing `Scope` exits.
   *
@@ -81,15 +81,18 @@ object JsonRpcHandler:
 
         /** Closes the handler immediately without draining in-flight requests. */
         def close(using Frame): Unit < Async =
-            Sync.Unsafe.defer(self.close(Duration.Zero).safe.get)
+            Sync.Unsafe.defer(self.close(Duration.Zero).uninterruptible().safe.get)
 
         /** Closes the handler, waiting up to `gracePeriod` for in-flight requests to drain before forcing. */
         def close(gracePeriod: Duration)(using Frame): Unit < Async =
-            Sync.Unsafe.defer(self.close(gracePeriod).safe.get)
+            // Uninterruptible: `.get` registers the close carrier in the caller's interrupts, so an interrupt of the
+            // caller would cascade into the finalizer and abandon it partway, leaving the transport, exchange and
+            // inbound handlers uncleaned.
+            Sync.Unsafe.defer(self.close(gracePeriod).uninterruptible().safe.get)
 
         /** Closes the handler immediately without draining in-flight requests. Identical to `close(Duration.Zero)`. */
         def closeNow(using Frame): Unit < Async =
-            Sync.Unsafe.defer(self.close(Duration.Zero).safe.get)
+            Sync.Unsafe.defer(self.close(Duration.Zero).uninterruptible().safe.get)
 
         /** Returns the underlying unsafe handler instance. */
         def unsafe: Unsafe = self

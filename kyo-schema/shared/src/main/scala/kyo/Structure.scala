@@ -3,7 +3,6 @@ package kyo
 import kyo.*
 import scala.annotation.tailrec
 import scala.annotation.targetName
-import scala.reflect.ClassTag
 
 /** Runtime structural description of Scala types, used for introspection, generic programming, and bridging to dynamic formats.
   *
@@ -91,7 +90,7 @@ object Structure:
       *   - Optional: Null conforms; anything else is checked against the inner type.
       *   - Sum, Mapping, Open: accepted without inspection (not modeled).
       */
-    private[kyo] def conform(value: Structure.Value, tpe: Structure.Type): Maybe[String] =
+    def conform(value: Structure.Value, tpe: Structure.Type): Maybe[String] =
         tpe match
             case p: Type.Product =>
                 value match
@@ -431,7 +430,7 @@ object Structure:
                             reader.objectEnd()
                             Product(name, tag, typeParams, fields)
                         end serializeRead
-                        @publicInBinary private[kyo] def getter(value: Product): Maybe[Any] = Maybe(value)
+                        @publicInBinary private[kyo] def getter(value: Product): Maybe[Any]         = Maybe(value)
                         @publicInBinary private[kyo] def setter(value: Product, next: Any): Product =
                             next match
                                 case p: Product => p
@@ -479,7 +478,7 @@ object Structure:
                             reader.objectEnd()
                             Sum(name, tag, typeParams, variants, enumValues)
                         end serializeRead
-                        @publicInBinary private[kyo] def getter(value: Sum): Maybe[Any] = Maybe(value)
+                        @publicInBinary private[kyo] def getter(value: Sum): Maybe[Any]     = Maybe(value)
                         @publicInBinary private[kyo] def setter(value: Sum, next: Any): Sum =
                             next match
                                 case s: Sum => s
@@ -530,14 +529,14 @@ object Structure:
                         case "Mapping"    => mappingSchema.serializeRead(reader)
                         case "Optional"   => optionalSchema.serializeRead(reader)
                         case "Open"       => openSchema.serializeRead(reader)
-                        case other =>
+                        case other        =>
                             reader.skip()
                             throw UnknownVariantException(Seq.empty, other)(using reader.frame)
                     reader.objectEnd()
                     result
                 end serializeRead
 
-                @publicInBinary private[kyo] def getter(value: Structure.Type): Maybe[Any] = Maybe(value)
+                @publicInBinary private[kyo] def getter(value: Structure.Type): Maybe[Any]                = Maybe(value)
                 @publicInBinary private[kyo] def setter(value: Structure.Type, next: Any): Structure.Type =
                     next match
                         case t: Structure.Type => t
@@ -694,7 +693,7 @@ object Structure:
                     reader.objectEnd()
                     Field(name, fieldType, doc, default, optional)
                 end serializeRead
-                @publicInBinary private[kyo] def getter(value: Field): Maybe[Any] = Maybe(value)
+                @publicInBinary private[kyo] def getter(value: Field): Maybe[Any]       = Maybe(value)
                 @publicInBinary private[kyo] def setter(value: Field, next: Any): Field =
                     next match
                         case f: Field => f
@@ -796,7 +795,7 @@ object Structure:
                     reader.objectEnd()
                     Variant(name, variantType)
                 end serializeRead
-                @publicInBinary private[kyo] def getter(value: Variant): Maybe[Any] = Maybe(value)
+                @publicInBinary private[kyo] def getter(value: Variant): Maybe[Any]         = Maybe(value)
                 @publicInBinary private[kyo] def setter(value: Variant, next: Any): Variant =
                     next match
                         case v: Variant => v
@@ -972,18 +971,18 @@ object Structure:
                 @publicInBinary private[kyo] def serializeRead(reader: Codec.Reader): Value =
                     reader match
                         case ir: Codec.IntrospectingReader => ir.readStructure()
-                        case other =>
+                        case other                         =>
                             throw SchemaNotSerializableException(
                                 s"Schema[Structure.Value] requires a self-describing reader (JSON or Structure source); got ${other.getClass.getSimpleName}"
                             )(using reader.frame)
-                @publicInBinary private[kyo] def getter(value: Value): Maybe[Any] = Maybe(value)
+                @publicInBinary private[kyo] def getter(value: Value): Maybe[Any]       = Maybe(value)
                 @publicInBinary private[kyo] def setter(value: Value, next: Any): Value =
                     next match
                         case sv: Value => sv
                         case _         => value
                 private lazy val _structure: Structure.Type =
                     Structure.Type.Open(Tag[Structure.Value].asInstanceOf[Tag[Any]])
-                override def structure: Structure.Type = _structure
+                override def structure: Structure.Type                                                               = _structure
                 override private[kyo] def fromStructureValue(sv: Value)(using Frame): Result[DecodeException, Value] =
                     Result.Success(sv)
 
@@ -1086,7 +1085,7 @@ object Structure:
 
         private def getAll(current: Chunk[Value], remaining: List[PathSegment])(using Frame): Result[NavigationException, Chunk[Value]] =
             remaining match
-                case Nil => Result.succeed(current)
+                case Nil         => Result.succeed(current)
                 case seg :: rest =>
                     val stepped = current.flatMap(v => stepGet(v, seg))
                     if stepped.isEmpty && current.nonEmpty then
@@ -1124,7 +1123,7 @@ object Structure:
 
         private def setAt(v: Value, remaining: List[PathSegment], newValue: Value)(using Frame): Result[NavigationException, Value] =
             remaining match
-                case Nil => Result.succeed(newValue)
+                case Nil         => Result.succeed(newValue)
                 case seg :: rest =>
                     seg match
                         case PathSegment.Field(name) =>
@@ -1204,53 +1203,53 @@ object Structure:
         val each: Path                  = root / PathSegment.Each
     end Path
 
-    private def firstAnnotationOf[A](annotations: Chunk[Any])(using ClassTag[A]): Maybe[A] =
+    private def firstAnnotationOf[A](annotations: Chunk[Any])(using ShallowTag[A]): Maybe[A] =
         allAnnotationsOf(annotations).headMaybe
 
-    private def allAnnotationsOf[A](annotations: Chunk[Any])(using ct: ClassTag[A]): Chunk[A] =
-        annotations.collect { case ct(a) => a }
+    private def allAnnotationsOf[A](annotations: Chunk[Any])(using tag: ShallowTag[A]): Chunk[A] =
+        annotations.collect { case tag(a) => a }
 
     extension (product: Structure.Type.Product)
         /** The first captured annotation of type `A` on this product type, or `Maybe.empty`. */
-        def annotationOf[A](using ClassTag[A]): Maybe[A] = firstAnnotationOf(product.annotations)
+        def annotationOf[A](using ShallowTag[A]): Maybe[A] = firstAnnotationOf(product.annotations)
 
         /** Every captured annotation of type `A` on this product type. */
-        def annotationsOf[A](using ClassTag[A]): Chunk[A] = allAnnotationsOf(product.annotations)
+        def annotationsOf[A](using ShallowTag[A]): Chunk[A] = allAnnotationsOf(product.annotations)
     end extension
 
     extension (sum: Structure.Type.Sum)
         /** The first captured annotation of type `A` on this sum type, or `Maybe.empty`. */
-        def annotationOf[A](using ClassTag[A]): Maybe[A] = firstAnnotationOf(sum.annotations)
+        def annotationOf[A](using ShallowTag[A]): Maybe[A] = firstAnnotationOf(sum.annotations)
 
         /** Every captured annotation of type `A` on this sum type. */
-        def annotationsOf[A](using ClassTag[A]): Chunk[A] = allAnnotationsOf(sum.annotations)
+        def annotationsOf[A](using ShallowTag[A]): Chunk[A] = allAnnotationsOf(sum.annotations)
     end extension
 
     extension (field: Structure.Field)
         /** The first captured annotation of type `A` on this field, or `Maybe.empty`. */
-        def annotationOf[A](using ClassTag[A]): Maybe[A] = firstAnnotationOf(field.annotations)
+        def annotationOf[A](using ShallowTag[A]): Maybe[A] = firstAnnotationOf(field.annotations)
 
         /** Every captured annotation of type `A` on this field. */
-        def annotationsOf[A](using ClassTag[A]): Chunk[A] = allAnnotationsOf(field.annotations)
+        def annotationsOf[A](using ShallowTag[A]): Chunk[A] = allAnnotationsOf(field.annotations)
     end extension
 
     extension (variant: Structure.Variant)
         /** The first captured annotation of type `A` on this variant, or `Maybe.empty`. */
-        def annotationOf[A](using ClassTag[A]): Maybe[A] = firstAnnotationOf(variant.annotations)
+        def annotationOf[A](using ShallowTag[A]): Maybe[A] = firstAnnotationOf(variant.annotations)
 
         /** Every captured annotation of type `A` on this variant. */
-        def annotationsOf[A](using ClassTag[A]): Chunk[A] = allAnnotationsOf(variant.annotations)
+        def annotationsOf[A](using ShallowTag[A]): Chunk[A] = allAnnotationsOf(variant.annotations)
     end extension
 
     extension (fields: Chunk[Structure.Field])
         /** Every field carrying an annotation of type `A`, paired with that instance. */
-        def fieldsWith[A](using ClassTag[A]): Chunk[(Structure.Field, A)] =
+        def fieldsWith[A](using ShallowTag[A]): Chunk[(Structure.Field, A)] =
             fields.flatMap(f => f.annotationOf[A].map(a => (f, a)))
     end extension
 
     extension (variants: Chunk[Structure.Variant])
         /** Every variant carrying an annotation of type `A`, paired with that instance. */
-        def variantsWith[A](using ClassTag[A]): Chunk[(Structure.Variant, A)] =
+        def variantsWith[A](using ShallowTag[A]): Chunk[(Structure.Variant, A)] =
             variants.flatMap(v => v.annotationOf[A].map(a => (v, a)))
     end extension
 

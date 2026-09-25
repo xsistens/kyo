@@ -93,7 +93,7 @@ object Path extends PathPlatformSpecific:
 
     /** Selects how deeply a watcher observes a directory.
       *
-      * [[Immediate]] observes only direct children of the watched root. [[Recursive]] also observes
+      * [[WatchDepth.Immediate]] observes only direct children of the watched root. [[WatchDepth.Recursive]] also observes
       * descendants at every depth. The watched root itself is not passed through the glob filter.
       * Its disappearance is instead reported as [[Change.Invalidated]].
       *
@@ -107,8 +107,8 @@ object Path extends PathPlatformSpecific:
 
     /** Selects the case policy used when matching a watch glob.
       *
-      * [[FileSystemDefault]] delegates to the backend's native policy. [[Sensitive]] compares every
-      * glob component case sensitively. [[Insensitive]] compares every glob component without case.
+      * [[MatchCase.FileSystemDefault]] delegates to the backend's native policy. [[MatchCase.Sensitive]] compares every
+      * glob component case sensitively. [[MatchCase.Insensitive]] compares every glob component without case.
       *
       * This setting changes only event selection. It does not rewrite the paths contained in emitted
       * [[Change]] values.
@@ -123,7 +123,7 @@ object Path extends PathPlatformSpecific:
       *
       * Creation, modification, and removal events identify one path. A move identifies both its former
       * and current paths. Moves crossing a watch filter boundary are normalized to removal or creation.
-      * [[Overflow]] reports that bounded event delivery lost detail, while [[Invalidated]] reports that
+      * [[Change.Overflow]] reports that bounded event delivery lost detail, while [[Change.Invalidated]] reports that
       * the watched root is no longer usable.
       *
       * Paths use the namespace of the filesystem that acquired the watcher.
@@ -187,7 +187,7 @@ object Path extends PathPlatformSpecific:
 
     /** Selects whether a move or copy may replace its target.
       *
-      * [[Never]] fails with [[FileAlreadyExistsException]] when the target exists. [[Existing]]
+      * [[Replace.Never]] fails with [[FileAlreadyExistsException]] when the target exists. [[Replace.Existing]]
       * replaces an existing target according to the backend's normal move or copy semantics.
       *
       * This policy is shared by [[MoveOptions]] and [[CopyOptions]].
@@ -198,7 +198,7 @@ object Path extends PathPlatformSpecific:
 
     /** Selects the atomicity guarantee required from a move.
       *
-      * [[Allowed]] permits the backend's normal move operation. [[Required]] requires the backend
+      * [[Atomicity.Allowed]] permits the backend's normal move operation. [[Atomicity.Required]] requires the backend
       * or platform to guarantee an atomic move and otherwise fails with
       * [[FileAtomicMoveUnsupportedException]] before changing either path.
       *
@@ -376,8 +376,8 @@ object Path extends PathPlatformSpecific:
         Frame
     ): A < (FS & Abort[FileSystemException] & S) =
         FileSystem.letErased(fileSystem) {
-            ArrowEffect.handle[[A] =>> Op[A], Id, PathWrite, A, S, FS & Abort[FileSystemException]](Tag[PathWrite], program)(
-                [C] => (op, cont) => dispatch(fileSystem, op).map(cont)
+            ArrowEffect.handleCont[[A] =>> Op[A], Id, PathWrite, A, S, FS & Abort[FileSystemException]](Tag[PathWrite], program)([C] =>
+                (op, cont) => cont(dispatch(fileSystem, op))
             )
         }
 
@@ -391,8 +391,8 @@ object Path extends PathPlatformSpecific:
         Frame
     ): A < (FS & Abort[FileSystemException] & S) =
         FileSystem.letReadErased(fileSystem) {
-            ArrowEffect.handle[[A] =>> Op[A], Id, PathRead, A, S, FS & Abort[FileSystemException]](Tag[PathRead], program)(
-                [C] => (op, cont) => dispatchRead(fileSystem, op).map(cont)
+            ArrowEffect.handleCont[[A] =>> Op[A], Id, PathRead, A, S, FS & Abort[FileSystemException]](Tag[PathRead], program)([C] =>
+                (op, cont) => cont(dispatchRead(fileSystem, op))
             )
         }
 
@@ -400,31 +400,29 @@ object Path extends PathPlatformSpecific:
     def runWatchWith[A, S](fileSystem: FileSystem.Watch)(program: A < (PathWatch & S))(using
         Frame
     ): A < (Async & Scope & Abort[FileWatchException] & S) =
-        ArrowEffect.handle[[A] =>> WatchOp[A], Id, PathWatch, A, S, Async & Scope & Abort[FileWatchException]](
+        ArrowEffect.handleCont[[A] =>> WatchOp[A], Id, PathWatch, A, S, Async & Scope & Abort[FileWatchException]](
             Tag[PathWatch],
             program
-        )(
-            [C] =>
-                (op, cont) =>
-                    op match
-                        case WatchOp.Open(path, options) => fileSystem.openWatcher(path, options).map(cont)
-                        case WatchOp.Raise(error)        => Abort.error(error)
+        )([C] =>
+            (op, cont) =>
+                op match
+                    case WatchOp.Open(path, options) => cont(fileSystem.openWatcher(path, options))
+                    case WatchOp.Raise(error)        => Abort.error(error)
         )
 
     /** Runs `program`, discharging [[PathWatch]] against the Local-selected watch backend. */
     def runWatch[A, S](program: A < (PathWatch & S))(using
         Frame
     ): A < (Async & Scope & Abort[FileWatchException] & S) =
-        ArrowEffect.handle[[A] =>> WatchOp[A], Id, PathWatch, A, S, Async & Scope & Abort[FileWatchException]](
+        ArrowEffect.handleCont[[A] =>> WatchOp[A], Id, PathWatch, A, S, Async & Scope & Abort[FileWatchException]](
             Tag[PathWatch],
             program
-        )(
-            [C] =>
-                (op, cont) =>
-                    op match
-                        case WatchOp.Open(path, options) =>
-                            FileSystem.useWatchErased(_.openWatcher(path, options)).map(cont)
-                        case WatchOp.Raise(error) => Abort.error(error)
+        )([C] =>
+            (op, cont) =>
+                op match
+                    case WatchOp.Open(path, options) =>
+                        cont(FileSystem.useWatchErased(_.openWatcher(path, options)))
+                    case WatchOp.Raise(error) => Abort.error(error)
         )
 
     /** Stateless isolation for read operations. Each child captures the Local-selected backend and
@@ -434,7 +432,7 @@ object Path extends PathPlatformSpecific:
         type State        = FileSystem.Read[Any]
         type Transform[A] = Result[FileSystemException, A]
 
-        def capture[A, S](f: State => A < S)(using Frame): A < (PathRead & Async & S) =
+        def capture[A, S](f: State => A < S)(using Frame): A < (PathRead & S) =
             FileSystem.useReadErased(f)
 
         def isolate[A, S](state: State, value: A < (S & PathRead))(using Frame): Result[FileSystemException, A] < (Async & S) =
@@ -443,7 +441,7 @@ object Path extends PathPlatformSpecific:
         def restore[A, S](value: Result[FileSystemException, A] < S)(using Frame): A < (PathRead & S) =
             value.map {
                 case Result.Success(result) => result
-                case Result.Failure(error) =>
+                case Result.Failure(error)  =>
                     ArrowEffect.suspend(Tag[PathRead], Op.Raise(Result.Failure(error)))
                 case panic: Result.Panic =>
                     ArrowEffect.suspend(Tag[PathRead], Op.Raise(panic))
@@ -455,7 +453,7 @@ object Path extends PathPlatformSpecific:
         type State        = FileSystem.Write[Any]
         type Transform[A] = Result[FileSystemException, A]
 
-        def capture[A, S](f: State => A < S)(using Frame): A < (PathWrite & Sync & S) =
+        def capture[A, S](f: State => A < S)(using Frame): A < (PathWrite & S) =
             FileSystem.useErased(f)
 
         def isolate[A, S](state: State, value: A < (S & PathWrite))(using Frame): Result[FileSystemException, A] < (Sync & S) =
@@ -464,7 +462,7 @@ object Path extends PathPlatformSpecific:
         def restore[A, S](value: Result[FileSystemException, A] < S)(using Frame): A < (PathWrite & S) =
             value.map {
                 case Result.Success(result) => result
-                case Result.Failure(error) =>
+                case Result.Failure(error)  =>
                     ArrowEffect.suspend(Tag[PathWrite], Op.Raise(Result.Failure(error)))
                 case panic: Result.Panic =>
                     ArrowEffect.suspend(Tag[PathWrite], Op.Raise(panic))
@@ -476,7 +474,7 @@ object Path extends PathPlatformSpecific:
         type State        = FileSystem.Watch
         type Transform[A] = Result[FileWatchException, A]
 
-        def capture[A, S](f: State => A < S)(using Frame): A < (PathWatch & Async & S) =
+        def capture[A, S](f: State => A < S)(using Frame): A < (PathWatch & S) =
             FileSystem.useWatchErased(f)
 
         def isolate[A, S](state: State, value: A < (S & PathWatch))(using Frame): Result[FileWatchException, A] < (Async & S) =
@@ -485,7 +483,7 @@ object Path extends PathPlatformSpecific:
         def restore[A, S](value: Result[FileWatchException, A] < S)(using Frame): A < (PathWatch & S) =
             value.map {
                 case Result.Success(result) => result
-                case Result.Failure(error) =>
+                case Result.Failure(error)  =>
                     ArrowEffect.suspend(Tag[PathWatch], WatchOp.Raise(Result.Failure(error)))
                 case panic: Result.Panic =>
                     ArrowEffect.suspend(Tag[PathWatch], WatchOp.Raise(panic))
@@ -801,7 +799,7 @@ object Path extends PathPlatformSpecific:
           */
         def extName: Maybe[String] =
             self.parts.lastMaybe match
-                case Absent => Absent
+                case Absent        => Absent
                 case Present(name) =>
                     val dot = name.lastIndexOf('.')
                     if dot <= 0 then Absent else Present(name.substring(dot))
@@ -952,7 +950,7 @@ object Path extends PathPlatformSpecific:
                     val rawBuf      = new Array[Byte](capacity)
                     val decoder     = charset.newDecoder()
                     val maxTrailing = math.ceil(charset.newEncoder().maxBytesPerChar()).toInt
-                    val inBuf =
+                    val inBuf       =
                         java.nio.ByteBuffer.allocate(capacity + maxTrailing) // extra space for incomplete trailing multi-byte sequence
                     val outBuf = java.nio.CharBuffer.allocate(math.ceil(capacity * decoder.maxCharsPerByte()).toInt)
                     Loop.foreach {
@@ -1073,13 +1071,13 @@ object Path extends PathPlatformSpecific:
                             java.lang.System.arraycopy(buf, 0, combined, leftover.length, n)
                             combined
                     // Find how many trailing bytes form an incomplete UTF-8 sequence
-                    val incomplete = incompleteUtf8Tail(allBytes, allBytes.length)
-                    val decodeLen  = allBytes.length - incomplete
+                    val incomplete  = incompleteUtf8Tail(allBytes, allBytes.length)
+                    val decodeLen   = allBytes.length - incomplete
                     val newLeftover =
                         if incomplete > 0 then java.util.Arrays.copyOfRange(allBytes, decodeLen, allBytes.length)
                         else emptyBytes
-                    val text  = pending + new String(allBytes, 0, decodeLen, StandardCharsets.UTF_8)
-                    val parts = text.split("\r?\n", -1).toList
+                    val text                 = pending + new String(allBytes, 0, decodeLen, StandardCharsets.UTF_8)
+                    val parts                = text.split("\r?\n", -1).toList
                     val (toEmit, newPending) =
                         if text.endsWith("\n") then (parts.dropRight(1), "")
                         else (parts.dropRight(1), parts.last)
@@ -1220,7 +1218,7 @@ object Path extends PathPlatformSpecific:
                         // Unsafe: bridges vended walk-handle iteration into the Sync tier.
                         Sync.Unsafe.defer {
                             handle.next() match
-                                case Absent => Loop.done
+                                case Absent        => Loop.done
                                 case Present(path) =>
                                     if matches(path) then Emit.valueWith(Chunk(path))(Loop.continue)
                                     else Loop.continue
@@ -1864,7 +1862,7 @@ object Path extends PathPlatformSpecific:
 
     /** The outcome of a single non-blocking lock attempt.
       *
-      * Separates "no" from "not yet", which `Result` alone cannot carry. Only [[Pending]] is worth
+      * Separates "no" from "not yet", which `Result` alone cannot carry. Only [[LockAttempt.Pending]] is worth
       * retrying on its own: a conflict clears when the holder releases, which is the waiting
       * caller's concern, while a pending answer clears without anyone releasing anything.
       */

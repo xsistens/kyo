@@ -69,7 +69,7 @@ class EmitTest extends kyo.test.Test[Any]:
 
     "runForeach" - {
         "with pure function" in {
-            var seen = List.empty[Int]
+            var seen                            = List.empty[Int]
             def emits(i: Int): Unit < Emit[Int] =
                 if i == 5 then ()
                 else Emit.valueWith(i)(emits(i + 1))
@@ -82,7 +82,7 @@ class EmitTest extends kyo.test.Test[Any]:
         }
 
         "with effects" in {
-            var seen = List.empty[Int]
+            var seen                            = List.empty[Int]
             def emits(i: Int): Unit < Emit[Int] =
                 if i == 5 then ()
                 else Emit.valueWith(i)(emits(i + 1))
@@ -102,7 +102,7 @@ class EmitTest extends kyo.test.Test[Any]:
         }
 
         "early termination" in {
-            var seen = List.empty[Int]
+            var seen                            = List.empty[Int]
             def emits(i: Int): Unit < Emit[Int] =
                 if i == 5 then ()
                 else Emit.valueWith(i)(emits(i + 1))
@@ -122,7 +122,7 @@ class EmitTest extends kyo.test.Test[Any]:
 
     "runWhile" - {
         "with pure function" in {
-            var seen = List.empty[Int]
+            var seen                            = List.empty[Int]
             def emits(i: Int): Unit < Emit[Int] =
                 if i == 5 then ()
                 else Emit.valueWith(i)(emits(i + 1))
@@ -137,7 +137,7 @@ class EmitTest extends kyo.test.Test[Any]:
         }
 
         "with effects" in {
-            var seen = List.empty[Int]
+            var seen                            = List.empty[Int]
             def emits(i: Int): Unit < Emit[Int] =
                 if i == 5 then ()
                 else Emit.valueWith(i)(emits(i + 1))
@@ -156,11 +156,11 @@ class EmitTest extends kyo.test.Test[Any]:
                     }
                 }.eval
             assert(seen == List(0, 1, 2, 3, 4))
-            assert(result == (5, ()))
+            assert(result == (5, Absent))
         }
 
         "early termination" in {
-            var seen = List.empty[Int]
+            var seen                            = List.empty[Int]
             def emits(i: Int): Unit < Emit[Int] =
                 if i == 5 then ()
                 else Emit.valueWith(i)(emits(i + 1))
@@ -226,7 +226,7 @@ class EmitTest extends kyo.test.Test[Any]:
 
         "with effects" in {
             var count = 0
-            val v =
+            val v     =
                 for
                     _ <- Emit.value(1)
                     _ <- Emit.value(2)
@@ -250,10 +250,10 @@ class EmitTest extends kyo.test.Test[Any]:
 
             for
                 (v1, cont1)    <- Emit.runFirst(v)
-                (v2, cont2)    <- Emit.runFirst(cont1())
-                (v3, cont3)    <- Emit.runFirst(cont2())
-                (v4, cont4)    <- Emit.runFirst(cont3())
-                (rest, result) <- Emit.run(cont4())
+                (v2, cont2)    <- Emit.runFirst(cont1(()))
+                (v3, cont3)    <- Emit.runFirst(cont2(()))
+                (v4, cont4)    <- Emit.runFirst(cont3(()))
+                (rest, result) <- Emit.run(cont4(()))
             yield
                 assert(v1.contains(1) && v2.contains(2) && v3.contains(3))
                 assert(v4.isEmpty)
@@ -267,7 +267,7 @@ class EmitTest extends kyo.test.Test[Any]:
 
             for
                 (v1, cont1)    <- Emit.runFirst(v)
-                (rest, result) <- Emit.run(cont1())
+                (rest, result) <- Emit.run(cont1(()))
             yield
                 assert(v1.isEmpty)
                 assert(rest.isEmpty)
@@ -288,9 +288,9 @@ class EmitTest extends kyo.test.Test[Any]:
                 result <- Var.runTuple(0) {
                     for
                         (v1, cont1)    <- Emit.runFirst(v)
-                        (v2, cont2)    <- Emit.runFirst(cont1())
-                        (v3, cont3)    <- Emit.runFirst(cont2())
-                        (rest, result) <- Emit.run(cont3())
+                        (v2, cont2)    <- Emit.runFirst(cont1(()))
+                        (v3, cont3)    <- Emit.runFirst(cont2(()))
+                        (rest, result) <- Emit.run(cont3(()))
                     yield (v1, v2, v3, rest, result)
                 }
             yield
@@ -436,7 +436,7 @@ class EmitTest extends kyo.test.Test[Any]:
             "combines emitted values from isolated and outer scopes" in {
                 val result = Emit.run {
                     for
-                        _ <- Emit.value(1)
+                        _        <- Emit.value(1)
                         isolated <- Emit.isolate.merge[Int].run {
                             for
                                 _ <- Emit.value(2)
@@ -452,10 +452,10 @@ class EmitTest extends kyo.test.Test[Any]:
             "proper state restoration after nested isolations" in {
                 val result = Emit.run {
                     for
-                        _ <- Emit.value("start")
+                        _  <- Emit.value("start")
                         v1 <- Emit.isolate.merge[String].run {
                             for
-                                _ <- Emit.value("inner1")
+                                _  <- Emit.value("inner1")
                                 v2 <- Emit.isolate.merge[String].run {
                                     Emit.value("nested").map(_ => "nested-result")
                                 }
@@ -472,7 +472,7 @@ class EmitTest extends kyo.test.Test[Any]:
             "inner emissions don't affect outer scope" in {
                 val result = Emit.run {
                     for
-                        _ <- Emit.value(1)
+                        _        <- Emit.value(1)
                         isolated <- Emit.isolate.discard[Int].run {
                             for
                                 _ <- Emit.value(2)
@@ -488,10 +488,10 @@ class EmitTest extends kyo.test.Test[Any]:
             "nested discards maintain isolation" in {
                 val result = Emit.run {
                     for
-                        _ <- Emit.value("outer")
+                        _  <- Emit.value("outer")
                         v1 <- Emit.isolate.discard[String].run {
                             for
-                                _ <- Emit.value("discarded1")
+                                _  <- Emit.value("discarded1")
                                 v2 <- Emit.isolate.discard[String].run {
                                     Emit.value("discarded2").map(_ => "nested-result")
                                 }
@@ -528,7 +528,7 @@ class EmitTest extends kyo.test.Test[Any]:
 
             "can combine with Memo isolate" in {
                 var count = 0
-                val f = Memo[Int, Int, Any] { x =>
+                val f     = Memo[Int, Int, Any] { x =>
                     count += 1
                     x * 2
                 }
@@ -686,14 +686,37 @@ class EmitTest extends kyo.test.Test[Any]:
             val ranFirst = Emit.runDiscard:
                 Emit.runFirst[T.T2](emit).map:
                     case (mv2, cont) =>
-                        Emit.runFirst[T.T1](cont()).map:
+                        Emit.runFirst[T.T1](cont(())).map:
                             case (mv1, cont) =>
-                                Emit.runDiscard(cont())
+                                Emit.runDiscard(cont(()))
                                     .andThen((mv2, mv1))
 
             assert(ranFirst.eval == (Present(T.T2("zero")), Present(T.T1(1))))
         }
 
+    }
+
+    "runWhile stops the emitter when the predicate is false" - {
+        // Each `valueWith` side effect runs in the emitter's cont, so a predicate that refuses the first value never resumes it.
+        "the emitter is not continued after the predicate returned false" in {
+            var emitted = 0
+            val emitter =
+                Emit.valueWith(1) { emitted += 1; () }
+                    .andThen(Emit.valueWith(2) { emitted += 1; () })
+                    .andThen(Emit.valueWith(3) { emitted += 1; () })
+            assert(Emit.runWhile(emitter)(_ => false).eval == Absent)
+            assert(emitted == 0, s"the emitter was continued after the predicate returned false: emitted $emitted times")
+        }
+
+        "a predicate that goes false partway stops the emitter there" in {
+            var emitted = 0
+            val emitter =
+                Emit.valueWith(1) { emitted += 1; () }
+                    .andThen(Emit.valueWith(2) { emitted += 1; () })
+                    .andThen(Emit.valueWith(3) { emitted += 1; () })
+            assert(Emit.runWhile(emitter)(v => v < 2).eval == Absent)
+            assert(emitted == 1, s"expected the emitter to advance once and stop: emitted $emitted times")
+        }
     }
 
     // Emitting from inside an opaque type's own scope once tagged the effect by the underlying

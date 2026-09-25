@@ -1,6 +1,5 @@
 package kyo
 
-import kyo.debug.Debug
 import kyo.internal.Reducible
 import kyo.kernel.ArrowEffect
 import scala.annotation.tailrec
@@ -500,7 +499,7 @@ class ForAbortOps[A, S, E, E1 <: E](effect: A < (Abort[E] & S)) extends AnyVal:
                     case Result.Failure(e1) if fn.isDefinedAt(e1) => fn(e1)
                     case e1: Result.Error[?]                      => Abort.get(e1)
                     case Result.Success(a)                        => a
-            }
+                }
 
     /** Translates the partial Abort[E1] effect to a Choice effect.
       *

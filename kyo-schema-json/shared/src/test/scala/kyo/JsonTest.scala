@@ -8,6 +8,10 @@ class JsonTest extends kyo.test.Test[Any]:
 
     given CanEqual[Any, Any] = CanEqual.derived
 
+    enum MemberLevel derives CanEqual, Schema:
+        case One, Two
+        case Custom(value: Int)
+
     private def jsonRoundTrip[A](value: A)(using schema: Schema[A]): A =
         val w = JsonWriter()
         schema.writeTo(value, w)
@@ -292,7 +296,7 @@ class JsonTest extends kyo.test.Test[Any]:
             result match
                 case Result.Success(_)                       => fail("Should not decode null to String")
                 case Result.Failure(_: NullPointerException) => fail("Should not throw NPE")
-                case Result.Failure(_) =>
+                case Result.Failure(_)                       =>
                     succeed("null String field rejected with a non-NPE failure; reaching this branch is the verification")
             end match
         }
@@ -1799,7 +1803,7 @@ class JsonTest extends kyo.test.Test[Any]:
             // Concatenating N copies produces 2^N distinct strings that ALL collide.
             // Original report (json4s #553): 100K colliding keys took >110 seconds without limits.
             // With maxCollectionSize=10000, the decoder rejects before quadratic blowup.
-            val base = Array("Aa", "BB")
+            val base                           = Array("Aa", "BB")
             def gen(depth: Int): Array[String] =
                 if depth == 0 then Array("")
                 else for prefix <- gen(depth - 1); b <- base yield prefix + b
@@ -2068,7 +2072,8 @@ class JsonTest extends kyo.test.Test[Any]:
                 MTOrderedDictLevels(OrderedDict(30 -> "gold", 10 -> "bronze", 20 -> "silver", 50 -> "copper", 40 -> "tin", 60 -> "iron"))
             val encoded = Json.encode(holder)
             assert(
-                encoded == """{"byLevel":[{"key":30,"value":"gold"},{"key":10,"value":"bronze"},{"key":20,"value":"silver"},{"key":50,"value":"copper"},{"key":40,"value":"tin"},{"key":60,"value":"iron"}]}"""
+                encoded ==
+                    """{"byLevel":[{"key":30,"value":"gold"},{"key":10,"value":"bronze"},{"key":20,"value":"silver"},{"key":50,"value":"copper"},{"key":40,"value":"tin"},{"key":60,"value":"iron"}]}"""
             )
             val decoded = Json.decode[MTOrderedDictLevels](encoded).getOrThrow
             assert(decoded.byLevel.toChunk.map(_._1) == Chunk(30, 10, 20, 50, 40, 60))
@@ -2099,6 +2104,25 @@ class JsonTest extends kyo.test.Test[Any]:
             assert(result.isFailure, "OrderedDict should reject an oversized entry count via maxCollectionSize")
         }
 
+    }
+
+    "an enum declared as a member of a class" - {
+
+        "encodes a case as the variant wrapper" in {
+            assert(Json.encode[MemberLevel](MemberLevel.Two) == """{"Two":{}}""")
+            assert(Json.encode[MemberLevel](MemberLevel.Custom(4)) == """{"Custom":{"value":4}}""")
+        }
+
+        "decodes the variant wrapper" in {
+            assert(Json.decode[MemberLevel]("""{"Two":{}}""") == Result.succeed(MemberLevel.Two))
+        }
+
+        "round trips every case" in {
+            Chunk(MemberLevel.One, MemberLevel.Two, MemberLevel.Custom(4)).foreach { level =>
+                val decoded = Json.decode[MemberLevel](Json.encode[MemberLevel](level))
+                assert(decoded == Result.succeed(level), s"decoded $decoded")
+            }
+        }
     }
 
 end JsonTest

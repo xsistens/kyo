@@ -54,6 +54,11 @@ object SqlCodec:
       * [[kyo.SqlUnsupportedException]], which is [[kyo.KyoException]]-derived and converted to a typed `Abort` at the transport boundary.
       * The constructor `frame` field supplies the [[kyo.Frame]] used when constructing those exceptions.
       *
+      * ENCODING A VALUE MUST BE A PURE FUNCTION OF THAT VALUE, repeatable and with no effect on the value itself. The transport binds the
+      * same parameters twice whenever it has to parse a statement again, so an encoder that consumed its input or folded in state it kept
+      * sends different bytes the second time. That failure is silent and rare: the rows are correct on every attempt but the retried one,
+      * where a JSON document arrives double-stringified or a byte string as the hex of its own hex.
+      *
       * [[extension]] is the escape for a type only one dialect owns, such as Postgres `hstore`. Its [[SqlCodec.Writer.Payload]] carries the
       * owning dialect, so a writer for another dialect rejects the value with [[kyo.SqlUnsupportedTypeOnBackendException]] instead of
       * emitting bytes the server cannot read.
@@ -147,7 +152,7 @@ object SqlCodec:
           * than one emitted column, an absent value, and a format the writer cannot meet are each refused with the typed leaf the composite
           * wire form has no way to carry. `typeName` names the element's Scala type in those refusals.
           */
-        final private[kyo] def encodeSingleElement[P](
+        final def encodeSingleElement[P](
             typeName: String,
             params: Chunk[P],
             format: SqlCodec.Format,
@@ -160,7 +165,7 @@ object SqlCodec:
             // format refusal would name the backend for something no flavor's composite wire form can express.
             val head = params.head
             encoded(head) match
-                case Maybe.Absent => throw SqlUnsupportedAbsentElementException(typeName)
+                case Maybe.Absent         => throw SqlUnsupportedAbsentElementException(typeName)
                 case Maybe.Present(bytes) =>
                     if !formatMatches(head) then
                         throw SqlUnsupportedElementFormatException(typeName, format, dialectId)
@@ -287,7 +292,7 @@ object SqlCodec:
           * this so a by-name decode survives a column order the row type did not declare. A return outside `names` means "no match";
           * the row codec falls back to the positional slot.
           */
-        private[kyo] def fieldIndex(index: Int, names: Chunk[String]): Int = index
+        def fieldIndex(index: Int, names: Chunk[String]): Int = index
 
         /** Verifies the input is fully consumed, when the reader can know. Default no-op. */
         private[kyo] def requireEndOfInput(): Unit = ()

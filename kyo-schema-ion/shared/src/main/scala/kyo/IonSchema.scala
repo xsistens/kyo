@@ -102,7 +102,7 @@ object IonSchema:
       * string materialized. The write happens synchronously on the calling thread. The stream is
       * flushed once rendering completes but is never closed; the caller owns its lifecycle.
       *
-      * Requires `AllowUnsafe`: this writes directly to a caller-supplied [[OutputStream]] outside
+      * Requires `AllowUnsafe`: this writes directly to a caller-supplied `OutputStream` outside
       * the effect system, so the caller opts into the side effect.
       */
     def encodeTo(schema: IonSchema, out: OutputStream)(using AllowUnsafe): Unit =
@@ -147,7 +147,7 @@ object IonSchema:
       * string materialized. The write happens synchronously on the calling thread. The stream is
       * flushed once rendering completes but is never closed; the caller owns its lifecycle.
       *
-      * Requires `AllowUnsafe`: this writes directly to a caller-supplied [[OutputStream]] outside
+      * Requires `AllowUnsafe`: this writes directly to a caller-supplied `OutputStream` outside
       * the effect system, so the caller opts into the side effect.
       */
     inline def encodeTo[A](out: OutputStream, config: Config = Config.Default)(using schema: Schema[A], allow: AllowUnsafe): Unit =
@@ -190,7 +190,7 @@ object IonSchema:
                     else
                         val nextSeen = seen + product.name
                         val renamed  = schema.renamedFields.toMap
-                        val fields =
+                        val fields   =
                             product.fields.flatMap { field =>
                                 if schema.droppedFields.contains(field.name) then Chunk.empty
                                 else
@@ -211,7 +211,7 @@ object IonSchema:
                     else
                         val nextSeen = seen + sum.name
                         val wires    = Schema.effectiveVariantWires(sum, schema.variantNaming)
-                        val options = sum.variants.zip(wires).map { (variant, wireName) =>
+                        val options  = sum.variants.zip(wires).map { (variant, wireName) =>
                             val payload = applyAnnotations(
                                 fromStructure(variant.variantType, constraints, path :+ variant.name, schema, config, nextSeen),
                                 variant.annotations,

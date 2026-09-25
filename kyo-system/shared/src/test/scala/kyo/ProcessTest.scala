@@ -192,8 +192,8 @@ class ProcessTest extends kyo.test.Test[Any]:
                 // If collectOutput called waitFor, alive would always be false
                 // This test documents that the process may still be running after drain
                 assert(new String(out.toArray).trim == "done")
-                // alive may be true or false depending on timing — the key insight is
-                // that collectOutput doesn't guarantee process exit
+            // alive may be true or false depending on timing — the key insight is
+            // that collectOutput doesn't guarantee process exit
         }
     }
 
@@ -208,8 +208,8 @@ class ProcessTest extends kyo.test.Test[Any]:
             yield
                 // stdout was drained, but process may not have exited yet
                 assert(new String(out.toArray).trim == "x")
-                // code may be Absent if process is still in sleep phase
-                // This documents the race: callers must explicitly waitFor
+            // code may be Absent if process is still in sleep phase
+            // This documents the race: callers must explicitly waitFor
         }
     }
 
@@ -257,6 +257,78 @@ class ProcessTest extends kyo.test.Test[Any]:
         }
     }
 
+    "exitCode reports the signal of a process that was killed" in {
+        unixOnly
+        // Node reports a signal death with a null exit code and the signal in signalCode, so a poll that consults the exit code alone
+        // reports a dead process as still running.
+        Scope.run {
+            for
+                proc <- Command("sleep", "60").spawn
+                _    <- proc.destroyForcibly
+                _    <- proc.waitFor
+                code <- proc.exitCode
+            yield assert(code == Present(ExitCode.SIGKILL), s"expected the kill signal, got $code")
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Piped stdin
+    // ---------------------------------------------------------------------------
+
+    // Writes and flushes `bytes` to the child's piped stdin, reporting an IOException as a failure.
+    private def writeStdin(proc: Process, bytes: Array[Byte])(using Frame): Result[java.io.IOException, Unit] < Sync =
+        Abort.run[java.io.IOException] {
+            // Unsafe: a piped stdin is reachable only as the child's java.io.OutputStream.
+            Sync.Unsafe.defer {
+                val stdin = proc.unsafe.stdinJava
+                stdin.write(bytes)
+                stdin.flush()
+            }
+        }
+
+    "a piped stdin delivers written bytes to the child" in {
+        unixOnly
+        Scope.run {
+            for
+                proc    <- Command("sh", "-c", "IFS= read -r line; printf 'got %s\\n' \"$line\"").pipeStdin.spawn
+                written <- writeStdin(proc, "hello\n".getBytes("UTF-8"))
+                out     <- proc.stdout.take("got hello\n".length).run
+            yield
+                assert(written == Result.succeed(()))
+                assert(new String(out.toArray, "UTF-8") == "got hello\n")
+        }
+    }
+
+    "a write to a piped stdin after the process exited fails with IOException" in {
+        unixOnly
+        Scope.run {
+            for
+                proc    <- Command("true").pipeStdin.spawn
+                _       <- proc.waitFor
+                written <- writeStdin(proc, "late\n".getBytes("UTF-8"))
+            yield written match
+                case Result.Failure(_: java.io.IOException) => succeed
+                case other                                  => fail(s"expected an IOException, got $other")
+        }
+    }
+
+    "a write to a piped stdin that the running child closed fails with IOException and leaves the parent running" in {
+        unixOnly
+        // The child closes its stdin and stays alive, so the parent writes into a pipe with no reader. Node reports that failure
+        // asynchronously, as an 'error' event on the stream, and an 'error' event nothing listens for ends the whole process. The failure
+        // must surface as an IOException from a write instead.
+        Scope.run {
+            for
+                proc  <- Command("sh", "-c", "exec 0<&-; echo ready; exec sleep 30").pipeStdin.spawn
+                ready <- proc.stdout.take("ready\n".length).run
+                _     <- assertEventually(writeStdin(proc, Array.fill(1024)('x'.toByte)).map(_.isFailure))
+                alive <- proc.isAlive
+            yield
+                assert(new String(ready.toArray, "UTF-8") == "ready\n")
+                assert(alive, "the child exited, so the writes did not reach a pipe closed by a live reader")
+        }
+    }
+
     // ---------------------------------------------------------------------------
     // Process.Unsafe
     // ---------------------------------------------------------------------------
@@ -275,6 +347,21 @@ class ProcessTest extends kyo.test.Test[Any]:
             case other =>
                 fail(s"Expected spawn to succeed, got: $other")
         end match
+    }
+
+    "Unsafe waitFor(timeout) returns the exit code of a process a signal already killed" in {
+        unixOnly
+        // The wait starts after the process died from a signal, so only the process's recorded state can answer it: its exit event has
+        // already fired. Node records that state as a null exit code plus a signal.
+        import AllowUnsafe.embrace.danger
+        Scope.run {
+            for
+                proc   <- Command("sleep", "60").spawn
+                _      <- proc.destroyForcibly
+                _      <- proc.waitFor
+                result <- proc.unsafe.waitFor(30.seconds).safe.get
+            yield assert(result == Present(ExitCode.SIGKILL), s"expected the kill signal, got $result")
+        }
     }
 
     "Process.Unsafe.waitFor returns Fiber.Unsafe resolving with ExitCode.Success" in {
@@ -403,7 +490,7 @@ class ProcessTest extends kyo.test.Test[Any]:
         unixOnly
         for
             pidHolder <- AtomicLong.init(0L)
-            _ <- Scope.run {
+            _         <- Scope.run {
                 for
                     proc <- Command("sleep", "60").spawn
                     pid  <- proc.pid
@@ -470,7 +557,7 @@ class ProcessTest extends kyo.test.Test[Any]:
         unixOnly
         for
             pidHolder <- AtomicLong.init(0L)
-            _ <- Scope.run {
+            _         <- Scope.run {
                 for
                     proc <- Command("sleep", "60").spawn
                     pid  <- proc.pid
@@ -502,7 +589,7 @@ class ProcessTest extends kyo.test.Test[Any]:
         unixOnly
         for
             pidRef <- AtomicLong.init(0L)
-            _ <- Scope.run {
+            _      <- Scope.run {
                 for
                     proc <- Command("sleep", "60").spawn
                     pid  <- proc.pid
@@ -530,7 +617,7 @@ class ProcessTest extends kyo.test.Test[Any]:
         unixOnly
         for
             pidRef <- AtomicLong.init(0L)
-            _ <- Abort.run[String] {
+            _      <- Abort.run[String] {
                 Scope.run {
                     for
                         proc <- Command("sleep", "60").spawn

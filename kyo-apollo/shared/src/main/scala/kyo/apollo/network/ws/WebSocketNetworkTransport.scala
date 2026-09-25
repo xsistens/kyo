@@ -120,7 +120,7 @@ final class WebSocketNetworkTransport private[apollo] (
     private val ownerStarted: AtomicBoolean           = AtomicBoolean.Unsafe.init(false)(using AllowUnsafe.embrace.danger).safe
     private val ownerExited: Fiber.Promise[Unit, Any] = Fiber.Promise.Unsafe.init[Unit, Any]()(using AllowUnsafe.embrace.danger).safe
     private val closing: Fiber.Promise[Unit, Any]     = Fiber.Promise.Unsafe.init[Unit, Any]()(using AllowUnsafe.embrace.danger).safe
-    private val mailbox: Channel[Msg] =
+    private val mailbox: Channel[Msg]                 =
         Channel.Unsafe.init[Msg](Int.MaxValue, Access.MultiProducerSingleConsumer)(using summon[Frame], AllowUnsafe.embrace.danger).safe
 
     // ---- public API -----------------------------------------------------------
@@ -162,7 +162,7 @@ final class WebSocketNetworkTransport private[apollo] (
     def close(gracePeriod: Duration)(using Frame): Unit < Async =
         awaitRoutes(gracePeriod)
             .andThen(closing.completeUnitDiscard)
-            .andThen(Async.mask(requestShutdown))
+            .andThen(Async.uninterruptible(requestShutdown))
             .andThen(ownerExited.get)
 
     /** [[close]] with a 30-second grace period. */
@@ -357,7 +357,7 @@ final class WebSocketNetworkTransport private[apollo] (
 
     private def onCancel(s: State, id: String)(using Frame): Unit < (Async & Scope) =
         s.routes.get(id) match
-            case None => Kyo.unit
+            case None    => Kyo.unit
             case Some(_) =>
                 val sendStop = s.phase match
                     case Phase.Open(_, conn, _, _) => conn.send(protocol.stopOperation(id))
@@ -410,7 +410,7 @@ final class WebSocketNetworkTransport private[apollo] (
                     case (Some(text), Present(conn)) => conn.send(text)
                     case _                           => Kyo.unit
             case WsMessage.Pong(_) | WsMessage.KeepAlive => Kyo.unit
-            case WsMessage.Data(id, payload) =>
+            case WsMessage.Data(id, payload)             =>
                 s.routes.get(id) match
                     case Some(sub) => sub.deliverData(payload)
                     case None      => unroutable("next", id)
@@ -439,7 +439,7 @@ final class WebSocketNetworkTransport private[apollo] (
       */
     private def onAck(s: State, c: Phase.Connecting)(using Frame): Unit < (Async & Scope) =
         c.conn match
-            case Absent => Kyo.unit // frames are handed over only after `Opened`
+            case Absent        => Kyo.unit // frames are handed over only after `Opened`
             case Present(conn) =>
                 stopFiber(c.ackTimer)
                     .andThen(stateRef.set(s.copy(phase = Phase.Open(c.gen, conn, c.socket, Absent))))
@@ -456,7 +456,7 @@ final class WebSocketNetworkTransport private[apollo] (
         else
             s.phase match
                 case c: Phase.Connecting => handshakeFailure(s, c, cause.getOrElse(normalClose))
-                case open: Phase.Open =>
+                case open: Phase.Open    =>
                     cause match
                         case Present(drop) if s.routes.nonEmpty && reconnectWhen(drop, 1L) =>
                             Clock.now.map(now => backoff.next(now)).map {
@@ -608,7 +608,7 @@ final class WebSocketNetworkTransport private[apollo] (
         for
             entered  <- AtomicBoolean.init(false)
             released <- Fiber.Promise.init[Unit, Any]
-            fiber <- Fiber.init(
+            fiber    <- Fiber.init(
                 Scope.run(Scope.ensure(released.completeUnitDiscard).andThen(entered.set(true)).andThen(body))
             )
         yield Worker(fiber, entered, released)
@@ -626,7 +626,7 @@ final class WebSocketNetworkTransport private[apollo] (
 
     private def ackTimeout(c: Phase.Connecting, framesSeen: Long)(using Frame): ApolloNetworkException =
         val detail = c.conn match
-            case Absent => "the socket did not open (connecting or the WebSocket upgrade hung), 0 frames received"
+            case Absent                        => "the socket did not open (connecting or the WebSocket upgrade hung), 0 frames received"
             case Present(_) if framesSeen == 0 =>
                 "0 frames received: the endpoint sent nothing back (is this a GraphQL WebSocket endpoint?)"
             case Present(_) =>

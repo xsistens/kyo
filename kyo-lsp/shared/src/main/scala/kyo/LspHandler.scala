@@ -13,13 +13,13 @@ import scala.annotation.nowarn
   *
   * Construct values via the namespaced factory companions:
   *
-  *   - [[LspHandler.textDocument]]      ; 38+ server-handled textDocument/X endpoints
-  *   - [[LspHandler.workspace]]         ; workspace/X endpoints (mixed direction)
-  *   - [[LspHandler.notebookDocument]]  ; notebookDocument/X endpoints
-  *   - [[LspHandler.window]]            ; window/X client-handled reverse-direction endpoints
-  *   - [[LspHandler.client]]            ; client/X reverse-direction endpoints
-  *   - [[LspHandler.custom]]            ; arbitrary server-handled extension method
-  *   - [[LspHandler.customClient]]      ; arbitrary client-handled extension method
+  *   - `LspHandler.textDocument`      ; 38+ server-handled textDocument/X endpoints
+  *   - `LspHandler.workspace`         ; workspace/X endpoints (mixed direction)
+  *   - `LspHandler.notebookDocument`  ; notebookDocument/X endpoints
+  *   - `LspHandler.window`            ; window/X client-handled reverse-direction endpoints
+  *   - `LspHandler.client`            ; client/X reverse-direction endpoints
+  *   - `LspHandler.custom`            ; arbitrary server-handled extension method
+  *   - `LspHandler.customClient`      ; arbitrary client-handled extension method
   *
   * Domain-error mappings are added with `.error[E2](code, message)`, mirroring `JsonRpcRoute.error`.
   *
@@ -221,7 +221,7 @@ object LspHandler:
 
     object LspDocument:
 
-        /** Opaque URI for a text document. Use [[parse]] to construct; the engine uses [[fromWire]].
+        /** Opaque URI for a text document. Use `parse` to construct; the engine uses `fromWire`.
           *
           * Validation: non-empty, not all-whitespace. Mirrors `McpResourceUri` shape.
           */
@@ -640,7 +640,7 @@ object LspHandler:
         def withData[X](x: X)(using Schema[X], Frame): WorkspaceSymbol = copy(_rawData = Present(Json.encode[X](x)))
         def dataAs[X](using frame: Frame, schema: Schema[X]): Maybe[X] < Abort[LspDecodeException] =
             _rawData match
-                case Absent => Absent
+                case Absent     => Absent
                 case Present(s) =>
                     Json.decode[X](s) match
                         case Result.Success(v) => Present(v)
@@ -740,7 +740,7 @@ object LspHandler:
         def withData[X](x: X)(using Schema[X], Frame): CompletionItem = copy(_rawData = Present(Json.encode[X](x)))
         def dataAs[X](using frame: Frame, schema: Schema[X]): Maybe[X] < Abort[LspDecodeException] =
             _rawData match
-                case Absent => Absent
+                case Absent     => Absent
                 case Present(s) =>
                     Json.decode[X](s) match
                         case Result.Success(v) => Present(v)
@@ -935,7 +935,7 @@ object LspHandler:
         def withData[X](x: X)(using Schema[X], Frame): CodeAction = copy(_rawData = Present(Json.encode[X](x)))
         def dataAs[X](using frame: Frame, schema: Schema[X]): Maybe[X] < Abort[LspDecodeException] =
             _rawData match
-                case Absent => Absent
+                case Absent     => Absent
                 case Present(s) =>
                     Json.decode[X](s) match
                         case Result.Success(v) => Present(v)
@@ -988,7 +988,7 @@ object LspHandler:
         def withData[X](x: X)(using Schema[X], Frame): CodeLens = copy(_rawData = Present(Json.encode[X](x)))
         def dataAs[X](using frame: Frame, schema: Schema[X]): Maybe[X] < Abort[LspDecodeException] =
             _rawData match
-                case Absent => Absent
+                case Absent     => Absent
                 case Present(s) =>
                     Json.decode[X](s) match
                         case Result.Success(v) => Present(v)
@@ -1015,7 +1015,7 @@ object LspHandler:
         def withData[X](x: X)(using Schema[X], Frame): DocumentLink = copy(_rawData = Present(Json.encode[X](x)))
         def dataAs[X](using frame: Frame, schema: Schema[X]): Maybe[X] < Abort[LspDecodeException] =
             _rawData match
-                case Absent => Absent
+                case Absent     => Absent
                 case Present(s) =>
                     Json.decode[X](s) match
                         case Result.Success(v) => Present(v)
@@ -1321,7 +1321,7 @@ object LspHandler:
         def withData[X](x: X)(using Schema[X], Frame): CallHierarchyItem = copy(_rawData = Present(Json.encode[X](x)))
         def dataAs[X](using frame: Frame, schema: Schema[X]): Maybe[X] < Abort[LspDecodeException] =
             _rawData match
-                case Absent => Absent
+                case Absent     => Absent
                 case Present(s) =>
                     Json.decode[X](s) match
                         case Result.Success(v) => Present(v)
@@ -1361,7 +1361,7 @@ object LspHandler:
         def withData[X](x: X)(using Schema[X], Frame): TypeHierarchyItem = copy(_rawData = Present(Json.encode[X](x)))
         def dataAs[X](using frame: Frame, schema: Schema[X]): Maybe[X] < Abort[LspDecodeException] =
             _rawData match
-                case Absent => Absent
+                case Absent     => Absent
                 case Present(s) =>
                     Json.decode[X](s) match
                         case Result.Success(v) => Present(v)
@@ -1599,7 +1599,7 @@ object LspHandler:
         def withData[X](x: X)(using Schema[X], Frame): InlayHint = copy(_rawData = Present(Json.encode[X](x)))
         def dataAs[X](using frame: Frame, schema: Schema[X]): Maybe[X] < Abort[LspDecodeException] =
             _rawData match
-                case Absent => Absent
+                case Absent     => Absent
                 case Present(s) =>
                     Json.decode[X](s) match
                         case Result.Success(v) => Present(v)
@@ -1944,7 +1944,7 @@ object LspHandler:
     ) derives CanEqual:
         def registerOptionsAs[X](using frame: Frame, schema: Schema[X]): Maybe[X] < Abort[LspDecodeException] =
             _rawRegisterOptions match
-                case Absent => Absent
+                case Absent     => Absent
                 case Present(s) =>
                     Json.decode[X](s) match
                         case Result.Success(v) => Present(v)

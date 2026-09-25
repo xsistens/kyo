@@ -74,8 +74,8 @@ final class PostgresArrayReader(bytes: Span[Byte], format: Format, readerFrame: 
     def elementFormat: Format = format
 
     /** The element type's OID from the array header, which the element decoders need for the same reason a column decoder needs the column's:
-      * an element's wire width is the element type's, not the Scala type's. [[PostgresEncoder.OID_UNSPECIFIED]] before [[openArray]] runs, and
-      * under [[Format.Text]], where the rendering names no element type and every decoder resolves the value from its own digits.
+      * an element's wire width is the element type's, not the Scala type's. `PostgresEncoder.OID_UNSPECIFIED` before [[openArray]] runs, and
+      * under `Format.Text`, where the rendering names no element type and every decoder resolves the value from its own digits.
       */
     def elementOid: Int = _elementOid
 
@@ -91,7 +91,7 @@ final class PostgresArrayReader(bytes: Span[Byte], format: Format, readerFrame: 
       */
     def nextElementIndex: Int = consumed
 
-    /** Parses the array value's header, or its whole rendering under [[Format.Text]], and sets [[remaining]] to the element count.
+    /** Parses the array value's header, or its whole rendering under `Format.Text`, and sets [[remaining]] to the element count.
       *
       * @return
       *   the element count
@@ -258,11 +258,10 @@ final class PostgresArrayReader(bytes: Span[Byte], format: Format, readerFrame: 
     // --- Internal helpers ---
 
     private def readInt32BE(): Int =
-        val v =
-            ((bytes(pos) & 0xff) << 24) |
-                ((bytes(pos + 1) & 0xff) << 16) |
-                ((bytes(pos + 2) & 0xff) << 8) |
-                (bytes(pos + 3) & 0xff)
+        val v = ((bytes(pos) & 0xff) << 24) |
+            ((bytes(pos + 1) & 0xff) << 16) |
+            ((bytes(pos + 2) & 0xff) << 8) |
+            (bytes(pos + 3) & 0xff)
         pos += 4
         v
     end readInt32BE

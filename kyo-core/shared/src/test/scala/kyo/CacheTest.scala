@@ -12,7 +12,7 @@ class CacheTest extends kyo.test.Test[Any]:
 
     // Test key with controlled hashCode
     class Key(val id: Int, val hash: Int) derives CanEqual:
-        override def hashCode(): Int = hash
+        override def hashCode(): Int             = hash
         override def equals(other: Any): Boolean = other match
             case k: Key => k.id == id
             case _      => false
@@ -746,7 +746,7 @@ class CacheTest extends kyo.test.Test[Any]:
         "listeners are independent — only relevant one fires" in {
             var evicted = List.empty[(Int, String)]
             var removed = List.empty[(Int, String)]
-            val s = cache(
+            val s       = cache(
                 maxSize = 2,
                 onEvict = (k, v) => evicted = (k.id, v) :: evicted,
                 onRemove = (k, v) => removed = (k.id, v) :: removed
@@ -1637,6 +1637,105 @@ class CacheTest extends kyo.test.Test[Any]:
         }
     }
 
+    "memo interruption" - {
+
+        /** A memo whose computation of `v` yields `v * 10`, held open until `gate` is released, counting every
+          * evaluation so a leaf can tell a reused entry from a recomputed one.
+          */
+        def gatedMemo(gate: Latch, calls: AtomicInteger)(using Frame): (Int => Int < Async) < Sync =
+            Cache.memo(4) { (v: Int) =>
+                discard(calls.incrementAndGet())
+                gate.await.andThen(v * 10)
+            }
+
+        /** A caller of a memoized key parks by registering the entry's promise as something its own interrupt
+          * reaches, so one waiter on the fiber is exactly "parked on the pending entry".
+          */
+        def parkedOnEntry(caller: Fiber[Int, Any])(using Frame): Boolean < Sync =
+            caller.waiters.map(_ == 1)
+
+        "a caller's interrupt leaves the value intact for the other callers".pendingUntilFixed(
+            "the entry's promise is handed to every caller of the key, so one caller's interrupt completes it for all of them"
+        ) in {
+            // The entry's promise is the entry, shared by every caller of the key, and one caller going away is
+            // not the computation going away. Both survivors are checked, one already parked when the interrupt
+            // landed and one that arrived after it, because an entry broken by the interrupt fails them in
+            // different ways.
+            val calls = new AtomicInteger(0)
+            for
+                gate    <- Latch.init(1)
+                m       <- gatedMemo(gate, calls)
+                winner  <- Fiber.initUnscoped(m(1))
+                _       <- assertEventually(Sync.defer(calls.get() == 1))
+                leaving <- Fiber.initUnscoped(m(1))
+                parked  <- Fiber.initUnscoped(m(1))
+                _       <- assertEventually(Kyo.zip(parkedOnEntry(leaving), parkedOnEntry(parked)).map { case (a, b) => a && b })
+                _       <- leaving.interrupt
+                _       <- leaving.getResult
+                arrived <- Fiber.initUnscoped(m(1))
+                _       <- gate.release
+                w       <- winner.get
+                first   <- parked.get
+                second  <- arrived.get
+            yield
+                assert(w == 10)
+                assert(first == 10, "a caller parked when another was interrupted must still get the value")
+                assert(second == 10, "a caller arriving after another was interrupted must still get the value")
+                assert(calls.get() == 1, "an interrupted caller must not cost a recomputation")
+            end for
+        }
+
+        "a caller's interrupt does not poison the entry for later callers".pendingUntilFixed(
+            "the interrupted entry stays in the store, so the key serves that interrupt until it is evicted"
+        ) in {
+            // The interrupted caller is gone before the value is produced, so nothing it did can reach the caller
+            // that asks for the same key once the entry is settled: that one is an ordinary hit.
+            val calls = new AtomicInteger(0)
+            for
+                gate    <- Latch.init(1)
+                m       <- gatedMemo(gate, calls)
+                winner  <- Fiber.initUnscoped(m(1))
+                _       <- assertEventually(Sync.defer(calls.get() == 1))
+                leaving <- Fiber.initUnscoped(m(1))
+                _       <- assertEventually(parkedOnEntry(leaving))
+                _       <- leaving.interrupt
+                _       <- leaving.getResult
+                _       <- gate.release
+                w       <- winner.get
+                later   <- m(1)
+            yield
+                assert(w == 10)
+                assert(later == 10, "the entry must still serve the value after one of its callers was interrupted")
+                assert(calls.get() == 1, "the settled entry must be reused, not recomputed")
+            end for
+        }
+
+        "the computing caller's interrupt fails the waiters and the next caller recomputes".ignore(
+            "the gate is a Latch awaited by the interrupted caller, so the interrupt can complete the latch's shared promise and fail the recompute; that defect is pinned by LatchTest's waiter-interrupt leaf"
+        ) in {
+            // The other half of the contract: a value that was never produced must not be served, and the entry
+            // must be gone by the time a waiter learns its computation was cancelled, so a waiter that reacts by
+            // asking again recomputes rather than finding the dead entry.
+            val calls = new AtomicInteger(0)
+            for
+                gate      <- Latch.init(1)
+                m         <- gatedMemo(gate, calls)
+                computing <- Fiber.initUnscoped(m(1))
+                _         <- assertEventually(Sync.defer(calls.get() == 1))
+                waiting   <- Fiber.initUnscoped(m(1))
+                _         <- assertEventually(parkedOnEntry(waiting))
+                _         <- computing.interrupt
+                _         <- gate.release
+                failed    <- waiting.getResult
+                retried   <- m(1)
+            yield
+                assert(failed.panic.exists(_.isInstanceOf[Interrupted]), "a waiter on a cancelled computation must fail")
+                assert(retried == 10)
+                assert(calls.get() == 2, "the next caller must recompute rather than read a value never produced")
+            end for
+        }
+    }
+
     "memo concurrency" - {
 
         val repeats = if Platform.isNative then 10 else 100
@@ -1646,7 +1745,7 @@ class CacheTest extends kyo.test.Test[Any]:
                 for
                     calls = new AtomicInteger(0)
                     latch <- Latch.init(1)
-                    m <- Cache.memo(100) { (v: Int) =>
+                    m     <- Cache.memo(100) { (v: Int) =>
                         discard(calls.incrementAndGet())
                         v + 1
                     }
@@ -1667,7 +1766,7 @@ class CacheTest extends kyo.test.Test[Any]:
                 for
                     calls = new AtomicInteger(0)
                     latch <- Latch.init(1)
-                    m <- Cache.memo(100) { (v: Int) =>
+                    m     <- Cache.memo(100) { (v: Int) =>
                         discard(calls.incrementAndGet())
                         v * 10
                     }
@@ -1688,7 +1787,7 @@ class CacheTest extends kyo.test.Test[Any]:
                 for
                     calls = new AtomicInteger(0)
                     latch <- Latch.init(1)
-                    m <- Cache.memo(100) { (v: Int) =>
+                    m     <- Cache.memo(100) { (v: Int) =>
                         Fiber.initUnscoped {
                             discard(calls.incrementAndGet())
                             v + 1
@@ -1711,7 +1810,7 @@ class CacheTest extends kyo.test.Test[Any]:
                 for
                     calls = new AtomicInteger(0)
                     latch <- Latch.init(1)
-                    m <- Cache.memo(100) { (v: Int) =>
+                    m     <- Cache.memo(100) { (v: Int) =>
                         val c = calls.incrementAndGet()
                         if c == 1 then throw new Exception("first call")
                         else v + 1
@@ -1733,8 +1832,8 @@ class CacheTest extends kyo.test.Test[Any]:
         "concurrent eviction under contention".notJs in {
             Loop.repeat(repeats) {
                 for
-                    latch <- Latch.init(1)
-                    m     <- Cache.memo(4) { (v: Int) => v * 10 }
+                    latch  <- Latch.init(1)
+                    m      <- Cache.memo(4) { (v: Int) => v * 10 }
                     fibers <- Kyo.foreach(1 to 20) { i =>
                         Fiber.initUnscoped(latch.await.andThen(m(i)))
                     }
@@ -1750,7 +1849,7 @@ class CacheTest extends kyo.test.Test[Any]:
                 for
                     calls = new AtomicInteger(0)
                     latch <- Latch.init(1)
-                    m <- Cache.memo(100) { (v: Int) =>
+                    m     <- Cache.memo(100) { (v: Int) =>
                         val c = calls.incrementAndGet()
                         if v == 1 && c % 2 == 1 then
                             throw new Exception("odd call")
@@ -1792,8 +1891,8 @@ class CacheTest extends kyo.test.Test[Any]:
         "interleaved puts and gets across many keys".notJs in {
             Loop.repeat(repeats) {
                 for
-                    latch <- Latch.init(1)
-                    m     <- Cache.memo(50) { (v: Int) => v }
+                    latch   <- Latch.init(1)
+                    m       <- Cache.memo(50) { (v: Int) => v }
                     writers <- Kyo.foreach(1 to 100) { i =>
                         Fiber.initUnscoped(latch.await.andThen(m(i)))
                     }
@@ -1813,8 +1912,8 @@ class CacheTest extends kyo.test.Test[Any]:
         "no lost updates under concurrent eviction".notJs in {
             Loop.repeat(repeats) {
                 for
-                    m     <- Cache.memo(8) { (v: Int) => v * v }
-                    latch <- Latch.init(1)
+                    m      <- Cache.memo(8) { (v: Int) => v * v }
+                    latch  <- Latch.init(1)
                     fibers <- Kyo.foreach(1 to 100) { i =>
                         Fiber.initUnscoped(latch.await.andThen(m(i % 20)))
                     }
@@ -1833,7 +1932,7 @@ class CacheTest extends kyo.test.Test[Any]:
                 for
                     calls = new AtomicInteger(0)
                     latch <- Latch.init(1)
-                    m <- Cache.memo(100) { (v: Int) =>
+                    m     <- Cache.memo(100) { (v: Int) =>
                         Async.sleep(1.millis).andThen {
                             discard(calls.incrementAndGet())
                             v + 1
@@ -1863,8 +1962,8 @@ class CacheTest extends kyo.test.Test[Any]:
 
         "add under contention".onlyJvm in {
             for
-                c     <- Cache.init[Int, String](1)
-                latch <- Latch.init(1)
+                c      <- Cache.init[Int, String](1)
+                latch  <- Latch.init(1)
                 fibers <- Kyo.foreach(1 to 1000)(i =>
                     Fiber.initUnscoped(latch.await.andThen(c.add(i % 4, s"val-$i")))
                 )
@@ -1879,8 +1978,8 @@ class CacheTest extends kyo.test.Test[Any]:
 
         "add and remove under contention".onlyJvm in {
             for
-                c     <- Cache.init[Int, String](1)
-                latch <- Latch.init(1)
+                c      <- Cache.init[Int, String](1)
+                latch  <- Latch.init(1)
                 fibers <- Kyo.foreach(1 to 1000)(i =>
                     Fiber.initUnscoped(latch.await.andThen {
                         if i % 2 == 0 then c.add(i % 4, s"val-$i")

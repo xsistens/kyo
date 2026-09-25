@@ -74,9 +74,9 @@ abstract class TestBase[S] extends KyoTestReflect with TypeCheck:
           *
           * The handler `h` peels `S1` (the body's extra row) down to baseline: it is a result-PRESERVING poly-function
           * `[A] => (A < (S1 & baseline)) => A < baseline`. Result-changing handlers (those returning `(X, A)`, e.g. `Var.runTuple`,
-          * `Console.withOut`) must be wrapped by the author (`.map(_._2)`); they do not fit this contract (RI-003).
+          * `Console.withOut`) must be wrapped by the author (`.map(_._2)`); they do not fit this contract.
           *
-          * Per-leaf granularity (O7): when applied to a group node, the composed transform is invoked freshly around each descended leaf
+          * Per-leaf granularity: when applied to a group node, the composed transform is invoked freshly around each descended leaf
           * body, so each test gets fresh `Var`/`Env`/`Random` state.
           */
         def handle[S1](
@@ -166,10 +166,10 @@ abstract class TestBase[S] extends KyoTestReflect with TypeCheck:
         inline infix def -(inline body: => Unit < (S & Async & Abort[Any] & Scope)): Unit =
             b.ignore match
                 case Maybe.Present(reason) => regCtx.registerIgnored(b.name, reason)
-                case _ =>
+                case _                     =>
                     b.onlyIf match
                         case Maybe.Present(cond) if !cond() => regCtx.registerSkipped(b.name, "condition false")
-                        case _ =>
+                        case _                              =>
                             regCtx.visitGroupWithBuilder[S](b.name, b, body)
         end -
 
@@ -179,7 +179,7 @@ abstract class TestBase[S] extends KyoTestReflect with TypeCheck:
         inline infix def in(inline body: kyo.test.AssertScope ?=> Unit < (S & Async & Abort[Any] & Scope))(using inline f: Frame): Unit =
             b.ignore match
                 case Maybe.Present(reason) => regCtx.registerIgnored(b.name, reason)
-                case _ =>
+                case _                     =>
                     b.onlyIf match
                         case Maybe.Present(cond) if !cond() => regCtx.registerSkipped(b.name, "condition false")
                         case _                              => regCtx.visitLeafWithBuilder[S](b.name, b, body)
@@ -267,7 +267,7 @@ abstract class TestBase[S] extends KyoTestReflect with TypeCheck:
                 val b = pb.builder
                 b.ignore match
                     case Maybe.Present(reason) => regCtx.registerIgnored(b.name, reason)
-                    case _ =>
+                    case _                     =>
                         b.onlyIf match
                             case Maybe.Present(cond) if !cond() => regCtx.registerSkipped(b.name, "condition false")
                             case _                              => regCtx.visitLeafWithBuilder[S](b.name, b, body)
@@ -282,7 +282,7 @@ abstract class TestBase[S] extends KyoTestReflect with TypeCheck:
                 val b = pb.builder
                 b.ignore match
                     case Maybe.Present(reason) => regCtx.registerIgnored(b.name, reason)
-                    case _ =>
+                    case _                     =>
                         b.onlyIf match
                             case Maybe.Present(cond) if !cond() => regCtx.registerSkipped(b.name, "condition false")
                             case _                              => regCtx.visitGroupWithBuilder[S](b.name, b, body)
@@ -299,13 +299,13 @@ abstract class TestBase[S] extends KyoTestReflect with TypeCheck:
         def ignore: PlatformTestBuilder[P]                 = PlatformTestBuilder(pb.builder.copy(ignore = Maybe("")))
         def ignore(reason: String): PlatformTestBuilder[P] = PlatformTestBuilder(pb.builder.copy(ignore = Maybe(reason)))
 
-        def pendingUntilFixed: PlatformTestBuilder[P] = PlatformTestBuilder(pb.builder.copy(pendingUntilFixed = Maybe("")))
+        def pendingUntilFixed: PlatformTestBuilder[P]                 = PlatformTestBuilder(pb.builder.copy(pendingUntilFixed = Maybe("")))
         def pendingUntilFixed(reason: String): PlatformTestBuilder[P] =
             PlatformTestBuilder(pb.builder.copy(pendingUntilFixed = Maybe(reason)))
 
         def tagged(tags: String*): PlatformTestBuilder[P] = PlatformTestBuilder(pb.builder.copy(tags = pb.builder.tags ++ tags.toSet))
         def timeout(d: Duration): PlatformTestBuilder[P]  = PlatformTestBuilder(pb.builder.copy(timeout = Maybe(d)))
-        def retry(n: Int): PlatformTestBuilder[P] =
+        def retry(n: Int): PlatformTestBuilder[P]         =
             PlatformTestBuilder(pb.builder.copy(retrySchedule = Maybe(kyo.Schedule.fixed(Duration.Zero).take(n))))
         def retry(s: kyo.Schedule): PlatformTestBuilder[P] = PlatformTestBuilder(pb.builder.copy(retrySchedule = Maybe(s)))
 
@@ -532,7 +532,7 @@ abstract class TestBase[S] extends KyoTestReflect with TypeCheck:
     /** Carrier produced by `.handle` that tracks the still-undischarged body row `S0` as a type parameter and composes additional handlers.
       *
       * The `transform` field is a BY-VALUE polymorphic function: a polymorphic-function TYPE forbids by-name parameters (a hard Scala 3
-      * restriction, RI-003.md:26-43), so the laziness is preserved only on the terminal `-`'s `inline body: => ...` (a normal method, where
+      * restriction), so the laziness is preserved only on the terminal `-`'s `inline body: => ...` (a normal method, where
       * `=>` is legal); the by-name `body` adapts to the by-value poly param at the `transform[Unit](body)` application.
       *
       * `transform` peels `S0 & baseline` to `baseline` (`Async & Abort[Any] & Scope`). Each `handle[S1]` prepends a handler `h`
@@ -572,12 +572,12 @@ abstract class TestBase[S] extends KyoTestReflect with TypeCheck:
         inline infix def -(inline body: => Unit < (S0 & Async & Abort[Any] & Scope)): Unit =
             builder.ignore match
                 case Maybe.Present(reason) => regCtx.registerIgnored(builder.name, reason)
-                case _ =>
+                case _                     =>
                     builder.onlyIf match
                         case Maybe.Present(cond) if !cond() => regCtx.registerSkipped(builder.name, "condition false")
                         case _                              =>
                             // `-` is ALWAYS a group: register the RAW `S0`-shaped block so its nested `-`/`in` calls fire during
-                            // discovery descent. `transform` is applied per descended leaf by the runner (O7). Leaves use `in`.
+                            // discovery descent. `transform` is applied per descended leaf by the runner. Leaves use `in`.
                             regCtx.visitGroupWithBuilder[S0](builder.name, builder, body)
         end -
 
@@ -587,7 +587,7 @@ abstract class TestBase[S] extends KyoTestReflect with TypeCheck:
         inline infix def in(inline body: kyo.test.AssertScope ?=> Unit < (S0 & Async & Abort[Any] & Scope))(using inline f: Frame): Unit =
             builder.ignore match
                 case Maybe.Present(reason) => regCtx.registerIgnored(builder.name, reason)
-                case _ =>
+                case _                     =>
                     builder.onlyIf match
                         case Maybe.Present(cond) if !cond() => regCtx.registerSkipped(builder.name, "condition false")
                         case _                              =>

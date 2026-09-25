@@ -1,4 +1,5 @@
 package kyo.internal.mysql
+
 import kyo.Chunk
 import kyo.Frame
 import kyo.Instant
@@ -9,12 +10,13 @@ import kyo.SqlRequestPeriodOverflowException
 import kyo.SqlSchema
 import kyo.SqlUnsupportedCustomTypeException
 import kyo.SqlUnsupportedTypeOnBackendException
+import kyo.internal.SqlJsonArray
 import kyo.internal.mysql.types.MysqlEncoder
 
 /** Maps `Codec.Writer` primitive calls to MySQL [[BoundMysqlParam]] instances.
   *
   * Each primitive method appends one [[BoundMysqlParam]] to an internal buffer. The MySQL type byte and wire-format selection mirrors the
-  * existing [[MysqlEncoder]] singletons exactly: the byte output is byte-for-byte identical to calling those encoders directly.
+  * existing `MysqlEncoder` singletons exactly: the byte output is byte-for-byte identical to calling those encoders directly.
   *
   * After all writes, retrieve the accumulated params via [[params]].
   */
@@ -31,7 +33,7 @@ final class MysqlParamWriter()(using frame: Frame) extends SqlCodec.Writer(frame
 
     // Byte → TYPE_TINY (1 byte). No MysqlEncoder.byteEncoder singleton exists.
     private val byteEncoder: MysqlEncoder[Byte] = new MysqlEncoder[Byte]:
-        def mysqlType: Int = MysqlEncoder.TYPE_TINY
+        def mysqlType: Int                                   = MysqlEncoder.TYPE_TINY
         def write(value: Byte, buf: MysqlBufferWriter): Unit =
             buf.writeUInt8(value.toInt)
 
@@ -175,10 +177,10 @@ final class MysqlParamWriter()(using frame: Frame) extends SqlCodec.Writer(frame
     end calendarInterval
 
     override def arrayOfInt(values: Chunk[Int]): Unit =
-        string(MysqlJsonArray.encodeInts(values))
+        string(SqlJsonArray.encodeInts(values))
 
     override def arrayOfString(values: Chunk[String]): Unit =
-        string(MysqlJsonArray.encodeStrings(values))
+        string(SqlJsonArray.encodeStrings(values))
 
     override def arrayOfJson(values: Chunk[String]): Unit =
         // Each element is already a JSON document, so the array is their concatenation with separators.

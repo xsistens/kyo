@@ -26,7 +26,7 @@ import kyo.net.NetTlsConfig
   */
 final private[kyo] class PostgresSqlConnection private[postgres] (
     private[kyo] val underlying: PostgresConnection,
-    private val address: SqlConfig.Address,
+    private val address: SqlConfig.Address.Network,
     // The mode travels with the settings because the reclaim's cancel opens a second socket to the same server and has
     // to make the same encryption decision this one was opened under. Given only the settings it cannot: `Absent` would
     // be indistinguishable from "nothing to negotiate with" under a mode that demands encryption.
@@ -49,7 +49,7 @@ final private[kyo] class PostgresSqlConnection private[postgres] (
         underlying.parameters.get.flatMap { params =>
             Maybe.fromOption(params.get("server_version")) match
                 case Present(reported) => Connection.parseServerVersion(reported)
-                case Absent =>
+                case Absent            =>
                     Abort.fail(SqlConnectionProtocolDecodeException(
                         "ParameterStatus",
                         "startup reported no server_version parameter"
@@ -123,8 +123,22 @@ final private[kyo] class PostgresSqlConnection private[postgres] (
     def ping(using Frame): Unit < (Async & Abort[SqlException]) =
         tracked(underlying.ping)
 
+    /** `DISCARD ALL` scrubs the session, and the cache is dropped with it so this connection's record matches.
+      *
+      * `DISCARD ALL` includes `DEALLOCATE ALL`, so a surviving entry would Bind a name that is gone and answer `26000` for that SQL from
+      * then on. This runs on its own lease, so the caller who pays is the next borrower.
+      *
+      * Dropped only once the scrub has RETURNED, because a `DISCARD ALL` that failed deallocated nothing: `DiscardAll` runs
+      * `PreventInTransactionBlock` first, so `25001` fires before it touches a statement. Dropping the cache there would strand every
+      * statement the server still holds, since their names go with it, for the life of the connection.
+      *
+      * The edges this does not cover are the ones where the scrub ran but its reply never arrived, an interrupt or an expired read bound,
+      * and the narrow case of a step after `DropAllPreparedStatements` raising. The cache then survives statements that are gone. All three
+      * leave the session idle, since `DISCARD ALL` cannot run inside a block, so the first stale hit is repaired by the re-prepare in
+      * [[kyo.internal.postgres.exchange.ExtendedQueryExchange]] and counted.
+      */
     def resetSession(using Frame): Unit < (Async & Abort[SqlException]) =
-        tracked(underlying.simpleExecute("DISCARD ALL").unit)
+        tracked(underlying.simpleExecute("DISCARD ALL").unit).andThen(underlying.discardPreparedStatements)
 
     def acquireAdvisoryLock(key: Long, timeout: Maybe[Duration])(using Frame): Unit < (Async & Abort[SqlException]) =
         // `pg_advisory_lock` blocks until the lock is granted and takes no timeout argument, so a caller's
@@ -166,7 +180,7 @@ final private[kyo] class PostgresSqlConnection private[postgres] (
             case true =>
                 Sync.Unsafe.defer(exchangeResyncable.get()).flatMap {
                     case false => false // see `pipelined`: more than one barrier is outstanding
-                    case true =>
+                    case true  =>
                         underlying.isOpen.flatMap {
                             case false => false
                             case true  => drainToReadyForQuery
@@ -180,6 +194,8 @@ final private[kyo] class PostgresSqlConnection private[postgres] (
 
     // Unsafe: closes without suspending, for callers that cannot park (pool discard callbacks).
     def closeNow(using Frame, AllowUnsafe): Unit = Sync.Unsafe.evalOrThrow(underlying.close)
+
+    override private[kyo] def takeReprepares()(using AllowUnsafe): Long = underlying.takeReprepareCount()
 
     // --- Internals ---
 
@@ -195,14 +211,12 @@ final private[kyo] class PostgresSqlConnection private[postgres] (
       */
     private def drainToReadyForQuery(using Frame): Boolean < (Async & Abort[SqlException]) =
         underlying.drainToReadyForQuery.flatMap { rfq =>
-            underlying.transactionStatus.set(rfq.status).andThen {
-                Sync.Unsafe.defer {
-                    requestInFlight.set(false)
-                    // 'I' is idle, 'T' is in a transaction, 'E' is a failed transaction. The latter two
-                    // both mean a transaction is still open and owed a rollback.
-                    transactionOpen.set(rfq.status != 'I'.toByte)
-                    true
-                }
+            Sync.Unsafe.defer {
+                requestInFlight.set(false)
+                // 'T' is in a transaction and 'E' is a failed transaction; both mean a transaction is
+                // still open and owed a rollback.
+                transactionOpen.set(rfq.status != ReadyForQuery.Idle)
+                true
             }
         }
 
@@ -278,89 +292,105 @@ private[kyo] object PostgresSqlConnection:
             def open(address: SqlConfig.Address, password: Maybe[String], config: SqlConfig)(using
                 Frame
             ): PostgresSqlConnection < (Async & Abort[SqlException]) =
-                connect(address, password, config, options).flatMap { conn =>
-                    populateTypeRegistry(PostgresConfig.of(config).typeNames, conn).flatMap { registry =>
-                        // Unsafe: two plain flags backing the in-flight window; initialised before the
-                        // connection is visible to any caller.
-                        Sync.Unsafe.defer(
-                            new PostgresSqlConnection(
-                                conn,
-                                address,
-                                config.tlsMode,
-                                config.tls,
-                                registry,
-                                AtomicBoolean.Unsafe.init(false),
-                                AtomicBoolean.Unsafe.init(true),
-                                AtomicBoolean.Unsafe.init(false)
+                // Narrowed once, here: everything beneath takes a network address, so no layer below carries a host
+                // and port that might be absent. Unreachable in practice, the registry routing by scheme.
+                SqlConfig.Address.requireNetwork(address).flatMap { address =>
+                    connect(address, password, config, options).flatMap { conn =>
+                        populateTypeRegistry(PostgresConfig.of(config).typeNames, conn).flatMap { registry =>
+                            // Unsafe: two plain flags backing the in-flight window; initialised before the
+                            // connection is visible to any caller.
+                            Sync.Unsafe.defer(
+                                new PostgresSqlConnection(
+                                    conn,
+                                    address,
+                                    config.tlsMode,
+                                    config.tls,
+                                    registry,
+                                    AtomicBoolean.Unsafe.init(false),
+                                    AtomicBoolean.Unsafe.init(true),
+                                    AtomicBoolean.Unsafe.init(false)
+                                )
                             )
-                        )
+                        }
                     }
                 }
 
-    private def connect(address: SqlConfig.Address, password: Maybe[String], config: SqlConfig, options: SqlConfig.Url.Options)(using
+    private def connect(
+        address: SqlConfig.Address.Network,
+        password: Maybe[String],
+        config: SqlConfig,
+        options: SqlConfig.Url.Options
+    )(using
         Frame
     ): PostgresConnection < (Async & Abort[SqlException]) =
         // The startup packet carries `user` as a mandatory parameter, so it is resolved before any branch below opens a
-        // socket. Resolving here rather than per branch is what keeps every arm carrying the same user name.
+        // socket. Resolving here rather than per branch is what keeps every arm carrying the same user name. The search
+        // path is resolved alongside it for both reasons at once: every arm sends the same value, and a malformed one
+        // refuses before any socket is opened rather than after `allow` has already tried a plaintext connect.
         Connection.requireUser(address).flatMap { user =>
-            val readTimeout = options.socketTimeout.getOrElse(Duration.Infinity)
-            config.tlsMode match
-                case TlsMode.Prefer =>
-                    config.tls match
-                        case Present(tlsConfig) =>
-                            val neg = TlsNegotiator.postgres(TlsMode.Prefer, tlsConfig, address.host, address.port)
-                            PostgresConnection.connectWithNegotiator(
-                                address.host,
-                                address.port,
-                                user,
-                                address.database,
-                                password,
-                                tls = Absent,
-                                negotiator = Present(neg),
-                                preparedStmtCacheSize = config.preparedStatementCacheSize,
-                                preparedStmtTtl = config.preparedStatementTtl,
-                                applicationName = options.applicationName,
-                                socketTimeout = readTimeout
-                            )
-                        case Absent =>
-                            // No TLS settings to negotiate with, so plaintext is all `prefer` can mean here.
-                            plainConnect(address, user, password, config, Absent, options)
-                case TlsMode.Allow =>
-                    Abort.run[SqlException](plainConnect(address, user, password, config, Absent, options)).flatMap {
-                        case Result.Success(conn) => conn
-                        case Result.Failure(e) if requiresSsl(e) =>
-                            config.tls match
-                                case Present(tlsConfig) =>
-                                    PostgresConnection.connectWithNegotiator(
-                                        address.host,
-                                        address.port,
-                                        user,
-                                        address.database,
-                                        password,
-                                        tls = Present(tlsConfig),
-                                        negotiator = Absent, // allow: negotiate is a no-op, use the strict TLS upgrade
-                                        config.preparedStatementCacheSize,
-                                        config.preparedStatementTtl,
-                                        applicationName = options.applicationName,
-                                        socketTimeout = readTimeout
-                                    )
-                                case Absent => Abort.fail(e)
-                        case Result.Failure(e) => Abort.fail(e)
-                        case Result.Panic(t)   => Abort.error(Result.Panic(t))
-                    }
-                case _ =>
-                    plainConnect(address, user, password, config, config.tls, options)
-            end match
+            PostgresConfig.of(config).searchPathValue.flatMap { searchPath =>
+                val readTimeout = options.socketTimeout.getOrElse(Duration.Infinity)
+                config.tlsMode match
+                    case TlsMode.Prefer =>
+                        config.tls match
+                            case Present(tlsConfig) =>
+                                val neg = TlsNegotiator.postgres(TlsMode.Prefer, tlsConfig, address.host, address.port)
+                                PostgresConnection.connectWithNegotiator(
+                                    address.host,
+                                    address.port,
+                                    user,
+                                    address.database,
+                                    password,
+                                    tls = Absent,
+                                    negotiator = Present(neg),
+                                    preparedStmtCacheSize = config.preparedStatementCacheSize,
+                                    preparedStmtTtl = config.preparedStatementTtl,
+                                    applicationName = options.applicationName,
+                                    socketTimeout = readTimeout,
+                                    searchPath = searchPath
+                                )
+                            case Absent =>
+                                // No TLS settings to negotiate with, so plaintext is all `prefer` can mean here.
+                                plainConnect(address, user, password, config, Absent, options, searchPath)
+                    case TlsMode.Allow =>
+                        Abort.run[SqlException](plainConnect(address, user, password, config, Absent, options, searchPath)).flatMap {
+                            case Result.Success(conn)                => conn
+                            case Result.Failure(e) if requiresSsl(e) =>
+                                config.tls match
+                                    case Present(tlsConfig) =>
+                                        PostgresConnection.connectWithNegotiator(
+                                            address.host,
+                                            address.port,
+                                            user,
+                                            address.database,
+                                            password,
+                                            tls = Present(tlsConfig),
+                                            negotiator = Absent, // allow: negotiate is a no-op, use the strict TLS upgrade
+                                            config.preparedStatementCacheSize,
+                                            config.preparedStatementTtl,
+                                            applicationName = options.applicationName,
+                                            socketTimeout = readTimeout,
+                                            searchPath = searchPath
+                                        )
+                                    case Absent => Abort.fail(e)
+                            case Result.Failure(e) => Abort.fail(e)
+                            case Result.Panic(t)   => Abort.error(Result.Panic(t))
+                        }
+                    case _ =>
+                        plainConnect(address, user, password, config, config.tls, options, searchPath)
+                end match
+            }
         }
     end connect
 
     private def plainConnect(
-        address: SqlConfig.Address,
+        address: SqlConfig.Address.Network,
         user: String,
         password: Maybe[String],
         config: SqlConfig,
         tls: Maybe[NetTlsConfig],
-        options: SqlConfig.Url.Options
+        options: SqlConfig.Url.Options,
+        searchPath: Maybe[String]
     )(using Frame): PostgresConnection < (Async & Abort[SqlException]) =
         PostgresConnection.connect(
             address.host,
@@ -372,7 +402,8 @@ private[kyo] object PostgresSqlConnection:
             config.preparedStatementCacheSize,
             config.preparedStatementTtl,
             applicationName = options.applicationName,
-            socketTimeout = options.socketTimeout.getOrElse(Duration.Infinity)
+            socketTimeout = options.socketTimeout.getOrElse(Duration.Infinity),
+            searchPath = searchPath
         )
 
     /** Whether `e` says the server refused a plaintext connection and wants TLS, which is what `sslmode=allow` retries on.
@@ -419,7 +450,7 @@ private[kyo] object PostgresSqlConnection:
                     // from a misbehaving server or proxy; converting it here keeps the failure on the typed
                     // Abort[SqlException] channel instead of escaping as a NumberFormatException panic.
                     val oidText = new java.lang.String(oidBytes.toArray, StandardCharsets.UTF_8).trim
-                    val oid = oidText.toIntOption.getOrElse(
+                    val oid     = oidText.toIntOption.getOrElse(
                         throw SqlConnectionProtocolDecodeException("pg_type oid", s"non-numeric oid '$oidText' for type '$name'")
                     )
                     acc.updated(name, oid)
@@ -458,7 +489,7 @@ private[kyo] object PostgresSqlConnection:
       */
     private[kyo] def notificationStream(
         pool: SqlConnectionPool[PostgresSqlConnection],
-        address: SqlConfig.Address,
+        address: SqlConfig.Address.Network,
         password: Maybe[String],
         channel: String,
         config: SqlConfig
@@ -514,8 +545,8 @@ private[kyo] object PostgresSqlConnection:
       */
     private def pump(conn: PostgresConnection, cause: AtomicRef[Maybe[SqlException]])(using Frame): Unit < Async =
         Abort.run[SqlException](conn.receive).flatMap {
-            case Result.Failure(e) => failStream(conn, cause, e)
-            case Result.Panic(t)   => failStream(conn, cause, SqlConnectionNotificationPanicException(t))
+            case Result.Failure(e)   => failStream(conn, cause, e)
+            case Result.Panic(t)     => failStream(conn, cause, SqlConnectionNotificationPanicException(t))
             case Result.Success(msg) =>
                 msg match
                     case n: NotificationResponse =>

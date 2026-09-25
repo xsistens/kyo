@@ -38,9 +38,14 @@ class PathWatchTest extends FileSystemWatchTestSuite:
     ) extends FileSystem.Read[Sync], FileSystem.Watch:
         export delegate.{isDirectory as _, list as _, *}
 
+        /** How many times a directory check answered "not a directory": the fence a leaf needs before it restores the root,
+          * since a restore that lands before the scan looked would leave the scan nothing to invalidate on.
+          */
+        val notDirectoryReports = new java.util.concurrent.atomic.AtomicInteger(0)
+
         override def isDirectory(path: Path)(using Frame): Boolean < (Sync & Abort[FileReadException]) =
             rootIsDirectory.get.map {
-                case false => false
+                case false => Sync.defer(notDirectoryReports.incrementAndGet()).andThen(false)
                 case true  => delegate.isDirectory(path)
             }
 
@@ -123,7 +128,7 @@ class PathWatchTest extends FileSystemWatchTestSuite:
 
     private def glob(value: String): Glob =
         Glob.parse(value) match
-            case Result.Success(glob) => glob
+            case Result.Success(glob)  => glob
             case Result.Failure(error) =>
                 throw new AssertionError(s"invalid test glob at ${error.offset}: ${error.reason}")
             case Result.Panic(error) => throw error
@@ -161,7 +166,7 @@ class PathWatchTest extends FileSystemWatchTestSuite:
                                 for
                                     _       <- (root / "seed.txt").write("seed")
                                     watcher <- root.openWatcher()
-                                    walk <- Fiber.initUnscoped(
+                                    walk    <- Fiber.initUnscoped(
                                         Scope.run(
                                             Path.runReadOnlyWith(fileSystem)(
                                                 root.walk
@@ -298,26 +303,34 @@ class PathWatchTest extends FileSystemWatchTestSuite:
     }
 
     "watcher does not invent moves for equal files or directories" in {
-        hostRoot("kyo-path-watch-identity").map { dir =>
-            val fileSystem = FileSystem.host
-            val root       = dir / "identity-root"
-            val oldFile    = root / "old.txt"
-            val newFile    = root / "new.txt"
-            val oldDir     = root / "old-dir"
-            val newDir     = root / "new-dir"
-            Scope.run {
-                fileSystem.write(oldFile, "same", Path.WriteOptions()).andThen(fileSystem.mkDir(oldDir)).andThen {
-                    fileSystem.openWatcher(root, WatchOptions()).map { watcher =>
-                        fileSystem.removeExisting(oldFile).andThen(fileSystem.write(newFile, "same", Path.WriteOptions())).andThen {
-                            fileSystem.removeAll(oldDir).andThen(fileSystem.mkDir(newDir)).andThen {
-                                watcher.events.take(4).run.map { events =>
-                                    assert(!events.exists { case PathChange.Moved(_, _) => true; case _ => false })
-                                    assert(events.toSet == Set(
-                                        PathChange.Removed(oldFile),
-                                        PathChange.Created(newFile),
-                                        PathChange.Removed(oldDir),
-                                        PathChange.Created(newDir)
-                                    ))
+        // All four changes land before the first scan, so each removal is observed together with its equal
+        // replacement, which is exactly where a move could be invented. On the live clock a scan could also land
+        // inside write, between creating new.txt and filling it, and the Modified that followed took one of the
+        // four events read here. Waiting for the rearm proves the scan has published before the read begins.
+        Clock.withTimeControl { clock =>
+            hostRoot("kyo-path-watch-identity").map { dir =>
+                val fileSystem = FileSystem.host
+                val root       = dir / "identity-root"
+                val oldFile    = root / "old.txt"
+                val newFile    = root / "new.txt"
+                val oldDir     = root / "old-dir"
+                val newDir     = root / "new-dir"
+                Scope.run {
+                    fileSystem.write(oldFile, "same", Path.WriteOptions()).andThen(fileSystem.mkDir(oldDir)).andThen {
+                        fileSystem.openWatcher(root, WatchOptions()).map { watcher =>
+                            fileSystem.removeExisting(oldFile).andThen(fileSystem.write(newFile, "same", Path.WriteOptions())).andThen {
+                                fileSystem.removeAll(oldDir).andThen(fileSystem.mkDir(newDir)).andThen {
+                                    clock.advance(10.millis).andThen(clock.awaitPendingSleepers(1)).andThen {
+                                        watcher.events.take(4).run.map { events =>
+                                            assert(!events.exists { case PathChange.Moved(_, _) => true; case _ => false })
+                                            assert(events.toSet == Set(
+                                                PathChange.Removed(oldFile),
+                                                PathChange.Created(newFile),
+                                                PathChange.Removed(oldDir),
+                                                PathChange.Created(newDir)
+                                            ))
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -361,18 +374,30 @@ class PathWatchTest extends FileSystemWatchTestSuite:
     }
 
     "multi-event traces are stably path sorted" in {
-        hostRoot("kyo-path-watch-sorted").map { tempRoot =>
-            val fileSystem = FileSystem.host
-            val root       = tempRoot / "sorted-watch-root"
-            val dir        = root / "dir"
-            val a          = dir / "a.txt"
-            val b          = dir / "b.txt"
-            fileSystem.write(a, "a", Path.WriteOptions()).andThen(fileSystem.write(b, "b", Path.WriteOptions())).andThen {
-                Scope.run {
-                    fileSystem.openWatcher(root, WatchOptions(depth = WatchDepth.Recursive)).map { watcher =>
-                        fileSystem.removeAll(dir).andThen {
-                            watcher.events.take(3).run.map { events =>
-                                assert(events == Chunk(PathChange.Removed(dir), PathChange.Removed(a), PathChange.Removed(b)))
+        // Sorting is per scan, and removeAll is not atomic: it deletes the files before their directory. On the
+        // live clock a scan could land between those deletes and split this trace into separately sorted batches
+        // (a.txt, then dir and b.txt), which a Windows run did. Holding the clock until removeAll returns makes
+        // the whole removal one scan. That scan holds removals back one interval before publishing, so it takes
+        // two ticks, and waiting for the rearm between them keeps the second from landing before the held-back
+        // poll is scheduled.
+        Clock.withTimeControl { clock =>
+            hostRoot("kyo-path-watch-sorted").map { tempRoot =>
+                val fileSystem = FileSystem.host
+                val root       = tempRoot / "sorted-watch-root"
+                val dir        = root / "dir"
+                val a          = dir / "a.txt"
+                val b          = dir / "b.txt"
+                fileSystem.write(a, "a", Path.WriteOptions()).andThen(fileSystem.write(b, "b", Path.WriteOptions())).andThen {
+                    Scope.run {
+                        fileSystem.openWatcher(root, WatchOptions(depth = WatchDepth.Recursive)).map { watcher =>
+                            fileSystem.removeAll(dir).andThen {
+                                clock.advance(10.millis).andThen(clock.awaitPendingSleepers(1)).andThen {
+                                    clock.advance(10.millis).andThen {
+                                        watcher.events.take(3).run.map { events =>
+                                            assert(events == Chunk(PathChange.Removed(dir), PathChange.Removed(a), PathChange.Removed(b)))
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -483,7 +508,7 @@ class PathWatchTest extends FileSystemWatchTestSuite:
             val root       = dir / "glob-root"
             val ignored    = root / "other" / "FILE.TXT"
             val selected   = root / "selected" / "FILE.TXT"
-            val options = WatchOptions(
+            val options    = WatchOptions(
                 depth = WatchDepth.Recursive,
                 glob = glob("selected/*.txt"),
                 caseSensitivity = MatchCase.Insensitive
@@ -521,7 +546,7 @@ class PathWatchTest extends FileSystemWatchTestSuite:
                             _               <- root.mkDir
                             watcher         <- root.openWatcher(WatchOptions(glob = glob("*.txt")))
                             caseSensitivity <- fileSystem.defaultCaseSensitivity
-                            _ <- caseSensitivity match
+                            _               <- caseSensitivity match
                                 case Glob.CaseSensitivity.Sensitive   => upper.write("ignored").andThen(lower.write("selected"))
                                 case Glob.CaseSensitivity.Insensitive => upper.write("selected")
                             expected = caseSensitivity match
@@ -660,6 +685,8 @@ class PathWatchTest extends FileSystemWatchTestSuite:
                             fs.openWatcher(root, WatchOptions()).map { watcher =>
                                 Fiber.initUnscoped(Scope.run(watcher.events.run)).map { fiber =>
                                     rootIsDirectory.set(false).andThen(clock.advance(10.millis)).andThen {
+                                        assertEventually(Sync.defer(fs.notDirectoryReports.get() > 0))
+                                    }.andThen {
                                         rootIsDirectory.set(true).andThen(delegate.write(
                                             root / "later",
                                             "later",

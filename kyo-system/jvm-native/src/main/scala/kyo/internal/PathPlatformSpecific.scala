@@ -39,7 +39,7 @@ final private[kyo] class NioPathUnsafe(val jpath: java.nio.file.Path) extends Pa
             // and the drive designator (e.g. "C:") for a Windows drive root ("C:\"). Carrying
             // the drive here is what lets parts -> make round-trip without dropping the volume,
             // which otherwise re-anchors the path to the process working directory's drive.
-            val root = jpath.getRoot
+            val root        = jpath.getRoot
             val rootSegment =
                 if root == null then ""
                 else root.toString.replace('\\', '/').stripSuffix("/")
@@ -326,12 +326,14 @@ final private[kyo] class NioPathUnsafe(val jpath: java.nio.file.Path) extends Pa
     private def openRawChannel(mode: Path.RawChannelAccess): Path.RawChannel =
         def writeOptions(open: FileSystem.WriteOpen): Array[StandardOpenOption] = open match
             case FileSystem.WriteOpen.Existing => Array(StandardOpenOption.WRITE)
-            case FileSystem.WriteOpen.Create =>
+            case FileSystem.WriteOpen.Create   =>
                 ensureParent(jpath)
                 Array(StandardOpenOption.WRITE, StandardOpenOption.CREATE)
             case FileSystem.WriteOpen.CreateNew =>
                 ensureParent(jpath)
-                Array(StandardOpenOption.WRITE, StandardOpenOption.CREATE_NEW)
+                // Exclusive creation is the platform's to guarantee: atomic in the JDK's CREATE_NEW, absent from
+                // Scala Native's, which claims the path here instead. See NioExclusiveCreatePlatform.
+                NioExclusiveCreatePlatform.claimExclusively(jpath)
         val opts: Array[StandardOpenOption] = mode match
             case Path.RawChannelAccess.Read            => Array(StandardOpenOption.READ)
             case Path.RawChannelAccess.Write(open)     => writeOptions(open)
@@ -406,15 +408,15 @@ final private[kyo] class NioPathUnsafe(val jpath: java.nio.file.Path) extends Pa
         val isExclusive = mode == Path.LockMode.Exclusive
         // The suffix is part of the lock's identity: claims under different suffixes contend on
         // different sentinel files, so the registry keys on the sentinel, not on the data path.
-        val key = sentinel(registryKey, sentinelSuffix)
+        val key                                                                        = sentinel(registryKey, sentinelSuffix)
         def settled(result: Result[FileLockException, Path.RawLock]): Path.LockAttempt =
             result match
                 case Result.Success(raw)   => Path.LockAttempt.Acquired(raw)
                 case Result.Failure(error) => Path.LockAttempt.Failed(Result.Failure(error))
                 case panic: Result.Panic   => Path.LockAttempt.Failed(panic)
         NioPathLockRegistry.reserve(key, isExclusive) match
-            case NioPathLockRegistry.Reservation.Denied  => Path.LockAttempt.Failed(Result.fail(FileLockUnavailableException(safe)))
-            case NioPathLockRegistry.Reservation.Pending => Path.LockAttempt.Pending
+            case NioPathLockRegistry.Reservation.Denied         => Path.LockAttempt.Failed(Result.fail(FileLockUnavailableException(safe)))
+            case NioPathLockRegistry.Reservation.Pending        => Path.LockAttempt.Pending
             case NioPathLockRegistry.Reservation.SharedExisting =>
                 Path.LockAttempt.Acquired(new NioRawLock(key, isExclusive))
             case NioPathLockRegistry.Reservation.First =>
@@ -583,10 +585,16 @@ final private[kyo] class NioWriteHandle(channel: FileChannel, path: Path) extend
 
     def writeBytes(chunk: Chunk[Byte])(using AllowUnsafe, Frame): Result[FileWriteException, Unit] =
         try
-            val arr = chunk.toArray
-            val buf = java.nio.ByteBuffer.wrap(arr)
-            while buf.hasRemaining do discard(channel.write(buf))
-            Result.unit
+            val arr     = chunk.toArray
+            val buf     = java.nio.ByteBuffer.wrap(arr)
+            var stalled = false
+            // A short write leaves the tail of the buffer unwritten and is retried from the
+            // buffer's own cursor. A write taking no bytes ends the loop instead, since the retry
+            // would offer the same bytes at the same offset.
+            while buf.hasRemaining && !stalled do
+                if channel.write(buf) <= 0 then stalled = true
+            if stalled then Result.fail(FileWriteStalledException(path, buf.remaining.bytes))
+            else Result.unit
         catch
             case e: IOException if NioExceptionBoundary.isInterrupted(e) => Result.panic(e)
             case e: IOException                                          => Result.fail(FileIOException(path, FileSystemOperation.Write, e))
@@ -635,8 +643,12 @@ final private[kyo] class NioRawChannel(channel: FileChannel, path: Path) extends
         try
             val buf     = java.nio.ByteBuffer.wrap(bytes)
             var written = 0
-            while buf.hasRemaining do written += channel.write(buf, pos + written)
-            Result.unit
+            var stalled = false
+            while buf.hasRemaining && !stalled do
+                val n = channel.write(buf, pos + written)
+                if n <= 0 then stalled = true else written += n
+            if stalled then Result.fail(FileWriteStalledException(path, buf.remaining.bytes))
+            else Result.unit
         catch
             case e: IOException if NioExceptionBoundary.isInterrupted(e) => Result.panic(e)
             case e: IOException                                          => Result.fail(FileIOException(path, FileSystemOperation.Write, e))
@@ -1008,7 +1020,7 @@ abstract private[kyo] class PathPlatformSpecific extends PathDirectories:
                     )
                 catch
                     case e: java.io.IOException if NioExceptionBoundary.isInterrupted(e) => Result.panic(e)
-                    case e: java.io.IOException =>
+                    case e: java.io.IOException                                          =>
                         Result.fail(FileIOException(make(Chunk(prefix + suffix)), FileSystemOperation.Create, e))
             )
         )
@@ -1035,7 +1047,7 @@ abstract private[kyo] class PathPlatformSpecific extends PathDirectories:
                     )
                 catch
                     case e: java.io.IOException if NioExceptionBoundary.isInterrupted(e) => Result.panic(e)
-                    case e: java.io.IOException =>
+                    case e: java.io.IOException                                          =>
                         Result.fail(FileIOException(make(Chunk(prefix)), FileSystemOperation.Create, e))
             )
         )

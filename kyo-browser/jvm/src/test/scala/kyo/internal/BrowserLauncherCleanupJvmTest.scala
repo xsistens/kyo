@@ -14,11 +14,11 @@ import scala.annotation.tailrec
   *
   * `BrowserLauncher.launch` implements the contract via two independent finalizer chains:
   *
-  *   1. The Chrome subprocess is registered with the enclosing `Scope` via `Command.spawn`'s
-  *      `Scope.acquireRelease(proc)((_) => destroyForcibly())`.
+  *   1. The Chrome process tree is registered with the enclosing `Scope` via `Scope.acquireRelease(proc)(terminateTree)`, whose
+  *      release kills the main process and every descendant listed while it was alive, and returns once none of them is left.
   *   2. The user-data temp directory is cleaned up via two complementary finalizers: `Path.tempDir`'s own
   *      `Scope.acquireRelease` and the `Scope.ensure(removeTmpDir(...))` in `BrowserLauncher.launch`, both
-  *      of which run LIFO **after** the process is killed so the directory is no longer locked when removeAll runs.
+  *      of which run LIFO **after** the tree is gone so nothing writes into the directory when removeAll runs.
   *
   * Plus a JVM-level safety net via `BrowserLauncherPlatform.registerShutdownHook(proc)` for the case where the JVM exits before scope
   * finalizers run (BrowserLauncherPlatform.scala:5-27).
@@ -123,7 +123,7 @@ class BrowserLauncherCleanupJvmTest extends BaseChromeTest:
       * effect chaining is appropriate.
       */
     private def waitUntil(timeoutMs: Long, stepMs: Long = 50)(cond: () => Boolean): Boolean =
-        val deadline = java.lang.System.currentTimeMillis() + timeoutMs
+        val deadline                 = java.lang.System.currentTimeMillis() + timeoutMs
         @tailrec def loop(): Boolean =
             if cond() then true
             else if java.lang.System.currentTimeMillis() >= deadline then false
@@ -268,7 +268,7 @@ class BrowserLauncherCleanupJvmTest extends BaseChromeTest:
                                 _    <- Browser.eval("1+1")
                                 live <- Sync.defer(chromesByTag(tag))
                                 _    <- capturedRef.set(live)
-                                _ <- Sync.defer {
+                                _    <- Sync.defer {
                                     // Externally drop Chrome's process tree. After this point the CDP WebSocket
                                     // is half-open from the launcher's perspective; the next CDP send (or the
                                     // scope finalizer's disposeBrowserContext call) raises Closed → ConnectionLost.
@@ -290,7 +290,7 @@ class BrowserLauncherCleanupJvmTest extends BaseChromeTest:
                     // The action MUST have aborted: the killed Chrome cannot service a follow-up CDP request.
                     runResult match
                         case Result.Failure(_) | Result.Panic(_) => ()
-                        case Result.Success(_) =>
+                        case Result.Success(_)                   =>
                             fail("test: expected an abort/panic after externally killing Chrome, got Success")
                     end match
                     assert(captured.nonEmpty, "test: captured no Chrome process for our tag")
@@ -348,7 +348,7 @@ class BrowserLauncherCleanupJvmTest extends BaseChromeTest:
         Scope.run {
             for
                 r1 <- firstRun
-                _ <- Sync.defer {
+                _  <- Sync.defer {
                     r1 match
                         case Result.Failure(ex) if ex.getMessage == "first deliberate boom" =>
                             assert(ex.getMessage == "first deliberate boom", s"sentinel message mismatch: ${ex.getMessage}")
@@ -356,7 +356,7 @@ class BrowserLauncherCleanupJvmTest extends BaseChromeTest:
                     end match
                 }
                 r2 <- trivialRun(tag2)
-                _ <- Sync.defer {
+                _  <- Sync.defer {
                     r2 match
                         case Result.Success(v) =>
                             assert(v == "42", s"test: second run expected '42' but got '$v'")
@@ -364,7 +364,7 @@ class BrowserLauncherCleanupJvmTest extends BaseChromeTest:
                     end match
                 }
                 r3 <- trivialRun(tag3)
-                _ <- Sync.defer {
+                _  <- Sync.defer {
                     r3 match
                         case Result.Success(v) =>
                             assert(v == "42", s"test: third run expected '42' but got '$v'")

@@ -305,7 +305,7 @@ private[kyo] object HtmlRenderer:
 
     private[kyo] def wrapReactiveRegion(region: ReactiveRegion, innerHtml: String): String =
         region match
-            case ReactiveRegion.HtmlRange(id) => s"<!--kyo-rs:$id-->$innerHtml<!--kyo-re:$id-->"
+            case ReactiveRegion.HtmlRange(id)    => s"<!--kyo-rs:$id-->$innerHtml<!--kyo-re:$id-->"
             case ReactiveRegion.SvgElement(path) =>
                 s"""<g data-kyo-path="${pathAttr(path)}" data-kyo-reactive>$innerHtml</g>"""
 
@@ -344,9 +344,18 @@ private[kyo] object HtmlRenderer:
       * Called by `UI.runRenderPage`.
       */
     private[kyo] def page(head: UI.PageHead, body: String): String =
+        document(head, "", body, "")
+
+    /** A server-push page: the document [[page]] builds for `head`, with the page's pseudo-state rules after `head.css` and the
+      * WebSocket client for `basePath` at the end of the body.
+      */
+    private[kyo] def serverPage(head: UI.PageHead, body: String, css: String, basePath: String): String =
+        document(head, css, body, s"<script>${clientJs(jsStr(basePath))}</script>")
+
+    private def document(head: UI.PageHead, css: String, body: String, client: String): String =
         val metaTags = head.meta.map((n, c) => s"""<meta name="${esc(n)}" content="${esc(c)}">""").mkString
         val linkTags = head.links.map((r, h) => s"""<link rel="${esc(r)}" href="${esc(h)}">""").mkString
-        val script = head.moduleScript match
+        val script   = head.moduleScript match
             case Present(src) => s"""<script type="module" src="${esc(src)}"></script>"""
             case Absent       => ""
         val ldBlock = head.jsonLd match
@@ -360,12 +369,12 @@ private[kyo] object HtmlRenderer:
            |<meta name="viewport" content="width=device-width, initial-scale=1">
            |<title>${esc(head.title)}</title>
            |$metaTags$linkTags
-           |<style>$baseCss${head.css}</style>
+           |<style>$baseCss${head.css}$css</style>
            |$ldBlock</head>
-           |<body>$body$islands</body>
+           |<body>$body$islands$client</body>
            |$script
            |</html>""".stripMargin
-    end page
+    end document
 
     // Render a data island as `<script type="..."[ id="..."]>ESCAPED-JSON</script>`. The type
     // and id attributes use the HTML-entity escape (`esc`); the JSON body uses the JS-unicode
@@ -1871,9 +1880,9 @@ private[kyo] object HtmlRenderer:
            |// Read-only test hook on the current socket; it follows each reconnect.
            |Object.defineProperty(window,"__kyoWs",{get:function(){return ws;},configurable:true});
            |var __dragRt=null,__dragCleanup=null;
-           |// One call site on purpose. The runtime wires document-level capture listeners and one pagehide listener it never removes, so
-           |// it must be installed once per session and never over a live one; the guard at the open handler is what keeps that true
-           |// across reconnects, and its own cleanup is idempotent.
+           |// One call site on purpose. The runtime wires document-level capture listeners and a pagehide listener that only its cleanup
+           |// removes, so it must be installed once per session and never over a live one; the guard at the open handler is what keeps
+           |// that true across reconnects, and its own cleanup is idempotent.
            |function kyoInstallDrag(){
            |  __dragRt=installDragRuntime(function(m){post(m);},{onClose:function(c){__dragCleanup=c;}});
            |  __dragCleanup=__dragRt.cleanup;
@@ -1899,7 +1908,8 @@ private[kyo] object HtmlRenderer:
            |  // connection with a session attached whose frames are all dropped.
            |  if(ws&&ws.readyState<2)return;
            |  __live=false;
-           |  var sock=new WebSocket((location.protocol===\"https:\"?\"wss:\":\"ws:\")+"//"+location.host+base+"/_kyo/ws");
+           |  // The page's own path and query ride the upgrade, so a request-aware session evaluates the UI for the same page the GET served.
+           |  var sock=new WebSocket((location.protocol===\"https:\"?\"wss:\":\"ws:\")+"//"+location.host+base+"/_kyo/ws?${UIServer.pageParam}="+encodeURIComponent(location.pathname+location.search));
            |  ws=sock;
            |  // Each handler serves ONE socket and stands down once a newer one has replaced it, closing itself on the way out so
            |  // a superseded connection is torn down instead of lingering with a server session attached.
@@ -2855,12 +2865,12 @@ private[kyo] object HtmlRenderer:
                 s.preserveAspectRatio.foreach(p => svgAttr(sb, "preserveAspectRatio", par(p)))
                 s.width.foreach(c => svgAttr(sb, "width", coord(c)))
                 s.height.foreach(c => svgAttr(sb, "height", coord(c)))
-            case _: Svg.G    =>
-            case _: Svg.Defs =>
+            case _: Svg.G      =>
+            case _: Svg.Defs   =>
             case _: Svg.Symbol =>
                 s.viewBox.foreach(v => svgAttr(sb, "viewBox", viewBox(v)))
-            case _: Svg.Switch   =>
-            case _: Svg.Metadata =>
+            case _: Svg.Switch    =>
+            case _: Svg.Metadata  =>
             case _: Svg.SvgAnchor =>
                 s.href.foreach(h => svgAttr(sb, "href", h))
             case _: Svg.Use =>
@@ -3115,7 +3125,7 @@ private[kyo] object HtmlRenderer:
         case Svg.Paint.Ref(server)  => s"url(#${server.id})"
 
     private def transform(t: Svg.Transform): String = t match
-        case Svg.Transform.Translate(x, y) => s"translate(${fmtD(x)} ${fmtD(y)})"
+        case Svg.Transform.Translate(x, y)     => s"translate(${fmtD(x)} ${fmtD(y)})"
         case Svg.Transform.Rotate(deg, cx, cy) =>
             cx match
                 case Present(cx0) =>
@@ -3160,14 +3170,14 @@ private[kyo] object HtmlRenderer:
         Svg.PathData.commands(d).map(pathCmd).mkString(" ")
 
     private def pathCmd(c: Svg.PathCommand): String = c match
-        case Svg.PathCommand.MoveTo(x, y)   => s"M${fmtD(x)} ${fmtD(y)}"
-        case Svg.PathCommand.MoveBy(dx, dy) => s"m${fmtD(dx)} ${fmtD(dy)}"
-        case Svg.PathCommand.LineTo(x, y)   => s"L${fmtD(x)} ${fmtD(y)}"
-        case Svg.PathCommand.LineBy(dx, dy) => s"l${fmtD(dx)} ${fmtD(dy)}"
-        case Svg.PathCommand.HLineTo(x)     => s"H${fmtD(x)}"
-        case Svg.PathCommand.HLineBy(dx)    => s"h${fmtD(dx)}"
-        case Svg.PathCommand.VLineTo(y)     => s"V${fmtD(y)}"
-        case Svg.PathCommand.VLineBy(dy)    => s"v${fmtD(dy)}"
+        case Svg.PathCommand.MoveTo(x, y)                      => s"M${fmtD(x)} ${fmtD(y)}"
+        case Svg.PathCommand.MoveBy(dx, dy)                    => s"m${fmtD(dx)} ${fmtD(dy)}"
+        case Svg.PathCommand.LineTo(x, y)                      => s"L${fmtD(x)} ${fmtD(y)}"
+        case Svg.PathCommand.LineBy(dx, dy)                    => s"l${fmtD(dx)} ${fmtD(dy)}"
+        case Svg.PathCommand.HLineTo(x)                        => s"H${fmtD(x)}"
+        case Svg.PathCommand.HLineBy(dx)                       => s"h${fmtD(dx)}"
+        case Svg.PathCommand.VLineTo(y)                        => s"V${fmtD(y)}"
+        case Svg.PathCommand.VLineBy(dy)                       => s"v${fmtD(dy)}"
         case Svg.PathCommand.CubicTo(c1x, c1y, c2x, c2y, x, y) =>
             s"C${fmtD(c1x)} ${fmtD(c1y)} ${fmtD(c2x)} ${fmtD(c2y)} ${fmtD(x)} ${fmtD(y)}"
         case Svg.PathCommand.CubicBy(c1x, c1y, c2x, c2y, dx, dy) =>
@@ -3176,10 +3186,10 @@ private[kyo] object HtmlRenderer:
             s"S${fmtD(c2x)} ${fmtD(c2y)} ${fmtD(x)} ${fmtD(y)}"
         case Svg.PathCommand.SmoothCubicBy(c2x, c2y, dx, dy) =>
             s"s${fmtD(c2x)} ${fmtD(c2y)} ${fmtD(dx)} ${fmtD(dy)}"
-        case Svg.PathCommand.QuadTo(cx, cy, x, y)   => s"Q${fmtD(cx)} ${fmtD(cy)} ${fmtD(x)} ${fmtD(y)}"
-        case Svg.PathCommand.QuadBy(cx, cy, dx, dy) => s"q${fmtD(cx)} ${fmtD(cy)} ${fmtD(dx)} ${fmtD(dy)}"
-        case Svg.PathCommand.SmoothQuadTo(x, y)     => s"T${fmtD(x)} ${fmtD(y)}"
-        case Svg.PathCommand.SmoothQuadBy(dx, dy)   => s"t${fmtD(dx)} ${fmtD(dy)}"
+        case Svg.PathCommand.QuadTo(cx, cy, x, y)                       => s"Q${fmtD(cx)} ${fmtD(cy)} ${fmtD(x)} ${fmtD(y)}"
+        case Svg.PathCommand.QuadBy(cx, cy, dx, dy)                     => s"q${fmtD(cx)} ${fmtD(cy)} ${fmtD(dx)} ${fmtD(dy)}"
+        case Svg.PathCommand.SmoothQuadTo(x, y)                         => s"T${fmtD(x)} ${fmtD(y)}"
+        case Svg.PathCommand.SmoothQuadBy(dx, dy)                       => s"t${fmtD(dx)} ${fmtD(dy)}"
         case Svg.PathCommand.ArcTo(rx, ry, xRot, largeArc, sweep, x, y) =>
             val la = if largeArc then 1 else 0
             val sw = if sweep then 1 else 0

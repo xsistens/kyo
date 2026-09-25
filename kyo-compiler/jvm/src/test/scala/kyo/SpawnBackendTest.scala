@@ -114,8 +114,8 @@ class SpawnBackendTest extends kyo.test.Test[Any]:
         Scope.run {
             Abort.run[Closed] {
                 for
-                    sentCh <- Channel.initUnscoped[Int](16)
-                    respCh <- Channel.initUnscoped[Envelope](16)
+                    sentCh   <- Channel.initUnscoped[Int](16)
+                    respCh   <- Channel.initUnscoped[Envelope](16)
                     exchange <- Exchange.initUnscoped[Request, Response, Envelope, Nothing, TransportError](
                         encode = (id, req) => Envelope.Req(id, req),
                         send = (frame: Envelope) =>
@@ -271,7 +271,7 @@ class SpawnBackendTest extends kyo.test.Test[Any]:
                 // Capture THIS init's worker process via the onSpawn seam (fired once the interrupt-safe
                 // kill is armed, just before the readiness probe), targeting this test's own worker.
                 spawned <- Sync.defer(new java.util.concurrent.atomic.AtomicReference[Maybe[Process]](Absent))
-                fiber <- Fiber.initUnscoped(
+                fiber   <- Fiber.initUnscoped(
                     Abort.run[CompilerException](SpawnBackend.init(spawnConfig(), driver, 7, p => spawned.set(Present(p))))
                 )
                 // The worker JVM has spawned but cannot answer the probe for seconds, so once captured the
@@ -289,6 +289,46 @@ class SpawnBackendTest extends kyo.test.Test[Any]:
                 dead <- pollUntil(500, 10.millis)(process.isAlive.map(alive => !alive))
                 _ = assert(dead, "interrupting init must force-kill the partial worker, not leave an orphaned JVM")
             yield ()
+        }
+    }
+
+    // `SpawnBackend.init` spawns the worker JVM, then parks on the aeron connect and the exchange wiring before the
+    // readiness probe. The kill must be armed in the step that produces the process, or a stop landing on either
+    // park abandons the continuation that would arm it and the worker JVM outlives the caller. That window opens
+    // when the spawn returns and closes a few milliseconds later, so the rounds sweep the first twelve
+    // milliseconds in quarter-millisecond steps and then coarser steps for a slower machine. Each round's worker
+    // carries a unique token in its command line (a `-Wconf` filter that matches nothing, forwarded as a scalac
+    // option), so the count afterwards is of this round's workers alone, whatever else the suite is spawning.
+    "an interrupt landing before the kill is armed does not orphan the worker JVM" in {
+        withDriver { driver =>
+            val rounds                              = 64
+            def workers(token: String): Int < Async =
+                Abort.run[CommandException](Command("pgrep", "-f", token).textWithExitCode).map {
+                    case Result.Success((out, _)) => out.linesIterator.count(_.trim.nonEmpty)
+                    case _                        => 0
+                }
+            def kill(token: String): Unit < Async =
+                Abort.run[CommandException](Command("pkill", "-9", "-f", token).textWithExitCode).unit
+            Loop.indexed { i =>
+                if i >= rounds then Loop.done(succeed)
+                else
+                    val token = s"kyo-orphan-probe-${java.util.UUID.randomUUID().toString.take(8)}"
+                    for
+                        fiber <- Fiber.initUnscoped(
+                            Abort.run[CompilerException](SpawnBackend.init(spawnConfig(Chunk(s"-Wconf:msg=$token:s")), driver, 300 + i))
+                        )
+                        _ <- Async.delay(if i < 48 then (i * 250).micros else (12 + (i - 48) * 4).millis)(fiber.interrupt)
+                        r <- fiber.getResult
+                        _ <- r match
+                            case Result.Success(Result.Success(backend)) => Abort.run[Throwable](backend.close).unit
+                            case _                                       => Kyo.unit
+                        gone <- Abort.run[Timeout](Async.timeout(10.seconds)(assertEventually(workers(token).map(_ == 0))))
+                        _    <- if gone.isSuccess then Kyo.unit else kill(token)
+                    yield
+                        assert(gone.isSuccess, s"round $i: a worker JVM outlived the interrupted init")
+                        Loop.continue
+                    end for
+            }
         }
     }
 

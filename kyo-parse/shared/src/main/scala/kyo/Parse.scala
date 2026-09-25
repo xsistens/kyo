@@ -62,7 +62,7 @@ object Parse:
     def firstOf[In, Out, S](parsers: Seq[() => Out < (Parse[In] & S)])(using Tag[Parse[In]], Frame): Out < (Parse[In] & S) =
         Effect.defer:
             Loop(parsers):
-                case Seq() => fail("No branch succeeded")
+                case Seq()        => fail("No branch succeeded")
                 case head +: tail =>
                     attempt(head()).map:
                         case Present(value) => Loop.done(value)
@@ -245,7 +245,7 @@ object Parse:
     def readOne[In, Out](f: In => Result[Chunk[String], Out])(using Tag[Parse[In]], Frame): Out < Parse[In] =
         read(input =>
             input.headMaybe match
-                case Absent => Result.fail(Chunk(ParseFailure("EOF", input.position)))
+                case Absent         => Result.fail(Chunk(ParseFailure("EOF", input.position)))
                 case Present(token) =>
                     f(token) match
                         case Result.Failure(messages) => Result.fail(messages.map(ParseFailure(_, input.position)))
@@ -273,7 +273,7 @@ object Parse:
     ): Out < Parse[In] =
         modifyState(state =>
             f(state.input) match
-                case Result.Panic(error) => throw error
+                case Result.Panic(error)      => throw error
                 case Result.Failure(failures) =>
                     (state.copy(failures = state.failures ++ failures), Absent)
                 case Result.Success((newInput, out)) =>
@@ -329,7 +329,7 @@ object Parse:
     def anyMatch[A](using Frame)[In](pf: PartialFunction[In, A])(using Tag[Parse[In]]): A < Parse[In] =
         Parse.read(in =>
             in.headMaybe match
-                case Absent => Result.fail(Chunk(ParseFailure("Unexpected token, got EOF", in.position)))
+                case Absent         => Result.fail(Chunk(ParseFailure("Unexpected token, got EOF", in.position)))
                 case Present(token) =>
                     if pf.isDefinedAt(token) then Result.succeed((in.advance(1), pf(token)))
                     else Result.fail(Chunk(ParseFailure("Unexpected token", in.position)))
@@ -674,11 +674,11 @@ object Parse:
         allowTrailing: Boolean = false
     )(using Tag[Parse[In]]): Chunk[Out] < (Parse[In] & S) =
         attempt(element).map:
-            case Absent => Chunk.empty
+            case Absent         => Chunk.empty
             case Present(first) =>
                 Loop(Chunk(first)): acc =>
                     attempt(separator).map:
-                        case Absent => Loop.done(acc)
+                        case Absent     => Loop.done(acc)
                         case Present(_) =>
                             attempt(element).map:
                                 case Present(next) =>
@@ -874,7 +874,7 @@ object Parse:
         for
             result   <- parser
             maybeEnd <- attempt(end)
-            _ <-
+            _        <-
                 if maybeEnd.isDefined then Kyo.lift(())
                 else fail("Incomplete parse - remaining input not consumed")
         yield result
@@ -884,7 +884,7 @@ object Parse:
         tag: Tag[Parse[In]],
         frame: Frame
     ): (ParseState[In], ParseResult[Out2]) < (S & S2) =
-        ArrowEffect.handleLoop[
+        ArrowEffect.handleLoopState[
             [in] =>> Parse.Op[In, in],
             Id,
             Parse[In],
@@ -894,15 +894,18 @@ object Parse:
             S2,
             ParseState[In]
         ](tag, state, parser)(
+            // Each branch casts the answer it produces to `C`. `Op` is covariant in its answer type, so matching
+            // it refines `C` only from below, never to an equality, and the answer types are themselves pending,
+            // so nothing in a branch can be reconciled with `C` by subtyping.
             [C] =>
-                (input, state, cont) =>
+                (state, input) =>
                     input match
                         case Op.ModifyState(modify) =>
                             val (newState, optOut) = modify(state.copy(input = state.input.advanceWhile(state.isDiscarded)))
                             optOut match
-                                case Absent => Loop.done((newState, ParseResult.failure(newState.failures)))
+                                case Absent       => Loop.done((newState, ParseResult.failure(newState.failures)))
                                 case Present(out) =>
-                                    Loop.continue(newState.copy(input = newState.input.advanceWhile(newState.isDiscarded)), cont(out))
+                                    Loop.continue(newState.copy(input = newState.input.advanceWhile(newState.isDiscarded)), out)
                             end match
 
                         case Op.Attempt(parser: (Out < Parse[In]) @unchecked) =>
@@ -913,10 +916,10 @@ object Parse:
                                             if result.fatal then
                                                 Loop.done((parseState, ParseResult.failure(result.errors, true)))
                                             else
-                                                Loop.continue(state, cont(Kyo.lift(Absent)))
+                                                Loop.continue(state, Kyo.lift(Absent.asInstanceOf[C]))
                                             end if
                                         case Present(out) =>
-                                            Loop.continue(parseState, cont(Kyo.lift(Present(out))))
+                                            Loop.continue(parseState, Kyo.lift(Present(out).asInstanceOf[C]))
                                     end match
                                 )
 
@@ -924,7 +927,7 @@ object Parse:
                             runState(state)(parser).map((parseState, result) =>
                                 result.out match
                                     case Absent       => Loop.done((parseState, ParseResult.failure(parseState.failures, fatal = true)))
-                                    case Present(out) => Loop.continue(parseState, cont(Kyo.lift(out)))
+                                    case Present(out) => Loop.continue(parseState, Kyo.lift(out.asInstanceOf[C]))
                             )
 
                         case Op.RecoverWith(parser: (Out < Parse[In]) @unchecked, recoverStrategy) =>
@@ -938,10 +941,10 @@ object Parse:
                                                         case Absent => Loop.done((parseState, ParseResult.failure(parseState.failures)))
                                                         case Present(recouverOut) => Loop.continue(
                                                                 recoverState.copy(failures = recoverState.failures ++ parseState.failures),
-                                                                cont(Kyo.lift(recouverOut))
+                                                                Kyo.lift(recouverOut.asInstanceOf[C])
                                                             )
                                                 )
-                                        case Present(out) => Loop.continue(parseState, cont(Kyo.lift(out)))
+                                        case Present(out) => Loop.continue(parseState, Kyo.lift(out.asInstanceOf[C]))
                                 )
 
                         case Op.Discard(parser: (Out < Parse[In]) @unchecked, isDiscarded) =>
@@ -953,7 +956,7 @@ object Parse:
                                     val finalState = parseState.copy(isDiscarded = oldIsDiscarded)
                                     result.out match
                                         case Absent       => Loop.done((finalState, ParseResult.failure(finalState.failures)))
-                                        case Present(out) => Loop.continue(finalState, cont(Kyo.lift(out)))
+                                        case Present(out) => Loop.continue(finalState, Kyo.lift(out.asInstanceOf[C]))
                                 ),
             done = (s, r) => f(r).map(out => (s, ParseResult.success(s.failures, out)))
         )

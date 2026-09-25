@@ -316,7 +316,7 @@ class SignalTest extends kyo.test.Test[Any]:
             val effectiveRepeats = if Platform.isNative then 5 else repeats
             {
                 (for
-                    ref <- Signal.initRef(0)
+                    ref     <- Signal.initRef(0)
                     readers <-
                         Fiber.initUnscoped(Async.fill(10, 10)(
                             Loop(0)(_ => ref.currentWith(v => if v < 10 then Loop.continue(v) else Loop.done(v)))
@@ -1027,43 +1027,41 @@ class SignalTest extends kyo.test.Test[Any]:
     private def recordValue[A](seen: AtomicRef[Chunk[A]], v: A)(using Frame): Unit < Async =
         seen.updateAndGet(_.append(v)).unit
 
-    private def awaitValue(ref: AtomicRef[String], target: String, maxTries: Int)(using Frame): Boolean < Async =
-        Loop.indexed { i =>
-            if i >= maxTries then Loop.done(false)
-            else ref.get.map(v => if v == target then Loop.done(true) else Async.sleep(1.millis).andThen(Loop.continue))
-        }
-
     // Leaf and `map`-over-leaf `observe` use the repairing path (the exact register-before-read override was removed
     // because it miscompiled on Scala Native; see SignalRef in Signal.scala). The guarantee is that the final value is
     // never lost: a write that lands in the read/register window is reconciled within `repairInterval`. Drive
-    // back-to-back set(a);set(b) under an explicit repairInterval and await the final value under a generous
-    // hang-guard (default 10000 x ~1ms polls): the poll returns the instant the value arrives, so the budget only
-    // bounds a genuinely lost value. A tighter budget could expire while a starved repair fiber was merely late,
-    // miscounting a delivered value as lost; only a returned count > 0 after the hang-guard means a value was
-    // actually lost. `repairInterval = Duration.Infinity` removes the repair timer entirely, which is how the
-    // lossless register/validate/await path is tested on its own.
+    // back-to-back set(a);set(b) under an explicit repairInterval and take what the observer hands over until the final
+    // value arrives. The handoff is a channel rather than a polled reference because a poll's sleep costs a timer tick
+    // per iteration, and on a platform whose tick is 15ms that alone is over the leaf's budget at 5000 iterations; a
+    // take returns the instant the value is put. Each wait is bounded by `wait` so a genuinely lost value ends the
+    // iteration as a miss instead of hanging the leaf, and the default is wide enough that a starved repair fiber that
+    // is merely late is not miscounted as a loss. `repairInterval = Duration.Infinity` removes the repair timer
+    // entirely, which is how the lossless register/validate/await path is tested on its own.
     private def observeNeverLosesFinalValue(
         useMap: Boolean,
         iterations: Int,
         repairInterval: Duration = 50.millis,
-        maxTries: Int = 10000
+        wait: Duration = 2.seconds
     )(using Frame): Int < Async =
         for
             ref <- Signal.initRef("")
             sig = if useMap then ref.map(v => v) else ref
-            lastSeen <- AtomicRef.init("")
-            fiber    <- Fiber.initUnscoped(sig.observe(repairInterval)(lastSeen.set(_)))
+            seen   <- Channel.initUnscoped[String](16)
+            fiber  <- Fiber.initUnscoped(sig.observe(repairInterval)(v => Abort.run[Closed](seen.put(v)).unit))
             misses <- Kyo.foreach(Chunk.from(1 to iterations)) { i =>
-                val a = s"a$i"
-                val b = s"b$i"
+                val a                                          = s"a$i"
+                val b                                          = s"b$i"
+                def untilFinal: Unit < (Async & Abort[Closed]) =
+                    seen.take.map(v => if v == b then () else untilFinal)
                 for
                     _   <- ref.set(a)
                     _   <- ref.set(b)
-                    got <- awaitValue(lastSeen, b, maxTries)
-                yield if got then 0 else 1
+                    got <- Abort.run[Timeout | Closed](Async.timeout(wait)(untilFinal))
+                yield if got.isSuccess then 0 else 1
                 end for
             }
             _ <- fiber.interrupt
+            _ <- seen.close
         yield misses.foldLeft(0)(_ + _)
 
     "observe" - {
@@ -1135,12 +1133,12 @@ class SignalTest extends kyo.test.Test[Any]:
         "never loses the final value with NO repair timer (SignalRef leaf, exact protocol)" in {
             // With an infinite repair interval nothing heals a missed wakeup: this only passes because the
             // version-validated register/validate/await protocol never misses one in the first place.
-            observeNeverLosesFinalValue(useMap = false, iterations = 5000, repairInterval = Duration.Infinity, maxTries = 500)
+            observeNeverLosesFinalValue(useMap = false, iterations = 5000, repairInterval = Duration.Infinity, wait = 500.millis)
                 .map(lost => assert(lost == 0, s"SignalRef lost $lost / 5000 without repair"))
         }
 
         "never loses the final value with NO repair timer (map delegates to leaf)" in {
-            observeNeverLosesFinalValue(useMap = true, iterations = 5000, repairInterval = Duration.Infinity, maxTries = 500)
+            observeNeverLosesFinalValue(useMap = true, iterations = 5000, repairInterval = Duration.Infinity, wait = 500.millis)
                 .map(lost => assert(lost == 0, s"map lost $lost / 5000 without repair"))
         }
 
@@ -1316,7 +1314,7 @@ class SignalTest extends kyo.test.Test[Any]:
                 child  <- Signal.initRef("c")
                 live   <- AtomicInt.init(0)
                 peak   <- AtomicInt.init(0)
-                fiber <- Fiber.initUnscoped(parent.observe { _ =>
+                fiber  <- Fiber.initUnscoped(parent.observe { _ =>
                     for
                         n <- Scope.acquireRelease(live.incrementAndGet)(_ => live.decrementAndGet.unit)
                         _ <- peak.updateAndGet(p => math.max(p, n))
@@ -1356,7 +1354,7 @@ class SignalTest extends kyo.test.Test[Any]:
                 child    <- Signal.initRef("c")
                 running  <- AtomicInt.init(0)
                 released <- AtomicRef.init(Chunk.empty[Int])
-                fiber <- Fiber.initUnscoped(parent.observe { v =>
+                fiber    <- Fiber.initUnscoped(parent.observe { v =>
                     Scope.ensure(released.updateAndGet(_.append(v)).unit).andThen {
                         // The child fiber increments `running` while alive; the per-value scope interrupts it on close.
                         Fiber.init(running.incrementAndGet.andThen(child.next)).unit
@@ -1381,7 +1379,7 @@ class SignalTest extends kyo.test.Test[Any]:
                 child    <- Signal.initRef("c")
                 running  <- AtomicInt.init(0)
                 released <- AtomicRef.init(false)
-                fiber <- Fiber.initUnscoped(parent.observe { _ =>
+                fiber    <- Fiber.initUnscoped(parent.observe { _ =>
                     Scope.ensure(released.set(true)).andThen {
                         Fiber.init(running.incrementAndGet.andThen(child.next)).unit
                     }
@@ -1402,7 +1400,7 @@ class SignalTest extends kyo.test.Test[Any]:
                 ticker   <- Signal.initRef(0)
                 live     <- AtomicInt.init(0)
                 released <- AtomicRef.init(false)
-                fiber <- Fiber.initUnscoped(parent.observe { _ =>
+                fiber    <- Fiber.initUnscoped(parent.observe { _ =>
                     Scope.acquireRelease(live.incrementAndGet)(_ => live.decrementAndGet.unit).andThen {
                         Scope.ensure(released.set(true)).unit
                     }

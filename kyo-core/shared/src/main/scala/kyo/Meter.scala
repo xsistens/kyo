@@ -239,20 +239,23 @@ object Meter:
       *   A Meter effect that represents a rate limiter.
       */
     def initRateLimiterUnscoped(rate: Int, period: Duration, reentrant: Boolean = true)(using initFrame: Frame): Meter < Sync =
-        Sync.Unsafe.defer {
-            new Base(rate, reentrant):
-                val timerTask =
-                    // Schedule periodic task to replenish permits
-                    Sync.Unsafe.evalOrThrow(Clock.repeatAtInterval(period, period)(replenish()))
+        Clock.use { clock =>
+            Sync.Unsafe.defer {
+                new Base(rate, reentrant):
+                    val timerTask =
+                        // Under the caller's clock: the nested evaluation starts from an empty context and would read the default
+                        // one, so a meter initialized under a controlled or shifted clock would replenish on the live one.
+                        Sync.Unsafe.evalOrThrow(Clock.let(clock)(Clock.repeatAtInterval(period, period)(replenish())))
 
-                // A consumed permit is not returned on completion; the timer task replenishes it.
-                def settleAcquired(): Unit = ()
+                    // A consumed permit is not returned on completion; the timer task replenishes it.
+                    def settleAcquired(): Unit = ()
 
-                @tailrec def replenish(i: Int = 0): Unit =
-                    if i < rate && release() then
-                        replenish(i + 1)
+                    @tailrec def replenish(i: Int = 0): Unit =
+                        if i < rate && release() then
+                            replenish(i + 1)
 
-                def onClose() = discard(timerTask.unsafe.interrupt())
+                    def onClose() = discard(timerTask.unsafe.interrupt())
+            }
         }
 
     /** Combines two Meters into a pipeline.
@@ -376,14 +379,13 @@ object Meter:
 
         opaque type Snapshot = Long
 
-        private inline def pack(free: Int, waiters: Int): Long =
-            (free.toLong << 32) | (waiters.toLong & 0xffffffffL)
+        private inline def pack(free: Int, waiters: Int): Long = (free.toLong << 32) | (waiters.toLong & 0xffffffffL)
 
         def init(free: Int)(using AllowUnsafe): State =
             AtomicLong.Unsafe.init(pack(free, 0))
 
         extension (self: State)
-            def get()(using AllowUnsafe): Snapshot = AtomicLong.Unsafe.get(self)()
+            def get()(using AllowUnsafe): Snapshot                                    = AtomicLong.Unsafe.get(self)()
             def cas(expected: Snapshot, update: Snapshot)(using AllowUnsafe): Boolean =
                 AtomicLong.Unsafe.compareAndSet(self)(expected, update)
             def getAndClose()(using AllowUnsafe): Snapshot =

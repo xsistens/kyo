@@ -25,7 +25,7 @@ package kyo
   *   `Protobuf` in the kyo-schema-protobuf module for compact schema-required binary serialization
   */
 final class MsgPack(val config: MsgPack.Config = MsgPack.Config.Default) extends Codec:
-    def newWriter(): Codec.Writer = kyo.internal.msgpack.MsgPackWriter(config)
+    def newWriter(): Codec.Writer                               = kyo.internal.msgpack.MsgPackWriter(config)
     def newReader(input: Span[Byte])(using Frame): Codec.Reader =
         kyo.internal.msgpack.MsgPackReader(input.toArray, config)
 end MsgPack
@@ -62,10 +62,10 @@ object MsgPack:
     /** Selects how `java.time.Duration` and `scala.concurrent.duration.FiniteDuration` are encoded.
       *
       * MessagePack defines no Duration type and no cross-library convention exists, so this is a free choice:
-      *   - [[Lossless]] keeps full `java.time.Duration` range (seconds beyond a `Long` of nanoseconds).
-      *   - [[Compat]] matches upickle/weePickle, whose Duration wire form is a string of total nanoseconds.
+      *   - [[DurationEncoding.Lossless]] keeps full `java.time.Duration` range (seconds beyond a `Long` of nanoseconds).
+      *   - [[DurationEncoding.Compat]] matches upickle/weePickle, whose Duration wire form is a string of total nanoseconds.
       *
-      * `scala.concurrent.duration.Duration` (the possibly-infinite abstract type) always uses the [[Compat]]
+      * `scala.concurrent.duration.Duration` (the possibly-infinite abstract type) always uses the [[DurationEncoding.Compat]]
       * string form regardless of this setting, since `Inf`/`MinusInf`/`Undefined` have no lossless numeric
       * representation.
       */

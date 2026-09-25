@@ -13,7 +13,7 @@ import kyo.*
   *
   * Zero-cost: an opaque alias over `Long`, packed `(fd << 32) | generation`. The generation comes
   * from a process-lifetime monotonic counter, so two handles for the same fd over time never share
-  * an id. The fd is the high 32 bits (so [[fd]] is a shift) and the generation the low 32 bits.
+  * an id. The fd is the high 32 bits (so `fd` is a shift) and the generation the low 32 bits.
   *
   * The generation occupies 32 bits and wraps after 2^32 allocations in one process, so the
   * distinctness guarantee is stable within a 2^32 window of handle allocations rather than
@@ -39,8 +39,7 @@ object HandleId:
     /** Build a [[HandleId]] from an explicit `(fd, generation)` pair (the packing the kqueue udata
       * tag and the io_uring SQE user-data carry across the kernel boundary).
       */
-    def of(fd: Int, generation: Int): HandleId =
-        (fd.toLong << 32) | (generation.toLong & 0xffffffffL)
+    def of(fd: Int, generation: Int): HandleId = (fd.toLong << 32) | (generation.toLong & 0xffffffffL)
 
     extension (id: HandleId)
         /** The file descriptor this id names. */

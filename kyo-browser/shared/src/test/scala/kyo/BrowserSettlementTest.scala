@@ -17,6 +17,46 @@ class BrowserSettlementTest extends BrowserTest:
         }
     }
 
+    "goto fails when the navigation fails below HTTP rather than reporting success" in {
+        // A host reserved by RFC 2606 to never resolve, so Chrome commits its error document with no HTTP
+        // response behind it. That is the shape every transport failure takes, including the socket exhaustion
+        // that makes Windows CI legs fail: without the transport check the navigation reads as a success and the
+        // caller only finds out via a missing element several calls later.
+        //
+        // Assumes no HTTP proxy is configured. Behind one, Chrome reaches the proxy and gets an HTTP error from
+        // it instead of failing below HTTP, which is a different path. CI runners have no proxy.
+        withBrowser {
+            Browser.withConfig(_.loadSchedule(Schedule.fixed(50.millis).maxDuration(10.seconds))) {
+                Abort.run[BrowserNavigationException] {
+                    Browser.goto("http://kyo-transport-failure.invalid/")
+                }.map {
+                    case Result.Failure(ex: BrowserNavigationTransportFailedException) =>
+                        assert(ex.url.startsWith("chrome-error://"), s"Expected a chrome-error URL but got '${ex.url}'")
+                    case other =>
+                        fail(s"Expected Result.Failure(BrowserNavigationTransportFailedException) but got $other")
+                }
+            }
+        }
+    }
+
+    "goto with failOnHttpError = false still fails a navigation that fails below HTTP" in {
+        // failOnHttpError exists so a caller can read the body of an error response. A transport failure has no
+        // response, only Chrome's error document, so the reason to suppress it never applies and the flag does
+        // not reach it.
+        withBrowser {
+            Browser.withConfig(_.loadSchedule(Schedule.fixed(50.millis).maxDuration(10.seconds))) {
+                Abort.run[BrowserNavigationException] {
+                    Browser.goto("http://kyo-transport-failure.invalid/", failOnHttpError = false)
+                }.map {
+                    case Result.Failure(ex: BrowserNavigationTransportFailedException) =>
+                        assert(ex.url.startsWith("chrome-error://"), s"Expected a chrome-error URL but got '${ex.url}'")
+                    case other =>
+                        fail(s"Expected Result.Failure(BrowserNavigationTransportFailedException) but got $other")
+                }
+            }
+        }
+    }
+
     // ---- expectNavigation ----
 
     "expectNavigation completes when the trigger causes a navigation" in {
@@ -315,7 +355,7 @@ class BrowserSettlementTest extends BrowserTest:
         )
         withBrowser {
             for
-                _ <- Browser.goto(p)
+                _       <- Browser.goto(p)
                 outcome <-
                     Abort.run[BrowserAssertionException] {
                         Browser.withConfig(_.mutationSettlementTimeout(500.millis))(Browser.click(Browser.Selector.id("b")))
@@ -719,8 +759,8 @@ class BrowserSettlementTest extends BrowserTest:
               |  // can never open a quiet window, yet the load event fires on the initial HTML parse.
               |  setInterval(() => { fetch('/ping').catch(() => {}); }, 50);
               |</script></body></html>""".stripMargin
-        val htmlBytes = Span.fromUnsafe(html.getBytes("UTF-8"))
-        val pingBytes = Span.fromUnsafe("ok".getBytes("UTF-8"))
+        val htmlBytes   = Span.fromUnsafe(html.getBytes("UTF-8"))
+        val pingBytes   = Span.fromUnsafe("ok".getBytes("UTF-8"))
         val htmlHandler = HttpRoute.getRaw("/").response(_.bodyBinary).handler { _ =>
             HttpResponse.ok(htmlBytes).addHeader("Content-Type", "text/html; charset=utf-8")
         }
@@ -904,8 +944,8 @@ class BrowserSettlementTest extends BrowserTest:
               |    setTimeout(() => { fetch('/ping?n=3').then(() => { window.__done++; }, () => { window.__done++; }); }, 300);
               |  });
               |</script></body></html>""".stripMargin
-        val htmlBytes = Span.fromUnsafe(html.getBytes("UTF-8"))
-        val pingBytes = Span.fromUnsafe("ok".getBytes("UTF-8"))
+        val htmlBytes   = Span.fromUnsafe(html.getBytes("UTF-8"))
+        val pingBytes   = Span.fromUnsafe("ok".getBytes("UTF-8"))
         val htmlHandler = HttpRoute.getRaw("/").response(_.bodyBinary).handler { _ =>
             HttpResponse.ok(htmlBytes).addHeader("Content-Type", "text/html; charset=utf-8")
         }
@@ -992,7 +1032,7 @@ class BrowserSettlementTest extends BrowserTest:
         val html =
             """<!doctype html><html><body><h1>slow-image</h1>
               |<img src="/slow-image.gif" alt="slow"/></body></html>""".stripMargin
-        val htmlBytes = Span.fromUnsafe(html.getBytes("UTF-8"))
+        val htmlBytes   = Span.fromUnsafe(html.getBytes("UTF-8"))
         val htmlHandler = HttpRoute.getRaw("/").response(_.bodyBinary).handler { _ =>
             HttpResponse.ok(htmlBytes).addHeader("Content-Type", "text/html; charset=utf-8")
         }
@@ -1359,7 +1399,7 @@ class BrowserSettlementTest extends BrowserTest:
                         kyo.internal.MutationSettlement.waitForStable(300.millis)
                     }.map {
                         case Result.Failure(_: BrowserAssertionTimedOutException) => succeed
-                        case other =>
+                        case other                                                =>
                             fail(s"expected Result.Failure(BrowserAssertionTimedOutException) but got $other")
                     }
                 }
@@ -1384,7 +1424,7 @@ class BrowserSettlementTest extends BrowserTest:
                         kyo.internal.MutationSettlement.settleForCapture
                     }.map {
                         case Result.Success(()) => succeed
-                        case other =>
+                        case other              =>
                             fail(s"expected Result.Success(()) from settleForCapture on never-quiescing page but got $other")
                     }
                 }

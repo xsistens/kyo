@@ -46,7 +46,7 @@ val program: AddResp < (Async & Scope & Abort[JsonRpcError | Closed]) =
 end program
 ```
 
-The handler closes automatically when the scope exits. The dispatch fiber is interrupted, in-flight responses fail with `Closed`, and the transport's `close` runs.
+The handler closes automatically when the scope exits. The dispatch fiber is interrupted, a registered in-flight request fails with `JsonRpcLifecycleError(Close)` (one not yet registered fails with `Closed`), and the transport's `close` runs.
 
 ### Scoped vs unscoped lifecycle
 
@@ -101,6 +101,12 @@ val logRoute = JsonRpcRoute.notification[LogMsg]("log") { (msg, _) =>
 ```
 
 > **Note:** there is no bare `JsonRpcRoute.apply` form. Always use `request` or `notification`; the kind discriminator (`Kind.Request` vs `Kind.Notification`) is implicit in the factory you choose.
+
+### Dispatch order
+
+The handler runs what one peer sends in an order that keeps state changes consistent. Notifications are handled one at a time, in the order they arrive: each notification handler starts after the previous one completes, however it completed. A request handler starts once every notification that arrived before it has been handled, so a request sees the effects of those notifications (an LSP hover after a `didChange` sees the edit). Requests run concurrently with each other, and a notification does not wait for a request that arrived before it. Cancelling a request that is still waiting for earlier notifications interrupts only that request.
+
+A notification handler that runs for a long time therefore delays the notifications and requests behind it. Hand long work to a fiber of its own when later messages must not wait for it.
 
 ### The per-request context
 
@@ -224,7 +230,7 @@ val drainSlowly: Unit < (Async & Scope) =
 end drainSlowly
 ```
 
-The no-arg `close` is identical to `closeNow`: zero grace period, in-flight requests fail with `Closed`. The `close(gracePeriod)` variant waits up to `gracePeriod` for in-flight requests to drain before forcing.
+The no-arg `close` is identical to `closeNow`: zero grace period. A request already registered when the handler closes fails with `JsonRpcLifecycleError(Close)`; one issued after the close, or not yet registered, fails with `Closed`. The `close(gracePeriod)` variant waits up to `gracePeriod` for in-flight requests to drain before forcing.
 
 ### Progress-bearing requests
 

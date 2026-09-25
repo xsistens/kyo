@@ -75,7 +75,7 @@ class BrowserCoreTest extends BrowserTest:
                 Browser.back
             }.map {
                 case Result.Failure(_: BrowserAlreadyAtHistoryStartException) => ()
-                case other =>
+                case other                                                    =>
                     fail(s"Expected BrowserAlreadyAtHistoryStartException but got $other")
             }
         }
@@ -768,7 +768,7 @@ class BrowserCoreTest extends BrowserTest:
                 Abort.run[BrowserNavigationException] {
                     Browser.goto(url, failOnHttpError = false).unit
                 }.map {
-                    case Result.Success(_) => ()
+                    case Result.Success(_)                                   => ()
                     case Result.Failure(_: BrowserNavigationFailedException) =>
                         fail("expected goto(failOnHttpError=false) to succeed on a 4xx but got BrowserNavigationFailedException")
                     case other => fail(s"unexpected outcome: $other")
@@ -948,7 +948,7 @@ class BrowserCoreTest extends BrowserTest:
                     yield (targets.targetInfos.size, ctxs.browserContextIds.size)
                 for
                     baseline <- snapshot
-                    samples <- Kyo.foreach(Chunk.from(0 until Iterations)) { _ =>
+                    samples  <- Kyo.foreach(Chunk.from(0 until Iterations)) { _ =>
                         Browser.run(wsUrl) {
                             Browser.goto(page("<body>hello</body>")).andThen(Browser.url.unit)
                         }.andThen(snapshot)
@@ -1152,7 +1152,8 @@ class BrowserCoreTest extends BrowserTest:
 
     // ---- Browser critical methods + describe ----
 
-    /** Helper: navigates to Chrome's localhost devtools JSON endpoint (which is a real http://localhost URL), then replaces the body with
+    /** Helper: navigates to Chrome's devtools JSON endpoint (a real http URL, on 127.0.0.1 for the reason given on
+      * [[BrowserTest.withBrowserOnLocalhost]]), then replaces the body with
       * the given HTML so we exercise selectors against an injected DOM while still benefiting from a real keyboard event pipeline (keyboard
       * events don't fire reliably on `data:` URLs).
       */
@@ -1161,7 +1162,7 @@ class BrowserCoreTest extends BrowserTest:
     ): A < (Async & Scope & Abort[BrowserReadException | BrowserSetupException] & S) =
         SharedChrome.init.map { url =>
             val port    = url.split(":")(2).split("/")(0)
-            val httpUrl = s"http://localhost:$port/json/version"
+            val httpUrl = s"http://127.0.0.1:$port/json/version"
             val escaped = html.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ")
             Browser.run(url) {
                 Browser.goto(httpUrl).andThen {
@@ -1377,7 +1378,7 @@ class BrowserCoreTest extends BrowserTest:
                 Browser.evalJson[EvalJsonShape]("({ a: 1, b: 2 })")
             }.map {
                 case Result.Failure(_: BrowserDecodingException) => ()
-                case other =>
+                case other                                       =>
                     fail(s"Expected Result.Failure(BrowserDecodingException) for shape mismatch but got $other")
             }
         }
@@ -1483,7 +1484,7 @@ class BrowserCoreTest extends BrowserTest:
                     }
                 }.map {
                     case Result.Failure(_: BrowserProtocolErrorException) => ()
-                    case other =>
+                    case other                                            =>
                         fail(s"Expected Result.Failure(BrowserProtocolErrorException) but got $other")
                 }
             }
@@ -1570,7 +1571,7 @@ class BrowserCoreTest extends BrowserTest:
     // setCookie with a non-default `path` round-trips through Browser.cookies.
     "setCookie with a non-default path round-trips into Browser.cookies" in {
         withBrowserOnLocalhost {
-            Browser.setCookie("custompath", "v1", "localhost", path = "/json").andThen {
+            Browser.setCookie("custompath", "v1", "127.0.0.1", path = "/json").andThen {
                 Browser.cookies.map { cs =>
                     cs.find(_.name == "custompath") match
                         case Some(c) =>
@@ -1590,12 +1591,12 @@ class BrowserCoreTest extends BrowserTest:
     // deleteCookie with explicit domain removes the cookie scoped to that domain.
     "deleteCookie with an explicit domain removes the cookie" in {
         withBrowserOnLocalhost {
-            Browser.setCookie("explicit", "v", "localhost").andThen {
+            Browser.setCookie("explicit", "v", "127.0.0.1").andThen {
                 Browser.cookies.map { cs =>
                     assert(cs.exists(_.name == "explicit"), s"expected 'explicit' to exist after setCookie: ${cs.map(_.name)}")
                 }.andThen {
                     // Delete via explicit-domain branch (Browser.scala:1457-1462): domain.nonEmpty → uses domain= param.
-                    Browser.deleteCookie("explicit", domain = "localhost").andThen {
+                    Browser.deleteCookie("explicit", domain = "127.0.0.1").andThen {
                         Browser.cookies.map { cs =>
                             assert(
                                 !cs.exists(_.name == "explicit"),
@@ -1621,7 +1622,7 @@ class BrowserCoreTest extends BrowserTest:
             }
         }.map {
             case Result.Failure(_: BrowserSetupFailedException) => ()
-            case other =>
+            case other                                          =>
                 fail(s"Expected Result.Failure(BrowserSetupFailedException) but got $other")
         }
     }
@@ -1641,7 +1642,7 @@ class BrowserCoreTest extends BrowserTest:
             }
         }.map {
             case Result.Failure(_: BrowserSetupFailedException) => ()
-            case other =>
+            case other                                          =>
                 fail(s"Expected Result.Failure(BrowserSetupFailedException) but got $other")
         }
     }
@@ -1661,7 +1662,7 @@ class BrowserCoreTest extends BrowserTest:
             }
         }.map {
             case Result.Failure(_: BrowserConnectionException | _: BrowserSetupException) => ()
-            case other =>
+            case other                                                                    =>
                 fail(s"Expected Abort.Failure(BrowserConnectionException or BrowserSetupException) but got $other")
         }
     }
@@ -1928,7 +1929,7 @@ class BrowserCoreTest extends BrowserTest:
     }
 
     "withLocalhostServer smoke" in {
-        val bytes = Span.fromUnsafe("<html><body><p id=\"x\">fixed-body</p></body></html>".getBytes("UTF-8"))
+        val bytes   = Span.fromUnsafe("<html><body><p id=\"x\">fixed-body</p></body></html>".getBytes("UTF-8"))
         val handler = HttpRoute.getRaw("/page").response(_.bodyBinary).handler { _ =>
             HttpResponse.ok(bytes).addHeader("Content-Type", "text/html; charset=utf-8")
         }
@@ -1976,7 +1977,7 @@ class BrowserCoreTest extends BrowserTest:
                         Browser.scrollToElement(Browser.Selector.id("no-such-element"))
                     }.map {
                         case Result.Failure(_: BrowserElementNotFoundException) => ()
-                        case other =>
+                        case other                                              =>
                             fail(s"Expected BrowserElementNotFoundException for missing selector but got $other")
                     }
                 }

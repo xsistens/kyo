@@ -6,7 +6,7 @@ import kyo.*
   * KyoException, leaves are top-level + prefixed, each leaf is one failure mode with raw structured
   * fields, Frame captured. The whole family lives in this one `WebsiteException.scala` file, matching
   * how the kyo substrate organizes its exception hierarchies ([[kyo.FileSystemException]],
-  * [[kyo.HttpException]], [[kyo.BrowserException]]).
+  * [[kyo.HttpException]], `kyo.BrowserException`).
   */
 sealed abstract class WebsiteException(message: => String = "", cause: String | Throwable = "")(using Frame)
     extends KyoException(message, cause)
@@ -19,7 +19,7 @@ final case class WebsiteReadmeException(path: Path, detail: WebsiteReadmeExcepti
 
 object WebsiteReadmeException:
     /** Typed README-parse failure modes. Nested in this exception's companion (its owner), mirroring
-      * how [[kyo.BrowserIFrameInvalidException.Reason]] scopes its detail enum to its owning exception
+      * how `kyo.BrowserIFrameInvalidException.Reason` scopes its detail enum to its owning exception
       * rather than sitting as a free-standing top-level type.
       */
     enum ReadmeFailure derives CanEqual:
@@ -32,6 +32,14 @@ end WebsiteReadmeException
   */
 final case class WebsiteMarkdownException(slug: String, detail: String)(using Frame)
     extends WebsiteException(s"markdown render failed for $slug: $detail")
+
+/** No linked site bundle was found: `searched` holds no `scala-*` directory with a `-opt` link containing `main.js`. Raised when
+  * `--bundle-dir` is absent, so the bundle has to be linked first (`kyo-website-bundleJS/Compile/fullLinkJS`) or its directory passed.
+  */
+final case class WebsiteBundleNotFoundException(searched: Path)(using Frame)
+    extends WebsiteException(
+        s"no linked site bundle under $searched: run `sbt kyo-website-bundleJS/Compile/fullLinkJS` or pass --bundle-dir"
+    )
 
 /** Writing a route's file failed. */
 final case class WebsiteEmitException(route: String, cause: Throwable)(using Frame)

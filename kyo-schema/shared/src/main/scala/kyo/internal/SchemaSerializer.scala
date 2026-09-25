@@ -151,7 +151,7 @@ private[kyo] object SchemaSerializer:
         // wire-shape hint (topShape) share one computation. forwardMap/resolveTarget/resolvedRenames
         // are schema-level (independent of the captured value), so computing them once here is safe
         // regardless of whether schema.structure turns out to be a Product or something else.
-        val forwardMap = schema.renamedFields.toMap
+        val forwardMap                          = schema.renamedFields.toMap
         def resolveTarget(name: String): String =
             forwardMap.get(name) match
                 case Some(next) => resolveTarget(next)
@@ -189,6 +189,12 @@ private[kyo] object SchemaSerializer:
             case _ =>
                 Maybe.empty
 
+        // The map nodes in the materialized tree that were written in the pair-array framing, which
+        // the replay at the end of this method honors rather than re-deciding from the entry keys
+        // (see writeStructureValue). A field-transform's own writer contributes its own nodes below:
+        // a transform is free to write a mapping in either framing, exactly as a bound given is.
+        var framedNodes: List[Structure.Value] = structWriter.pairArrayFramedNodes
+
         // Apply per-field write overrides. For each field with a write-direction transform,
         // extract the raw Scala value, run the user-supplied writer against a fresh
         // StructureValueWriter, and capture the result. The replacement chunk feeds the
@@ -202,6 +208,7 @@ private[kyo] object SchemaSerializer:
                             val rawFieldValue: Any = transform.get(value)
                             val fieldWriter        = StructureValueWriter()
                             transform.write.get(rawFieldValue, fieldWriter)
+                            framedNodes = fieldWriter.pairArrayFramedNodes ::: framedNodes
                             name -> fieldWriter.getResult
                     }.toMap
                 if overrideMap.isEmpty then originalFields
@@ -259,7 +266,7 @@ private[kyo] object SchemaSerializer:
         // where a non-object payload is still intact (the flatten's non-record drop is what NOT
         // injecting into a Record avoids).
         val selected = selectRepresentation(schema, writer)
-        val output = selected match
+        val output   = selected match
             case Schema.UnionRepresentation.External =>
                 transformed
             case Schema.UnionRepresentation.Internal(tagKey) =>
@@ -284,7 +291,14 @@ private[kyo] object SchemaSerializer:
             case Schema.UnionRepresentation.External => topShape
             case _                                   => Maybe.empty
 
-        writeStructureValue(writer, output, outputShape)
+        // Identity, not equality: two empty mappings are equal values written by different givens.
+        // The transforms above carry a field's value into the output tree by reference, so the node
+        // the writer recorded is the node the replay sees.
+        val pairArrayFramed: Structure.Value => Boolean =
+            if framedNodes.isEmpty then noPairArrayFraming
+            else node => framedNodes.exists(_ eq node)
+
+        writeStructureValue(writer, output, outputShape, pairArrayFramed)
     end writeWithTransforms
 
     /** True iff `sourceName`'s value should be omitted on encode under the schema's effective omit
@@ -299,7 +313,7 @@ private[kyo] object SchemaSerializer:
             case Some(Schema.OmitPolicy.WhenNone)        => isNullValue(value)
             case Some(Schema.OmitPolicy.WhenEmpty)       => isEmptyOmittableCollection(schema, sourceName, value)
             case Some(Schema.OmitPolicy.When(predicate)) => predicate(value)
-            case Some(Schema.OmitPolicy.WhenDefault) =>
+            case Some(Schema.OmitPolicy.WhenDefault)     =>
                 schema.fieldMaterializedDefaults.collectFirst { case (n, default) if n == sourceName => default } match
                     case Some(default) => default == value
                     case None          => false
@@ -346,7 +360,7 @@ private[kyo] object SchemaSerializer:
                 val caps = writer.capabilities
                 chain.find(rep => Schema.representationExpressibleBy(rep, caps)) match
                     case Some(rep) => rep
-                    case None =>
+                    case None      =>
                         throw RepresentationUnsupportedException(writer.codecName, chain.mkString(", "))
                 end match
             case Maybe.Absent =>
@@ -361,10 +375,10 @@ private[kyo] object SchemaSerializer:
       * no declared representation).
       */
     def readChain[A](schema: Schema[A], reader: Reader, chain: Chunk[Schema.UnionRepresentation]): A =
-        given Frame = reader.frame
+        given Frame  = reader.frame
         val captured = reader.captureValue() match
             case ir: Codec.IntrospectingReader => ir.readStructure()
-            case _ =>
+            case _                             =>
                 throw SchemaNotSerializableException(
                     "representation-chain decode requires a self-describing reader (such as: Json, Yaml, Ion, MsgPack)"
                 )
@@ -500,7 +514,7 @@ private[kyo] object SchemaSerializer:
     ): Structure.Value =
         value match
             case Structure.Value.VariantCase(variantName, payload) =>
-                val wireName = resolveWire(variantName)
+                val wireName    = resolveWire(variantName)
                 val fieldValues = payload match
                     case Structure.Value.Record(payloadFields) => payloadFields.map(_._2)
                     case _                                     => Chunk.empty
@@ -552,7 +566,7 @@ private[kyo] object SchemaSerializer:
     )(using Frame): Chunk[(String, Structure.Value)] =
         schema.variantNaming.fieldCase match
             case Maybe.Present(nc) =>
-                val fn = NameCaseConversion.convert(nc)
+                val fn     = NameCaseConversion.convert(nc)
                 val mapped = fields.map { (name, v) =>
                     if renamedTargetNames.contains(name) then (name, name, v)
                     else (fn(name), name, v)
@@ -711,7 +725,7 @@ private[kyo] object SchemaSerializer:
             writer.getResult
         end materializeDefault
 
-        val defaultByName = schema.fieldDefaults.toMap
+        val defaultByName   = schema.fieldDefaults.toMap
         val syntheticFields =
             schema.sourceFields.flatMap { field =>
                 if schema.droppedFields.contains(field.name) then None
@@ -720,9 +734,8 @@ private[kyo] object SchemaSerializer:
                         case Some(fieldDefault) =>
                             Some(SyntheticField(field.name, () => materializeDefault(fieldDefault)))
                         case None if omitDefaultedNames.contains(field.name) =>
-                            if isOrderedDictOrDictTag(field) then
-                                emptyMappingWireValue(schema, field.name)
-                                    .map(v => SyntheticField(field.name, () => v))
+                            if isMappingTag(field) then
+                                Some(SyntheticField(field.name, () => emptyMappingWireValue))
                             else
                                 val zero = zeroForField(field)
                                 if zero == null then None
@@ -790,7 +803,7 @@ private[kyo] object SchemaSerializer:
     private def fieldNamingReverse[A](schema: Schema[A], renameReverse: Map[String, String]): Map[String, String] =
         val naming         = schema.variantNaming
         val renamedTargets = renameReverse.values.toSet
-        val conventionMap = naming.fieldCase match
+        val conventionMap  = naming.fieldCase match
             case Maybe.Present(nc) =>
                 val fn = NameCaseConversion.convert(nc)
                 schema.sourceFields.iterator
@@ -804,7 +817,7 @@ private[kyo] object SchemaSerializer:
         // those so an alias registered against a rename target (e.g. alias("given","g") after
         // rename("firstName","given")) resolves on decode.
         val wireToSource = conventionMap ++ renameReverse ++ schema.sourceFields.map(sf => sf.name -> sf.name)
-        val aliasMap = naming.fieldAliases.flatMap { (alias, primaryWire) =>
+        val aliasMap     = naming.fieldAliases.flatMap { (alias, primaryWire) =>
             wireToSource.get(primaryWire).map(src => alias -> src)
         }.toMap
         aliasMap ++ conventionMap
@@ -858,6 +871,11 @@ private[kyo] object SchemaSerializer:
             case Structure.Type.Optional(_, _, inner) => unwrapOptionalShape(inner)
             case other                                => other
 
+    /** The framing answer for a caller replaying a tree it did not materialize, and so has no
+      * framing to declare. See [[writeStructureValue]]'s `pairArrayFramed`.
+      */
+    private val noPairArrayFraming: Structure.Value => Boolean = _ => false
+
     /** Writes a Structure.Value tree to a Writer. Reverse of StructureValueWriter.
       *
       * `shape` is an optional type hint carried down from the originating Schema's structure. It
@@ -872,8 +890,23 @@ private[kyo] object SchemaSerializer:
       * a MapEntry key). When `shape` resolves to `Mapping`, the `Record` writes as a map; otherwise
       * (no hint, or a genuine `Product`) it writes as an object, matching the shape-free behavior
       * every caller other than `writeWithTransforms` still relies on.
+      *
+      * `pairArrayFramed` answers, for a `MapEntries` node, whether the writer that materialized the
+      * tree wrote it in the pair-array framing. A map node carries no framing of its own and the
+      * declared structure carries none either (the object-form and array-of-pairs givens of `Map`,
+      * `Dict`, and `OrderedDict` declare a byte-identical `Mapping`), so this is the only thing that
+      * can tell the two apart, and the transform path's replay has to tell them apart: a mapping
+      * field's framing belongs to the given bound at it, and rewriting it produces a document the
+      * schema that wrote it cannot read back. A caller replaying a tree it did not materialize
+      * (a wire-decoded or hand-built tree) has nothing to declare and passes nothing, which keeps
+      * the key-type spelling below.
       */
-    def writeStructureValue(writer: Writer, value: Structure.Value, shape: Maybe[Structure.Type] = Maybe.empty): Unit =
+    def writeStructureValue(
+        writer: Writer,
+        value: Structure.Value,
+        shape: Maybe[Structure.Type] = Maybe.empty,
+        pairArrayFramed: Structure.Value => Boolean = noPairArrayFraming
+    ): Unit =
         value match
             case Structure.Value.Record(fields) =>
                 val resolvedShape = shape.map(unwrapOptionalShape)
@@ -883,7 +916,7 @@ private[kyo] object SchemaSerializer:
                         writer.mapStart(fields.size)
                         fields.foreach { (name, v) =>
                             writer.fieldBytes(name.getBytes(java.nio.charset.StandardCharsets.UTF_8), 0)
-                            writeStructureValue(writer, v, valueShape)
+                            writeStructureValue(writer, v, valueShape, pairArrayFramed)
                         }
                         writer.mapEnd()
                     case _ =>
@@ -898,7 +931,7 @@ private[kyo] object SchemaSerializer:
                                 name.getBytes(java.nio.charset.StandardCharsets.UTF_8),
                                 CodecMacro.fieldId(name)
                             )
-                            writeStructureValue(writer, v, Maybe.fromOption(fieldShapes.get(name)))
+                            writeStructureValue(writer, v, Maybe.fromOption(fieldShapes.get(name)), pairArrayFramed)
                         }
                         writer.objectEnd()
                 end match
@@ -907,14 +940,18 @@ private[kyo] object SchemaSerializer:
                     case Maybe.Present(Structure.Type.Collection(_, _, elem)) => Maybe(unwrapOptionalShape(elem))
                     case _                                                    => Maybe.empty
                 writer.arrayStart(elements.size)
-                elements.foreach(e => writeStructureValue(writer, e, elemShape))
+                elements.foreach(e => writeStructureValue(writer, e, elemShape, pairArrayFramed))
                 writer.arrayEnd()
             case Structure.Value.MapEntries(entries) =>
-                // Shape-aware MapEntries, matching the typed map schemas' wire spelling exactly so the
-                // transform-replay path is byte-identical with the raw write path:
+                // The framing a map goes out in, in priority order:
+                //   * the framing the field's own writer used, when the caller can name it
+                //     (`pairArrayFramed`): a bound given's framing is part of what it encodes, so a
+                //     replay that changed it would produce a document that given cannot read back.
                 //   * all-String keys -> map framing with each key as a field (a JSON object).
                 //   * mixed/non-String keys -> the mapEntriesStart envelope (array of {key, value}
                 //     records on wire codecs); non-String keys are inexpressible as JSON field names.
+                // The last two match the typed map schemas' own spelling, so a tree with no framing
+                // declared still replays byte-identically with the raw write path.
                 val (keyShape, valueShape) = shape.map(unwrapOptionalShape) match
                     case Maybe.Present(Structure.Type.Mapping(_, _, k, v)) =>
                         (Maybe(unwrapOptionalShape(k)), Maybe(unwrapOptionalShape(v)))
@@ -924,7 +961,7 @@ private[kyo] object SchemaSerializer:
                     case (Structure.Value.Str(_), _) => true
                     case _                           => false
                 }
-                if allStringKeys then
+                if allStringKeys && !pairArrayFramed(value) then
                     writer.mapStart(entries.size)
                     entries.foreach { (k, v) =>
                         k match
@@ -932,16 +969,16 @@ private[kyo] object SchemaSerializer:
                                 writer.fieldBytes(s.getBytes(java.nio.charset.StandardCharsets.UTF_8), 0)
                             case _ => () // unreachable; allStringKeys is true
                         end match
-                        writeStructureValue(writer, v, valueShape)
+                        writeStructureValue(writer, v, valueShape, pairArrayFramed)
                     }
                     writer.mapEnd()
                 else
                     writer.mapEntriesStart(entries.size)
                     entries.foreach { (k, v) =>
                         writer.mapEntryStart()
-                        writeStructureValue(writer, k, keyShape)
+                        writeStructureValue(writer, k, keyShape, pairArrayFramed)
                         writer.mapEntryValue()
-                        writeStructureValue(writer, v, valueShape)
+                        writeStructureValue(writer, v, valueShape, pairArrayFramed)
                         writer.mapEntryEnd()
                     }
                     writer.mapEntriesEnd()
@@ -952,9 +989,9 @@ private[kyo] object SchemaSerializer:
                 // Wire round-trips through the shape-aware identity Schema therefore canonicalize to Record on read;
                 // a StructureValueWriter target keeps the VariantCase identity.
                 writer.variantStart(name, name, name.getBytes(java.nio.charset.StandardCharsets.UTF_8), 0)
-                writeStructureValue(writer, v)
+                writeStructureValue(writer, v, Maybe.empty, pairArrayFramed)
                 writer.variantEnd()
-            case Structure.Value.Str(s) => writer.string(s)
+            case Structure.Value.Str(s)     => writer.string(s)
             case Structure.Value.Integer(l) =>
                 if l >= Int.MinValue && l <= Int.MaxValue then writer.int(l.toInt)
                 else writer.long(l)
@@ -1002,13 +1039,20 @@ private[kyo] object SchemaSerializer:
         show.startsWith("(kyo.Dict$package$.Dict[")
     end isOrderedDictOrDictTag
 
+    /** True iff `field`'s declared type is a mapping: `Map`, `Dict`, or `OrderedDict`. These are the
+      * fields whose omitted empty value is injected as [[emptyMappingWireValue]] rather than derived
+      * from a zero instance, because their wire shape depends on the bound given.
+      */
+    private def isMappingTag(field: Field[?, ?]): Boolean =
+        isMapTag(field) || isOrderedDictOrDictTag(field)
+
     /** True iff `field`'s declared type is a sequence-like collection, a set, or a map (including
       * the opaque `OrderedDict`/`Dict` map types): the exact set the encode-time omit gate and the
       * decode-time synthetic-injection gate both consult, so an empty product (which also
-      * materializes as an empty `Record`) is never mistaken for an empty collection. `OrderedDict`
-      * and `Dict` fields synthesize their decode-time zero value from the schema's declared
-      * structure (see [[emptyMappingWireValue]]) rather than from [[zeroForField]], since their
-      * opaque erasure gives `zeroForField` no runtime shape to introspect.
+      * materializes as an empty `Record`) is never mistaken for an empty collection. A mapping field
+      * takes its decode-time empty value from [[emptyMappingWireValue]] rather than from
+      * [[zeroForField]]: `Dict` and `OrderedDict` erase to a bare `Span`-backed array with no runtime
+      * shape to introspect, and every mapping's wire form depends on the given bound at the field.
       */
     private def isCollectionOrMapTag(field: Field[?, ?]): Boolean =
         isMapTag(field) ||
@@ -1047,48 +1091,25 @@ private[kyo] object SchemaSerializer:
         field.default.fold(zeroFromTag)(_.asInstanceOf[AnyRef])
     end zeroForField
 
-    /** Returns the empty wire-shape `Structure.Value` for `fieldName`'s declared field type, when
-      * that field is an `OrderedDict`/`Dict` (a `Structure.Type.Mapping`). Used in place of
-      * [[zeroForField]] + [[zeroToStructureValue]] for these two types: both are opaque types whose
-      * empty value erases to a bare `Span`-backed array with no reliable runtime shape to
-      * pattern-match (unlike `Map`, a real generic class `zeroToStructureValue` matches directly), so
-      * the empty value is derived from the field's DECLARED structure instead of from an instance.
+    /** The empty value injected on decode for an omitted mapping field, in the one wire shape that
+      * reads back under either mapping form.
       *
-      * A String key selects the `Record` (object) form, any other key the `Sequence` (array) form.
-      * This matches the default given resolution: the object-form given (`stringDictSchema`,
-      * `stringOrderedDictSchema`) is the more specific one for a String key and wins by default, and the
-      * array-form given (`dictSchema`, `orderedDictSchema`) is the only one for every other key. It is
-      * derived from the declared key structure because the declared structure is all that is reachable
-      * here; the wire form is a property of the bound given, and the field's own writer is not exposed
-      * on this path.
+      * A mapping's wire form belongs to the given bound at the field, not to the field's declared
+      * type: for a `String` key the object-form given (`stringDictSchema`, `stringOrderedDictSchema`,
+      * `stringMapSchema`) is the more specific one and wins by default, while the array-of-pairs given
+      * (`dictSchema`, `orderedDictSchema`, `mapSchema`) can be bound explicitly for the same key type
+      * and declares a byte-identical `Structure.Type.Mapping`. The declared structure therefore cannot
+      * say which reader will consume the injected value, and a value guessed from the key type is
+      * unreadable under the explicit binding (getkyo/kyo#1748).
       *
-      * Known boundary: a caller that explicitly binds the array-form given for a String key (rather
-      * than the object-form default) declares a structure byte-identical to the object-form given's,
-      * so this returns the object empty value while the bound reader expects the array form, and the
-      * decode fails with a typed `TypeMismatchException`. It fails loud, never silently, and only under
-      * that explicit non-default binding. Tracked in getkyo/kyo#1748.
-      *
-      * Returns `None` when `schema.structure` is not a `Product`, or carries no field named
-      * `fieldName`; this should not happen for a schema whose `sourceFields` supplied `fieldName` in
-      * the first place, but the empty result keeps the caller total rather than throwing.
+      * It does not have to be guessed. `MapEntries` is what [[StructureValueWriter]] produces for an
+      * empty mapping under BOTH forms (`mapEnd` and `mapEntriesEnd` both emit it), and
+      * [[StructureValueReader]], which replays every synthetic value, accepts it under both protocols:
+      * `mapStart` presents the entries as object fields and `arrayStart` as the array-of-`{key, value}`
+      * envelope. So this is the empty value the field's own codec would have written, for whichever
+      * form is bound.
       */
-    private def emptyMappingWireValue[A](schema: Schema[A], fieldName: String): Option[Structure.Value] =
-        schema.structure match
-            case p: Structure.Type.Product =>
-                p.fields.find(_.name == fieldName).map { f =>
-                    unwrapOptionalShape(f.fieldType) match
-                        case Structure.Type.Mapping(_, _, keyType, _) =>
-                            unwrapOptionalShape(keyType) match
-                                case Structure.Type.Primitive(Structure.PrimitiveKind.String, _) =>
-                                    Structure.Value.Record(Chunk.empty)
-                                case _ =>
-                                    Structure.Value.Sequence(Chunk.empty)
-                        case _ =>
-                            Structure.Value.Sequence(Chunk.empty)
-                }
-            case _ =>
-                None
-    end emptyMappingWireValue
+    private val emptyMappingWireValue: Structure.Value = Structure.Value.MapEntries(Chunk.empty)
 
     /** Discriminator-aware deserialization path.
       *
@@ -1176,16 +1197,16 @@ private[kyo] object SchemaSerializer:
             case Structure.Type.Sum(name, _, _, _, _, _) if name == "Union" =>
                 readUnionMultiProbe(schema, reader)
             case _ =>
-                given Frame = reader.frame
+                given Frame               = reader.frame
                 val tree: Structure.Value =
                     reader.captureValue() match
                         case ir: Codec.IntrospectingReader => ir.readStructure()
-                        case _ =>
+                        case _                             =>
                             throw SchemaNotSerializableException(
                                 "untagged decode requires a self-describing reader (Json, Yaml, Ion, MsgPack)"
                             )
-                val decoders  = schema.variantDecoders
-                val wireNames = untaggedVariantWireNames(schema)
+                val decoders                      = schema.variantDecoders
+                val wireNames                     = untaggedVariantWireNames(schema)
                 @tailrec def attempt(idx: Int): A =
                     if idx >= decoders.size then
                         throw NoVariantMatchException(Seq.empty, wireNames)
@@ -1221,9 +1242,9 @@ private[kyo] object SchemaSerializer:
       */
     def readUnionMultiProbe[A](schema: Schema[A], reader: Reader): A =
         given Frame = reader.frame
-        val tree = reader.captureValue() match
+        val tree    = reader.captureValue() match
             case ir: Codec.IntrospectingReader => ir.readStructure()
-            case _ =>
+            case _                             =>
                 throw SchemaNotSerializableException(
                     "untagged union decode requires a self-describing reader (such as: Json, Yaml, Ion, MsgPack)"
                 )
@@ -2006,12 +2027,12 @@ private[kyo] object SchemaSerializer:
         //   flattened-parent checks (which know the source name) match it on either codec.
         // List, not Chunk: these are drained head/tail as the reader yields each pending field,
         // and List gives O(1) head/tail on this hot decode path.
-        private var _pendingSyntheticFields: List[SyntheticField]      = syntheticFields
-        private var _pendingFlattened: List[(String, Structure.Value)] = Nil
-        private var _flattenedPrepared: Boolean                        = false
-        private var _syntheticActive: Boolean                          = false
-        private var _syntheticDepth: Int                               = 0
-        private var _syntheticReader: Maybe[Reader]                    = Maybe.empty
+        private var _pendingSyntheticFields: List[SyntheticField]                                                      = syntheticFields
+        private var _pendingFlattened: List[(String, Structure.Value)]                                                 = Nil
+        private var _flattenedPrepared: Boolean                                                                        = false
+        private var _syntheticActive: Boolean                                                                          = false
+        private var _syntheticDepth: Int                                                                               = 0
+        private var _syntheticReader: Maybe[Reader]                                                                    = Maybe.empty
         private val _flattenedValues: scala.collection.mutable.LinkedHashMap[String, Chunk[(String, Structure.Value)]] =
             scala.collection.mutable.LinkedHashMap.empty[String, Chunk[(String, Structure.Value)]]
         private val _seenFromWire: scala.collection.mutable.HashSet[WireKey.Key] =
@@ -2040,7 +2061,7 @@ private[kyo] object SchemaSerializer:
                 _syntheticField = false
                 val renamedAway = renamedSources.contains(rawName)
                 val mapped      = reverseMap.get(rawName)
-                val translated = mapped.getOrElse(
+                val translated  = mapped.getOrElse(
                     if renamedAway then "\u0000_invalid_renamed_field"
                     else rawName
                 )
@@ -2105,9 +2126,9 @@ private[kyo] object SchemaSerializer:
                 clearSynthetic()
             else if !_syntheticField && !_matchedField && flattenedReadFields.contains(_rawFieldName) then
                 val (parent, child) = flattenedReadFields(_rawFieldName)
-                val captured = inner.captureValue() match
+                val captured        = inner.captureValue() match
                     case reader: Codec.IntrospectingReader => reader.readStructure()
-                    case other =>
+                    case other                             =>
                         throw TypeMismatchException(Seq.empty, "introspecting reader", other.getClass.getName)(using frame)
                 val current = _flattenedValues.getOrElse(parent, Chunk.empty)
                 _flattenedValues.update(parent, current :+ (child -> captured))

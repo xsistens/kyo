@@ -94,6 +94,18 @@ object Frame:
 
         def show: String = s"Frame(${Position.show(position)}, $className, $callerName, $snippetShort)"
 
+        /** The compact form naming what was called and where, as `caller.callee(file:line:col)`.
+          *
+          * For identifying a frame inside a larger rendering, where [[show]] is too wide and [[render]] too tall.
+          */
+        def callSite: String =
+            // Position.show rather than position.show: inside this extension the latter resolves to Frame's own show.
+            val at     = Position.show(position)
+            val callee = calleeName
+            if callee.isEmpty then s"$callerName($at)"
+            else s"$callerName.$callee($at)"
+        end callSite
+
         def render: String =
             Ansi.highlight(
                 s"// ${Position.show(position)} $className $callerName",
@@ -159,7 +171,7 @@ object Frame:
     private def contentAndLines(sourceFile: AnyRef, fetchContent: => String): (String, Array[String]) =
         fileCache match
             case Present((sf, content, lines)) if sf eq sourceFile => (content, lines)
-            case _ =>
+            case _                                                 =>
                 val content = fetchContent
                 val lines   = content.linesIterator.toArray
                 fileCache = Present((sourceFile, content, lines))

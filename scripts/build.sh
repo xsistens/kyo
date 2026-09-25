@@ -29,6 +29,8 @@ set -uo pipefail
 #                     natives can only be produced on a genuine musl host.
 #   STAGE_BORINGSSL=1 build the vendored BoringSSL before the command (kyo-net TLS).
 #   STAGE_AERON=1     build the pinned Aeron C library before the command (kyo-aeron).
+#   STAGE_SQLITE=1    fetch the pinned SQLite C source before the command (kyo-sql-sqlite).
+#   STAGE_DOLTLITE=1  stage the pinned DoltLite library before the command (kyo-sql-doltlite).
 #                     Both derive their os-arch from the container's own host, musl included.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -82,6 +84,32 @@ done
 
 case "$ENV_KIND" in direct|podman|podman-ci) ;; *) die_usage "unknown env '$ENV_KIND'" ;; esac
 case "$ARCH" in native|x86|arm) ;; *) die_usage "unknown arch '$ARCH'" ;; esac
+
+# The CI setup action stages BoringSSL and Aeron unconditionally (kyo-aeronJVM's ffiCompile links
+# -laeron_driver_static and the kyo-net TLS tests link real libssl/libcrypto), so the CI-faithful
+# env stages them by default too. An explicit STAGE_*=0 still opts out; plain podman keeps them
+# opt-in since they add several minutes of one-off toolchain and build work.
+if [ "$ENV_KIND" = podman-ci ]; then
+    STAGE_BORINGSSL="${STAGE_BORINGSSL:-1}"
+    STAGE_AERON="${STAGE_AERON:-1}"
+    # GitHub runners always carry a container runtime, which the container-backed suites
+    # (kyo-sql, kyo-pod) auto-detect and use to launch sibling DB containers. The CI-faithful
+    # env therefore defaults the socket passthrough on, pointing at the podman VM's own
+    # socket; KYO_POD_SOCKET= (explicitly empty) opts out, and plain podman keeps it opt-in.
+    KYO_POD_SOCKET="${KYO_POD_SOCKET-/run/podman/podman.sock}"
+    # An enforcing SELinux in the podman VM confines the sibling containers the suites launch
+    # (the build container itself runs label=disable) and denies their bind-mount writes into
+    # the shared /tmp, which GitHub runners never do: kyo-pod's host-marker tests then fail on
+    # EACCES inside the sibling. Verified directly: the identical stop-signal flow delivers with
+    # enforcement off and is denied with it on. Self-repair to permissive when a machine VM is
+    # present; a Linux host without a machine VM has no such layer to adjust.
+    if [ -n "${KYO_POD_SOCKET:-}" ] && podman machine ssh true >/dev/null 2>&1; then
+        if [ "$(podman machine ssh getenforce 2>/dev/null)" = "Enforcing" ]; then
+            echo "build.sh: podman VM SELinux is Enforcing; setting permissive so sibling containers can write shared bind mounts (as on CI)" >&2
+            podman machine ssh 'sudo setenforce 0 && sudo sed -i "s/^SELINUX=enforcing/SELINUX=permissive/" /etc/selinux/config' || true
+        fi
+    fi
+fi
 
 ACTION="${1:-test}"
 shift || true
@@ -195,20 +223,40 @@ container_provision() {
     # Read host-side: the musl branch installs sbt before the source snapshot is extracted.
     local sbt_version; sbt_version=$(sed -n 's/^sbt.version=//p' "$PROJECT_DIR/project/build.properties")
     # liburing-dev + libssl-dev: the kyo-net JVM FFI shims link the io_uring (-luring) and OpenSSL TLS data planes; without them
-    # kyo-netJVM's ffiCompile fails (cannot find -luring). Small and always installed so any kyo-net command builds in the container.
+    # kyo-netJVM's ffiCompile fails (cannot find -luring). build-essential supplies the cc that ffiCompile runs to build the shims,
+    # preinstalled on GitHub runners but absent from a bare image, and its lack fails ffiCompile before any linking (cannot run "cc").
+    # Always installed so any kyo-net command builds in the container.
     # openssl is the CLI, not the library libssl-dev provides, and the base image ships without it. The
     # kyo-sql TLS suites generate their server cert and key by shelling out to it, so without it every
     # such leaf fails as "SSL not ready" with a Postgres that started perfectly well and simply has no
     # certificate, which reads like a TLS defect rather than a missing tool.
     # file + binutils are not optional either: native_assert_arch reads a member of the staged archive
     # to prove it is really for the target architecture, and fails when either tool is missing.
-    local apt_pkgs="curl ca-certificates patch liburing-dev libssl-dev openssl file binutils"
-    local node_pkgs="" native_pkgs="" bssl_pkgs="" aeron_pkgs=""
+    local apt_pkgs="curl ca-certificates patch build-essential liburing-dev libssl-dev openssl file binutils"
+    local node_pkgs="" native_pkgs="" bssl_pkgs="" aeron_pkgs="" sqlite_pkgs="" doltlite_pkgs=""
     # Alpine equivalents, used when KYO_BUILD_IMAGE names a musl image. Alpine spells the OpenSSL and
     # libuuid development packages differently (openssl-dev, util-linux-dev) and has no separate
-    # ca-certificates-for-curl split, so the lists are mapped rather than shared.
-    local apk_pkgs="bash curl ca-certificates patch liburing-dev openssl-dev tar file binutils"
-    local apk_node_pkgs="" apk_native_pkgs="" apk_bssl_pkgs="" apk_aeron_pkgs=""
+    # ca-certificates-for-curl split, so the lists are mapped rather than shared. build-base is the
+    # musl counterpart of build-essential, for the same cc that ffiCompile runs.
+    local apk_pkgs="bash curl ca-certificates patch build-base liburing-dev openssl-dev tar file binutils"
+    local apk_node_pkgs="" apk_native_pkgs="" apk_bssl_pkgs="" apk_aeron_pkgs="" apk_sqlite_pkgs="" apk_doltlite_pkgs=""
+    # kyo-pod's shell backend execs the podman CLI (the CI setup action installs it on the runner
+    # for exactly these suites); with the socket passthrough active the CLI talks to the same
+    # socket the HTTP backend uses, via the CONTAINER_HOST the passthrough exports. The client
+    # must match the server's major: apt's podman (4.9 on noble) fails unmarshalling a 5.x
+    # server's inspect payloads over the libpod remote API, so the pinned static remote client
+    # is installed instead of the distro package. The docker shell cells stay visible cancels:
+    # CI's docker comes preinstalled on the runner, not from kyo's own setup, and the podman
+    # socket serves both API backends already.
+    local pod_setup=""
+    if [ -n "${KYO_POD_SOCKET:-}" ]; then
+        pod_setup='
+case $(uname -m) in aarch64) podman_arch=linux_arm64 ;; *) podman_arch=linux_amd64 ;; esac
+curl -fsSL "https://github.com/containers/podman/releases/download/v'"${PODMAN_CLIENT_VERSION:-5.0.1}"'/podman-remote-static-${podman_arch}.tar.gz" \
+    | tar xz -C /usr/local/bin --strip-components=1
+mv "/usr/local/bin/podman-remote-static-${podman_arch}" /usr/local/bin/podman
+chmod +x /usr/local/bin/podman'
+    fi
     # "all" provisions the union (raw sbt mode may run any platform's command in the container).
     case "$platform" in
         JS|Wasm|all) node_pkgs="nodejs npm"; apk_node_pkgs="nodejs npm" ;;
@@ -238,14 +286,23 @@ if command -v node >/dev/null 2>&1; then
 fi
 if [ "$node_ok" != 1 ]; then
     case $(uname -m) in aarch64) node_arch=linux-arm64 ;; *) node_arch=linux-x64 ;; esac
-    curl -fsSL "https://nodejs.org/dist/v24.16.0/node-v24.16.0-${node_arch}.tar.gz" \
-        | tar xz -C /usr/local --strip-components=1
+    fetch_url "https://nodejs.org/dist/v24.16.0/node-v24.16.0-${node_arch}.tar.gz" /tmp/node.tar.gz
+    tar xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 && rm -f /tmp/node.tar.gz
 fi'
     fi
     # BoringSSL build toolchain (cmake + Go + a C toolchain), only when STAGE_BORINGSSL=1 builds the vendored BoringSSL so kyo-net's
     # TLS tests run against real libssl/libcrypto instead of cancelling. Heavy, so off by default.
     [ "${STAGE_BORINGSSL:-}" = 1 ] && bssl_pkgs="cmake golang-go build-essential git clang libunwind-dev"
     [ "${STAGE_BORINGSSL:-}" = 1 ] && apk_bssl_pkgs="cmake go build-base git clang libunwind-dev linux-headers perl"
+    # SQLite staging fetches and unpacks one source zip, so it needs only curl + unzip, neither of which every base
+    # image carries. Far lighter than the two above, but opt-in for the same reason: only a command touching
+    # kyo-sql-sqlite needs it, and that module's ffiLibraries hard-errors without it rather than degrading.
+    [ "${STAGE_SQLITE:-}" = 1 ] && sqlite_pkgs="curl unzip"
+    [ "${STAGE_SQLITE:-}" = 1 ] && apk_sqlite_pkgs="curl unzip"
+    # DoltLite downloads a published library where upstream has one and builds the pinned tag from source
+    # where it does not, which is every musl target, so the Alpine list carries the autoconf toolchain too.
+    [ "${STAGE_DOLTLITE:-}" = 1 ] && doltlite_pkgs="curl unzip git build-essential tcl"
+    [ "${STAGE_DOLTLITE:-}" = 1 ] && apk_doltlite_pkgs="curl unzip git build-base tcl linux-headers"
     # Aeron build toolchain (a C toolchain + git for the pinned clone), only when STAGE_AERON=1 stages the static Aeron C library so
     # kyo-aeron's shim has an archive to link. uuid-dev supplies the libuuid.so link target the driver needs and that no base image
     # preinstalls. The staged tree is gitignored, so any container command touching kyo-aeron needs this. Heavy, so off by default.
@@ -277,12 +334,17 @@ if [ "$cmake_ok" != 1 ]; then
         exit 1
     fi
     case $(uname -m) in aarch64) cmake_arch=linux-aarch64 ;; *) cmake_arch=linux-x86_64 ;; esac
-    curl -fsSL "https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-${cmake_arch}.tar.gz" \
-        | tar xz -C /usr/local --strip-components=1
+    fetch_url "https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-${cmake_arch}.tar.gz" /tmp/cmake.tar.gz
+    tar xzf /tmp/cmake.tar.gz -C /usr/local --strip-components=1 && rm -f /tmp/cmake.tar.gz
 fi'
     fi
     cat <<PROVISION
 export DEBIAN_FRONTEND=noninteractive
+# GitHub runners export a UTF-8 locale; a bare image has none, which leaves the JVM's
+# sun.jnu.encoding at ASCII and makes unicode file names unmappable (kyo-pod's unicode
+# copy roundtrip fails with InvalidPathException). file.encoding alone does not cover
+# path encoding, so the locale itself is set.
+export LANG=C.UTF-8 LC_ALL=C.UTF-8
 if command -v apt-get >/dev/null 2>&1; then
     # Every run provisions from a bare image, so one unreachable Ubuntu mirror stalls the whole loop
     # (ports.ubuntu.com has timed out for a stretch while the rest of the network was fine). KYO_APT_MIRROR
@@ -295,13 +357,14 @@ if command -v apt-get >/dev/null 2>&1; then
         done
     fi
     apt-get update -qq >/dev/null
-    apt-get install -y -qq -o Acquire::Retries=3 $apt_pkgs $node_pkgs $native_pkgs $bssl_pkgs $aeron_pkgs >/dev/null
+    apt-get install -y -qq -o Acquire::Retries=3 $apt_pkgs $node_pkgs $native_pkgs $bssl_pkgs $aeron_pkgs $sqlite_pkgs $doltlite_pkgs >/dev/null
 elif command -v apk >/dev/null 2>&1; then
     # musl path, reached via KYO_BUILD_IMAGE=<a musl jdk image>. Both staging scripts refuse a
     # cross-OS build, so the release builds its linux-musl-* natives on a genuine musl host; this is
     # how that leg is reproduced locally.
-    apk add --no-cache $apk_pkgs $apk_node_pkgs $apk_native_pkgs $apk_bssl_pkgs $apk_aeron_pkgs >/dev/null
+    apk add --no-cache $apk_pkgs $apk_node_pkgs $apk_native_pkgs $apk_bssl_pkgs $apk_aeron_pkgs $apk_sqlite_pkgs $apk_doltlite_pkgs >/dev/null
 fi
+$pod_setup
 $node_setup
 export COURSIER_CACHE=/root/.cache/coursier
 if command -v apk >/dev/null 2>&1; then
@@ -311,7 +374,8 @@ if command -v apk >/dev/null 2>&1; then
     if ! command -v sbt >/dev/null 2>&1; then
         # The version comes from the host: provisioning runs before the source snapshot is
         # extracted, so project/build.properties is not readable here yet.
-        curl -fsSL "https://github.com/sbt/sbt/releases/download/v$sbt_version/sbt-$sbt_version.tgz" | tar -xz -C /opt
+        fetch_url "https://github.com/sbt/sbt/releases/download/v$sbt_version/sbt-$sbt_version.tgz" /tmp/sbt.tgz
+        tar -xzf /tmp/sbt.tgz -C /opt && rm -f /tmp/sbt.tgz
     fi
     export PATH="/opt/sbt/bin:\$PATH"
 elif ! command -v cs >/dev/null 2>&1; then
@@ -323,7 +387,8 @@ elif ! command -v cs >/dev/null 2>&1; then
     else
         cs_url="https://github.com/coursier/coursier/releases/latest/download/cs-x86_64-pc-linux.gz"
     fi
-    curl -fsSL "\$cs_url" | gzip -d > /usr/local/bin/cs && chmod +x /usr/local/bin/cs
+    fetch_url "\$cs_url" /tmp/cs.gz
+    gzip -dc /tmp/cs.gz > /usr/local/bin/cs && chmod +x /usr/local/bin/cs && rm -f /tmp/cs.gz
 fi
 if command -v cs >/dev/null 2>&1; then
     eval "\$(cs java --jvm corretto:25 --env)"
@@ -377,7 +442,11 @@ run_in_container() {
     # share the host network so kyo-pod inside the container can start sibling DB containers and reach their published ports on localhost. Opt-in,
     # so a normal run is unaffected.
     if [ -n "${KYO_POD_SOCKET:-}" ]; then
-        args+=(--network host -v "${KYO_POD_SOCKET}:${KYO_POD_SOCKET}")
+        # /tmp is shared with the daemon's host alongside the socket: a sibling container's bind
+        # mounts resolve on the daemon host, and the suites mint host paths under /tmp (markers a
+        # container trap writes for the test to read). On CI the test process runs directly on the
+        # daemon host so the trees coincide; sharing /tmp restores that arrangement here.
+        args+=(--network host -v "${KYO_POD_SOCKET}:${KYO_POD_SOCKET}" -v /tmp:/tmp)
         envs+=(-e "CONTAINER_HOST=unix://${KYO_POD_SOCKET}")
         # /tmp at the SAME path on both sides, because a sibling container's bind mounts are resolved by the daemon, not by us. A suite that
         # generates a file and hands its path to a sibling (kyo-sql's TLS suites write server certs to a temp dir and bind it into Postgres at
@@ -393,6 +462,12 @@ run_in_container() {
     # ffiCompile finds the staged archive instead of failing to link. Both staging scripts derive the os-arch from the container's
     # own host (musl included), so neither is passed one here: a hand-computed "linux-$(uname -m)" is wrong on an Alpine image.
     [ -n "${STAGE_AERON:-}" ] && envs+=(-e "STAGE_AERON=$STAGE_AERON")
+    # Forward the SQLite-staging flag; when set the container fetches the pinned SQLite source before the command, so
+    # kyo-sql-sqlite's ffiCompile finds the staged tree instead of failing on the source file it cannot open.
+    [ -n "${STAGE_SQLITE:-}" ] && envs+=(-e "STAGE_SQLITE=$STAGE_SQLITE")
+    # Forward the DoltLite-staging flag, for the same reason as SQLite: without it that module's ffiCompile fails
+    # on the header and archive it cannot find.
+    [ -n "${STAGE_DOLTLITE:-}" ] && envs+=(-e "STAGE_DOLTLITE=$STAGE_DOLTLITE")
     # Forward the kyo-net per-backend test isolation flag (KYO_NET_ONLY=<backend>), the per-TLS-provider isolation flag
     # (KYO_NET_TLS_ONLY=<provider>), and the success-leaves-only flag (KYO_NET_SUCCESS_ONLY=1) so a podman run can
     # validate/sample a single (backend x provider) cell in isolation. Unset by default (all backends/providers), so a normal run is unaffected.
@@ -446,7 +521,11 @@ run_in_container() {
         stage_jsdom=1
     fi
     envs+=(-e "STAGE_JSDOM=$stage_jsdom")
-    local provision; provision=$(container_provision "$platform")
+    # The fetch library leads the prelude: provisioning runs before the source snapshot is extracted,
+    # so the container cannot source it from the tree, and every download in the prelude goes
+    # through it. A `curl | tar` pipe cannot be retried: curl restarts its output on a retry and tar
+    # has already consumed the first bytes.
+    local provision; provision=$(cat "$PROJECT_DIR/scripts/fetch-lib.sh" && container_provision "$platform")
     # `sh`, not `bash`: a musl JDK image ships busybox sh and no bash, and provisioning is what
     # installs bash there, so a bash entrypoint cannot get far enough to install it. This prelude is
     # POSIX throughout; the two staging scripts genuinely need bash and are invoked as `bash <script>`
@@ -458,6 +537,8 @@ mkdir -p /work && cd /work && tar xf /build-input/src.tar \
     && if [ -s /build-input/changes.patch ]; then patch -p1 < /build-input/changes.patch; fi \
     && if [ \"\${STAGE_BORINGSSL:-}\" = 1 ]; then bash kyo-net/build/boringssl/build-boringssl.sh; fi \
     && if [ \"\${STAGE_AERON:-}\" = 1 ]; then bash kyo-aeron/scripts/build-aeron.sh; fi \
+    && if [ \"\${STAGE_SQLITE:-}\" = 1 ]; then bash kyo-sql-sqlite/scripts/build-sqlite.sh; fi \
+    && if [ \"\${STAGE_DOLTLITE:-}\" = 1 ]; then bash kyo-sql-doltlite/scripts/build-doltlite.sh; fi \
     && if [ \"\${STAGE_JSDOM:-}\" = 1 ]; then npm install --no-save --no-fund --no-audit jsdom@^30; fi
 if $inner; then __rc=0; else __rc=\$?; fi
 if [ -d /output ]; then find . -type d \\( -name scoverage-report -o -name scoverage-data \\) -exec cp -r --parents {} /output/ \\; 2>/dev/null || true; fi

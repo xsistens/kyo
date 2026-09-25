@@ -38,7 +38,7 @@ package kyo
   * @see
   *   [[Rollout]] for the expression DSL grammar and bucketing
   * @see
-  *   [[FlagAdmin]] for HTTP endpoints to update dynamic flags at runtime
+  *   kyo-http's `kyo.FlagAdmin` for HTTP endpoints to update dynamic flags at runtime
   */
 abstract class DynamicFlag[A](default: A, validate: A => Either[Throwable, A] = (a: A) => Right(a))(implicit reader: Flag.Reader[A])
     extends Flag[A](default, validate) {
@@ -110,7 +110,7 @@ abstract class DynamicFlag[A](default: A, validate: A => Either[Throwable, A] = 
         expr match {
             case None                             => Flag.ReloadResult.NoSource
             case Some(e) if e == state.expression => Flag.ReloadResult.Unchanged
-            case Some(e) =>
+            case Some(e)                          =>
                 update(e)
                 Flag.ReloadResult.Updated(e)
         }
@@ -198,12 +198,12 @@ abstract class DynamicFlag[A](default: A, validate: A => Either[Throwable, A] = 
     private def validateValue(value: A, fullExpr: String): A = {
         try validate(value) match {
                 case Right(a) => a
-                case Left(e) =>
+                case Left(e)  =>
                     throw FlagValidationFailedException(name, String.valueOf(value), s"expression '$fullExpr'", e)
             }
         catch {
             case e: FlagException => throw e
-            case e: Throwable =>
+            case e: Throwable     =>
                 throw FlagValidationFailedException(name, String.valueOf(value), s"expression '$fullExpr'", e)
         }
     }
@@ -215,7 +215,7 @@ abstract class DynamicFlag[A](default: A, validate: A => Either[Throwable, A] = 
             }
         catch {
             case e: FlagException => throw e
-            case e: Exception =>
+            case e: Exception     =>
                 throw FlagChoiceParseException(name, fullExpr, choiceNum, total, raw, reader.typeName, e)
         }
     }

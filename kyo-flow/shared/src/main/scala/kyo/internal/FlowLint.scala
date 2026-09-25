@@ -33,8 +33,8 @@ private[kyo] object FlowLint:
         }
     end duplicateNames
 
-    /** The characters the engine reserves in a node name, because it builds durable keys with them. See [[NodePath]]. */
-    val Reserved: Set[Char] = NodePath.Reserved
+    /** The characters the engine reserves in a node name, because it builds durable keys with them. See [[FlowNodePath]]. */
+    val Reserved: Set[Char] = FlowNodePath.Reserved
 
     /** The flow's own name, taken from the `Init` node every public constructor roots.
       *
@@ -68,7 +68,7 @@ private[kyo] object FlowLint:
                 Schema[V],
                 Tag[State],
                 Schema[State]
-            ) = Chunk(name)
+            )                                                                                                                 = Chunk(name)
             override def onForEach[V](name: String, concurrency: Int, frame: Frame, meta: Flow.Meta)(using Tag[V], Schema[V]) =
                 Chunk(name)
             override def onSubflow(name: String, childFlow: Flow[?, ?, ?], child: Chunk[String], frame: Frame, meta: Flow.Meta) =
@@ -113,10 +113,10 @@ private[kyo] object FlowLint:
       */
     private def underPath(path: String, names: Names): Names =
         Names(
-            NodePath.qualifyAll(path, names.result),
-            NodePath.qualifyAll(path, names.internal),
-            NodePath.qualifyAll(path, names.read),
-            names.conflicts.map(c => FlowNameConflict(NodePath.qualify(path, c.name), c.composition, c.locations))
+            FlowNodePath.qualifyAll(path, names.result),
+            FlowNodePath.qualifyAll(path, names.internal),
+            FlowNodePath.qualifyAll(path, names.read),
+            names.conflicts.map(c => FlowNameConflict(FlowNodePath.qualify(path, c.name), c.composition, c.locations))
         )
 
     /** Joins what two sides of a composition claim, and records every name they claim against each other.
@@ -134,7 +134,7 @@ private[kyo] object FlowLint:
     private def join(left: Names, right: Names, composition: String, exemptShared: Boolean): Names =
         val shared = (left.written & (right.written ++ right.read.keySet)) ++ (right.written & left.read.keySet)
         val exempt = if exemptShared then left.result.keySet & right.result.keySet else Set.empty[String]
-        val found = (shared -- exempt).toSeq.sorted.map { name =>
+        val found  = (shared -- exempt).toSeq.sorted.map { name =>
             FlowNameConflict(name, composition, (left.locationsOf(name) ++ right.locationsOf(name)).toSeq)
         }
         Names(
@@ -230,7 +230,7 @@ private[kyo] object FlowLint:
                 Schema[V],
                 Tag[State],
                 Schema[State]
-            ) = Chunk(name)
+            )                                                                                                                 = Chunk(name)
             override def onForEach[V](name: String, concurrency: Int, frame: Frame, meta: Flow.Meta)(using Tag[V], Schema[V]) =
                 Chunk(name)
             override def onSubflow(name: String, childFlow: Flow[?, ?, ?], child: Chunk[String], frame: Frame, meta: Flow.Meta) =
@@ -264,7 +264,7 @@ private[kyo] object FlowLint:
                 Schema[V],
                 Tag[State],
                 Schema[State]
-            ) = Chunk(name)
+            )                                                                                                                 = Chunk(name)
             override def onForEach[V](name: String, concurrency: Int, frame: Frame, meta: Flow.Meta)(using Tag[V], Schema[V]) =
                 Chunk(name)
             // The subflow's own name and not its child's: these are the names the PARENT's record carries, and a child's

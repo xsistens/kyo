@@ -93,6 +93,79 @@ class NioIoDriverTest extends Test:
         end try
     }
 
+    private def openServer(): ServerSocketChannel =
+        val ssc = ServerSocketChannel.open()
+        ssc.configureBlocking(false)
+        ssc.bind(new InetSocketAddress("127.0.0.1", 0))
+        ssc
+    end openServer
+
+    // `releaseListener` is armed for a channel that has been closed while registered: its SelectionKey is cancelled and its fd close deferred
+    // to the selector's next deregistration pass. `isRegistered` afterwards is
+    // the same observation the driver completes on.
+    "listener release" - {
+        "completes after the running loop's deregistration pass" in {
+            val driver  = NioIoDriver.init()
+            given Frame = Frame.internal
+            discard(driver.start())
+            val ssc = openServer()
+            assert(driver.registerServerChannel(ssc))
+            // No registration check here: the loop is running, so its next pass can deregister the cancelled key at any point after the
+            // close.
+            ssc.close()
+            val released = Promise.Unsafe.init[Unit, Any]()
+            driver.releaseListener(ssc, released)
+            released.safe.get.map { _ =>
+                assert(!ssc.isRegistered)
+                driver.close()
+                succeed
+            }
+        }
+        "armed before the loop starts, completes on its first pass" in {
+            val driver  = NioIoDriver.init()
+            given Frame = Frame.internal
+            val ssc     = openServer()
+            assert(driver.registerServerChannel(ssc))
+            ssc.close()
+            val released = Promise.Unsafe.init[Unit, Any]()
+            driver.releaseListener(ssc, released)
+            assert(!released.done(), "nothing runs the deregistration pass before the loop starts")
+            discard(driver.start())
+            released.safe.get.map { _ =>
+                assert(!ssc.isRegistered)
+                driver.close()
+                succeed
+            }
+        }
+        "armed on a driver that never starts, completes when the driver closes" in {
+            val driver  = NioIoDriver.init()
+            given Frame = Frame.internal
+            val ssc     = openServer()
+            assert(driver.registerServerChannel(ssc))
+            ssc.close()
+            val released = Promise.Unsafe.init[Unit, Any]()
+            driver.releaseListener(ssc, released)
+            assert(!released.done())
+            driver.close()
+            assert(released.done())
+            assert(!ssc.isRegistered)
+            succeed
+        }
+        "armed after the driver closed, completes at once" in {
+            val driver  = NioIoDriver.init()
+            given Frame = Frame.internal
+            val ssc     = openServer()
+            assert(driver.registerServerChannel(ssc))
+            ssc.close()
+            driver.close()
+            val released = Promise.Unsafe.init[Unit, Any]()
+            driver.releaseListener(ssc, released)
+            assert(released.done())
+            assert(!ssc.isRegistered)
+            succeed
+        }
+    }
+
     "label includes selector hashcode" in {
         val driver = NioIoDriver.init()
         try
@@ -342,7 +415,7 @@ class NioIoDriverTest extends Test:
         // A background writer floods more than the staging cap and then closes (FIN). The probe stages up to the cap and stops consuming, so the
         // FIN sits behind the cap and is never observed: isPeerClosed stays false. This is the deliberate trade that stops a live chatty peer
         // turning the descriptor fix into a heap leak (a FIN behind more than the cap keeps the pre-fix behavior).
-        val cap = NioIoDriver.GraceProbeStagingCap
+        val cap    = NioIoDriver.GraceProbeStagingCap
         val writer = new Thread(() =>
             try
                 val buf = ByteBuffer.wrap(Array.fill[Byte](cap + (256 * 1024))(1))
@@ -437,7 +510,7 @@ class NioIoDriverTest extends Test:
             Abort.run[Closed | Timeout](Async.timeout(bound)(p.asInstanceOf[Fiber.Unsafe[ReadOutcome, Abort[Closed]]].safe.get)).map {
                 case Result.Success(ReadOutcome.Bytes(span)) => Present(span.toArray)
                 case Result.Failure(_: Timeout)              => Absent
-                case other =>
+                case other                                   =>
                     assert(false, s"iteration $iter: unexpected read outcome $other")
                     Absent
             }
@@ -479,7 +552,7 @@ class NioIoDriverTest extends Test:
                             else
                                 readBytes(iter, 2.seconds).map {
                                     case Present(bytes) => Loop.continue(received ++ bytes)
-                                    case Absent =>
+                                    case Absent         =>
                                         assert(
                                             false,
                                             s"iteration $iter: read never completed with stagedBytes=${driver.stagedBytes(handle)}; " +
@@ -612,7 +685,7 @@ class NioIoDriverTest extends Test:
             driver.armUpgradeProducerRead(handle)
             awaitOutcome(p, 10.seconds).map {
                 case Present(Result.Failure(_)) => succeed
-                case Absent =>
+                case Absent                     =>
                     assert(
                         false,
                         "read armed after detachForUpgrade was stranded: nothing completed it " +

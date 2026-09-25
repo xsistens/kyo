@@ -20,11 +20,7 @@ class TopicRuntimeReleaseTest extends Test:
         kyo.internal.Diagnostics.dumpAll().linesIterator
             .filter(_.contains("dir=")).map(_.trim).toSet
 
-    "a body that fails with a typed error still releases the driver"
-        .pendingUntilFixed(
-            "Sync.ensure does not run its finalizer when the guarded body short-circuits via Abort, so Topic.run's "
-                + "runtime close is skipped on a typed failure"
-        ) in {
+    "a body that fails with a typed error still releases the driver" in {
         Sync.Unsafe.defer(aeronDirs()).flatMap { before =>
             Sync.Unsafe.defer(new java.util.concurrent.atomic.AtomicReference(Set.empty[String])).flatMap { seen =>
                 Abort.run[String] {
@@ -66,7 +62,7 @@ class TopicRuntimeReleaseTest extends Test:
         val closedPublications      = new java.util.concurrent.atomic.AtomicInteger(0)
         val closedSubscriptions     = new java.util.concurrent.atomic.AtomicInteger(0)
 
-        def asyncAddPublication(uri: String, streamId: Int)(using AllowUnsafe): Maybe[AsyncPub] = Present(streamId)
+        def asyncAddPublication(uri: String, streamId: Int)(using AllowUnsafe): Maybe[AsyncPub]         = Present(streamId)
         def pollAddPublication(async: AsyncPub)(using AllowUnsafe): AeronTransport.AddPoll[Publication] =
             added = true
             AeronTransport.AddPoll.Done(async)
@@ -75,7 +71,7 @@ class TopicRuntimeReleaseTest extends Test:
         def offer(pub: Publication, message: Array[Byte])(using AllowUnsafe): Long = 1L
         def maxMessageLength(pub: Publication)(using AllowUnsafe): Int             = 1 << 20
         def closePublication(pub: Publication)(using AllowUnsafe): Unit            = discard(closedPublications.incrementAndGet())
-        def asyncAddSubscription(uri: String, streamId: Int)(using AllowUnsafe): Maybe[AsyncSub] = Present(streamId)
+        def asyncAddSubscription(uri: String, streamId: Int)(using AllowUnsafe): Maybe[AsyncSub]          = Present(streamId)
         def pollAddSubscription(async: AsyncSub)(using AllowUnsafe): AeronTransport.AddPoll[Subscription] =
             added = true
             AeronTransport.AddPoll.Done(async)
@@ -88,11 +84,7 @@ class TopicRuntimeReleaseTest extends Test:
             if added then Present("injected after the publication was added") else Absent
     end FatalAfterAddTransport
 
-    "a publish that fails with a typed error still closes its publication"
-        .pendingUntilFixed(
-            "Sync.ensure does not run its finalizer when the guarded body short-circuits via Abort, so the "
-                + "publication close is skipped when publish aborts typed"
-        ) in {
+    "a publish that fails with a typed error still closes its publication" in {
         val transport = new FatalAfterAddTransport
         Abort.run[TopicTransportException] {
             Topic.runWith(transport) {
@@ -107,11 +99,7 @@ class TopicRuntimeReleaseTest extends Test:
         }
     }
 
-    "a stream that fails with a typed error still closes its subscription"
-        .pendingUntilFixed(
-            "Sync.ensure does not run its finalizer when the guarded body short-circuits via Abort, so the "
-                + "subscription close is skipped when stream aborts typed"
-        ) in {
+    "a stream that fails with a typed error still closes its subscription" in {
         val transport = new FatalAfterAddTransport
         Abort.run[TopicTransportException] {
             Topic.runWith(transport) {

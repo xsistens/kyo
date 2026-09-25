@@ -803,7 +803,7 @@ object Yaml:
             if cstStaged then stagedDocument(input).flatMap(decode[A](_))
             else
                 processor match
-                    case Absent => Yaml.decode[A](input, readerConfig)
+                    case Absent           => Yaml.decode[A](input, readerConfig)
                     case Present(current) =>
                         decodeSource(input).flatMap { source =>
                             internal.yaml.YamlEventScanner.collect(source, current).flatMap { events =>
@@ -967,7 +967,7 @@ object Yaml:
                 case Present(source) if processor.isEmpty =>
                     Result.succeed(source)
                 case _ =>
-                    val multiDoc = stream.documents.size > 1
+                    val multiDoc      = stream.documents.size > 1
                     val childPipeline =
                         if multiDoc
                         then
@@ -1353,7 +1353,7 @@ object Yaml:
           *
           * A path describes how to reach a node by YAML structure, not by character offset. [[Path.Segment.Key]] selects a mapping entry by
           * key text and [[Path.Segment.Index]] selects a sequence entry by zero-based position. The root path has no segments. Use
-          * [[show]] for diagnostics and user-facing edit errors.
+          * `show` for diagnostics and user-facing edit errors.
           */
         opaque type Path = Chunk[Path.Segment]
 

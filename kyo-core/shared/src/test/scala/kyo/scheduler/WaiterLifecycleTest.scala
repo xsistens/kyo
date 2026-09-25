@@ -98,9 +98,9 @@ class WaiterLifecycleTest extends kyo.test.Test[Any]:
             assert(p1.waiters() == 0)
         }
 
-        "A6 a masked promise survives the interruption of its subscribers" in {
+        "A6 a uninterruptible promise survives the interruption of its subscribers" in {
             import AllowUnsafe.embrace.danger
-            val masked = Promise.Unsafe.initMasked[Int, Any]().safe
+            val masked = Promise.Unsafe.initUninterruptible[Int, Any]().safe
             for
                 fibers <- Kyo.foreach(Chunk.from(1 to N))(_ => Fiber.initUnscoped(masked.get))
                 _      <- awaitCount(masked.waiters, N)
@@ -149,9 +149,9 @@ class WaiterLifecycleTest extends kyo.test.Test[Any]:
 
     "B — releasing a waiter whose owner died first" - {
 
-        "B1 an interrupted subscriber leaves no waiter on a masked promise" in {
+        "B1 an interrupted subscriber leaves no waiter on a uninterruptible promise" in {
             import AllowUnsafe.embrace.danger
-            val masked = Promise.Unsafe.initMasked[Int, Any]().safe
+            val masked = Promise.Unsafe.initUninterruptible[Int, Any]().safe
             for
                 fibers <- Kyo.foreach(Chunk.from(1 to N))(_ => Fiber.initUnscoped(masked.get))
                 _      <- awaitCount(masked.waiters, N)

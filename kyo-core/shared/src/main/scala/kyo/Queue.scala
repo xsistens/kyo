@@ -127,8 +127,8 @@ object Queue:
           * with the drain. A consumer already inside `poll` is the caller's own business, as it is on an open queue.
           *
           * Interrupting a caller parked here discards the backlog. The queue still closes and still drains, but the elements have no
-          * receiver and are dropped, so an interrupted close behaves as `closeDiscard`. Mask the interrupt where the elements own a
-          * resource that must be released.
+          * receiver and are dropped, so an interrupted close behaves as `closeDiscard`. Make the close uninterruptible where the elements
+          * own a resource that must be released.
           *
           * @return
           *   a sequence of remaining elements, or absent when another close owns the closure. Absent means this call did not close the
@@ -529,11 +529,11 @@ object Queue:
                 allow: AllowUnsafe
             ): Unsafe[A] =
                 new Unsafe[A]:
-                    val underlying                 = Queue.Unsafe.init[A](_capacity, slidingAccess(access))
-                    def capacity                   = _capacity
-                    def size()(using AllowUnsafe)  = underlying.size()
-                    def empty()(using AllowUnsafe) = underlying.empty()
-                    def full()(using AllowUnsafe)  = underlying.full().map(_ => false)
+                    val underlying                     = Queue.Unsafe.init[A](_capacity, slidingAccess(access))
+                    def capacity                       = _capacity
+                    def size()(using AllowUnsafe)      = underlying.size()
+                    def empty()(using AllowUnsafe)     = underlying.empty()
+                    def full()(using AllowUnsafe)      = underlying.full().map(_ => false)
                     def offer(v: A)(using AllowUnsafe) =
                         @tailrec def loop(v: A): Result[Closed, Boolean] =
                             underlying.offer(v) match
@@ -813,15 +813,15 @@ object Queue:
                         def _isEmpty()                             = true
                 case 1 =>
                     new Closeable[A](initFrame):
-                        private val state              = AtomicRef.Unsafe.init(Maybe.empty[A])
-                        def capacity                   = 1
-                        def empty()(using AllowUnsafe) = op(state.get().isEmpty)
-                        def size()(using AllowUnsafe)  = op(if state.get().isEmpty then 0 else 1)
-                        def full()(using AllowUnsafe)  = op(state.get().isDefined)
+                        private val state                  = AtomicRef.Unsafe.init(Maybe.empty[A])
+                        def capacity                       = 1
+                        def empty()(using AllowUnsafe)     = op(state.get().isEmpty)
+                        def size()(using AllowUnsafe)      = op(if state.get().isEmpty then 0 else 1)
+                        def full()(using AllowUnsafe)      = op(state.get().isDefined)
                         def offer(v: A)(using AllowUnsafe) =
                             offerOp(state.compareAndSet(Maybe.empty, Maybe(v)))
-                        def poll()(using AllowUnsafe) = pollOp(state.getAndSet(Maybe.empty))
-                        def peek()(using AllowUnsafe) = op(state.get())
+                        def poll()(using AllowUnsafe)              = pollOp(state.getAndSet(Maybe.empty))
+                        def peek()(using AllowUnsafe)              = op(state.get())
                         def _drain(max: Maybe[Int] = Maybe.Absent) =
                             max.fold(
                                 state.getAndSet(Maybe.empty).fold(Chunk.empty)(Chunk(_))
@@ -846,13 +846,13 @@ object Queue:
 
         private[Queue] def fromInternal[A](q: UnsafeQueue[A])(using initFrame: Frame, allow: AllowUnsafe): Unsafe[A] =
             new Closeable[A](initFrame):
-                def capacity                       = q.capacity
-                def size()(using AllowUnsafe)      = op(q.size())
-                def empty()(using AllowUnsafe)     = op(q.isEmpty())
-                def full()(using AllowUnsafe)      = op(q.isFull())
-                def offer(v: A)(using AllowUnsafe) = offerOp(q.offer(v))
-                def poll()(using AllowUnsafe)      = pollOp(q.poll())
-                def peek()(using AllowUnsafe)      = op(q.peek())
+                def capacity                               = q.capacity
+                def size()(using AllowUnsafe)              = op(q.size())
+                def empty()(using AllowUnsafe)             = op(q.isEmpty())
+                def full()(using AllowUnsafe)              = op(q.isFull())
+                def offer(v: A)(using AllowUnsafe)         = offerOp(q.offer(v))
+                def poll()(using AllowUnsafe)              = pollOp(q.poll())
+                def peek()(using AllowUnsafe)              = op(q.peek())
                 def _drain(max: Maybe[Int] = Maybe.Absent) =
                     val b = Chunk.newBuilder[A]
                     max match

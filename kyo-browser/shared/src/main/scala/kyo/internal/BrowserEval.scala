@@ -27,6 +27,27 @@ private[kyo] object BrowserEval:
             }
         }
 
+    /** [[evalJs]] for an expression that leaves something on the page. `remove` builds, from the expression's value, the expression
+      * that takes it off again. The page holds the injection before the reply arrives, so the removal is owed to the enclosing scope
+      * from the reply on: see [[CdpBackend.acquire]]. The removal runs against the tab's main frame and its failure is dropped, since
+      * it runs while the scope is closing.
+      */
+    private[kyo] def acquireJs(expr: String)(remove: String => String)(using
+        Frame
+    ): String < (Browser & Scope & Abort[BrowserReadException]) =
+        Browser.activeIFrameLocal.use(active => active.map(_.executionContextId)).map { ctx =>
+            Browser.use { tab =>
+                kyo.kernel.ContextEffect.suspendWith(Tag[Scope]) { finalizer =>
+                    CdpBackend.runtimeEvaluateAcquire(tab.session, finalizer, EvalParams(expr, contextId = ctx.map(c => c.value))) {
+                        result =>
+                            Abort.run[BrowserReadException](
+                                Browser.runOn(tab)(CdpEvalDecoder.extractValueOrFail(result).map(token => evalJs(remove(token)).unit))
+                            ).unit
+                    }.map(CdpEvalDecoder.extractValueOrFail)
+                }
+            }
+        }
+
     /** Like [[evalJs]] but evaluates an `async`/Promise-returning expression and waits for the promise to settle in-page before returning
       * its resolved value. Used by [[kyo.internal.StabilitySampler]], which drives an entire in-page sampling loop inside one eval.
       */
@@ -74,7 +95,7 @@ private[kyo] object BrowserEval:
                 // Recursive walk with explicit early-return: `Kyo.foldLeft` would visit every alternative even after we have a hit, which
                 // means an N-way `FirstOf` issues N JS evaluations on a hit at index 0. The recursion below stops at the first non-zero
                 // count, matching the public-facing short-circuit semantics.
-                val alternatives = selectors.toSeq
+                val alternatives                                                = selectors.toSeq
                 def walk(i: Int): Int < (Browser & Abort[BrowserReadException]) =
                     if i >= alternatives.length then 0
                     else
@@ -226,7 +247,7 @@ private[kyo] object BrowserEval:
     ): Unit < (Browser & Abort[BrowserReadException]) =
         Browser.activeIFrameLocal.use { active =>
             active match
-                case Absent => clickAt(ref.x, ref.y, clickCount)
+                case Absent     => clickAt(ref.x, ref.y, clickCount)
                 case Present(_) =>
                     Browser.use { tab =>
                         Abort.recover[BrowserProtocolErrorException](_ => clickAt(ref.x, ref.y, clickCount)) {

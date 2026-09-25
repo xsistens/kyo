@@ -25,9 +25,15 @@ abstract class BasePodTest extends kyo.test.Test[Any]:
     // Container ops contend on a single daemon, so leaves must run sequentially (runBackends assumes <=1
     // in-flight op per daemon); parallel leaves produce port conflicts, already-exists, and pull errors.
     //
+    // globallySequential, not just sequential: the resource these suites share is the container daemon, which reaches beyond any one suite.
+    // `sequential` only orders a suite's own leaves inside the process-global pool, so two container suites sharing a fork would still
+    // interleave, and the per-leaf container-leak check below diffs the daemon's whole container list: a container another leaf created
+    // inside this leaf's window is indistinguishable from one this leaf leaked, and the leaf fails for it. The build puts every
+    // daemon-touching suite in one fork per daemon so this flag covers all of them.
+    //
     // Only socket leak-checking is disabled: the NIO transport defers a connection's fd close to its idle selector's
     // next select() (which nothing wakes), so the fd outlives the run and its opaque socket:[inode] matches no allowlist.
-    override def config = super.config.sequential.leakCheckSockets(false)
+    override def config = super.config.sequential.globallySequential(true).leakCheckSockets(false)
 
     // Linux CI's container runtime (podman REST API) intermittently takes longer than
     // the production 5-second `HttpClientConfig.timeout` default for ordinary Container ops
@@ -54,20 +60,26 @@ abstract class BasePodTest extends kyo.test.Test[Any]:
                         val candidates = after.filterNot(s => beforeIds.contains(s.id))
                         // The daemon's listing lags inspect on podman: a just-removed container can still appear in `list`.
                         // Confirm each candidate via an authoritative inspect before flagging, avoiding a false leak.
-                        Kyo.foreach(candidates) { s =>
-                            Abort.run[ContainerException](backend.state(s.id)).map {
-                                case Result.Failure(_: ContainerMissingException) => Maybe.empty[Container.Summary]
-                                case _                                            => Maybe(s)
-                            }
-                        }.map { results =>
-                            val leaked = results.flatMap(m => Chunk.from(m.toList))
-                            if leaked.isEmpty then Kyo.unit
-                            else
-                                fail(
+                        //
+                        // Removal is asynchronous: the scope's `remove` returns when the daemon has accepted it, not when the
+                        // container is gone, and under load the daemon takes seconds over it.
+                        // The check waits on the daemon through the leaf's barrier
+                        // rather than a fixed window, and still demands every candidate be gone: a container that really leaked
+                        // never goes, since nothing else is going to remove it.
+                        def stillHere: Chunk[Container.Summary] < (Async & Abort[Any]) =
+                            Kyo.foreach(candidates) { s =>
+                                Abort.run[ContainerException](backend.state(s.id)).map {
+                                    case Result.Failure(_: ContainerMissingException) => Chunk.empty[Container.Summary]
+                                    case _                                            => Chunk(s)
+                                }
+                            }.map(_.flattenChunk)
+                        assertEventually {
+                            stillHere.map { leaked =>
+                                leaked.isEmpty || fail(
                                     s"leaf leaked ${leaked.size} container(s) not freed before exit: " +
                                         leaked.map(s => s"${s.id.value.take(12)}[${s.state}]").mkString(", ")
                                 )
-                            end if
+                            }
                         }
                     }
                 }
@@ -92,15 +104,15 @@ abstract class BasePodTest extends kyo.test.Test[Any]:
                     }
                 }
 
-                // The shell arm shells out to the runtime's CLI, so it is gated on the CLI the way the http arm is
-                // gated on the socket. A host that reaches a daemon over a socket alone (a mounted socket inside a
-                // container) has no CLI to run, and registering the arm there produced a leaf per shell test that
-                // could only fail on a missing binary.
-                if ContainerRuntime.cliExists(runtime) then
-                    "shell" in {
-                        Container.withBackendConfig(_.Shell(runtime))(checkingContainerLeak(v))
-                    }
-                end if
+                "shell" in {
+                    // The http arm above needs a socket to talk to; this one needs a CLI that reaches the
+                    // daemon. A runtime reached through a mounted socket with no CLI installed (a build
+                    // container, and any CI runner wired the same way) is genuinely available for HTTP and
+                    // cannot serve Shell at all. Cancelled rather than unregistered so the skip is visible in
+                    // the run's own totals instead of the leaf silently not existing.
+                    requireRuntimeCli(runtime)
+                    Container.withBackendConfig(_.Shell(runtime))(checkingContainerLeak(v))
+                }
             }
         }
 
@@ -121,15 +133,15 @@ abstract class BasePodTest extends kyo.test.Test[Any]:
                     }
                 }
 
-                // The shell arm shells out to the runtime's CLI, so it is gated on the CLI the way the http arm is
-                // gated on the socket. A host that reaches a daemon over a socket alone (a mounted socket inside a
-                // container) has no CLI to run, and registering the arm there produced a leaf per shell test that
-                // could only fail on a missing binary.
-                if ContainerRuntime.cliExists(runtime) then
-                    "shell" in {
-                        Container.withBackendConfig(_.Shell(runtime))(checkingContainerLeak(v))
-                    }
-                end if
+                "shell" in {
+                    // The http arm above needs a socket to talk to; this one needs a CLI that reaches the
+                    // daemon. A runtime reached through a mounted socket with no CLI installed (a build
+                    // container, and any CI runner wired the same way) is genuinely available for HTTP and
+                    // cannot serve Shell at all. Cancelled rather than unregistered so the skip is visible in
+                    // the run's own totals instead of the leaf silently not existing.
+                    requireRuntimeCli(runtime)
+                    Container.withBackendConfig(_.Shell(runtime))(checkingContainerLeak(v))
+                }
             }
         }
 

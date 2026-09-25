@@ -10,12 +10,12 @@ package kyo
   *
   * Construct values via the companion factories:
   *
-  *   - [[tool]] / [[toolRaw]] ; `tools/call` endpoints (structured-typed vs raw `ToolOutcome`)
-  *   - [[resource]] ; fixed-URI `resources/read` endpoint
-  *   - [[resourceTemplate]] ; URI-template `resources/read` endpoint
-  *   - [[prompt]] ; `prompts/get` endpoint
-  *   - [[completion]] / [[completionWith]] ; `completion/complete` endpoint (1-arg / 3-arg)
-  *   - [[custom]] ; arbitrary JSON-RPC method
+  *   - `tool` / `toolRaw` ; `tools/call` endpoints (structured-typed vs raw `ToolOutcome`)
+  *   - `resource` ; fixed-URI `resources/read` endpoint
+  *   - `resourceTemplate` ; URI-template `resources/read` endpoint
+  *   - `prompt` ; `prompts/get` endpoint
+  *   - `completion` / `completionWith` ; `completion/complete` endpoint (1-arg / 3-arg)
+  *   - `custom` ; arbitrary JSON-RPC method
   *
   * Each factory takes the handler closure directly. `[In]` is annotated at the call site;
   * `[Out]` is inferred from the handler's return type via clause interleaving so callers only
@@ -129,7 +129,7 @@ object McpHandler:
       * required binding (no `getOrElse("")`).
       */
     final class ResourceMatch private[kyo] (val uri: McpResourceUri, val bindings: Map[String, String]):
-        def variable(name: String): Maybe[String] = Maybe.fromOption(bindings.get(name))
+        def variable(name: String): Maybe[String]                                                   = Maybe.fromOption(bindings.get(name))
         def requireVariable(name: String)(using Frame): String < Abort[McpInvalidArgumentException] =
             bindings.get(name) match
                 case Some(v) => v
@@ -261,7 +261,7 @@ object McpHandler:
               */
             def structuredContentAs[M](using Schema[M], Frame): Maybe[M] < Abort[McpDecodeException] =
                 self.structuredContent match
-                    case Absent => Maybe.empty
+                    case Absent      => Maybe.empty
                     case Present(sv) =>
                         Structure.decode[M](sv) match
                             case Result.Success(m) => Present(m)
@@ -271,7 +271,7 @@ object McpHandler:
             /** Decodes `meta` to `M`, or `Absent` when no `_meta` is present. */
             def metaAs[M](using Schema[M], Frame): Maybe[M] < Abort[McpDecodeException] =
                 self.meta match
-                    case Absent => Maybe.empty
+                    case Absent      => Maybe.empty
                     case Present(sv) =>
                         Structure.decode[M](sv) match
                             case Result.Success(m) => Present(m)
@@ -500,7 +500,7 @@ object McpHandler:
         // `OutInferred` is required BEFORE the output schema so a body that left `Out` uninferred is
         // reported as that, rather than as an ambiguity between two primitive schemas the author never
         // mentioned. See its docs.
-        val _ = outInferred
+        val _    = outInferred
         val meta = ToolMeta(
             name = name,
             description = if description.isEmpty then Absent else Present(description),
@@ -513,7 +513,7 @@ object McpHandler:
 
     /** Constructs a tool handler returning a full [[ToolOutcome]] for total control
       * (multiple content leaves, a pure-content tool, in-band `isError`). The lower-level
-      * escape; reach for [[tool]] when one returned value should drive the structured output.
+      * escape; reach for `tool` when one returned value should drive the structured output.
       */
     inline def toolRaw[In](
         name: String,
@@ -533,13 +533,22 @@ object McpHandler:
         new ToolMultiHandler[In, E](meta, inSchema, handler, Chunk.empty, declaredError(errorTag))
     end toolRaw
 
+    /** The schema-at-runtime form of `toolRaw`: the wire metadata is given rather than derived from `In`,
+      * so a tool published with a schema (an MCP server's, a hand-built descriptor) advertises that
+      * schema verbatim, while `inSchema` still decodes the arguments the handler receives.
+      */
+    def toolRaw[In](meta: ToolMeta)[E](
+        handler: In => ToolOutcome < (Async & Abort[JsonRpcResponse.Halt | E])
+    )(using errorTag: ConcreteTag[E], inSchema: Schema[In], frame: Frame): McpHandler[In, ToolOutcome, E] =
+        new ToolMultiHandler[In, E](meta, inSchema, handler, Chunk.empty, declaredError(errorTag))
+
     /** Constructs a fixed-URI resource handler.
       *
       * The handler is a by-name effectful value because the URI is fully known at registration
       * time: the engine only dispatches `resources/read` to this handler when the inbound URI
       * equals the registered `uri`. The engine stamps the registered URI onto each [[ResourceBody]]
       * returned by the handler. For URI-template resources where the URI is dynamic per request,
-      * use [[resourceTemplate]].
+      * use `resourceTemplate`.
       *
       * @param subscribe when `true`, this resource opts into the subscription protocol (SS3.4).
       *                  The server advertises `resources.subscribe = true` when any resource handler

@@ -157,7 +157,7 @@ final private[kyo] case class MountedSpec(node: UI.Ast.Mounted, path: Seq[String
     def errorUI(err: UI.MountError): UI =
         node.errorRender match
             case Present(f) => f(err)
-            case Absent =>
+            case Absent     =>
                 given Frame = node.frame
                 UI.span(UI.Ast.Text(err.message)).cssClass("kyo-mount-error")
 
@@ -218,7 +218,7 @@ private[kyo] object ReactiveUI:
         // continuations per row, one for each frame between the read and the row loop.
         Sync.Unsafe.defer {
             val mountDispatch = MountDispatch.initNow()
-            val root = normalizeWith(
+            val root          = normalizeWith(
                 ui,
                 rootPath,
                 svg,
@@ -257,58 +257,57 @@ private[kyo] object ReactiveUI:
 
             case ui: Foreach[?, ?] @unchecked =>
                 ui.applyTyped {
-                    [T] =>
-                        (itemSignal, keyFn, renderFn) =>
-                            val sig                  = itemSignal.map(items => foreachFragment(keyFn, renderFn, items))
-                            val contentContext       = regionIdentity
-                            val rows                 = RowRegistry.initNow()
-                            val items0               = SignalNow(itemSignal)
-                            val current              = foreachFragment(keyFn, renderFn, items0)
-                            val contentParentContext = nestedParentContext(parentContext, current)
-                            val (kids, _)            = walkStatic(current, path, svg, contentContext, contentParentContext, mountDispatch)
-                            // Fallback dispatch: re-render the whole list from the current value and route
-                            // through the fresh fragment handler. Used whenever the row registry cannot
-                            // resolve the target (region not subscribed on the reuse path, row painted but
-                            // not yet registered, or an event addressed to the region node itself).
-                            val fullWalk: Handler = (targetPath, event) =>
-                                Sync.Unsafe.defer {
-                                    val currentUI          = SignalNow(sig)
-                                    val freshParentContext = nestedParentContext(parentContext, currentUI)
-                                    val (_, freshHdl) = walkStatic(currentUI, path, svg, contentContext, freshParentContext, mountDispatch)
-                                    freshHdl(targetPath, event)
-                                }
-                            init(path, sig, isConst = false, kids, svg, regionIdentity, contentContext, parentContext) {
-                                (targetPath, event) =>
-                                    // Row-registry fast path: the segment after the region path is the row
-                                    // key, so the live RowInstance resolves the target directly. Its cached
-                                    // handler is as fresh as a re-derived one: the registry retains a row
-                                    // only while its item value is unchanged (a changed item rebuilds the
-                                    // row, and with it the handler), which is the same purity assumption
-                                    // the paint reuse already makes. A seeded row has no cached handler
-                                    // yet; its cached rowUI is walked on demand (one row, not the list).
-                                    if targetPath.size > path.size then
-                                        rows.find(targetPath(path.size)).map { live =>
-                                            live match
-                                                case Present(inst) =>
-                                                    inst.handler match
-                                                        case Present(h) => h(targetPath, event)
-                                                        case Absent =>
-                                                            Sync.Unsafe.defer {
-                                                                walkRow(
-                                                                    inst.rowUI,
-                                                                    path :+ inst.key,
-                                                                    svg,
-                                                                    contentContext.child(inst.key),
-                                                                    nestedParentContext(parentContext, inst.rowUI),
-                                                                    mountDispatch
-                                                                )._2(targetPath, event)
-                                                            }
-                                                case Absent => fullWalk(targetPath, event)
-                                        }
-                                    else fullWalk(targetPath, event)
-                            }.copy(
-                                renderedValue = Present(current),
-                                foreachSpec = Present(ForeachSpec(ui, Present(items0), rows))
+                    [T] => (itemSignal, keyFn, renderFn) =>
+                        val sig                  = itemSignal.map(items => foreachFragment(keyFn, renderFn, items))
+                        val contentContext       = regionIdentity
+                        val rows                 = RowRegistry.initNow()
+                        val items0               = SignalNow(itemSignal)
+                        val current              = foreachFragment(keyFn, renderFn, items0)
+                        val contentParentContext = nestedParentContext(parentContext, current)
+                        val (kids, _)            = walkStatic(current, path, svg, contentContext, contentParentContext, mountDispatch)
+                        // Fallback dispatch: re-render the whole list from the current value and route
+                        // through the fresh fragment handler. Used whenever the row registry cannot
+                        // resolve the target (region not subscribed on the reuse path, row painted but
+                        // not yet registered, or an event addressed to the region node itself).
+                        val fullWalk: Handler = (targetPath, event) =>
+                            Sync.Unsafe.defer {
+                                val currentUI          = SignalNow(sig)
+                                val freshParentContext = nestedParentContext(parentContext, currentUI)
+                                val (_, freshHdl)      = walkStatic(currentUI, path, svg, contentContext, freshParentContext, mountDispatch)
+                                freshHdl(targetPath, event)
+                            }
+                        init(path, sig, isConst = false, kids, svg, regionIdentity, contentContext, parentContext) {
+                            (targetPath, event) =>
+                                // Row-registry fast path: the segment after the region path is the row
+                                // key, so the live RowInstance resolves the target directly. Its cached
+                                // handler is as fresh as a re-derived one: the registry retains a row
+                                // only while its item value is unchanged (a changed item rebuilds the
+                                // row, and with it the handler), which is the same purity assumption
+                                // the paint reuse already makes. A seeded row has no cached handler
+                                // yet; its cached rowUI is walked on demand (one row, not the list).
+                                if targetPath.size > path.size then
+                                    rows.find(targetPath(path.size)).map { live =>
+                                        live match
+                                            case Present(inst) =>
+                                                inst.handler match
+                                                    case Present(h) => h(targetPath, event)
+                                                    case Absent     =>
+                                                        Sync.Unsafe.defer {
+                                                            walkRow(
+                                                                inst.rowUI,
+                                                                path :+ inst.key,
+                                                                svg,
+                                                                contentContext.child(inst.key),
+                                                                nestedParentContext(parentContext, inst.rowUI),
+                                                                mountDispatch
+                                                            )._2(targetPath, event)
+                                                        }
+                                            case Absent => fullWalk(targetPath, event)
+                                    }
+                                else fullWalk(targetPath, event)
+                        }.copy(
+                            renderedValue = Present(current),
+                            foreachSpec = Present(ForeachSpec(ui, Present(items0), rows))
                         )
                 }
 
@@ -352,14 +351,14 @@ private[kyo] object ReactiveUI:
                 // The handler resolves through the MountDispatch TABLE (by path), not the node: dispatch re-normalizes
                 // a fresh node value per event, so no live wiring can ride the node. The stored signal is a placeholder
                 // constant the subscribe path never observes (subscribeScoped branches on mountedSpec first).
-                val spec = MountedSpec(ui, path)
+                val spec            = MountedSpec(ui, path)
                 val handle: Handler = (targetPath, event) =>
                     mountDispatch.lookup(path).map {
                         case Present(cell) =>
                             Sync.Unsafe.defer {
                                 val currentUI            = SignalNow(cell)
                                 val contentParentContext = nestedParentContext(parentContext, currentUI)
-                                val (_, freshHdl) = walkStatic(
+                                val (_, freshHdl)        = walkStatic(
                                     currentUI,
                                     path,
                                     svg,
@@ -433,7 +432,7 @@ private[kyo] object ReactiveUI:
       */
     private def needsOwnNode(ui: UI): Boolean = ui match
         case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted => true
-        case el: Element =>
+        case el: Element                                    =>
             collectSignalRef(el).nonEmpty || el.attrs.reactiveAttrs.nonEmpty
             || el.attrs.reactiveBoolAttrs.nonEmpty || el.attrs.reactiveClasses.nonEmpty
         case _ => false
@@ -532,7 +531,7 @@ private[kyo] object ReactiveUI:
                 }
                 val reactiveChildren: Seq[ReactiveUI]   = kids.result()
                 val staticHandlers: Seq[(Int, Handler)] = handlers.result()
-                val handle: Handler = (targetPath, event) =>
+                val handle: Handler                     = (targetPath, event) =>
                     dispatch(elem, basePath, targetPath, event, reactiveChildren, staticHandlers)
                 (reactiveChildren, handle)
 
@@ -546,7 +545,7 @@ private[kyo] object ReactiveUI:
                         case _                 => i.toString
                     val childPath    = basePath :+ segment
                     val childContext = context.child(segment)
-                    val inner = child match
+                    val inner        = child match
                         case kc: KeyedChild[?] => kc.child
                         case _                 => child
                     if needsOwnNode(inner) then
@@ -681,7 +680,7 @@ private[kyo] object ReactiveUI:
                 // reported to the handler rather than acted on here: only the handler knows whether
                 // its click means something the control already means (see UI.MouseEvent.onControl).
                 targetOnControl = isClick && facts.controlBelow
-                bubble = dispatchToElement(
+                bubble          = dispatchToElement(
                     elem,
                     event,
                     isTarget = false,
@@ -821,7 +820,7 @@ private[kyo] object ReactiveUI:
                     case Present(Bound.Const(s)) => Kyo.lift(s)
                     case _                       => Kyo.lift("")
                 currentIdx = values.indexOf(current).max(0)
-                nextIdx =
+                nextIdx    =
                     if forward then (currentIdx + 1)    % values.size
                     else (currentIdx - 1 + values.size) % values.size
                 newValue = values(nextIdx)
@@ -954,15 +953,14 @@ private[kyo] object ReactiveUI:
                 else
                     val seg = targetPath(nodePath.size)
                     fe.applyTyped {
-                        [T] =>
-                            (signal, keyFn, renderFn) =>
-                                signal.current(using fe.frame).map { items =>
-                                    val idx = keyFn match
-                                        case Present(f) => items.indexWhere(it => f(it) == seg)
-                                        case Absent     => Maybe.fromOption(seg.toIntOption).getOrElse(-1)
-                                    if idx >= 0 && idx < items.size then
-                                        resolveTarget(renderFn(idx, items(idx)), nodePath :+ seg, targetPath, rootDepth, controlBelow)
-                                    else unresolved(controlBelow)
+                        [T] => (signal, keyFn, renderFn) =>
+                            signal.current(using fe.frame).map { items =>
+                                val idx = keyFn match
+                                    case Present(f) => items.indexWhere(it => f(it) == seg)
+                                    case Absent     => Maybe.fromOption(seg.toIntOption).getOrElse(-1)
+                                if idx >= 0 && idx < items.size then
+                                    resolveTarget(renderFn(idx, items(idx)), nodePath :+ seg, targetPath, rootDepth, controlBelow)
+                                else unresolved(controlBelow)
                             }
                     }
             case e: Element =>
@@ -1043,7 +1041,7 @@ private[kyo] object ReactiveUI:
                     // The target element is the nearest one that carries a path, so `isTarget` alone would also hold
                     // for a click on a plain descendant; `self` is the client's word that it was this element.
                     val onSelf = isTarget && ev.mouse.self
-                    val self = if onSelf then
+                    val self   = if onSelf then
                         invoke(attrs.onClickSelf).andThen(invokeWith(attrs.onClickSelfEvt, mouse))
                     else Kyo.lift(())
                     // Checkbox/radio toggle is handled by UIControlSession.click() which dispatches
@@ -1129,7 +1127,9 @@ private[kyo] object ReactiveUI:
                     else Kyo.lift(())
                     // ArrowDown/ArrowUp/Space/Enter on Select cycles through options (browser behavior)
                     val selectCycle =
-                        if isTarget && (e.keyboard.key == "ArrowDown" || e.keyboard.key == "ArrowUp" || e.keyboard.key == " " || e.keyboard.key == "Enter")
+                        if isTarget &&
+                            (e.keyboard.key == "ArrowDown" || e.keyboard.key == "ArrowUp" || e.keyboard.key == " " ||
+                                e.keyboard.key == "Enter")
                         then
                             elem match
                                 case sel: Select => cycleSelectOption(sel, forward = e.keyboard.key != "ArrowUp")
@@ -1263,7 +1263,7 @@ private[kyo] object ReactiveUI:
             case _: UIEvent.DragEnter => dispatchDragEvent(elem, attrs.onDragEnter, attrs.onDragEnterEvt, "drag enter")
             case _: UIEvent.DragLeave => dispatchDragEvent(elem, attrs.onDragLeave, attrs.onDragLeaveEvt, "drag leave")
             case _: UIEvent.DragOver  => dispatchDragEvent(elem, attrs.onDragOver, attrs.onDragOverEvt, "drag over")
-            case _: UIEvent.Drop =>
+            case _: UIEvent.Drop      =>
                 DragCommands.current.use {
                     case Present(DragCommands.Dispatch(DragCommands.Payload.Event(value), decisions)) =>
                         invokeDecision(attrs.onDrop, decisions, "The drop handler failed.")
@@ -1326,9 +1326,9 @@ private[kyo] object ReactiveUI:
         handler.fold((): Unit < Async) { effect =>
             for
                 result <- Abort.run[Any](effect)
-                _ <- result match
+                _      <- result match
                     case Result.Success(decision) => recordDecision(decisions, decision)
-                    case Result.Failure(err) =>
+                    case Result.Failure(err)      =>
                         Log.error(s"Drag decision handler error: $err").andThen(failDecision(decisions, failure))
                     case Result.Panic(panic) =>
                         Log.error(s"Drag decision handler panic: ${panic.getMessage}").andThen(failDecision(decisions, failure))
@@ -1341,7 +1341,7 @@ private[kyo] object ReactiveUI:
         ref.fold((): Unit < Sync)(_.getAndUpdate {
             case failed: DragCommands.DecisionState.Failed     => failed
             case rejected: DragCommands.DecisionState.Rejected => rejected
-            case _ =>
+            case _                                             =>
                 decision match
                     case Drag.Decision.Accept         => DragCommands.DecisionState.Accepted
                     case reject: Drag.Decision.Reject => DragCommands.DecisionState.Rejected(reject)
@@ -1484,7 +1484,7 @@ private[kyo] object ReactiveUI:
                         recorded <- AtomicRef.init(Maybe.empty[Seq[String]])
                         keep     <- activationTarget.let(Present(recorded))(handle(path, kd))
                         target   <- recorded.get
-                        _ <- target.fold(Kyo.lift(())) { clickPath =>
+                        _        <- target.fold(Kyo.lift(())) { clickPath =>
                             handle(
                                 clickPath,
                                 UIEvent.Click(
@@ -1576,12 +1576,13 @@ private[kyo] object ReactiveUI:
                                 Absent
                             )
                             Clock.now.map { now =>
-                                sessions.set(current + (data.sessionId -> DragSession(
-                                    domain,
-                                    terminalResolved = false,
-                                    now + limits.lifetime,
-                                    resolver
-                                )))
+                                sessions.set(current +
+                                    (data.sessionId -> DragSession(
+                                        domain,
+                                        terminalResolved = false,
+                                        now + limits.lifetime,
+                                        resolver
+                                    )))
                                     .andThen(wakeExpiryScheduler(expiryWake))
                                     .andThen(DragCommands.current.let(Present(DragCommands.Dispatch(
                                         DragCommands.Payload.Event(domain),
@@ -1618,7 +1619,7 @@ private[kyo] object ReactiveUI:
                     case Some(session) if !session.terminalResolved =>
                         for
                             decisions <- AtomicRef.init[DragCommands.DecisionState](DragCommands.DecisionState.None)
-                            _ <- DragCommands.current.let(Present(DragCommands.Dispatch(
+                            _         <- DragCommands.current.let(Present(DragCommands.Dispatch(
                                 DragCommands.Payload.Move(move),
                                 Present(decisions)
                             ))) {
@@ -1714,7 +1715,7 @@ private[kyo] object ReactiveUI:
                     for
                         decisions <- AtomicRef.init[DragCommands.DecisionState](DragCommands.DecisionState.None)
                         _         <- sessions.getAndUpdate(_ + (data.sessionId -> session.copy(event = domain)))
-                        _ <- DragCommands.current.let(Present(DragCommands.Dispatch(
+                        _         <- DragCommands.current.let(Present(DragCommands.Dispatch(
                             DragCommands.Payload.Event(domain),
                             Present(decisions)
                         ))) {
@@ -1852,7 +1853,7 @@ private[kyo] object ReactiveUI:
                 // original patcher is used unwrapped, so the off path is byte-for-byte what it was.
                 Devtools.currentSink.map { devSink =>
                     val write: String => Unit = devSink match
-                        case Absent => v => patch(rui.path, v)
+                        case Absent          => v => patch(rui.path, v)
                         case Present(report) =>
                             v =>
                                 patch(rui.path, v)
@@ -1960,7 +1961,7 @@ private[kyo] object ReactiveUI:
         Devtools.currentSink.map { devSink =>
             def instrument[A](patcher: Maybe[(Seq[String], String, A) => Unit]): Maybe[(Seq[String], String, A) => Unit] =
                 devSink match
-                    case Absent => patcher
+                    case Absent          => patcher
                     case Present(report) =>
                         patcher.map(patch =>
                             (target, name, value) =>
@@ -1970,7 +1971,7 @@ private[kyo] object ReactiveUI:
 
             def instrumented[A](name: String, slow: A => Unit < Async): A => Unit < Async =
                 devSink match
-                    case Absent => slow
+                    case Absent          => slow
                     case Present(report) =>
                         v =>
                             slow(v).andThen(
@@ -2032,7 +2033,7 @@ private[kyo] object ReactiveUI:
         releases: Maybe[ReleaseSink]
     )(using CanEqual[A, A], Frame): Boolean < (Sync & Scope) =
         patcher match
-            case Absent => false
+            case Absent         => false
             case Present(patch) =>
                 Sync.Unsafe.defer {
                     sig.unsafeObserveProjected[A](identity, rendered, v => patch(path, name, v)) match
@@ -2116,7 +2117,8 @@ private[kyo] object ReactiveUI:
                         // start its observers here, scoped to this per-value fiber like the child subscriptions.
                         _ <- current match
                             case el: Element
-                                if el.attrs.reactiveAttrs.nonEmpty || el.attrs.reactiveBoolAttrs.nonEmpty || el.attrs.reactiveClasses.nonEmpty =>
+                                if el.attrs.reactiveAttrs.nonEmpty || el.attrs.reactiveBoolAttrs.nonEmpty ||
+                                    el.attrs.reactiveClasses.nonEmpty =>
                                 forkChannelObservers(
                                     rui.path,
                                     el.attrs.reactiveAttrs,
@@ -2210,7 +2212,7 @@ private[kyo] object ReactiveUI:
                 bytes
             )
         probe match
-            case Absent => Devtools.emit(event(wasted = false, durationNanos = 0L, bytes = 0))
+            case Absent     => Devtools.emit(event(wasted = false, durationNanos = 0L, bytes = 0))
             case Present(p) =>
                 Clock.nowMonotonic.map(ended => Devtools.emit(event(p.wasted, (ended - started).toNanos, p.bytes)))
         end match
@@ -2244,7 +2246,7 @@ private[kyo] object ReactiveUI:
                 bytes
             )
         probe match
-            case Absent => Devtools.emit(event(wasted = false, durationNanos = 0L, bytes = 0))
+            case Absent     => Devtools.emit(event(wasted = false, durationNanos = 0L, bytes = 0))
             case Present(p) =>
                 Clock.nowMonotonic.map { ended =>
                     Devtools.emit(event(
@@ -2300,7 +2302,7 @@ private[kyo] object ReactiveUI:
     end ReleaseSink
 
     /** What keeps one row's subscriptions open: its channel releases and its Scope finalizer. */
-    final private[kyo] class RowScope(val releases: ReleaseSink, val finalizer: Scope.Finalizer.Awaitable)
+    final private[kyo] class RowScope(val releases: ReleaseSink, val finalizer: Scope.Finalizer)
 
     /** Per-region ownership of reusable Foreach rows, in list order, plus the same rows by key. Mutation
       * happens only from the owning region's sequential observe loop, so plain get/set on the refs suffices.
@@ -2524,189 +2526,194 @@ private[kyo] object ReactiveUI:
         initialKids: Seq[ReactiveUI]
     )(using Frame): Unit < (Async & Scope) =
         val path = rui.path
-        val svg = rui.region match
+        val svg  = rui.region match
             case _: ReactiveRegion.HtmlRange  => false
             case _: ReactiveRegion.SvgElement => true
         // The tree this region last rendered, so the exchange can send only what moved (see subscribeRegion).
         // Unsafe: region-scoped, single-writer state created before the observe loop is started.
         val rendered = AtomicRef.Unsafe.init(Maybe.empty[UI])(using AllowUnsafe.embrace.danger)
         spec.node.applyTyped {
-            [T] =>
-                (itemSignal, keyFnMaybe, renderFn) =>
-                    val keyFn = keyFnMaybe.get // reusable guarantees a key function
-                    for
-                        regionMounts <- MountRegistry.init.map(r => Scope.ensure(r.evictAll).andThen(r))
-                        rows = spec.rows
-                        _ <- Scope.ensure(rows.evictAll)
-                        _ <- startOwnedFiber {
-                            // A row owns a bare Finalizer, not a fiber: the registry closes and awaits it, and
-                            // scoped children still die with it: `Fiber.init` is `Scope.acquireRelease(_.interrupt)`,
-                            // so a nested region's or mount's interrupt is registered HERE. Subscribing inline
-                            // rather than on a forked fiber makes a row that suspends (only one containing a
-                            // Mounted node can) finish before the emission does; the paint is already out by then.
-                            // The registry always closes AND awaits a row, so its finalizers run on the evicting
-                            // fiber (initInline): the queued finalizer forked a fiber per row and suspended the
-                            // eviction loop on each, a scheduler hop per row for two callback releases.
-                            def rowRunner(kids: Seq[ReactiveUI]): RowScope < Async =
-                                Sync.Unsafe.defer {
-                                    val fin   = Scope.Finalizer.Awaitable.Unsafe.initInline()
-                                    val sink  = new ReleaseSink
-                                    val scope = new RowScope(sink, fin)
-                                    ContextEffect.handle[Scope.Finalizer, Scope, Unit, Async](Tag[Scope], fin, _ => fin) {
-                                        Kyo.foreachDiscard(kids)(
-                                            subscribeScoped(_, exchange, signalChangeTime, regionMounts, mountDispatch, Present(sink))
-                                        )
-                                    }.andThen(scope)
-                                }
-
-                            def distinctKeys(items: Chunk[T]): Boolean =
-                                val ks = items.toSeq.map(keyFn)
-                                ks.distinct.sizeIs == ks.size
-
-                            // First emission over the already-painted value: skip render and walk entirely; adopt the
-                            // walked initial kids as rows (grouped by their row path segment) and just subscribe them.
-                            def seed(items: Chunk[T]): Unit < (Async & Scope) =
-                                for
-                                    _ <- regionMounts.evictExcept(collectMountKeys(initialKids))
-                                    grouped = initialKids.groupBy(k => k.path.lift(path.length).getOrElse(""))
-                                    built <- Kyo.foreach(Chunk.from(items.toSeq.zipWithIndex)) { (item, i) =>
-                                        val key  = keyFn(item)
-                                        val kids = grouped.getOrElse(key, Seq.empty)
-                                        rowRunner(kids).map(fiber =>
-                                            new RowInstance(key, item, renderFn(i, item), kids, Absent, fiber)
-                                        )
-                                    }
-                                    // No paint here: the enclosing render already put exactly this fragment in the
-                                    // DOM. It is still recorded as this region's last render, so the NEXT emission
-                                    // diffs against it rather than re-sending every row.
-                                    _ <- Sync.Unsafe.defer(
-                                        rendered.set(Present(Fragment[UI](Chunk.from(built.toSeq.map(r =>
-                                            KeyedChild[UI](r.key, r.rowUI)
-                                        )))))
+            [T] => (itemSignal, keyFnMaybe, renderFn) =>
+                val keyFn = keyFnMaybe.get // reusable guarantees a key function
+                for
+                    regionMounts <- MountRegistry.init.map(r => Scope.ensure(r.evictAll).andThen(r))
+                    rows = spec.rows
+                    _ <- Scope.ensure(rows.evictAll)
+                    _ <- startOwnedFiber {
+                        // A row owns a bare Finalizer, not a fiber: the registry closes and awaits it, and
+                        // scoped children still die with it: `Fiber.init` is `Scope.acquireRelease(_.interrupt)`,
+                        // so a nested region's or mount's interrupt is registered HERE. Subscribing inline
+                        // rather than on a forked fiber makes a row that suspends (only one containing a
+                        // Mounted node can) finish before the emission does; the paint is already out by then.
+                        // The registry always closes AND awaits a row, so its finalizers run on the evicting
+                        // fiber (initInline): the queued finalizer forked a fiber per row and suspended the
+                        // eviction loop on each, a scheduler hop per row for two callback releases.
+                        def rowRunner(kids: Seq[ReactiveUI]): RowScope < Async =
+                            Sync.Unsafe.defer {
+                                val fin   = Scope.Finalizer.Unsafe.initInline()
+                                val sink  = new ReleaseSink
+                                val scope = new RowScope(sink, fin)
+                                // A root, as `Scope.runUnowned`'s is: the registry owns the row, not the enclosing scope.
+                                ContextEffect.handle[Scope.Finalizer, Scope, Unit, Async](
+                                    Tag[Scope],
+                                    derive = (_: Maybe[Scope.Finalizer]) => fin,
+                                    fork = (parent: Scope.Finalizer) => parent.forked,
+                                    join = (parent: Scope.Finalizer, _: Scope.Finalizer, _: Scope.Finalizer) => parent
+                                ) {
+                                    Kyo.foreachDiscard(kids)(
+                                        subscribeScoped(_, exchange, signalChangeTime, regionMounts, mountDispatch, Present(sink))
                                     )
-                                    _ <- rows.replaceAll(built.toSeq, built.toSeq)
-                                    // No paint happened, so no cost is charged — but the rows DID come into
-                                    // existence, in the enclosing region's paint. Same accounting as the region
-                                    // skip branch in subscribeRegion.
-                                    _ <- reportListPatch(
-                                        rui,
-                                        UI.RenderCause.Created,
-                                        Absent,
-                                        Duration.Zero,
-                                        changedRows = 0,
-                                        totalRows = built.size,
-                                        reordered = false
-                                    )
-                                yield ()
-
-                            def handle(items: Chunk[T]): Unit < (Async & Scope) =
-                                for
-                                    now       <- Clock.now
-                                    _         <- signalChangeTime.set(now)
-                                    prev      <- rows.snapshot
-                                    prevByKey <- rows.byKey
-                                    plan = new RowPlan[T](items, prev, prevByKey, keyFn)
-                                    _ <-
-                                        if plan.duplicates then
-                                            Log.warn(
-                                                s"kyo-ui: duplicate keys in foreachKeyed at ${path.mkString(".")} within one emission: " +
-                                                    "row reuse is disabled for this emission (all rows rebuilt); use distinct keys"
-                                            )
-                                        else Kyo.unit
-                                    _ <- rows.evictExcept(plan.isRetained) // removed AND changed rows close before the paint
-                                    // One synchronous pass over the rebuilt rows (see SignalNow), not an
-                                    // effect loop that suspends twice per row.
-                                    _ <- Sync.Unsafe.defer {
-                                        plan.rebuilt.foreach { i =>
-                                            val key   = plan.keys(i)
-                                            val item  = plan.items(i)
-                                            val rowUI = renderFn(i, item)
-                                            val (kids, hdl) = walkRow(
-                                                rowUI,
-                                                path :+ key,
-                                                svg,
-                                                rui.contentContext.child(key),
-                                                nestedParentContext(rui.parentContext, rowUI),
-                                                mountDispatch
-                                            )
-                                            plan.built(i) = new RowPlan.Built(key, item, rowUI, kids, Present(hdl), Absent)
-                                        }
-                                    }
-                                    // Both key sets are computed without an allocation when no row carries a
-                                    // mounted node, which is every row of a plain keyed list.
-                                    _ <- regionMounts.evictExcept(plan.mountKeys(retainedOnly = false), plan.mountKeys(retainedOnly = true))
-                                    fragment = Fragment[UI](plan.fragmentChildren)
-                                    previous <- Sync.Unsafe.defer(rendered.getAndSet(Present(fragment)))
-                                    // A structural command addresses rows BY KEY, so it can say nothing useful
-                                    // about an emission whose keys are not unique — two rows would name one
-                                    // slot. That emission already rebuilds every row and warns; it also keeps
-                                    // the whole-fragment paint, where duplicates degrade positionally instead
-                                    // of aliasing. Likewise a row that paints as several roots or as none has
-                                    // nothing for a key to name. The wire cannot discover that late and change
-                                    // its mind: once the untouched rows are left out of a frame, the client has
-                                    // nothing to rebuild them from. So the shape is decided here, beside the
-                                    // duplicate-key gate it restates, and without rendering anything.
-                                    addressable = plan.built.forall(b => HtmlRenderer.paintsAsKeyedRoot(b.rowUI))
-                                    probe   <- Devtools.newProbe
-                                    started <- if probe.isEmpty then Kyo.lift(Duration.Zero) else Clock.nowMonotonic
-                                    _ <- Devtools.probe.let(probe) {
-                                        if plan.duplicates || !addressable then
-                                            exchange.onChange(
-                                                rui.region,
-                                                path,
-                                                rui.contentContext,
-                                                rui.parentContext,
-                                                previous,
-                                                fragment
-                                            )
-                                        else
-                                            exchange.onListPatch(
-                                                rui.region,
-                                                path,
-                                                rui.contentContext,
-                                                rui.parentContext,
-                                                previous,
-                                                plan.listRows
-                                            )
-                                    }
-                                    _ <- reportListPatch(
-                                        rui,
-                                        UI.RenderCause.Signal,
-                                        probe,
-                                        started,
-                                        changedRows = plan.rebuilt.length,
-                                        totalRows = plan.size,
-                                        reordered = plan.reordered
-                                    )
-                                    _ <- Kyo.foreachDiscard(plan.rebuilt) { i =>
-                                        val b = plan.built(i)
-                                        rowRunner(b.kids).map(fiber =>
-                                            plan.finalRows(i) = new RowInstance(b.key, b.item, b.rowUI, b.kids, b.handler, fiber)
-                                        )
-                                    }
-                                    _ <- rows.replaceAll(plan.finalRowsSeq, plan.freshRows)
-                                yield ()
-
-                            Abort.run[Throwable] {
-                                var first = true
-                                itemSignal.observe { items =>
-                                    val isFirst = first
-                                    first = false
-                                    if isFirst && spec.renderedItems.exists(_.equals(items)) && distinctKeys(items) then seed(items)
-                                    else handle(items)
-                                }
-                            }.map { result =>
-                                result.fold(
-                                    _ => (),
-                                    err => Log.error(s"Reactive subscription fiber failed at path=${path.mkString(".")}", err),
-                                    panic =>
-                                        if panic.isInstanceOf[Interrupted] then ()
-                                        else Log.error(s"Reactive subscription fiber failed at path=${path.mkString(".")}", panic)
-                                )
+                                }.andThen(scope)
                             }
+
+                        def distinctKeys(items: Chunk[T]): Boolean =
+                            val ks = items.toSeq.map(keyFn)
+                            ks.distinct.sizeIs == ks.size
+
+                        // First emission over the already-painted value: skip render and walk entirely; adopt the
+                        // walked initial kids as rows (grouped by their row path segment) and just subscribe them.
+                        def seed(items: Chunk[T]): Unit < (Async & Scope) =
+                            for
+                                _ <- regionMounts.evictExcept(collectMountKeys(initialKids))
+                                grouped = initialKids.groupBy(k => k.path.lift(path.length).getOrElse(""))
+                                built <- Kyo.foreach(Chunk.from(items.toSeq.zipWithIndex)) { (item, i) =>
+                                    val key  = keyFn(item)
+                                    val kids = grouped.getOrElse(key, Seq.empty)
+                                    rowRunner(kids).map(fiber =>
+                                        new RowInstance(key, item, renderFn(i, item), kids, Absent, fiber)
+                                    )
+                                }
+                                // No paint here: the enclosing render already put exactly this fragment in the
+                                // DOM. It is still recorded as this region's last render, so the NEXT emission
+                                // diffs against it rather than re-sending every row.
+                                _ <- Sync.Unsafe.defer(
+                                    rendered.set(Present(Fragment[UI](Chunk.from(built.toSeq.map(r =>
+                                        KeyedChild[UI](r.key, r.rowUI)
+                                    )))))
+                                )
+                                _ <- rows.replaceAll(built.toSeq, built.toSeq)
+                                // No paint happened, so no cost is charged — but the rows DID come into
+                                // existence, in the enclosing region's paint. Same accounting as the region
+                                // skip branch in subscribeRegion.
+                                _ <- reportListPatch(
+                                    rui,
+                                    UI.RenderCause.Created,
+                                    Absent,
+                                    Duration.Zero,
+                                    changedRows = 0,
+                                    totalRows = built.size,
+                                    reordered = false
+                                )
+                            yield ()
+
+                        def handle(items: Chunk[T]): Unit < (Async & Scope) =
+                            for
+                                now       <- Clock.now
+                                _         <- signalChangeTime.set(now)
+                                prev      <- rows.snapshot
+                                prevByKey <- rows.byKey
+                                plan = new RowPlan[T](items, prev, prevByKey, keyFn)
+                                _ <-
+                                    if plan.duplicates then
+                                        Log.warn(
+                                            s"kyo-ui: duplicate keys in foreachKeyed at ${path.mkString(".")} within one emission: " +
+                                                "row reuse is disabled for this emission (all rows rebuilt); use distinct keys"
+                                        )
+                                    else Kyo.unit
+                                _ <- rows.evictExcept(plan.isRetained) // removed AND changed rows close before the paint
+                                // One synchronous pass over the rebuilt rows (see SignalNow), not an
+                                // effect loop that suspends twice per row.
+                                _ <- Sync.Unsafe.defer {
+                                    plan.rebuilt.foreach { i =>
+                                        val key         = plan.keys(i)
+                                        val item        = plan.items(i)
+                                        val rowUI       = renderFn(i, item)
+                                        val (kids, hdl) = walkRow(
+                                            rowUI,
+                                            path :+ key,
+                                            svg,
+                                            rui.contentContext.child(key),
+                                            nestedParentContext(rui.parentContext, rowUI),
+                                            mountDispatch
+                                        )
+                                        plan.built(i) = new RowPlan.Built(key, item, rowUI, kids, Present(hdl), Absent)
+                                    }
+                                }
+                                // Both key sets are computed without an allocation when no row carries a
+                                // mounted node, which is every row of a plain keyed list.
+                                _ <- regionMounts.evictExcept(plan.mountKeys(retainedOnly = false), plan.mountKeys(retainedOnly = true))
+                                fragment = Fragment[UI](plan.fragmentChildren)
+                                previous <- Sync.Unsafe.defer(rendered.getAndSet(Present(fragment)))
+                                // A structural command addresses rows BY KEY, so it can say nothing useful
+                                // about an emission whose keys are not unique — two rows would name one
+                                // slot. That emission already rebuilds every row and warns; it also keeps
+                                // the whole-fragment paint, where duplicates degrade positionally instead
+                                // of aliasing. Likewise a row that paints as several roots or as none has
+                                // nothing for a key to name. The wire cannot discover that late and change
+                                // its mind: once the untouched rows are left out of a frame, the client has
+                                // nothing to rebuild them from. So the shape is decided here, beside the
+                                // duplicate-key gate it restates, and without rendering anything.
+                                addressable = plan.built.forall(b => HtmlRenderer.paintsAsKeyedRoot(b.rowUI))
+                                probe   <- Devtools.newProbe
+                                started <- if probe.isEmpty then Kyo.lift(Duration.Zero) else Clock.nowMonotonic
+                                _       <- Devtools.probe.let(probe) {
+                                    if plan.duplicates || !addressable then
+                                        exchange.onChange(
+                                            rui.region,
+                                            path,
+                                            rui.contentContext,
+                                            rui.parentContext,
+                                            previous,
+                                            fragment
+                                        )
+                                    else
+                                        exchange.onListPatch(
+                                            rui.region,
+                                            path,
+                                            rui.contentContext,
+                                            rui.parentContext,
+                                            previous,
+                                            plan.listRows
+                                        )
+                                }
+                                _ <- reportListPatch(
+                                    rui,
+                                    UI.RenderCause.Signal,
+                                    probe,
+                                    started,
+                                    changedRows = plan.rebuilt.length,
+                                    totalRows = plan.size,
+                                    reordered = plan.reordered
+                                )
+                                _ <- Kyo.foreachDiscard(plan.rebuilt) { i =>
+                                    val b = plan.built(i)
+                                    rowRunner(b.kids).map(fiber =>
+                                        plan.finalRows(i) = new RowInstance(b.key, b.item, b.rowUI, b.kids, b.handler, fiber)
+                                    )
+                                }
+                                _ <- rows.replaceAll(plan.finalRowsSeq, plan.freshRows)
+                            yield ()
+
+                        Abort.run[Throwable] {
+                            var first = true
+                            itemSignal.observe { items =>
+                                val isFirst = first
+                                first = false
+                                if isFirst && spec.renderedItems.exists(_.equals(items)) && distinctKeys(items) then seed(items)
+                                else handle(items)
+                            }
+                        }.map { result =>
+                            result.fold(
+                                _ => (),
+                                err => Log.error(s"Reactive subscription fiber failed at path=${path.mkString(".")}", err),
+                                panic =>
+                                    if panic.isInstanceOf[Interrupted] then ()
+                                    else Log.error(s"Reactive subscription fiber failed at path=${path.mkString(".")}", panic)
+                            )
                         }
-                    yield ()
-                    end for
+                    }
+                yield ()
+                end for
         }
     end subscribeForeachRegion
 
@@ -2751,7 +2758,7 @@ private[kyo] object ReactiveUI:
                             // (every adopted keyed mount) and a page full of them reads as cleaner than it is.
                             probe   <- Devtools.newProbe
                             started <- if probe.isEmpty then Kyo.lift(Duration.Zero) else Clock.nowMonotonic
-                            _ <- Devtools.probe.let(probe)(
+                            _       <- Devtools.probe.let(probe)(
                                 exchange.onChange(
                                     rui.region,
                                     rui.path,
@@ -2795,7 +2802,7 @@ private[kyo] object ReactiveUI:
                     _           <- mountDispatch.register(rui.path, cell)
                     _           <- Scope.ensure(mountDispatch.unregister(rui.path, cell))
                     supervision <- MountSupervision.init
-                    _ <- Fiber.init(runMountEffect(
+                    _           <- Fiber.init(runMountEffect(
                         spec,
                         cell,
                         ui => mounts.recordContent(rui.path, ui),
@@ -2832,7 +2839,7 @@ private[kyo] object ReactiveUI:
                 case Result.Panic(_: Interrupted)   => Kyo.lift(())
                 case Result.Failure(_: Interrupted) => Kyo.lift(())
                 case Result.Panic(exception)        => recordFailure(exception)
-                case Result.Failure(failure) =>
+                case Result.Failure(failure)        =>
                     failure match
                         case t: Throwable => recordFailure(t)
                         case other        => recordFailure(MountFiberFailure(other))
@@ -2890,7 +2897,7 @@ private[kyo] object ReactiveUI:
             cell.set(spec.errorUI(spec.mountError(t, source))).unit
         Abort.run[Throwable](MountSupervision.let(supervision)(spec.node.effect)).map {
             case Result.Success(ui) => cell.set(ui).andThen(record(ui))
-            case Result.Failure(t) =>
+            case Result.Failure(t)  =>
                 Log.error(s"Mounted effect failed (frame=${spec.node.frame.position.show})", t)
                     .andThen(supervision.routeOnce(t)(failed(UI.MountErrorSource.Effect)))
             case Result.Panic(t) =>
@@ -2930,7 +2937,7 @@ private[kyo] object ReactiveUI:
         def keepLatestSeed(path: Seq[String], spec: MountedSpec)(using Frame): UI < Sync =
             spec.node.pendingPolicy match
                 case UI.PendingPolicy.Placeholder => spec.placeholderUI
-                case UI.PendingPolicy.KeepLatest =>
+                case UI.PendingPolicy.KeepLatest  =>
                     lastContent.get.map(_.getOrElse(path, spec.placeholderUI))
 
         def recordContent(path: Seq[String], ui: UI)(using Frame): Unit < Sync =
@@ -2955,8 +2962,8 @@ private[kyo] object ReactiveUI:
                     ).andThen(Absent: Maybe[MountInstance])
                 case false =>
                     for
-                        _ <- noteKeyAt(path, key)
-                        m <- instances.get
+                        _    <- noteKeyAt(path, key)
+                        m    <- instances.get
                         inst <- m.get(key) match
                             case Present(inst) => Kyo.lift(inst)
                             case Absent        =>
@@ -2967,7 +2974,7 @@ private[kyo] object ReactiveUI:
                                     cell        <- Signal.initRef[UI](seed)
                                     childMounts <- MountRegistry.init
                                     supervision <- MountSupervision.init
-                                    fiber <- Fiber.initUnscoped {
+                                    fiber       <- Fiber.initUnscoped {
                                         Scope.run {
                                             // runMountEffect never returns (it parks on `supervision`), which holds this
                                             // node Scope open until teardown.
@@ -3115,19 +3122,18 @@ private[kyo] object ReactiveUI:
                 yield resolved
             case fe: Foreach[?, ?] @unchecked =>
                 fe.applyTyped {
-                    [T] =>
-                        (signal, keyFn, renderFn) =>
-                            for
-                                items <- signal.current(using fe.frame)
-                                children = items.toSeq.zipWithIndex.map { (item, i) =>
-                                    val key = keyFn match
-                                        case Present(f) => f(item)
-                                        case Absent     => i.toString
-                                    KeyedChild[UI](key, renderFn(i, item))
-                                }
-                                resolved <- Kyo.foreach(children)(resolveReactives)
-                            yield Fragment[UI](Chunk.from(resolved))
-                            end for
+                    [T] => (signal, keyFn, renderFn) =>
+                        for
+                            items <- signal.current(using fe.frame)
+                            children = items.toSeq.zipWithIndex.map { (item, i) =>
+                                val key = keyFn match
+                                    case Present(f) => f(item)
+                                    case Absent     => i.toString
+                                KeyedChild[UI](key, renderFn(i, item))
+                            }
+                            resolved <- Kyo.foreach(children)(resolveReactives)
+                        yield Fragment[UI](Chunk.from(resolved))
+                        end for
                 }
             case elem: Element =>
                 Kyo.foreach(elem.children.toSeq)(resolveReactives).map { resolved =>
@@ -3248,7 +3254,7 @@ private[kyo] object ReactiveUI:
                 if i >= children.size then Absent
                 else
                     val childPath = if currentPath.isEmpty then i.toString else s"$currentPath.$i"
-                    val child = children(i) match
+                    val child     = children(i) match
                         case kc: KeyedChild[?] => kc.child
                         case c                 => c
                     findPathById(child, id, childPath) match
@@ -3314,7 +3320,7 @@ private[kyo] object ReactiveUI:
                 })
                 keyIdx match
                     case Present(child) => Present(child)
-                    case Absent =>
+                    case Absent         =>
                         Maybe.fromOption(segment.toIntOption) match
                             case Present(i) if i >= 0 && i < children.size =>
                                 children(i) match

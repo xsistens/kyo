@@ -13,12 +13,17 @@ import java.util.concurrent.locks.LockSupport
 import java.util.concurrent.locks.ReentrantLock
 import kyo.scheduler.util.ThreadUserTime
 import org.scalatest.NonImplicitAssertions
-import org.scalatest.concurrent.Eventually.*
+import org.scalatest.concurrent.Eventually
 import org.scalatest.freespec.AnyFreeSpec
+import org.scalatest.time.Millis
 import org.scalatest.time.Seconds
 import org.scalatest.time.Span
 
-class BlockingMonitorTest extends AnyFreeSpec with NonImplicitAssertions {
+class BlockingMonitorTest extends AnyFreeSpec with NonImplicitAssertions with Eventually {
+
+    /** The budget for the leaves that state no timeout of their own; see SchedulerTest for why the default one is unusable here. */
+    implicit override val patienceConfig: PatienceConfig =
+        PatienceConfig(timeout = Span(15, Seconds), interval = Span(50, Millis))
 
     // ── shared scheduler (single instance for all scheduler-level tests) ─
 
@@ -47,7 +52,7 @@ class BlockingMonitorTest extends AnyFreeSpec with NonImplicitAssertions {
             val started  = new CountDownLatch(1)
             val done     = new CountDownLatch(1)
             val threadId = new AtomicLong(0L)
-            val thread = new Thread((() => {
+            val thread   = new Thread((() => {
                 threadId.set(ThreadUserTime.currentThreadId())
                 started.countDown()
                 op(done)
@@ -78,7 +83,7 @@ class BlockingMonitorTest extends AnyFreeSpec with NonImplicitAssertions {
         val warmedUp = new CountDownLatch(1)
         val stop     = new AtomicBoolean(false)
         val threadId = new AtomicLong(0L)
-        val thread = new Thread((() => {
+        val thread   = new Thread((() => {
             threadId.set(ThreadUserTime.currentThreadId())
             started.countDown()
             op(warmedUp, stop)
@@ -106,7 +111,7 @@ class BlockingMonitorTest extends AnyFreeSpec with NonImplicitAssertions {
         def userCpu(): Long = { ThreadUserTime.userTimes(ids, 1, cpuBuf); cpuBuf(0) }
         detector.sample(ids, 1)
         var cPrev = userCpu()
-        val _ = eventually(timeout(scaled(org.scalatest.time.Span(30, org.scalatest.time.Seconds)))) {
+        val _     = eventually(timeout(scaled(org.scalatest.time.Span(30, org.scalatest.time.Seconds)))) {
             val cCur = userCpu()
             detector.sample(ids, 1)
             val advanced = cCur > cPrev
@@ -274,7 +279,7 @@ class BlockingMonitorTest extends AnyFreeSpec with NonImplicitAssertions {
                 val computing = new CountDownLatch(1)
                 val stop      = new AtomicBoolean(false)
                 val threadId  = new AtomicLong(0L)
-                val thread = new Thread((() => {
+                val thread    = new Thread((() => {
                     threadId.set(ThreadUserTime.currentThreadId())
                     started.countDown()
                     try { val _ = unblock.await(30, TimeUnit.SECONDS) }
@@ -313,7 +318,7 @@ class BlockingMonitorTest extends AnyFreeSpec with NonImplicitAssertions {
                 val warmedUp = new CountDownLatch(1)
                 val stop     = new AtomicBoolean(false)
                 val threadId = new AtomicLong(0L)
-                val thread = new Thread((() => {
+                val thread   = new Thread((() => {
                     threadId.set(ThreadUserTime.currentThreadId())
                     started.countDown()
                     try { val _ = unblock.await(30, TimeUnit.SECONDS) }
@@ -395,7 +400,7 @@ class BlockingMonitorTest extends AnyFreeSpec with NonImplicitAssertions {
                 val started  = new CountDownLatch(1)
                 val done     = new CountDownLatch(1)
                 val threadId = new AtomicLong(0L)
-                val thread = new Thread((() => {
+                val thread   = new Thread((() => {
                     threadId.set(ThreadUserTime.currentThreadId())
                     started.countDown()
                     try { val _ = done.await(30, TimeUnit.SECONDS) }
@@ -464,7 +469,7 @@ class BlockingMonitorTest extends AnyFreeSpec with NonImplicitAssertions {
         "Thread.sleep — TIMED_WAITING detected as blocked" in {
             val started = new CountDownLatch(1)
             val done    = new CountDownLatch(1)
-            val task = TestTask(_run = () => {
+            val task    = TestTask(_run = () => {
                 started.countDown()
                 done.await()
                 Task.Done
@@ -486,7 +491,7 @@ class BlockingMonitorTest extends AnyFreeSpec with NonImplicitAssertions {
             val started    = new CountDownLatch(1)
             val done       = new CountDownLatch(1)
             val taskThread = new AtomicReference[Thread](null)
-            val task = TestTask(_run = () => {
+            val task       = TestTask(_run = () => {
                 taskThread.set(Thread.currentThread())
                 started.countDown()
                 LockSupport.park()
@@ -509,7 +514,7 @@ class BlockingMonitorTest extends AnyFreeSpec with NonImplicitAssertions {
             val lock    = new Object
             val started = new CountDownLatch(1)
             val done    = new AtomicBoolean(false)
-            val task = TestTask(_run = () => {
+            val task    = TestTask(_run = () => {
                 started.countDown()
                 lock.synchronized {
                     while (!done.get()) lock.wait(1000)
@@ -532,7 +537,7 @@ class BlockingMonitorTest extends AnyFreeSpec with NonImplicitAssertions {
             val baseline   = blockedWorkerCount()
             val iterations = new AtomicInteger(0)
             val stop       = new AtomicBoolean(false)
-            val task = TestTask(_run = () => {
+            val task       = TestTask(_run = () => {
                 while (!stop.get()) {
                     val _ = iterations.incrementAndGet()
                 }
@@ -566,7 +571,7 @@ class BlockingMonitorTest extends AnyFreeSpec with NonImplicitAssertions {
             val resumed   = new CountDownLatch(1)
             val stop      = new AtomicBoolean(false)
             val theWorker = new AtomicReference[Worker](null)
-            val task = TestTask(_run = () => {
+            val task      = TestTask(_run = () => {
                 theWorker.set(Worker.current())
                 started.countDown()
                 release.await() // block: flat CPU time -> worker flagged blocked
@@ -601,7 +606,7 @@ class BlockingMonitorTest extends AnyFreeSpec with NonImplicitAssertions {
         "dispatches Thread.interrupt to blocked thread with needsInterrupt" in {
             val interrupted = new AtomicBoolean(false)
             val started     = new CountDownLatch(1)
-            val task = TestTask(_run = () => {
+            val task        = TestTask(_run = () => {
                 started.countDown()
                 try
                     Thread.sleep(30000)
@@ -633,7 +638,7 @@ class BlockingMonitorTest extends AnyFreeSpec with NonImplicitAssertions {
             val interrupted = new AtomicBoolean(false)
             val started     = new CountDownLatch(1)
             val done        = new CountDownLatch(1)
-            val task = TestTask(_run = () => {
+            val task        = TestTask(_run = () => {
                 started.countDown()
                 try
                     done.await()
@@ -665,7 +670,7 @@ class BlockingMonitorTest extends AnyFreeSpec with NonImplicitAssertions {
         "re-interrupts thread that catches and re-blocks" in {
             val interruptCount = new AtomicInteger(0)
             val started        = new CountDownLatch(1)
-            val task = TestTask(_run = () => {
+            val task           = TestTask(_run = () => {
                 started.countDown()
                 while (interruptCount.get() < 3) {
                     try
@@ -718,7 +723,7 @@ class BlockingMonitorTest extends AnyFreeSpec with NonImplicitAssertions {
             val count       = 3
             val started     = new CountDownLatch(count)
             val interrupted = Array.fill(count)(new AtomicBoolean(false))
-            val tasks = (0 until count).map { i =>
+            val tasks       = (0 until count).map { i =>
                 TestTask(_run = () => {
                     started.countDown()
                     try
@@ -754,7 +759,7 @@ class BlockingMonitorTest extends AnyFreeSpec with NonImplicitAssertions {
             // The monitor samples CPU time by the id a worker publishes at mount, which on Scala Native is the pthread
             // handle, not Thread.getId; the sleeper must publish it from inside itself or the slot never reads blocked.
             val sleeperId = new AtomicLong(0L)
-            val sleeper = new Thread((() => {
+            val sleeper   = new Thread((() => {
                 sleeperId.set(ThreadUserTime.currentThreadId())
                 started.countDown()
                 try Thread.sleep(60000)
@@ -764,7 +769,7 @@ class BlockingMonitorTest extends AnyFreeSpec with NonImplicitAssertions {
             sleeper.start()
             assert(started.await(5, TimeUnit.SECONDS))
 
-            val clock = InternalClock(TestExecutors.cached)
+            val clock  = InternalClock(TestExecutors.cached)
             val worker = new Worker(2, TestExecutors.cached, (_, _) => (), _ => null, clock, 10) {
                 def currentInterruptEpoch(): Long = 0L
                 def shouldStop()                  = false
@@ -802,7 +807,7 @@ class BlockingMonitorTest extends AnyFreeSpec with NonImplicitAssertions {
             val tasks = (0 until n).map { i =>
                 interrupted(i) = new AtomicBoolean(false)
                 val interruptedFlag = interrupted(i)
-                val task = TestTask(_run = () => {
+                val task            = TestTask(_run = () => {
                     allStarted.countDown()
                     try
                         Thread.sleep(30000)
@@ -1044,7 +1049,7 @@ class BlockingMonitorTest extends AnyFreeSpec with NonImplicitAssertions {
             // Start active task first so it grabs a worker
             val activeStarted = new CountDownLatch(1)
             val activeStop    = new AtomicBoolean(false)
-            val activeTask = TestTask(_run = () => {
+            val activeTask    = TestTask(_run = () => {
                 activeStarted.countDown()
                 var i = 0L
                 while (!activeStop.get()) i += 1
@@ -1056,7 +1061,7 @@ class BlockingMonitorTest extends AnyFreeSpec with NonImplicitAssertions {
             // Then start blocking task
             val blockingStarted = new CountDownLatch(1)
             val blockingDone    = new CountDownLatch(1)
-            val blockingTask = TestTask(_run = () => {
+            val blockingTask    = TestTask(_run = () => {
                 blockingStarted.countDown()
                 blockingDone.await()
                 Task.Done
@@ -1086,7 +1091,7 @@ class BlockingMonitorTest extends AnyFreeSpec with NonImplicitAssertions {
             // time) makes this immune to CI scheduling jitter.
             val wakeStarted = new CountDownLatch(1)
             val wakeDone    = new CountDownLatch(1)
-            val wakeTask = TestTask(_run = () => {
+            val wakeTask    = TestTask(_run = () => {
                 wakeStarted.countDown()
                 wakeDone.await()
                 Task.Done

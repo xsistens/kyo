@@ -3,16 +3,37 @@ package kyo.scheduler
 import org.scalajs.macrotaskexecutor.MacrotaskExecutor
 import scala.collection.mutable.ArrayDeque
 import scala.concurrent.ExecutionContext
+import scala.scalajs.js
 
 object Scheduler {
     val get = new Scheduler
 }
 
-class Scheduler {
+/** Single-threaded scheduler that drains a run queue in Node macrotasks.
+  *
+  * With `statusFile` set (the `topStatusFile` flag the JVM and Native schedulers also write), a timer rewrites a one-line snapshot there
+  * every `statusFileMs`. The timer shares the event loop with every task, so a slice that never returns stops the rewrites; ci-monitor
+  * reports the snapshot's age, which is how a blocked event loop shows from outside the process. The counters are kept only while a status
+  * file is configured, so the default path does no extra work per slice.
+  */
+class Scheduler(statusFile: String, statusFileMs: Int, nowMs: () => Long) {
+
+    def this() = this(topStatusFile(), topStatusFileMs(), () => System.currentTimeMillis())
 
     private val timeSlice     = timeSliceMs()
     private val drainBudgetNs = drainBudgetMs().toLong * 1000000L
     private val clock         = new InternalClock()
+
+    val writesStatus: Boolean = statusFile.nonEmpty
+
+    private var scheduled  = 0L
+    private var ran        = 0L
+    private var preempted  = 0L
+    private var maxSliceMs = 0L
+
+    private val statusTimer: js.UndefOr[js.timers.SetIntervalHandle] =
+        if (writesStatus) StatusFile.start(statusFile, if (statusFileMs > 0) statusFileMs else 1000, () => statusLine())
+        else js.undefined
 
     // A run queue, drained by at most one scheduled pump. Without it every task cost its own macrotask: a
     // postMessage round trip per wake, per continuation and per re-arm. Tearing down a thousand fibers was
@@ -25,6 +46,7 @@ class Scheduler {
     private var pumpScheduled = false
 
     def schedule(t: Task): Unit = {
+        if (writesStatus) scheduled += 1
         queue += t
         if (!pumpScheduled) {
             pumpScheduled = true
@@ -66,7 +88,8 @@ class Scheduler {
                         val now   = clock.currentMillis()
                         val slice = Math.max(1L, Math.min(timeSlice.toLong, remainingNs / 1000000L))
                         try
-                            if (t.run(now, clock, now + slice) == Task.Preempted)
+                            if (writesStatus) runCounted(t, now, slice)
+                            else if (t.run(now, clock, now + slice) == Task.Preempted)
                                 queue += t
                         catch {
                             // Without this the throw would leave the loop, strand pumpScheduled and stall a
@@ -88,6 +111,29 @@ class Scheduler {
         }
     }
 
+
+    // The counters are kept only while a status file is configured, so the default path does no extra work per task.
+    private def runCounted(t: Task, now: Long, slice: Long): Unit = {
+        ran += 1
+        val start  = nowMs()
+        val result = t.run(now, clock, now + slice)
+        val took   = nowMs() - start
+        if (took > maxSliceMs) maxSliceMs = took
+        if (result == Task.Preempted) {
+            preempted += 1
+            scheduled += 1
+            queue += t
+        }
+    }
+
+    /** The snapshot ci-monitor appends to its line. Each call resets `maxSliceMs`, so a line reports the longest slice since the previous one. */
+    def statusLine(): String = {
+        val line =
+            s"kyo.sched ts=${nowMs()} platform=js scheduled=$scheduled ran=$ran preempted=$preempted pending=${scheduled - ran} maxSliceMs=$maxSliceMs"
+        maxSliceMs = 0
+        line
+    }
+
     def asExecutionContext: ExecutionContext = MacrotaskExecutor
 
     def flush(): Unit = {}
@@ -99,5 +145,8 @@ class Scheduler {
     def reject(key: Int): Boolean = false
 
     def notifyInterrupt(): Unit = {}
+
+    def shutdown(): Unit =
+        statusTimer.foreach(js.timers.clearInterval)
 
 }

@@ -54,8 +54,8 @@ object PosixTestSockets:
                 finally
                     out.close()
                     ol.close()
-            val client   = sockets.socket(PosixConstants.AF_INET, PosixConstants.SOCK_STREAM, 0).value
-            val (ca, cl) = SockAddr.encodeInet4(PosixConstants.AF_INET, "127.0.0.1", port).getOrElse(???)
+            val client    = sockets.socket(PosixConstants.AF_INET, PosixConstants.SOCK_STREAM, 0).value
+            val (ca, cl)  = SockAddr.encodeInet4(PosixConstants.AF_INET, "127.0.0.1", port).getOrElse(???)
             val connected =
                 Sync.ensure(Sync.defer(ca.close()))(sockets.connect(client, ca, cl).safe.get.map(r => assert(r.value == 0)))
             connected.andThen {
@@ -94,8 +94,8 @@ object PosixTestSockets:
                 finally
                     out.close()
                     ol.close()
-            val client   = sockets.socket(PosixConstants.AF_INET, PosixConstants.SOCK_STREAM, 0).value
-            val (ca, cl) = SockAddr.encodeInet4(PosixConstants.AF_INET, "127.0.0.1", port).getOrElse(???)
+            val client    = sockets.socket(PosixConstants.AF_INET, PosixConstants.SOCK_STREAM, 0).value
+            val (ca, cl)  = SockAddr.encodeInet4(PosixConstants.AF_INET, "127.0.0.1", port).getOrElse(???)
             val connected =
                 Sync.ensure(Sync.defer(ca.close()))(sockets.connect(client, ca, cl).safe.get.map(r => assert(r.value == 0)))
             connected.andThen {
@@ -152,7 +152,7 @@ object PosixTestSockets:
                     ol.close()
             val client = sockets.socket(PosixConstants.AF_INET, PosixConstants.SOCK_STREAM, 0).value
             setIntSockOpt(client, PosixConstants.SO_SNDBUF, sndBuf)
-            val (ca, cl) = SockAddr.encodeInet4(PosixConstants.AF_INET, "127.0.0.1", port).getOrElse(???)
+            val (ca, cl)  = SockAddr.encodeInet4(PosixConstants.AF_INET, "127.0.0.1", port).getOrElse(???)
             val connected =
                 Sync.ensure(Sync.defer(ca.close()))(sockets.connect(client, ca, cl).safe.get.map(r => assert(r.value == 0)))
             connected.andThen {
@@ -196,7 +196,7 @@ object PosixTestSockets:
       */
     def drainPeer(driver: IoDriver[PosixHandle], handle: PosixHandle, fd: Int, want: Int)(using Frame): Int < (Abort[Closed] & Async) =
         import AllowUnsafe.embrace.danger
-        val sockets = sock
+        val sockets                   = sock
         def recvLoop(total: Int): Int =
             val buf = Buffer.alloc[Byte](65536)
             try
@@ -239,8 +239,8 @@ object PosixTestSockets:
       */
     def drainCollect(driver: IoDriver[PosixHandle], fd: Int, want: Int)(using Frame): List[Byte] < (Abort[Closed] & Async) =
         import AllowUnsafe.embrace.danger
-        val sockets = sock
-        val handle  = PosixHandle.socket(fd, PosixHandle.DefaultReadBufferSize, Absent, Frame.internal)
+        val sockets                               = sock
+        val handle                                = PosixHandle.socket(fd, PosixHandle.DefaultReadBufferSize, Absent, Frame.internal)
         def recvLoop(acc: List[Byte]): List[Byte] =
             val buf = Buffer.alloc[Byte](65536)
             try
@@ -374,48 +374,8 @@ object PosixTestSockets:
             throw new kyo.test.TestCancelled("kqueue is macOS/BSD-only")
     end assumeKqueue
 
-    /** Cancel the test if io_uring is unavailable at the PRODUCTION ring depth.
-      *
-      * Probes at max(256, ioPoolSize*64) (the exact formula from IoUringDriver.scala), not depth 2. If io_uring_queue_init fails at that depth
-      * the gate cancels, so the gate never reports available when IoUringDriver.init would actually fail. The ring is closed immediately after
-      * the probe; no resources are leaked.
-      *
-      * Closes the probe-vs-driver-depth gap: a depth-2 probe succeeds in restricted environments where the production-depth ring fails. The
-      * specific failure mode is a container-level cgroup `io_uring.max` cap that limits the total number of io_uring entries a process may
-      * have in flight. A depth-2 ring stays under the cap; a depth-256 ring exceeds it and io_uring_queue_init returns ENOENT. The
-      * `--privileged` container flag does not lift this cgroup limit (it only relaxes seccomp); the gate must probe at the same depth the
-      * driver will use so that "gate passes" iff "driver init succeeds".
-      */
-    def assumeUring()(using Frame): Unit < Any =
-        if !PosixConstants.isLinux then
-            throw new kyo.test.TestCancelled("io_uring is Linux-only")
-        else
-            import AllowUnsafe.embrace.danger
-            val available =
-                try
-                    val uring = Ffi.load[IoUringBindings]
-                    val depth = math.max(256, kyo.net.ioPoolSize() * 64)
-                    val ring  = Buffer.alloc[Byte](uring.kyo_uring_sizeof().toInt)
-                    val rc    = uring.io_uring_queue_init(depth, ring, 0)
-                    // io_uring_queue_init returns 0 on success or -errno on failure and does NOT set the global errno
-                    // (liburing returns the negated errno directly). Read the return value, not the captured errno: a
-                    // stale errno left by a prior syscall would spuriously report io_uring unavailable here.
-                    if rc != 0 then
-                        ring.close()
-                        false
-                    else
-                        uring.io_uring_queue_exit(ring)
-                        ring.close()
-                        true
-                    end if
-                catch case _: Throwable => false
-            if !available then
-                throw new kyo.test.TestCancelled(
-                    "io_uring unavailable at production depth on this kernel/runtime (needs Linux >= 5.6)"
-                )
-            end if
-        end if
-    end assumeUring
+    /** Cancel the test if io_uring is unavailable at the PRODUCTION ring depth. */
+    def assumeUring()(using Frame): Unit < Any = UringGate.assumeUring()
 
     /** Open a real temporary file, write `content`, and return (raw POSIX fd, backing File) where the fd is opened `O_RDONLY` through the
       * native [[PosixShimBindings.kyo_posix_open]] shim.

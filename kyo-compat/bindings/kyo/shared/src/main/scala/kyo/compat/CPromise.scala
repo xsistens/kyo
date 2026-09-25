@@ -32,13 +32,13 @@ object CPromise:
 
         /** Suspends until the promise is completed and returns its value. */
         inline def get(using inline frame: Frame): CIO[A] =
-            CIO.lift(Fiber.mask(self.lower).map(masked => Fiber.get(masked)))
+            CIO.lift(Fiber.uninterruptible(self.lower).map(masked => Fiber.get(masked)))
 
         /** Returns the current state without blocking: `None` if pending, `Some(Try)` if completed. */
         inline def poll(using inline frame: Frame): CIO[Option[scala.util.Try[A]]] =
             CIO.lift(
                 Fiber.poll(self.lower).map {
-                    case Absent => Option.empty
+                    case Absent                                         => Option.empty
                     case Present(s: Result.Success[A < Any] @unchecked) =>
                         s.successValue.map(a => Option(scala.util.Success(a)))
                     case Present(f: Result.Failure[Throwable] @unchecked) =>

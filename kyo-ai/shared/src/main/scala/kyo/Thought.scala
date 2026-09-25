@@ -4,7 +4,6 @@ import kyo.Json
 import kyo.Json.JsonSchema
 import kyo.Schema
 import kyo.schema.doc
-import scala.reflect.ClassTag
 
 /** Structured self-prompting woven into the model's required output schema.
   *
@@ -36,13 +35,13 @@ object Thought:
     enum Position derives CanEqual:
         case Opening, Closing
 
-    def opening[A: Schema: ClassTag]: Thought[Any] = opening[A](_ => ())
-    def closing[A: Schema: ClassTag]: Thought[Any] = closing[A](_ => ())
+    def opening[A: Schema]: Thought[Any] = opening[A](_ => ())
+    def closing[A: Schema]: Thought[Any] = closing[A](_ => ())
 
-    def opening[A: Schema](using ClassTag[A])[S](process: A => Unit < (LLM & S)): Thought[S] =
+    def opening[A](using Schema[A])[S](process: A => Unit < (LLM & S)): Thought[S] =
         init[A](Position.Opening)(process)
 
-    def closing[A: Schema](using ClassTag[A])[S](process: A => Unit < (LLM & S)): Thought[S] =
+    def closing[A](using Schema[A])[S](process: A => Unit < (LLM & S)): Thought[S] =
         init[A](Position.Closing)(process)
 
     def aggregate[S](thoughts: Thought[S]*): Thought[S] =
@@ -55,9 +54,7 @@ object Thought:
       */
     def reflective: Thought[Any] = internal.reflective
 
-    def init[A: Schema](position: Position)[S](process: A => Unit < (LLM & S))(
-        using ClassTag[A]
-    ): Thought[S] =
+    def init[A: Schema](position: Position)[S](process: A => Unit < (LLM & S)): Thought[S] =
         new Thought[S]:
             def infos = Chunk(Info(summon[Schema[A]].structure.name, position, summon[Schema[A]], process))
 
@@ -92,7 +89,7 @@ object Thought:
         // in opening -> resultValue -> closing order. Assembling per-thought schemas directly preserves each
         // field's @doc description, which a Structure.Type.Product round-trip through fromStructure would drop.
         def resultJson[A](thoughts: Chunk[Info[?, ?]], resultSchema: JsonSchema): JsonSchema =
-            val (opening, closing) = thoughts.partition(_.position == Position.Opening)
+            val (opening, closing)                                    = thoughts.partition(_.position == Position.Opening)
             def group(name: String, l: Chunk[Info[?, ?]]): JsonSchema =
                 JsonSchema.Obj(
                     // cast: each info's existential schema renders its own thought type's jsonSchema; erasing to

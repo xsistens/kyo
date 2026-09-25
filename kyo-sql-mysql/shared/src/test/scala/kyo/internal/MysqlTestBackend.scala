@@ -96,6 +96,19 @@ final class MysqlTestBackend extends SqlTestBackend:
 
     def bytesLiteral(hexDigits: String): String = s"X'${hexDigits.toUpperCase}'"
 
+    /** The offset form, which this engine accepts into a TIMESTAMP and converts against the session zone. */
+    def instantLiteral(wallClockUtc: String): String = s"'$wallClockUtc+00:00'"
+
+    /** A `JSON` column keeps the key order the document was written in. */
+    def jsonPreservesKeyOrder: Boolean = true
+
+    def computesRangeOffsetFrames: Boolean = true
+
+    def defaultPreventsLostUpdate: Boolean = true
+
+    /** A violated reference fails whatever the conflict clause says, which is the correct behaviour. */
+    def conflictClauseEnforcesForeignKeys: Boolean = true
+
     /** No equivalent settings: this engine's simple protocol has no knob that respells a value it already stores. */
     def outputAffectingSettings: Chunk[String] = Chunk.empty
 
@@ -109,6 +122,16 @@ final class MysqlTestBackend extends SqlTestBackend:
 
     /** No array column type: a collection is carried inside a JSON document and reported as one. */
     def hasNativeArrayColumns: Boolean = false
+
+    def caseFoldingReachesPastAscii: Boolean = true
+
+    def likeFollowsColumnCollation: Boolean = true
+
+    def boundedTextColumn(name: String, maxChars: Int): String = s"$name VARCHAR($maxChars) NOT NULL"
+
+    def allowsConcurrentWriteTransactions: Boolean = true
+
+    def hasAdvisoryLocks: Boolean = true
 
     /** MySQL's `TIME` is a signed span from -838:59:59 to 838:59:59, so roughly half its range has no time-of-day reading. */
     def timeColumnIsSignedSpan: Boolean = true
@@ -140,11 +163,31 @@ final class MysqlTestBackend extends SqlTestBackend:
         ("BIT(64)", "b'" + ("1" * 64) + "'", "18446744073709551615")
     )
 
+    override def hasSecondSchema: Boolean = true
+
+    /** A second schema on MySQL is a second DATABASE, named after the leaf's own so concurrent leaves cannot collide.
+      *
+      * The name is fixed here rather than taken from the caller because the leaf connects as the restricted `test` user, which holds no
+      * global `CREATE`. [[MysqlTestBackend.secondSchemaName]] is what provisioning grants that user rights over, so this name and that
+      * grant have to agree.
+      *
+      * It also lives OUTSIDE the per-leaf database the harness drops, so the leaf owns removing it; left behind it would accumulate on the
+      * shared container.
+      */
+    override def secondSchema(schema: SqlTestBackend.Schema): Maybe[SqlTestBackend.SecondSchema] =
+        val name = MysqlTestBackend.secondSchemaName(schema.database)
+        Present(SqlTestBackend.SecondSchema(
+            name,
+            Chunk(s"CREATE DATABASE ${quoteIdent(name)}"),
+            Chunk(s"DROP DATABASE IF EXISTS ${quoteIdent(name)}")
+        ))
+    end secondSchema
+
     def tableNotFoundSqlState: String = "42S02"
 
     def uniqueViolationSqlState: String = "23000"
 
-    def sessionIdSql: String = "CONNECTION_ID()"
+    def sessionIdSql: Maybe[String] = Present("CONNECTION_ID()")
 
     // Reads the level of the transaction actually in progress, which `@@transaction_isolation` does NOT report.
     // `SET TRANSACTION ISOLATION LEVEL` without a scope applies to the next transaction while the session variable
@@ -152,9 +195,20 @@ final class MysqlTestBackend extends SqlTestBackend:
     // except the one that happens to be the default. performance_schema is the only place the running
     // transaction's own level is visible, and the fixture already enables it. The thread lookup goes through
     // `performance_schema.threads` rather than `PS_CURRENT_THREAD_ID()`, which needs 8.0.16 or newer.
-    def isolationIntrospectionSql: String =
-        """SELECT ISOLATION_LEVEL FROM performance_schema.events_transactions_current
-          | WHERE THREAD_ID = (SELECT THREAD_ID FROM performance_schema.threads WHERE PROCESSLIST_ID = CONNECTION_ID())""".stripMargin
+    def sessionZoneStatements: Maybe[SqlTestBackend.SessionZone] =
+        Present(SqlTestBackend.SessionZone(west = "SET time_zone='-03:00'", utc = "SET time_zone='+00:00'"))
+
+    def isolationIntrospectionSql: Maybe[String] =
+        Present(
+            """SELECT ISOLATION_LEVEL FROM performance_schema.events_transactions_current
+              | WHERE THREAD_ID = (SELECT THREAD_ID FROM performance_schema.threads WHERE PROCESSLIST_ID = CONNECTION_ID())""".stripMargin
+        )
+
+    // All four, and MySQL's REPEATABLE READ is its own default rather than a substitution.
+    def honouredIsolationLevels: Set[SqlClient.IsolationLevel] = SqlClient.IsolationLevel.values.toSet
+
+    /** The driver pins it at connect, overriding this engine's own REPEATABLE READ default. */
+    def defaultIsolationLevel: SqlClient.IsolationLevel = SqlClient.IsolationLevel.ReadCommitted
 
     /** The MySQL fixture config, identical to the one [[SqlSharedContainers.withFreshMysqlSchema]] builds so both share one container per id.
       *
@@ -188,7 +242,7 @@ final class MysqlTestBackend extends SqlTestBackend:
                 "--performance-schema-events-transactions-history-long-size=0"
             )
 
-    def containerConfig: Container.Config = ContainerPredef.MySQL.buildContainerConfig(predefCfg)
+    def containerConfig: Maybe[Container.Config] = Present(ContainerPredef.MySQL.buildContainerConfig(predefCfg))
 
     private def freshSchemaName(using Frame): String < Sync =
         Random.nextLong.map(v => s"test_${(v & Long.MaxValue).toHexString}")
@@ -220,6 +274,13 @@ final class MysqlTestBackend extends SqlTestBackend:
             // makes every schema this fixture hands out mean the same thing.
             _ <- admin.simpleExecute(s"CREATE DATABASE `$schema` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci")
             _ <- admin.simpleExecute(s"GRANT ALL ON `$schema`.* TO '${predefCfg.username}'@'%'")
+            // Rights over the companion database a schema-qualification leaf creates. Granted unconditionally
+            // because MySQL grants on a database that does not exist yet, and database-level CREATE is what lets
+            // the restricted user create that database itself; the leaf connects as that user and holds no global
+            // CREATE. Dropped below whether or not any leaf used it.
+            secondSchema = MysqlTestBackend.secondSchemaName(schema)
+            _ <- admin.simpleExecute(s"GRANT ALL ON `$secondSchema`.* TO '${predefCfg.username}'@'%'")
+            _ <- Scope.ensure(Abort.run(admin.simpleExecute(s"DROP DATABASE IF EXISTS `$secondSchema`")).unit)
             // The eviction suite counts this connection's server-side statements through
             // `performance_schema.prepared_statements_instances` and `sys.ps_thread_id`. The entrypoint's MYSQL_USER
             // lacks the privilege to READ either even once the engine is on (1142 on the table, 1370 on the routine),
@@ -253,4 +314,17 @@ final class MysqlTestBackend extends SqlTestBackend:
         end for
     end withFreshSchemaBody
 
+end MysqlTestBackend
+
+object MysqlTestBackend:
+
+    /** The companion database a schema-qualification leaf uses, beside the per-leaf one named `database`.
+      *
+      * One rule in one place: provisioning grants the restricted user rights over this name, and
+      * [[MysqlTestBackend.secondSchema]] hands the same name to the leaf. The two disagreeing would leave the leaf refused for want of a
+      * privilege, which reads as a driver failure rather than a harness one.
+      *
+      * MySQL's identifier ceiling is 64 bytes, so the suffix is short and the base is already well inside it.
+      */
+    private[internal] def secondSchemaName(database: String): String = s"${database}_second"
 end MysqlTestBackend

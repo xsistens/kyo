@@ -201,6 +201,13 @@ abstract class Connection:
       */
     def closeNow(using Frame, AllowUnsafe): Unit
 
+    /** How many prepared statements this session has parsed again because the server no longer held them, taken and reset.
+      *
+      * The pool reads it at each lease's exit and folds it into `prepared_statements_reprepared`. That counter is the only sign an
+      * operator gets, since the recovery itself is silent. Zero on an engine where a cached statement cannot go missing.
+      */
+    private[kyo] def takeReprepares()(using AllowUnsafe): Long = 0L
+
 end Connection
 
 /** Companion of [[Connection]]: how a session is opened, and the policy every implementation shares.
@@ -331,9 +338,14 @@ object Connection:
       * names an account is the server's judgment.
       */
     def requireUser(address: SqlConfig.Address)(using Frame): String < Abort[SqlException] =
-        address.user match
-            case Present(user) => user
-            case Absent        => Abort.fail(SqlConnectionUserRequiredException(address.scheme))
+        address match
+            case a: SqlConfig.Address.Network =>
+                a.user match
+                    case Present(user) => user
+                    case Absent        => Abort.fail(SqlConnectionUserRequiredException(a.scheme))
+            // An embedded address names no user because its engine has no handshake to send one to. A factory that
+            // asked anyway is a factory calling the wrong helper, so it fails rather than inventing a name.
+            case a: SqlConfig.Address.Local => Abort.fail(SqlConnectionUserRequiredException(a.scheme))
 
     /** The exit-edge view of a handled `outcome`: a success is [[kyo.Absent]], a failure and a panic are each themselves.
       *
@@ -356,7 +368,7 @@ object Connection:
     private[kyo] def parseServerVersion(reported: String)(using Frame): Idiom.ServerVersion < Abort[SqlConnectionProtocolDecodeException] =
         Idiom.ServerVersion.parse(reported) match
             case Present(version) => version
-            case Absent =>
+            case Absent           =>
                 Abort.fail(
                     SqlConnectionProtocolDecodeException(
                         "server version",

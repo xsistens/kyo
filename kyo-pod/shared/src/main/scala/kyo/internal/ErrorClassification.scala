@@ -21,7 +21,7 @@ private[internal] object ErrorClassification:
     def missingFor(ctx: ResourceContext, cause: String | Throwable)(using Frame): ContainerException =
         ctx match
             case ResourceContext.Container(id) => ContainerMissingException(id)
-            case ResourceContext.Image(ref) =>
+            case ResourceContext.Image(ref)    =>
                 ContainerImageMissingException(ContainerImage.parse(ref).getOrElse(ContainerImage(ref)))
             case ResourceContext.Network(id) => ContainerNetworkMissingException(id)
             case ResourceContext.Volume(id)  => ContainerVolumeMissingException(id)
@@ -64,6 +64,19 @@ private[internal] object DaemonErrorPhrases:
       * and remain in ErrorPatterns.ImageNotFound.
       */
     val NoSuchImage: Seq[String] = Seq("no such image", "manifest unknown", "image not known")
+
+    /** Phrases by which a daemon quotes a status the registry gave it, rather than answering about the resource itself.
+      *
+      * Both daemons relay the registry's wording under a status of their own choosing, so the quoted status is the only reliable signal
+      * that the failure is the registry's and therefore transient. HTTP: `HttpContainerBackend.bodyNamesServerError` reads the response
+      * body. Shell: `ShellBackend.mapError` reads the command's output, where podman prints the same sentence.
+      */
+    val ServerError: Seq[String] = Seq(
+        "500 internal server error",
+        "502 bad gateway",
+        "503 service unavailable",
+        "504 gateway timeout"
+    )
 
     /** Phrases matching the "conflict / already in use" condition shared by both backends.
       *

@@ -94,6 +94,71 @@ class NavigationWatcherTest extends kyo.BrowserTest:
         )
     }
 
+    "NavigationWatcher.decidePending: NetworkIdle + Ready(chrome-error, 0, throwOnFailure=true) → AbortTransportFailure" in {
+        // A navigation that failed below HTTP carries no status, so the 4xx/5xx branch cannot see it and the
+        // URL did change, which leaves DegradeToLoad reporting success. NetworkIdle is goto's default settle,
+        // so this is the path a socket-exhausted runner takes.
+        val decision = NavigationWatcher.decidePending(
+            expectedDifferentFrom = Present(snap),
+            settle = Browser.Settle.NetworkIdle,
+            urlHint = "https://example.com/landed",
+            loadProbe = Present(NavigationWatcher.SettleStatus.Ready("chrome-error://chromewebdata/", 0)),
+            throwOnFailure = true
+        )
+        assert(
+            decision == NavigationWatcher.PendingDecision.AbortTransportFailure("chrome-error://chromewebdata/"),
+            s"expected AbortTransportFailure(chrome-error://chromewebdata/) but got $decision"
+        )
+    }
+
+    "NavigationWatcher.decidePending: NetworkIdle + Ready(chrome-error, 0, throwOnFailure=false) → AbortTransportFailure (not gated)" in {
+        // throwOnFailure is failOnHttpError at the public surface, and it exists so a caller can read the body of
+        // an error response. A transport failure has no response, so the flag does not reach it.
+        val decision = NavigationWatcher.decidePending(
+            expectedDifferentFrom = Present(snap),
+            settle = Browser.Settle.NetworkIdle,
+            urlHint = "https://example.com/landed",
+            loadProbe = Present(NavigationWatcher.SettleStatus.Ready("chrome-error://chromewebdata/", 0)),
+            throwOnFailure = false
+        )
+        assert(
+            decision == NavigationWatcher.PendingDecision.AbortTransportFailure("chrome-error://chromewebdata/"),
+            s"expected AbortTransportFailure(chrome-error://chromewebdata/) but got $decision"
+        )
+    }
+
+    "NavigationWatcher.interpretPendingDecision: AbortTransportFailure raises BrowserNavigationTransportFailedException" in {
+        // The type is what decides whether a caller may retry. A transport failure never reached a server, so it is
+        // retryable; an HTTP status failure carries a real response and re-fetches the same status, so it is not. The
+        // leaf below pins the other side of that split.
+        Abort.run[BrowserReadException] {
+            NavigationWatcher.interpretPendingDecision(
+                NavigationWatcher.PendingDecision.AbortTransportFailure("chrome-error://chromewebdata/"),
+                Duration.Zero
+            )
+        }.map {
+            case Result.Failure(ex: BrowserNavigationTransportFailedException) =>
+                assert(ex.url == "chrome-error://chromewebdata/", s"url was `${ex.url}`")
+            case other => fail(s"expected Failure(BrowserNavigationTransportFailedException) but got $other")
+        }
+    }
+
+    "NavigationWatcher.interpretPendingDecision: AbortHttpError raises BrowserNavigationFailedException, not the transport type" in {
+        Abort.run[BrowserReadException] {
+            NavigationWatcher.interpretPendingDecision(
+                NavigationWatcher.PendingDecision.AbortHttpError("https://example.com/landed", 404),
+                Duration.Zero
+            )
+        }.map {
+            case Result.Failure(ex: BrowserNavigationTransportFailedException) =>
+                fail(s"an HTTP status failure must not be the retryable transport type, got $ex")
+            case Result.Failure(ex: BrowserNavigationFailedException) =>
+                assert(ex.url == "https://example.com/landed", s"url was `${ex.url}`")
+                assert(ex.error == "HTTP 404", s"error was `${ex.error}`")
+            case other => fail(s"expected Failure(BrowserNavigationFailedException) but got $other")
+        }
+    }
+
     "NavigationWatcher.decidePending: NetworkIdle + Ready(differentUrl, 500, throwOnFailure=false) → DegradeToLoad (HTTP-status check is gated)" in {
         val decision = NavigationWatcher.decidePending(
             expectedDifferentFrom = Present(snap),
@@ -449,7 +514,7 @@ class NavigationWatcherTest extends kyo.BrowserTest:
     private def statusServer[A, S](status: HttpStatus, path: String)(f: (String, Int) => A < (Browser & S))(using
         Frame
     ): A < (Browser & Scope & Abort[BrowserConnectionException] & Abort[HttpBindException] & Async & S) =
-        val body = Span.fromUnsafe(s"<html><body>status ${status.code}</body></html>".getBytes("UTF-8"))
+        val body    = Span.fromUnsafe(s"<html><body>status ${status.code}</body></html>".getBytes("UTF-8"))
         val handler = HttpRoute.getRaw(path).response(_.bodyBinary).handler { _ =>
             HttpResponse(status)
                 .addField("body", body)
