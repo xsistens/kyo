@@ -1743,13 +1743,21 @@ class ScopeTest extends kyo.test.Test[Any]:
             }
         }
 
-        "ensure after close panics like the queued finalizer" in {
-            val fin = Scope.Finalizer.Unsafe.initInline()
+        "ensure after close is rejected like the queued finalizer" in {
+            def rejected(fin: Scope.Finalizer) =
+                for
+                    _ <- fin.close(Absent)
+                    _ <- fin.await
+                    r <- Abort.run[Throwable](fin.ensure(_ => ()))
+                yield r
             for
-                _ <- fin.close(Absent)
-                _ <- fin.await
-                r <- Abort.run[Throwable](fin.ensure(_ => ()))
-            yield assert(r.isPanic)
+                queued <- Scope.Finalizer.init(1)
+                q      <- rejected(queued)
+                i      <- rejected(Scope.Finalizer.Unsafe.initInline())
+            yield
+                assert(q.error.exists(_.exception.isInstanceOf[Closed]), s"queued: $q")
+                assert(i.error.exists(_.exception.isInstanceOf[Closed]), s"inline: $i")
+                assert(i.isPanic == q.isPanic, s"inline $i, queued $q")
             end for
         }
 
