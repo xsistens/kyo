@@ -116,10 +116,13 @@ class WatcherSpec extends kyo.test.Test[Any]:
                 if n == 1 then response
                 else
                     Sync.ensure { (error: Maybe[Result.Error[Any]]) =>
+                        // Ended from outside is a panic: `Interrupted` when the stop reaches a running slice, the kernel's
+                        // "fiber abandoned" when the fiber is released while parked here on the gate. This call never
+                        // panics on its own, so either one is the close reaching it.
                         val how = error match
-                            case Absent                                => "answered"
-                            case Present(Result.Panic(_: Interrupted)) => "interrupted"
-                            case Present(_)                            => "failed"
+                            case Absent                     => "answered"
+                            case Present(Result.Panic(_))   => "interrupted"
+                            case Present(Result.Failure(_)) => "failed"
                         ended.fold(Kyo.unit)(_.completeDiscard(Result.succeed(how)))
                     }(arrived.release.andThen(gate.await).andThen(response))
                 end if
