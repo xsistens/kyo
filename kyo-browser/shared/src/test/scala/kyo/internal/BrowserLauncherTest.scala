@@ -234,9 +234,10 @@ class BrowserLauncherTest extends BaseChromeTest:
     // Chrome is left behind only when the process that launched it has exited, which leaves it adopted by
     // pid 1. The sentinel is started by a shell that exits at once, so it is adopted the same way.
     //
-    // Sentinel form: `sh -c 'true; sleep 30 # --user-data-dir=$pattern'`. Multi-statement script
-    // prevents sh from exec-optimizing into sleep (a single-stmt `sh -c 'sleep 30'` would replace
-    // sh's argv with sleep's, losing the tag), so `pgrep -f "user-data-dir=.*<tag>"` matches the sh PID.
+    // Sentinel form: `sh -c 'sleep 30; true # --user-data-dir=$pattern'`. A shell may exec-optimize the
+    // LAST command of its script (bash 5 as /bin/sh does), replacing its argv and losing the tag. With a
+    // command after the sleep, the shell must fork to run the sleep and stays alive under its own argv,
+    // so `pgrep -f "user-data-dir=.*<tag>"` matches the sh PID.
     "killOrphans kills an ownerless process whose launcher has exited" in {
         Scope.run {
             System.operatingSystem.map {
@@ -252,7 +253,7 @@ class BrowserLauncherTest extends BaseChromeTest:
                     for
                         n <- Random.nextLong
                         pattern = f"kyo-browser-orphans-test-$n%016x"
-                        script  = s"sh -c 'true; sleep 30 # --user-data-dir=$pattern' >/dev/null 2>&1 & echo $$!"
+                        script  = s"sh -c 'sleep 30; true # --user-data-dir=$pattern' >/dev/null 2>&1 & echo $$!"
                         pid     <- Command("sh", "-c", script).text.map(_.trim.toLong)
                         _       <- Scope.ensure(Abort.run[CommandException](Command("kill", "-9", pid.toString).waitFor).unit)
                         adopted <- awaitParent(pid, 1L)
@@ -279,7 +280,7 @@ class BrowserLauncherTest extends BaseChromeTest:
                     for
                         n <- Random.nextLong
                         pattern = f"kyo-browser-orphans-test-$n%016x"
-                        proc   <- Command("sh", "-c", s"true; sleep 30 # --user-data-dir=/nonexistent/$pattern").spawn
+                        proc   <- Command("sh", "-c", s"sleep 30; true # --user-data-dir=/nonexistent/$pattern").spawn
                         pid    <- proc.pid
                         _      <- BrowserLauncher.killOrphans(pattern, command = "pgrep")
                         killed <- awaitDeath(pid)
@@ -305,7 +306,7 @@ class BrowserLauncherTest extends BaseChromeTest:
                         owner    <- Command("sh", "-c", "true; sleep 30").spawn
                         ownerPid <- owner.pid
                         pattern = f"kyo-browser-$ownerPid-orphans-test-$n%016x"
-                        proc   <- Command("sh", "-c", s"true; sleep 30 # --user-data-dir=/nonexistent/$pattern").spawn
+                        proc   <- Command("sh", "-c", s"sleep 30; true # --user-data-dir=/nonexistent/$pattern").spawn
                         pid    <- proc.pid
                         _      <- BrowserLauncher.killOrphans(pattern, command = "pgrep")
                         killed <- awaitDeath(pid)
@@ -331,7 +332,7 @@ class BrowserLauncherTest extends BaseChromeTest:
                         _          <- owner.waitFor
                         ownerAlive <- isPidAlive(ownerPid)
                         pattern = f"kyo-browser-$ownerPid-orphans-test-$n%016x"
-                        proc   <- Command("sh", "-c", s"true; sleep 30 # --user-data-dir=/nonexistent/$pattern").spawn
+                        proc   <- Command("sh", "-c", s"sleep 30; true # --user-data-dir=/nonexistent/$pattern").spawn
                         pid    <- proc.pid
                         _      <- BrowserLauncher.killOrphans(pattern, command = "pgrep")
                         killed <- awaitDeath(pid)
@@ -370,7 +371,7 @@ class BrowserLauncherTest extends BaseChromeTest:
                     for
                         n <- Random.nextLong
                         pattern = f"kyo-browser-orphans-test-$n%016x"
-                        script  = s"sh -c 'true; sleep 30 # grep user-data-dir=$pattern' >/dev/null 2>&1 & echo $$!"
+                        script  = s"sh -c 'sleep 30; true # grep user-data-dir=$pattern' >/dev/null 2>&1 & echo $$!"
                         pid     <- Command("sh", "-c", script).text.map(_.trim.toLong)
                         _       <- Scope.ensure(Abort.run[CommandException](Command("kill", "-9", pid.toString).waitFor).unit)
                         adopted <- awaitParent(pid, 1L)
