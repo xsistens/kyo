@@ -230,6 +230,23 @@ private[kyo] object ReactiveUI:
         }
     end normalize
 
+    /** The same tree without its render-time snapshots, for a normalize that painted nothing.
+      *
+      * The snapshots let subscribe skip a first emission the page already shows, which holds only where this normalize
+      * is the one the page was rendered from. A server session is not: the page came from an earlier HTTP render, and a
+      * reconnecting client still shows whatever the previous session last sent. Without snapshots every observer's first
+      * emission goes out, so a session starts by bringing the page to the current state.
+      */
+    def unpainted(rui: ReactiveUI): ReactiveUI =
+        rui.copy(
+            children = rui.children.map(unpainted),
+            renderedValue = Absent,
+            renderedAttrValues = Map.empty,
+            renderedBoolAttrValues = Map.empty,
+            renderedClassValues = Map.empty,
+            foreachSpec = rui.foreachSpec.map(_.copy(renderedItems = Absent))
+        )
+
     private def normalizeWith(
         ui: UI,
         path: Seq[String],

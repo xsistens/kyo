@@ -62,4 +62,18 @@ class ReactiveSubscribeSkipTest extends kyo.test.Test[Any]:
         }
     }
 
+    "an unpainted tree sends every first emission, regions and channels alike" in {
+        Scope.run {
+            for
+                items <- Signal.initRef(Chunk("a", "b"))
+                on    <- Signal.initRef(true)
+                rec = new Recording
+                ui  = UI.div(items.foreach(i => UI.span(i)), UI.span("x").cssClass("hot", on))
+                root <- ReactiveUI.normalize(ui, Seq.empty).map(ReactiveUI.unpainted)
+                _    <- ReactiveUI.subscribe(root, rec.exchange)
+                _    <- assertEventually(Sync.defer(rec.changes.get >= 1 && rec.classPatches.get >= 1))
+            yield assert(true)
+        }
+    }
+
 end ReactiveSubscribeSkipTest

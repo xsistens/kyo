@@ -78,7 +78,9 @@ private[kyo] object UIServer:
         Scope.run {
             for
                 uiTree <- ui
-                root   <- ReactiveUI.normalize(uiTree, Seq.empty)
+                // Unpainted: the page this session drives was rendered by the HTTP route, or on a reconnect by the previous
+                // session, so no first emission may be skipped as already shown.
+                root <- ReactiveUI.normalize(uiTree, Seq.empty).map(ReactiveUI.unpainted)
                 // Pre-seed the connection's sent-class tracking with every pseudo-state class the
                 // initial SSR page already carries (rendered once more here, discarding the HTML), so
                 // the first reactive update touching an unchanged pseudo-styled element does not
