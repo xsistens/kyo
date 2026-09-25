@@ -20,3 +20,5 @@ private[kyo] object topStatusFileMs    extends StaticFlag[Int](0)
 private[kyo] object minInterval extends StaticFlag[Int](1)
 // WorkerQueue initial backing-array size
 private[kyo] object queueCapacity extends StaticFlag[Int](8, n => Right(Math.max(1, n)))
+// JS only: wall-clock budget (ms) within which one turn of the scheduler starts queued tasks, clamped to timeSliceMs
+private[kyo] object drainBudgetMs extends StaticFlag[Int](4, n => Right(Math.max(1, Math.min(timeSliceMs(), n))))
