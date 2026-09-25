@@ -1,0 +1,11 @@
+# The JVM row validates the README both rows share.
+> jvm/doctest
+
+# The js row refuses instead of forking a JVM onto another platform's artifacts.
+-> js/doctest
+
+# doctestFresh takes the same route.
+-> js/doctestFresh
+
+# The aggregate command skips the non-JVM row and still succeeds.
+> doctest
