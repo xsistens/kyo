@@ -65,6 +65,13 @@ sealed abstract private[kyo] class IOTask[E, A, S2] extends IOPromise[E, A < S2]
       */
     private var joinFrame: Frame = Frame.internal
 
+    /** The wakeup this task left on the promise it is parked on, or null. An uninterruptible promise (a `SignalRef`'s next-value
+      * promise, for one) outlives its waiters and may never complete, so a wakeup left behind by a task that is abandoned first would
+      * stay in that promise's chain for the promise's lifetime. `abandon` cancels it. Volatile because the abandoning thread is not the
+      * one that armed it.
+      */
+    @volatile private var wakeup: IOPromise.Waiter[?, ?] | Null = null
+
     /** The fiber boundary: one region answering everything the scheduler owns, in `IOTask` not `Fiber` since its
       * decisions are scheduling, not effect interpretation.
       */
@@ -301,10 +308,15 @@ sealed abstract private[kyo] class IOTask[E, A, S2] extends IOPromise[E, A < S2]
                     // Read out before the wakeup closes over it.
                     val frame = joinFrame
                     if casStatus(Status.parked(promise), Status.Idle) then
-                        promise.onComplete { _ =>
+                        val w = promise.onCompleteCancellable { _ =>
+                            wakeup = null
                             removeInterrupt(promise)(using frame)
                             Scheduler.get.schedule(this)
                         }
+                        wakeup = w
+                        // An interrupt may have released the task between the claim and the store above, reading no
+                        // wakeup to cancel.
+                        if status.isInterrupted || status.isDone then discard(w.cancel())
                         // Completed while this slice unwound, without an interrupt: no run was scheduled on its behalf,
                         // and the wakeup may never come, so claim it here.
                         if !isPending() && casStatus(Status.Idle, Status.Done) then abandon(Absent)
@@ -362,6 +374,11 @@ sealed abstract private[kyo] class IOTask[E, A, S2] extends IOPromise[E, A < S2]
         val remainder = curr
         curr = cleared
         status = Status.Done
+        val w = wakeup
+        if w ne null then
+            wakeup = null
+            discard(w.cancel())
+        end if
         if !isNull(remainder) then
             Eval.release(remainder, new KyoException("fiber abandoned")(using Frame.internal), Tag[Async.Join]) {
                 // Invoking the input registers the link.

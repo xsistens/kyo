@@ -1047,6 +1047,16 @@ class SignalTest extends kyo.test.Test[Any]:
             yield assert(result == Chunk(0)) // the post-interrupt change is not observed
         }
 
+        "observers that stop before any change leave no waiters behind" in {
+            for
+                ref    <- Signal.initRef(0)
+                fibers <- Kyo.foreach(Chunk.fill(100)(()))(_ => Fiber.initUnscoped(ref.observe(_ => Kyo.unit)))
+                _      <- assertEventually(ref.waiters.map(_ >= 100))
+                _      <- Kyo.foreachDiscard(fibers)(f => f.interrupt.andThen(f.getResult.unit))
+                after  <- ref.waiters
+            yield assert(after == 0)
+        }
+
         "never loses the final value under back-to-back writes (SignalRef leaf)" in {
             observeNeverLosesFinalValue(useMap = false, iterations = 5000).map(lost => assert(lost == 0, s"SignalRef lost $lost / 5000"))
         }

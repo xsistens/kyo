@@ -1038,6 +1038,56 @@ class IOPromiseTest extends kyo.test.Test[Any]:
         }
     }
 
+    "onCompleteCancellable" - {
+        "a cancelled registration never runs and is no longer a waiter" in {
+            val p     = new IOPromise[Nothing, Int]()
+            var calls = 0
+            val w     = p.onCompleteCancellable(_ => calls += 1)
+            assert(p.waiters() == 1)
+            assert(w.cancel())
+            assert(p.waiters() == 0)
+            p.complete(Result.succeed(1))
+            assert(calls == 0)
+        }
+
+        "a cancel that runs inside the flush still wins over it" in {
+            val p         = new IOPromise[Nothing, Int]()
+            var ran       = false
+            var cancelWon = false
+            val victim    = p.onCompleteCancellable(_ => ran = true)
+            // The flush runs the latest registration first, so this cancels the victim while the flush is in progress.
+            p.onComplete(_ => cancelWon = victim.cancel())
+            p.complete(Result.succeed(1))
+            assert(cancelWon)
+            assert(!ran)
+        }
+
+        "a cancel after the flush took the callback reports false and runs nothing again" in {
+            val p     = new IOPromise[Nothing, Int]()
+            var calls = 0
+            val w     = p.onCompleteCancellable(_ => calls += 1)
+            p.complete(Result.succeed(1))
+            assert(calls == 1)
+            assert(!w.cancel())
+            assert(calls == 1)
+        }
+
+        "fibers interrupted while parked on an uninterruptible promise leave no waiters behind" in {
+            import AllowUnsafe.embrace.danger
+            val promise = Promise.Unsafe.initUninterruptible[Int, Any]().safe
+            for
+                fibers <- Kyo.foreach(Chunk.fill(100)(()))(_ => Fiber.initUnscoped(promise.get))
+                _      <- assertEventually(promise.waiters.map(_ == 100))
+                _      <- Kyo.foreachDiscard(fibers)(f => f.interrupt.andThen(f.getResult.unit))
+                after  <- promise.waiters
+                done   <- promise.done
+            yield
+                assert(after == 0)
+                assert(!done)
+            end for
+        }
+    }
+
     // --- becomeAvailable / reuseTake tests ---
 
     /** A testable subclass that exposes protected methods. */
