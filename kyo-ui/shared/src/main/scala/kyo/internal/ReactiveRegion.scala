@@ -290,7 +290,9 @@ private[kyo] object ReactiveRegion:
         if at < 0 then id.length else at
 
     private def isVerbatim(c: Char): Boolean =
-        (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
+        (c >= '0' && c <= '9') ||
+            (c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z') || c == '_'
 
     private def isHex(c: Char): Boolean = hexValue(c) >= 0
 

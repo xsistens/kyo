@@ -149,7 +149,7 @@ final case class SelectButton[A] private (
     private def invalidGate(nav: Nav)(using Frame): UI =
         (invalidV.dynSig, invalidMsgDynV) match
             case (Absent, Absent) => renderDisabledResolved(nav)
-            case _ => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
+            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
                     copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent)
                         .renderDisabledResolved(nav)
                 )
@@ -239,7 +239,7 @@ final case class SelectButton[A] private (
         val buttons: List[UI] = items.zipWithIndex.map { (a, i) =>
             val k     = key(a)
             val label = labelF(a)
-            var tb = ToggleButton()
+            var tb    = ToggleButton()
                 .checked(selected.contains(k))
                 .onLabel(label)
                 .offLabel(label)

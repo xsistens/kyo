@@ -185,7 +185,7 @@ final case class MegaMenu private (
         def applyStep(step: MenuNav.Step): Any < Async =
             focusRef match
                 case Present(fr) =>
-                    val finish = step.activate || step.dismiss
+                    val finish                                   = step.activate || step.dismiss
                     def openTo(t: Maybe[List[Int]]): Any < Async =
                         refs match
                             case Present(rs) => MenuRender.openExactly(rs, t)
@@ -229,7 +229,7 @@ final case class MegaMenu private (
             groups.map { g =>
                 val heading: UI = g.labelV match
                     case TextValue.Const(t) => li.cssClass("p-megamenu-submenu-label").role("presentation")(t)
-                    case TextValue.Dyn(s) =>
+                    case TextValue.Dyn(s)   =>
                         li.cssClass("p-megamenu-submenu-label").role("presentation")(s)
                 val rows: List[UI] = g.itemsV.map { it =>
                     if it.separatorFlag then li.cssClass("p-megamenu-separator").role("separator")
@@ -260,7 +260,7 @@ final case class MegaMenu private (
         val rowUIs: List[UI] = itemsV.zipWithIndex.map { (it, i) =>
             val p = List(i)
             if it.columnsV.nonEmpty then
-                val isOpen = open(p)
+                val isOpen              = open(p)
                 def toggle: Any < Async =
                     refs match
                         case Present(rs) =>
@@ -313,7 +313,7 @@ final case class MegaMenu private (
                     row = row.cssClass("p-focus").scrollAuto(true)
                     partBase.foreach(b => row = row.id(s"$b-active"))
                 if it.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
-                val plain = it.asMenuItem
+                val plain                 = it.asMenuItem
                 def activate: Any < Async =
                     for
                         _ <- plain.actionV match

@@ -145,7 +145,7 @@ final case class Drawer private (
 
                 val titleChildren: List[UI] = headerContent match
                     case Present(c) => List(c)
-                    case Absent =>
+                    case Absent     =>
                         headerText.toList.map {
                             case TextValue.Const(t) => div.cssClass("p-drawer-title")(t): UI
                             case TextValue.Dyn(s)   => div.cssClass("p-drawer-title")(s)

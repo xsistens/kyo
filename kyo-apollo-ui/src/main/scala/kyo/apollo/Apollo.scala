@@ -109,7 +109,7 @@ object Apollo:
             MutationHandle(
                 state = ref,
                 run = (input: I) =>
-                    val call = build(input)
+                    val call   = build(input)
                     val policy =
                         call.requestBuilder.executionContext.get(ErrorPolicy).getOrElse(ErrorPolicy.Default)
                     // Arm `Loading`, run ONCE via `.response` (total — keeps partial data), then
@@ -293,10 +293,10 @@ object Apollo:
         // is read first and the projection over the reads stays pure.
         def readRow(a: A): Apollo.RowRead[Origin, D] < Sync =
             refOf(a) match
-                case Absent => Apollo.RowRead.Plain()
+                case Absent       => Apollo.RowRead.Plain()
                 case Present(ref) =>
                     maybeStore match
-                        case Absent => Apollo.RowRead.Unkeyed(ref)
+                        case Absent         => Apollo.RowRead.Unkeyed(ref)
                         case Present(store) =>
                             Abort.run[CacheReadFailure](store.keyOf(ref.typeName, ref.raw)).map {
                                 case Result.Success(key) =>
@@ -537,7 +537,7 @@ object Apollo:
         for
             cursors <- Signal.initRef[C](initial)
             ref     <- values.currentWith(v0 => Signal.initRef[QueryState[D]](ApolloSignal.seedFor(v0)))
-            _ <- UI.fork(
+            _       <- UI.fork(
                 ApolloSignal.driveSwitching(
                     values,
                     (v: V) => page(v, initial).watch(),
@@ -549,7 +549,7 @@ object Apollo:
             val advance: ((C, D) => Maybe[C]) => (Unit < (Async & Abort[ApolloException])) =
                 reduce =>
                     values.current.map {
-                        case Absent => ()
+                        case Absent     => ()
                         case Present(v) =>
                             cursors.current.map { c =>
                                 ref.current.map { qs =>
@@ -673,7 +673,7 @@ object Apollo:
     ): Signal[QueryState[D]] < (Async & Scope) =
         for
             ref <- values.currentWith(v0 => Signal.initRef[QueryState[D]](ApolloSignal.seedFor(v0)))
-            _ <- UI.fork(
+            _   <- UI.fork(
                 ApolloSignal.driveSwitching(values, (v: V) => call(v).watch(), ref, _ => (): Unit < Sync)
             )
         yield ref
@@ -714,7 +714,7 @@ object Apollo:
             def pollLoop: Unit < Async =
                 Async.sleep(interval).andThen {
                     skip.current.map {
-                        case true => pollLoop // paused: skip the network poll, keep the timer loop alive
+                        case true  => pollLoop // paused: skip the network poll, keep the timer loop alive
                         case false =>
                             Abort
                                 .run[ApolloException](call.fetchPolicy(FetchPolicy.NetworkOnly).data)
@@ -851,7 +851,7 @@ object Apollo:
         @tailrec private def install(keys: Set[CacheKey])(using AllowUnsafe): Maybe[Set[CacheKey]] =
             val current = held.get()
             current match
-                case Absent => Absent
+                case Absent            => Absent
                 case Present(replaced) =>
                     if held.compareAndSet(current, Present(keys)) then Present(replaced) else install(keys)
             end match

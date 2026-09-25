@@ -24,7 +24,7 @@ object FioriIconsGen:
 
     def run(): Unit =
         val iconsDir = Common.inputDir.resolve("icons")
-        val icons = Files
+        val icons    = Files
             .list(iconsDir)
             .iterator()
             .asScala

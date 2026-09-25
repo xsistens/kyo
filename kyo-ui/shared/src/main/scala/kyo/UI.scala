@@ -367,7 +367,7 @@ object UI:
         frame: Frame
     ): Fiber[A, reduce.SReduced & S2] < (Sync & S & Scope) =
         ReactiveUI.MountSupervision.local.use {
-            case Absent => Fiber.init[E, A, S, S2](v)
+            case Absent               => Fiber.init[E, A, S, S2](v)
             case Present(supervision) =>
                 Fiber.init[E, A, S, S2](v).map(fiber => fiber.onComplete(r => supervision.report(r)).andThen(fiber))
         }

@@ -17,7 +17,7 @@ class UICommandsTest extends UITest:
     "a measure request for an element that is also observed comes back" in {
         for
             asked <- Promise.init[Unit, Any]
-            cmds <- UI.Commands.init {
+            cmds  <- UI.Commands.init {
                 case HtmlOp.RequestMeasureById(_) => asked.completeUnitDiscard
                 case _                            => ()
             }

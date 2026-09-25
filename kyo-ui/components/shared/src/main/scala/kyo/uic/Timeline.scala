@@ -78,7 +78,7 @@ final case class Timeline[A] private (
     def layout(v: TimelineLayout): Timeline[A] = copy(layoutV = v)
 
     private[uic] def render(using Frame): UI =
-        val n = eventsV.length
+        val n                  = eventsV.length
         val eventEls: List[UI] = eventsV.zipWithIndex.map { (a, i) =>
             val oppositeEl: UI = div.cssClass("p-timeline-event-opposite")(
                 oppositeF.toList.map(f => toChild(f(a)))*

@@ -453,13 +453,13 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
         for
             ready   <- Sync.defer(new DomTestEnv.MountReady)
             clicked <- Latch.init(2)
-            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(
+            fiber   <- Fiber.initUnscoped(Scope.run(DomBackend.mount(
                 UI.div(UI.a.href(UI.Href.Path("/target")).id("modified-click").onClick(clicked.release)("Link")),
                 ready
             )))
             _ <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("modified-click") != null), installBudget)
             prevented <- Sync.defer {
-                val target = dom.document.getElementById("modified-click")
+                val target                        = dom.document.getElementById("modified-click")
                 def click(ctrl: Boolean): Boolean =
                     val event = scalajs.Dynamic.newInstance(dom.window.asInstanceOf[scalajs.Dynamic].MouseEvent)(
                         "click",

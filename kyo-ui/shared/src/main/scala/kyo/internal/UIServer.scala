@@ -160,7 +160,7 @@ private[kyo] object UIServer:
       */
     private def devtoolsPump(ws: HttpWebSocket)(using Frame): Unit < (Async & Scope) =
         Devtools.statsProvider match
-            case Absent => Kyo.unit
+            case Absent            => Kyo.unit
             case Present(provider) =>
                 Fiber.init(
                     Loop.forever {

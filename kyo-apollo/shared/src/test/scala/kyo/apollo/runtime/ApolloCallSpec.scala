@@ -71,7 +71,7 @@ class ApolloCallSpec extends kyo.test.Test[Any]:
         }
 
         "a raising stream (wiring error) fails the execute effect" in {
-            val boom = new IllegalStateException("chain exhausted")
+            val boom                         = new IllegalStateException("chain exhausted")
             val raising: ResponseStream[Int] =
                 Stream.init(Async.fromFuture(Future.failed[ApolloResponse[Int]](boom)).map(Seq(_)))
             Abort.run[Throwable](callOf(raising).execute).map {

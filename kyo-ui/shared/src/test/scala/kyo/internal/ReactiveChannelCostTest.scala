@@ -43,7 +43,7 @@ class ReactiveChannelCostTest extends kyo.test.Test[Any]:
     private val fanOut = 1000
 
     final private class Recording:
-        val patches = new AtomicInteger(0)
+        val patches  = new AtomicInteger(0)
         val exchange = new UIExchange:
             def onChange(
                 region: ReactiveRegion,
@@ -53,7 +53,7 @@ class ReactiveChannelCostTest extends kyo.test.Test[Any]:
                 previous: Maybe[UI],
                 changed: UI
             )(using Frame): Unit < Async = Kyo.unit
-            private def bump(): Unit = discard(patches.incrementAndGet())
+            private def bump(): Unit     = discard(patches.incrementAndGet())
             override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
                 Sync.defer(bump())
             override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =

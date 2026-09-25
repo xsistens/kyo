@@ -2412,7 +2412,8 @@ object Tokens:
     )
 
     def auraLight: Seq[(String, String)] =
-        auraLight_0 ++ auraLight_1 ++ auraLight_2 ++ auraLight_3 ++ auraLight_4 ++ auraLight_5 ++ auraLight_6 ++ auraLight_7 ++ auraLight_8 ++ auraLight_9
+        auraLight_0 ++ auraLight_1 ++ auraLight_2 ++ auraLight_3 ++ auraLight_4 ++ auraLight_5 ++ auraLight_6 ++ auraLight_7 ++
+            auraLight_8 ++ auraLight_9
 
     private def auraDark_0: Seq[(String, String)] = Seq(
         ("p-navigation-submenu-icon-color", "var(--p-surface-500)"),
@@ -5301,7 +5302,8 @@ object Tokens:
     )
 
     def materialLight: Seq[(String, String)] =
-        materialLight_0 ++ materialLight_1 ++ materialLight_2 ++ materialLight_3 ++ materialLight_4 ++ materialLight_5 ++ materialLight_6 ++ materialLight_7 ++ materialLight_8 ++ materialLight_9
+        materialLight_0 ++ materialLight_1 ++ materialLight_2 ++ materialLight_3 ++ materialLight_4 ++ materialLight_5 ++ materialLight_6 ++
+            materialLight_7 ++ materialLight_8 ++ materialLight_9
 
     private def materialDark_0: Seq[(String, String)] = Seq(
         ("p-navigation-submenu-icon-color", "var(--p-surface-400)"),
@@ -8182,7 +8184,8 @@ object Tokens:
     )
 
     def laraLight: Seq[(String, String)] =
-        laraLight_0 ++ laraLight_1 ++ laraLight_2 ++ laraLight_3 ++ laraLight_4 ++ laraLight_5 ++ laraLight_6 ++ laraLight_7 ++ laraLight_8 ++ laraLight_9
+        laraLight_0 ++ laraLight_1 ++ laraLight_2 ++ laraLight_3 ++ laraLight_4 ++ laraLight_5 ++ laraLight_6 ++ laraLight_7 ++
+            laraLight_8 ++ laraLight_9
 
     private def laraDark_0: Seq[(String, String)] = Seq(
         ("p-navigation-submenu-icon-color", "var(--p-surface-500)"),
@@ -11084,7 +11087,8 @@ object Tokens:
     )
 
     def noraLight: Seq[(String, String)] =
-        noraLight_0 ++ noraLight_1 ++ noraLight_2 ++ noraLight_3 ++ noraLight_4 ++ noraLight_5 ++ noraLight_6 ++ noraLight_7 ++ noraLight_8 ++ noraLight_9
+        noraLight_0 ++ noraLight_1 ++ noraLight_2 ++ noraLight_3 ++ noraLight_4 ++ noraLight_5 ++ noraLight_6 ++ noraLight_7 ++
+            noraLight_8 ++ noraLight_9
 
     private def noraDark_0: Seq[(String, String)] = Seq(
         ("p-navigation-submenu-icon-color", "var(--p-text-muted-color)"),

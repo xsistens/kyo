@@ -37,7 +37,7 @@ class DevtoolsInterceptorSpec extends kyo.test.Test[Any]:
         def document: String              = "mutation Login($input: LoginInput!) { login(input: $input) }"
         val dataCodec: JsonCodec[Boolean] = JsonCodec.fromSchema(using loginSchema)
         def rootField: CompiledField      = CompiledField("data", CompiledNamedType("Mutation"))
-        def variables: Json =
+        def variables: Json               =
             Json.JObj(VectorMap(
                 "input" -> Json.JObj(VectorMap(
                     "email"    -> Json.JStr("a@b.example"),
@@ -57,7 +57,7 @@ class DevtoolsInterceptorSpec extends kyo.test.Test[Any]:
         def document: String              = "query Search($term: String!, $limit: Int!) { login }"
         val dataCodec: JsonCodec[Boolean] = JsonCodec.fromSchema(using loginSchema)
         def rootField: CompiledField      = CompiledField("data", CompiledNamedType("Query"))
-        def variables: Json =
+        def variables: Json               =
             Json.JObj(VectorMap("term" -> Json.JStr("kyo"), "limit" -> Json.JInt(10L)))
     end SearchQuery
 
@@ -122,7 +122,7 @@ class DevtoolsInterceptorSpec extends kyo.test.Test[Any]:
     "a custom redaction" - {
 
         "is applied to every recorded operation, queries included" in {
-            val store = new DevtoolsOperationStore()
+            val store       = new DevtoolsOperationStore()
             val interceptor = new DevtoolsInterceptor(
                 store,
                 redact = (_, variables) => DevtoolsInterceptor.redactValues(variables)
@@ -152,7 +152,7 @@ class DevtoolsInterceptorSpec extends kyo.test.Test[Any]:
         }
 
         "each execution of one mutation call is its own entry, under the id minted for it" in {
-            val store = new DevtoolsOperationStore()
+            val store              = new DevtoolsOperationStore()
             val engine: HttpEngine = new HttpEngine:
                 def execute(request: HttpEngine.Request)(using Frame): HttpEngine.Response < Async =
                     HttpEngine.response(HttpStatus.OK, """{"data":{"login":true}}""")

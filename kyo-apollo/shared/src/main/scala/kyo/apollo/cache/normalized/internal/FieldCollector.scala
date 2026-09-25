@@ -49,7 +49,7 @@ private[internal] object FieldCollector:
             })
 
         def go(sels: Chunk[CompiledSelection]): Unit = sels.foreach {
-            case field: CompiledField => add(field)
+            case field: CompiledField       => add(field)
             case fragment: CompiledFragment =>
                 if fragment.possibleTypes.isEmpty || fragment.possibleTypes.contains(typename) then
                     go(fragment.selections)

@@ -64,7 +64,7 @@ class SignalProjectedObserveTest extends kyo.test.Test[Any]:
         src =>
             last.get() match
                 case Present((prev, img)) if prev == src => img
-                case _ =>
+                case _                                   =>
                     val img = Img(src._1 * 10 + src._2)
                     last.set(Present((src, img)))
                     img

@@ -58,10 +58,10 @@ final private class FieldPolicyRecordMerger(policies: FieldPolicies) extends Rec
 
     def merge(existing: Maybe[Record], incoming: Record): (Record, Set[FieldKey]) =
         existing match
-            case Absent => (incoming, incoming.fieldKeys)
+            case Absent       => (incoming, incoming.fieldKeys)
             case Present(old) =>
-                val typename = recordTypename(incoming).orElse(recordTypename(old))
-                var changed  = Set.empty[FieldKey]
+                val typename       = recordTypename(incoming).orElse(recordTypename(old))
+                var changed        = Set.empty[FieldKey]
                 val mergedIncoming = incoming.fields.map { case (fieldKey, incomingValue) =>
                     val oldValue = old.get(fieldKey)
                     val newValue = typename

@@ -233,7 +233,7 @@ class ReactiveUITest extends UITest:
     /** Runs one key against a single element carrying a counting click handler. */
     private def activations(target: AtomicInt => UI, key: String)(using Frame): Int < Async =
         for
-            hits <- AtomicInt.init(0)
+            hits     <- AtomicInt.init(0)
             dispatch <- Scope.run {
                 for
                     root         <- ReactiveUI.normalize(target(hits), Seq.empty)

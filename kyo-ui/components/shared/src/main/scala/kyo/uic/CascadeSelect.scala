@@ -241,7 +241,7 @@ final case class CascadeSelect[A] private (
         TextValue.reactive(placeholderV): ph =>
             (invalidV.dynSig, invalidMsgDynV) match
                 case (Absent, Absent) => bodyStatic(current, isOpen, openMap, st, ph)
-                case _ => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
+                case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
                         copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent)
                             .bodyStatic(current, isOpen, openMap, st, ph)
                     )
@@ -454,12 +454,12 @@ final case class CascadeSelect[A] private (
                 row(toChild(content(toChild(span.cssClass("p-cascadeselect-option-text")(labelF(a))))))
 
             case (CascadeItem.Group(label, children), i) =>
-                val p         = path :+ i
-                val groupOpen = openMap(p)
+                val p                        = path :+ i
+                val groupOpen                = openMap(p)
                 def toggleGroup: Any < Async =
                     st match
                         case Present(state) =>
-                            val refs = state.refs
+                            val refs                     = state.refs
                             val target: Maybe[List[Int]] =
                                 if groupOpen then (if p.size > 1 then Present(p.init) else Absent)
                                 else Present(p)

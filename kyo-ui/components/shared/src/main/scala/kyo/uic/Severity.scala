@@ -90,7 +90,7 @@ private[uic] object SelectionPick:
         current: Set[String]
     ): Set[String] =
         def plain: Set[String] = mode match
-            case SelectionMode.None => current
+            case SelectionMode.None                         => current
             case SelectionMode.Single | SelectionMode.Radio =>
                 if current == Set(id) then Set.empty else Set(id)
             case SelectionMode.Multiple | SelectionMode.Checkbox =>

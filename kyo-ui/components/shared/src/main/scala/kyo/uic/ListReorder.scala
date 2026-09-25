@@ -101,7 +101,7 @@ private[uic] object ListReorder:
         key match
             case Keyboard.ArrowUp if carry   => Present(if mods.shift then Move.Edge(false) else Move.Step(false))
             case Keyboard.ArrowDown if carry => Present(if mods.shift then Move.Edge(true) else Move.Step(true))
-            case k =>
+            case k                           =>
                 toward match
                     case Present(t) if t == k => Present(Move.Out(carry))
                     case _                    => Absent

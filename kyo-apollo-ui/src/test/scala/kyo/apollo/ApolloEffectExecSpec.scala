@@ -75,7 +75,7 @@ class ApolloEffectExecSpec extends kyo.test.Test[Any]:
         }
 
         "ApolloClientResource closes the client's subscription socket on Scope exit" in {
-            val conn = new FakeWebSocketConnection
+            val conn   = new FakeWebSocketConnection
             val config = ApolloClient.Config("wss://example.invalid/graphql")
                 .webSocketEngine(new FakeWebSocketEngine(conn))
             for _ <- Scope.run {

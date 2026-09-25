@@ -22,7 +22,7 @@ class ThemeTest extends UicTest:
         def varBlock(selector: String, pairs: Seq[(String, String)]): String =
             if pairs.isEmpty then ""
             else pairs.map((n, vl) => s"--$n:$vl").mkString(s"$selector{", ";", "}")
-        val auraLight = Tokens.auraLight.toMap
+        val auraLight                                                  = Tokens.auraLight.toMap
         def diff(preset: Seq[(String, String)]): Seq[(String, String)] =
             preset.filterNot((n, vl) => auraLight.get(n).contains(vl))
         val presets = Seq(
@@ -30,8 +30,8 @@ class ThemeTest extends UicTest:
             "lara"     -> (Tokens.laraLight, Tokens.laraDark),
             "nora"     -> (Tokens.noraLight, Tokens.noraDark)
         )
-        val root = varBlock(""":root, [data-theme], [data-scheme]""", Tokens.auraLight)
-        val dark = varBlock("""[data-scheme="dark"]""", Tokens.auraDark)
+        val root   = varBlock(""":root, [data-theme], [data-scheme]""", Tokens.auraLight)
+        val dark   = varBlock("""[data-scheme="dark"]""", Tokens.auraDark)
         val scoped = presets.flatMap { (name, sets) =>
             val (light, darkSet) = sets
             Seq(

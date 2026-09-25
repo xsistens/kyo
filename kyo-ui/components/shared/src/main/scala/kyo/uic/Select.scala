@@ -312,7 +312,7 @@ final case class Select[A] private (
     private def withValue(f: String => UI)(using Frame): UI =
         currentV match
             case Present(cur) => f(cur)
-            case Absent =>
+            case Absent       =>
                 valueRef match
                     case Present(ref) => ref.render(f)
                     case Absent       => f("")
@@ -325,7 +325,7 @@ final case class Select[A] private (
         TextValue.reactive(placeholderV): ph =>
             (invalidV.dynSig, invalidMsgDynV) match
                 case (Absent, Absent) => bodyStatic(current, st, ph, invalidV.constTrue, invalidMsgV)
-                case _ =>
+                case _                =>
                     FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) => bodyStatic(current, st, ph, red, msg))
 
     private def bodyStatic(current: String, st: Maybe[State], placeholder: Maybe[String], redFlag: Boolean, redMsg: Maybe[String])(using
@@ -541,7 +541,7 @@ final case class Select[A] private (
         else
             ListNav.onKey(navigable, hiEff, e.key, wrap = false) match
                 case Present(step) if step.dismiss => s.open.set(false)
-                case Present(step) =>
+                case Present(step)                 =>
                     val picked: Any < Async =
                         if step.activate && shown.isDefinedAt(step.focus) then pick(shown(step.focus))(s) else ()
                     s.hi.set(step.focus).andThen(picked)
@@ -580,8 +580,8 @@ final case class Select[A] private (
         val (shownGroups, shown, navigable, hiEff) = shownState(s)
 
         val rows: List[UI] = OptionItem.rows(shownGroups, "p-select-option-group") { (a, i) =>
-            val isSel = key(a) == current
-            val isDis = isOptionDisabled(a)
+            val isSel               = key(a) == current
+            val isDis               = isOptionDisabled(a)
             val checkSlot: List[UI] =
                 if checkmarkFlag then
                     if isSel then List(GlyphSvg(Icons.check, "p-select-option-check-icon", "p-icon"))

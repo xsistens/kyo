@@ -30,7 +30,7 @@ class NodeTest extends UicTest:
         // `Files.list` opens a descriptor on the directory; the suite's leak check fails
         // the run if it is not closed, so the stream is drained inside `use`.
         val stream = Files.list(classesIn)
-        val files =
+        val files  =
             try stream.iterator.asScala.toList
             finally stream.close()
         files
@@ -40,7 +40,7 @@ class NodeTest extends UicTest:
             // Nested types and companion objects both carry a '$' in the JVM name.
             .filterNot(_.contains("$"))
             .flatMap { simple =>
-                val c = Class.forName(s"kyo.uic.$simple", false, loader)
+                val c           = Class.forName(s"kyo.uic.$simple", false, loader)
                 val isComponent =
                     classOf[Node].isAssignableFrom(c) &&
                         !c.isInterface &&

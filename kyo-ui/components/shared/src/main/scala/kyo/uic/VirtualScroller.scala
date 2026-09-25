@@ -121,7 +121,7 @@ final case class VirtualScroller[A] private (
       */
     private def shell(ref: Maybe[SignalRef[Double]])(inner: UI)(using Frame): UI =
         template match
-            case Absent => div.cssClass("p-virtualscroller").cssClass("p-component")
+            case Absent     => div.cssClass("p-virtualscroller").cssClass("p-component")
             case Present(_) =>
                 var v = div
                     .cssClass("p-virtualscroller")
@@ -149,7 +149,7 @@ final case class VirtualScroller[A] private (
       */
     private def window(scrollTop: Double)(using Frame): UI =
         template match
-            case Absent => div.cssClass("p-virtualscroller-content")
+            case Absent       => div.cssClass("p-virtualscroller-content")
             case Present(tpl) =>
                 val (firstIdx, reach) = viewport.span(clampScroll(scrollTop))
                 val lastIdx           = math.min(items.length, reach)
@@ -182,14 +182,14 @@ final case class VirtualScroller[A] private (
       */
     private[uic] def sourceWindow(scrollTop: Double, w: RowSource.Window[A], total: Total)(using Frame): UI =
         template match
-            case Absent => div.cssClass("p-virtualscroller-content")
+            case Absent       => div.cssClass("p-virtualscroller-content")
             case Present(tpl) =>
                 val vp                = viewport
                 val loadedEnd         = w.offset + w.rows.size
                 val count             = vp.extent(total, loadedEnd)
                 val (firstIdx, reach) = vp.span(vp.clamp(scrollTop, count))
                 val lastIdx           = math.min(count, reach)
-                val rows: List[UI] = (firstIdx until lastIdx).toList.map { i =>
+                val rows: List[UI]    = (firstIdx until lastIdx).toList.map { i =>
                     val cell =
                         if i >= w.offset && i < loadedEnd then tpl(w.rows(i - w.offset))
                         else Skeleton().height(s"${itemSizeV}px").render

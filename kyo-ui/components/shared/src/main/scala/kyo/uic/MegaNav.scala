@@ -84,17 +84,17 @@ private[uic] object MegaNav:
                 case ArrowUp | ArrowLeft      => Absent
                 case Home                     => Present(Step(List(firstRoot(items)), OpenOp.Close))
                 case End                      => Present(Step(List(lastRoot(items)), OpenOp.Close))
-                case Enter | Space =>
+                case Enter | Space            =>
                     openPanel(items, r).orElse(Present(Step(List(r), activate = true)))
                 case Escape => Present(Step(Nil, OpenOp.Close, dismiss = true))
                 case _      => Absent
             end match
         else
             // panel: focus == List(r, c, i)
-            val r            = focus.head
-            val c            = focus(1)
-            val i            = focus(2)
-            def col(cc: Int) = colItems(items, r, cc)
+            val r                               = focus.head
+            val c                               = focus(1)
+            val i                               = focus(2)
+            def col(cc: Int)                    = colItems(items, r, cc)
             def clampI(cc: Int, want: Int): Int =
                 val n = col(cc).size
                 if n == 0 then 0 else math.max(0, math.min(n - 1, want))

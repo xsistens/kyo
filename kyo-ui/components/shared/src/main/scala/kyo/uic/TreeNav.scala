@@ -105,7 +105,7 @@ private[uic] object TreeNav:
                 if !on then Absent
                 else
                     val row = rows(focus)
-                    val op =
+                    val op  =
                         if !row.expandable then Op.Keep
                         else if row.expanded then Op.Collapse(row.key)
                         else Op.Expand(row.key)

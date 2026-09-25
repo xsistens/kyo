@@ -82,7 +82,7 @@ final case class ConfirmDialog private (
 
     private[uic] def render(using Frame): UI =
         openRef match
-            case Absent => UI.empty
+            case Absent       => UI.empty
             case Present(ref) =>
                 def run(eff: Maybe[Any < Async]): Any < Async =
                     eff match

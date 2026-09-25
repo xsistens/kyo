@@ -83,7 +83,7 @@ class DataSignalSpec extends kyo.test.Test[Any]:
             for
                 seen <- Promise.init[String, Any]
                 src  <- Signal.initRef[QueryState[Int]](QueryState.Success(1, fromCache = false))
-                res <- UI.notices(ex => seen.completeDiscard(Result.succeed(messageOf(ex)))) {
+                res  <- UI.notices(ex => seen.completeDiscard(Result.succeed(messageOf(ex)))) {
                     for
                         sig      <- src.dataSignal(UpdateFailure.Notify)
                         _        <- src.set(QueryState.Failure(DefaultApolloException("update failure")))

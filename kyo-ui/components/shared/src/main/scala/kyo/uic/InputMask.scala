@@ -103,7 +103,7 @@ final case class InputMask private (
     private[uic] def render(using Frame): UI =
         (invalidV.dynSig, invalidMsgDynV) match
             case (Absent, Absent) => renderStatic
-            case _ => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
+            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
                     copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderStatic
                 )
 

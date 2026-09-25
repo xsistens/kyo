@@ -121,7 +121,7 @@ final case class ToggleButton private (
     private[uic] def render(using Frame): UI =
         (invalidV.dynSig, invalidMsgDynV) match
             case (Absent, Absent) => renderStatic
-            case _ => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
+            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
                     copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderStatic
                 )
 
@@ -187,7 +187,7 @@ final case class ToggleButton private (
 
         val contentChildren: List[UI] = contentV match
             case Present(ui) => List(ui)
-            case Absent =>
+            case Absent      =>
                 val iconSlot: List[UI] =
                     (if isChecked then onIconV else offIconV).toList.map(g => GlyphSvg(g, "p-togglebutton-icon"))
                 // Prime: the current-state label, or a non-breaking space when no labels are set.

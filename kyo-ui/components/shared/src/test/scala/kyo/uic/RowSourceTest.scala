@@ -51,7 +51,7 @@ class RowSourceTest extends UicTest:
         for
             q     <- Signal.initRef("a")
             calls <- Signal.initRef(List.empty[(String, Int)])
-            src <- RowSource.init(q, pageSize, config) { (query, offset, limit) =>
+            src   <- RowSource.init(q, pageSize, config) { (query, offset, limit) =>
                 val data  = rows(query)
                 val block = offset / limit
                 for
@@ -230,7 +230,7 @@ class RowSourceTest extends UicTest:
         def once(using Frame) =
             Scope.run {
                 for
-                    q <- Signal.initRef("a")
+                    q   <- Signal.initRef("a")
                     src <- RowSource.init(q, pageSize = 2) { (_, offset, limit) =>
                         (all.slice(offset, offset + limit), Total.Known(all.size))
                     }

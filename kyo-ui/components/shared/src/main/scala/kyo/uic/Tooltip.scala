@@ -51,7 +51,7 @@ final case class Tooltip private (
     private[uic] def render(using Frame): UI =
         val textUI: UI = contentV match
             case Present(c) => c
-            case Absent =>
+            case Absent     =>
                 textV match
                     case Present(TextValue.Const(t)) => stringToUI(t)
                     case Present(TextValue.Dyn(s))   => signalStringToUI(s)

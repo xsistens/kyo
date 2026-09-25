@@ -36,7 +36,7 @@ object CountryFixture:
         def name                           = "CurrentUser"
         def document                       = "query CurrentUser { user { __typename id name } }"
         val dataCodec: JsonCodec[UserData] = JsonCodec.fromSchema[UserData]
-        def rootField: CompiledField =
+        def rootField: CompiledField       =
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),

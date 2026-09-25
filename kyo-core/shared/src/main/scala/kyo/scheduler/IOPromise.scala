@@ -351,9 +351,10 @@ private[kyo] object IOPromise:
                 // it is not a waiter. Keeps the count meaning "callbacks that may still fire",
                 // which is what every caller already assumes; plain callbacks are unaffected.
                 def waiters: Int =
-                    self.waiters + (f match
-                        case w: Waiter[?, ?] if w.get().isEmpty => 0
-                        case _                                  => 1)
+                    self.waiters +
+                        (f match
+                            case w: Waiter[?, ?] if w.get().isEmpty => 0
+                            case _                                  => 1)
                 def interrupt(error: Error[E]) =
                     eval(discard(f(error)))
                     self

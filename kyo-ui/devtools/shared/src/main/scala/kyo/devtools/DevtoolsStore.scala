@@ -42,7 +42,7 @@ final class DevtoolsStore(
       */
     val record: UI.RenderEvent => Unit = event =>
         if recording then
-            val key = event.path.mkString(".")
+            val key    = event.path.mkString(".")
             val region = regions.get(key) match
                 case null =>
                     // Beyond the cap new regions are ignored rather than evicted. A page whose tree grows
@@ -248,8 +248,8 @@ object DevtoolsStore:
             val file     = position.fileName
             if file == "<internal>" then engine
             else
-                val caller = frame.callerName
-                val owner  = simpleName(frame.className)
+                val caller  = frame.callerName
+                val owner   = simpleName(frame.className)
                 val display =
                     if owner.isEmpty && caller.isEmpty then file.stripSuffix(".scala")
                     else if owner.isEmpty then caller
@@ -320,7 +320,7 @@ object DevtoolsStore:
           */
         lazy val history: Chunk[Int] =
             regions.headOption match
-                case None => Chunk.empty
+                case None        => Chunk.empty
                 case Some(first) =>
                     val totals = new Array[Int](first.history.size)
                     regions.foreach { region =>

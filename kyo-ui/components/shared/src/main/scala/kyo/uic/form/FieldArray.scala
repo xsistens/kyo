@@ -190,7 +190,7 @@ final class FieldArray[R] private[form] (
     private[form] def runCrossChecks(using Frame): Chunk[FieldError] < Async =
         for
             models <- currentRows
-            fails <- Kyo.foreach(crossChecks) { case (code, pred, reveal) =>
+            fails  <- Kyo.foreach(crossChecks) { case (code, pred, reveal) =>
                 pred(models).map(ok => (reveal, if ok then (Absent: Maybe[FieldError]) else Present(FieldError(code))))
             }
             // A failing cross-row check always blocks submit; only RAISED into the summary unless Manual.

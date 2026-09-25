@@ -162,7 +162,7 @@ final case class Password private (
         // through the shared helper; otherwise the untouched static form.
         (invalidV.dynSig, invalidMsgDynV) match
             case (Absent, Absent) => bodyStatic(current, rev)
-            case _ => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
+            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
                     copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).bodyStatic(current, rev)
                 )
 

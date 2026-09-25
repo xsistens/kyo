@@ -471,7 +471,7 @@ class DatePickerTest extends UicTest:
     "a view switch hands the focus to the grid it switched to" in {
         for
             (_, _, moved, ui) <- recording(uic.DatePicker(), july)
-            month <- elements(ui).map(_.collectFirst {
+            month             <- elements(ui).map(_.collectFirst {
                 case b: UI.Ast.Button if b.attrs.cssClasses.contains("p-datepicker-select-month") => b
             }.get)
             _   <- click(month)
@@ -495,7 +495,7 @@ class DatePickerTest extends UicTest:
     "the title buttons switch the grid without a caller binding a view ref either" in {
         for
             (_, _, _, _, _, ui) <- wired(july)
-            month <- elements(ui).map(_.collectFirst {
+            month               <- elements(ui).map(_.collectFirst {
                 case b: UI.Ast.Button if b.attrs.cssClasses.contains("p-datepicker-select-month") => b
             }.get)
             _    <- click(month)

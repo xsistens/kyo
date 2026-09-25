@@ -123,7 +123,7 @@ final case class FileUpload private (
         // The validity boundary is resolved inside `body`, never around `UI.mounted`.
         filesRef match
             case Present(_) => body(Absent)
-            case Absent =>
+            case Absent     =>
                 UI.mounted {
                     for shown <- Signal.initRef[Maybe[String]](Absent)
                     yield body(Present(shown))
@@ -135,7 +135,7 @@ final case class FileUpload private (
     private def labelSpan(chosen: Maybe[String])(using Frame): UI =
         chosen match
             case Present(names) => span.cssClass("p-fileupload-filelabel").cssClass("p-fileupload-filename")(names)
-            case Absent =>
+            case Absent         =>
                 fileLabelV match
                     case Present(TextValue.Const(t)) => span.cssClass("p-fileupload-filelabel")(t)
                     case Present(TextValue.Dyn(s))   => span.cssClass("p-fileupload-filelabel")(s)
@@ -148,7 +148,7 @@ final case class FileUpload private (
     private def body(shown: Maybe[SignalRef[Maybe[String]]])(using Frame): UI =
         (invalidV.dynSig, invalidMsgDynV) match
             case (Absent, Absent) => bodyStatic(shown, invalidV.constTrue, invalidMsgV)
-            case _ =>
+            case _                =>
                 FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) => bodyStatic(shown, red, msg))
 
     private def bodyStatic(shown: Maybe[SignalRef[Maybe[String]]], red: Boolean, redMsg: Maybe[String])(using Frame): UI =
@@ -184,7 +184,7 @@ final case class FileUpload private (
         if onSelectF.isDefined || filesRef.isDefined then
             file = file.onFileSelect { payloads =>
                 val setLabel: Any < Async = (filesRef, shown) match
-                    case (Present(ref), _) => ref.set(payloads)
+                    case (Present(ref), _)      => ref.set(payloads)
                     case (Absent, Present(ref)) =>
                         ref.set(FileUpload.joinedNames(payloads))
                     case _ => ()

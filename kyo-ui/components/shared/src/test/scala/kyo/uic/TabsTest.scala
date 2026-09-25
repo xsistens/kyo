@@ -180,7 +180,7 @@ class TabsTest extends UicTest:
         // middle button — so an empty handler would silently cost the very thing an
         // anchor was chosen for. Verified in a browser both ways.
         for
-            plain <- elementsWithClass(navStrip.selected("one").render, "p-tab")
+            plain      <- elementsWithClass(navStrip.selected("one").render, "p-tab")
             withSelect <- elementsWithClass(
                 navStrip.selected("one").onTabSelect(_ => ()).render,
                 "p-tab"

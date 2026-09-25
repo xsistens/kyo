@@ -144,7 +144,7 @@ class DataTableReuseTest extends UicTest:
         // derived from the SAME signal as the rows, because it lives in the row's own data, and the
         // table also carries a sort ref, a context row, a shift anchor and modifier selection.
         Scope.run {
-            val counted = new Renders
+            val counted                                = new Renders
             def selectedOf(rs: Seq[Item]): Set[String] =
                 rs.collect { case r if r.name.endsWith("*") => r.id }.toSet
             for

@@ -391,7 +391,7 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
         val from   = js.indexOf("function __kyoRangeIdOf(p){")
         val until  = js.indexOf("function __kyoFirstElIn", from)
         val encode = scala.scalajs.js.eval(s"(${js.substring(from, until)})").asInstanceOf[scala.scalajs.js.Function1[String, String]]
-        val paths = Seq(
+        val paths  = Seq(
             Seq.empty[String],
             Seq("0"),
             Seq("2", "0", "17", "1"),
@@ -407,12 +407,12 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
         // transparently. An index that only ever gained entries would hold a path per round at the end.
         val root = host(s"<!--kyo-rs:$Outer--><!--kyo-re:$Outer-->")
         for
-            saved <- AtomicRef.init(Absent: Maybe[DomReactiveRegions])
+            saved  <- AtomicRef.init(Absent: Maybe[DomReactiveRegions])
             counts <- Scope.run {
                 for
                     regions <- DomReactiveRegions.init(root)
                     _       <- saved.set(Present(regions))
-                    _ <- Kyo.foreachDiscard(0 until 200) { round =>
+                    _       <- Kyo.foreachDiscard(0 until 200) { round =>
                         val plain = idOf("round", round.toString)
                         val outer = idOf("nested", round.toString)
                         val inner = outer + "~1"
@@ -466,7 +466,7 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
                 }
                 afterRemove  <- regions.ids
                 expectRemove <- freshIds(root)
-                swapped <- regions.withRegionFragment(ListId, "") { (target, _) =>
+                swapped      <- regions.withRegionFragment(ListId, "") { (target, _) =>
                     val (first, last) = (row(1), row(48))
                     val afterLast     = last.nextSibling
                     discard(ul.insertBefore(last, first))
@@ -475,7 +475,7 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
                 }
                 afterSwap  <- regions.ids
                 expectSwap <- freshIds(root)
-                repainted <- regions.withRegionFragment(ListId, rowHtml(5, "b")) { (target, scope) =>
+                repainted  <- regions.withRegionFragment(ListId, rowHtml(5, "b")) { (target, scope) =>
                     val live  = row(5)
                     val until = live.nextSibling
                     scope.retire(live)
@@ -487,7 +487,7 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
                 }
                 afterRepaint  <- regions.ids
                 expectRepaint <- freshIds(root)
-                inserted <- regions.withRegionFragment(ListId, rowHtml(77, "c")) { (target, scope) =>
+                inserted      <- regions.withRegionFragment(ListId, rowHtml(77, "c")) { (target, scope) =>
                     val fresh = dom.document.importNode(target.fragment.firstChild, true)
                     discard(ul.insertBefore(fresh, target.end))
                     scope.placed(fresh, target.end)
@@ -516,7 +516,7 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
             for
                 regions <- DomReactiveRegions.init(root)
                 before  <- regions.registryWrites
-                _ <- regions.withRegionFragment(ListId, "") { (_, _) =>
+                _       <- regions.withRegionFragment(ListId, "") { (_, _) =>
                     val (first, last) = (row(1), row(998))
                     val afterLast     = last.nextSibling
                     discard(ul.insertBefore(last, first))
@@ -524,7 +524,7 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
                     true
                 }
                 swapped <- regions.registryWrites
-                _ <- regions.withRegionFragment(ListId, "") { (_, scope) =>
+                _       <- regions.withRegionFragment(ListId, "") { (_, scope) =>
                     scope.retire(row(500))
                     discard(ul.removeChild(row(500)))
                     true
@@ -546,7 +546,7 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
                 regions <- DomReactiveRegions.init(root)
                 before  <- regions.ids
                 writes  <- regions.registryWrites
-                took <- regions.withRegionFragment(ListId, rowHtml(9, "z")) { (_, scope) =>
+                took    <- regions.withRegionFragment(ListId, rowHtml(9, "z")) { (_, scope) =>
                     false
                 }
                 after       <- regions.ids

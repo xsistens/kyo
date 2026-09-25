@@ -138,7 +138,7 @@ final case class ContextMenu private (
         // by this effectful mount; static projections (SSG, the SSR page HTML)
         // render the closed target region inert.
         val stat: UI = body(false, Absent, Nil, Absent, Map.empty.withDefaultValue(false), Absent, Absent)
-        val mount = UI.mounted {
+        val mount    = UI.mounted {
             for
                 openRef <- Signal.initRef(false)
                 focus   <- Signal.initRef(List.empty[Int])

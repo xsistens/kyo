@@ -33,7 +33,7 @@ final case class Title private (
 
     private[uic] def render(using Frame): UI =
         val visual = sizeV.getOrElse(levelV)
-        var el = div
+        var el     = div
             .cssClass("p-uic-title")
             .cssClass(s"p-uic-title--${visual.token.toLowerCase}")
             .role("heading")

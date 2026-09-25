@@ -156,7 +156,7 @@ final case class Tree private (
         val rowIndex = rows.map(_.key).zipWithIndex.toMap
         val focus    = roving.map(r => if r.focus >= 0 && r.focus < rows.size then r.focus else -1).getOrElse(-1)
 
-        val nodes = nodeList.map(n => renderNode(n, exp, sel, rowIndex, focus, roving))
+        val nodes              = nodeList.map(n => renderNode(n, exp, sel, rowIndex, focus, roving))
         val emptyRow: List[UI] =
             if nodeList.isEmpty then
                 EmptyContent.whenSet(emptyContentV)(c =>
@@ -386,7 +386,7 @@ final case class Tree private (
     /** Finds the node carrying `id` anywhere in `nodes` (depth-first). */
     private def findNode(nodes: List[TreeNode], id: String): Maybe[TreeNode] =
         nodes match
-            case Nil => Absent
+            case Nil       => Absent
             case n :: rest =>
                 if n.id == id then Present(n)
                 else

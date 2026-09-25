@@ -58,7 +58,7 @@ object GraphQLWsProtocol extends WsProtocol:
 
     def parse(text: String): WsMessage =
         asObject(text) match
-            case None => WsMessage.Unknown(text)
+            case None         => WsMessage.Unknown(text)
             case Some(fields) =>
                 val id      = idOf(fields)
                 val payload = payloadOf(fields)
@@ -67,7 +67,7 @@ object GraphQLWsProtocol extends WsProtocol:
                     case WsProtocol.Type.ConnectionError => WsMessage.ConnectionError(payload)
                     case Type.Ping                       => WsMessage.Ping(payload)
                     case Type.Pong                       => WsMessage.Pong(payload)
-                    case Type.Next =>
+                    case Type.Next                       =>
                         id.fold(WsMessage.Unknown(text))(i => WsMessage.Data(i, payload.getOrElse(Json.JNull)))
                     case WsProtocol.Type.Error =>
                         id.fold(WsMessage.Unknown(text))(i => WsMessage.Error(i, payload.getOrElse(Json.JNull)))

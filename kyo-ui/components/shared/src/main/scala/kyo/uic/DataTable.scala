@@ -1095,7 +1095,7 @@ final case class DataTable[A] private (
         else
             rowsSigV match
                 case Present(sig) => sig.current
-                case Absent =>
+                case Absent       =>
                     rowsRefV match
                         case Present(ref) => ref.get
                         case Absent       => Kyo.lift(rowsV)
@@ -1495,12 +1495,12 @@ final case class DataTable[A] private (
             set: (RowInputs[A], T) => RowInputs[A]
         )(using CanEqual[T, T]): Maybe[Signal[RowInputs[A]]] =
             sig match
-                case Absent => acc
+                case Absent     => acc
                 case Present(s) =>
                     acc match
                         case Absent       => Present(s.map(t => set(base, t)))
                         case Present(cur) => Present(cur.combineLatest(s).map((r, t) => set(r, t)))
-        val rowsSig: Maybe[Signal[Seq[A]]] = rowsSigV.orElse(rowsRefV.map(r => r: Signal[Seq[A]]))
+        val rowsSig: Maybe[Signal[Seq[A]]]     = rowsSigV.orElse(rowsRefV.map(r => r: Signal[Seq[A]]))
         val selSig: Maybe[Signal[Set[String]]] = selectedBinding.flatMap {
             case ReactiveValue.Dyn(sig) => Present(sig)
             case ReactiveValue.Const(_) => Absent
@@ -2037,8 +2037,8 @@ final case class DataTable[A] private (
             // so a stale copy does not merely display wrongly: it would store a list missing
             // whatever arrived while the row was being dragged.
             bodyViewNow.map { v =>
-                val next = DataTable.moveBlock(v.moveAll.toList, d.from, d.from + 1, d.target)
-                val to   = if d.target > d.from then d.target - 1 else d.target
+                val next               = DataTable.moveBlock(v.moveAll.toList, d.from, d.from + 1, d.target)
+                val to                 = if d.target > d.from then d.target - 1 else d.target
                 val store: Any < Async = rowsRefV match
                     case Present(ref) => ref.set(next)
                     case Absent       => ()
@@ -2089,7 +2089,7 @@ final case class DataTable[A] private (
       */
     private def freeze(cell: Ast.Element, slot: Maybe[FrozenSlot]): Ast.Element =
         slot match
-            case Absent => cell
+            case Absent     => cell
             case Present(s) =>
                 val stuck = cell.cssClass("p-datatable-frozen-column")
                 if s.edge == FrozenEdge.Start then stuck.style(_.left(s.offset)) else stuck.style(_.right(s.offset))
@@ -2298,7 +2298,7 @@ final case class DataTable[A] private (
       */
     private def withColumnOrder(order: OrderState)(k: (DataTable[A], OrderState) => UI)(using Frame): UI =
         columnOrderRef match
-            case Absent => k(this, order)
+            case Absent       => k(this, order)
             case Present(ref) =>
                 ref.render { o =>
                     val tree = ColumnTree.reorder(cols, o)
@@ -2518,7 +2518,7 @@ final case class DataTable[A] private (
       */
     private def withFrozenRows(k: Seq[A] => UI)(using Frame): UI =
         frozenRowsV match
-            case Absent => k(Nil)
+            case Absent      => k(Nil)
             case Present(rv) =>
                 rv.dyn match
                     case Present(sig) => sig.render(k)
@@ -2538,7 +2538,7 @@ final case class DataTable[A] private (
         else
             rowsSigV match
                 case Present(sig) => sig.render(k(_, 0))
-                case Absent =>
+                case Absent       =>
                     rowsRefV match
                         case Present(ref) => ref.render(k(_, 0))
                         case Absent       => k(rowsV, 0)
@@ -2663,7 +2663,7 @@ final case class DataTable[A] private (
             val count = pageSizeV match
                 case Present(size) if prepared =>
                     forTotal match
-                        case Total.Known(n) => n
+                        case Total.Known(n)               => n
                         case Total.Unknown(more, atLeast) =>
                             math.max(math.max(page, 0) * size + sorted.size, atLeast) + (if more then 1 else 0)
                 case _ => sorted.size
@@ -2687,7 +2687,7 @@ final case class DataTable[A] private (
                 List(chrome { (in, total) =>
                     val ar   = arrange(in, total)
                     val size = pageSizeV.get
-                    var pag = paginatorF.getOrElse(identity[Paginator])(Paginator())
+                    var pag  = paginatorF.getOrElse(identity[Paginator])(Paginator())
                         .totalRecords(ar.count)
                         .rows(size)
                         .currentPage(ar.pg.current)
@@ -2722,8 +2722,8 @@ final case class DataTable[A] private (
         // top row and reach down through every other one, so they line up with a column
         // whatever depth the header has.
         val headRows: List[UI] =
-            val matrix = ColumnTree.spans(cols)
-            val depth  = math.max(matrix.length, 1)
+            val matrix            = ColumnTree.spans(cols)
+            val depth             = math.max(matrix.length, 1)
             val leading: List[UI] =
                 val expanderTh: List[Ast.Element] =
                     if !expanderColumn then Nil
@@ -2836,8 +2836,8 @@ final case class DataTable[A] private (
             val count     = windowCount
             if count <= 0 then List(RowSpec.Empty(colCount))
             else
-                val (from, reach) = vp.span(vp.clamp(scrollTop, count))
-                val until         = math.min(count, reach)
+                val (from, reach)           = vp.span(vp.clamp(scrollTop, count))
+                val until                   = math.min(count, reach)
                 val drawn: List[RowSpec[A]] = (from until until).toList.map { i =>
                     if i >= staticInputs.offset && i < loadedEnd then
                         RowSpec.Data(
@@ -2901,7 +2901,7 @@ final case class DataTable[A] private (
           */
         def frozenSpecs(rows: Seq[A], in: RowInputs[A]): List[RowSpec[A]] =
             rows.toList.zipWithIndex.flatMap { (a, i) =>
-                val rowId = keyOf(a)
+                val rowId            = keyOf(a)
                 val data: RowSpec[A] = RowSpec.Data(
                     a,
                     i,
@@ -2981,7 +2981,7 @@ final case class DataTable[A] private (
             else
                 val leadingTds: List[UI]  = leadTerms.indices.toList.map(i => freeze(td, frozen.leadAt(i)))
                 val trailingTds: List[UI] = trailTerms.indices.toList.map(i => freeze(td, frozen.trailAt(i)))
-                val footTds: List[UI] =
+                val footTds: List[UI]     =
                     leafCols.zipWithIndex.map((c, i) => freeze(footerCell(c, sorted), frozen.at(i)))
                 val footRow: UI = tr((leadingTds ++ footTds ++ trailingTds).map(toChild)*)
                 List(tfoot.cssClass("p-datatable-tfoot")(toChild(footRow)))
@@ -3184,7 +3184,7 @@ final case class DataTable[A] private (
             if rowKeyF.isEmpty then Nil
             else
                 KeyDiagnostics.duplicates(shown.map(keyOf)) match
-                    case Nil => Nil
+                    case Nil  => Nil
                     case dups =>
                         List(KeyDiagnostics.card(
                             "DataTable",
@@ -3211,7 +3211,7 @@ final case class DataTable[A] private (
         val empties                          = ColumnTree.emptyGroups(cols)
         val sortable                         = allPaths.collect { case (p, c) if canSortBy(c) => p }
         val unknown                          = if sortRef.isEmpty then Nil else sort.map(_.path).filterNot(sortable.contains).map(show)
-        val ambiguous =
+        val ambiguous                        =
             if sortRef.isEmpty then Nil else KeyDiagnostics.duplicates(sortable.map(show))
         // A column asked to be sortable with nothing to sort by: the flag decides whether the
         // reader may change the spec, and an ordering is what a change would act on.
@@ -3274,7 +3274,7 @@ final case class DataTable[A] private (
       */
     private def filterCards(filter: FilterState)(using Frame): List[UI] =
         val filterable = leafPaths.exists(_._2.isFilterable) || hiddenPaths.exists(_._2.isFilterable)
-        val nothing =
+        val nothing    =
             if columnFiltersRef.isEmpty || filterable then Nil
             else
                 List(KeyDiagnostics.card(
@@ -3294,7 +3294,7 @@ final case class DataTable[A] private (
                 ))
         // The paths, not the visible ones: a filter on a hidden column is deliberately
         // inert, and reporting it as unknown would name a mistake nobody made.
-        val known = (leafPaths ++ hiddenPaths).collect { case (p, c) if c.isFilterable => p }.toSet
+        val known   = (leafPaths ++ hiddenPaths).collect { case (p, c) if c.isFilterable => p }.toSet
         val unknown =
             if columnFiltersRef.isEmpty then Nil
             else filter.specs.keys.toList.filterNot(known.contains).map(_.mkString(" / ")).sorted
@@ -3349,7 +3349,7 @@ final case class DataTable[A] private (
                 ))
         // Over the authored columns rather than the visible ones: a width on a hidden
         // column is what a reader showing it again gets back, not a mistake.
-        val known = (leafPaths ++ hiddenPaths).map(_._1).toSet
+        val known   = (leafPaths ++ hiddenPaths).map(_._1).toSet
         val unknown =
             if columnWidthsRef.isEmpty then Nil
             else size.widths.keys.toList.filterNot(known.contains).map(_.mkString(" / ")).sorted
@@ -3362,7 +3362,7 @@ final case class DataTable[A] private (
                         "the column followed by its header",
                     unknown
                 ))
-        val unsized = if resizeModeV == ColumnResizeMode.Expand then unsizedLeaves(size) else Nil
+        val unsized    = if resizeModeV == ColumnResizeMode.Expand then unsizedLeaves(size) else Nil
         val expandCard =
             if unsized.isEmpty then Nil
             else
@@ -3382,7 +3382,7 @@ final case class DataTable[A] private (
     private def orderCards(order: OrderState)(using Frame): List[UI] =
         if columnOrderRef.isEmpty then Nil
         else
-            val known = (leafPaths ++ hiddenPaths).map(_._1).toSet
+            val known   = (leafPaths ++ hiddenPaths).map(_._1).toSet
             val nothing =
                 if reorderOn then Nil
                 else
@@ -3392,7 +3392,7 @@ final case class DataTable[A] private (
                             "needs two columns willing to trade places",
                         Nil
                     ))
-            val unknown = order.requested.filterNot(known.contains).map(_.mkString(" / ")).sorted
+            val unknown   = order.requested.filterNot(known.contains).map(_.mkString(" / ")).sorted
             val strangers =
                 if unknown.isEmpty then Nil
                 else
@@ -3499,8 +3499,8 @@ final case class DataTable[A] private (
         // the set and applies the change themselves. `onSelectionChange` is the outlet that
         // carries it; `onRowClick` covers the toggling case only, since a row key cannot say what
         // a range or a replacement became.
-        val oneWay   = selectedBinding.isDefined && selectedRef.isEmpty
-        val noOutlet = onSelectionF.isEmpty
+        val oneWay     = selectedBinding.isDefined && selectedRef.isEmpty
+        val noOutlet   = onSelectionF.isEmpty
         val unwritable =
             if !oneWay || !noOutlet || selectionModeV != SelectionMode.Checkbox then Nil
             else
@@ -3646,7 +3646,7 @@ final case class DataTable[A] private (
                     ))
             val body  = rows.map(keyOf).toSet
             val twice = held.map(keyOf).filter(body.contains).distinct
-            val both =
+            val both  =
                 if twice.isEmpty then Nil
                 else
                     List(KeyDiagnostics.card(
@@ -3720,7 +3720,7 @@ final case class DataTable[A] private (
     private def editCards(using Frame): List[UI] =
         val bound    = editingRowsRef.isDefined || editingCellRef.isDefined
         val editable = allPaths.exists(_._2.isEditable)
-        val nothing =
+        val nothing  =
             if !bound || editable then Nil
             else
                 List(KeyDiagnostics.card(
@@ -3775,8 +3775,8 @@ final case class DataTable[A] private (
       * drop what was selected before.
       */
     private def selectAllCell(inFilter: List[A], sel: Set[String], rows: Int)(using Frame): Ast.Element =
-        val keys        = inFilter.filter(selectableAt).map(keyOf)
-        val allSelected = keys.nonEmpty && keys.forall(sel.contains)
+        val keys                = inFilter.filter(selectableAt).map(keyOf)
+        val allSelected         = keys.nonEmpty && keys.forall(sel.contains)
         val toggle: Any < Async =
             currentValue(selectedBinding, Set.empty[String])
                 .map(cur => applySelection(if allSelected then cur -- keys else cur ++ keys))
@@ -3838,9 +3838,9 @@ final case class DataTable[A] private (
     private def filterCell(path: List[String], c: Column[A, FlatOnly], filter: FilterState)(using Frame): Ast.Element =
         val cell = th.cssClass("p-datatable-header-cell")
         c.filterV match
-            case Absent => cell
+            case Absent      => cell
             case Present(cf) =>
-                val cur = filter.specs.getOrElse(path, ColumnFilter("", cf.default))
+                val cur   = filter.specs.getOrElse(path, ColumnFilter("", cf.default))
                 val input = Input()
                     .value(cur.query)
                     .fluid(true)
@@ -3931,7 +3931,7 @@ final case class DataTable[A] private (
         if !filterMenuOn then Nil
         else
             c.filterV match
-                case Absent => Nil
+                case Absent      => Nil
                 case Present(cf) =>
                     val cur = filter.specs.getOrElse(path, ColumnFilter.empty(cf.default))
                     // Filled while the column is filtering, hollow while it is not: which
@@ -4153,7 +4153,7 @@ final case class DataTable[A] private (
             // Sized rather than left to share the leftover: see DataTable.ToggleWidth.
             val leading: List[UI]  = leadTerms.map(v => col.style(_.width(Length.Calc(v))))
             val trailing: List[UI] = trailTerms.map(v => col.style(_.width(Length.Calc(v))))
-            val cells: List[UI] = leafPaths.map { (p, c) =>
+            val cells: List[UI]    = leafPaths.map { (p, c) =>
                 widthOf(p, c, size) match
                     case Present(w) => col.style(_.width(w.px))
                     case Absent     => col
@@ -4366,7 +4366,7 @@ final case class DataTable[A] private (
         select: SelectState
     )(using Frame): List[RowSpec[A]] =
         levels match
-            case Nil => leafRows(rows, sel, ctx, cells, exp, colCount, edit, nav, frozen, move, select)
+            case Nil           => leafRows(rows, sel, ctx, cells, exp, colCount, edit, nav, frozen, move, select)
             case level :: rest =>
                 RowGroup.runs(rows)((a, _) => level.keyF(a)).flatMap { (key, run) =>
                     val groupPath = GroupPath(path :+ key)
@@ -4424,8 +4424,8 @@ final case class DataTable[A] private (
     )(using Frame): List[RowSpec[A]] =
         val spans = spanCells(rows.map(_._1), exp)
         rows.zip(spans).flatMap { (row, spanned) =>
-            val (a, index) = row
-            val id         = keyOf(a)
+            val (a, index)       = row
+            val id               = keyOf(a)
             val data: RowSpec[A] =
                 RowSpec.Data(
                     a,
@@ -4462,9 +4462,9 @@ final case class DataTable[A] private (
         else
             val indexed                                                = rows.toVector
             val start: (Map[Int, Map[Int, SpanCell]], List[List[Int]]) = (Map.empty, List(rows.indices.toList))
-            val (assigned, _) = merged.foldLeft(start) { case ((acc, blocks), (col, same)) =>
+            val (assigned, _)                                          = merged.foldLeft(start) { case ((acc, blocks), (col, same)) =>
                 val split = blocks.flatMap(block => RowGroup.blocks(block)((x, y) => same(indexed(x), indexed(y))))
-                val next = split.foldLeft(acc) { (byRow, run) =>
+                val next  = split.foldLeft(acc) { (byRow, run) =>
                     val spanned = run.map(pos => trCount(indexed(pos), exp)).sum
                     run.zipWithIndex.foldLeft(byRow) { case (m, (pos, offset)) =>
                         val cell = if offset == 0 then SpanCell.Head(spanned) else SpanCell.Covered
@@ -4546,7 +4546,7 @@ final case class DataTable[A] private (
             if !expanderColumn then Nil
             else
                 val glyph = if isExp then Icons.chevronDown else Icons.chevronRight
-                val cell = td(
+                val cell  = td(
                     button
                         .cssClass("p-datatable-row-toggle-button")
                         .jsProp("type", "button")
@@ -4924,7 +4924,7 @@ final case class DataTable[A] private (
                     cancel = cancelCell(edit)
                 )
                 edit.errorAt(cell) match
-                    case Absent => ed.editor(params)
+                    case Absent     => ed.editor(params)
                     case Present(e) =>
                         fragment(
                             ed.editor(params),
@@ -5084,7 +5084,7 @@ final case class DataTable[A] private (
                 val editStep: Boolean < Async = step.edit match
                     case GridNav.EditOp.Keep       => true
                     case GridNav.EditOp.Open(seed) => openCell(cell, row, c, seed, edit).andThen(true)
-                    case GridNav.EditOp.Commit =>
+                    case GridNav.EditOp.Commit     =>
                         if rowEdit then (if isTab then Kyo.lift(true) else closing(commitRow(cell.row, row, edit)))
                         else closing(commitCell(cell, row, c, edit))
                     case GridNav.EditOp.Cancel =>
@@ -5244,7 +5244,7 @@ final case class DataTable[A] private (
                 for
                     text <- ref.get
                     res  <- ed.commit(row, text)
-                    out <- res match
+                    out  <- res match
                         case Result.Success(after) =>
                             val moved: Any < Async = if ed.show(row) == text then () else applyCell(cell, row, after, ed)
                             for
@@ -5254,7 +5254,7 @@ final case class DataTable[A] private (
                             yield true
                             end for
                         case Result.Failure(e) => setError(cell, e, edit).andThen(false)
-                        case Result.Panic(ex) =>
+                        case Result.Panic(ex)  =>
                             setError(cell, FieldError("error", Map.empty, Maybe(ex.getMessage)), edit).andThen(false)
                 yield out
             case _ => setEditingCell(Absent).andThen(true)
@@ -5276,7 +5276,7 @@ final case class DataTable[A] private (
     private def commitRow(id: String, row: A, edit: EditState)(using Frame): Boolean < Async =
         def loop(rest: List[(List[String], Column[A, FlatOnly])], acc: A): Result[(CellPath, FieldError), A] < Async =
             rest match
-                case Nil => Kyo.lift(Result.succeed(acc))
+                case Nil               => Kyo.lift(Result.succeed(acc))
                 case (path, c) :: tail =>
                     val cell = CellPath(id, path)
                     (c.editV, edit.draftOf(path)) match
@@ -5284,13 +5284,13 @@ final case class DataTable[A] private (
                             for
                                 text <- ref.get
                                 res  <- ed.commit(acc, text)
-                                out <- res match
+                                out  <- res match
                                     case Result.Success(next) =>
                                         val moved: Any < Async =
                                             if ed.show(acc) == text then () else applyCell(cell, acc, next, ed)
                                         moved.andThen(loop(tail, next))
                                     case Result.Failure(e) => Kyo.lift(Result.fail((cell, e)))
-                                    case Result.Panic(ex) =>
+                                    case Result.Panic(ex)  =>
                                         Kyo.lift(Result.fail((cell, FieldError("error", Map.empty, Maybe(ex.getMessage)))))
                             yield out
                         case _ => loop(tail, acc)

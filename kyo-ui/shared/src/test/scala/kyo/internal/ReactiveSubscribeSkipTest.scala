@@ -14,7 +14,7 @@ class ReactiveSubscribeSkipTest extends kyo.test.Test[Any]:
     final private class Recording:
         val changes      = new AtomicInteger(0)
         val classPatches = new AtomicInteger(0)
-        val exchange = new UIExchange:
+        val exchange     = new UIExchange:
             def onChange(
                 region: ReactiveRegion,
                 path: Seq[String],

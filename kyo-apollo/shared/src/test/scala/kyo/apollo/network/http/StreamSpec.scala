@@ -32,7 +32,7 @@ class StreamSpec extends kyo.test.Test[Any]:
         def name: String               = "Q"
         def document: String           = "query Q { items @stream(initialCount: 1) { id } }"
         val dataCodec: JsonCodec[Data] = JsonCodec.fromSchema[Data]
-        def rootField: CompiledField = CompiledField(
+        def rootField: CompiledField   = CompiledField(
             "data",
             CompiledNamedType("Query"),
             selections = Chunk(

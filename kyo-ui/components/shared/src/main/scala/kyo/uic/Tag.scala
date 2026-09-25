@@ -84,7 +84,7 @@ final case class Tag private (
                         case _                               => ()
                 }
         }
-        val iconChild: List[UI] = iconV.toList.map(g => GlyphSvg(g, "p-tag-icon"))
+        val iconChild: List[UI]  = iconV.toList.map(g => GlyphSvg(g, "p-tag-icon"))
         val labelChild: List[UI] = labelV.toList.map {
             case TextValue.Const(t) => span.cssClass("p-tag-label")(t)
             // The signal goes in as the label's CHILD, not as a region around the span: a

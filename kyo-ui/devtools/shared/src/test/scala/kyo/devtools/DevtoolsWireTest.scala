@@ -102,8 +102,8 @@ class DevtoolsWireTest extends kyo.test.Test[Any]:
         // The encoder and the overlay are the two halves of a contract with nothing in between to check it:
         // a key renamed on one side produces no error, no warning and no log line — just a panel column that
         // reads undefined, in a tool whose whole purpose is to be believed. So the halves are compared here.
-        val json   = DevtoolsWire.snapshotJson(snapshot(region()))
-        val script = DevtoolsJs.script
+        val json    = DevtoolsWire.snapshotJson(snapshot(region()))
+        val script  = DevtoolsJs.script
         val rowKeys = "\"([a-z]{1,2})\":".r
             .findAllMatchIn(json.substring(json.indexOf("\"rows\":")))
             .map(_.group(1))

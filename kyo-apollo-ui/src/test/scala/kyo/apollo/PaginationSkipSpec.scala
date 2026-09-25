@@ -31,8 +31,8 @@ class PaginationSkipSpec extends kyo.test.Test[Any]:
             for
                 client <- cached(StaticEngine(body("Alice")))
                 // Warm the cache so the CacheOnly watcher opens on populated data.
-                _    <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).response
-                skip <- Signal.initRef[Boolean](false)
+                _     <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).response
+                skip  <- Signal.initRef[Boolean](false)
                 paged <- Apollo.paginatedQuery(
                     initial = Absent: Maybe[String],
                     skip = skip,
@@ -77,7 +77,7 @@ class PaginationSkipSpec extends kyo.test.Test[Any]:
                 client <- cached(StaticEngine(body("Alice")))
                 _      <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).response
                 values <- Signal.initRef[Maybe[String]](Present("live"))
-                paged <- Apollo.paginatedQuery(values)(initial = Absent: Maybe[String])((_, _) =>
+                paged  <- Apollo.paginatedQuery(values)(initial = Absent: Maybe[String])((_, _) =>
                     client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly)
                 )
                 active <- awaitSignal(paged.state)(_ == painted("Alice"))
@@ -117,7 +117,7 @@ class PaginationSkipSpec extends kyo.test.Test[Any]:
                 client <- cached(StaticEngine(body("Alice")))
                 _      <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).response
                 values <- Signal.initRef[Maybe[String]](Present("live"))
-                paged <- Apollo.paginatedQuery(values)(initial = Absent: Maybe[String])((_, _) =>
+                paged  <- Apollo.paginatedQuery(values)(initial = Absent: Maybe[String])((_, _) =>
                     client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly)
                 )
                 // The two lines a caller used to have to write out by hand.

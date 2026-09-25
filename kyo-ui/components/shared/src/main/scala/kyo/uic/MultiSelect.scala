@@ -305,7 +305,7 @@ final case class MultiSelect[A] private (
         TextValue.reactive(placeholderV): ph =>
             (invalidV.dynSig, invalidMsgDynV) match
                 case (Absent, Absent) => bodyStatic(current, st, ph, invalidV.constTrue, invalidMsgV)
-                case _ =>
+                case _                =>
                     FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) => bodyStatic(current, st, ph, red, msg))
 
     private def bodyStatic(
@@ -687,7 +687,7 @@ final case class MultiSelect[A] private (
     )(using Frame): Any < Async =
         val caretOwns     = filtering && (e.key == Keyboard.Space || e.key.charValue.isDefined)
         val fromToggleAll = s.idBase.exists(b => e.targetId.contains(toggleAllId(b)))
-        val selectsAll = showToggleAllFlag && (e.modifiers.ctrl || e.modifiers.meta) &&
+        val selectsAll    = showToggleAllFlag && (e.modifiers.ctrl || e.modifiers.meta) &&
             (e.key match
                 case Keyboard.Char(c) => c.toLower == 'a'
                 case _                => false)
@@ -698,7 +698,7 @@ final case class MultiSelect[A] private (
         else
             ListNav.onKey(navigable, hiEff, e.key, wrap = false) match
                 case Present(step) if step.dismiss => s.open.set(false)
-                case Present(step) =>
+                case Present(step)                 =>
                     val toggled: Any < Async =
                         if step.activate && shown.isDefinedAt(step.focus) then toggleOption(shown(step.focus)) else ()
                     s.hi.set(step.focus).andThen(toggled)

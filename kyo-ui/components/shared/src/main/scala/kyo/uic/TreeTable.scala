@@ -265,7 +265,7 @@ final case class TreeTable[A] private (
                     )
                 )
             else
-                val seen = visibleRows(nodeList, depth = 0, prefix = "", exp, sort)
+                val seen    = visibleRows(nodeList, depth = 0, prefix = "", exp, sort)
                 val navRows =
                     seen.map((n, d, path) => TreeNav.Row(d, keyOf(n.data, path), n.children.nonEmpty, exp.contains(keyOf(n.data, path))))
                 val stop = tabStop(navRows, sel, cursor)
@@ -569,7 +569,7 @@ final case class TreeTable[A] private (
         Frame
     ): KeyboardEvent => Any < Async = e =>
         TreeNav.onKey(navRows, index, e.key) match
-            case Absent => ()
+            case Absent        => ()
             case Present(step) =>
                 val opEff: Any < Async = step.op match
                     case TreeNav.Op.Keep        => ()

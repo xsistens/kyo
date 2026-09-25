@@ -86,7 +86,7 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
         install("<!--kyo-rs:r--><span id='kept'>kept</span><!--kyo-re:r-->")
         val before    = dom.document.body.innerHTML
         val malformed = evalString("try{kyoRangeReplace('r1','changed');'no error'}catch(e){e.message}")
-        val unknown = evalString(
+        val unknown   = evalString(
             "try{kyoRangeReplace('r.x','changed');'no error'}catch(e){e.message}"
         )
         assert(malformed == "kyo-ui reactive range: malformed replacement id: r1")

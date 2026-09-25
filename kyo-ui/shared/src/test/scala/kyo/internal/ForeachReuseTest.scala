@@ -14,7 +14,7 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
         val changes      = new AtomicInteger(0)
         val classPatches = new AtomicInteger(0)
         val trueClassOns = new AtomicInteger(0)
-        val exchange = new UIExchange:
+        val exchange     = new UIExchange:
             def onChange(
                 region: ReactiveRegion,
                 path: Seq[String],
@@ -37,7 +37,7 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 renders <- Sync.defer(new AtomicInteger(0))
                 rows    <- Signal.initRef(Chunk("a", "b", "c"))
                 rec = new Recording
-                ui = UI.ul(rows.foreachKeyed(identity) { item =>
+                ui  = UI.ul(rows.foreachKeyed(identity) { item =>
                     discard(renders.incrementAndGet())
                     UI.li(item)
                 })
@@ -59,7 +59,7 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 rows     <- Signal.initRef(Chunk("a", "b", "c"))
                 selected <- Signal.initRef("")
                 rec = new Recording
-                ui = UI.ul(rows.foreachKeyed(identity) { item =>
+                ui  = UI.ul(rows.foreachKeyed(identity) { item =>
                     discard(renders.incrementAndGet())
                     UI.li(item).cssClass("sel", selected.map(_ == item))
                 })
@@ -83,7 +83,7 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 rows     <- Signal.initRef(Chunk("a", "b", "c"))
                 selected <- Signal.initRef("")
                 rec = new Recording
-                ui = UI.ul(rows.foreachKeyed(identity) { item =>
+                ui  = UI.ul(rows.foreachKeyed(identity) { item =>
                     UI.li(item).cssClass("sel", selected.map(_ == item))
                 })
                 root <- ReactiveUI.normalize(ui, Seq.empty)
@@ -113,7 +113,7 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 rows     <- Signal.initRef(Chunk("a", "b"))
                 selected <- Signal.initRef("")
                 rec = new Recording
-                ui = UI.ul(rows.foreachKeyed(identity) { item =>
+                ui  = UI.ul(rows.foreachKeyed(identity) { item =>
                     UI.li(item).cssClass("sel", selected.map(_ == item))
                 })
                 root <- ReactiveUI.normalize(ui, Seq.empty)
@@ -140,7 +140,7 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 clicks  <- Sync.defer(new AtomicInteger(0))
                 rows    <- Signal.initRef(Chunk.from((0 until 10).map(i => s"r$i")))
                 rec = new Recording
-                ui = UI.ul(rows.foreachKeyed(identity) { item =>
+                ui  = UI.ul(rows.foreachKeyed(identity) { item =>
                     discard(renders.incrementAndGet())
                     UI.li(item).onClick(Sync.defer(discard(clicks.incrementAndGet())))
                 })
@@ -208,7 +208,7 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 renders <- Sync.defer(new AtomicInteger(0))
                 rows    <- Signal.initRef(Chunk("a:1", "b:1", "c:1"))
                 rec = new Recording
-                ui = UI.ul(rows.foreachKeyed(_.takeWhile(_ != ':')) { item =>
+                ui  = UI.ul(rows.foreachKeyed(_.takeWhile(_ != ':')) { item =>
                     discard(renders.incrementAndGet())
                     UI.li(item)
                 })
@@ -238,7 +238,7 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
                 released <- Sync.defer(new AtomicInteger(0))
                 rows     <- Signal.initRef(Chunk("a", "b", "c"))
                 rec = new Recording
-                ui = UI.ul(rows.foreachKeyed(identity) { item =>
+                ui  = UI.ul(rows.foreachKeyed(identity) { item =>
                     UI.li(UI.mounted(component(item, runs, released)).keyed(item))
                 })
                 root <- ReactiveUI.normalize(ui, Seq.empty)

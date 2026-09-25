@@ -116,7 +116,7 @@ final case class CheckBox private (
     private[uic] def render(using Frame): UI =
         (invalidV.dynSig, invalidMsgDynV) match
             case (Absent, Absent) => renderStatic
-            case _ => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
+            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
                     copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderStatic
                 )
 
@@ -196,7 +196,7 @@ final case class CheckBox private (
         root = disabledFlag.foldFlag(root)(root.cssClass("p-disabled", _))
         if isDisplayOnly then root = root.cssClass("p-uic-display-only")
 
-        val control: UI = root(List[UI](box, boxDiv).map(toChild)*)
+        val control: UI  = root(List[UI](box, boxDiv).map(toChild)*)
         val labelled: UI = labelText match
             case Present(t) => label.cssClass("p-uic-control-label")(List[UI](control, span(t)).map(toChild)*)
             case Absent     => control

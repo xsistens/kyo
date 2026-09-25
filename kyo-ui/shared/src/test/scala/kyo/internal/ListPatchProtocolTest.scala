@@ -20,7 +20,7 @@ class ListPatchProtocolTest extends kyo.test.Test[Any]:
     final private class Recording:
         val patches   = new AtomicReference(Vector.empty[Seq[ListRow]])
         val fragments = new AtomicInteger(0)
-        val exchange = new UIExchange:
+        val exchange  = new UIExchange:
             def onChange(
                 region: ReactiveRegion,
                 path: Seq[String],

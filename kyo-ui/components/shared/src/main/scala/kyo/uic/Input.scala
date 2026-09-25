@@ -154,7 +154,7 @@ final case class Input private (
     private[uic] def render(using Frame): UI =
         (invalidV.dynSig, invalidMsgDynV) match
             case (Absent, Absent) => renderStatic
-            case _ => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
+            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
                     copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderStatic
                 )
 
@@ -164,7 +164,7 @@ final case class Input private (
                 buildField(withConstraints(input), _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e))
             case InputType.Email =>
                 buildField(withConstraints(emailInput), _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e))
-            case InputType.Number => buildField(numberInput, _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e))
+            case InputType.Number   => buildField(numberInput, _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e))
             case InputType.Password =>
                 buildField(withConstraints(passwordInput), _.placeholder(_), _.onInput(_), _.onChange(_), (bb, e) => bb.onBlur(e))
             case InputType.Tel =>

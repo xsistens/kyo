@@ -42,7 +42,7 @@ object DateCodec:
 
     /** A plain calendar date, no timezone — the honest type for a date-only picker. */
     given local: DateCodec[LocalDate] with
-        def toInput(a: LocalDate): String = a.format(Iso)
+        def toInput(a: LocalDate): String          = a.format(Iso)
         def fromInput(s: String): Maybe[LocalDate] =
             val t = s.trim
             if t.isEmpty then Absent
@@ -60,7 +60,7 @@ object DateCodec:
       */
     def zoned(zone: ZoneId, at: LocalTime = LocalTime.MIDNIGHT): DateCodec[ZonedDateTime] =
         new DateCodec[ZonedDateTime]:
-            def toInput(a: ZonedDateTime): String = a.withZoneSameInstant(zone).toLocalDate.format(Iso)
+            def toInput(a: ZonedDateTime): String          = a.withZoneSameInstant(zone).toLocalDate.format(Iso)
             def fromInput(s: String): Maybe[ZonedDateTime] =
                 val t = s.trim
                 if t.isEmpty then Absent

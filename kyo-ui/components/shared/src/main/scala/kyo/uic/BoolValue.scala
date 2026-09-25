@@ -85,7 +85,7 @@ extension (bv: Maybe[BoolValue])
         // see that Present/Absent covers it, and -Werror turns the false warning into a failure.
         bv.flatMap(_.const) match
             case Present(v) => set(v)
-            case _ =>
+            case _          =>
                 bv.flatMap(_.dyn) match
                     case Present(s) => set(s)
                     case _          => self

@@ -222,7 +222,7 @@ final case class Listbox private (
         // the `filterable` mount, so an emission never re-mounts and drops the query.
         (invalidV.dynSig, invalidMsgDynV) match
             case (Absent, Absent) => renderQuery
-            case _ => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
+            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
                     copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderQuery
                 )
 
@@ -244,7 +244,7 @@ final case class Listbox private (
                 // something a reader has to opt into to be told which option is highlighted.
                 base <- idV.map(v => Kyo.lift(v)).getOrElse(cmds.freshId)
                 hi   <- Signal.initRef(-1)
-                q <-
+                q    <-
                     if ownsQuery then Signal.initRef("").map(r => Present(r): Maybe[SignalRef[String]])
                     else filterQueryRef: Maybe[SignalRef[String]] < Sync
             yield subscribed(q, Present(hi), Present(base))
@@ -419,7 +419,7 @@ final case class Listbox private (
                 if isSel then List(GlyphSvg(Icons.check, "p-listbox-option-check-icon", "p-icon"))
                 else List(span.cssClass("p-listbox-option-blank-icon").cssClass("p-icon").aria("hidden", "true"))
             else Nil
-        val iconSlot: List[UI] = it.icon.toList.map(g => GlyphSvg(g, "p-uic-option-icon"))
+        val iconSlot: List[UI]  = it.icon.toList.map(g => GlyphSvg(g, "p-uic-option-icon"))
         val extraSlot: List[UI] =
             it.additionalText.toList.map(t => span.cssClass("p-uic-option-extra")(t))
 
@@ -457,7 +457,7 @@ final case class Listbox private (
         end if
         val labelSlot: UI = templateF match
             case Present(f) => f(it)
-            case Absent =>
+            case Absent     =>
                 it.text match
                     case TextValue.Const(t) => stringToUI(t)
                     case TextValue.Dyn(s)   => signalStringToUI(s)

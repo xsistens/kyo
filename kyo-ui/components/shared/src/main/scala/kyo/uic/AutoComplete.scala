@@ -368,7 +368,7 @@ final case class AutoComplete[A] private (
 
         // Writes the picked label, fires onSelect/onChange, closes the panel.
         def pick(a: A)(s: State): Any < Async =
-            val text = labelF(a)
+            val text                  = labelF(a)
             val setValue: Any < Async = valueBinding match
                 case Present(Input.Value.Ref(r)) => r.set(text)
                 case _                           => ()
@@ -535,8 +535,8 @@ final case class AutoComplete[A] private (
       * Escape is handled by the field, outside clicks by the backdrop.
       */
     private def overlayPanel(visibleGroups: List[OptionItem[A]], s: State, pick: A => State => Any < Async)(using Frame): UI =
-        val visible = OptionItem.flatten(visibleGroups)
-        val hiEff   = if visible.isEmpty then -1 else math.min(s.hiV, visible.size - 1)
+        val visible        = OptionItem.flatten(visibleGroups)
+        val hiEff          = if visible.isEmpty then -1 else math.min(s.hiV, visible.size - 1)
         val rows: List[UI] = OptionItem.rows(visibleGroups, "p-autocomplete-option-group") { (a, i) =>
             val content: HtmlChildVal = itemTemplateF match
                 case Present(t) => toChild(t(a))

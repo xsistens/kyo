@@ -633,8 +633,8 @@ private[kyo] object DragProtocol:
                                 }
                             )
                             .map(_ => ValidatedEvent.FileSelect(event))
-                    case event: UIEvent.Hover   => validateMouse(event.mouse, limits).map(_ => ValidatedEvent.Hover(event))
-                    case event: UIEvent.Unhover => validateMouse(event.mouse, limits).map(_ => ValidatedEvent.Unhover(event))
+                    case event: UIEvent.Hover       => validateMouse(event.mouse, limits).map(_ => ValidatedEvent.Hover(event))
+                    case event: UIEvent.Unhover     => validateMouse(event.mouse, limits).map(_ => ValidatedEvent.Unhover(event))
                     case event: UIEvent.PointerDown =>
                         validatePointer(event.pointer, limits).map(_ => ValidatedEvent.PointerDown(event))
                     case event: UIEvent.PointerMove =>

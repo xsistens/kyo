@@ -122,8 +122,8 @@ class DevtoolsShimSpec extends kyo.test.Test[Any]:
         }
 
         "the polled getters recompute live (reflect a changed backing list)" in {
-            var mlist = oneMutation
-            val s     = shim(mutations = () => mlist)
+            var mlist  = oneMutation
+            val s      = shim(mutations = () => mlist)
             val before = sjs.Dynamic.global.Object
                 .applyDynamic("keys")(s.selectDynamic("queryManager").selectDynamic("mutationStore"))
             assert(before.asInstanceOf[sjs.Array[sjs.Any]].length == 1)

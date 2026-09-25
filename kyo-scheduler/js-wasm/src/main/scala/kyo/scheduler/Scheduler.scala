@@ -111,7 +111,6 @@ class Scheduler(statusFile: String, statusFileMs: Int, nowMs: () => Long) {
         }
     }
 
-
     // The counters are kept only while a status file is configured, so the default path does no extra work per task.
     private def runCounted(t: Task, now: Long, slice: Long): Unit = {
         ran += 1

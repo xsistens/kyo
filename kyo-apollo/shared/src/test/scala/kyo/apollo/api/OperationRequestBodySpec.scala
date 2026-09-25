@@ -35,7 +35,7 @@ class OperationRequestBodySpec extends kyo.test.Test[Any]:
         def document: String          = "query Mini($limit: Int!) { x }"
         val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema[Int]
         def rootField: CompiledField  = CompiledField("data", CompiledNamedType("Query"))
-        def variables: Json = Json.JObj(
+        def variables: Json           = Json.JObj(
             VectorMap("limit" -> SchemaJson.encode(limit))
         )
     end MiniQuery
@@ -46,7 +46,7 @@ class OperationRequestBodySpec extends kyo.test.Test[Any]:
         def document: String          = "query Search($limit: Int!, $after: DateTime) { y }"
         val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema[Int]
         def rootField: CompiledField  = CompiledField("data", CompiledNamedType("Query"))
-        def variables: Json = Json.JObj(
+        def variables: Json           = Json.JObj(
             VectorMap(
                 "limit" -> SchemaJson.encode(limit),
                 "after" -> SchemaJson.encode(after)
@@ -146,7 +146,7 @@ class OperationRequestBodySpec extends kyo.test.Test[Any]:
             val query = hello[RootQuery].toQuery()
             for
                 reads <- AtomicRef.init(Chunk.empty[String])
-                _ <- Scope.run(StreamProbe.first(
+                _     <- Scope.run(StreamProbe.first(
                     DefaultApolloInterceptorChain(Chunk(ThreeDocumentReads(reads)), 0)
                         .proceed(ApolloRequest(query, TestIds.requestUuid))
                 ))

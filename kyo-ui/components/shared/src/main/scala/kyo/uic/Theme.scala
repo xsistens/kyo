@@ -1183,10 +1183,9 @@ object Theme:
             + dialogSeverityCss
 
     /** Line-clamp rules behind [[Text.maxLines]] (`data-uic-max-lines`, 1–10). */
-    private def textClampCss: String =
-        (1 to 10)
-            .map(n => s""".p-uic-text--clamp[data-uic-max-lines="$n"] { -webkit-line-clamp: $n; }""")
-            .mkString("", "\n", "\n")
+    private def textClampCss: String = (1 to 10)
+        .map(n => s""".p-uic-text--clamp[data-uic-max-lines="$n"] { -webkit-line-clamp: $n; }""")
+        .mkString("", "\n", "\n")
 
     /** Dialog severity accents (`Dialog.severity`, kyo extension): a subtle colored
       * border under the header plus a tinted leading icon, keyed on the button

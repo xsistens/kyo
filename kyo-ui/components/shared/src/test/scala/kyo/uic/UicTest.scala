@@ -31,7 +31,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
                 Kyo.foreach(f.children)(elements).map(_.flatten)
             case f: UI.Ast.Foreach[?, ?] => foreachElements(f)
             case k: UI.Ast.KeyedChild[?] => elements(k.child)
-            case m: UI.Ast.Mounted =>
+            case m: UI.Ast.Mounted       =>
                 m.placeholderUI match
                     case Present(ui) => elements(ui)
                     case Absent      => Chunk.empty
@@ -51,7 +51,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
             case e: UI.Ast.Element       => Kyo.foreach(e.children)(reactiveNodes).map(_.flattenChunk)
             case f: UI.Ast.Fragment[?]   => Kyo.foreach(f.children)(reactiveNodes).map(_.flattenChunk)
             case k: UI.Ast.KeyedChild[?] => reactiveNodes(k.child)
-            case r: UI.Ast.Reactive[?] =>
+            case r: UI.Ast.Reactive[?]   =>
                 r.signal.current(using r.frame).map(reactiveNodes).map(Chunk(r) ++ _)
             case f: UI.Ast.Foreach[?, ?] =>
                 f.applyTyped([T] =>
@@ -59,7 +59,8 @@ abstract class UicTest extends kyo.test.Test[Any]:
                         signal.current(using f.frame).map { items =>
                             Kyo.foreach(items.zipWithIndex) { (item, i) => reactiveNodes(render(i, item)) }
                                 .map(_.flattenChunk)
-                    })
+                        }
+                )
             case m: UI.Ast.Mounted =>
                 m.placeholderUI match
                     case Present(ui) => reactiveNodes(ui)
@@ -78,7 +79,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
             case k: UI.Ast.KeyedChild[?] => foreachNodes(k.child)
             case r: UI.Ast.Reactive[?]   => r.signal.current(using r.frame).map(foreachNodes)
             case f: UI.Ast.Foreach[?, ?] => Kyo.lift(Chunk(f))
-            case m: UI.Ast.Mounted =>
+            case m: UI.Ast.Mounted       =>
                 m.placeholderUI match
                     case Present(ui) => foreachNodes(ui)
                     case Absent      => Chunk.empty
@@ -95,7 +96,8 @@ abstract class UicTest extends kyo.test.Test[Any]:
             (signal: Signal[Chunk[T]], _: Maybe[T => String], render: (Int, T) => UI) =>
                 signal.current(using f.frame).map { items =>
                     Kyo.foreach(items.zipWithIndex) { (item, i) => elements(render(i, item)) }.map(_.flatten)
-            })
+                }
+        )
 
     /** How many reactive regions sit between `node` and the nearest element carrying `cls`.
       *
@@ -119,9 +121,10 @@ abstract class UicTest extends kyo.test.Test[Any]:
                             signal.current(using f.frame).map { items =>
                                 Kyo.foreach(items.zipWithIndex) { (item, i) => walk(render(i, item), depth + 1) }
                                     .map(_.flattenChunk)
-                        })
+                            }
+                    )
                 case k: UI.Ast.KeyedChild[?] => walk(k.child, depth)
-                case m: UI.Ast.Mounted =>
+                case m: UI.Ast.Mounted       =>
                     m.placeholderUI match
                         case Present(ui) => walk(ui, depth)
                         case Absent      => Chunk.empty
@@ -160,7 +163,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
     private[uic] def click(el: UI.Ast.Element)(using Frame): Any < Async =
         el.attrs.onClick match
             case Present(eff) => eff
-            case Absent =>
+            case Absent       =>
                 el.attrs.onClickEvt match
                     case Present(f) => f(UI.MouseEvent(el.attrs.identifier, UI.Modifiers.none))
                     case Absent     => throw new AssertionError("the element declares no click handler")

@@ -100,7 +100,7 @@ final case class Terminal private (
                 case TextValue.Dyn(s)   => div.cssClass("p-terminal-welcome-message")(s)
             }
 
-        val lastIdx = history.size - 1
+        val lastIdx        = history.size - 1
         val rows: List[UI] = history.toList.zipWithIndex.map { (c, i) =>
             var row = div.cssClass("p-terminal-command")
             // Stamp the newest row + give it an invisible mount that scrolls IT into

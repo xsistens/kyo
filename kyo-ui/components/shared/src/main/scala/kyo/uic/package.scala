@@ -68,7 +68,7 @@ package object uic:
           * `calc(<raw>)` — CSS-equivalent to the raw value.
           */
         def length(v: String): Length =
-            val t = v.trim
+            val t                                   = v.trim
             def num(suffix: String): Option[Double] =
                 if t.endsWith(suffix) then t.dropRight(suffix.length).trim.toDoubleOption else None
             if t.equalsIgnoreCase("auto") then Length.Auto

@@ -161,7 +161,7 @@ final case class InputOtp private (
         // through the shared helper; otherwise the untouched static form.
         (invalidV.dynSig, invalidMsgDynV) match
             case (Absent, Absent) => bodyStatic(current, ref, cellIds, focus)
-            case _ => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
+            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
                     copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent)
                         .bodyStatic(current, ref, cellIds, focus)
                 )
@@ -173,7 +173,7 @@ final case class InputOtp private (
         focus: String => Any < Async
     )(using Frame): UI =
         val cells: List[UI] = (0 until lengthV).toList.map { i =>
-            val ch = current.lift(i).filterNot(_ == ' ').map(_.toString).getOrElse("")
+            val ch   = current.lift(i).filterNot(_ == ' ').map(_.toString).getOrElse("")
             var cell = Input()
                 .extraClass("p-inputotp-input")
                 .inputType(if maskFlag then InputType.Password else InputType.Text)
@@ -192,7 +192,7 @@ final case class InputOtp private (
                 cell = cell.onInput { s =>
                     // A digit landed → advance to the next cell via focusId; the
                     // last cell and an empty edit stay put.
-                    val accepted = (if integerOnlyFlag then s.filter(_.isDigit) else s).takeRight(1)
+                    val accepted             = (if integerOnlyFlag then s.filter(_.isDigit) else s).takeRight(1)
                     val advance: Any < Async = cellIds match
                         case Present(ids) if accepted.nonEmpty && i + 1 < lengthV => focus(ids(i + 1))
                         case _                                                    => ()

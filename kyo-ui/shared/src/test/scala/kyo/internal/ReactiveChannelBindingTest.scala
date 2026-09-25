@@ -27,7 +27,7 @@ class ReactiveChannelBindingTest extends kyo.test.Test[Any]:
         val sync                                       = new AtomicInteger(0)
         val async                                      = new AtomicInteger(0)
         private def bump(counter: AtomicInteger): Unit = discard(counter.incrementAndGet())
-        val exchange = new UIExchange:
+        val exchange                                   = new UIExchange:
             def onChange(
                 region: ReactiveRegion,
                 path: Seq[String],
@@ -35,7 +35,7 @@ class ReactiveChannelBindingTest extends kyo.test.Test[Any]:
                 parentContext: ReactiveRegion.ParentContext,
                 previous: Maybe[UI],
                 changed: UI
-            )(using Frame): Unit < Async = Kyo.unit
+            )(using Frame): Unit < Async                                                                        = Kyo.unit
             override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
                 Sync.defer(bump(async))
             override def onBoolAttrPatch(path: Seq[String], name: String, value: Boolean)(using Frame): Unit < Async =

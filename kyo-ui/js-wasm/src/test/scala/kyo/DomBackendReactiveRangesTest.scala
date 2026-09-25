@@ -532,7 +532,7 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
             again  <- Signal.initRef("c1").map(Row("c", _))
             rows   <- Signal.initRef(labels)
             byId = labels.map(r => r.id -> r).toMap
-            ui = UI.div(
+            ui   = UI.div(
                 UI.ul(rows.foreachKeyed(_.id)(row => UI.li(UI.span(row.label: Signal[String]).id(s"lbl-${row.id}")))).id("bound-list")
             )
             ready = new DomTestEnv.MountReady

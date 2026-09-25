@@ -154,7 +154,7 @@ final case class Panel private (
             if titleSlot.isEmpty && actions.isEmpty then Nil
             else List(div.cssClass("p-panel-header")((titleSlot ++ actions).map(toChild)*))
 
-        val footerUI: List[UI] = footerV.toList.map(f => div.cssClass("p-panel-footer")(toChild(f)))
+        val footerUI: List[UI]     = footerV.toList.map(f => div.cssClass("p-panel-footer")(toChild(f)))
         val contentInner: List[UI] =
             (div.cssClass("p-panel-content")(kids.map(toChild)*): UI) :: footerUI
         val containerBase =

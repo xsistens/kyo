@@ -260,7 +260,7 @@ final case class Stepper private (
     private def activate(i: Int)(using Frame): Any < Async =
         val write: Any < Async = valueRef match
             case Present(ref) => ref.set(stepValue(i))
-            case Absent =>
+            case Absent       =>
                 activeRef match
                     case Present(ref) => ref.set(i)
                     case Absent       => ()

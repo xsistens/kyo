@@ -106,8 +106,8 @@ enum QueryState[+D] derives CanEqual:
       * anything wider would make the local `.eval` unsound.
       */
     def mapData[B](f: D => B < Abort[ApolloException])(using Frame): QueryState[B] = this match
-        case QueryState.Idle    => QueryState.Idle
-        case QueryState.Loading => QueryState.Loading
+        case QueryState.Idle              => QueryState.Idle
+        case QueryState.Loading           => QueryState.Loading
         case QueryState.Failure(ex, last) =>
             QueryState.Failure(ex, last.flatMap(d => QueryState.runDataMaybe(f(d))))
         case QueryState.Success(d, fromCache, complete) =>
@@ -128,7 +128,7 @@ object QueryState:
         Abort.run(projected).eval match
             case Result.Success(b) => onData(b)
             case Result.Failure(e) => QueryState.Failure(e)
-            case Result.Panic(t) =>
+            case Result.Panic(t)   =>
                 QueryState.Failure(DefaultApolloException(Option(t.getMessage).getOrElse(t.toString)))
 
     /** Discharge a projection over a `Failure`'s retained `last`, keeping only a
@@ -318,7 +318,7 @@ object ApolloSignal:
                     case Present(d) => QueryState.PartialData(d, gql.errors)
                     case Absent     => QueryState.Failure(gql)
             case Present(ex) => QueryState.Failure(ex)
-            case Absent =>
+            case Absent      =>
                 response.data match
                     case Present(d) =>
                         QueryState.Success(
@@ -367,7 +367,7 @@ object ApolloSignal:
             case SkipMode.Unsubscribe =>
                 def window: Unit < Async =
                     skip.current.map {
-                        case true => skip.next.andThen(window)
+                        case true  => skip.next.andThen(window)
                         case false =>
                             Fiber
                                 .use(Scope.run(newSource.foreach(resp => push(ref, resp))))(_ => skip.next)

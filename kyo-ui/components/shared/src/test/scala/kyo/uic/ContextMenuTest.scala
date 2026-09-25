@@ -74,7 +74,7 @@ class ContextMenuTest extends UicTest:
             focus <- Signal.initRef(List.empty[Int])
             ui = menu.wired(open, focus, at, Nil, "cm")
             drop <- elementWithClass(ui, "p-uic-overlay-backdrop")
-            _ <- drop.attrs.onContextMenuEvt match
+            _    <- drop.attrs.onContextMenuEvt match
                 case Present(f) => f(UI.MouseEvent(Absent, UI.Modifiers.none, Present(UI.Point(10, 10))))
                 case Absent     => throw new AssertionError("the backdrop declares no typed context-handler")
             still <- open.get

@@ -112,8 +112,8 @@ private[uic] object GridNav:
             case Keyboard.End =>
                 if mods.ctrl || mods.meta then move(edge(g, Pos(g.rows - 1, g.cols - 1), -1))
                 else move(edge(g, at.copy(col = g.cols - 1), -1))
-            case Keyboard.PageUp   => move(at.copy(row = at.row - g.page))
-            case Keyboard.PageDown => move(at.copy(row = at.row + g.page))
+            case Keyboard.PageUp              => move(at.copy(row = at.row - g.page))
+            case Keyboard.PageDown            => move(at.copy(row = at.row + g.page))
             case Keyboard.Enter | Keyboard.F2 =>
                 if g.editable(at) then Present(Step(edit = EditOp.Open(Absent))) else Absent
             // A printable key opens the editor ON that character, which is what makes
@@ -126,7 +126,7 @@ private[uic] object GridNav:
             // thing on every button-shaped row in the library. A reader who wants a leading
             // space in a cell opens the editor with Enter or F2 first.
             case Keyboard.Space => Present(Step(selectRow = true))
-            case k =>
+            case k              =>
                 k.charValue match
                     case Present(c) if !mods.ctrl && !mods.alt && !mods.meta && g.editable(at) =>
                         Present(Step(edit = EditOp.Open(Present(c))))

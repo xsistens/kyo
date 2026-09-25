@@ -85,7 +85,7 @@ object Fixtures:
         def name: String                   = "CurrentUser"
         def document: String               = "query CurrentUser { user { __typename id name } }"
         val dataCodec: JsonCodec[UserData] = JsonCodec.fromSchema[UserData]
-        def rootField: CompiledField =
+        def rootField: CompiledField       =
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),

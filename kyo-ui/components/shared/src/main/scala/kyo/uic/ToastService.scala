@@ -123,7 +123,7 @@ object ToastService:
             for
                 id <- seq.incrementAndGet
                 _  <- queue.updateAndGet(_ :+ Queued(id, msg)).unit
-                _ <- msg.life match
+                _  <- msg.life match
                     case Present(d) =>
                         Fiber.initUnscoped(Async.sleep(d).andThen(remove(id))).unit
                     case Absent => (): Unit < Async
@@ -178,13 +178,13 @@ object ToastService:
                 )
 
     private def messageUI(q: Queued, position: OverlayPosition, remove: Int => Any < Async)(using Frame): UI =
-        val msg      = q.message
-        val token    = Toast.severityToken(msg.severity)
-        val icon: UI = GlyphSvg(Toast.severityIcon(msg.severity), "p-toast-message-icon")
+        val msg                 = q.message
+        val token               = Toast.severityToken(msg.severity)
+        val icon: UI            = GlyphSvg(Toast.severityIcon(msg.severity), "p-toast-message-icon")
         val textParts: List[UI] =
             msg.summary.toList.map(t => span.cssClass("p-toast-summary")(t)) ++
                 msg.detail.toList.map(t => div.cssClass("p-toast-detail")(t))
-        val text: UI = div.cssClass("p-toast-message-text")(textParts.map(toChild)*)
+        val text: UI           = div.cssClass("p-toast-message-text")(textParts.map(toChild)*)
         val closeBtn: List[UI] =
             if !msg.closable then Nil
             else

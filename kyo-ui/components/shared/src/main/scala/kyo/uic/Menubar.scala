@@ -189,7 +189,7 @@ private[uic] object MenuTree:
             else
                 val p = path :+ i
                 if it.itemsV.nonEmpty then
-                    val isOpen = open(p)
+                    val isOpen              = open(p)
                     def toggle: Any < Async =
                         refs match
                             case Present(rs) =>

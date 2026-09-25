@@ -15,7 +15,7 @@ class CodegenRunnerSpec extends kyo.test.Test[Any]:
     given CanEqual[Any, Any] = CanEqual.derived
 
     private def resource(name: String): String =
-        val path = s"/codegenExample/$name"
+        val path   = s"/codegenExample/$name"
         val stream = Option(getClass.getResourceAsStream(path))
             .getOrElse(sys.error(s"fixture not found on classpath: $path"))
         Using.resource(Source.fromInputStream(stream, "UTF-8"))(_.mkString)
@@ -112,7 +112,7 @@ class CodegenRunnerSpec extends kyo.test.Test[Any]:
 
         "a missing --schema is reported by name" in {
             val outDir = Files.createTempDirectory("apollo-codegen-cli-missing")
-            val e = intercept[CodegenException](
+            val e      = intercept[CodegenException](
                 CodegenRunner.main(Array("--out", outDir.toString, "--package", "cli.gen"))
             )
             assert(e.getMessage.contains("--schema"), e.getMessage)

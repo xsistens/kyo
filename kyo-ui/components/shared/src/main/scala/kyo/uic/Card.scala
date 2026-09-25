@@ -75,7 +75,7 @@ final case class Card private (
     private[uic] def render(using Frame): UI =
         val headerUI: List[UI] =
             customHeaderV.toList.map(h => div.cssClass("p-card-header")(toChild(h)))
-        val contentUI: UI = div.cssClass("p-card-content")(kids.map(toChild)*)
+        val contentUI: UI      = div.cssClass("p-card-content")(kids.map(toChild)*)
         val footerUI: List[UI] =
             footerV.toList.map(f => div.cssClass("p-card-footer")(toChild(f)))
         val body: UI =

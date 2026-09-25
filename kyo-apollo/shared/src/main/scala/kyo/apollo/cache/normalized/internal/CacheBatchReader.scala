@@ -136,14 +136,14 @@ final class CacheBatchReader(
       */
     private def children(pending: Pending): Chunk[Pending] =
         loaded.get(pending.key) match
-            case None => Chunk.empty
+            case None         => Chunk.empty
             case Some(record) =>
                 val typename = recordTypename(record).getOrElse(pending.parentType)
                 FieldCollector.collect(pending.selections, typename, injectTypename = false).flatMap { field =>
                     val childType = field.fieldType.leafType.name
                     redirect(typename, field) match
                         case Present(targetKey) => Chunk(Pending(targetKey, field.selections, childType))
-                        case Absent =>
+                        case Absent             =>
                             record.get(fieldPolicies.fieldKey(typename, field, variables)) match
                                 case Present(value) => references(value).map(Pending(_, field.selections, childType))
                                 case Absent         => Chunk.empty
@@ -198,7 +198,7 @@ final class CacheBatchReader(
     private def readField(record: Record, field: CompiledField, parentType: String): Result[CacheMissException, Json] =
         redirect(parentType, field) match
             case Present(targetKey) => readReferenced(targetKey, field)
-            case Absent =>
+            case Absent             =>
                 val fieldKey = fieldPolicies.fieldKey(parentType, field, variables)
                 record.get(fieldKey) match
                     case Present(value) => readValue(value, field)
@@ -229,7 +229,7 @@ final class CacheBatchReader(
         case RecordValue.Null           => Result.succeed(Json.JNull)
         case RecordValue.Scalar(json)   => Result.succeed(json)
         case RecordValue.Reference(ref) => readReferenced(ref.key, field)
-        case RecordValue.RList(items) =>
+        case RecordValue.RList(items)   =>
             val elements = items.iterator
             val builder  = Chunk.newBuilder[Json]
             @scala.annotation.tailrec

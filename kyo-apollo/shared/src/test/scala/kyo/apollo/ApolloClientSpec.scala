@@ -73,7 +73,7 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
       * body/status without any network.
       */
     final private class CapturingEngine(body: String, status: HttpStatus = HttpStatus.OK) extends HttpEngine:
-        var lastRequest: Maybe[HttpEngine.Request] = Absent
+        var lastRequest: Maybe[HttpEngine.Request]                                         = Absent
         def execute(request: HttpEngine.Request)(using Frame): HttpEngine.Response < Async =
             lastRequest = Present(request)
             HttpEngine.response(status, body)
@@ -88,7 +88,7 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
     )(using Frame): ApolloClient < (Sync & Scope) =
         ApolloClient.init(configure(baseConfig.httpEngine(engine)))
 
-    private def ack: String = """{"type":"connection_ack"}"""
+    private def ack: String                          = """{"type":"connection_ack"}"""
     private def next(id: String, value: Int): String =
         s"""{"id":"$id","type":"next","payload":{"data":{"value":$value}}}"""
 
@@ -194,7 +194,7 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
         }
 
         "Apollo-tier interceptors run in registration order around the network" in {
-            var order = List.empty[String]
+            var order                  = List.empty[String]
             val tap: ApolloInterceptor = new ApolloInterceptor:
                 def intercept[D](
                     request: ApolloRequest[D],
@@ -290,32 +290,33 @@ class ApolloClientSpec extends kyo.test.Test[Any]:
             end for
         }
 
-        "closeNow does not wait for an open subscription; close(gracePeriod) returns once the grace period is over" in Clock
-            .withTimeControl { control =>
-                val immediateConn = new FakeWebSocketConnection
-                val patientConn   = new FakeWebSocketConnection
-                for
-                    immediate <- ApolloClient.init(wsConfig(FakeWebSocketEngine(immediateConn)))
-                    _         <- StreamProbe.Pull.open(immediate.subscription(ValueSubscription()).stream)
-                    _         <- established(immediateConn)
-                    _         <- immediate.closeNow // the clock never moves
-                    _ = assert(immediateConn.closedWith.map(_._1) == Some(WebSocketConnection.NormalClosure))
-                    patient <- ApolloClient.init(wsConfig(FakeWebSocketEngine(patientConn)))
-                    pull    <- StreamProbe.Pull.open(patient.subscription(ValueSubscription()).stream)
-                    _       <- established(patientConn)
-                    closer  <- Fiber.init(patient.close(10.seconds))
-                    _       <- control.awaitPendingSleepers(1) // the grace period is running
-                    early   <- closer.done
-                    _ = assert(!early, "close(10.seconds) returned before its grace period was over")
-                    _ = assert(patientConn.closedWith.isEmpty, "the socket closed during the grace period")
-                    _     <- control.advance(10.seconds, Duration.Zero)
-                    _     <- closer.get
-                    ended <- pull.next
-                yield
-                    assert(patientConn.closedWith.map(_._1) == Some(WebSocketConnection.NormalClosure))
-                    assert(closedValue(ended), s"got $ended")
-                end for
-            }
+        "closeNow does not wait for an open subscription; close(gracePeriod) returns once the grace period is over" in
+            Clock
+                .withTimeControl { control =>
+                    val immediateConn = new FakeWebSocketConnection
+                    val patientConn   = new FakeWebSocketConnection
+                    for
+                        immediate <- ApolloClient.init(wsConfig(FakeWebSocketEngine(immediateConn)))
+                        _         <- StreamProbe.Pull.open(immediate.subscription(ValueSubscription()).stream)
+                        _         <- established(immediateConn)
+                        _         <- immediate.closeNow // the clock never moves
+                        _ = assert(immediateConn.closedWith.map(_._1) == Some(WebSocketConnection.NormalClosure))
+                        patient <- ApolloClient.init(wsConfig(FakeWebSocketEngine(patientConn)))
+                        pull    <- StreamProbe.Pull.open(patient.subscription(ValueSubscription()).stream)
+                        _       <- established(patientConn)
+                        closer  <- Fiber.init(patient.close(10.seconds))
+                        _       <- control.awaitPendingSleepers(1) // the grace period is running
+                        early   <- closer.done
+                        _ = assert(!early, "close(10.seconds) returned before its grace period was over")
+                        _ = assert(patientConn.closedWith.isEmpty, "the socket closed during the grace period")
+                        _     <- control.advance(10.seconds, Duration.Zero)
+                        _     <- closer.get
+                        ended <- pull.next
+                    yield
+                        assert(patientConn.closedWith.map(_._1) == Some(WebSocketConnection.NormalClosure))
+                        assert(closedValue(ended), s"got $ended")
+                    end for
+                }
 
         "a Config is a value: a derived Config leaves the original unchanged, and each client owns its socket" in {
             val http   = CapturingEngine("""{"data":{"value":1}}""")

@@ -36,7 +36,7 @@ class UseQuerySurfaceSpec extends kyo.test.Test[Any]:
         val _: RawQueryHandle[D] < (Async & Scope) = handle
         // …and mapData chains directly on the effect, yielding the projected handle.
         val _: QueryHandle[String] < (Async & Scope) = Apollo.query(call).mapData(_.toString)
-        val _ = handle.map { q =>
+        val _                                        = handle.map { q =>
             val _: Signal[QueryState[D]]                = q.state
             val _: D < (Async & Abort[ApolloException]) = q.refetch
             // The projected handle: state AND refetch carry the projected type.

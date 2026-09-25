@@ -244,7 +244,7 @@ object ColumnTree:
     private[uic] def reorder[A](nodes: List[ColumnTree[A]], order: List[List[String]]): List[ColumnTree[A]] =
         if order.isEmpty then nodes
         else
-            val rank = order.zipWithIndex.toMap
+            val rank                                                                     = order.zipWithIndex.toMap
             def walk(ns: List[ColumnTree[A]], prefix: List[String]): List[ColumnTree[A]] =
                 val placed = ns.zipWithIndex.map { (n, authored) =>
                     val named = leafPaths(List(n)).flatMap(e => rank.get(prefix ++ e._1))
@@ -268,7 +268,7 @@ object ColumnTree:
             ns.foldLeft((List.empty[ColumnTree[A]], next)) { case ((acc, i), n) =>
                 n.asColumn match
                     case Present(_) => (if keep(i) then acc :+ n else acc, i + 1)
-                    case Absent =>
+                    case Absent     =>
                         val (kept, after) = walk(n.children, i)
                         val group         = n.withChildren(kept)
                         (if kept.nonEmpty || n.children.isEmpty then acc :+ group else acc, after)

@@ -39,7 +39,7 @@ object OptionItem:
       */
     private[uic] def filter[A](is: List[OptionItem[A]], keep: A => Boolean): List[OptionItem[A]] =
         is.flatMap:
-            case i @ OptionItem.Item(a) => if keep(a) then List(i) else Nil
+            case i @ OptionItem.Item(a)      => if keep(a) then List(i) else Nil
             case OptionItem.Group(label, as) =>
                 val kept = as.filter(keep)
                 if kept.isEmpty then Nil else List(OptionItem.Group(label, kept))
@@ -82,12 +82,13 @@ object OptionItem:
       */
     private[uic] def rows[A](is: List[OptionItem[A]], headerClass: String)(option: (A, Int) => UI)(using Frame): List[UI] =
         val offsets = is.scanLeft(0)((n, it) =>
-            n + (it match
-                case OptionItem.Item(_)      => 1
-                case OptionItem.Group(_, as) => as.size)
+            n +
+                (it match
+                    case OptionItem.Item(_)      => 1
+                    case OptionItem.Group(_, as) => as.size)
         )
         is.zip(offsets).map:
-            case (OptionItem.Item(a), base) => option(a, base)
+            case (OptionItem.Item(a), base)          => option(a, base)
             case (OptionItem.Group(label, as), base) =>
                 groupRow(label, headerClass, as.zipWithIndex.map((a, j) => option(a, base + j)))
     end rows

@@ -115,7 +115,7 @@ class ApolloEffectSpec extends kyo.test.Test[Any]:
             val defect = new IllegalStateException("defect")
             for
                 success <- Abort.run[ApolloExecuteFailure](ApolloEffect.asExecuteFailure(42: Int < Abort[ApolloException]))
-                panic <- Abort.run[Throwable](
+                panic   <- Abort.run[Throwable](
                     ApolloEffect.asExecuteFailure(Abort.panic(defect): Int < Abort[ApolloException])
                 )
             yield

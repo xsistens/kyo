@@ -424,7 +424,7 @@ class KyoTest extends Test:
         }
 
         "foreachIndexedDiscard" in {
-            var acc = Seq.empty[(Int, Int)]
+            var acc                         = Seq.empty[(Int, Int)]
             def run(source: Seq[Int]): Unit =
                 acc = Seq.empty
                 TestEffect1.run(Kyo.foreachIndexedDiscard(source)((idx, v) => TestEffect1(v).map(i => acc :+= ((idx, i))))).eval

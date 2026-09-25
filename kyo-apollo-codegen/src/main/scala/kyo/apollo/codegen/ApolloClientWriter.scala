@@ -162,9 +162,9 @@ object ApolloClientWriter:
 
     final private class Emitter(schema: Document, config: CodegenConfig):
 
-        private val objectNames: Set[String] = schema.objectTypeDefinitions.map(_.name).toSet
-        private val enumNames: Set[String]   = schema.enumTypeDefinitions.map(_.name).toSet
-        private val inputNames: Set[String]  = schema.inputObjectTypeDefinitions.map(_.name).toSet
+        private val objectNames: Set[String]                = schema.objectTypeDefinitions.map(_.name).toSet
+        private val enumNames: Set[String]                  = schema.enumTypeDefinitions.map(_.name).toSet
+        private val inputNames: Set[String]                 = schema.inputObjectTypeDefinitions.map(_.name).toSet
         private val unionMembers: Map[String, List[String]] =
             schema.unionTypeDefinitions.map(u => u.name -> u.memberTypes).toMap
         private val interfaceNames: Set[String] = schema.interfaceTypeDefinitions.map(_.name).toSet
@@ -293,8 +293,8 @@ object ApolloClientWriter:
           * cannot collide with a case, as no GraphQL name contains `$`.
           */
         private def emitEnum(e: EnumTypeDefinition): GeneratedSource =
-            val name  = e.name
-            val cases = e.enumValuesDefinition.map(v => sanitize(v.enumValue)).mkString(", ")
+            val name     = e.name
+            val cases    = e.enumValuesDefinition.map(v => sanitize(v.enumValue)).mkString(", ")
             val contents =
                 s"""package ${config.packageName}
            |
@@ -337,7 +337,7 @@ object ApolloClientWriter:
             val params       = fields.map(f => s"${f.scalaName}: ${f.scalaType}").mkString(", ")
             val scalarImport = customScalarImport(fields.map(_.scalaType))
             val kyoImports   = kyoTypeImports(params)
-            val contents =
+            val contents     =
                 s"""package ${config.packageName}
            |
            |import kyo.Schema$kyoImports$scalarImport
@@ -418,7 +418,7 @@ object ApolloClientWriter:
           */
         def emitSelectors: List[GeneratedSource] =
             validateClientFields()
-            val roots = rootSelectorMap
+            val roots                                                 = rootSelectorMap
             def specs(fields: List[FieldDefinition]): List[FieldSpec] =
                 fields.map(f => FieldSpec(f.name, f.ofType, f.args.map(a => ArgSpec(a.name, a.ofType))))
             val objects = schema.objectTypeDefinitions.map { obj =>
@@ -478,7 +478,7 @@ object ApolloClientWriter:
             else
                 // `A *: B *: EmptyTuple` rather than `(A, B)` so the one-type case
                 // renders as a valid tuple type too.
-                val tuple = types.mkString("", " *: ", " *: EmptyTuple")
+                val tuple    = types.mkString("", " *: ", " *: EmptyTuple")
                 val contents =
                     s"""package ${config.packageName}
                |
@@ -529,9 +529,8 @@ object ApolloClientWriter:
             branches: List[String],
             emitTrait: Boolean
         ): GeneratedSource =
-            val methods =
-                (fields.map(selectorMethod(originName, _)) ++ branches.map(branchMethods(originName, _)))
-                    .mkString("\n\n")
+            val methods = (fields.map(selectorMethod(originName, _)) ++ branches.map(branchMethods(originName, _)))
+                .mkString("\n\n")
             // Every selector object is a `SelectionList` over itself, so a factored
             // selection is written the same way as an inline one — `Image(_.url,
             // _.width)` is a `Fields[Image, (url: …, width: …)]` value — and a root
@@ -557,15 +556,15 @@ object ApolloClientWriter:
             // both object types and the operation roots.
             val clientBlock = clientAccessors(originName, gqlType).map("\n\n" + _).getOrElse("")
             val objectBody  = s"$givens$methods$clientBlock"
-            val scalaTypes =
+            val scalaTypes  =
                 fields.flatMap(f => scalaTypeOf(f.ofType) :: f.args.map(a => scalaTypeOf(a.ofType)))
             val scalarImport = customScalarImport(scalaTypes)
             val traitDecl    = if emitTrait then s"sealed trait $originName\n\n" else ""
-            val objectDecl =
+            val objectDecl   =
                 s"object $objectName extends SelectionList[$objectName.type, $originName, [D <: scala.NamedTuple.AnyNamedTuple] =>> SelectionBuilder.Fields[$originName, D]]:"
             // `Maybe`/`Chunk`/`Absent` for nullable/list fields and argument defaults.
             val kyoImports = kyoTypeImports(objectBody)
-            val contents =
+            val contents   =
                 s"""package ${config.packageName}
            |
            |import kyo.apollo.api.*$kyoImports$scalarImport
@@ -586,8 +585,8 @@ object ApolloClientWriter:
           * fields, so `.deferred`/`.streamed` apply to them.
           */
         private def selectorMethod(originName: String, field: FieldSpec): String =
-            val label    = sanitize(field.name)
-            val leafName = Type.innerType(field.ofType)
+            val label     = sanitize(field.name)
+            val leafName  = Type.innerType(field.ofType)
             val argParams = field.args.map { a =>
                 val default = if isNonNull(a.ofType) then "" else " = Absent"
                 s"${sanitize(a.name)}: ${scalaTypeOf(a.ofType)}$default"
@@ -603,7 +602,7 @@ object ApolloClientWriter:
                     s"Chunk(${entries.mkString(", ")})"
 
             if isComposite(leafName) then
-                val argClause = if field.args.isEmpty then "" else s"(${argParams.mkString(", ")})"
+                val argClause             = if field.args.isEmpty then "" else s"(${argParams.mkString(", ")})"
                 def returnType(a: String) =
                     s"SelectionBuilder.Deferrable[$originName, ($label: ${wrappedTypeExpr(field.ofType, a)})]"
                 val compiled = compiledTypeExpr(field.ofType)
@@ -642,7 +641,7 @@ object ApolloClientWriter:
                 val paramLists = if field.args.isEmpty then "" else s"(${argParams.mkString(", ")})"
                 val returnType = s"SelectionBuilder.Deferrable[$originName, ($label: ${scalaTypeOf(field.ofType)})]"
                 val argArg     = if field.args.isEmpty then "" else s", $argList"
-                val body =
+                val body       =
                     s"""SelectionBuilder.scalar("${field.name}", ${compiledTypeExpr(
                             field.ofType
                         )}, ${scalarCodecExpr(field.ofType)}$argArg)"""
@@ -720,7 +719,7 @@ object ApolloClientWriter:
             if config.clientFields.isEmpty then Nil
             else
                 validateClientFields()
-                val types = config.clientFields.map(_.onType).distinct
+                val types   = config.clientFields.map(_.onType).distinct
                 val objects = types
                     .map { gqlType =>
                         val vals =
@@ -734,7 +733,7 @@ object ApolloClientWriter:
                 // Declared value types / defaults are verbatim user text and may name
                 // the kyo data types unqualified (`Chunk[String]`, `Absent`).
                 val kyoImports = kyoTypeImports(objects)
-                val contents =
+                val contents   =
                     s"""package ${config.packageName}
              |
              |import kyo.apollo.api.*$kyoImports
@@ -766,7 +765,7 @@ object ApolloClientWriter:
             case "String"  => "ScalarCodec.string"
             case "Boolean" => "ScalarCodec.boolean"
             case "ID"      => "ScalarCodec.id"
-            case other =>
+            case other     =>
                 if enumNames(other) || inputNames(other) then s"ScalarCodec.fromSchema[$other]"
                 else if customScalarNames(other) then
                     config.scalarMappings.get(other) match
@@ -779,7 +778,7 @@ object ApolloClientWriter:
           * (kyo types: a nullable field is `Maybe`, a list field is `Chunk`).
           */
         private def wrappedTypeExpr(t: Type, a: String): String = t match
-            case Type.NamedType(_, nonNull) => if nonNull then a else s"Maybe[$a]"
+            case Type.NamedType(_, nonNull)     => if nonNull then a else s"Maybe[$a]"
             case Type.ListType(ofType, nonNull) =>
                 val inner = s"Chunk[${wrappedTypeExpr(ofType, a)}]"
                 if nonNull then inner else s"Maybe[$inner]"
@@ -827,7 +826,7 @@ object ApolloClientWriter:
         private def leafScalaType(name: String): String =
             BuiltInScalars.get(name) match
                 case Some(scala) => scala
-                case None =>
+                case None        =>
                     if enumNames(name) then name // Scala 3 `enum` emitted by writeSchemaTypes.
                     else if customScalarNames(name) then config.scalarMappings.getOrElse(name, "String")
                     else if inputNames(name) then name // input case class emitted by writeSchemaTypes.

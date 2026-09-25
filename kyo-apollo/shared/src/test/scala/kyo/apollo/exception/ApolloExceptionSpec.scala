@@ -51,7 +51,7 @@ class ApolloExceptionSpec extends kyo.test.Test[Any]:
 
         "http exception: carries status code and response headers" in {
             val headers = HttpHeaders.empty.add("Retry-After", "30")
-            val ex = ApolloHttpException(
+            val ex      = ApolloHttpException(
                 statusCode = 503,
                 headers = headers,
                 message = "service unavailable"
@@ -178,7 +178,7 @@ class ApolloExceptionSpec extends kyo.test.Test[Any]:
         }
 
         "every leaf folds into an ApolloResponse.error value (no throw)" in {
-            val id = TestIds.requestUuid
+            val id                            = TestIds.requestUuid
             val leaves: List[ApolloException] = List(
                 ApolloNetworkException(),
                 ApolloHttpException(500, HttpHeaders.empty, "boom"),

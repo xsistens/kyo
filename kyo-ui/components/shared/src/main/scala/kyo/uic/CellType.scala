@@ -71,7 +71,7 @@ object CellType:
         CellType[V](label) { raw =>
             Maybe.fromOption(values.find(v => label(v) == raw)) match
                 case Present(v) => Result.succeed(v)
-                case Absent =>
+                case Absent     =>
                     Result.fail(FieldError("unknown-option", Map("value" -> raw), Present(s"$raw is not one of the options")))
         }(CellEditor.select(values.map(label)))
 
@@ -105,7 +105,7 @@ object CellType:
             s.trim.toLowerCase match
                 case "true"  => Result.succeed(true)
                 case "false" => Result.succeed(false)
-                case other =>
+                case other   =>
                     Result.fail(FieldError("boolean", Map("value" -> other), Present(s"$other is not true or false")))
         )(CellEditor.checkbox)
 
@@ -116,7 +116,7 @@ object CellType:
         raw =>
             f(raw.trim) match
                 case Present(v) => Result.succeed(v)
-                case Absent =>
+                case Absent     =>
                     Result.fail(FieldError(code, Map("value" -> raw), Present(s"$raw is not $what")))
 
 end CellType

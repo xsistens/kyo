@@ -59,7 +59,7 @@ private[uic] object ListNav:
         if navigable.isEmpty then focus
         else
             navigable.indexOf(focus) match
-                case -1 => if dir > 0 then navigable.head else navigable.last
+                case -1  => if dir > 0 then navigable.head else navigable.last
                 case cur =>
                     val next = cur + dir
                     if next >= 0 && next < navigable.size then navigable(next)
@@ -88,7 +88,7 @@ private[uic] object ListNav:
             case k if back.contains(k)    => Present(Step(move(navigable, focus, -1, wrap)))
             case Home                     => Maybe.fromOption(navigable.headOption).map(Step(_))
             case End                      => Maybe.fromOption(navigable.lastOption).map(Step(_))
-            case Enter | Space =>
+            case Enter | Space            =>
                 if navigable.contains(focus) then Present(Step(focus, activate = true)) else Absent
             case Escape => Present(Step(focus = -1, dismiss = true))
             case _      => Absent

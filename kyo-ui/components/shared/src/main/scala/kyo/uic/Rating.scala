@@ -148,7 +148,7 @@ final case class Rating private (
     private def renderNamed(using Frame): UI =
         (invalidV.dynSig, invalidMsgDynV) match
             case (Absent, Absent) => renderDisabledResolved
-            case _ => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
+            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
                     copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderDisabledResolved
                 )
 
@@ -169,7 +169,7 @@ final case class Rating private (
             case Present(ReactiveVariable(dref)) => dref.render(d => body(math.rint(d).toInt, Absent))
             case Present(ReactiveValue.Dyn(sig)) => sig.render(d => body(math.rint(d).toInt, Absent))
             case Present(ReactiveValue.Const(d)) => body(math.rint(d).toInt, Absent)
-            case Absent =>
+            case Absent                          =>
                 valueBinding match
                     case Present(ReactiveVariable(ref))  => ref.render(v => body(v, Present(ref)))
                     case Present(ReactiveValue.Dyn(sig)) => sig.render(v => body(v, Absent))
@@ -244,7 +244,7 @@ final case class Rating private (
 
     /** Prime's select semantics: picking the current value clears to 0. */
     private def activate(i: Int, current: Int, ref: Maybe[SignalRef[Int]])(using Frame): Any < Async =
-        val next = if i == current then 0 else i
+        val next               = if i == current then 0 else i
         val write: Any < Async = (ref, doubleWriteRef) match
             case (Present(r), _)       => r.set(next)
             case (Absent, Present(dr)) => dr.set(next.toDouble)

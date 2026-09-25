@@ -73,7 +73,7 @@ private[kyo] object HtmlRenderer:
     private def bindsSignal(ui: UI): Boolean =
         ui match
             case _: Reactive[?] | _: Foreach[?, ?] => true
-            case el: Element =>
+            case el: Element                       =>
                 el.attrs.reactiveClasses.nonEmpty || el.attrs.reactiveAttrs.nonEmpty || el.attrs.reactiveBoolAttrs.nonEmpty
                 || ReactiveUI.collectSignalRef(el).nonEmpty
                 || (el match
@@ -533,33 +533,32 @@ private[kyo] object HtmlRenderer:
             case fe: Foreach[?, ?] @unchecked =>
                 val region = ReactiveRegion.from(context, namespace)
                 fe.applyTyped {
-                    [T] =>
-                        (signal, keyFn, renderFn) =>
-                            val items = SignalNow(signal)(using summon[AllowUnsafe], fe.frame)
-                            val rendered = items.toSeq.zipWithIndex.map { (item, i) =>
-                                val key = keyFn match
-                                    case Present(f) => f(item)
-                                    case Absent     => i.toString
-                                (key, renderFn(i, item))
-                            }
-                            val content = ReactiveRegion.tableContent(rendered.iterator.map(_._2))
-                            val host    = ReactiveRegion.renderHost(region, parentContext, content)
-                            openInitialHost(sb, host)
-                            val keyed = keyFn.nonEmpty
-                            rendered.foreach { (key, child) =>
-                                renderTo(
-                                    sb,
-                                    child,
-                                    path :+ key,
-                                    context.child(key),
-                                    ReactiveRegion.namespace(host),
-                                    cssRules,
-                                    ReactiveRegion.contentParent(host),
-                                    ReactiveRegion.BoundaryMode.Emit,
-                                    keyedRoot = keyed
-                                )
-                            }
-                            closeInitialHost(sb, host)
+                    [T] => (signal, keyFn, renderFn) =>
+                        val items    = SignalNow(signal)(using summon[AllowUnsafe], fe.frame)
+                        val rendered = items.toSeq.zipWithIndex.map { (item, i) =>
+                            val key = keyFn match
+                                case Present(f) => f(item)
+                                case Absent     => i.toString
+                            (key, renderFn(i, item))
+                        }
+                        val content = ReactiveRegion.tableContent(rendered.iterator.map(_._2))
+                        val host    = ReactiveRegion.renderHost(region, parentContext, content)
+                        openInitialHost(sb, host)
+                        val keyed = keyFn.nonEmpty
+                        rendered.foreach { (key, child) =>
+                            renderTo(
+                                sb,
+                                child,
+                                path :+ key,
+                                context.child(key),
+                                ReactiveRegion.namespace(host),
+                                cssRules,
+                                ReactiveRegion.contentParent(host),
+                                ReactiveRegion.BoundaryMode.Emit,
+                                keyedRoot = keyed
+                            )
+                        }
+                        closeInitialHost(sb, host)
                 }
 
             case m: Mounted =>
@@ -611,7 +610,7 @@ private[kyo] object HtmlRenderer:
     private def openInitialHost(sb: StringBuilder, host: ReactiveRegion.RenderHost, flags: String = ""): Unit =
         host match
             case ReactiveRegion.RenderHost.HtmlComments(id, _) => w(sb, s"<!--kyo-rs:$id$flags-->")
-            case ReactiveRegion.RenderHost.HtmlTableBody(id) =>
+            case ReactiveRegion.RenderHost.HtmlTableBody(id)   =>
                 w(sb, s"<tbody data-kyo-range-host=\"$id\"><!--kyo-rs:$id$flags-->")
             case ReactiveRegion.RenderHost.SvgGroup(path) => w(sb, openSvgRegion(path))
 
@@ -1130,7 +1129,7 @@ private[kyo] object HtmlRenderer:
     private def renderEventAttr(sb: StringBuilder, elem: Element): Boolean =
         // Written as they are found: the attribute opens with the first event and closes at the end, so a
         // plain element allocates nothing here.
-        var first = true
+        var first                   = true
         def add(name: String): Unit =
             discard(sb.append(if first then " data-kyo-ev=\"" else ",").append(name))
             first = false

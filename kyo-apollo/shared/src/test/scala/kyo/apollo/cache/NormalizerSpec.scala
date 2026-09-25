@@ -27,7 +27,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
     final case class TestQuery(selections: Chunk[CompiledSelection]) extends Query.Normalizable[Int]:
         def name                      = "Q"; def document = "query Q { ... }"
         val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema[Int]
-        def rootField: CompiledField =
+        def rootField: CompiledField  =
             CompiledField("data", CompiledNamedType("Query"), selections = selections)
         def variables: Json = Json.JObj(VectorMap.empty)
     end TestQuery
@@ -163,7 +163,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
             val country =
                 obj("countries", "Country", Chunk(leaf("__typename"), leaf("code"), leaf("name")))
             val selections = Chunk(listOf(country))
-            val data = Map(
+            val data       = Map(
                 "countries" -> Json.JArr(
                     Chunk(
                         Json.JObj(
@@ -195,7 +195,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
         }
 
         "an id-less list of objects keys each element by its indexed path" in {
-            val item = obj("items", "Item", Chunk(leaf("label")))
+            val item    = obj("items", "Item", Chunk(leaf("label")))
             val records = normalize(
                 selections = Chunk(listOf(item)),
                 data = Map(
@@ -220,8 +220,8 @@ class NormalizerSpec extends kyo.test.Test[Any]:
             // reaching the same album by another route would mint a SECOND record for one
             // logical field, and the narrower of the two writers would win the parent's
             // pointer while missing the other's fields.
-            val cover = obj("cover", "Image", Chunk(leaf("url")))
-            val album = obj("album", "Album", Chunk(leaf("__typename"), leaf("id"), cover))
+            val cover   = obj("cover", "Image", Chunk(leaf("url")))
+            val album   = obj("album", "Album", Chunk(leaf("__typename"), leaf("id"), cover))
             val records = normalize(
                 selections = Chunk(album),
                 data = Map(
@@ -240,15 +240,15 @@ class NormalizerSpec extends kyo.test.Test[Any]:
         }
 
         "an id-less list under an identified parent indexes below the parent's key" in {
-            val images = listOf(obj("images", "Image", Chunk(leaf("url"))))
-            val album  = obj("album", "Album", Chunk(leaf("__typename"), leaf("id"), images))
+            val images  = listOf(obj("images", "Image", Chunk(leaf("url"))))
+            val album   = obj("album", "Album", Chunk(leaf("__typename"), leaf("id"), images))
             val records = normalize(
                 selections = Chunk(album),
                 data = Map(
                     "album" -> Json.JObj(Map(
                         "__typename" -> jstr("Album"),
                         "id"         -> jstr("1"),
-                        "images" -> Json.JArr(
+                        "images"     -> Json.JArr(
                             Chunk(Json.JObj(Map("url" -> jstr("a"))), Json.JObj(Map("url" -> jstr("b"))))
                         )
                     ))
@@ -268,7 +268,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
             // path key renders the identical string.
             val breakdown = obj("breakdown", "Breakdown", Chunk(leaf("views")))
             val stats     = obj("stats", "Stats", Chunk(breakdown))
-            val records = normalize(
+            val records   = normalize(
                 selections = Chunk(stats),
                 data = Map(
                     "stats" -> Json.JObj(Map("breakdown" -> Json.JObj(Map("views" -> jnum(3)))))
@@ -348,7 +348,7 @@ class NormalizerSpec extends kyo.test.Test[Any]:
         "__typename is collected implicitly even when not explicitly selected" in {
             // The selection set does NOT list __typename, but the server sends it.
             val selections = Chunk(obj("book", "Book", Chunk(leaf("id"), leaf("title"))))
-            val data = Map(
+            val data       = Map(
                 "book" -> Json.JObj(
                     Map("__typename" -> jstr("Book"), "id" -> jstr("7"), "title" -> jstr("T"))
                 )

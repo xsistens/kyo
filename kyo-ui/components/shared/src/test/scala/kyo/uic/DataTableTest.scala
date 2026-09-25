@@ -336,7 +336,8 @@ class DataTableTest extends UicTest:
                     (signal: Signal[Chunk[T]], _: Maybe[T => String], render: (Int, T) => UI) =>
                         signal.current(using f.frame).map { items =>
                             Kyo.foreach(items.zipWithIndex) { (item, i) => resolve(render(i, item)) }.map(_.flatten)
-                    })
+                        }
+                )
             case k: UI.Ast.KeyedChild[?] => resolve(k.child)
             case _                       => Chunk.empty
 
@@ -504,7 +505,7 @@ class DataTableTest extends UicTest:
             err  <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
             grab <- Signal.initRef(Absent: Maybe[ColumnGrab])
         yield
-            val base = uic.DataTable[Item]().rows(rows).rowKey(_.id)
+            val base  = uic.DataTable[Item]().rows(rows).rowKey(_.id)
             val table =
                 if pinMiddle then
                     base.columns(
@@ -800,7 +801,7 @@ class DataTableTest extends UicTest:
             err   <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
             move  <- Signal.initRef(Absent: Maybe[ColumnDrag])
         yield
-            val base = uic.DataTable[Item]().rows(rows).rowKey(_.id).sort(sort)
+            val base  = uic.DataTable[Item]().rows(rows).rowKey(_.id).sort(sort)
             val table =
                 if group then
                     base.columns(
@@ -1176,7 +1177,7 @@ class DataTableTest extends UicTest:
     "a bound source fills the rows, the total and the paginator in one call" in {
         for
             query <- Signal.initRef("a")
-            src <- RowSource.init(query, pageSize = 2) { (_, offset, limit) =>
+            src   <- RowSource.init(query, pageSize = 2) { (_, offset, limit) =>
                 (five.slice(offset, offset + limit), Total.Known(five.size))
             }
             seen <- Channel.init[Seq[Item]](16)
@@ -1217,7 +1218,7 @@ class DataTableTest extends UicTest:
             // A derived signal — exactly what a query state or a paginated
             // connection hands a caller, and not something anyone can write into.
             derived = source.map(_.filter(_.price >= 20))
-            table = uic.DataTable[Item]().rows(derived).rowKey(_.id).columns(
+            table   = uic.DataTable[Item]().rows(derived).rowKey(_.id).columns(
                 uic.column("Name")(_.name)
             )
             before <- bodyNames(table.render)
@@ -1253,7 +1254,7 @@ class DataTableTest extends UicTest:
         for
             rows  <- Signal.initRef[Seq[Item]](items)
             query <- Signal.initRef("a")
-            src <- RowSource.init(query, pageSize = 2) { (_, offset, limit) =>
+            src   <- RowSource.init(query, pageSize = 2) { (_, offset, limit) =>
                 (five.slice(offset, offset + limit), Total.Known(five.size))
             }
             text <- cards(uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
@@ -1366,7 +1367,7 @@ class DataTableTest extends UicTest:
             scroll <- Signal.initRef(0.0)
             ui = windowed.source(src).wired("t", Map.empty, err, _ => (), scroll = Present(scroll))
             vs <- elementWithClass(ui, "p-virtualscroller")
-            _ <- vs.attrs.onScrollPos.getOrElse(throw new AssertionError("the scroller reports no scroll"))(
+            _  <- vs.attrs.onScrollPos.getOrElse(throw new AssertionError("the scroller reports no scroll"))(
                 UI.ScrollPositionEvent(400.0, 0.0, Absent)
             )
             at  <- scroll.get
@@ -1407,7 +1408,7 @@ class DataTableTest extends UicTest:
     "an unknown total leaves a screen to scroll into while anything follows" in {
         for
             query <- Signal.initRef("a")
-            src <- RowSource.init(query, pageSize = 6)((_, o, l) =>
+            src   <- RowSource.init(query, pageSize = 6)((_, o, l) =>
                 (hundred.slice(o, o + l), Total.Unknown(o + l < hundred.size))
             )
             seen   <- Channel.init[Seq[Item]](16)
@@ -1614,7 +1615,7 @@ class DataTableTest extends UicTest:
                 .selectionMode(SelectionMode.Checkbox).selected(sel)
                 .selectableWhen(_.id != "2").render
             box <- elements(ui).map(_.collect { case c: UI.Ast.Checkbox => c }.head)
-            _ <- box.onChange match
+            _   <- box.onChange match
                 case Present(f) => f(true)
                 case Absent     => throw new AssertionError("the header box declares no change handler")
             all <- sel.get
@@ -1711,7 +1712,7 @@ class DataTableTest extends UicTest:
                 .onRowClick(_ => ())
                 .onRowContextMenu(t => seen.set(Present(t))).render
             trs <- bodyTrs(ui)
-            _ <- trs(1).attrs.onContextMenu match
+            _   <- trs(1).attrs.onContextMenu match
                 case Present(h) => h
                 case Absent     => throw new AssertionError("the row declares no context handler")
             told <- seen.get
@@ -1720,7 +1721,7 @@ class DataTableTest extends UicTest:
 
     "a checkbox column over a one-way selection has nothing to write, and says so" in {
         for
-            src <- Signal.initRef(Set.empty[String])
+            src  <- Signal.initRef(Set.empty[String])
             text <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id)
                 .columns(uic.column("Name")(_.name))
                 .selectionMode(SelectionMode.Checkbox).selected(src.map(identity)).render)
@@ -1729,7 +1730,7 @@ class DataTableTest extends UicTest:
 
     "a one-way selection with no onRowClick cannot move at all, and says so" in {
         for
-            src <- Signal.initRef(Set.empty[String])
+            src   <- Signal.initRef(Set.empty[String])
             inert <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id)
                 .columns(uic.column("Name")(_.name))
                 .selectionMode(SelectionMode.Multiple).selected(src.map(identity)).render)
@@ -1913,7 +1914,7 @@ class DataTableTest extends UicTest:
 
     "a one-way selection with modifiers and only a row key to report with is reported" in {
         for
-            src <- Signal.initRef(Set.empty[String])
+            src  <- Signal.initRef(Set.empty[String])
             text <- cards(uic.DataTable[Item]().rows(four).rowKey(_.id)
                 .columns(uic.column("Name")(_.name))
                 .selectionMode(SelectionMode.Multiple).selected(src.map(identity))
@@ -2001,7 +2002,7 @@ class DataTableTest extends UicTest:
             err  <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
             grab <- Signal.initRef(Absent: Maybe[ColumnGrab])
         yield
-            val base = uic.DataTable[Item]().rows(items).rowKey(_.id)
+            val base     = uic.DataTable[Item]().rows(items).rowKey(_.id)
             val withCols = lastWidth match
                 case Present(w) => base.columns(
                         uic.column("Name")(_.name).width(100),
@@ -2013,7 +2014,7 @@ class DataTableTest extends UicTest:
                         uic.column("Price")(_.price.toString).width(100),
                         uic.column("Id")(_.id)
                     )
-            val table = withCols.columnWidths(cols).columnResizeMode(mode)
+            val table   = withCols.columnWidths(cols).columnResizeMode(mode)
             val measure = (ids: Seq[String]) =>
                 Chunk.from(ids.map(id =>
                     UI.Rect(0, 0, Map("t-h0" -> 100.0, "t-h1" -> 100.0, "t-h2" -> 100.0).getOrElse(id, 0.0), 30, 1000, 800)
@@ -2209,7 +2210,7 @@ class DataTableTest extends UicTest:
                 .selectionMode(SelectionMode.Multiple).selected(sel)
                 .contextMenuRow(ctx).onRowContextMenu(t => seen.getAndUpdate(_ :+ t.row))
             trs <- bodyTrs(table.render)
-            _ <- trs(1).attrs.onContextMenu match
+            _   <- trs(1).attrs.onContextMenu match
                 case Present(h) => h
                 case Absent     => throw new AssertionError("the row declares no context handler")
             on     <- ctx.get
@@ -2237,7 +2238,7 @@ class DataTableTest extends UicTest:
                 case Absent     => throw new AssertionError("the row declares no context handler")
             outside <- seen.get
             _       <- sel.set(Set("1", "2"))
-            _ <- trs(1).attrs.onContextMenu match
+            _       <- trs(1).attrs.onContextMenu match
                 case Present(h) => h
                 case Absent     => throw new AssertionError("the row declares no context handler")
             inside <- seen.get
@@ -2257,7 +2258,7 @@ class DataTableTest extends UicTest:
                 .selectionMode(SelectionMode.Multiple).selected(sel).globalFilter(qry)
                 .onRowContextMenu(t => seen.set(Present(t)))
             trs <- bodyTrs(table.render)
-            _ <- trs.head.attrs.onContextMenu match
+            _   <- trs.head.attrs.onContextMenu match
                 case Present(h) => h
                 case Absent     => throw new AssertionError("the row declares no context handler")
             told <- seen.get
@@ -2444,7 +2445,7 @@ class DataTableTest extends UicTest:
             picked  <- Signal.initRef(Set.empty[CellPath])
             editing <- Signal.initRef(Absent: Maybe[CellPath])
             rows    <- Signal.initRef(Set.empty[String])
-            clash <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id)
+            clash   <- cards(uic.DataTable[Item]().rows(items).rowKey(_.id)
                 .columns(uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v)))
                 .selectionMode(SelectionMode.Multiple).selectedCells(picked).editingCell(editing)
                 .onCellValueChanged(_ => ()).render)
@@ -2525,7 +2526,7 @@ class DataTableTest extends UicTest:
         for
             (ui, filters, open, draft) <- filterMenu
             _                          <- open.set(true)
-            _ <- draft.set(ColumnFilter(
+            _                          <- draft.set(ColumnFilter(
                 List(FilterRule("A", MatchMode.Contains), FilterRule("B", MatchMode.Contains)),
                 uic.FilterOperator.Or
             ))
@@ -2547,7 +2548,7 @@ class DataTableTest extends UicTest:
     "Match All keeps only the rows every rule keeps" in {
         for
             (ui, filters, _, _) <- filterMenu
-            _ <- filters.set(Map(List("Name") -> ColumnFilter(
+            _                   <- filters.set(Map(List("Name") -> ColumnFilter(
                 List(FilterRule("A", MatchMode.Contains), FilterRule("B", MatchMode.Contains)),
                 uic.FilterOperator.And
             )))

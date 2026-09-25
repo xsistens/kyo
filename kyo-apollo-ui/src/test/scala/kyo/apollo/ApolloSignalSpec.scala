@@ -131,7 +131,7 @@ class ApolloSignalSpec extends kyo.test.Test[Any]:
         }
 
         "QueryState.mapData lands an Abort.fail in Failure — from Success and from PartialData" in {
-            val rejected = DefaultApolloException("unusable")
+            val rejected                                     = DefaultApolloException("unusable")
             def reject(qs: QueryState[Int]): QueryState[Int] =
                 qs.mapData(n => if n < 0 then Abort.fail(rejected) else n)
             assert(reject(QueryState.Success(-1, fromCache = false)) == QueryState.Failure(rejected))
@@ -157,8 +157,8 @@ class ApolloSignalSpec extends kyo.test.Test[Any]:
         }
 
         "mapData drops retained data the projection rejects — it is not renderable" in {
-            val down     = ApolloNetworkException("down")
-            val rejected = DefaultApolloException("unusable")
+            val down      = ApolloNetworkException("down")
+            val rejected  = DefaultApolloException("unusable")
             val projected =
                 QueryState.Failure(down, Present(-1)).mapData(n => if n < 0 then Abort.fail(rejected) else n)
             // The original failure is what the view reports; the rejection only decides

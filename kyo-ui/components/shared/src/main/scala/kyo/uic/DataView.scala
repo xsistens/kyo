@@ -147,7 +147,7 @@ final case class DataView[A] private (
             case Present(size) =>
                 val totalPages = math.max(1, (itemsV.size + size - 1) / size)
                 val cur        = math.min(math.max(page, 0), totalPages - 1)
-                var pag = Paginator()
+                var pag        = Paginator()
                     .totalRecords(itemsV.size)
                     .rows(size)
                     .currentPage(cur)

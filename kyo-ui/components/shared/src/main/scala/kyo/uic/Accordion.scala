@@ -122,7 +122,7 @@ final case class Accordion private (
         UI.mounted {
             for
                 cmds <- UI.commands
-                ids <- Kyo.foreach(panelList) { _ =>
+                ids  <- Kyo.foreach(panelList) { _ =>
                     for
                         shellId   <- cmds.freshId
                         contentId <- cmds.freshId
@@ -218,7 +218,7 @@ final case class Accordion private (
 
         val headerSlot: UI = p.headerUI match
             case Present(u) => u
-            case Absent =>
+            case Absent     =>
                 p.header match
                     case TextValue.Const(t) => stringToUI(t)
                     case TextValue.Dyn(s)   => signalStringToUI(s)
@@ -272,7 +272,7 @@ final case class Accordion private (
 
         val headerSlot: UI = p.headerUI match
             case Present(u) => u
-            case Absent =>
+            case Absent     =>
                 p.header match
                     case TextValue.Const(t) => stringToUI(t)
                     case TextValue.Dyn(s)   => signalStringToUI(s)
@@ -309,7 +309,7 @@ final case class Accordion private (
       */
     private def toggle(id: String)(using Frame): Any < Async =
         val write: Any < Async = (singleRef, multiRef) match
-            case (Present(ref), _) => ref.getAndUpdate(cur => if cur == id then "" else id)
+            case (Present(ref), _)      => ref.getAndUpdate(cur => if cur == id then "" else id)
             case (Absent, Present(ref)) =>
                 ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
             case _ => ()

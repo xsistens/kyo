@@ -38,7 +38,7 @@ object JsonPath:
       */
     def splice(target: Json, path: Chunk[String | Int], patch: Json): Maybe[Json] =
         path.headMaybe match
-            case Absent => Present(merge(target, patch))
+            case Absent                 => Present(merge(target, patch))
             case Present(field: String) =>
                 target match
                     case Json.JObj(fields) =>

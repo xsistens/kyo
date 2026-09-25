@@ -43,7 +43,7 @@ final class AutoPersistedQueryInterceptor extends ApolloInterceptor:
     )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
         request.operation match
             case _: Subscription[?] => chain.proceed(request)
-            case _ =>
+            case _                  =>
                 val probe = request.copy(sendApqExtensions = true, sendDocument = false)
                 negotiate(request, probe, chain)
 

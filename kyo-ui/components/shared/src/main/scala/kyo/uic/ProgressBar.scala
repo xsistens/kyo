@@ -53,7 +53,7 @@ final case class ProgressBar private (
     private[uic] def render(using Frame): UI =
         modeV match
             case ProgressBarMode.Indeterminate => indeterminateBody
-            case ProgressBarMode.Determinate =>
+            case ProgressBarMode.Determinate   =>
                 valueBinding match
                     case Present(ReactiveVariable(ref))  => ref.render(determinateBody)
                     case Present(ReactiveValue.Dyn(sig)) => sig.render(determinateBody)
@@ -76,7 +76,7 @@ final case class ProgressBar private (
     end root
 
     private def determinateBody(raw: Int)(using Frame): UI =
-        val pct = math.max(0, math.min(100, raw))
+        val pct             = math.max(0, math.min(100, raw))
         val label: List[UI] =
             if !showValueFlag || pct == 0 then Nil
             else List(div.cssClass("p-progressbar-label")(valueTemplateV.map(_(pct)).getOrElse(s"$pct%")))

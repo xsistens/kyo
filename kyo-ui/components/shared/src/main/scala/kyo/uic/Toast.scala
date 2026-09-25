@@ -82,14 +82,14 @@ final case class Toast private (
 
     private[uic] def render(using Frame): UI =
         openRef match
-            case Absent => UI.empty
+            case Absent       => UI.empty
             case Present(ref) =>
                 val close: Any < Async =
                     onCloseEff match
                         case Present(e) => ref.set(false).map(_ => e)
                         case Absent     => ref.set(false)
 
-                val icon: UI = GlyphSvg(severityIcon, "p-toast-message-icon")
+                val icon: UI            = GlyphSvg(severityIcon, "p-toast-message-icon")
                 val textParts: List[UI] =
                     summaryV.toList.map {
                         case TextValue.Const(t) => span.cssClass("p-toast-summary")(t): UI
@@ -100,7 +100,7 @@ final case class Toast private (
                             case TextValue.Dyn(s)   => div.cssClass("p-toast-detail")(s)
                         } ++
                         kids
-                val text: UI = div.cssClass("p-toast-message-text")(textParts.map(toChild)*)
+                val text: UI           = div.cssClass("p-toast-message-text")(textParts.map(toChild)*)
                 val closeBtn: List[UI] =
                     if !closableFlag then Nil
                     else

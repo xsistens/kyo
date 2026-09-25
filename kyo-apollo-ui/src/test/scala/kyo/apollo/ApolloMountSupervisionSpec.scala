@@ -28,7 +28,7 @@ class ApolloMountSupervisionSpec extends kyo.test.Test[Any]:
     /** Records every emission's rendered HTML and completes marker promises on first match. */
     final private class Recording(markers: Map[String, Fiber.Promise.Unsafe[String, Any]]):
         val emissions = new CopyOnWriteArrayList[String]()
-        val exchange = new UIExchange:
+        val exchange  = new UIExchange:
             def onChange(
                 region: ReactiveRegion,
                 path: Seq[String],
@@ -86,7 +86,7 @@ class ApolloMountSupervisionSpec extends kyo.test.Test[Any]:
                 (rec, marks) <- recording("value:1", "marker:after")
                 effect =
                     for
-                        ref <- Signal.initRef(1)
+                        ref   <- Signal.initRef(1)
                         fiber <- Fiber.init(src.observe {
                             case QueryState.Success(d, _, _) => ref.set(d)
                             case QueryState.Failure(ex, _)   => Abort.fail(ex)

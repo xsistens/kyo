@@ -326,10 +326,10 @@ final case class DatePicker private (
         copy(currentViewRefV = Present(refs.view)).wiredWith(refs, base, focus)
 
     private def wiredWith(refs: DatePicker.Refs, base: String, focus: String => Any < Async)(using Frame): UI =
-        val oref   = refs.open
-        val mref   = refs.month
-        val cursor = refs.cursor
-        val seed   = refs.seed
+        val oref                                                     = refs.open
+        val mref                                                     = refs.month
+        val cursor                                                   = refs.cursor
+        val seed                                                     = refs.seed
         def nav(mv: String, cv: String, sd: Boolean): DatePicker.Nav =
             DatePicker.Nav(mref, mv, cursor, cv, seed, sd, refs.restore, base, focus)
         // The cursor and the seed flag are read together rather than through a second nested
@@ -362,7 +362,7 @@ final case class DatePicker private (
         // the shared helper; otherwise the untouched static form.
         (invalidV.dynSig, invalidMsgDynV) match
             case (Absent, Absent) => assembleStatic(oref, nav, floating, panel, openSignal)
-            case _ => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
+            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
                     copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent)
                         .assembleStatic(oref, nav, floating, panel, openSignal)
                 )
@@ -431,7 +431,7 @@ final case class DatePicker private (
         if invalidV.constTrue then i = i.aria("invalid", "true")
         displayOverride match
             case Present(text) => i = i.value(text)
-            case Absent =>
+            case Absent        =>
                 valueBinding match
                     case Present(Input.Value.Const(v)) => i = i.value(v)
                     case Present(Input.Value.Ref(r))   => i = i.value(r)
@@ -456,7 +456,7 @@ final case class DatePicker private (
             // (the derived display text for the multiple/range modes, which aren't parsed back).
             val eff = displayOverride match
                 case Present(text) => f(text)
-                case Absent =>
+                case Absent        =>
                     valueBinding match
                         case Present(Input.Value.Ref(r))   => r.use(f)
                         case Present(Input.Value.Const(v)) => f(v)
@@ -500,7 +500,7 @@ final case class DatePicker private (
         for
             _      <- seedGrid(nav)
             isOpen <- oref.get
-            _ <-
+            _      <-
                 if !isOpen then openPanel(oref)
                 else
                     nav match
@@ -590,11 +590,11 @@ final case class DatePicker private (
       */
     private def remember(nav: Maybe[DatePicker.Nav])(using Frame): Any < Async =
         nav match
-            case Absent => ()
+            case Absent     => ()
             case Present(n) =>
                 n.restore.use {
                     case Present(_) => (): Any < Async
-                    case Absent =>
+                    case Absent     =>
                         for
                             single <- valueBinding match
                                 case Present(Input.Value.Ref(r))   => r.get
@@ -630,7 +630,7 @@ final case class DatePicker private (
         if inlineFlag then ()
         else
             val undo: Any < Async = nav match
-                case Absent => ()
+                case Absent     => ()
                 case Present(n) =>
                     n.restore.use {
                         case Present(rs) => writeBack(rs)
@@ -684,7 +684,7 @@ final case class DatePicker private (
     private def withMonthOverride(nav: Maybe[DatePicker.Nav])(f: Maybe[String] => UI)(using Frame): UI =
         nav match
             case Present(n) => f(if n.monthOvV.isEmpty then Absent else Present(n.monthOvV))
-            case Absent =>
+            case Absent     =>
                 monthRef match
                     case Present(ref) => ref.render(m => f(Present(m)))
                     case Absent       => f(Absent)
@@ -692,10 +692,10 @@ final case class DatePicker private (
     private def withSelection(f: Snapshot => UI)(using Frame): UI =
         rangeRefsV match
             case Present((s, e)) => s.render(sv => e.render(ev => f(Snapshot.Range(sv, ev))))
-            case Absent =>
+            case Absent          =>
                 multiRef match
                     case Present(mref) => mref.render(set => f(Snapshot.Multi(set)))
-                    case Absent =>
+                    case Absent        =>
                         valueBinding match
                             case Present(Input.Value.Ref(ref)) => ref.render(v => f(Snapshot.Single(v)))
                             case Present(Input.Value.Const(v)) => f(Snapshot.Single(v))
@@ -868,7 +868,7 @@ final case class DatePicker private (
         // Where the keyboard is. A cursor outside the displayed month is not this grid's, so it
         // falls back to the selected day and then to the first, which is what a reader who has
         // just paged into a month means by "here".
-        val cursorIso = dayCursor(year, month, snap, nav)
+        val cursorIso      = dayCursor(year, month, snap, nav)
         val days: List[UI] = (1 to dim).toList.map { d =>
             val iso = DatePicker.isoDate(year, month, d)
             // ISO strings compare lexicographically, so plain string order is date order.
@@ -952,10 +952,10 @@ final case class DatePicker private (
         nav: DatePicker.Nav
     )(e: KeyboardEvent)(using Frame): Any < Async =
         CalendarNav.onKey(e.key, e.modifiers, perRow = 7) match
-            case Absent => ()
+            case Absent        => ()
             case Present(step) =>
                 DatePicker.parseDate(cursorIso) match
-                    case Absent => ()
+                    case Absent                => ()
                     case Present((cy, cm, cd)) =>
                         import CalendarNav.Step.*
                         val target: Maybe[(Int, Int, Int)] = step match
@@ -1039,7 +1039,7 @@ final case class DatePicker private (
                 yield r
                 end for
             case Snapshot.Multi(set) =>
-                val toggled = if set.contains(iso) then set - iso else set + iso
+                val toggled            = if set.contains(iso) then set - iso else set + iso
                 val write: Any < Async = multiRef match
                     case Present(ref) => ref.set(toggled)
                     case Absent       => ()
@@ -1081,10 +1081,10 @@ final case class DatePicker private (
     private def monthView(year: Int, snap: Snapshot, oref: Maybe[SignalRef[Boolean]], nav: Maybe[DatePicker.Nav])(using
         Frame
     ): UI =
-        val current = DatePicker.datePart(anchorValue(snap)).take(7)
-        val cursor  = granularCursor(DatePicker.pad(year, 4) + "-", current, 7, nav)
+        val current         = DatePicker.datePart(anchorValue(snap)).take(7)
+        val cursor          = granularCursor(DatePicker.pad(year, 4) + "-", current, 7, nav)
         val cells: List[UI] = (1 to 12).toList.map { m =>
-            val iso7 = DatePicker.pad(year, 4) + "-" + DatePicker.pad(m, 2)
+            val iso7       = DatePicker.pad(year, 4) + "-" + DatePicker.pad(m, 2)
             val outOfRange =
                 minDateV.exists(min => iso7 < min.take(7)) || maxDateV.exists(max => iso7 > max.take(7))
             var cell = span.cssClass("p-datepicker-month")
@@ -1105,9 +1105,9 @@ final case class DatePicker private (
         granularGrid("p-datepicker-month-view", cells, cursor, iso => DatePicker.monthOf(iso) - 1, 3, oref, nav) { (at, step) =>
             import CalendarNav.Step.*
             step match
-                case Move(cells) => Present(DatePicker.pad(year, 4) + "-" + DatePicker.pad(wrapIndex(at + cells, 12) + 1, 2))
-                case RowStart    => Present(DatePicker.pad(year, 4) + "-" + DatePicker.pad(at - at % 3 + 1, 2))
-                case RowEnd      => Present(DatePicker.pad(year, 4) + "-" + DatePicker.pad(at - at % 3 + 3, 2))
+                case Move(cells)      => Present(DatePicker.pad(year, 4) + "-" + DatePicker.pad(wrapIndex(at + cells, 12) + 1, 2))
+                case RowStart         => Present(DatePicker.pad(year, 4) + "-" + DatePicker.pad(at - at % 3 + 1, 2))
+                case RowEnd           => Present(DatePicker.pad(year, 4) + "-" + DatePicker.pad(at - at % 3 + 3, 2))
                 case Page(delta, big) =>
                     Present(DatePicker.pad(year + (if big then delta * 10 else delta), 4) + "-" + DatePicker.pad(at + 1, 2))
                 case Activate | Dismiss => Absent
@@ -1132,11 +1132,11 @@ final case class DatePicker private (
         oref: Maybe[SignalRef[Boolean]],
         nav: Maybe[DatePicker.Nav]
     )(using Frame): UI =
-        val current = DatePicker.datePart(anchorValue(snap)).take(4)
-        val base    = year - Math.floorMod(year, 10)
-        val cursor  = granularCursor("", current, 4, nav, fallback = DatePicker.pad(base, 4))
+        val current         = DatePicker.datePart(anchorValue(snap)).take(4)
+        val base            = year - Math.floorMod(year, 10)
+        val cursor          = granularCursor("", current, 4, nav, fallback = DatePicker.pad(base, 4))
         val cells: List[UI] = (base to base + 9).toList.map { y =>
-            val iso4 = DatePicker.pad(y, 4)
+            val iso4       = DatePicker.pad(y, 4)
             val outOfRange =
                 minDateV.exists(min => iso4 < min.take(4)) || maxDateV.exists(max => iso4 > max.take(4))
             var cell = span.cssClass("p-datepicker-year")
@@ -1217,7 +1217,7 @@ final case class DatePicker private (
                     if cursor.isEmpty then ()
                     else
                         CalendarNav.onKey(e.key, e.modifiers, perRow) match
-                            case Absent => ()
+                            case Absent        => ()
                             case Present(step) =>
                                 val moved: Any < Async = move(indexOf(cursor), step) match
                                     case Present(next) => n.cursor.set(next)
@@ -1340,17 +1340,18 @@ final case class DatePicker private (
                     "Next Minute",
                     "Previous Minute"
                 )
-            ) ++ (hourFormatV match
-                case HourFormat.H12 =>
-                    val toggle = write(Math.floorMod(hour + 12, 24), minute)
-                    List(
-                        div.cssClass("p-datepicker-ampm-picker")(
-                            toChild(spinButton("p-datepicker-increment-button", Icons.chevronUp, "AM/PM", toggle)),
-                            toChild(span(if hour < 12 then "AM" else "PM")),
-                            toChild(spinButton("p-datepicker-decrement-button", Icons.chevronDown, "AM/PM", toggle))
+            ) ++
+                (hourFormatV match
+                    case HourFormat.H12 =>
+                        val toggle = write(Math.floorMod(hour + 12, 24), minute)
+                        List(
+                            div.cssClass("p-datepicker-ampm-picker")(
+                                toChild(spinButton("p-datepicker-increment-button", Icons.chevronUp, "AM/PM", toggle)),
+                                toChild(span(if hour < 12 then "AM" else "PM")),
+                                toChild(spinButton("p-datepicker-decrement-button", Icons.chevronDown, "AM/PM", toggle))
+                            )
                         )
-                    )
-                case HourFormat.H24 => Nil)
+                    case HourFormat.H24 => Nil)
 
         div.cssClass("p-datepicker-time-picker")(columns.map(toChild)*)
     end timePickerUI
@@ -1387,7 +1388,7 @@ final case class DatePicker private (
 
         val clearAction: Any < Async =
             val wipeSingle: Any < Async = writeSingle("")
-            val wipeMulti: Any < Async = multiRef match
+            val wipeMulti: Any < Async  = multiRef match
                 case Present(ref) => ref.set(Set.empty)
                 case Absent       => ()
             val wipeRange: Any < Async = rangeRefsV match
@@ -1420,10 +1421,10 @@ final case class DatePicker private (
         val fromOverride = monthOverride.flatMap(DatePicker.parseYearMonth)
         fromOverride match
             case Present(ym) => ym
-            case Absent =>
+            case Absent      =>
                 DatePicker.parseYearMonth(current) match
                     case Present(ym) => ym
-                    case Absent =>
+                    case Absent      =>
                         referenceDateV match
                             case Present(rd) => DatePicker.parseYearMonth(rd).getOrElse((2000, 1))
                             case Absent      => (2000, 1)
@@ -1513,13 +1514,12 @@ object DatePicker:
             case _                           => 30
 
     // Sakamoto's algorithm — returns 0 = Sunday .. 6 = Saturday.
-    private val sakamoto = Array(0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4)
+    private val sakamoto                               = Array(0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4)
     private def dayOfWeek(y: Int, m: Int, d: Int): Int =
         val yy = if m < 3 then y - 1 else y
         Math.floorMod(yy + yy / 4 - yy / 100 + yy / 400 + sakamoto(m - 1) + d, 7)
 
-    private def dayOfYear(y: Int, m: Int, d: Int): Int =
-        (1 until m).foldLeft(d)((acc, mm) => acc + daysInMonth(y, mm))
+    private def dayOfYear(y: Int, m: Int, d: Int): Int = (1 until m).foldLeft(d)((acc, mm) => acc + daysInMonth(y, mm))
 
     /** Number of ISO 8601 weeks in `y` (52 or 53) — 53 iff the year starts or ends on
       * a Thursday, expressed via the standard `p(y)` weekday-of-Dec-31 formula.

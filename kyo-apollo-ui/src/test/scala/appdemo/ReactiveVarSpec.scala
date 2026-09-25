@@ -30,7 +30,7 @@ class ReactiveVarSpec extends kyo.test.Test[Any]:
     // single `import kyo.apollo.*`. Never executed.
     private def surface(using Frame): ReactiveVar[Filter] < Sync =
         val rv = reactiveVar(Filter.All)
-        val _ = rv.map { v =>
+        val _  = rv.map { v =>
             val _: ReactiveVar[Filter] = v
             val _: Signal[Filter]      = v // the alias IS a Signal — read-only view
             ()

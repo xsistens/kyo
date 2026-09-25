@@ -137,11 +137,11 @@ final case class Message private (
                     // An explicit icon is fixed. Otherwise the default glyph follows the severity: constant is
                     // built once; reactive re-renders ONLY the icon in its own sub-region on severity change.
                     case Present(g) => List(GlyphSvg(g, "p-message-icon"))
-                    case Absent =>
+                    case Absent     =>
                         severityV match
                             case SeverityValue.Const(s) => List(GlyphSvg(defaultIconFor(s), "p-message-icon"))
                             case SeverityValue.Dyn(sig) => List(sig.render(s => GlyphSvg(defaultIconFor(s), "p-message-icon")))
-        val textChild: List[UI] = List(span.cssClass("p-message-text")(kids.map(toChild)*))
+        val textChild: List[UI]  = List(span.cssClass("p-message-text")(kids.map(toChild)*))
         val closeChild: List[UI] =
             if !closableFlag then Nil
             else

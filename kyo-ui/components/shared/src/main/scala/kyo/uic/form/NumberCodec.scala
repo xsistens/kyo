@@ -33,7 +33,7 @@ end NumberCodec
 object NumberCodec:
 
     given int: NumberCodec[Int] with
-        def toDouble(a: Int): Double = a.toDouble
+        def toDouble(a: Int): Double   = a.toDouble
         def fromDouble(d: Double): Int =
             val r = math.rint(d)
             if r >= Int.MaxValue.toDouble then Int.MaxValue
@@ -44,7 +44,7 @@ object NumberCodec:
     end int
 
     given long: NumberCodec[Long] with
-        def toDouble(a: Long): Double = a.toDouble
+        def toDouble(a: Long): Double   = a.toDouble
         def fromDouble(d: Double): Long =
             val r = math.rint(d)
             if r >= Long.MaxValue.toDouble then Long.MaxValue

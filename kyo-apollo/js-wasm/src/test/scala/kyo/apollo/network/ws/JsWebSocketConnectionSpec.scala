@@ -56,9 +56,9 @@ class JsWebSocketConnectionSpec extends kyo.test.Test[Any]:
         private def fire(event: String, payload: sjs.Dynamic): Unit =
             listeners.get(event).foreach(_(payload))
 
-        def open(): Unit                = fire("open", sjs.Dynamic.literal())
-        def message(text: String): Unit = fire("message", sjs.Dynamic.literal(data = text))
-        def error(): Unit               = fire("error", sjs.Dynamic.literal())
+        def open(): Unit                                     = fire("open", sjs.Dynamic.literal())
+        def message(text: String): Unit                      = fire("message", sjs.Dynamic.literal(data = text))
+        def error(): Unit                                    = fire("error", sjs.Dynamic.literal())
         def closeEvent(code: Int, reason: String = ""): Unit =
             fire("close", sjs.Dynamic.literal(code = code, reason = reason))
     end FakeSocket

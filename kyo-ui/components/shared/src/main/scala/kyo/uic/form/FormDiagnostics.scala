@@ -85,7 +85,7 @@ private[form] object FormDiagnostics:
             case r: Ast.Reactive[?]   => r.signal.current(using r.frame).map(scan)
             case f: Ast.Fragment[?]   => descend(f.children, Seen.empty)
             case k: Ast.KeyedChild[?] => scan(k.child)
-            case m: Ast.Mounted =>
+            case m: Ast.Mounted       =>
                 m.placeholderUI match
                     case Present(u) => scan(u)
                     case Absent     => Seen.empty

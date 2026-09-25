@@ -91,7 +91,7 @@ class VirtualScrollerTest extends UicTest:
             query  <- Signal.initRef("a")
             source <- RowSource.init(query, pageSize = 6)((_, o, l) => (Seq.empty[String], Total.Known(0)))
             scroll <- Signal.initRef(0.0)
-            ui = uic.VirtualScroller(source).itemSize(40).height(200).overscan(0)(s => span(s)).wired(scroll)
+            ui      = uic.VirtualScroller(source).itemSize(40).height(200).overscan(0)(s => span(s)).wired(scroll)
             handler = ui match
                 case e: UI.Ast.Element => e.attrs.onScrollPos
                 case _                 => Absent

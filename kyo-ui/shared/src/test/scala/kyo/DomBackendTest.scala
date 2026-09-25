@@ -748,7 +748,7 @@ class DomBackendTest extends UITest:
             )
         withUI(app) {
             for
-                _ <- Browser.assertText(Selector.id("panel"), "panel-content")
+                _  <- Browser.assertText(Selector.id("panel"), "panel-content")
                 ok <- Browser.evalBoolean(
                     """(function(){
                       |  var el=document.getElementById('panel');
@@ -826,9 +826,9 @@ class DomBackendTest extends UITest:
                 _ <- Browser.assertText(Selector.id("ptxt"), "n:0")
                 // Stamp an expando on the live twin: it survives ONLY if the morph patches the same node in place
                 // (an inline re-materialization or a replace would produce a fresh node without it).
-                _ <- Browser.evalDiscard("document.getElementById('ppanel').__probe=1")
-                _ <- Browser.click(Selector.id("ptick"))
-                _ <- Browser.assertText(Selector.id("ptxt"), "n:1")
+                _  <- Browser.evalDiscard("document.getElementById('ppanel').__probe=1")
+                _  <- Browser.click(Selector.id("ptick"))
+                _  <- Browser.assertText(Selector.id("ptxt"), "n:1")
                 ok <- Browser.evalBoolean(
                     """(function(){
                       |  var el=document.getElementById('ppanel');

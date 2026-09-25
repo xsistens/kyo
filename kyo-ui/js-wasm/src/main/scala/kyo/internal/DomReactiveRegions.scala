@@ -70,7 +70,7 @@ final private[kyo] class DomReactiveRegions private (
             // still detached, and a live portal twin under `<body>` shares the document with the range being
             // patched, so both stay.
             val liveRoot = treeRoot(endpoints.start)
-            val removed = ranges.iterator.collect {
+            val removed  = ranges.iterator.collect {
                 case (id, nested)
                     if id != regionId && (intersects(range, nested.start) || !(treeRoot(nested.start) eq liveRoot)) =>
                     id
@@ -87,9 +87,9 @@ final private[kyo] class DomReactiveRegions private (
                     fail(s"Duplicate reactive range id: $id")
             }
 
-            val oldElements     = elementsBetween(endpoints)
-            val incomingContent = classifyIncoming(regionId, fragment)
-            val newElements     = incomingContent.semanticRoots
+            val oldElements                                        = elementsBetween(endpoints)
+            val incomingContent                                    = classifyIncoming(regionId, fragment)
+            val newElements                                        = incomingContent.semanticRoots
             val morphTarget: Maybe[DomReactiveRegions.MorphTarget] = (liveHost, incomingContent) match
                 case (DomReactiveRegions.LiveHost.Siblings(siblingParent), DomReactiveRegions.IncomingContent.Semantic(_)) =>
                     Present(
@@ -108,7 +108,7 @@ final private[kyo] class DomReactiveRegions private (
             // what is about to depart) and `after` applies the post-patch work to whatever ended up in the range.
             // Both run for the morph as well as for the replacement: a reconciliation is still a patch, and a leave
             // transition, a portal re-home or a focus-auto seed has no business depending on which path painted it.
-            val state = before(oldElements, newElements)
+            val state   = before(oldElements, newElements)
             val morphed = morphTarget match
                 case Present(target) => tryMorph(target)
                 case Absent          => false
@@ -197,7 +197,7 @@ final private[kyo] class DomReactiveRegions private (
         // The innermost range of the path: only a leaf region binds its text, and writing through an outer range
         // would take the inner one's markers for content and delete them.
         ranges.atPath(path, innermost = true) match
-            case Absent => false
+            case Absent             => false
             case Present(endpoints) =>
                 val first = DomReactiveRegions.next(endpoints.start)
                 first match
@@ -271,7 +271,7 @@ final private[kyo] class DomReactiveRegions private (
             if !ReactiveRegion.isValidHtmlId(regionId) then fail(s"Malformed reactive range id: $regionId")
             ranges.get(regionId) match
                 // A range that was never painted has nothing to patch, and nothing a repaint would find either.
-                case None => true
+                case None            => true
                 case Some(endpoints) =>
                     val parent = validatedParent(regionId, endpoints)
                     val range  = document.createRange()
@@ -279,7 +279,7 @@ final private[kyo] class DomReactiveRegions private (
                     range.setEndBefore(endpoints.end)
                     val fragment = range.createContextualFragment(html)
                     val incoming = DomReactiveRegions.scan(document, fragment)
-                    val target = DomReactiveRegions.MorphTarget(
+                    val target   = DomReactiveRegions.MorphTarget(
                         parent,
                         endpoints.start,
                         endpoints.end,
@@ -477,7 +477,7 @@ private[kyo] object DomReactiveRegions:
         /** The range that owns `path`: the most deeply nested one when `innermost`, the outermost otherwise. */
         def atPath(path: Seq[String], innermost: Boolean): Maybe[Endpoints] =
             byBase.get(ReactiveRegion.htmlId(path)) match
-                case None => Absent
+                case None      => Absent
                 case Some(ids) =>
                     var best = ids(0)
                     var i    = 1
@@ -535,11 +535,11 @@ private[kyo] object DomReactiveRegions:
         until: dom.Node,
         found: mutable.HashMap[String, Endpoints]
     )(using Frame): Unit =
-        val open = mutable.ArrayBuffer.empty[(String, dom.Comment)]
+        val open                        = mutable.ArrayBuffer.empty[(String, dom.Comment)]
         def visit(node: dom.Node): Unit =
             startMarkerId(node) match
                 case Present(id) => open += ((id, node.asInstanceOf[dom.Comment]))
-                case Absent =>
+                case Absent      =>
                     endMarkerId(node).foreach { id =>
                         if open.isEmpty || open.last._1 != id then
                             fail(s"Crossed reactive ranges after morphing $regionId: found $id")

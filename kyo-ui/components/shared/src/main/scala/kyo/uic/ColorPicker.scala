@@ -203,7 +203,7 @@ final case class ColorPicker private (
             val eff: Any < Async = e.key match
                 case Keyboard.Enter | Keyboard.Space => dismiss(panel, restore = false, ref)
                 case Keyboard.Escape                 => dismiss(panel, restore = true, ref)
-                case k =>
+                case k                               =>
                     r.get.map { cur =>
                         val moved: Any < Async = onKey(k, ColorPicker.hsvOf(cur)) match
                             case Present(hex) => commit(hex, ref)
@@ -239,7 +239,7 @@ final case class ColorPicker private (
         def planeVisual(hex: String): UI =
             val (h, s, v)    = ColorPicker.hsvOf(hex)
             val (hr, hg, hb) = ColorPicker.hsvToRgb(h, 1.0, 1.0) // pure hue tint
-            val handle = div.cssClass("p-colorpicker-color-handle").aria("hidden", "true")
+            val handle       = div.cssClass("p-colorpicker-color-handle").aria("hidden", "true")
                 .style(_.left((s * 100).pct).top(((1 - v) * 100).pct))
             div.cssClass("p-colorpicker-color-background").style(_.bg(_.rgb(hr, hg, hb)))(toChild(handle))
         end planeVisual
@@ -510,7 +510,7 @@ object ColorPicker:
       * back to red on anything unparseable.
       */
     private[uic] def hexToRgb(raw: String): (Int, Int, Int) =
-        val h = raw.trim.stripPrefix("#")
+        val h                          = raw.trim.stripPrefix("#")
         def hx(s: String): Option[Int] =
             try Some(Integer.parseInt(s, 16))
             catch case _: Throwable => None
@@ -550,7 +550,7 @@ object ColorPicker:
         val d  = mx - mn
         val v  = mx
         val s  = if mx <= 0 then 0.0 else d / mx
-        val h =
+        val h  =
             if d <= 0 then 0.0
             else if mx == r then 60.0 * (((g - b) / d) % 6)
             else if mx == g then 60.0 * (((b - r) / d) + 2)
@@ -559,9 +559,9 @@ object ColorPicker:
     end rgbToHsv
 
     private[uic] def hsvToRgb(h: Double, s: Double, v: Double): (Int, Int, Int) =
-        val hh = ((h % 360.0) + 360.0) % 360.0 / 60.0
-        val c  = v * s
-        val x  = c * (1 - math.abs(hh % 2 - 1))
+        val hh           = ((h % 360.0) + 360.0) % 360.0 / 60.0
+        val c            = v * s
+        val x            = c * (1 - math.abs(hh % 2 - 1))
         val (r1, g1, b1) =
             if hh < 1 then (c, x, 0.0)
             else if hh < 2 then (x, c, 0.0)

@@ -42,8 +42,8 @@ class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
 
     /** A query whose `data` is a single `{ "value": Int }` object. */
     final case class ValueQuery() extends Query.Normalizable[Int]:
-        def name: String     = "Value"
-        def document: String = "query Value { value }"
+        def name: String              = "Value"
+        def document: String          = "query Value { value }"
         val dataCodec: JsonCodec[Int] =
             JsonCodec.fromSchema(using summon[Schema[ValueData]].transform[Int](_.value)(ValueData.apply))
         def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
@@ -118,7 +118,7 @@ class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
             Clock.withTimeControl { control =>
                 for
                     terminal <- RecordingTerminal.scripted(networkFail, networkFail, data(42))
-                    fiber <- consume(
+                    fiber    <- consume(
                         RetryOnErrorInterceptor(schedule = Schedule.fixed(1.second).take(2), jitter = 0.0),
                         terminal
                     )
@@ -167,7 +167,7 @@ class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
             Clock.withTimeControl { control =>
                 for
                     terminal <- RecordingTerminal.scripted(networkFail, data(42))
-                    fiber <- consume(
+                    fiber    <- consume(
                         RetryOnErrorInterceptor(schedule = Schedule.fixed(1.second).take(2), jitter = 0.0),
                         terminal
                     )

@@ -142,7 +142,7 @@ final case class Knob private (
     private[uic] def render(using Frame): UI =
         (invalidV.dynSig, invalidMsgDynV) match
             case (Absent, Absent) => renderDisabledResolved
-            case _ => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
+            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
                     copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderDisabledResolved
                 )
 
@@ -222,7 +222,7 @@ final case class Knob private (
             .strokeLinecap(Svg.StrokeLinecap.Round)
 
         val label = valueTemplateV.map(_(value)).getOrElse(InputNumber.format(value))
-        val text = Svg.text
+        val text  = Svg.text
             .cssClass("p-knob-text")
             .x(50)
             .y(57)

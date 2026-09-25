@@ -68,7 +68,7 @@ private[kyo] object DomBackend:
       * ever grows) and `morphAttrs` shields each owned attribute BY NAME. Mirrors `__kyoMark` in HtmlRenderer.clientJs.
       */
     private def markOwned(el: dom.Element, name: String): Unit =
-        val d = el.asInstanceOf[js.Dynamic]
+        val d   = el.asInstanceOf[js.Dynamic]
         val own =
             if js.isUndefined(d.__kyoOwn) then
                 val fresh = js.Dictionary.empty[Boolean]
@@ -146,9 +146,8 @@ private[kyo] object DomBackend:
     end morphEl
 
     private def morphAttrs(fromEl: dom.Element, toEl: dom.Element): Unit =
-        val tag = fromEl.tagName
-        val activeInput =
-            (fromEl eq document.activeElement) && (tag == "INPUT" || tag == "TEXTAREA")
+        val tag         = fromEl.tagName
+        val activeInput = (fromEl eq document.activeElement) && (tag == "INPUT" || tag == "TEXTAREA")
         // An attribute the imperative id-addressed channel owns is never reconciled: rendered HTML never carries the
         // client-set value, so reconciling would clobber it. Twin of the `own` shield in `__kyoMorphAttrs`.
         val owned   = ownedAttrs(fromEl)
@@ -509,7 +508,7 @@ private[kyo] object DomBackend:
             val oldFocusAuto                   = focusAutoPaths(logicalElementsOf(repainted))
             val ghosts                         = prepareLeaveGhosts(disturbed, survivors)
 
-            val touched = scala.collection.mutable.ArrayBuffer.empty[dom.Element]
+            val touched                                 = scala.collection.mutable.ArrayBuffer.empty[dom.Element]
             def place(from: dom.Node, index: Int): Unit =
                 val to = toNodes(index)
                 if to != null then
@@ -783,10 +782,10 @@ private[kyo] object DomBackend:
                     _ <- Sync.defer(diagnostics.drainInstalled(drain))
                     // Finalizers are LIFO. Register the drain first, then the channel, then listeners, so teardown
                     // removes callbacks before closing their queue and finally interrupts and joins the drain.
-                    _ <- Scope.ensure(events.close.andThen(Sync.defer(diagnostics.channelClosed())).unit)
-                    _ <- setupEventDelegation(dispatch.handle, events)
-                    _ <- setupPointerDelegation(dispatch.handle, events)
-                    _ <- setupInputMasking()
+                    _           <- Scope.ensure(events.close.andThen(Sync.defer(diagnostics.channelClosed())).unit)
+                    _           <- setupEventDelegation(dispatch.handle, events)
+                    _           <- setupPointerDelegation(dispatch.handle, events)
+                    _           <- setupInputMasking()
                     dragRuntime <- DomDragRuntime.install(
                         container,
                         event =>
@@ -888,7 +887,7 @@ private[kyo] object DomBackend:
         if el != null then
             val dyn = el.asInstanceOf[scalajs.js.Dynamic]
             verb match
-                case "focus" => focusInto(el)
+                case "focus"          => focusInto(el)
                 case "scrollIntoView" =>
                     if scalajs.js.typeOf(dyn.scrollIntoView) == "function" then
                         discard(dyn.scrollIntoView(scalajs.js.Dynamic.literal(block = "nearest")))
@@ -919,13 +918,13 @@ private[kyo] object DomBackend:
 
     private def applyOpLocal(op: HtmlOp, regions: DomReactiveRegions, commands: () => UI.Commands)(using Frame): Unit < Async =
         op match
-            case HtmlOp.Command(path, verb) => Sync.defer(applyCommandDom(regions, path, verb))
+            case HtmlOp.Command(path, verb)  => Sync.defer(applyCommandDom(regions, path, verb))
             case HtmlOp.RequestMeasure(path) =>
                 Sync.defer(measureDom(regions, path)).map {
                     case Present(rect) => commands().deliverMeasure(path, rect)
                     case Absent        => Kyo.unit
                 }
-            case HtmlOp.CommandById(id, verb) => Sync.defer(applyCommandDomById(id, verb))
+            case HtmlOp.CommandById(id, verb)  => Sync.defer(applyCommandDomById(id, verb))
             case HtmlOp.RequestMeasureById(id) =>
                 Sync.defer(measureDomById(id)).map {
                     case Present(rect) => commands().deliverMeasureById(id, rect)
@@ -1303,7 +1302,7 @@ private[kyo] object DomBackend:
       */
     private def focusAutoPaths(root: dom.Element): Set[String] =
         if !sawFocusAuto then return Set.empty
-        val els = root.querySelectorAll("[data-kyo-focus-auto]")
+        val els         = root.querySelectorAll("[data-kyo-focus-auto]")
         val descendants = (0 until els.length).flatMap { i =>
             Maybe(els(i).asInstanceOf[dom.Element].getAttribute("data-kyo-path")).toList
         }.toSet
@@ -1432,9 +1431,9 @@ private[kyo] object DomBackend:
       */
     private def sweepScrollAuto(scroll: Boolean = true): Unit =
         if !sawScrollAuto then return
-        val els  = document.querySelectorAll("[data-kyo-scroll-auto]")
-        val list = (0 until els.length).map(els(_).asInstanceOf[dom.Element])
-        val now  = list.flatMap(el => Maybe(el.getAttribute("data-kyo-path")).toList).toSet
+        val els   = document.querySelectorAll("[data-kyo-scroll-auto]")
+        val list  = (0 until els.length).map(els(_).asInstanceOf[dom.Element])
+        val now   = list.flatMap(el => Maybe(el.getAttribute("data-kyo-path")).toList).toSet
         val fresh = list.find { el =>
             val p = el.getAttribute("data-kyo-path")
             p != null && !scrollAutoPaths.contains(p)
@@ -1860,9 +1859,9 @@ private[kyo] object DomBackend:
         val wheelOptions = js.Dynamic.literal(capture = true, passive = false).asInstanceOf[dom.EventListenerOptions]
         // onScrollPosition: rAF-coalesces a scroll burst to one dispatch per frame. Scroll does not bubble, but the
         // capture-phase listener catches descendant viewport scrolls; a page-level scroll (no data-kyo-path) is ignored.
-        var scrRaf               = 0
-        var scrEl: dom.Element   = null
-        var scrPath: Seq[String] = Seq.empty
+        var scrRaf                                               = 0
+        var scrEl: dom.Element                                   = null
+        var scrPath: Seq[String]                                 = Seq.empty
         val scrollHandler: scalajs.js.Function1[dom.Event, Unit] = (e: dom.Event) =>
             findPathElement(e.target.asInstanceOf[dom.Element]).foreach { target =>
                 if declaredInChain(target, "scroll") then
@@ -2074,7 +2073,7 @@ private[kyo] object DomBackend:
         val cls     = leave.split("\\s+").filter(_.nonEmpty)
         val clsList = g.asInstanceOf[scalajs.js.Dynamic].classList
         discard(dom.window.requestAnimationFrame((_: Double) => cls.foreach(c => clsList.add(c))))
-        var done = false
+        var done            = false
         def cleanup(): Unit =
             if !done then
                 done = true
@@ -2285,7 +2284,7 @@ private[kyo] object DomBackend:
       */
     private def portalSweep(root: dom.Element): Unit =
         if root != null then
-            val els = root.querySelectorAll("[data-kyo-portal]")
+            val els  = root.querySelectorAll("[data-kyo-portal]")
             val cand =
                 (if root.hasAttribute("data-kyo-portal") then Seq(root) else Seq.empty) ++
                     (0 until els.length).map(els(_).asInstanceOf[dom.Element])

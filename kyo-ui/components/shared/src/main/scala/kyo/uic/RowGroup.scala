@@ -90,7 +90,7 @@ object RowGroup:
     def runs[A](rows: List[A])(key: A => String): List[(String, List[A])] =
         @tailrec def loop(rest: List[A], acc: List[(String, List[A])]): List[(String, List[A])] =
             rest match
-                case Nil => acc.reverse
+                case Nil       => acc.reverse
                 case head :: _ =>
                     val k           = key(head)
                     val (run, tail) = rest.span(a => key(a) == k)
@@ -117,7 +117,7 @@ object RowGroup:
         collapsible: Boolean
     ): List[A] =
         levels match
-            case Nil => rows
+            case Nil           => rows
             case level :: rest =>
                 runs(rows)(a => level.keyF(a)).flatMap { (key, run) =>
                     val groupPath = GroupPath(path :+ key)
@@ -140,7 +140,7 @@ object RowGroup:
     def blocks[A](rows: List[A])(same: (A, A) => Boolean): List[List[A]] =
         @tailrec def loop(rest: List[A], acc: List[List[A]]): List[List[A]] =
             rest match
-                case Nil => acc.reverse
+                case Nil            => acc.reverse
                 case head :: others =>
                     val (run, tail) = others.span(a => same(head, a))
                     loop(tail, (head :: run) :: acc)

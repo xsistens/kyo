@@ -134,7 +134,7 @@ final case class Paginator private (
         def withPage(rows: Int): UI =
             currentPageV match
                 case Present(cur) => body(cur, rows)
-                case Absent =>
+                case Absent       =>
                     pageRef match
                         case Present(ref) => ref.render(body(_, rows))
                         case Absent       => body(0, rows)
@@ -197,7 +197,7 @@ final case class Paginator private (
         val report: List[UI] = reportTemplateV.toList.map { t =>
             val first = if totalRecordsV > 0 then cur * rows + 1 else 0
             val last  = math.min((cur + 1) * rows, totalRecordsV)
-            val text = t
+            val text  = t
                 .replace("{currentPage}", (cur + 1).toString)
                 .replace("{totalPages}", pages.toString)
                 .replace("{first}", first.toString)
@@ -227,7 +227,7 @@ final case class Paginator private (
             case PaginatorElement.FirstPageLink => List(navButton("first", Icons.angleDoubleLeft, 0, cur == 0, "First Page"))
             case PaginatorElement.PrevPageLink  => List(navButton("prev", Icons.angleLeft, cur - 1, cur == 0, "Previous Page"))
             case PaginatorElement.PageLinks     => List(span.cssClass("p-paginator-pages")(pageButtons.map(toChild)*))
-            case PaginatorElement.NextPageLink =>
+            case PaginatorElement.NextPageLink  =>
                 List(navButton("next", Icons.angleRight, cur + 1, cur >= pages - 1, "Next Page"))
             case PaginatorElement.LastPageLink =>
                 List(navButton("last", Icons.angleDoubleRight, pages - 1, cur >= pages - 1, "Last Page"))
@@ -290,7 +290,7 @@ final case class Paginator private (
       * clamps against the render-time page count.
       */
     private def activate(target: Int)(using Frame): Any < Async =
-        val t = math.max(0, target)
+        val t                  = math.max(0, target)
         val write: Any < Async = pageRef match
             case Present(ref) => ref.set(t)
             case Absent       => ()
@@ -310,8 +310,8 @@ final case class Paginator private (
     private def changeRows(selected: String, cur: Int, oldRows: Int)(using Frame): Any < Async =
         selected.trim.toIntOption match
             case Some(newRows) if newRows >= 1 =>
-                val newPages = totalPages(newRows)
-                val target   = math.min(cur * oldRows / newRows, newPages - 1)
+                val newPages               = totalPages(newRows)
+                val target                 = math.min(cur * oldRows / newRows, newPages - 1)
                 val writeRows: Any < Async = rowsRef match
                     case Present(ref) => ref.set(newRows)
                     case Absent       => ()

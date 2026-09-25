@@ -117,7 +117,7 @@ class FormActivationTest extends kyo.test.Test[Any]:
     "Enter in a text field is still implicit submission, which has no button to ask" in {
         for
             submits <- AtomicInt.init(0)
-            _ <- withDispatch(UI.form.onSubmit(submits.getAndUpdate(_ + 1).unit)(UI.input.id("t"))) { dispatch =>
+            _       <- withDispatch(UI.form.onSubmit(submits.getAndUpdate(_ + 1).unit)(UI.input.id("t"))) { dispatch =>
                 dispatch(Seq("0"), enter(Seq("0")))
             }
             s <- submits.get
@@ -144,7 +144,7 @@ class FormActivationTest extends kyo.test.Test[Any]:
     "Space anywhere else does not submit, because a space is a character there" in {
         for
             submits <- AtomicInt.init(0)
-            _ <- withDispatch(UI.form.onSubmit(submits.getAndUpdate(_ + 1).unit)(UI.input.id("t"))) { dispatch =>
+            _       <- withDispatch(UI.form.onSubmit(submits.getAndUpdate(_ + 1).unit)(UI.input.id("t"))) { dispatch =>
                 dispatch(Seq("0"), space(Seq("0")))
             }
             s <- submits.get

@@ -361,7 +361,7 @@ final case class Overlay private (
             for
                 anchorSig <- cmds.observeViewportById(anchorId)
                 panelSig  <- cmds.observeViewportById(panelId)
-                _ <- cmds.bindStyleById(
+                _         <- cmds.bindStyleById(
                     panelId,
                     anchorSig.combineLatest(panelSig).map {
                         case (Present(a), Present(p)) => Overlay.portalGeometryFor(anchorV, matchWidthV, a, p)
@@ -388,7 +388,7 @@ final case class Overlay private (
             for
                 cmds     <- UI.commands
                 panelSig <- cmds.observeViewportById(panelId)
-                _ <- cmds.bindStyleById(
+                _        <- cmds.bindStyleById(
                     panelId,
                     panelSig.combineLatest(at).map {
                         case (Present(panel), Present(at)) => Overlay.pointerGeometryFor(at, panel)
@@ -486,7 +486,7 @@ final case class Overlay private (
             panel = panel.onKeyDown { e =>
                 e.key match
                     case Keyboard.Escape if dismissOnEscapeV => close
-                    case _ =>
+                    case _                                   =>
                         keyHandlerV match
                             case Present(f) => f(e)
                             case Absent     => ()
@@ -586,7 +586,7 @@ object Overlay:
         val vh        = anchor.viewportHeight
         val fitsBelow = anchor.y + anchor.height + panel.height <= vh - Gutter
         val fitsAbove = anchor.y - panel.height >= Gutter
-        val resolved = declared match
+        val resolved  = declared match
             case OverlayAnchor.BottomStart if !fitsBelow && fitsAbove => OverlayAnchor.TopStart
             case OverlayAnchor.BottomEnd if !fitsBelow && fitsAbove   => OverlayAnchor.TopEnd
             case OverlayAnchor.TopStart if !fitsAbove && fitsBelow    => OverlayAnchor.BottomStart
@@ -628,14 +628,14 @@ object Overlay:
       * has to reset the edge it is leaving. `opacity` lifts the portal class's unmeasured-paint gate.
       */
     private[uic] def pointerGeometryFor(at: UI.Point, panel: UI.Rect): Style =
-        val vw        = panel.viewportWidth
-        val vh        = panel.viewportHeight
-        val fitsBelow = at.y + panel.height <= vh - Gutter
-        val fitsAbove = at.y - panel.height >= Gutter
-        val fitsRight = at.x + panel.width <= vw - Gutter
-        val fitsLeft  = at.x - panel.width >= Gutter
-        val top       = if !fitsBelow && fitsAbove then at.y - panel.height else at.y
-        val left      = if !fitsRight && fitsLeft then at.x - panel.width else at.x
+        val vw                                                         = panel.viewportWidth
+        val vh                                                         = panel.viewportHeight
+        val fitsBelow                                                  = at.y + panel.height <= vh - Gutter
+        val fitsAbove                                                  = at.y - panel.height >= Gutter
+        val fitsRight                                                  = at.x + panel.width <= vw - Gutter
+        val fitsLeft                                                   = at.x - panel.width >= Gutter
+        val top                                                        = if !fitsBelow && fitsAbove then at.y - panel.height else at.y
+        val left                                                       = if !fitsRight && fitsLeft then at.x - panel.width else at.x
         def clamp(v: Double, extent: Double, viewport: Double): Double =
             math.max(Gutter, math.min(v, viewport - extent - Gutter))
         Style

@@ -30,7 +30,7 @@ class ReactiveTextBindingTest extends kyo.test.Test[Any]:
         val lastPatch                      = new AtomicReference[String]("")
         val lastRepaint                    = new AtomicReference[UI](null)
         private def bump(c: AtomicInteger) = discard(c.incrementAndGet())
-        val exchange = new UIExchange:
+        val exchange                       = new UIExchange:
             def onChange(
                 region: ReactiveRegion,
                 path: Seq[String],

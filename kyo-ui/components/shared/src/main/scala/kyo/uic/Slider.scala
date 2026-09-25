@@ -111,7 +111,7 @@ final case class Slider private (
     private[uic] def render(using Frame): UI =
         (invalidV.dynSig, invalidMsgDynV) match
             case (Absent, Absent) => renderDisabledResolved
-            case _ => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
+            case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
                     copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent).renderDisabledResolved
                 )
 
@@ -128,7 +128,7 @@ final case class Slider private (
 
     private def body(raw: Double, ref: Maybe[SignalRef[Double]])(using Frame): UI =
         val value = clamp(raw)
-        val pct =
+        val pct   =
             if maxV <= minV then 0.0
             else (value - minV) / (maxV - minV) * 100.0
         val horizontal = orientationV == Orientation.Horizontal
@@ -157,7 +157,7 @@ final case class Slider private (
         if disabledFlag.constTrue then in = in.disabled(true)
         else
             in = in.onChange { d =>
-                val next = clamp(d)
+                val next               = clamp(d)
                 val write: Any < Async = ref match
                     case Present(r) => r.set(next)
                     case Absent     => ()

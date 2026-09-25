@@ -15,7 +15,7 @@ class MountSupervisionTest extends kyo.test.Test[Any]:
     /** Records every emission's rendered HTML and completes marker promises on first match. */
     final private class Recording(markers: Dict[String, Fiber.Promise.Unsafe[String, Any]]):
         val emissions = new CopyOnWriteArrayList[String]()
-        val exchange = new UIExchange:
+        val exchange  = new UIExchange:
             def onChange(
                 region: ReactiveRegion,
                 path: Seq[String],

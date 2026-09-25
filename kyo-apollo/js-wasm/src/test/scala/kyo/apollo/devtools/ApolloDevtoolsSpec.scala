@@ -62,7 +62,7 @@ class ApolloDevtoolsSpec extends kyo.test.Test[Any]:
         def name: String                    = "Login"
         def document: String                = "mutation Login($input: LoginInput!) { login(input: $input) { ok user { id } } }"
         val dataCodec: JsonCodec[LoginData] = JsonCodec.fromSchema[LoginData]
-        def rootField: CompiledField =
+        def rootField: CompiledField        =
             CompiledField(
                 "data",
                 CompiledNamedType("Mutation"),

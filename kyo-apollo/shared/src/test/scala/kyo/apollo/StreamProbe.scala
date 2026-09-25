@@ -65,7 +65,7 @@ object StreamProbe:
           */
         def next(using Frame): A < Async =
             Abort.run[Closed](channel.take).map {
-                case Result.Success(a) => a
+                case Result.Success(a)      => a
                 case Result.Failure(closed) =>
                     throw new NoSuchElementException(s"pulled from an already-closed stream: $closed")
                 case Result.Panic(cause) => throw cause

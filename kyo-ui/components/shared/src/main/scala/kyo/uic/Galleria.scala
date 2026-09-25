@@ -203,7 +203,7 @@ final case class Galleria private (
 
             val preview: UI = itemTemplateF match
                 case Present(f) => f(current)
-                case Absent =>
+                case Absent     =>
                     img(ImgSrc.Path(current.src), current.alt).cssClass("p-uic-galleria-image")
 
             val titleSlot: List[UI] = current.titleDyn match
@@ -293,7 +293,7 @@ final case class Galleria private (
                             itemEl = itemEl.cssClass("p-galleria-thumbnail-item-current").cssClass("p-galleria-thumbnail-item-active")
                         val content: UI = thumbnailTemplateF match
                             case Present(f) => f(it)
-                            case Absent =>
+                            case Absent     =>
                                 img(ImgSrc.Path(it.thumbnailSrc.getOrElse(it.src)), it.alt)
                                     .cssClass("p-uic-galleria-thumbnail-image")
                         itemEl(
@@ -342,7 +342,7 @@ final case class Galleria private (
       * then fires `onItemChange`.
       */
     private def setActive(target: Int)(using Frame): Any < Async =
-        val n = itemList.size
+        val n    = itemList.size
         val next =
             if n == 0 then 0
             else if circularFlag then ((target % n) + n) % n

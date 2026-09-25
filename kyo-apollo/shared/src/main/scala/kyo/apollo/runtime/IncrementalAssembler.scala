@@ -93,7 +93,7 @@ object IncrementalAssembler:
     /** Apply one part to the accumulated state. */
     private def applyPart(acc: Acc, part: MultipartPart)(using Frame): Applied =
         part match
-            case MultipartPart.Malformed(error) => Result.fail(error)
+            case MultipartPart.Malformed(error)           => Result.fail(error)
             case MultipartPart.Payload(Json.JObj(fields)) =>
                 val awaitingMore = fields.get("hasNext") match
                     case Some(Json.JBool(more)) => more
@@ -101,7 +101,7 @@ object IncrementalAssembler:
                 val extensions = fields.get("extensions") match
                     case Some(Json.JObj(ext)) => acc.extensions ++ ext
                     case _                    => acc.extensions
-                val announced = acc.copy(awaitingMore = awaitingMore, extensions = extensions)
+                val announced        = acc.copy(awaitingMore = awaitingMore, extensions = extensions)
                 val patched: Applied =
                     fields.get("incremental") match
                         case Some(Json.JArr(items)) =>
@@ -136,7 +136,7 @@ object IncrementalAssembler:
         item match
             case Json.JObj(inc) =>
                 inc.get("path") match
-                    case None => Result.fail(ApolloParseException(item, "an incremental payload with a path"))
+                    case None       => Result.fail(ApolloParseException(item, "an incremental payload with a path"))
                     case Some(path) =>
                         pathOf(path).flatMap { segments =>
                             val withData: Applied =
@@ -162,13 +162,13 @@ object IncrementalAssembler:
     private def spliceData(acc: Acc, path: Json, segments: Chunk[String | Int], data: Json)(using Frame): Applied =
         JsonPath.splice(acc.data, segments, data) match
             case Present(tree) => Result.succeed((acc.copy(data = tree), true))
-            case Absent =>
+            case Absent        =>
                 Result.fail(ApolloParseException(path, s"${shown(segments)} to be a path in the accumulated response"))
 
     private def spliceItems(acc: Acc, path: Json, segments: Chunk[String | Int], items: Chunk[Json])(using Frame): Applied =
         JsonPath.spliceItems(acc.data, segments, items) match
             case Present(tree) => Result.succeed((acc.copy(data = tree), true))
-            case Absent =>
+            case Absent        =>
                 Result.fail(ApolloParseException(
                     path,
                     s"${shown(segments)} to be the path of a list in the accumulated response, ending at its size"

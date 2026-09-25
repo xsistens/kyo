@@ -252,7 +252,7 @@ object RowSource:
             windowRef  <- Signal.initRef(Window(0, Seq.empty[A]))
             totalRef   <- Signal.initRef(Total.Unknown(false): Total)
             loadingRef <- Signal.initRef(true)
-            cache <- Cache.init[(Q, Int), Fiber[(Seq[A], Total), Any]](
+            cache      <- Cache.init[(Q, Int), Fiber[(Seq[A], Total), Any]](
                 maxSize = room,
                 expireAfterWrite = config.expireAfterWrite
             )
@@ -304,7 +304,7 @@ object RowSource:
         private def warm(q: Q, at: Int)(using Frame): Fiber[(Seq[A], Total), Any] < Sync =
             cache.get((q, at)).map {
                 case Present(f) => f
-                case Absent =>
+                case Absent     =>
                     Fiber.initUnscoped(fetch(q, at * block, block)).map(f => cache.add((q, at), f))
             }
 
@@ -369,7 +369,7 @@ object RowSource:
           */
         private def neighbours(first: Int, last: Int, total: Total): List[Int] =
             val before = (math.max(0, first - ahead) until first).toList
-            val after = total match
+            val after  = total match
                 case Total.Known(n) =>
                     val lastBlock = math.max(0, (n - 1) / block)
                     ((last + 1) to math.min(last + ahead, lastBlock)).toList

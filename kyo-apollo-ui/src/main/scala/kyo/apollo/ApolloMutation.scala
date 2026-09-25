@@ -103,10 +103,10 @@ object MutationState:
                     case Present(d) => MutationState.PartialData(d, gql.errors)
                     case Absent     => MutationState.Failure(gql)
             case Present(ex) => MutationState.Failure(ex)
-            case Absent =>
+            case Absent      =>
                 resp.data match
                     case Present(d) => MutationState.Success(d)
-                    case Absent =>
+                    case Absent     =>
                         MutationState.Failure(
                             DefaultApolloException("The server did not return any data")
                         )

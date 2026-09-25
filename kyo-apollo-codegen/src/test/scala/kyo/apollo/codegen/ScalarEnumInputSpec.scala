@@ -21,7 +21,7 @@ class ScalarEnumInputSpec extends kyo.test.Test[Any]:
     given CanEqual[Any, Any] = CanEqual.derived
 
     private def resource(name: String): String =
-        val path = s"/codegenExample/$name"
+        val path   = s"/codegenExample/$name"
         val stream = Option(getClass.getResourceAsStream(path))
             .getOrElse(sys.error(s"fixture not found on classpath: $path"))
         Using.resource(Source.fromInputStream(stream, "UTF-8"))(_.mkString)

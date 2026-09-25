@@ -166,7 +166,7 @@ private[ws] object JsWebSocketConnection:
         on("close")(e =>
             val code      = closeCode(e)
             val reasonOpt = Option(closeReason(e)).filter(_.nonEmpty)
-            val failure =
+            val failure   =
                 if code == WebSocketConnection.NormalClosure then Absent
                 else Present(ApolloWebSocketClosedException(code, reasonOpt))
             terminate(conn, incomingCh, done, opened, failure)

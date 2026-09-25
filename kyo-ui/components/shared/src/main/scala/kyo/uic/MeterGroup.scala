@@ -112,7 +112,7 @@ final case class MeterGroup private (
 
     private[uic] def render(using Frame): UI =
         val totalPct = math.round(pct(metersV.map(_.value).sum))
-        val root = div
+        val root     = div
             .cssClass("p-metergroup")
             .cssClass("p-component")
             .cssClass(s"p-metergroup-${orientationV.token}")
@@ -127,7 +127,7 @@ final case class MeterGroup private (
             case (m, i) if meterTemplateV.isDefined || math.round(pct(m.value)) != 0L =>
                 meterTemplateV match
                     case Present(f) => f(m, pct(m.value))
-                    case Absent =>
+                    case Absent     =>
                         val sized: Style.type => Style = orientationV match
                             case Orientation.Horizontal => _.width(Length.Pct(pct(m.value))).bg(colorOf(m, i))
                             case Orientation.Vertical   => _.height(Length.Pct(pct(m.value))).bg(colorOf(m, i))
@@ -141,7 +141,7 @@ final case class MeterGroup private (
                 metersV.zipWithIndex.map { (m, i) =>
                     val content: List[UI] = labelTemplateV match
                         case Present(f) => List(f(m, pct(m.value)))
-                        case Absent =>
+                        case Absent     =>
                             val lead: UI = m.icon match
                                 case Present(g) =>
                                     GlyphSvg.styled(g, _.color(colorOf(m, i)), "p-metergroup-label-icon")
@@ -164,7 +164,7 @@ final case class MeterGroup private (
 
         val startLabels: List[UI] = if labelPositionV == LabelPosition.Start then List(labels) else Nil
         val endLabels: List[UI]   = if labelPositionV == LabelPosition.End then List(labels) else Nil
-        val body: List[UI] =
+        val body: List[UI]        =
             startLabels ++ startTemplateV.toList ++ List(meters) ++ endTemplateV.toList ++ endLabels
         root(body.map(toChild)*)
     end render

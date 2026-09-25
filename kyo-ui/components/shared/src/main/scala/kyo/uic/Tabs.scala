@@ -248,20 +248,19 @@ final case class Tabs private (
     private def bodyWith(active: String, ids: List[String], focus: String => Any < Async)(using Frame): UI =
         // The positions the keyboard may land on: a disabled tab is out of the tab order, so an
         // arrow steps over it.
-        val navigable = tabList.zipWithIndex.collect { case (t, i) if !t.disabled => i }
+        val navigable         = tabList.zipWithIndex.collect { case (t, i) if !t.disabled => i }
         val headers: List[UI] = tabList.zipWithIndex.map { (t, i) =>
             val isActive            = t.id == active
             val iconSlot: List[UI]  = t.icon.toList.map(g => GlyphSvg(g, "p-uic-tab-icon"))
             val countSlot: List[UI] = t.additionalText.toList.map(c => span.cssClass("p-uic-tab-count")(c))
-            val barSlot: List[UI] =
+            val barSlot: List[UI]   =
                 if isActive then List(span.cssClass("p-tablist-active-bar").aria("hidden", "true"))
                 else Nil
             val textSlot: UI = t.text match
                 case TextValue.Const(x) => span(x): UI
                 case TextValue.Dyn(s)   => span(s): UI
-            val content: List[UI] =
-                (iconSlot :+ textSlot) ++ countSlot ++ barSlot
-            val kids = content.map(toChild)
+            val content: List[UI] = (iconSlot :+ textSlot) ++ countSlot ++ barSlot
+            val kids              = content.map(toChild)
             t.urlV match
                 case Present(u) =>
                     // An anchor has no native `disabled`, so a disabled nav tab drops its

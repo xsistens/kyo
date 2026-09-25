@@ -134,8 +134,8 @@ object ApolloDevtools:
             // Memoize parse: documents are immutable per record, and the panel polls the
             // getters ~1s, so without this every op is re-parsed once per second. Bounded
             // (a real cap, so the devtools memory view can show a genuine size/limit pair).
-            val astCap   = 100
-            val astCache = scala.collection.mutable.Map.empty[String, js.Any]
+            val astCap                      = 100
+            val astCache                    = scala.collection.mutable.Map.empty[String, js.Any]
             val memoParse: String => js.Any = sdl =>
                 astCache.getOrElseUpdate(
                     sdl, {
@@ -203,7 +203,7 @@ object ApolloDevtools:
 
         // cache.extract() returns fresh normalized JSON; the four write methods are
         // no-ops that exist only so the devtools cacheWrite `patch()` can wrap them.
-        val cache = js.Dynamic.literal()
+        val cache                                   = js.Dynamic.literal()
         val extractFn: js.Function1[js.Any, js.Any] = (optimistic: js.Any) =>
             val include = js.isUndefined(optimistic) || optimistic.asInstanceOf[Boolean]
             jsonToJs(extract(include))
@@ -342,12 +342,12 @@ object ApolloDevtools:
 
     /** Convert an internal [[Json]] value to its plain JS equivalent. */
     private def jsonToJs(json: Json): js.Any = json match
-        case Json.JNull    => null
-        case Json.JBool(b) => b
-        case Json.JInt(n)  => n.toDouble
-        case Json.JDec(n)  => n.toDouble
-        case Json.JNum(n)  => n
-        case Json.JStr(s)  => s
+        case Json.JNull       => null
+        case Json.JBool(b)    => b
+        case Json.JInt(n)     => n.toDouble
+        case Json.JDec(n)     => n.toDouble
+        case Json.JNum(n)     => n
+        case Json.JStr(s)     => s
         case Json.JArr(items) =>
             val arr = new js.Array[js.Any]()
             items.foreach(v => arr.push(jsonToJs(v)))

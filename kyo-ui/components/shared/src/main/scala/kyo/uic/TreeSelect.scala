@@ -239,7 +239,7 @@ final case class TreeSelect private (
         TextValue.reactive(placeholderV): ph =>
             (invalidV.dynSig, invalidMsgDynV) match
                 case (Absent, Absent) => bodyStatic(current, exp, isOpen, st, ph)
-                case _ => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
+                case _                => FieldInvalid.reactive(invalidV.dynSig, invalidMsgDynV, invalidMsgV)((red, msg) =>
                         copy(invalidV = Present(BoolValue.Const(red)), invalidMsgV = msg, invalidMsgDynV = Absent)
                             .bodyStatic(current, exp, isOpen, st, ph)
                     )
@@ -332,7 +332,7 @@ final case class TreeSelect private (
                 }
 
         val panelUI: List[UI] = st.toList.map { state =>
-            val roving = Roving(state.hi, state.hiV, state.idBase, ownsFocus = false)
+            val roving     = Roving(state.hi, state.hiV, state.idBase, ownsFocus = false)
             val treeUI: UI = hosted match
                 case Absent =>
                     EmptyContent.render(emptyContentV, "No results found")(c =>

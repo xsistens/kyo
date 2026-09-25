@@ -60,7 +60,7 @@ final case class Icon private (
             .cssClass("p-icon")
             .cssClass("p-uic-icon")
             .data("uic-icon", glyph.name)
-        val withTip = if showTooltipFlag then base.jsProp("title", glyph.name) else base
+        val withTip  = if showTooltipFlag then base.jsProp("title", glyph.name) else base
         val withMode = modeV match
             case Present(m) => applyMode(withTip, m)
             case Absent     => implicitMode(withTip)
@@ -80,7 +80,7 @@ final case class Icon private (
             case IconMode.Decorative =>
                 el.role("presentation").aria("hidden", "true")
             case IconMode.Interactive =>
-                val btn = el.role("button").tabIndex(0)
+                val btn      = el.role("button").tabIndex(0)
                 val withName = accNameV match
                     case Present(TextValue.Const(n)) => btn.aria("label", n)
                     case Present(TextValue.Dyn(s))   => btn.aria("label", s)

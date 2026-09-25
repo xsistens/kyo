@@ -41,13 +41,13 @@ enum Json derives CanEqual:
 
     /** Render this value as compact, valid JSON text. */
     def render: String = this match
-        case JNull       => "null"
-        case JBool(v)    => if v then "true" else "false"
-        case JInt(v)     => v.toString
-        case JDec(v)     => v.toString
-        case JNum(v)     => Json.renderNumber(v)
-        case JStr(v)     => Json.renderString(v)
-        case JArr(items) => items.map(_.render).mkString("[", ",", "]")
+        case JNull        => "null"
+        case JBool(v)     => if v then "true" else "false"
+        case JInt(v)      => v.toString
+        case JDec(v)      => v.toString
+        case JNum(v)      => Json.renderNumber(v)
+        case JStr(v)      => Json.renderString(v)
+        case JArr(items)  => items.map(_.render).mkString("[", ",", "]")
         case JObj(fields) =>
             fields
                 .map((k, v) => s"${Json.renderString(k)}:${v.render}")

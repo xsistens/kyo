@@ -1150,7 +1150,7 @@ class SignalTest extends kyo.test.Test[Any]:
             for
                 seen     <- AtomicRef.init(Chunk.empty[Int])
                 released <- AtomicRef.init(false)
-                fiber <- Fiber.initUnscoped(Signal.initConst(7).observe(20.millis) { v =>
+                fiber    <- Fiber.initUnscoped(Signal.initConst(7).observe(20.millis) { v =>
                     Scope.ensure(released.set(true)).andThen(recordValue(seen, v))
                 })
                 _         <- pollUntil(seen.get.map(_.nonEmpty))
@@ -1190,7 +1190,7 @@ class SignalTest extends kyo.test.Test[Any]:
                 gate    <- Latch.init(1)
                 started <- Latch.init(1)
                 seen    <- AtomicRef.init(Chunk.empty[Int])
-                fiber <- Fiber.initUnscoped(ref.observe(Duration.Infinity) { v =>
+                fiber   <- Fiber.initUnscoped(ref.observe(Duration.Infinity) { v =>
                     recordValue(seen, v).andThen {
                         if v == 0 then started.release.andThen(gate.await) else (): Unit < Async
                     }

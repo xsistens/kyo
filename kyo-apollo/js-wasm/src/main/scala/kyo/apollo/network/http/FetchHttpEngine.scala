@@ -97,8 +97,8 @@ final class FetchHttpEngine extends HttpEngine:
       */
     private def fetched[A](result: A < Async)(using Frame): A < (Async & Abort[HttpEngineFailure]) =
         Abort.run[Throwable](result).map {
-            case Result.Success(value)                => value
-            case Result.Panic(interrupt: Interrupted) => Abort.panic(interrupt)
+            case Result.Success(value)                                                => value
+            case Result.Panic(interrupt: Interrupted)                                 => Abort.panic(interrupt)
             case Result.Panic(e: js.JavaScriptException) if isAbortError(e.exception) =>
                 Abort.panic(Interrupted(summon[Frame], Present("the fetch was aborted")))
             case Result.Error(rejection) => Abort.fail(ApolloNetworkException(cause = rejection))
@@ -125,8 +125,8 @@ final class FetchHttpEngine extends HttpEngine:
         }
         init.headers = headers
         request.fields.body match
-            case HttpRequestBody.Empty      => ()
-            case HttpRequestBody.Text(json) => init.body = json
+            case HttpRequestBody.Empty            => ()
+            case HttpRequestBody.Text(json)       => init.body = json
             case HttpRequestBody.Multipart(parts) =>
                 val data = new dom.FormData()
                 parts.foreach { part =>

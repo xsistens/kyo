@@ -13,7 +13,7 @@ object TokensGen:
 
     private def chunked(ident: String, pairs: Seq[(String, String)]): String =
         val groups = pairs.grouped(250).toSeq
-        val defs = groups.zipWithIndex
+        val defs   = groups.zipWithIndex
             .map { (g, i) =>
                 val body = g
                     .map { (n, v) =>
@@ -42,7 +42,7 @@ object TokensGen:
         require(Files.isDirectory(tokensDir), s"token JSON missing — run gen/fetch.sh first ($tokensDir)")
 
         val sections = Presets.flatMap { preset =>
-            val json = ujson.read(Files.readString(tokensDir.resolve(s"$preset.json")))
+            val json                                      = ujson.read(Files.readString(tokensDir.resolve(s"$preset.json")))
             def pairs(key: String): Seq[(String, String)] =
                 json(key).arr.toSeq.map(e => (e(0).str.stripPrefix("--"), e(1).str))
             val light = pairs("light")

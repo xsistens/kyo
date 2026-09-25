@@ -76,7 +76,7 @@ class MountKeyedMissWiringTest extends kyo.test.Test[Any]:
                 root <- ReactiveUI.normalize(ui, Seq.empty)
                 _    <- ReactiveUI.subscribe(root, quiet)
                 _    <- Async.sleep(50.millis)
-                _ <- Kyo.foreachDiscard(1 to passes) { _ =>
+                _    <- Kyo.foreachDiscard(1 to passes) { _ =>
                     outer.getAndUpdate(_ + 1).andThen(Async.sleep(30.millis))
                 }
                 _ <- Async.sleep(300.millis)

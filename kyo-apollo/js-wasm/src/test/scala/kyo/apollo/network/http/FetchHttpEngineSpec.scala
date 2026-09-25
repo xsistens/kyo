@@ -114,10 +114,10 @@ class FetchHttpEngineSpec extends kyo.test.Test[Any]:
         }
 
         "streaming: the fetch stays open while the Scope holds the response and is aborted when the Scope closes" in {
-            var signal: sjs.UndefOr[dom.AbortSignal] = sjs.undefined
+            var signal: sjs.UndefOr[dom.AbortSignal]                                 = sjs.undefined
             val answering: sjs.Function2[sjs.Any, sjs.Dynamic, sjs.Promise[sjs.Any]] = (_, init) =>
                 signal = init.signal.asInstanceOf[sjs.UndefOr[dom.AbortSignal]]
-                val body = sjs.Dynamic.newInstance(sjs.Dynamic.global.ReadableStream)(sjs.Dynamic.literal())
+                val body     = sjs.Dynamic.newInstance(sjs.Dynamic.global.ReadableStream)(sjs.Dynamic.literal())
                 val response = sjs.Dynamic.newInstance(sjs.Dynamic.global.Response)(
                     body,
                     sjs.Dynamic.literal(status = 200, headers = sjs.Dynamic.literal("Content-Type" -> "multipart/mixed; boundary=b"))
@@ -141,7 +141,7 @@ class FetchHttpEngineSpec extends kyo.test.Test[Any]:
                 (_, _) => sjs.Promise.reject(abortError()).asInstanceOf[sjs.Promise[sjs.Any]]
             withFetch(rejecting) {
                 Abort.run[Throwable](engine.execute(request)).map {
-                    case Result.Panic(e: Interrupted) => assert(e.by.exists(_.contains("aborted")), s"$e")
+                    case Result.Panic(e: Interrupted)              => assert(e.by.exists(_.contains("aborted")), s"$e")
                     case Result.Failure(e: ApolloNetworkException) =>
                         fail(s"an AbortError was reported as a network failure: $e")
                     case other => fail(s"expected an Interrupted panic, got $other")

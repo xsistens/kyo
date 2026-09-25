@@ -172,7 +172,7 @@ class TestingModuleSpec extends kyo.test.Test[Any]:
                 _         <- transport.registerData(Fixtures.CurrentUserQuery(), Fixtures.userData("Bob"))
                 client    <- TestApolloClient.cachedWithTransport(transport)
                 _         <- client.query(Fixtures.CurrentUserQuery()).execute
-                cached <- client
+                cached    <- client
                     .query(Fixtures.CurrentUserQuery())
                     .fetchPolicy(FetchPolicy.CacheOnly)
                     .execute

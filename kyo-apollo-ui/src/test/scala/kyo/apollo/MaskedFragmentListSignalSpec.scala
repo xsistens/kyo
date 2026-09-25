@@ -105,7 +105,7 @@ class MaskedFragmentListSignalSpec extends kyo.test.Test[Any]:
                 c    <- client(body)
                 data <- c.query(countriesQuery).data
                 refs <- Signal.initRef(data.countries.map(e => Entry.Country(e.countryCard)): Seq[Entry])
-                sig <-
+                sig  <-
                     given ApolloClient = c
                     Apollo.fragmentRows(refs)(refOf)(label, heading)
                 now <- sig.current
@@ -117,7 +117,7 @@ class MaskedFragmentListSignalSpec extends kyo.test.Test[Any]:
                 c    <- client(body)
                 data <- c.query(countriesQuery).data
                 refs <- Signal.initRef(data.countries.map(e => Entry.Country(e.countryCard)): Seq[Entry])
-                sig <-
+                sig  <-
                     given ApolloClient = c
                     Apollo.fragmentRows(refs)(refOf)(label, heading)
                 _   <- rename(c, data.countries(1).countryCard, "Frankreich")
@@ -132,7 +132,7 @@ class MaskedFragmentListSignalSpec extends kyo.test.Test[Any]:
                 all = data.countries.map(e => Entry.Country(e.countryCard))
                 // Start with a first page of one row, then append the rest.
                 refs <- Signal.initRef(all.take(1): Seq[Entry])
-                sig <-
+                sig  <-
                     given ApolloClient = c
                     Apollo.fragmentRows(refs)(refOf)(label, heading)
                 first <- sig.current
@@ -154,7 +154,7 @@ class MaskedFragmentListSignalSpec extends kyo.test.Test[Any]:
                 data <- c.query(countriesQuery).data
                 mixed = Entry.Heading("Europe") +: data.countries.map(e => Entry.Country(e.countryCard))
                 refs <- Signal.initRef(mixed: Seq[Entry])
-                sig <-
+                sig  <-
                     given ApolloClient = c
                     Apollo.fragmentRows(refs)(refOf)(label, heading)
                 now <- sig.current
@@ -166,7 +166,7 @@ class MaskedFragmentListSignalSpec extends kyo.test.Test[Any]:
                 c    <- client(body)
                 data <- c.query(countriesQuery).data
                 refs <- Signal.initRef(data.countries.map(_.countryCard): Seq[CountryCard.fields.Ref])
-                sig <-
+                sig  <-
                     given ApolloClient = c
                     Apollo.fragments(CountryCard.fields)(refs)
                 now   <- sig.current
@@ -182,7 +182,7 @@ class MaskedFragmentListSignalSpec extends kyo.test.Test[Any]:
                 c    <- ApolloClient.init(ApolloClient.Config(serverUrl).httpEngine(StaticEngine(body)))
                 data <- c.query(countriesQuery).data
                 refs <- Signal.initRef(data.countries.map(e => Entry.Country(e.countryCard)): Seq[Entry])
-                sig <-
+                sig  <-
                     given ApolloClient = c
                     Apollo.fragmentRows(refs)(refOf)(label, heading)
                 now <- sig.current

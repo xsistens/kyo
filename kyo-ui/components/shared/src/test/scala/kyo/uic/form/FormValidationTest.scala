@@ -162,7 +162,7 @@ class FormValidationTest extends UicTest:
                     ui  <- Form.errorSummary(form)
                     els <- elements(ui)
                 yield
-                    val jump = els.filter(_.attrs.cssClasses.contains("p-uic-error-link"))
+                    val jump  = els.filter(_.attrs.cssClasses.contains("p-uic-error-link"))
                     val plain = els.filter(e =>
                         e.attrs.cssClasses.contains("p-uic-invalid-message") && !e.attrs.cssClasses.contains("p-uic-error-link")
                     )
@@ -235,7 +235,7 @@ class FormValidationTest extends UicTest:
             (emptyErrs, filledErrs) <-
                 for
                     f1 <- mkForm
-                    _ <- f1.fieldArray(2)((row, _) =>
+                    _  <- f1.fieldArray(2)((row, _) =>
                         row.field.rules(Validator.required()).on(Activation.Submit).declare.map(_ => (fragment(): UI))
                     )
                     s1 <- f1.allErrors
@@ -243,7 +243,7 @@ class FormValidationTest extends UicTest:
                     e1 <- s1.current
 
                     f2 <- mkForm
-                    _ <- f2.fieldArray(2)((row, _) =>
+                    _  <- f2.fieldArray(2)((row, _) =>
                         row.field("ok").rules(Validator.required()).on(Activation.Submit).declare.map(_ => (fragment(): UI))
                     )
                     s2 <- f2.allErrors
@@ -261,7 +261,7 @@ class FormValidationTest extends UicTest:
                 for
                     captured <- AtomicRef.init(Chunk.empty[FormField[String]])
                     form     <- mkForm
-                    arr <- form.fieldArray(0) { (row, _) =>
+                    arr      <- form.fieldArray(0) { (row, _) =>
                         for
                             fld <- row.field("x").rules(Validator.required()).on(Activation.Submit).declare
                             _   <- captured.updateAndGet(_ :+ fld)
@@ -375,7 +375,7 @@ class FormValidationTest extends UicTest:
             // handed, which is the whole point of binding the payloads rather than names.
             (small, tooBig) <-
                 for
-                    form <- mkForm
+                    form  <- mkForm
                     field <- form.field(Seq.empty[UI.FilePayload])
                         .rules(Validator.satisfy[Seq[UI.FilePayload]]("file-too-large")(_.forall(_.size <= 2048)))
                         .on(Activation.Submit)
@@ -407,7 +407,7 @@ class FormValidationTest extends UicTest:
                 for
                     captured <- AtomicRef.init(Chunk.empty[FormField[String]])
                     form     <- mkForm
-                    arr <- form.fieldArray(0) { (row, _) =>
+                    arr      <- form.fieldArray(0) { (row, _) =>
                         for
                             fld <- row.field("ok").rules(Validator.required()).on(Activation.Change).declare
                             _   <- captured.updateAndGet(_ :+ fld)
@@ -440,7 +440,7 @@ class FormValidationTest extends UicTest:
                 for
                     ctls <- AtomicRef.init(Chunk.empty[FieldArray.Row])
                     form <- mkForm
-                    arr <- form.fieldArray(0) { (row, ctl) =>
+                    arr  <- form.fieldArray(0) { (row, ctl) =>
                         ctls.updateAndGet(_ :+ ctl).andThen(row.field.on(Activation.Submit).declare.map(_ =>
                             (fragment(): UI)
                         ))
@@ -464,7 +464,7 @@ class FormValidationTest extends UicTest:
             (uniqueClean, dupFormErr, dupRowErr, clearedOnEdit) <-
                 for
                     form <- mkForm
-                    arr <- form.fieldArrayOf[FormField[String]](2) { (row, _) =>
+                    arr  <- form.fieldArrayOf[FormField[String]](2) { (row, _) =>
                         row.field.on(Activation.Submit).declare.map(f => ((fragment(): UI), f))
                     }
                     _ = arr.satisfy("dup") { rows =>
@@ -786,7 +786,7 @@ class FormValidationTest extends UicTest:
             (emptyValue, emptyValid, parsed, pastFails, futureOk) <-
                 for
                     form <- mkForm
-                    df <- form.dateField[LocalDate](Absent)
+                    df   <- form.dateField[LocalDate](Absent)
                         .rules(Validator.satisfy[LocalDate]("after-2020")(_.isAfter(LocalDate.of(2020, 1, 1))))
                         .on(Activation.Submit)
                         .declare

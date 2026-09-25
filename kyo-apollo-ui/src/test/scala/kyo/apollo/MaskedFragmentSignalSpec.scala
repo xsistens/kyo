@@ -76,7 +76,7 @@ class MaskedFragmentSignalSpec extends kyo.test.Test[Any]:
             for
                 c    <- client(germanyBody)
                 data <- c.query(countryQuery).data
-                sig <-
+                sig  <-
                     given ApolloClient = c
                     Apollo.fragment(data.country.countryCard)
                 current <- sig.current
@@ -105,7 +105,7 @@ class MaskedFragmentSignalSpec extends kyo.test.Test[Any]:
                 france <- ApolloClient.init(shared.httpEngine(StaticEngine(franceBody)))
                 data   <- germany.query(countryQuery).data
                 ref = data.country.countryCard
-                key <- germany.apolloStore.keyOf(ref.typeName, ref.raw)
+                key              <- germany.apolloStore.keyOf(ref.typeName, ref.raw)
                 removedWhileOpen <- Scope.run {
                     given ApolloClient = germany
                     for
@@ -127,7 +127,7 @@ class MaskedFragmentSignalSpec extends kyo.test.Test[Any]:
             for
                 c    <- ApolloClient.init(ApolloClient.Config(serverUrl).httpEngine(StaticEngine(germanyBody)))
                 data <- c.query(countryQuery).data
-                sig <-
+                sig  <-
                     given ApolloClient = c
                     Apollo.fragment(data.country.countryCard)
                 current <- sig.current
@@ -143,7 +143,7 @@ class MaskedFragmentSignalSpec extends kyo.test.Test[Any]:
                     ApolloClient.Config(serverUrl).httpEngine(StaticEngine(germanyBody)).normalizedCache(MemoryCache())
                 )
                 data <- c.query(countryQuery).data
-                sig <-
+                sig  <-
                     given ApolloClient = c
                     Apollo.fragment(data.country.countryCard)
                 current <- sig.current

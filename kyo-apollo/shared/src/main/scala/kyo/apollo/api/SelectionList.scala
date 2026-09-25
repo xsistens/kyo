@@ -476,9 +476,10 @@ trait SelectionList[S, Origin, Out[_ <: AnyNamedTuple]]:
         ] =:= R
     ): Out[R] =
         val s = selector
-        fromFields(as(f1(s) ~ f2(s) ~ f3(s) ~ f4(s) ~ f5(s) ~ f6(s) ~ f7(s) ~ f8(s) ~ f9(s) ~ f10(s) ~ f11(s) ~ f12(s) ~ f13(s) ~ f14(
-            s
-        ) ~ f15(s) ~ f16(s)))
+        fromFields(as(f1(s) ~ f2(s) ~ f3(s) ~ f4(s) ~ f5(s) ~ f6(s) ~ f7(s) ~ f8(s) ~ f9(s) ~ f10(s) ~ f11(s) ~ f12(s) ~ f13(s) ~
+            f14(
+                s
+            ) ~ f15(s) ~ f16(s)))
     end apply
 
     final def apply[
@@ -534,9 +535,10 @@ trait SelectionList[S, Origin, Out[_ <: AnyNamedTuple]]:
         ] =:= R
     ): Out[R] =
         val s = selector
-        fromFields(as(f1(s) ~ f2(s) ~ f3(s) ~ f4(s) ~ f5(s) ~ f6(s) ~ f7(s) ~ f8(s) ~ f9(s) ~ f10(s) ~ f11(s) ~ f12(s) ~ f13(s) ~ f14(
-            s
-        ) ~ f15(s) ~ f16(s) ~ f17(s)))
+        fromFields(as(f1(s) ~ f2(s) ~ f3(s) ~ f4(s) ~ f5(s) ~ f6(s) ~ f7(s) ~ f8(s) ~ f9(s) ~ f10(s) ~ f11(s) ~ f12(s) ~ f13(s) ~
+            f14(
+                s
+            ) ~ f15(s) ~ f16(s) ~ f17(s)))
     end apply
 
     final def apply[
@@ -597,9 +599,10 @@ trait SelectionList[S, Origin, Out[_ <: AnyNamedTuple]]:
         ] =:= R
     ): Out[R] =
         val s = selector
-        fromFields(as(f1(s) ~ f2(s) ~ f3(s) ~ f4(s) ~ f5(s) ~ f6(s) ~ f7(s) ~ f8(s) ~ f9(s) ~ f10(s) ~ f11(s) ~ f12(s) ~ f13(s) ~ f14(
-            s
-        ) ~ f15(s) ~ f16(s) ~ f17(s) ~ f18(s)))
+        fromFields(as(f1(s) ~ f2(s) ~ f3(s) ~ f4(s) ~ f5(s) ~ f6(s) ~ f7(s) ~ f8(s) ~ f9(s) ~ f10(s) ~ f11(s) ~ f12(s) ~ f13(s) ~
+            f14(
+                s
+            ) ~ f15(s) ~ f16(s) ~ f17(s) ~ f18(s)))
     end apply
 
     final def apply[
@@ -665,9 +668,10 @@ trait SelectionList[S, Origin, Out[_ <: AnyNamedTuple]]:
         ] =:= R
     ): Out[R] =
         val s = selector
-        fromFields(as(f1(s) ~ f2(s) ~ f3(s) ~ f4(s) ~ f5(s) ~ f6(s) ~ f7(s) ~ f8(s) ~ f9(s) ~ f10(s) ~ f11(s) ~ f12(s) ~ f13(s) ~ f14(
-            s
-        ) ~ f15(s) ~ f16(s) ~ f17(s) ~ f18(s) ~ f19(s)))
+        fromFields(as(f1(s) ~ f2(s) ~ f3(s) ~ f4(s) ~ f5(s) ~ f6(s) ~ f7(s) ~ f8(s) ~ f9(s) ~ f10(s) ~ f11(s) ~ f12(s) ~ f13(s) ~
+            f14(
+                s
+            ) ~ f15(s) ~ f16(s) ~ f17(s) ~ f18(s) ~ f19(s)))
     end apply
 
     final def apply[
@@ -738,9 +742,10 @@ trait SelectionList[S, Origin, Out[_ <: AnyNamedTuple]]:
         ] =:= R
     ): Out[R] =
         val s = selector
-        fromFields(as(f1(s) ~ f2(s) ~ f3(s) ~ f4(s) ~ f5(s) ~ f6(s) ~ f7(s) ~ f8(s) ~ f9(s) ~ f10(s) ~ f11(s) ~ f12(s) ~ f13(s) ~ f14(
-            s
-        ) ~ f15(s) ~ f16(s) ~ f17(s) ~ f18(s) ~ f19(s) ~ f20(s)))
+        fromFields(as(f1(s) ~ f2(s) ~ f3(s) ~ f4(s) ~ f5(s) ~ f6(s) ~ f7(s) ~ f8(s) ~ f9(s) ~ f10(s) ~ f11(s) ~ f12(s) ~ f13(s) ~
+            f14(
+                s
+            ) ~ f15(s) ~ f16(s) ~ f17(s) ~ f18(s) ~ f19(s) ~ f20(s)))
     end apply
 
     final def apply[
@@ -816,9 +821,10 @@ trait SelectionList[S, Origin, Out[_ <: AnyNamedTuple]]:
         ] =:= R
     ): Out[R] =
         val s = selector
-        fromFields(as(f1(s) ~ f2(s) ~ f3(s) ~ f4(s) ~ f5(s) ~ f6(s) ~ f7(s) ~ f8(s) ~ f9(s) ~ f10(s) ~ f11(s) ~ f12(s) ~ f13(s) ~ f14(
-            s
-        ) ~ f15(s) ~ f16(s) ~ f17(s) ~ f18(s) ~ f19(s) ~ f20(s) ~ f21(s)))
+        fromFields(as(f1(s) ~ f2(s) ~ f3(s) ~ f4(s) ~ f5(s) ~ f6(s) ~ f7(s) ~ f8(s) ~ f9(s) ~ f10(s) ~ f11(s) ~ f12(s) ~ f13(s) ~
+            f14(
+                s
+            ) ~ f15(s) ~ f16(s) ~ f17(s) ~ f18(s) ~ f19(s) ~ f20(s) ~ f21(s)))
     end apply
 
     final def apply[
@@ -899,8 +905,9 @@ trait SelectionList[S, Origin, Out[_ <: AnyNamedTuple]]:
         ] =:= R
     ): Out[R] =
         val s = selector
-        fromFields(as(f1(s) ~ f2(s) ~ f3(s) ~ f4(s) ~ f5(s) ~ f6(s) ~ f7(s) ~ f8(s) ~ f9(s) ~ f10(s) ~ f11(s) ~ f12(s) ~ f13(s) ~ f14(
-            s
-        ) ~ f15(s) ~ f16(s) ~ f17(s) ~ f18(s) ~ f19(s) ~ f20(s) ~ f21(s) ~ f22(s)))
+        fromFields(as(f1(s) ~ f2(s) ~ f3(s) ~ f4(s) ~ f5(s) ~ f6(s) ~ f7(s) ~ f8(s) ~ f9(s) ~ f10(s) ~ f11(s) ~ f12(s) ~ f13(s) ~
+            f14(
+                s
+            ) ~ f15(s) ~ f16(s) ~ f17(s) ~ f18(s) ~ f19(s) ~ f20(s) ~ f21(s) ~ f22(s)))
     end apply
 end SelectionList

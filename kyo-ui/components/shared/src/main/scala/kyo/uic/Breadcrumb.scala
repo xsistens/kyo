@@ -78,13 +78,13 @@ final case class Breadcrumb private (
     def onItemClick(f: String => Any < Async): Breadcrumb = copy(onItemClickF = Present(f))
 
     private[uic] def render(using Frame): UI =
-        val sepGlyph = separatorV.getOrElse(Icons.chevronRight)
+        val sepGlyph                                  = separatorV.getOrElse(Icons.chevronRight)
         val allItems: List[(BreadcrumbItem, Boolean)] =
             homeV.toList.map(h => (h, true)) ++ itemsV.map(i => (i, false))
-        val lastIdx = allItems.length - 1
+        val lastIdx           = allItems.length - 1
         val entries: List[UI] = allItems.zipWithIndex.flatMap { case ((it, isHome), i) =>
-            val itemCls = if isHome then "p-breadcrumb-home-item" else "p-breadcrumb-item"
-            val row: UI = li.cssClass(itemCls)(toChild(renderLink(it, i == lastIdx)))
+            val itemCls       = if isHome then "p-breadcrumb-home-item" else "p-breadcrumb-item"
+            val row: UI       = li.cssClass(itemCls)(toChild(renderLink(it, i == lastIdx)))
             val sep: List[UI] =
                 if i < lastIdx then
                     List(
@@ -95,7 +95,7 @@ final case class Breadcrumb private (
                 else Nil
             row :: sep
         }
-        val navBase = UI.nav.cssClass("p-breadcrumb").cssClass("p-component")
+        val navBase  = UI.nav.cssClass("p-breadcrumb").cssClass("p-component")
         val labelled = accessibleNameV match
             case Present(TextValue.Const(v)) => navBase.aria("label", v)
             case Present(TextValue.Dyn(s))   => navBase.aria("label", s)
@@ -124,7 +124,7 @@ final case class Breadcrumb private (
             case Absent =>
                 if isCurrent then anchor = anchor.aria("current", "page")
         end match
-        val iconSlot: List[UI] = it.icon.toList.map(g => GlyphSvg(g, "p-breadcrumb-item-icon"))
+        val iconSlot: List[UI]  = it.icon.toList.map(g => GlyphSvg(g, "p-breadcrumb-item-icon"))
         val labelSlot: List[UI] = it.text match
             case TextValue.Dyn(s)   => List(span.cssClass("p-breadcrumb-item-label")(s))
             case TextValue.Const(t) => if t.isEmpty then Nil else List(span.cssClass("p-breadcrumb-item-label")(t))

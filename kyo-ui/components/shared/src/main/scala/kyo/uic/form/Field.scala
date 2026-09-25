@@ -84,9 +84,9 @@ final class FormField[A] private[form] (
         def gated(open: Signal[Boolean]): Signal[Maybe[FieldError]] =
             open.combineLatest(error).map((o, e) => if o then e else Absent)
         revealMode match
-            case Reveal.Immediate => error
-            case Reveal.Manual    => Signal.initConst(Absent)
-            case Reveal.OnSubmit  => gated(submitCount.map(_ > 0))
+            case Reveal.Immediate   => error
+            case Reveal.Manual      => Signal.initConst(Absent)
+            case Reveal.OnSubmit    => gated(submitCount.map(_ > 0))
             case Reveal.WhenTouched =>
                 gated(touchedRef.combineLatest(submitCount).map((t, c) => t || c > 0))
         end match
@@ -240,7 +240,7 @@ final class FormField[A] private[form] (
             _    <- if debounce > Duration.Zero then Async.sleep(debounce) else Kyo.unit
             res  <- rules.run(v)
             cur  <- epoch.get
-            _ <- if cur == mine then clientErrorRef.set(res).andThen(validatingRef.set(false))
+            _    <- if cur == mine then clientErrorRef.set(res).andThen(validatingRef.set(false))
             else Kyo.unit
         yield ()
 

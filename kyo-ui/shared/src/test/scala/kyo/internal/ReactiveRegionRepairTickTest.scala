@@ -72,8 +72,8 @@ class ReactiveRegionRepairTickTest extends kyo.test.Test[Any]:
 
     "a region over a combinator does not repaint on repair ticks while its sources hold" in {
         for
-            a <- Signal.initRef(0)
-            b <- Signal.initRef(0)
+            a      <- Signal.initRef(0)
+            b      <- Signal.initRef(0)
             counts <- paintsAcrossTicks(
                 a.combineLatest(b).render((x, y) => UI.button(s"$x/$y").onClick(Kyo.unit)),
                 a.set(1)
@@ -91,7 +91,7 @@ class ReactiveRegionRepairTickTest extends kyo.test.Test[Any]:
         for
             busy    <- Signal.initRef(false)
             invalid <- Signal.initRef(false)
-            counts <- paintsAcrossTicks(
+            counts  <- paintsAcrossTicks(
                 busy.combineLatest(invalid).map(_ || _).render(off => UI.button(if off then "wait" else "go").onClick(Kyo.unit)),
                 busy.set(true)
             )

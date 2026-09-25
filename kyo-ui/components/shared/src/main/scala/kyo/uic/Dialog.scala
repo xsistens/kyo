@@ -181,7 +181,7 @@ final case class Dialog private (
 
                 val titleChildren: List[UI] = headerContent match
                     case Present(c) => List(c)
-                    case Absent =>
+                    case Absent     =>
                         headerText.toList.map {
                             case TextValue.Const(t) => span.cssClass("p-dialog-title")(t): UI
                             case TextValue.Dyn(s)   => span.cssClass("p-dialog-title")(s)
@@ -341,7 +341,7 @@ final case class Dialog private (
                                         )
                                     else Nil
                                 val staticInner: List[UI] = headerBlock(drag) ++ contentUI ++ footerUI ++ resizeHandle
-                                val boxUI = pos.render { p =>
+                                val boxUI                 = pos.render { p =>
                                     size.render(sz => buildBox(Present(boxId), animate = false, Present(p), sz, staticInner))
                                 }
                                 maskAround(boxUI)

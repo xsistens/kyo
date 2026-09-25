@@ -311,8 +311,8 @@ final case class Carousel[A] private (
         val atStart = page == 0
         val atEnd   = pages == 0 || page == pages - 1
 
-        val prevGlyph = if verticalFlag then Icons.chevronUp else Icons.chevronLeft
-        val nextGlyph = if verticalFlag then Icons.chevronDown else Icons.chevronRight
+        val prevGlyph      = if verticalFlag then Icons.chevronUp else Icons.chevronLeft
+        val nextGlyph      = if verticalFlag then Icons.chevronDown else Icons.chevronRight
         val prev: List[UI] =
             if showItemNavigatorsFlag then
                 List(navButton("p-carousel-prev-button", prevGlyph, "Previous Page", !circularFlag && atStart, page - 1, pages))

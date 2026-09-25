@@ -42,7 +42,7 @@ class NoticeTest extends kyo.test.Test[Any]:
         for
             outer <- AtomicInt.init(0)
             inner <- AtomicInt.init(0)
-            _ <- UI.notices(_ => outer.incrementAndGet.unit) {
+            _     <- UI.notices(_ => outer.incrementAndGet.unit) {
                 UI.notices(_ => inner.incrementAndGet.unit)(UI.notify(boom))
             }
             o <- outer.get
@@ -60,7 +60,7 @@ class NoticeTest extends kyo.test.Test[Any]:
         for
             seen <- AtomicRef.init[Maybe[String]](Absent)
             gate <- Promise.init[Unit, Any]
-            _ <- UI.notices(t => seen.set(Present(t.getMessage)).andThen(gate.completeUnitDiscard)) {
+            _    <- UI.notices(t => seen.set(Present(t.getMessage)).andThen(gate.completeUnitDiscard)) {
                 Scope.run {
                     val effect = UI.notify(boom).andThen(UI.span("content").id("c"): UI)
                     subscribe(UI.div(UI.mounted(effect).keyed("k"))).andThen(gate.get)

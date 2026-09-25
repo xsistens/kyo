@@ -85,8 +85,7 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
       * (kyo-schema encodes `Absent` as an ABSENT field; the cache must repair it to
       * an explicit `null` or every later read misses).
       */
-    private def playerSel: SelectionBuilder.Bidirectional[LobbyPlayerT, Player] =
-        (GPlayer.id ~ GPlayer.color).mapInto[Player]
+    private def playerSel: SelectionBuilder.Bidirectional[LobbyPlayerT, Player] = (GPlayer.id ~ GPlayer.color).mapInto[Player]
 
     private def lobbySel: SelectionBuilder.Bidirectional[LobbyViewT, Lobby] =
         (GLobby.id ~ GLobby.name ~ GLobby.players(playerSel) ~ GLobby.startedGameId).mapInto[Lobby]
@@ -273,8 +272,7 @@ class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
             // repair / client-authored entity), and a query read reaches it by
             // reference — its players node compiles the implicit `__typename`
             // selection, so the record must carry the field.
-            val playerFragment: Fragment[(id: String, color: String)] =
-                (GPlayer.id ~ GPlayer.color).toFragment
+            val playerFragment: Fragment[(id: String, color: String)] = (GPlayer.id ~ GPlayer.color).toFragment
 
             for
                 store   <- cachedClient().map(_.apolloStore)

@@ -104,7 +104,7 @@ object FlexBox:
       * (`rem` converts at the standard 16px root).
       */
     private def parseGap(v: String): Maybe[Length.Px | Length.Em] =
-        val t = v.trim
+        val t                                   = v.trim
         def num(suffix: String): Option[Double] =
             if t.endsWith(suffix) then t.dropRight(suffix.length).trim.toDoubleOption else None
         num("px").map(d => Length.Px(d): Length.Px | Length.Em)

@@ -181,7 +181,7 @@ private[uic] object MenuRender:
     /** Rewrites the item at `path` with its `disabled` pinned to `v`. */
     private def pinDisabled(items: List[MenuItem], path: List[Int], v: Boolean): List[MenuItem] =
         path match
-            case Nil => items
+            case Nil       => items
             case i :: rest =>
                 items.zipWithIndex.map { (it, j) =>
                     if j != i then it
@@ -245,7 +245,7 @@ private[uic] object MenuRender:
                             val root = acc(ri)
                             val col  = root.columnsV(ci)
                             val grp  = col(gi)
-                            val its =
+                            val its  =
                                 grp.itemsV.updated(ii, grp.itemsV(ii).withDisabled(Present(BoolValue.Const(v))))
                             root.withColumns(root.columnsV.updated(ci, col.updated(gi, grp.withItems(its))))
                         }
@@ -282,7 +282,7 @@ private[uic] object MenuRender:
         popupRef: Maybe[SignalRef[Boolean]],
         step: MenuNav.Step
     )(using Frame): Any < Async =
-        val finish = step.activate || step.dismiss
+        val finish                                   = step.activate || step.dismiss
         def openTo(t: Maybe[List[Int]]): Any < Async =
             refs match
                 case Present(rs) => openExactly(rs, t)
@@ -365,7 +365,7 @@ private[uic] object MenuRender:
             }
         end if
         val icon: List[UI] = it.iconV.toList.map(g => GlyphSvg(g, s"p-$prefix-item-icon", "p-icon"))
-        val label: UI = it.labelV match
+        val label: UI      = it.labelV match
             case TextValue.Const(t) => span.cssClass(s"p-$prefix-item-label")(t)
             case TextValue.Dyn(s)   => span.cssClass(s"p-$prefix-item-label")(s)
         val subIcon: List[UI] =

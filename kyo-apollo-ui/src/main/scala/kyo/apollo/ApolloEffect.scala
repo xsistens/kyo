@@ -95,7 +95,7 @@ extension [D](call: ApolloCall[D])
         // BOTH failure and panic back into an `ApolloResponse.error` value
         // (ordinary transport errors already arrive as response values).
         Abort.run[Throwable](Scope.run(call.execute)).map {
-            case Result.Success(resp) => resp
+            case Result.Success(resp)  => resp
             case Result.Failure(cause) =>
                 Uuid.random.map(ApolloResponse.fromException[D](_, ApolloEffect.asApolloException(cause)))
             case Result.Panic(cause) =>
@@ -146,7 +146,7 @@ object ApolloEffect:
     private[kyo] def asApolloException(cause: Throwable)(using Frame): ApolloException =
         cause match
             case ae: ApolloException => ae
-            case other =>
+            case other               =>
                 DefaultApolloException(
                     "Apollo call failed before producing a response",
                     other
