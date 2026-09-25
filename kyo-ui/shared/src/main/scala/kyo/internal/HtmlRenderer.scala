@@ -1387,6 +1387,23 @@ private[kyo] object HtmlRenderer:
           |  return typeof id==="string"&&/^r(?:\.(?:[0-9A-Za-z_]|\$[0-9a-f]{4})*)*(?:~[1-9][0-9]*)?$/.test(id);
           |}
           |function kyoRangeFail(message){throw new Error("kyo-ui reactive range: "+message);}
+          |// A reactive range's id encodes its own path (ReactiveRegion.htmlId: `.` and the segment per path segment,
+          |// a unit outside [0-9A-Za-z_] written as `$` + 4 hex, optional `~` + depth suffix), so the path is read
+          |// back out of the id rather than re-encoded here. Returns null for anything that is not a range id.
+          |function __kyoRangeIdPath(id){
+          |  if(!kyoRangeId(id))return null;
+          |  var end=id.indexOf("~");if(end<0)end=id.length;
+          |  var segs=[],i=1;
+          |  while(i<end){
+          |    var j=i+1,s="";
+          |    while(j<end&&id.charAt(j)!=="."){
+          |      if(id.charAt(j)==="$"){s+=String.fromCharCode(parseInt(id.substring(j+1,j+5),16));j+=5;}
+          |      else{s+=id.charAt(j);j++;}
+          |    }
+          |    segs.push(s);i=j;
+          |  }
+          |  return segs.join(".");
+          |}
           |// A marker payload may carry a flag section after its id (a mount slot, and the m the client stamps on once
           |// it adopts one), so the id is everything up to the first separator.
           |function kyoRangeMarker(comment,prefix){
@@ -1830,7 +1847,10 @@ private[kyo] object HtmlRenderer:
           |  var se=inside&&typeof active.selectionEnd==="number"?active.selectionEnd:null;
           |  var oldEnter=kyoEnterPathsRoots(oldRoots),ghosts=kyoLeavePrepareRoots(oldRoots,kyoLeavePathsRoots(newSemanticRoots));
           |  var oldFocus=kyoFocusPathsRoots(oldRoots);
-          |  var finalRoots,morphed=!synthetic&&kyoRangeMorph(endpoints,fragment,incoming,synthetic);
+          |  // Morph only siblings into siblings, as DomReactiveRegions does: rows arriving in a range host move the
+          |  // markers into that host below, which a morph of the live nodes into the wrapper would skip.
+          |  var hostWrapped=newRoots.length===1&&newRoots[0].tagName==="TBODY"&&newRoots[0].getAttribute("data-kyo-range-host")===id;
+          |  var finalRoots,morphed=!synthetic&&!hostWrapped&&kyoRangeMorph(endpoints,fragment,incoming,synthetic);
           |  if(morphed){finalRoots=kyoRangeRoots(endpoints.start,endpoints.end);
           |    for(var i=0;i<removed.length;i++)__kyoRanges.delete(removed[i]);
           |    kyoRangeRescan(id,endpoints).forEach(function(pair,key){__kyoRanges.set(key,pair);});
@@ -2064,23 +2084,6 @@ private[kyo] object HtmlRenderer:
            |  if(!el)return;
            |  if(verb==="focus"){var fs='input,textarea,select,button,a[href],[tabindex],[contenteditable]';var ft=(el.matches&&el.matches(fs))?el:(el.querySelector?el.querySelector(fs):null);if(ft&&typeof ft.focus==="function")ft.focus();}
            |  else if(verb==="scrollIntoView"){if(typeof el.scrollIntoView==="function")el.scrollIntoView({block:"nearest"});}
-           |}
-           |// A reactive range's id encodes its own path (ReactiveRegion.htmlId: `.` and the segment per path segment,
-           |// a unit outside [0-9A-Za-z_] written as `$$` + 4 hex, optional `~` + depth suffix), so the path is read
-           |// back out of the id rather than re-encoded here. Returns null for anything that is not a range id.
-           |function __kyoRangeIdPath(id){
-           |  if(!kyoRangeId(id))return null;
-           |  var end=id.indexOf("~");if(end<0)end=id.length;
-           |  var segs=[],i=1;
-           |  while(i<end){
-           |    var j=i+1,s="";
-           |    while(j<end&&id.charAt(j)!=="."){
-           |      if(id.charAt(j)==="$$"){s+=String.fromCharCode(parseInt(id.substring(j+1,j+5),16));j+=5;}
-           |      else{s+=id.charAt(j);j++;}
-           |    }
-           |    segs.push(s);i=j;
-           |  }
-           |  return segs.join(".");
            |}
            |function __kyoPathSel(p){var bs=String.fromCharCode(92),q=String.fromCharCode(34);var s=String(p).split(bs).join(bs+bs).split(q).join(bs+q);return '[data-kyo-path='+q+s+q+']';}
            |// The id a path encodes to at nesting depth zero (ReactiveRegion.htmlId), so the common lookup is one

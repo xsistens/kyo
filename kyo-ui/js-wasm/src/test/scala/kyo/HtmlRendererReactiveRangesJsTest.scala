@@ -22,6 +22,10 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
           |function ba(root){__kyoLifecycle.push("animate:"+root.id);}
           |function kyoSpawnGhosts(){}
           |function sweepFocusAuto(){}
+          |function sweepScrollAuto(){}
+          |function __kyoPortalTwin(){return null;}
+          |function __kyoPortalSweep(){}
+          |function __kyoSyncField(el,name,value){if(name==="value"&&(el.tagName==="INPUT"||el.tagName==="TEXTAREA")&&el.value!==value)el.value=value;}
           |function kyoSetCaret(target,start,end){target.setSelectionRange(start,end);}""".stripMargin
 
     private def install(html: String): Unit =
@@ -214,7 +218,7 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
         ))
         assert(evalString("__kyoLifecycle.indexOf('leave:semantic-host')>=0?'yes':'no'") == "yes")
         assert(evalString("String(document.getElementById('returned-row').rangeprobe)") == "returned")
-        assert(evalString("__kyoLifecycle.indexOf('enter:returned-row')>=0?'yes':'no'") == "yes")
+        assert(evalString("__kyoLifecycle.indexOf('enter:returned-row')>=0?'yes':'no'") == "yes", evalString("__kyoLifecycle.join(',')"))
         assert(evalString("__kyoLifecycle.indexOf('animate:returned-row')>=0?'yes':'no'") == "yes")
     }
 
