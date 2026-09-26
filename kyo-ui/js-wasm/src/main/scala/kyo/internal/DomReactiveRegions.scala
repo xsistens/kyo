@@ -114,12 +114,30 @@ final private[kyo] class DomReactiveRegions private (
         after: (A, Seq[dom.Element], Boolean) => Unit
     )(using Frame): Unit =
         val incoming = DomReactiveRegions.scan(document, fragment)
+        // Gone from the registry's point of view: inside the range about to be patched, or stranded in a tree
+        // this one no longer shares. The second case is a portal twin the sweep retired: its markers went with
+        // it into a detached subtree, and the sweep moves DOM without walking the registry, so the entry
+        // outlives the nodes it names. A dead entry is not a duplicate of the region coming back; it is the same
+        // region's corpse, and keeping it would refuse the live one.
+        //
+        // The test is "same tree", not "in the document": a whole mount can legitimately be patched while it is
+        // still detached, and a live portal twin under `<body>` shares the document with the range being
+        // patched, so both stay.
+        val liveRoot = treeRoot(endpoints.start)
         val removed  = ranges.iterator.collect {
-            case (id, nested) if id != regionId && intersects(range, nested.start) => id
+            case (id, nested)
+                if id != regionId && (intersects(range, nested.start) || !(treeRoot(nested.start) eq liveRoot)) =>
+                id
         }.toSet
 
+        // A region registered inside a portal twin is not a second copy of itself: the payload carries the portal
+        // element inline (the twin's inline original), and this patch either morphs the twin in place (markers,
+        // and so the registration, untouched) or replaces the range wholesale, in which case the incoming markers
+        // take the id over and the sweep retires the stale twin. It stays out of `removed` for the same reason:
+        // nothing inside the live range re-registers it, so dropping it would leave the next write to that region
+        // with an unknown id.
         incoming.keysIterator.foreach { id =>
-            if ranges.contains(id) && !removed.contains(id) then
+            if ranges.contains(id) && !removed.contains(id) && !inPortalTwin(ranges(id).start) then
                 fail(s"Duplicate reactive range id: $id")
         }
 
@@ -144,7 +162,7 @@ final private[kyo] class DomReactiveRegions private (
         // `before` reads the pre-patch DOM (the focused node, the enter and leave path sets, the ghost clones of
         // what is about to depart) and `after` applies the post-patch work to whatever ended up in the range.
         // Both run for the morph as well as for the replacement: a reconciliation is still a patch, and a leave
-        // transition or a focus-auto seed has no business depending on which path painted it.
+        // transition, a portal re-home or a focus-auto seed has no business depending on which path painted it.
         val state   = before(oldElements, newElements)
         val morphed = morphTarget match
             case Present(target) => tryMorph(target)
@@ -325,6 +343,37 @@ final private[kyo] class DomReactiveRegions private (
 
     private def intersects(range: dom.Range, node: dom.Node): Boolean =
         range.asInstanceOf[js.Dynamic].intersectsNode(node).asInstanceOf[Boolean]
+
+    /** The topmost node above this one: the Document for anything attached, the detached subtree's own root
+      * otherwise. Two nodes share a tree exactly when this returns the same node for both.
+      */
+    private def treeRoot(node: dom.Node): dom.Node =
+        var top    = node
+        var parent = DomReactiveRegions.parent(top)
+        while parent.nonEmpty do
+            top = parent.get
+            parent = DomReactiveRegions.parent(top)
+        top
+    end treeRoot
+
+    /** Does this live marker sit inside a portal twin, an element `portalSweep` re-homed to `<body>`?
+      *
+      * Twin of `__kyoInPortalTwin` in HtmlRenderer.clientJs; keep the two in lockstep.
+      */
+    private def inPortalTwin(node: dom.Node): Boolean =
+        // The registry is handed a bare Document (so a detached one can be tested against) and `body` lives on
+        // HTMLDocument; every document a mount runs over is one.
+        val body    = document.asInstanceOf[dom.HTMLDocument].body
+        var current = DomReactiveRegions.parent(node)
+        var found   = false
+        while !found && current.exists(_.nodeType == dom.Node.ELEMENT_NODE) do
+            val element = current.get.asInstanceOf[dom.Element]
+            if DomReactiveRegions.parent(element).exists(_ eq body) && element.hasAttribute("data-kyo-portal")
+            then found = true
+            else current = DomReactiveRegions.parent(element)
+        end while
+        found
+    end inPortalTwin
 
     private def elementsBetween(endpoints: DomReactiveRegions.Endpoints): Seq[dom.Element] =
         val elements = mutable.ArrayBuffer.empty[dom.Element]
