@@ -1587,21 +1587,46 @@ private[kyo] object ReactiveUI:
         renderedBools: Map[String, Boolean] = Map.empty,
         renderedClasses: Map[String, Boolean] = Map.empty
     )(using Frame): Unit < (Async & Scope) =
-        // Each channel is seeded with the render-time value: normalize happens-before the HTML render on every
-        // paint path, so the DOM already shows it, while a change landing between render and subscribe differs
-        // from it and still fires.
+        // A channel's handler is one attribute write, so where the exchange offers a synchronous sink the
+        // channel binds through `Signal.onChange`: for a signal rooted in a SignalRef the patch runs inside the
+        // writer's own `set`, and the comparison with the previous value happens before any scheduler hop.
+        // An exchange without a sink (the server transport) runs the channel on its own fiber. Both are seeded
+        // with the render-time value: normalize happens-before the HTML render on every paint path, so the DOM
+        // already shows it, while a change landing between render and subscribe differs from it and still fires.
+        def bindOrFork[A](
+            name: String,
+            sig: Signal[A],
+            rendered: Maybe[A],
+            patcher: Maybe[(Seq[String], String, A) => Unit],
+            slow: A => Unit < Async
+        )(using CanEqual[A, A], Frame): Unit < (Async & Scope) =
+            patcher match
+                case Present(patch) => sig.onChange(rendered)(v => Sync.defer(patch(path, name, v)))
+                case Absent         => Fiber.init(sig.observe(rendered, Signal.defaultRepairInterval)(slow)).unit
         Kyo.foreachDiscard(attrs.toSeq) { case (name, sig) =>
-            Fiber.init(sig.observe(Maybe.fromOption(renderedAttrs.get(name)), Signal.defaultRepairInterval)(v =>
-                exchange.onAttrPatch(path, name, v)
-            )).unit
+            bindOrFork(
+                name,
+                sig,
+                Maybe.fromOption(renderedAttrs.get(name)),
+                exchange.attrPatcherNow,
+                v => exchange.onAttrPatch(path, name, v)
+            )
         }.andThen(Kyo.foreachDiscard(boolAttrs.toSeq) { case (name, sig) =>
-            Fiber.init(sig.observe(Maybe.fromOption(renderedBools.get(name)), Signal.defaultRepairInterval)(v =>
-                exchange.onBoolAttrPatch(path, name, v)
-            )).unit
+            bindOrFork(
+                name,
+                sig,
+                Maybe.fromOption(renderedBools.get(name)),
+                exchange.boolAttrPatcherNow,
+                v => exchange.onBoolAttrPatch(path, name, v)
+            )
         }).andThen(Kyo.foreachDiscard(classes.toSeq) { case (name, sig) =>
-            Fiber.init(sig.observe(Maybe.fromOption(renderedClasses.get(name)), Signal.defaultRepairInterval)(v =>
-                exchange.onClassPatch(path, name, v)
-            )).unit
+            bindOrFork(
+                name,
+                sig,
+                Maybe.fromOption(renderedClasses.get(name)),
+                exchange.classPatcherNow,
+                v => exchange.onClassPatch(path, name, v)
+            )
         })
     end forkChannelObservers
 
