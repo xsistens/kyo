@@ -197,8 +197,9 @@ class ReactiveUITeardownTest extends kyo.test.Test[Any]:
                 )(using Frame): Unit < Async = entered.completeUnitDiscard.andThen(release.get)
             fiber <- Fiber.initUnscoped(Scope.run {
                 for
-                    _    <- Scope.ensure(closed.completeUnitDiscard)
-                    root <- ReactiveUI.normalize(ref.map(UI.span(_)), Seq.empty)
+                    _ <- Scope.ensure(closed.completeUnitDiscard)
+                    // Nothing painted this tree, so the first emission is the change that blocks.
+                    root <- ReactiveUI.normalize(ref.map(UI.span(_)), Seq.empty).map(ReactiveUI.unpainted)
                     _    <- ReactiveUI.subscribe(root, exchange)
                     _    <- Async.never
                 yield ()
