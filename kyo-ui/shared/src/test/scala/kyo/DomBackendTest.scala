@@ -1,6 +1,7 @@
 package kyo
 
 import kyo.Browser.*
+import kyo.UI.foreachKeyed
 
 // DomBackend.scala is a JS-only source. These tests exercise its behaviour
 // end-to-end via the JVM browser test infrastructure (SSE/event POST cycle).
@@ -634,6 +635,44 @@ class DomBackendTest extends UITest:
                         "&&document.querySelector('[data-kyo-ghost]')!==null"
                 )
             yield assert(atBody && ok)
+        }
+    }
+
+    "a list patch adopts a portal in a new row, keeps it while other rows change, and retires it with its row" in {
+        val app: UI < Async =
+            for rows <- Signal.initRef(Chunk(1, 2))
+            yield UI.div(
+                UI.button("add").id("lpadd").onClick(rows.set(Chunk(1, 2, 3))),
+                UI.button("prepend").id("lppre").onClick(rows.set(Chunk(0, 1, 2, 3))),
+                UI.button("drop").id("lpdrop").onClick(rows.set(Chunk(0, 1, 2))),
+                UI.ul(rows.foreachKeyed(_.toString)(i =>
+                    if i == 3 then UI.li.id("lprow")(UI.div.id("lppanel").portal(true)(UI.span("panel")))
+                    else UI.li(s"row $i").id(s"lprow-$i")
+                ))
+            )
+        val portalState =
+            """(function(){
+              |  var el=document.getElementById('lppanel');
+              |  var p=el?el.getAttribute('data-kyo-path'):'';
+              |  return [el!==null&&el.parentElement===document.body,
+              |          document.querySelectorAll('[data-kyo-portal-slot]').length,
+              |          el?document.querySelectorAll('[data-kyo-path="'+p+'"]').length:0].join(',');
+              |})()""".stripMargin
+        withUI(app) {
+            for
+                _       <- Browser.click(Selector.id("lpadd"))
+                _       <- Browser.assertText(Selector.id("lppanel"), "panel")
+                adopted <- Browser.eval(portalState)
+                _       <- Browser.click(Selector.id("lppre"))
+                _       <- Browser.assertText(Selector.id("lprow-0"), "row 0")
+                kept    <- Browser.eval(portalState)
+                _       <- Browser.click(Selector.id("lpdrop"))
+                _       <- Browser.assertNotExists(Selector.id("lppanel"))
+                retired <- Browser.eval(portalState)
+            yield assert(
+                adopted == "true,1,1" && kept == "true,1,1" && retired == "false,0,0",
+                s"adopted=$adopted kept=$kept retired=$retired"
+            )
         }
     }
 
