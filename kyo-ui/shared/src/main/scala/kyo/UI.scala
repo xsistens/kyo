@@ -62,7 +62,8 @@ object UI:
     implicit def stringToUI(v: String)(using Frame): Text = Text(v)
 
     /** Auto-lifts a `Signal[String]` into a reactive text node that re-renders whenever the signal emits. */
-    implicit def signalStringToUI(v: Signal[String])(using Frame): Reactive[Text] = Reactive[Text](v.map(s => Text(s)))
+    implicit def signalStringToUI(v: Signal[String])(using Frame): Reactive[Text] =
+        Reactive[Text](v.map(s => Text(s)), Present(Reactive.Source.Lifted(v)))
 
     /** Auto-lifts a `Signal[A]` of UI values into a reactive node that swaps in the latest emitted subtree on every emission. */
     implicit def signalUIToUI[A <: UI](v: Signal[A])(using Frame, CanEqual[A, A]): Reactive[A] = Reactive[A](v.map(x => x: UI))
@@ -70,8 +71,19 @@ object UI:
     // ---- Signal extensions ----
 
     extension [A](signal: Signal[A])
-        /** Projects a signal into a reactive subtree: `f` maps each emitted value to a `C`, and the region re-renders on every emission. */
-        def render[C <: UI](f: A => C)(using Frame): Reactive[C] = Reactive[C](signal.map(a => f(a): UI))
+        /** Projects a signal into a reactive subtree: `f` maps each emitted value to a `C`, and the region re-renders whenever the signal
+          * emits a value different from the last one it rendered.
+          *
+          * The node keeps `signal` and `f` beside the projected `Signal[UI]` ([[kyo.UI.Ast.Reactive.Source]]) so that the comparison
+          * happens on the value. Comparing the projection instead cannot work: `f` allocates fresh handler closures on every call, so two
+          * trees built from the same value are never equal, and a source that re-emits an unchanged value would repaint. `f` must
+          * therefore be a pure function of its value: one that reads mutable state on the side is not refreshed by an emission that
+          * carries the same value.
+          */
+        def render[C <: UI](f: A => C)(using Frame): Reactive[C] =
+            val project: A => UI = a => f(a): UI
+            Reactive[C](signal.map(project), Present(Reactive.Source.Projected(signal, project)))
+    end extension
 
     extension [A](signal: Signal[Chunk[A]])
         /** Renders one child per element of the collection signal, re-rendering when the chunk changes. Elements are reconciled by
@@ -1261,7 +1273,7 @@ object UI:
               * `document.body`, leaving an inert placeholder (`data-kyo-portal-slot="<path>"`, hidden) at the logical
               * position. The element keeps its `data-kyo-path`, so it stays the document's only carrier of that path:
               * server-side dispatch (which bubbles over the logical tree), every path- and id-addressed op (`bind*`,
-              * `requestMeasure*`, `Command`) and focus restore keep working unchanged. On the next re-render of an
+              * `requestMeasureById`, `commandById`) and focus restore keep working unchanged. On the next re-render of an
               * enclosing region the morph matches the incoming element against the placeholder and reconciles the body
               * twin in place, so content updates flow and no inline duplicate is materialized. When the element
               * disappears from the server render, the placeholder is removed by the normal keyed reconciliation and the
@@ -1615,7 +1627,7 @@ object UI:
               * text node so string signals can be passed directly to HTML container `apply` overloads.
               */
             implicit def liftSignalString(sig: Signal[String])(using Frame): HtmlChildVal =
-                new HtmlChildVal(Reactive[Text](sig.map(s => Text(s))))
+                new HtmlChildVal(Reactive[Text](sig.map(s => Text(s)), Present(Reactive.Source.Lifted(sig))))
         end HtmlChildVal
 
         /** Layout marker for block-flow elements (`div`, `p`, headings, ...). */
@@ -1870,8 +1882,43 @@ object UI:
 
         /** A subtree driven by a `Signal[UI]`: re-renders the bound region whenever the signal emits a new value. The type parameter `C`
           * is a phantom bound that records the content type at the construction site; it erases to `UI` at runtime.
+          *
+          * `source` is the signal before the projection to UI, kept as an accelerator (see [[Reactive.Source]]). `signal` stays the
+          * node's content for the first paint, for event dispatch and for the server transport, and a node built without a source (a
+          * lifted `Signal[UI]`, where no value exists before the UI) is compared as UI.
           */
-        case class Reactive[C <: UI](signal: Signal[UI])(using val frame: Frame) extends UI
+        case class Reactive[C <: UI](signal: Signal[UI], source: Maybe[Reactive.Source[?]] = Absent)(using val frame: Frame) extends UI
+
+        object Reactive:
+            /** The signal a region was projected from, with the projection that turns one of its values into UI. The same pair
+              * [[kyo.UI.Ast.Foreach]] keeps for its rows.
+              *
+              * Why the node cannot make do with `signal` alone: the only comparison available there is UI against UI, and a subtree built
+              * from closures is never equal to the last one, so every emission repaints, including the ones a projection made
+              * irrelevant. `a.map(slice).render(f)` observed in UI space compares the root's values (projections compose down the chain,
+              * see `Signal.map`) against an image that is never equal; observed here it compares `slice`, which is a value.
+              */
+            sealed trait Source[A]:
+                def signal: Signal[A]
+                def render: A => UI
+
+                /** Observes the source in value space: an emission equal to the last one never reaches the projection. */
+                private[kyo] def observe[S](paint: UI => Unit < (S & Async & Scope))(using Frame): Unit < (S & Async) =
+                    signal.observe(v => paint(render(v)))
+            end Source
+
+            object Source:
+                /** A region built by `Signal.render`. */
+                final case class Projected[A](signal: Signal[A], render: A => UI) extends Source[A]
+
+                /** A region lifted from a `Signal[String]`. Its content is one text node whatever the signal emits, which is knowable at the
+                  * lift site and only guessable afterwards, so the engine binds it straight to the backend's text write; a backend that
+                  * offers no such write re-renders the region.
+                  */
+                final case class Lifted(signal: Signal[String])(using Frame) extends Source[String]:
+                    def render: String => UI = s => Text(s)
+            end Source
+        end Reactive
 
         /** A keyed list driven by a `Signal[Chunk[A]]`: renders one child per element, reconciling by `key` when present. The type
           * parameter `C` is a phantom bound that records the content type at the construction site; it erases to `UI` at runtime.
