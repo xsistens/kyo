@@ -33,10 +33,10 @@ class ClickTargetResolutionTest extends kyo.test.Test[Any]:
                 _ <- dispatch.handle(target, UIEvent.Click(target, MouseEventData(UI.Modifiers.none, Absent)))
                 _ <- assertEventually(Sync.defer(clicks.get == 1))
                 delta = renders.get - base
-            // Two renders dispatch into the list. Each of the three ancestors then asks whether the target is
-            // disabled, a button or behind a control, and answers all of it from one resolution: one row render
-            // each. A resolution per question would cost two per ancestor, eight in all.
-            yield assert(delta == 5, s"row renders during one click: $delta")
+            // The list region's own dispatch costs one render. Each of the three ancestors then asks
+            // whether the target is disabled, a button or behind a control, and answers all of it from one
+            // resolution: one row render each. A resolution per question would cost two per ancestor.
+            yield assert(delta == 4, s"row renders during one click: $delta")
             end for
         }
     }
