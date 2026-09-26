@@ -259,13 +259,34 @@ private[kyo] object ReactiveRegion:
         else if c >= 'a' && c <= 'f' then c - 'a' + 10
         else -1
 
+    // Four hex digits for every value below 256, which covers every Latin-1 UTF-16 unit and every realistic
+    // segment length, so an id is written a segment at a time in whole strings.
+    private val hex4: Array[String] =
+        val out = new Array[String](256)
+        var v   = 0
+        while v < 256 do
+            val sb = new StringBuilder(4)
+            appendHexSlow(sb, v, 4)
+            out(v) = sb.toString
+            v += 1
+        end while
+        out
+    end hex4
+
     private def appendHex(out: StringBuilder, value: Int, digits: Int): Unit =
+        if value >= 0 && value < 256 then
+            if digits == 4 then discard(out.append(hex4(value)))
+            else if digits == 8 then discard(out.append("0000").append(hex4(value)))
+            else appendHexSlow(out, value, digits)
+        else appendHexSlow(out, value, digits)
+
+    private def appendHexSlow(out: StringBuilder, value: Int, digits: Int): Unit =
         var shift = (digits - 1) * 4
         while shift >= 0 do
             val nibble = (value >>> shift) & 0xf
             out.append(if nibble < 10 then ('0' + nibble).toChar else ('a' + nibble - 10).toChar)
             shift -= 4
         end while
-    end appendHex
+    end appendHexSlow
 
 end ReactiveRegion
