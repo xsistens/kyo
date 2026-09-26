@@ -53,6 +53,12 @@ private[kyo] trait UIExchange:
     def boolAttrPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit] = Absent
     def classPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit]    = Absent
 
+    /** Synchronous sink for a region whose content is exactly one text node: a `Signal[String]` lifted into a
+      * child position. Same contract as the three above: it runs on the writer's stack and must not suspend. It has no
+      * effectful twin because a region repaint with the new `Text` already is one, on every transport.
+      */
+    def textPatcherNow: Maybe[(Seq[String], String) => Unit] = Absent
+
     /** Structural patch of a keyed list region: the whole row order, with the rows that actually need
       * repainting flagged.
       *
