@@ -26,6 +26,11 @@ private[kyo] object HtmlOp:
     case class InjectCss(css: String)                       extends HtmlOp derives Schema
     case class ScrollIntoView(id: String)                   extends HtmlOp derives Schema
 
+    // Contracts for these imperative ops live on UI.Commands (commandById / requestMeasureById); the client resolves the
+    // target by getElementById(id).
+    case class CommandById(id: String, verb: String) extends HtmlOp derives Schema
+    case class RequestMeasureById(id: String)        extends HtmlOp derives Schema
+
     // --- Drag operations ---
 
     /** Requests a bounded byte range from a dropped browser file. */
