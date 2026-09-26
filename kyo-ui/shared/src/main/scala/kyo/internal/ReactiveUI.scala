@@ -1488,20 +1488,69 @@ private[kyo] object ReactiveUI:
                 if skip then (): Unit < Async else f(v)
             }
         end observeSkippingRendered
+
+        // A channel's handler is one attribute write, so where both ends allow it the channel binds as a
+        // callback on its signal instead of a fiber: the patch runs inside the writer's own `set`, and the
+        // comparison with the previous value happens before any scheduler hop. Either end can decline (the
+        // server transport, or a signal not rooted in a SignalRef), and the channel then runs on its own fiber.
+        def bindOrFork[A](
+            name: String,
+            sig: Signal[A],
+            rendered: Maybe[A],
+            patcher: Maybe[(Seq[String], String, A) => Unit],
+            slow: A => Unit < Async
+        )(using CanEqual[A, A], Frame): Unit < (Async & Scope) =
+            bindChannel(path, name, sig, rendered, patcher).map { bound =>
+                if bound then Kyo.unit
+                else Fiber.init(observeSkippingRendered(sig, rendered)(slow)).unit
+            }
         Kyo.foreachDiscard(attrs.toSeq) { case (name, sig) =>
-            Fiber.init(observeSkippingRendered(sig, Maybe.fromOption(renderedAttrs.get(name)))(v =>
-                exchange.onAttrPatch(path, name, v)
-            )).unit
+            bindOrFork(
+                name,
+                sig,
+                Maybe.fromOption(renderedAttrs.get(name)),
+                exchange.attrPatcherNow,
+                v => exchange.onAttrPatch(path, name, v)
+            )
         }.andThen(Kyo.foreachDiscard(boolAttrs.toSeq) { case (name, sig) =>
-            Fiber.init(observeSkippingRendered(sig, Maybe.fromOption(renderedBools.get(name)))(v =>
-                exchange.onBoolAttrPatch(path, name, v)
-            )).unit
+            bindOrFork(
+                name,
+                sig,
+                Maybe.fromOption(renderedBools.get(name)),
+                exchange.boolAttrPatcherNow,
+                v => exchange.onBoolAttrPatch(path, name, v)
+            )
         }).andThen(Kyo.foreachDiscard(classes.toSeq) { case (name, sig) =>
-            Fiber.init(observeSkippingRendered(sig, Maybe.fromOption(renderedClasses.get(name)))(v =>
-                exchange.onClassPatch(path, name, v)
-            )).unit
+            bindOrFork(
+                name,
+                sig,
+                Maybe.fromOption(renderedClasses.get(name)),
+                exchange.classPatcherNow,
+                v => exchange.onClassPatch(path, name, v)
+            )
         })
     end forkChannelObservers
+
+    /** Try to bind one channel without a fiber; `false` means the caller must fork. The release is registered
+      * on the current Scope, the scope that would have owned the fiber: the registration sits on a masked promise
+      * and would otherwise outlive its subscriber.
+      */
+    private def bindChannel[A](
+        path: Seq[String],
+        name: String,
+        sig: Signal[A],
+        rendered: Maybe[A],
+        patcher: Maybe[(Seq[String], String, A) => Unit]
+    )(using CanEqual[A, A], Frame): Boolean < (Sync & Scope) =
+        patcher match
+            case Absent         => false
+            case Present(patch) =>
+                Sync.Unsafe.defer {
+                    sig.unsafeObserveProjected[A](identity, rendered, v => patch(path, name, v)) match
+                        case Absent           => Kyo.lift(false)
+                        case Present(release) => Scope.ensure(Sync.defer(release())).andThen(true)
+                }
+    end bindChannel
 
     /** Start one region fiber observing `signal`, with a per-value Scope per emission (see subscribeScoped's
       * contract note). `presetMounts` supplies the region's MountRegistry when the caller owns it already (the
