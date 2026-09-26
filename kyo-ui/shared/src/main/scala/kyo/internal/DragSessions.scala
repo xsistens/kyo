@@ -3,9 +3,7 @@ package kyo.internal
 import EventDispatch.*
 import ReactiveUI.*
 import kyo.*
-import kyo.Svg
 import kyo.UI.*
-import kyo.kernel.ContextEffect
 
 private[kyo] object DragSessions:
 
@@ -36,24 +34,27 @@ private[kyo] object DragSessions:
     )(using Frame): ValidatedHandler =
         (path, event) =>
             event match
-                case event: DragProtocol.ValidatedEvent.Click         => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.ClickSelf     => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Input         => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Change        => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.ChangeChecked => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.ChangeNumeric => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Submit        => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.KeyDown       => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.KeyUp         => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Focus         => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Blur          => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Scroll        => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.PointerDown   => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.PointerMove   => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.PointerUp     => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Hover         => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Unhover       => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Attach        => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.Click          => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.ClickSelf      => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.ContextMenu    => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.Input          => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.Change         => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.ChangeChecked  => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.ChangeNumeric  => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.Submit         => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.KeyDown        => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.KeyUp          => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.Focus          => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.Blur           => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.Scroll         => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.ScrollPosition => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.FileSelect     => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.PointerDown    => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.PointerMove    => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.PointerUp      => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.Hover          => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.Unhover        => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.Attach         => safeDispatch(handle, path, event.wire)
                 // A measure reply is the client's answer to a `requestMeasureById`, not an element event: the session
                 // completes the pending reply on UI.Commands before dispatch, so one never reaches the handler
                 // tree. Bubbling is the right answer for an event no element declared.
@@ -168,6 +169,7 @@ private[kyo] object DragSessions:
             // Never reaches here: the session completes a measure reply on UI.Commands before dispatch.
             case _: DragProtocol.ValidatedEvent.MeasureById | _: DragProtocol.ValidatedEvent.MeasureMissing => true
             case _: DragProtocol.ValidatedEvent.Click | _: DragProtocol.ValidatedEvent.ClickSelf |
+                _: DragProtocol.ValidatedEvent.ContextMenu |
                 _: DragProtocol.ValidatedEvent.Input | _: DragProtocol.ValidatedEvent.Change |
                 _: DragProtocol.ValidatedEvent.ChangeChecked | _: DragProtocol.ValidatedEvent.ChangeNumeric |
                 _: DragProtocol.ValidatedEvent.Submit | _: DragProtocol.ValidatedEvent.KeyDown |
@@ -175,7 +177,9 @@ private[kyo] object DragSessions:
                 _: DragProtocol.ValidatedEvent.Blur | _: DragProtocol.ValidatedEvent.Scroll |
                 _: DragProtocol.ValidatedEvent.Hover | _: DragProtocol.ValidatedEvent.Unhover |
                 _: DragProtocol.ValidatedEvent.PointerDown | _: DragProtocol.ValidatedEvent.PointerMove |
-                _: DragProtocol.ValidatedEvent.PointerUp | _: DragProtocol.ValidatedEvent.Attach =>
+                _: DragProtocol.ValidatedEvent.PointerUp |
+                _: DragProtocol.ValidatedEvent.ScrollPosition | _: DragProtocol.ValidatedEvent.FileSelect |
+                _: DragProtocol.ValidatedEvent.Attach =>
                 safeDispatch(handle, path, event.wire)
 
     private def wakeExpiryScheduler(expiryWake: Channel[Unit])(using Frame): Unit < Sync =
@@ -275,4 +279,5 @@ private[kyo] object DragSessions:
             case DragCommands.DecisionState.Rejected(value) => value
             case DragCommands.DecisionState.Failed(value)   => value
         }
+
 end DragSessions
