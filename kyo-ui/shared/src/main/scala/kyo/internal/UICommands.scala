@@ -15,6 +15,11 @@ private[kyo] object UICommands:
 
     private[kyo] val scrollSink: Local[Maybe[String => Unit < Async]] = Local.init(Absent)
 
+    /** The session's [[kyo.UI.Commands]], installed by the runner around the subscription and the event drain, so mount effects
+      * and event handlers reach it the way they reach the scroll sink.
+      */
+    private[kyo] val commands: Local[Maybe[UI.Commands]] = Local.init(Absent)
+
     def scrollIntoView(id: String)(using Frame): Unit < Async =
         scrollSink.use {
             case Present(sink) => sink(id)
