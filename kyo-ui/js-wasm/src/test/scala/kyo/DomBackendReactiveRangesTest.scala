@@ -526,6 +526,33 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
             assert(leaveGhost)
     }
 
+    "a region repaint inserts in front of a last row whose first root changed its tag" in {
+        // A row whose first root changes its tag is replaced, not patched; matched from the tail, the replacement has
+        // to become the boundary the rest of the pass inserts in front of. Rows of two roots are not addressable by
+        // key, so the list repaints whole and the morph's own two-ended pass reconciles it.
+        for
+            rows <- Signal.initRef(Chunk(("a", false), ("b", false)))
+            ui = UI.div(
+                UI.div(rows.foreachKeyed(_._1)((k, asSpan) =>
+                    UI.fragment(
+                        if asSpan then UI.span(k).id(s"mt-${k}0") else UI.p(k).id(s"mt-${k}0"),
+                        UI.div(s"$k!").id(s"mt-${k}1")
+                    )
+                )).id("mthost"),
+                UI.span("after").id("mtafter")
+            )
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("mthost").textContent == "aa!bb!"))
+            _     <- rows.set(Chunk(("a", false), ("c", false), ("b", true)))
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("mthost").textContent == "aa!cc!bb!"))
+            state <- Sync.defer((dom.document.getElementById("mt-b0").tagName, dom.document.getElementById("mtafter").textContent))
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield assert(state == ("SPAN", "after"), s"state=$state")
+        end for
+    }
+
     private def topology: (rows: Int, groups: Int, spans: Int, anchorParent: String, staticCaptured: Boolean) =
         val table  = dom.document.getElementById("table")
         val groups = table.querySelectorAll(":scope > tbody")
