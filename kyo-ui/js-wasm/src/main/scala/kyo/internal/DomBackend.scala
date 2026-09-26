@@ -532,6 +532,9 @@ private[kyo] object DomBackend:
             _       <- applyJsProps(container)
             _       <- Sync.defer(seedEnter(container, Set.empty))
             _       <- Sync.defer(seedFocusAuto(container, Set.empty))
+            // Record the initial carriers without scrolling: the first paint is where the reader starts, not a
+            // movement to follow.
+            _ <- Sync.defer(sweepScrollAuto(scroll = false))
             // Portal adopt for the initial paint: a portal element present at load re-homes immediately.
             _        <- Sync.defer(portalSweep(container))
             _        <- Sync.defer(beginAnimationsSync(container))
@@ -945,6 +948,9 @@ private[kyo] object DomBackend:
             newElements.foreach(portalSweep)
             spawnGhosts(state.ghosts)
             sweepFocusAuto()
+            // A patch that left the flag on a different element scrolls that element into view; one that left it
+            // where it was scrolls nothing.
+            sweepScrollAuto()
         end finishRangePatch
 
         private def replaceSvg(region: ReactiveRegion.SvgElement, html: String)(using Frame): Unit < Sync =
@@ -1115,6 +1121,38 @@ private[kyo] object DomBackend:
                 sweepFocusAuto(restored || landed)
             case _ => ()
     end sweepFocusAuto
+
+    /** Paths of the elements that carried `data-kyo-scroll-auto` after the last patch.
+      *
+      * The flag moves (a highlight walking down a list), which is the difference from focus-auto's
+      * per-region "newly appeared" test: both the row losing it and the row taking it were already on
+      * screen, so only the carrier set tells them apart. Mirrors `__scrollAutoPaths` in HtmlRenderer.clientJs.
+      */
+    private var scrollAutoPaths: Set[String] = Set.empty
+
+    /** Scrolls the element that newly carries `data-kyo-scroll-auto` into view, at most one per patch.
+      *
+      * `block: "nearest"` is the whole point: it moves the nearest scrollable ancestor by the least it can and
+      * does nothing when the element is already visible, so a highlight walking within view never moves the
+      * panel under the reader. A patch that leaves the flag where it was scrolls nothing.
+      */
+    private def sweepScrollAuto(scroll: Boolean = true): Unit =
+        val els   = document.querySelectorAll("[data-kyo-scroll-auto]")
+        val list  = (0 until els.length).map(els(_).asInstanceOf[dom.Element])
+        val now   = list.flatMap(el => Maybe(el.getAttribute("data-kyo-path")).toList).toSet
+        val fresh = list.find { el =>
+            val p = el.getAttribute("data-kyo-path")
+            p != null && !scrollAutoPaths.contains(p)
+        }
+        scrollAutoPaths = now
+        // The first paint only records what is already carrying the flag: a page that arrives with a
+        // highlight has not moved it, and scrolling on load would fight the browser's own restoration.
+        if scroll then
+            fresh.foreach(el =>
+                discard(el.asInstanceOf[js.Dynamic].scrollIntoView(js.Dynamic.literal(block = "nearest", inline = "nearest")))
+            )
+        end if
+    end sweepScrollAuto
 
     /** Whether the patch that removed the seeded element took the focus with it.
       *
@@ -1324,9 +1362,19 @@ private[kyo] object DomBackend:
             if e.`type` == "keydown" then
                 val ke  = e.asInstanceOf[dom.KeyboardEvent]
                 val tgt = e.target.asInstanceOf[dom.Element]
+                // preventActivation: an inert region declines the browser default for the keys that change a
+                // native control's value, so a readonly checkbox stays focusable rather than being disabled.
+                // The keydown is still forwarded. Twin of the `data-kyo-inert` block in clientJs.
+                if tgt != null && KeyPolicy.suppressesActivation(ke.key) && tgt.closest("[data-kyo-inert]") != null then
+                    e.preventDefault()
                 if tgt != null && scrollKeyPrevented(ke.key, tgt) && tgt.closest("[data-kyo-scroll-keys]") != null then
                     e.preventDefault()
+                if tgt != null && doubleActivation(ke.key, tgt) then e.preventDefault()
             end if
+            // The click's default goes the same way, so a readonly control does not toggle under the pointer.
+            if e.`type` == "click" then
+                val tgt = e.target.asInstanceOf[dom.Element]
+                if tgt != null && tgt.closest("[data-kyo-inert]") != null then e.preventDefault()
             findPathElement(e.target.asInstanceOf[dom.Element]).foreach { target =>
                 val path    = parsePath(target.getAttribute("data-kyo-path"))
                 val evTypes = ChainTypes(target)
@@ -1825,29 +1873,39 @@ private[kyo] object DomBackend:
             end if
         end if
 
-    /** True when `key` is a page-scrolling navigation key a `preventScrollKeys` region should suppress on `target`.
-      * Vertical keys are exempt when `target` consumes them itself (caret line movement, option change) — there the
-      * browser default is not a page scroll, so there is nothing to suppress. A single-line input stays suppressed for
-      * vertical keys on purpose: that is the combobox case where `ArrowDown` drives the listbox highlight.
-      * Horizontal/edge keys are exempt for any text-editable target, so a filter input keeps caret movement.
+    /** Whether the browser's own activation of `target` would run a handler the dispatcher runs again.
+      *
+      * The rule itself is [[KeyPolicy.doubleActivates]], shared with the server-push client; this
+      * reads the facts it needs off the DOM. The button's `type` is not among them: the dispatcher
+      * answers a keydown by synthesizing the click, so the browser's activation is the second one
+      * whatever the type says (see the rule's own scaladoc).
+      */
+    private def doubleActivation(key: String, target: dom.Element): Boolean =
+        val declared = target.getAttribute("data-kyo-ev")
+        KeyPolicy.doubleActivates(
+            key = key,
+            tag = target.tagName,
+            declaresClick = declared != null && declared.split(",").contains("click"),
+            declaresKeyDown = declaredInChain(target, "keydown"),
+            insideForm = target.closest("form") != null
+        )
+    end doubleActivation
+
+    /** Whether a `preventScrollKeys` region should suppress the browser's page scroll for `key` on
+      * `target`. The rule itself is [[KeyPolicy.preventsPageScroll]], shared with the server-push
+      * client; this reads the two facts it needs off the DOM.
       */
     private def scrollKeyPrevented(key: String, target: dom.Element): Boolean =
-        val tag = target.tagName
         // `isContentEditable` is an HTMLElement member: an SVG target does not carry it, and jsdom implements
         // contentEditable on no element at all, so the property reads as undefined. Casting undefined straight to
         // Boolean throws a ClassCastException out of the keydown listener, which takes the whole delegation path
         // down with it. Read the property defensively and treat an absent one as "not editable".
-        def contentEditable =
-            val value = target.asInstanceOf[scalajs.js.Dynamic].isContentEditable
-            !scalajs.js.isUndefined(value) && value != null && value.asInstanceOf[Boolean]
-        end contentEditable
-        def editable         = tag == "INPUT" || tag == "TEXTAREA" || tag == "SELECT" || contentEditable
-        def verticalConsumer = tag == "TEXTAREA" || tag == "SELECT" || contentEditable
-        key match
-            case "ArrowUp" | "ArrowDown" | "PageUp" | "PageDown" => !verticalConsumer
-            case "ArrowLeft" | "ArrowRight" | "Home" | "End"     => !editable
-            case _                                               => false
-        end match
+        val value = target.asInstanceOf[scalajs.js.Dynamic].isContentEditable
+        KeyPolicy.preventsPageScroll(
+            key = key,
+            tag = target.tagName,
+            contentEditable = !scalajs.js.isUndefined(value) && value != null && value.asInstanceOf[Boolean]
+        )
     end scrollKeyPrevented
     private val SvgNs = "http://www.w3.org/2000/svg"
 
