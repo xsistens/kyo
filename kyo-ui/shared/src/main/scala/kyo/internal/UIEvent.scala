@@ -43,4 +43,22 @@ private[kyo] enum UIEvent derives CanEqual, Schema:
     case DragOver(path: Seq[String], event: DragProtocol.TargetData)
     case Drop(path: Seq[String], event: DragProtocol.TargetData)
     case SortMove(path: Seq[String], sessionId: String, move: Drag.Move)
+    // pointer/drag events; `pointer` (UI.PointerEvent) rides the wire directly like UI.FilePayload. See UI.PointerEvent.
+    case PointerDown(path: Seq[String], pointer: UI.PointerEvent)
+    case PointerMove(path: Seq[String], pointer: UI.PointerEvent)
+    case PointerUp(path: Seq[String], pointer: UI.PointerEvent)
+    // Reply to HtmlOp.RequestMeasureById; routed by `id` to deliverMeasureById. `path` exists only to
+    // satisfy the enum's abstract member (never read; the client sends it empty).
+    case MeasureById(
+        path: Seq[String],
+        id: String,
+        rectX: Double,
+        rectY: Double,
+        rectW: Double,
+        rectH: Double,
+        viewportW: Double,
+        viewportH: Double
+    )
+    // Reply to HtmlOp.RequestMeasureById when no element carries the id; `path` as in MeasureById.
+    case MeasureMissing(path: Seq[String], id: String)
 end UIEvent
