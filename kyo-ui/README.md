@@ -438,6 +438,8 @@ When to use which setter:
 - `.value(ref: SignalRef[A])` / `.checked(ref: SignalRef[Boolean])`: two-way binding. Use for any field whose value participates in app state.
 - `.checked(sig: Signal[Boolean])` on `BooleanInput`: read-only reactive binding. The element re-renders when `sig` changes; user clicks do NOT mutate `sig` (you have to wire `onChange` yourself). This returns `UI`, not `Self`.
 
+What a re-render shows: a field shows what the reader did to it until the app renders something else. A render that changes a checkbox's or radio's `checked` or an option's `selected` writes it to the control, so a "Clear" that empties a selection unticks every box the reader ticked. A render that leaves that state as it was leaves the control alone, which keeps the reader's tick on a box the app does not bind. A field bound with `.value` (a text field, a textarea, a select) shows the bound value on every render, except a focused text field or textarea, which keeps its caret.
+
 ### Signup form: the running example
 
 A signup form with two reactive text fields and a checkbox, validated reactively, with a disabled submit button until terms are accepted:
