@@ -28,18 +28,19 @@ class ClickTargetResolutionTest extends kyo.test.Test[Any]:
                 })))
                 root     <- ReactiveUI.normalize(ui, Seq.empty)
                 dispatch <- ReactiveUI.subscribe(root, exchange)
-                // The list region takes its first emission and then parks on the signal again; measuring
-                // before that would count its renders as the click's.
+                // The list region takes its first emission as the painted rows and then parks on the signal
+                // again; measuring before that would count its row renders as the click's.
                 _ <- assertEventually(rows.waiters.map(_ == 1))
                 base   = renders.get
                 target = Seq("0", "0", "0", "r0")
                 _ <- dispatch.handle(target, UIEvent.Click(target, MouseEventData(UI.Modifiers.none, Absent)))
                 _ <- assertEventually(Sync.defer(clicks.get == 1))
                 delta = renders.get - base
-            // One render dispatches into the list. Each of the three ancestors then asks whether the target is
-            // disabled, a button or behind a control, and answers all of it from one resolution: one row render
-            // each. A resolution per question would cost two per ancestor.
-            yield assert(delta == 4, s"row renders during one click: $delta")
+            // The list region resolves the row through its registry and renders nothing. Each of the three
+            // ancestors then asks whether the target is disabled, a button or behind a control, and answers
+            // all of it from one resolution: one row render each. A resolution per question would cost two
+            // per ancestor.
+            yield assert(delta == 3, s"row renders during one click: $delta")
             end for
         }
     }
