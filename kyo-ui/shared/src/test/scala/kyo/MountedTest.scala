@@ -16,8 +16,27 @@ class MountedTest extends kyo.test.Test[Any]:
 
     import UI.*
 
-    private class Recorder extends UIExchange:
+    /** @param keepsRows
+      *   answers a list patch the way the DOM backend does: only the changed rows are painted, the kept ones stay in place
+      */
+    private class Recorder(keepsRows: Boolean = false) extends UIExchange:
         private val paints = AtomicRef.Unsafe.init(Chunk.empty[(Seq[String], String)])(using AllowUnsafe.embrace.danger)
+
+        override def onListPatch(
+            region: ReactiveRegion,
+            path: Seq[String],
+            contentContext: ReactiveRegion.RegionIdentity,
+            parentContext: ReactiveRegion.ParentContext,
+            previous: Maybe[UI],
+            rows: Seq[kyo.internal.ListRow]
+        )(using Frame): Boolean < Async =
+            if !keepsRows then super.onListPatch(region, path, contentContext, parentContext, previous, rows)
+            else
+                Kyo.foreachDiscard(rows.filter(_.changed)) { row =>
+                    HtmlRenderer.render(row.ui, path :+ row.key).map(html =>
+                        Sync.Unsafe.defer(discard(paints.getAndUpdate(_.append((path :+ row.key, html)))))
+                    )
+                }.andThen(true)
 
         def onChange(
             region: ReactiveRegion,
@@ -47,11 +66,11 @@ class MountedTest extends kyo.test.Test[Any]:
 
     private def click(path: String*): UIEvent = UIEvent.Click(path, MouseEventData(UI.Modifiers.none, Absent))
 
-    private def mount[A](ui: UI)(f: (Recorder, (Seq[String], UIEvent) => Boolean < Async) => A < (Async & Scope))(using
-        Frame
-    ): A < Async =
+    private def mount[A](ui: UI, keepsRows: Boolean = false)(
+        f: (Recorder, (Seq[String], UIEvent) => Boolean < Async) => A < (Async & Scope)
+    )(using Frame): A < Async =
         Scope.run {
-            val recorder = new Recorder
+            val recorder = new Recorder(keepsRows)
             for
                 _    <- recorder.initial(ui)
                 root <- ReactiveUI.normalize(ui, Seq.empty)
@@ -273,7 +292,7 @@ class MountedTest extends kyo.test.Test[Any]:
         yield succeed
     }
 
-    "rows of a keyed list keep separate instances of the same keyed node across list changes" in {
+    private def rowsKeepTheirInstances(keepsRows: Boolean)(using Frame, kyo.test.AssertScope) =
         for
             runs  <- AtomicRef.init(Map.empty[String, Int])
             items <- Signal.initRef(Chunk("a", "b"))
@@ -281,7 +300,7 @@ class MountedTest extends kyo.test.Test[Any]:
                 UI.mounted(runs.updateAndGet(m => m.updated(id, m.getOrElse(id, 0) + 1)).map(m => span(s"$id:${m(id)}")))
                     .keyed("row")
             ui = div(items.foreachKeyed(identity)(id => div(row(id))))
-            _ <- mount(ui) { (recorder, _) =>
+            _ <- mount(ui, keepsRows) { (recorder, _) =>
                 for
                     _ <- showsEventually(recorder, Seq("0", "a", "0"), "a:1")
                     _ <- showsEventually(recorder, Seq("0", "b", "0"), "b:1")
@@ -293,6 +312,34 @@ class MountedTest extends kyo.test.Test[Any]:
             }
             counts <- runs.get
         yield assert(counts == Map("a" -> 1, "b" -> 1, "c" -> 1))
+
+    "rows of a keyed list keep separate instances of the same keyed node across list changes" in {
+        rowsKeepTheirInstances(keepsRows = false)
+    }
+
+    "rows a list patch leaves in place keep their keyed instances, and a new row with the same key gets its own" in {
+        rowsKeepTheirInstances(keepsRows = true)
+    }
+
+    "the same call site shown twice with one key inside a list row renders an error in the second slot" in {
+        for
+            runs  <- AtomicInt.init(0)
+            items <- Signal.initRef(Chunk("a"))
+            row = (_: String) =>
+                UI.Ast.Div(children =
+                    Chunk.from(Seq(1, 2).map(_ => UI.mounted(runs.incrementAndGet.map(n => span(s"runs:$n"))).keyed("same")))
+                )
+            ui = div(items.foreachKeyed(identity)(row))
+            _ <- mount(ui, keepsRows = true) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "a", "0"), "runs:1")
+                    _ <- showsEventually(recorder, Seq("0", "a", "1"), "duplicate mounted key")
+                    _ <- items.set(Chunk("b", "a"))
+                    _ <- showsEventually(recorder, Seq("0", "b", "1"), "duplicate mounted key")
+                yield ()
+            }
+            total <- runs.get
+        yield assert(total == 2)
     }
 
     "the same call site shown twice with one key renders an error in the second slot" in {
