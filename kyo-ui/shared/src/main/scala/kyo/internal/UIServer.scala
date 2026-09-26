@@ -78,7 +78,9 @@ private[kyo] object UIServer:
         Scope.run {
             for
                 uiTree <- ui
-                root   <- ReactiveUI.normalize(uiTree, Seq.empty)
+                // Unpainted: the page this session drives was rendered by the HTTP route, or on a reconnect by the previous
+                // session, so no first emission may be skipped as already shown.
+                root <- ReactiveUI.normalize(uiTree, Seq.empty).map(ReactiveUI.unpainted)
                 // Pre-seed the connection's sent-class tracking with every pseudo-state class the
                 // initial SSR page already carries (rendered once more here, discarding the HTML), so
                 // the first reactive update touching an unchanged pseudo-styled element does not
@@ -206,6 +208,16 @@ private[kyo] object UIServer:
                     }
                 end if
             end onChange
+
+            override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
+                val op = HtmlOp.SetAttrByPath(path, name, value)
+                Abort.runPartial[Closed](ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](op)))).unit
+            override def onBoolAttrPatch(path: Seq[String], name: String, value: Boolean)(using Frame): Unit < Async =
+                val op = HtmlOp.SetBoolAttrByPath(path, name, value)
+                Abort.runPartial[Closed](ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](op)))).unit
+            override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
+                val op = HtmlOp.SetClassByPath(path, name, on)
+                Abort.runPartial[Closed](ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](op)))).unit
 
             /** Render and send the whole region. The region kind picks the op: an HTML region replaces the
               * content between its comment anchors (`ReplaceRange`), so the replacement parses in its actual
