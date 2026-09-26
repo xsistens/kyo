@@ -765,6 +765,40 @@ class FocusableTest extends UITest:
         }
     }
 
+    "preventScrollKeys suppresses the page scroll for Space on a list that is one tab stop" in {
+        // The list is the whole tab stop and nothing native is focused inside it, so the browser
+        // treated Space as page-down: picking the highlighted row also jumped a screenful.
+        val app: UI < Async =
+            for log <- Signal.initRef("")
+            yield UI.div(
+                UI.ul.id("list").tabIndex(0).preventScrollKeys
+                    .onKeyDown((_: KeyboardEvent) => log.set("picked"))(UI.li("one"), UI.li("two")),
+                UI.span(log).id("log"),
+                UI.div("spacer").style(Style.height(Length.Px(3000)))
+            )
+        withUI(app) {
+            for
+                _  <- Browser.focus(Selector.id("list"))
+                _  <- Browser.assertFocused(Selector.id("list"))
+                _  <- Browser.press(Selector.id("list"), Key.Space)
+                _  <- Browser.assertText(Selector.id("log"), "picked")
+                sp <- Browser.scrollPosition
+            yield assert(sp.y == 0)
+        }
+    }
+
+    "preventScrollKeys keeps Space typing in an input inside the region" in {
+        // The counterpart to the rule above: a filter header sits inside the same region, and a
+        // Space that stopped reaching it would be a worse bug than the scroll it prevents.
+        withUI(UI.div.preventScrollKeys(UI.input.id("filter"))) {
+            for
+                _   <- Browser.fill(Selector.id("filter"), "ab")
+                _   <- Browser.press(Selector.id("filter"), Key.Space)
+                txt <- Browser.eval("document.getElementById('filter').value")
+            yield assert(txt == "ab ", s"Space must still type into a field inside the region, got '$txt'")
+        }
+    }
+
     "preventScrollKeys keeps caret line movement in a textarea inside the region" in {
         // A textarea consumes vertical keys itself (caret line movement), so the region must not suppress them there.
         withUI(UI.div.preventScrollKeys(
@@ -776,6 +810,94 @@ class FocusableTest extends UITest:
                 _   <- Browser.press(Selector.id("ta"), Key.ArrowDown)
                 pos <- Browser.evalInt("document.getElementById('ta').selectionStart")
             yield assert(pos >= 6) // caret left line 1 ("first\n" is 6 chars), so ArrowDown was not preventDefault-ed
+        }
+    }
+
+    // scrollAuto over the server-push transport in real Chrome. Same note as focusAuto above: the
+    // DomBackend SPA mirror has no browser harness and is kept in sync by construction.
+
+    /** A capped scroller of 40 rows where `at` carries the scroll flag, plus buttons that move it. */
+    private def scroller(using Frame): UI < Async =
+        for at <- Signal.initRef(0)
+        yield UI.div(
+            UI.button("far").id("far").onClick(at.set(35)),
+            UI.button("near").id("near").onClick(at.set(1)),
+            UI.button("same").id("same").onClick(at.getAndUpdate(identity).unit),
+            UI.div(
+                at.map(h =>
+                    UI.fragment((0 until 40).map { i =>
+                        val row = UI.div(s"row $i").id(s"r$i").style(_.height(Length.Px(24)))
+                        if i == h then row.scrollAuto(true) else row
+                    }*)
+                )
+            ).id("box").style(Style.maxHeight(Length.Px(120)).overflowY(_.auto))
+        )
+
+    "scrollAuto emits its attribute, and only where it is set" in {
+        withUI(UI.div(
+            UI.div("on").scrollAuto(true).id("on"),
+            UI.div("off").scrollAuto(false).id("off"),
+            UI.div("plain").id("plain")
+        )) {
+            for
+                _ <- Browser.assertAttribute(Selector.id("on"), "data-kyo-scroll-auto", "1")
+                _ <- Browser.assertNoAttribute(Selector.id("off"), "data-kyo-scroll-auto")
+                _ <- Browser.assertNoAttribute(Selector.id("plain"), "data-kyo-scroll-auto")
+            yield ()
+        }
+    }
+
+    "a highlight that moves out of view scrolls its scroller to it" in {
+        withUI(scroller) {
+            for
+                before <- Browser.evalInt("Math.round(document.getElementById('box').scrollTop)")
+                _      <- Browser.click(Selector.id("far"))
+                _      <- Browser.assertAttribute(Selector.id("r35"), "data-kyo-scroll-auto", "1")
+                after  <- Browser.evalInt("Math.round(document.getElementById('box').scrollTop)")
+                // block: "nearest" scrolls the row to the bottom edge, which is the least it can move.
+                shown <- Browser.evalBoolean(
+                    """(function(){var b=document.getElementById('box').getBoundingClientRect();
+                      |var r=document.getElementById('r35').getBoundingClientRect();
+                      |return r.top >= b.top - 1 && r.bottom <= b.bottom + 1;})()""".stripMargin
+                )
+            yield assert(before == 0 && after > 0 && shown, s"scrollTop $before then $after, row visible: $shown")
+        }
+    }
+
+    "and back again when it moves the other way" in {
+        withUI(scroller) {
+            for
+                _    <- Browser.click(Selector.id("far"))
+                far  <- Browser.evalInt("Math.round(document.getElementById('box').scrollTop)")
+                _    <- Browser.click(Selector.id("near"))
+                _    <- Browser.assertAttribute(Selector.id("r1"), "data-kyo-scroll-auto", "1")
+                near <- Browser.evalInt("Math.round(document.getElementById('box').scrollTop)")
+            yield assert(far > 0 && near < far, s"came back from $far to $near")
+        }
+    }
+
+    "a re-render that leaves the flag where it was scrolls nothing" in {
+        // The reader has scrolled the box themselves; a repaint of the same highlight must not undo that.
+        withUI(scroller) {
+            for
+                _     <- Browser.evalDiscard("document.getElementById('box').scrollTop = 300")
+                _     <- Browser.click(Selector.id("same"))
+                after <- Browser.evalInt("Math.round(document.getElementById('box').scrollTop)")
+            yield assert(after == 300, s"the reader's own scroll position survived a repaint, got $after")
+        }
+    }
+
+    "a checkbox inside a preventActivation region stays reachable and keeps its value" in {
+        // HTML has no readonly for a checkbox. The region declines the browser's default for Space and for a
+        // click, so the box keeps its value while the keyboard can still reach it.
+        withUI(UI.div(UI.checkbox.id("ro")).preventActivation) {
+            for
+                _ <- Browser.focus(Selector.id("ro"))
+                _ <- Browser.press(Selector.id("ro"), Key.Space)
+                _ <- Browser.click(Selector.id("ro"))
+                _ <- Browser.assertNotChecked(Selector.id("ro"))
+                _ <- Browser.assertFocused(Selector.id("ro"))
+            yield ()
         }
     }
 
