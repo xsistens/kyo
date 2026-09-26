@@ -21,4 +21,12 @@ private[kyo] trait UIExchange:
         previous: Maybe[UI],
         ui: UI
     )(using Frame): Unit < Async
+
+    /** Declarative reactive-channel patch: update the attribute/class on the element at `path` IN PLACE (no
+      * content replace). Defaulted to a no-op so exchanges without in-place patching (plain-HTML render) need
+      * not override.
+      */
+    def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async      = Kyo.unit
+    def onBoolAttrPatch(path: Seq[String], name: String, value: Boolean)(using Frame): Unit < Async = Kyo.unit
+    def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async       = Kyo.unit
 end UIExchange
