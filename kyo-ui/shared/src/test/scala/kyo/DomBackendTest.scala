@@ -553,4 +553,206 @@ class DomBackendTest extends UITest:
         }
     }
 
+    // Portal (data-kyo-portal): the client re-homes the element to document.body behind an inert
+    // data-kyo-portal-slot placeholder at its logical position. The element stays the document's only carrier of
+    // its data-kyo-path, the morph reconciles the body twin through the placeholder, and the placeholder's removal
+    // retires the twin. These pin the protocol end-to-end over the server-push transport.
+
+    "a portal element re-homes to document.body behind a placeholder slot (path stays unique)" in {
+        val app: UI < Async =
+            for open <- Signal.initRef(true)
+            yield UI.div.id("phost")(
+                UI.when(open)(UI.div.id("panel").portal(true)(UI.span("panel-content")))
+            )
+        withUI(app) {
+            for
+                _  <- Browser.assertText(Selector.id("panel"), "panel-content")
+                ok <- Browser.evalBoolean(
+                    """(function(){
+                      |  var el=document.getElementById('panel');
+                      |  var slot=document.querySelector('[data-kyo-portal-slot]');
+                      |  if(!el||!slot)return false;
+                      |  var p=el.getAttribute('data-kyo-path');
+                      |  return el.parentElement===document.body
+                      |    && document.getElementById('phost').contains(slot)
+                      |    && slot.getAttribute('data-kyo-portal-slot')===p
+                      |    && document.querySelectorAll('[data-kyo-path="'+p+'"]').length===1;
+                      |})()""".stripMargin
+                )
+            yield assert(ok)
+        }
+    }
+
+    "a region re-render reconciles the body twin in place through the placeholder (no inline duplicate)" in {
+        val app: UI < Async =
+            for tick <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("tick").id("ptick").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map(t => UI.div.id("ppanel").portal(true)(UI.span(s"n:$t").id("ptxt")): UI)
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("ptxt"), "n:0")
+                // Stamp an expando on the live twin: it survives only if the morph patches the same node in place
+                // (an inline re-materialization or a replace would produce a fresh node without it).
+                _  <- Browser.evalDiscard("document.getElementById('ppanel').__probe=1")
+                _  <- Browser.click(Selector.id("ptick"))
+                _  <- Browser.assertText(Selector.id("ptxt"), "n:1")
+                ok <- Browser.evalBoolean(
+                    """(function(){
+                      |  var el=document.getElementById('ppanel');
+                      |  if(!el)return false;
+                      |  var p=el.getAttribute('data-kyo-path');
+                      |  return el.parentElement===document.body
+                      |    && el.__probe===1
+                      |    && document.querySelectorAll('[data-kyo-path="'+p+'"]').length===1;
+                      |})()""".stripMargin
+                )
+            yield assert(ok)
+        }
+    }
+
+    "closing the gate over a portal element removes the body twin and its placeholder" in {
+        val app: UI < Async =
+            for open <- Signal.initRef(true)
+            yield UI.div(
+                UI.button("close").id("pclose").onClick(open.set(false)),
+                UI.when(open)(UI.div.id("cpanel").portal(true).leaveTransition("portal-leave-probe")(UI.span("x")))
+            )
+        withUI(app) {
+            for
+                _      <- Browser.assertText(Selector.id("cpanel"), "x")
+                atBody <- Browser.evalBoolean("document.getElementById('cpanel').parentElement===document.body")
+                _      <- Browser.click(Selector.id("pclose"))
+                _      <- Browser.assertNotExists(Selector.id("cpanel"))
+                // The twin left through the regular ghost machinery. Its leave classes carry no CSS, so the ghost
+                // lives until the 1s safety timeout, comfortably longer than this immediate check, and its presence
+                // is what proves the removal-based spawn guard read the twin as genuinely departed rather than
+                // preserved. No placeholder lingers behind it.
+                ok <- Browser.evalBoolean(
+                    "document.querySelector('[data-kyo-portal-slot]')===null" +
+                        "&&document.querySelector('[data-kyo-ghost]')!==null"
+                )
+            yield assert(atBody && ok)
+        }
+    }
+
+    "keydown inside a portaled panel reaches a handler on a logical ancestor (forwarding hop)" in {
+        // The client-side forwarding gate walks ancestors for the data-kyo-ev token; the portal hop continues the
+        // walk at the placeholder's parent. Without it this keydown dies in the browser, since the panel itself
+        // declares no keydown and only its logical ancestor does.
+        val app: UI < Async =
+            for hits <- Signal.initRef(0)
+            yield UI.div(
+                UI.div.onKeyDown(_ => hits.getAndUpdate(_ + 1).unit)(
+                    UI.div.id("kpanel").portal(true)(
+                        UI.button("inside").id("kin")
+                    )
+                ),
+                hits.map(n => UI.span(s"k:$n").id("khits"))
+            )
+        withUI(app) {
+            for
+                _      <- Browser.assertText(Selector.id("khits"), "k:0")
+                atBody <- Browser.evalBoolean("document.getElementById('kpanel').parentElement===document.body")
+                _      <- Browser.press(Selector.id("kin"), Key.Enter)
+                _      <- Browser.assertText(Selector.id("khits"), "k:1")
+            yield assert(atBody)
+        }
+    }
+
+    // A portaled element that contains a reactive region is the shape every overlay has: the
+    // overlay portals its panel to `document.body`, and the panel's contents are reactive. The region inside it is registered while the element is still under its
+    // host, and `portalSweep` then moves the element, so its markers end up outside every
+    // range, and the payload of the region around it carries the portal element inline and
+    // therefore that same id a second time. Only the twin check keeps that from reading as a
+    // collision and aborting the whole patch.
+    "a reactive region inside a portaled element still updates after the region around it re-renders" in {
+        val app: UI < Async =
+            for
+                outer <- Signal.initRef(0)
+                inner <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("outer").id("po").onClick(outer.getAndUpdate(_ + 1).unit),
+                UI.button("inner").id("pi").onClick(inner.getAndUpdate(_ + 1).unit),
+                outer.map(o =>
+                    UI.div.id("nested-portal").portal(true)(
+                        inner.map(i => UI.span(s"$o/$i").id("nptxt"): UI)
+                    ): UI
+                )
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("nptxt"), "0/0")
+                _ <- Browser.click(Selector.id("pi"))
+                _ <- Browser.assertText(Selector.id("nptxt"), "0/1")
+                // The outer emission re-renders the region that owns the portaled element.
+                _ <- Browser.click(Selector.id("po"))
+                _ <- Browser.assertText(Selector.id("nptxt"), "1/1")
+                // And the region inside the portal has to still be live, or writing its ref
+                // reaches nothing and the panel is frozen at whatever it last showed.
+                _ <- Browser.click(Selector.id("pi"))
+                _ <- Browser.assertText(Selector.id("nptxt"), "1/2")
+            yield ()
+        }
+    }
+
+    // Closing the panel removes its slot, and the sweep retires the twin under <body> without walking the
+    // region registry, so the registry still names the region inside the twin. Reopening renders that region
+    // again under the same id, which must not read as a second copy of a live region.
+    "a portaled region closed and reopened still updates" in {
+        val app: UI < Async =
+            for
+                open  <- Signal.initRef(true)
+                inner <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("toggle").id("rt").onClick(open.getAndUpdate(!_).unit),
+                UI.button("inner").id("ri").onClick(inner.getAndUpdate(_ + 1).unit),
+                open.map(o =>
+                    if o then UI.div.id("rpanel").portal(true)(inner.map(i => UI.span(s"v:$i").id("rtxt"): UI)): UI
+                    else UI.span("closed").id("rclosed"): UI
+                )
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("rtxt"), "v:0")
+                _ <- Browser.click(Selector.id("rt"))
+                _ <- Browser.assertText(Selector.id("rclosed"), "closed")
+                _ <- Browser.click(Selector.id("rt"))
+                _ <- Browser.assertText(Selector.id("rtxt"), "v:0")
+                _ <- Browser.click(Selector.id("ri"))
+                _ <- Browser.assertText(Selector.id("rtxt"), "v:1")
+            yield ()
+        }
+    }
+
+    "two portaled elements, each with a region inside, do not collide" in {
+        val app: UI < Async =
+            for
+                outer <- Signal.initRef(0)
+                inner <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("outer").id("to").onClick(outer.getAndUpdate(_ + 1).unit),
+                UI.button("inner").id("ti").onClick(inner.getAndUpdate(_ + 1).unit),
+                outer.map(o =>
+                    UI.div.id("tp-a").portal(true)(inner.map(i => UI.span(s"a$o$i").id("ta"): UI)): UI
+                ),
+                outer.map(o =>
+                    UI.div.id("tp-b").portal(true)(inner.map(i => UI.span(s"b$o$i").id("tb"): UI)): UI
+                )
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("ta"), "a00")
+                _ <- Browser.assertText(Selector.id("tb"), "b00")
+                _ <- Browser.click(Selector.id("to"))
+                _ <- Browser.assertText(Selector.id("ta"), "a10")
+                _ <- Browser.assertText(Selector.id("tb"), "b10")
+                _ <- Browser.click(Selector.id("ti"))
+                _ <- Browser.assertText(Selector.id("ta"), "a11")
+                _ <- Browser.assertText(Selector.id("tb"), "b11")
+            yield ()
+        }
+    }
+
 end DomBackendTest
