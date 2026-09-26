@@ -1372,4 +1372,242 @@ class EventHandlerTest extends UITest:
         }
     }
 
+    // onContextMenu end-to-end over the server-push transport; the DomBackend SPA mirror has no harness.
+    /** Dispatch a synthetic right-click; returns whether the native menu would still open
+      * (dispatchEvent returns false iff a listener called preventDefault on the cancelable event).
+      */
+    private def rightClick(id: String)(using Frame) =
+        Browser.evalBoolean(
+            s"""document.getElementById('$id').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,ctrlKey:false}))"""
+        )
+
+    /** The same, at a viewport position: what a menu that opens where the reader clicked reads. */
+    private def rightClickAt(id: String, x: Int, y: Int)(using Frame) =
+        Browser.evalBoolean(
+            s"""document.getElementById('$id').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:$x,clientY:$y}))"""
+        )
+
+    "onContextMenu emits the contextmenu event marker; absent on plain elements" in {
+        val app: UI < Async = UI.div(
+            UI.div("target").id("t").onContextMenu(()),
+            UI.div("plain").id("plain")
+        )
+        withUI(app) {
+            for
+                _ <- Browser.assertAttribute(Selector.id("t"), "data-kyo-ev", "contextmenu")
+                _ <- Browser.assertNoAttribute(Selector.id("plain"), "data-kyo-ev")
+            yield ()
+        }
+    }
+
+    "right-click fires the handler and suppresses the native menu" in {
+        val app: UI < Async =
+            for ref <- Signal.initRef(0)
+            yield UI.div(
+                UI.div("target").id("t").onContextMenu(ref.getAndUpdate(_ + 1).unit),
+                ref.map(n => UI.span(n.toString).id("v"))
+            )
+        withUI(app) {
+            for
+                nativeMenu <- rightClick("t")
+                _          <- Browser.assertText(Selector.id("v"), "1")
+                _ = assert(!nativeMenu)
+            yield ()
+        }
+    }
+
+    "right-click on a plain element does not fire and keeps the native menu" in {
+        val app: UI < Async =
+            for ref <- Signal.initRef(0)
+            yield UI.div(
+                UI.div("target").id("t").onContextMenu(ref.getAndUpdate(_ + 1).unit),
+                UI.div("plain").id("plain"),
+                ref.map(n => UI.span(n.toString).id("v"))
+            )
+        withUI(app) {
+            for
+                nativeMenu <- rightClick("plain")
+                // Ordered socket: observing v=1 after the t right-click proves the plain dispatch ran
+                // without firing (else v would read 2).
+                _ <- rightClick("t")
+                _ <- Browser.assertText(Selector.id("v"), "1")
+                _ = assert(nativeMenu)
+            yield ()
+        }
+    }
+
+    "right-click on a descendant bubbles to the ancestor's handler" in {
+        val app: UI < Async =
+            for ref <- Signal.initRef(0)
+            yield UI.div(
+                UI.div.id("parent").onContextMenu(ref.getAndUpdate(_ + 1).unit)(
+                    UI.span("child").id("child")
+                ),
+                ref.map(n => UI.span(n.toString).id("v"))
+            )
+        withUI(app) {
+            for
+                nativeMenu <- rightClick("child")
+                _          <- Browser.assertText(Selector.id("v"), "1")
+                _ = assert(!nativeMenu)
+            yield ()
+        }
+    }
+
+    "typed onContextMenu receives the MouseEvent payload (target id)" in {
+        val app: UI < Async =
+            for ref <- Signal.initRef("")
+            yield UI.div(
+                UI.div("target").id("t").onContextMenu(me => ref.set(me.targetId.getOrElse("none"))),
+                ref.map(v => UI.span(v).id("v"))
+            )
+        withUI(app) {
+            for
+                _ <- rightClick("t")
+                _ <- Browser.assertText(Selector.id("v"), "t")
+            yield ()
+        }
+    }
+
+    "typed onContextMenu receives the viewport position the right-click landed at" in {
+        val app: UI < Async =
+            for ref <- Signal.initRef("")
+            yield UI.div(
+                UI.div("target").id("t").onContextMenu(me =>
+                    ref.set(me.position.map(p => s"${p.x.toInt},${p.y.toInt}").getOrElse("none"))
+                ),
+                ref.map(v => UI.span(v).id("v"))
+            )
+        withUI(app) {
+            for
+                _ <- rightClickAt("t", 137, 42)
+                _ <- Browser.assertText(Selector.id("v"), "137,42")
+            yield ()
+        }
+    }
+
+    "a focus event carries no position, since it has no pointer to report" in {
+        val app: UI < Async =
+            for ref <- Signal.initRef("")
+            yield UI.div(
+                UI.input.id("t").onFocus(me => ref.set(me.position.map(_ => "some").getOrElse("none"))),
+                ref.map(v => UI.span(v).id("v"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.eval("document.getElementById('t').focus()")
+                _ <- Browser.assertText(Selector.id("v"), "none")
+            yield ()
+        }
+    }
+
+    "onScrollPosition delivers the element's native scrollTop after it is scrolled" in {
+        val app: UI < Async =
+            for pos <- Signal.initRef(-1)
+            yield UI.div(
+                UI.div(UI.div("tall").id("tall"))
+                    .id("scroller")
+                    .onScrollPosition((e: UI.ScrollPositionEvent) => pos.set(e.scrollTop.toInt)),
+                pos.map(p => UI.span(s"pos:$p").id("out"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("out"), "pos:-1")
+                // Setting scrollTop programmatically fires a native 'scroll' the capture-phase listener catches.
+                _ <- Browser.evalDiscard(
+                    "var s=document.getElementById('scroller');s.style.display='block';s.style.height='80px';s.style.overflow='auto';" +
+                        "document.getElementById('tall').style.height='2000px';void s.scrollHeight;s.scrollTop=120;"
+                )
+                _ <- Browser.assertText(Selector.id("out"), "pos:120")
+            yield ()
+        }
+    }
+
+    // MouseEvent.onControl: what an element that makes a whole region clickable needs in order to
+    // leave the reader's own controls inside that region alone.
+
+    "a click that reached a region through a control of the reader's own says so" in {
+        val app: UI < Async =
+            for ref <- Signal.initRef("none")
+            yield UI.div(
+                UI.div
+                    .id("region")
+                    .onClick((me: UI.MouseEvent) => ref.set(me.onControl.toString))(
+                        // Fragment("") goes nowhere, so the click is observable without navigating away.
+                        UI.a.href(UI.Href.Fragment("")).id("link")("Link"),
+                        UI.button("Go").id("btn"),
+                        UI.input.id("field"),
+                        UI.span("plain").id("plain")
+                    ),
+                ref.map(v => UI.span(v).id("v"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.click(Selector.id("link"))
+                _ <- Browser.assertText(Selector.id("v"), "true")
+                _ <- Browser.click(Selector.id("btn"))
+                _ <- Browser.assertText(Selector.id("v"), "true")
+                _ <- Browser.click(Selector.id("field"))
+                _ <- Browser.assertText(Selector.id("v"), "true")
+                _ <- Browser.click(Selector.id("plain"))
+                _ <- Browser.assertText(Selector.id("v"), "false")
+            yield ()
+        }
+    }
+
+    "an anchor with nowhere to go and nothing to run is markup, not a control" in {
+        val app: UI < Async =
+            for ref <- Signal.initRef("none")
+            yield UI.div(
+                UI.div
+                    .id("region")
+                    .onClick((me: UI.MouseEvent) => ref.set(me.onControl.toString))(
+                        UI.a.id("inert")("Inert")
+                    ),
+                ref.map(v => UI.span(v).id("v"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.click(Selector.id("inert"))
+                _ <- Browser.assertText(Selector.id("v"), "false")
+            yield ()
+        }
+    }
+
+    "the element the click landed on never answers for itself, or a button would decline its own click" in {
+        val app: UI < Async =
+            for ref <- Signal.initRef("none")
+            yield UI.div(
+                UI.button("Go").id("btn").onClick((me: UI.MouseEvent) => ref.set(me.onControl.toString)),
+                ref.map(v => UI.span(v).id("v"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.click(Selector.id("btn"))
+                _ <- Browser.assertText(Selector.id("v"), "false")
+            yield ()
+        }
+    }
+
+    "a control answers for a click that landed on what is inside it" in {
+        // The whole chain between the region and the target is asked, not just the target: a click on
+        // the icon inside a button targets the icon, which is no control at all on its own.
+        val app: UI < Async =
+            for ref <- Signal.initRef("none")
+            yield UI.div(
+                UI.div
+                    .id("region")
+                    .onClick((me: UI.MouseEvent) => ref.set(me.onControl.toString))(
+                        UI.button.id("btn")(UI.span("icon").id("icon"))
+                    ),
+                ref.map(v => UI.span(v).id("v"))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.click(Selector.id("icon"))
+                _ <- Browser.assertText(Selector.id("v"), "true")
+            yield ()
+        }
+    }
+
 end EventHandlerTest
