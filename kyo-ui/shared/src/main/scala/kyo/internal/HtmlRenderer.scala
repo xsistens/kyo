@@ -15,11 +15,15 @@ private[kyo] object HtmlRenderer:
     /** Render a UI tree to HTML with data-kyo-path attributes. */
     def render(ui: UI, path: Seq[String])(using Frame): String < Sync =
         val sb = new StringBuilder
+        // Every descendant extends the path with `:+`, and `Seq.empty` is a List, whose `:+` copies the
+        // whole prefix per node. Normalizing once at the entry makes those appends Vector appends; paths
+        // are only ever built, compared and joined, and Seq equality holds across both.
+        val root = path.toVector
         renderTo(
             sb,
             ui,
-            path,
-            ReactiveRegion.RegionIdentity.root(path),
+            root,
+            ReactiveRegion.RegionIdentity.root(root),
             ReactiveRegion.Namespace.Html,
             parentContext = ReactiveRegion.ParentContext.Other,
             boundaryMode = ReactiveRegion.BoundaryMode.Emit
@@ -140,13 +144,14 @@ private[kyo] object HtmlRenderer:
       * rule, in first-encountered order.
       */
     private[kyo] def renderWithCss(ui: UI, path: Seq[String])(using Frame): (String, Chunk[(String, String)]) < Sync =
-        val sb  = new StringBuilder
-        val css = new CssCollector
+        val sb   = new StringBuilder
+        val css  = new CssCollector
+        val root = path.toVector
         renderTo(
             sb,
             ui,
-            path,
-            ReactiveRegion.RegionIdentity.root(path),
+            root,
+            ReactiveRegion.RegionIdentity.root(root),
             ReactiveRegion.Namespace.Html,
             cssRules = Present(css),
             parentContext = ReactiveRegion.ParentContext.Other,
@@ -332,7 +337,9 @@ private[kyo] object HtmlRenderer:
                     // Reactive classes currently true, folded into the class list so SSR is correct. Empty when
                     // none are bound, so the `class` attribute is byte-identical there.
                     def openTag(extraClasses: Seq[String]): Unit =
-                        w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}"""")
+                        discard(sb.append('<').append(tag).append(" data-kyo-path=\""))
+                        appendPath(sb, path)
+                        discard(sb.append('"'))
                         renderCommonAttrs(
                             sb,
                             if extraClasses.isEmpty then elem.attrs
@@ -384,7 +391,7 @@ private[kyo] object HtmlRenderer:
                                 case d: Svg.Desc  => w(sb, esc(d.text)); Kyo.unit
                                 case _            => Kyo.unit
                             textChild.andThen(
-                                Kyo.foreachDiscard(elem.children.toSeq.zipWithIndex) { (child, i) =>
+                                Kyo.foreachIndexedDiscard(elem.children) { (i, child) =>
                                     renderTo(
                                         sb,
                                         child,
@@ -395,7 +402,7 @@ private[kyo] object HtmlRenderer:
                                         childParentContext,
                                         ReactiveRegion.BoundaryMode.Emit
                                     )
-                                }.andThen(w(sb, s"</$tag>"))
+                                }.andThen(discard(sb.append("</").append(tag).append('>')))
                             )
                         end if
                     end for
@@ -405,12 +412,12 @@ private[kyo] object HtmlRenderer:
                 w(sb, value)
 
             case UI.Ast.Text(value) =>
-                w(sb, esc(value))
+                escInto(sb, value)
 
             case Fragment(children) =>
                 // Use key for KeyedChild, index for everything else. This matches the path scheme
                 // walkStatic uses, so server-side event routing aligns with rendered data-kyo-path.
-                Kyo.foreachDiscard(children.toSeq.zipWithIndex) { (child, i) =>
+                Kyo.foreachIndexedDiscard(children) { (i, child) =>
                     val childPath = child match
                         case kc: KeyedChild[?] => path :+ kc.key
                         case _                 => path :+ i.toString
@@ -708,12 +715,26 @@ private[kyo] object HtmlRenderer:
       * classes currently true are folded into the class list) without rebuilding the element itself.
       */
     private def renderCommonAttrs(sb: StringBuilder, attrs: Attrs, isSvg: Boolean, cssRules: Maybe[CssCollector])(using Frame): Unit =
-        attrs.identifier.foreach(id => w(sb, s""" id="${esc(id)}""""))
+        attrs.identifier.foreach { id =>
+            sb.append(" id=\"")
+            escInto(sb, id)
+            sb.append('"')
+        }
         val pseudoClass = registerPseudoClass(cssRules, attrs.uiStyle)
-        val classes     = pseudoClass match
-            case Present(cls) => attrs.cssClasses :+ cls
-            case Absent       => attrs.cssClasses
-        if classes.nonEmpty then w(sb, s""" class="${esc(classes.mkString(" "))}"""")
+        if attrs.cssClasses.nonEmpty || pseudoClass.nonEmpty then
+            sb.append(" class=\"")
+            var first = true
+            attrs.cssClasses.foreach { cls =>
+                if !first then sb.append(' ')
+                first = false
+                escInto(sb, cls)
+            }
+            pseudoClass.foreach { cls =>
+                if !first then sb.append(' ')
+                escInto(sb, cls)
+            }
+            sb.append('"')
+        end if
         // Skipped when a `.hidden(Signal)` channel owns the attribute; see renderElementAttrs on precedence.
         if !attrs.reactiveBoolAttrs.contains("hidden") then attrs.hidden.foreach(v => if v then w(sb, " hidden"))
         attrs.tabIndex.foreach(n => w(sb, s""" tabindex="$n""""))
@@ -750,16 +771,24 @@ private[kyo] object HtmlRenderer:
         if pseudoClass.isEmpty then
             val css = CssStyleRenderer.render(attrs.uiStyle)
             if css.nonEmpty then w(sb, s""" style="${esc(css)}"""")
-        attrs.ariaAttrs.toSeq.sortBy(_._1).foreach { case (name, value) =>
-            w(sb, s""" aria-$name="${esc(value)}"""")
-        }
+        // The emptiness gates match reactiveTrueClasses below: sorting for deterministic output costs a
+        // Seq copy and a sort per element, and on a plain element every one of these maps is empty.
+        if attrs.ariaAttrs.nonEmpty then
+            attrs.ariaAttrs.toSeq.sortBy(_._1).foreach { case (name, value) =>
+                w(sb, s""" aria-$name="${esc(value)}"""")
+            }
+        end if
         attrs.role.foreach(r => w(sb, s""" role="${esc(r)}""""))
-        attrs.dataAttrs.toSeq.sortBy(_._1).foreach { case (name, value) =>
-            w(sb, s""" data-$name="${esc(value)}"""")
-        }
-        attrs.jsProps.toSeq.sortBy(_._1).foreach { case (name, value) =>
-            w(sb, s""" data-kyo-prop-$name="${esc(value)}"""")
-        }
+        if attrs.dataAttrs.nonEmpty then
+            attrs.dataAttrs.toSeq.sortBy(_._1).foreach { case (name, value) =>
+                w(sb, s""" data-$name="${esc(value)}"""")
+            }
+        end if
+        if attrs.jsProps.nonEmpty then
+            attrs.jsProps.toSeq.sortBy(_._1).foreach { case (name, value) =>
+                w(sb, s""" data-kyo-prop-$name="${esc(value)}"""")
+            }
+        end if
     end renderCommonAttrs
 
     private def encodedDragSource(source: Drag.Source)(using Frame): String =
@@ -788,17 +817,21 @@ private[kyo] object HtmlRenderer:
       * then patches it in place (HtmlOp.SetAttrByPath). Sorted for deterministic output.
       */
     private def renderReactiveAttrs(sb: StringBuilder, attrs: Attrs)(using Frame): Unit < Sync =
-        Kyo.foreachDiscard(attrs.reactiveAttrs.toSeq.sortBy(_._1)) { case (name, sig) =>
-            sig.current.map(v => w(sb, s""" $name="${esc(v)}""""))
-        }
+        if attrs.reactiveAttrs.isEmpty then Kyo.unit
+        else
+            Kyo.foreachDiscard(attrs.reactiveAttrs.toSeq.sortBy(_._1)) { case (name, sig) =>
+                sig.current.map(v => w(sb, s""" $name="${esc(v)}""""))
+            }
 
     /** Emits each reactive boolean attribute as a bare present attribute while its signal is true (mirrors
       * `boolAttr`); the client toggles it in place (HtmlOp.SetBoolAttrByPath). Sorted for deterministic output.
       */
     private def renderReactiveBoolAttrs(sb: StringBuilder, attrs: Attrs)(using Frame): Unit < Sync =
-        Kyo.foreachDiscard(attrs.reactiveBoolAttrs.toSeq.sortBy(_._1)) { case (name, sig) =>
-            sig.current.map(v => if v then w(sb, s" $name"))
-        }
+        if attrs.reactiveBoolAttrs.isEmpty then Kyo.unit
+        else
+            Kyo.foreachDiscard(attrs.reactiveBoolAttrs.toSeq.sortBy(_._1)) { case (name, sig) =>
+                sig.current.map(v => if v then w(sb, s" $name"))
+            }
 
     /** The reactive classes whose signal is currently true, for folding into the SSR class list; the client
       * toggles them in place afterwards (HtmlOp.SetClassByPath). Empty (and cheap) when none are bound.
@@ -1032,52 +1065,57 @@ private[kyo] object HtmlRenderer:
         case _                        => false
 
     private def renderEventAttr(sb: StringBuilder, elem: Element): Unit =
-        val events = Seq.newBuilder[String]
-        val attrs  = elem.attrs
+        // Written as they are found: the attribute opens with the first event and closes at the end, so a
+        // plain element allocates nothing here.
+        var first                   = true
+        def add(name: String): Unit =
+            discard(sb.append(if first then " data-kyo-ev=\"" else ",").append(name))
+            first = false
+        val attrs = elem.attrs
         if attrs.onClick.nonEmpty || attrs.onClickEvt.nonEmpty ||
             attrs.onClickSelf.nonEmpty || attrs.onClickSelfEvt.nonEmpty
-        then events += "click"
-        if attrs.onContextMenu.nonEmpty || attrs.onContextMenuEvt.nonEmpty then events += "contextmenu"
-        if attrs.onFocus.nonEmpty || attrs.onFocusEvt.nonEmpty then events += "focus"
-        if attrs.onBlur.nonEmpty || attrs.onBlurEvt.nonEmpty then events += "blur"
-        if attrs.onKeyDown.nonEmpty then events += "keydown"
-        if attrs.onKeyUp.nonEmpty then events += "keyup"
-        if attrs.onHover.nonEmpty || attrs.onHoverEvt.nonEmpty then events += "mouseover"
-        if attrs.onUnhover.nonEmpty || attrs.onUnhoverEvt.nonEmpty then events += "mouseout"
-        if attrs.onScroll.nonEmpty || attrs.onScrollEvt.nonEmpty then events += "wheel"
-        if attrs.onDragStart.nonEmpty || attrs.onDragStartEvt.nonEmpty then events += "dragstart"
-        if attrs.onDragEnd.nonEmpty || attrs.onDragEndEvt.nonEmpty then events += "dragend"
-        if attrs.onDragEnter.nonEmpty || attrs.onDragEnterEvt.nonEmpty then events += "dragenter"
-        if attrs.onDragLeave.nonEmpty || attrs.onDragLeaveEvt.nonEmpty then events += "dragleave"
-        if attrs.onDragOver.nonEmpty || attrs.onDragOverEvt.nonEmpty then events += "dragover"
-        if attrs.onDrop.nonEmpty || attrs.onDropEvt.nonEmpty then events += "drop"
-        if attrs.onSortMove.nonEmpty || attrs.onSortMoveEvt.nonEmpty then events += "sortmove"
-        if attrs.onScrollPos.nonEmpty then events += "scroll"
+        then add("click")
+        if attrs.onContextMenu.nonEmpty || attrs.onContextMenuEvt.nonEmpty then add("contextmenu")
+        if attrs.onFocus.nonEmpty || attrs.onFocusEvt.nonEmpty then add("focus")
+        if attrs.onBlur.nonEmpty || attrs.onBlurEvt.nonEmpty then add("blur")
+        if attrs.onKeyDown.nonEmpty then add("keydown")
+        if attrs.onKeyUp.nonEmpty then add("keyup")
+        if attrs.onHover.nonEmpty || attrs.onHoverEvt.nonEmpty then add("mouseover")
+        if attrs.onUnhover.nonEmpty || attrs.onUnhoverEvt.nonEmpty then add("mouseout")
+        if attrs.onScroll.nonEmpty || attrs.onScrollEvt.nonEmpty then add("wheel")
+        if attrs.onDragStart.nonEmpty || attrs.onDragStartEvt.nonEmpty then add("dragstart")
+        if attrs.onDragEnd.nonEmpty || attrs.onDragEndEvt.nonEmpty then add("dragend")
+        if attrs.onDragEnter.nonEmpty || attrs.onDragEnterEvt.nonEmpty then add("dragenter")
+        if attrs.onDragLeave.nonEmpty || attrs.onDragLeaveEvt.nonEmpty then add("dragleave")
+        if attrs.onDragOver.nonEmpty || attrs.onDragOverEvt.nonEmpty then add("dragover")
+        if attrs.onDrop.nonEmpty || attrs.onDropEvt.nonEmpty then add("drop")
+        if attrs.onSortMove.nonEmpty || attrs.onSortMoveEvt.nonEmpty then add("sortmove")
+        if attrs.onScrollPos.nonEmpty then add("scroll")
         // "input" event: when handler is set OR when .value(SignalRef) auto-binding is in use
         elem match
-            case ti: TextInput if ti.onInput.nonEmpty || hasSignalRefValue(ti.value) => events += "input"
+            case ti: TextInput if ti.onInput.nonEmpty || hasSignalRefValue(ti.value) => add("input")
             case _                                                                   =>
         // "change" event: when handler is set OR when .value/.checked(SignalRef) auto-binding is in use
         elem match
-            case ti: TextInput if ti.onChange.nonEmpty || hasSignalRefValue(ti.value)          => events += "change"
-            case pi: PickerInput if pi.onChange.nonEmpty || hasSignalRefValue(pi.value)        => events += "change"
-            case bi: BooleanInput if bi.onChange.nonEmpty || hasSignalRefValue(bi.checked)     => events += "change"
-            case ni: NumberInput if ni.onChangeNumeric.nonEmpty || hasSignalRefValue(ni.value) => events += "change"
-            case ri: RangeInput if ri.onChange.nonEmpty || hasSignalRefValue(ri.value)         => events += "change"
-            case fi: FileInput if fi.onChange.nonEmpty || attrs.onFileSelect.nonEmpty          => events += "change"
-            case sel: Select if hasSignalRefValue(sel.value)                                   => events += "change"
+            case ti: TextInput if ti.onChange.nonEmpty || hasSignalRefValue(ti.value)          => add("change")
+            case pi: PickerInput if pi.onChange.nonEmpty || hasSignalRefValue(pi.value)        => add("change")
+            case bi: BooleanInput if bi.onChange.nonEmpty || hasSignalRefValue(bi.checked)     => add("change")
+            case ni: NumberInput if ni.onChangeNumeric.nonEmpty || hasSignalRefValue(ni.value) => add("change")
+            case ri: RangeInput if ri.onChange.nonEmpty || hasSignalRefValue(ri.value)         => add("change")
+            case fi: FileInput if fi.onChange.nonEmpty || attrs.onFileSelect.nonEmpty          => add("change")
+            case sel: Select if hasSignalRefValue(sel.value)                                   => add("change")
             case _                                                                             =>
         end match
         elem match
-            case f: Form if f.onSubmit.nonEmpty || f.onSubmitEvt.nonEmpty => events += "submit"
+            case f: Form if f.onSubmit.nonEmpty || f.onSubmitEvt.nonEmpty => add("submit")
             case _                                                        =>
-        if attrs.onPointerDown.nonEmpty then events += "pointerdown"
-        if attrs.onPointerMove.nonEmpty then events += "pointermove"
-        if attrs.onPointerUp.nonEmpty then events += "pointerup"
+        if attrs.onPointerDown.nonEmpty then add("pointerdown")
+        if attrs.onPointerMove.nonEmpty then add("pointermove")
+        if attrs.onPointerUp.nonEmpty then add("pointerup")
         // fileselect marker so the client's change branch reads all files instead of only the first.
-        if attrs.onFileSelect.nonEmpty then events += "fileselect"
-        val ev = events.result()
-        if ev.nonEmpty then w(sb, s""" data-kyo-ev="${ev.mkString(",")}"""")
+        if attrs.onFileSelect.nonEmpty then add("fileselect")
+        if !first then sb.append('"')
+        ()
     end renderEventAttr
 
     // ---- Helpers ----
@@ -1105,18 +1143,58 @@ private[kyo] object HtmlRenderer:
     private inline def w(sb: StringBuilder, s: String): Unit =
         sb.append(s); ()
 
+    private def escaped(c: Char): String =
+        c match
+            case '&'  => "&amp;"
+            case '<'  => "&lt;"
+            case '>'  => "&gt;"
+            case '"'  => "&quot;"
+            case '\'' => "&#39;"
+            case _    => null
+
+    private def firstSpecial(s: String): Int =
+        var i = 0
+        val n = s.length
+        while i < n && (escaped(s.charAt(i)) eq null) do i += 1
+        if i < n then i else -1
+    end firstSpecial
+
+    /** `s` HTML-escaped; the string itself when it has nothing to escape, which is most text. */
     private def esc(s: String): String =
-        val sb = new StringBuilder(s.length)
-        s.foreach {
-            case '&'  => sb.append("&amp;")
-            case '<'  => sb.append("&lt;")
-            case '>'  => sb.append("&gt;")
-            case '"'  => sb.append("&quot;")
-            case '\'' => sb.append("&#39;")
-            case c    => sb.append(c)
-        }
-        sb.toString
-    end esc
+        if firstSpecial(s) < 0 then s
+        else
+            val sb = new StringBuilder(s.length + 8)
+            escInto(sb, s)
+            sb.toString
+
+    /** Writes `s` HTML-escaped into `sb`, copying runs between special characters in one go. */
+    private def escInto(sb: StringBuilder, s: String): Unit =
+        val n     = s.length
+        var start = 0
+        var i     = 0
+        while i < n do
+            val rep = escaped(s.charAt(i))
+            if rep ne null then
+                if start < i then discard(sb.underlying.append(s, start, i))
+                sb.append(rep)
+                start = i + 1
+            end if
+            i += 1
+        end while
+        if start == 0 then sb.append(s)
+        else if start < n then discard(sb.underlying.append(s, start, n))
+    end escInto
+
+    /** Writes the `data-kyo-path` value, segments joined by `.` and escaped like [[pathAttr]], without building
+      * the joined string.
+      */
+    private def appendPath(sb: StringBuilder, path: Seq[String]): Unit =
+        val it = path.iterator
+        if it.hasNext then escInto(sb, it.next())
+        while it.hasNext do
+            discard(sb.append('.'))
+            escInto(sb, it.next())
+    end appendPath
 
     // Escape a string for safe embedding inside a JS double-quoted string literal within a
     // <script> element. Must handle both JS parse hazards and the HTML parser's raw-text
