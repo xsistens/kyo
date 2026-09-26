@@ -39,4 +39,29 @@ class DomBackendChannelTest extends kyo.test.Test[Any]:
         end for
     }
 
+    "a bound text region is written in place when set returns" in {
+        // A Signal[String] in a child position is one text node: the write lands in that node, which keeps its
+        // identity, and a string with markup characters arrives as literal text.
+        for
+            label <- Signal.initRef("before")
+            ui    = UI.div(UI.span(label: Signal[String]).id("chan-text"))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("chan-text") != null))
+            node  <- Sync.defer(textNodeOf("chan-text"))
+            _     <- label.set("<b>&after</b>")
+            seen  <- Sync.defer {
+                val el = dom.document.getElementById("chan-text")
+                (el.textContent, el.getElementsByTagName("b").length, textNodeOf("chan-text") eq node)
+            }
+            _ <- fiber.interrupt
+            _ <- fiber.getResult
+        yield assert(seen == ("<b>&after</b>", 0, true), s"text, markup elements, same node = $seen")
+        end for
+    }
+
+    private def textNodeOf(id: String): dom.Node =
+        val children = dom.document.getElementById(id).childNodes
+        (0 until children.length).map(children(_)).find(_.nodeType == dom.Node.TEXT_NODE).orNull
+
 end DomBackendChannelTest
