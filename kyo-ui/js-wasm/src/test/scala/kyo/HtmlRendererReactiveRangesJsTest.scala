@@ -214,7 +214,7 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
         ))
         assert(evalString("__kyoLifecycle.indexOf('leave:semantic-host')>=0?'yes':'no'") == "yes")
         assert(evalString("String(document.getElementById('returned-row').rangeprobe)") == "returned")
-        assert(evalString("__kyoLifecycle.indexOf('enter:returned-row')>=0?'yes':'no'") == "yes")
+        assert(evalString("__kyoLifecycle.indexOf('enter:returned-row')>=0?'yes':'no'") == "yes", evalString("__kyoLifecycle.join(',')"))
         assert(evalString("__kyoLifecycle.indexOf('animate:returned-row')>=0?'yes':'no'") == "yes")
     }
 

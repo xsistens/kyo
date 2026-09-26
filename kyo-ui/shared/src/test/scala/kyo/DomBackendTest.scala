@@ -6,6 +6,16 @@ import kyo.Browser.*
 // end-to-end via the JVM browser test infrastructure (SSE/event POST cycle).
 class DomBackendTest extends UITest:
 
+    /** Counts every `data-kyo-ghost` node the client appends from now on. Ghosts remove themselves on
+      * transitionend or a 1s timeout, so polling the DOM for their presence would race the cleanup; a
+      * MutationObserver records the spawn itself.
+      */
+    private val ghostCounterJs =
+        "window.__kyoGhostCount=0;" +
+            "new MutationObserver(function(ms){ms.forEach(function(m){m.addedNodes.forEach(function(n){" +
+            "if(n.nodeType===1&&n.hasAttribute&&n.hasAttribute('data-kyo-ghost'))window.__kyoGhostCount++;" +
+            "});});}).observe(document.body,{childList:true,subtree:true})"
+
     "Replace op updates only the target reactive zone" in {
         val app: UI < Async =
             for
@@ -25,6 +35,32 @@ class DomBackendTest extends UITest:
                 // zone b is untouched
                 _ <- Browser.assertText(Selector.id("zb"), "zone-b")
             yield ()
+        }
+    }
+
+    "morph reuses an inner element (preserving its DOM-local state) across a re-render of its region" in {
+        val app: UI < Async =
+            for outer <- Signal.initRef[Int](0)
+            yield UI.div(
+                outer.map(o =>
+                    UI.div(
+                        UI.div("keep-me").id("inner"),
+                        UI.span(s"o=$o").id("status")
+                    )
+                ),
+                UI.button("bump").id("bump").onClick(outer.getAndUpdate(_ + 1).unit)
+            )
+        withUI(app) {
+            for
+                _      <- Browser.assertText(Selector.id("status"), "o=0")
+                _      <- Browser.evalDiscard("document.getElementById('inner').__kyoMark = 4242;")
+                before <- Browser.evalJson[Int]("document.getElementById('inner').__kyoMark || 0")
+                _      <- Browser.evalDiscard("document.getElementById('bump').click()")
+                _      <- Browser.assertText(Selector.id("status"), "o=1")
+                after  <- Browser.evalJson[Int]("document.getElementById('inner').__kyoMark || 0")
+            yield
+                assert(before == 4242)
+                assert(after == 4242) // node reused; an outerHTML replace would recreate it (mark gone)
         }
     }
 
@@ -133,4 +169,237 @@ class DomBackendTest extends UITest:
         }
     }
 
+    "nested reactive directly inside a reactive patches independently (no path collision)" in {
+        // Two regions must not share a data-kyo-path when a reactive's value is ITSELF a reactive (e.g.
+        // `open.render(hi.render(...))`). The `: UI` ascription lifts the inner Signal into a Reactive so the outer value is itself reactive.
+        val app: UI < Async =
+            for
+                outer <- Signal.initRef("o0")
+                inner <- Signal.initRef("i0")
+            yield UI.div(
+                UI.button("set-inner").id("set-inner").onClick(inner.set("i1")),
+                UI.button("set-outer").id("set-outer").onClick(outer.set("o1")),
+                outer.map(o => (inner.map(i => UI.span(s"$o/$i").id("cell")): UI))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("cell"), "o0/i0")
+                // change ONLY inner: before the fix this stayed "o0/i0".
+                _ <- Browser.click(Selector.id("set-inner"))
+                _ <- Browser.assertText(Selector.id("cell"), "o0/i1")
+                _ <- Browser.click(Selector.id("set-outer"))
+                _ <- Browser.assertText(Selector.id("cell"), "o1/i1")
+            yield ()
+        }
+    }
+
+    // Mount-slot reconciliation: a keyless UI.mounted and a Reactive share the reactiveContentSegment key, so
+    // swapping one for the other collides on the same data-kyo-path. The live mount is preserved ONLY when the
+    // incoming top-down node is itself a mount slot (data-kyo-mount-slot); otherwise the stale mount is removed.
+
+    "a region swapping a keyless mount for colliding reactive content removes the stale mount DOM" in {
+        val app: UI < Async =
+            for
+                sel   <- Signal.initRef("a")
+                inner <- Signal.initRef("B-content")
+            yield UI.div(
+                UI.button("swap").id("swap").onClick(sel.set("b")),
+                sel.map {
+                    // both branches are reactive content -> they reconcile at the SAME positional key
+                    case "a" =>
+                        UI.mounted {
+                            Signal.initRef(0).map(_ => UI.span("A-content").id("mount-a"))
+                        }.placeholder(UI.empty): UI
+                    case _ =>
+                        inner.map(v => UI.span(v).id("plain-b")): UI
+                }
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("mount-a"), "A-content") // mount painted (data-kyo-mount)
+                _ <- Browser.click(Selector.id("swap"))
+                _ <- Browser.assertText(Selector.id("plain-b"), "B-content")
+                _ <- Browser.assertNotExists(Selector.id("mount-a"))         // stale mount DOM gone
+            yield ()
+        }
+    }
+
+    "a region closing a gate over a mount removes the mount DOM" in {
+        // Empty-slot path, keyed on the ABSENCE of a mount-slot marker: open -> false yields no mount, so the morph empties it.
+        val app: UI < Async =
+            for open <- Signal.initRef(true)
+            yield UI.div(
+                UI.button("gclose").id("gclose").onClick(open.set(false)),
+                open.map {
+                    case true  => UI.mounted { Signal.initRef(0).map(_ => UI.span("panel").id("gpanel")) }.placeholder(UI.empty): UI
+                    case false => UI.empty: UI
+                }
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("gpanel"), "panel")
+                _ <- Browser.click(Selector.id("gclose"))
+                _ <- Browser.assertNotExists(Selector.id("gpanel"))
+            yield ()
+        }
+    }
+
+    "a re-rendered region keeps a mount that is still present (no wipe)" in {
+        // Safety companion: the SAME mount stays across a region re-render. Its placeholder carries the mount-slot
+        // marker, so the guard preserves the live mount (the legitimate case the opaque-mount guard exists for).
+        val app: UI < Async =
+            for tick <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("ktick").id("ktick").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map { t =>
+                    UI.div(
+                        UI.span(s"t:$t").id("ktxt"),
+                        UI.mounted { Signal.initRef(0).map(_ => UI.span("kept").id("kpanel")) }.placeholder(UI.empty)
+                    ): UI
+                }
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("kpanel"), "kept")
+                _ <- Browser.click(Selector.id("ktick"))
+                _ <- Browser.assertText(Selector.id("ktxt"), "t:1")
+                _ <- Browser.assertText(Selector.id("kpanel"), "kept") // mount preserved across the morph
+            yield ()
+        }
+    }
+
+    "a keyed mount whose key changes still resets its slot" in {
+        // The other half of the `k` contract: opacity must NOT outlive the key. A changed key evicts the
+        // instance, so the span has to fall through to the morph, otherwise the evicted instance's
+        // content would stay painted forever. Node identity must NOT survive here.
+        val app: UI < Async =
+            for which <- Signal.initRef("a")
+            yield UI.div(
+                UI.button("swap").id("kswap").onClick(which.set("b")),
+                which.map(w =>
+                    UI.mounted(Kyo.lift[UI, Async](UI.div(s"body-$w").id("kbody")))
+                        .keyed(w)
+                        .placeholder(UI.span("..."))
+                )
+            )
+        withUI(app) {
+            for
+                _      <- Browser.assertText(Selector.id("kbody"), "body-a")
+                _      <- Browser.evalDiscard("document.getElementById('kbody').__kyoMark = 9;")
+                _      <- Browser.click(Selector.id("kswap"))
+                _      <- Browser.assertText(Selector.id("kbody"), "body-b")
+                marked <- Browser.evalJson[Int]("document.getElementById('kbody').__kyoMark || 0")
+            yield assert(marked == 0)
+        }
+    }
+
+    // Leave ghosts vs mount repaints. Two mechanisms conspire to keep a repaint from faking a departure:
+    // the mount region's OWN republish never prepares ghosts at all (bookkeeping, not leaving), and the
+    // ENCLOSING region's repaint prepares them but drops any whose source the morph preserved. Both are
+    // needed here: an enclosing repaint republishes the mount AND predicts a ghost for the mount's
+    // leave-marked content, which the opaque mount boundary then keeps alive.
+
+    "closing a gate above a keyless mount still plays the leave ghost" in {
+        val app: UI < Async =
+            for open <- Signal.initRef(true)
+            yield UI.div(
+                UI.button("gclose2").id("gclose2").onClick(open.set(false)),
+                UI.when(open)(
+                    UI.mounted {
+                        Signal.initRef(0).map(_ => UI.div("panel").id("gopanel").leaveTransition("ghost-probe-leave"): UI)
+                    }.placeholder(UI.empty)
+                )
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("gopanel"), "panel")
+                _ <- Browser.evalDiscard(ghostCounterJs)
+                _ <- Browser.click(Selector.id("gclose2"))
+                _ <- Browser.assertNotExists(Selector.id("gopanel"))
+                g <- Browser.evalJson[Int]("window.__kyoGhostCount")
+            yield assert(g == 1)
+        }
+    }
+
+    "an adopted keyed mount keeps its live DOM across a parent re-render" in {
+        // The `m`+`k` marker contract. A keyed mount survives its enclosing region's re-render as an
+        // INSTANCE (the effect does not re-run), but until the region claimed `m`, the parent's paint
+        // projected the mount to its placeholder and morphed the live subtree away, so every node below
+        // it was recreated. Focus, caret, scroll and in-place bindings all died with it. Pinned here by
+        // node identity: the expando survives only if the parent left the span alone.
+        val app: UI < Async =
+            for tick <- Signal.initRef[Int](0)
+            yield UI.div(
+                UI.button("tick").id("ktick").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map(t =>
+                    UI.div(
+                        UI.span(s"t:$t").id("ktxt"),
+                        UI.mounted(Kyo.lift[UI, Async](UI.div("live").id("kinner")))
+                            .keyed("stable")
+                            .placeholder(UI.span("..."))
+                    )
+                )
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("kinner"), "live")
+                // The FIRST re-render is the one that matters. A named slot is opaque from this pass on,
+                // not from the next: the render that emitted it named the instance that owns it, so waiting
+                // for the client's own `m` would cost one destructive morph per slot, and the regions inside
+                // the discarded subtree would leave the registry with it.
+                _      <- Browser.evalDiscard("document.getElementById('kinner').__kyoMark = 7;")
+                _      <- Browser.click(Selector.id("ktick"))
+                _      <- Browser.assertText(Selector.id("ktxt"), "t:1")
+                first  <- Browser.evalJson[Int]("document.getElementById('kinner').__kyoMark || 0")
+                _      <- Browser.evalDiscard("document.getElementById('kinner').__kyoMark = 7;")
+                before <- Browser.evalJson[Int]("document.getElementById('kinner').__kyoMark || 0")
+                // Steady state: the live marker names the same mount the incoming slot does, so the parent
+                // leaves the span alone entirely.
+                _     <- Browser.click(Selector.id("ktick"))
+                _     <- Browser.assertText(Selector.id("ktxt"), "t:2")
+                _     <- Browser.assertText(Selector.id("kinner"), "live")
+                after <- Browser.evalJson[Int]("document.getElementById('kinner').__kyoMark || 0")
+            yield
+                assert(first == 7, "the first parent re-render already leaves the named slot alone")
+                assert(before == 7)
+                assert(after == 7)
+        }
+    }
+
+    "a keyless mount republish does not ghost leave-marked content (enclosing region repaint)" in {
+        val app: UI < Async =
+            for tick <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("gtick").id("gtick").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map { t =>
+                    UI.div(
+                        UI.span(s"t:$t").id("gtxt"),
+                        UI.mounted {
+                            Signal.initRef(0).map(_ =>
+                                // Effect shape is fragment(marker, panel), so the panel's path differs from
+                                // the placeholder's and the survivor set cannot match it.
+                                UI.fragment(
+                                    UI.span("m").id("gmark"),
+                                    UI.div("panel").id("glpanel").leaveTransition("ghost-probe-leave")
+                                ): UI
+                            )
+                        }.placeholder(UI.div("panel").id("glpanel").leaveTransition("ghost-probe-leave"))
+                    ): UI
+                }
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("glpanel"), "panel")
+                _ <- Browser.evalDiscard(ghostCounterJs)
+                _ <- Browser.click(Selector.id("gtick"))
+                // The enclosing region repainted, which republished the mount.
+                _ <- Browser.assertText(Selector.id("gtxt"), "t:1")
+                _ <- Browser.assertText(Selector.id("glpanel"), "panel")
+                g <- Browser.evalJson[Int]("window.__kyoGhostCount")
+            yield assert(g == 0)
+        }
+    }
+
+    // The sibling `tick` signal bumps the reactive region containing `host`, so morphAttrs runs against server HTML
+    // that lacks the owned class, proving the ownership guard shields the client-set class from reconciliation.
 end DomBackendTest
