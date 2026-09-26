@@ -113,10 +113,14 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
                     One,
                     s"<tbody data-kyo-range-host='$One'><tr id='new-row'><td>new</td></tr></tbody>",
                     keepCurrent = false
-                )((_, _, _) => false) { (oldRoots, newRoots) =>
+                    // `tryMorph` declines, so this exercises the wholesale path, which is
+                    // the one that juggles the anchors between a synthetic host and its
+                    // table, and the only one that can produce the assertions below.
+                )(_ => false) { (oldRoots, newRoots) =>
                     assert(oldRoots.map(_.id) == Seq("authored"))
                     assert(newRoots.map(_.id) == Seq("new-row"))
-                } { (_, insertedRoots) =>
+                } { (_, insertedRoots, morphed) =>
+                    assert(!morphed)
                     assert(insertedRoots.map(_.id) == Seq("new-row"))
                 }
             yield
@@ -260,7 +264,7 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
     }
 
     private def keepCurrent(regions: DomReactiveRegions, regionId: String, html: String)(using Frame): Unit < Sync =
-        regions.replaceWith(regionId, html, keepCurrent = true)((_, _, _) => false)((_, _) => ())((_, _) => ())
+        regions.replaceWith(regionId, html, keepCurrent = true)(_ => false)((_, _) => ())((_, _, _) => ())
 
     "a first value with the inserted markup keeps the range once, and a later or different value replaces it" in {
         val root = host(s"<div><!--kyo-rs:$One--><input id='field' value='one'><!--kyo-re:$One--></div>")
