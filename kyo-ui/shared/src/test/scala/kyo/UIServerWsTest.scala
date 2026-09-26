@@ -102,6 +102,19 @@ class UIServerWsTest extends kyo.test.Test[Any]:
         }
     }
 
+    "a selected file is bounded by the text limit, and a negative size is rejected as a number" in {
+        val limits = DragProtocol.Limits.default.copy(maxTextLength = 4)
+
+        def select(content: String, size: Long) =
+            DragProtocol.validateEventAndDomain(
+                UIEvent.FileSelect(Seq.empty, Seq(UI.FilePayload("a.txt", size, "text/plain", content))),
+                limits
+            ).map(_.wire)
+        assert(select("abcd", 4L).isSuccess)
+        assert(select("abcde", 5L) == Result.fail(DragProtocol.ValidationFailure.TooLong("file.content", 4, 5)))
+        assert(select("", -(1L << 33)) == Result.fail(DragProtocol.ValidationFailure.InvalidNumber("file.size")))
+    }
+
     // ==================== Leaf 1: round trip ====================
 
     // notNative: WS-behavior leaf; see class scaladoc for RI-001 rationale.
