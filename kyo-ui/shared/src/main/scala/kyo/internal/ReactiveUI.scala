@@ -558,26 +558,35 @@ private[kyo] object ReactiveUI:
             // directly.
             val staticChild = Maybe.fromOption(childIdx).flatMap(i => Maybe.fromOption(staticHandlers.find(_._1 == i)).map(_._2))
 
+            val isClick   = event.isInstanceOf[UIEvent.Click]
+            val isKeyDown = event.isInstanceOf[UIEvent.KeyDown]
             for
                 // Disabled-target (Form submit suppression), Button-target (only Button clicks submit
-                // forms), and Select-target (Enter on Select must not submit) all resolve through any
-                // Reactive/Foreach boundary wrapping the target, so signal-typed setters do not hide it.
-                targetDisabled <- event match
-                    case _: UIEvent.Click => isTargetDisabled(elem, myPath, targetPath, mounts)
-                    case _                => Kyo.lift(false)
-                targetIsButton <- event match
-                    case _: UIEvent.Click => isTargetButton(elem, myPath, targetPath, mounts)
-                    case _                => Kyo.lift(false)
-                targetIsSelect <- event match
-                    case _: UIEvent.KeyDown => isTargetSelect(elem, myPath, targetPath, mounts)
-                    case _                  => Kyo.lift(false)
-                bubble = dispatchToElement(
+                // forms), Select-target (Enter on Select must not submit) and control-below all resolve
+                // through any Reactive/Foreach boundary wrapping the target, so signal-typed setters do
+                // not hide it. All four come out of one resolution: they are four questions about one
+                // element, not four searches for it.
+                facts <-
+                    if isClick || isKeyDown then targetFacts(elem, myPath, targetPath, mounts)
+                    else Kyo.lift(TargetFacts.none)
+                // "Is it disabled" is a question about the current value behind a channel, not about a
+                // field (see boolAttrNow), so it is read from the resolved element rather than carried.
+                targetDisabled <-
+                    if isClick then facts.target.fold(Kyo.lift(false))(isDisabled) else Kyo.lift(false)
+                targetIsButton = isClick && facts.target.exists(_.isInstanceOf[Button])
+                targetIsSelect = isKeyDown && facts.target.exists(_.isInstanceOf[Select])
+                // Whether a control of the reader's own stands between this element and the target,
+                // reported to the handler rather than acted on here: only the handler knows whether
+                // its click means something the control already means (see UI.MouseEvent.onControl).
+                targetOnControl = isClick && facts.controlBelow
+                bubble          = dispatchToElement(
                     elem,
                     event,
                     isTarget = false,
                     disabledTarget = targetDisabled,
                     submitOrigin = targetIsButton,
-                    selectTarget = targetIsSelect
+                    selectTarget = targetIsSelect,
+                    controlTarget = targetOnControl
                 )
                 result <- staticChild match
                     case Present(childHandle) =>
@@ -720,42 +729,67 @@ private[kyo] object ReactiveUI:
     private def isHidden(elem: Element)(using Frame): Boolean < Sync =
         boolAttrNow(elem, "hidden", elem.attrs.hidden.getOrElse(false))
 
-    /** Resolve the (possibly reactive) node at `targetPath` and test `predicate` against the concrete element there.
+    /** What a bubbling dispatch needs to know about the event's target, resolved once.
+      *
+      * @param target
+      *   the concrete element the path ends at, `Absent` when it does not resolve
+      * @param controlBelow
+      *   whether any element strictly below the dispatching one, the target included, is a control of
+      *   the reader's own
+      */
+    final private case class TargetFacts(target: Maybe[Element], controlBelow: Boolean)
+
+    private object TargetFacts:
+        /** Nothing was asked, so nothing was found: the answer for an event that resolves no target. */
+        val none: TargetFacts = TargetFacts(Absent, false)
+
+    /** Resolve the (possibly reactive) node at `targetPath` to the concrete element there, noting on the way
+      * whether the path passed through a control.
       *
       * Mirrors the renderer's path scheme: element children are index-addressed, a `Reactive`'s rendered content occupies the same path as
       * the boundary, `Foreach` items live at `path :+ key` (or `:+ index`), and `Fragment` children at `path :+ index`. Resolving through
       * these boundaries is what lets an element wrapped by a signal-typed setter (e.g. `.hidden(Signal)`, which wraps it in a `Reactive`)
       * still be recognized by its concrete type, so button-click form submit and disabled detection keep working through such wrappers.
       *
-      * The predicate is effectful because "is it disabled" is a question about the CURRENT value behind a
-      * channel, not about a field (see [[boolAttrNow]]).
+      * One walk answers every question a click asks. A walk is not free: resolving through a `Foreach`
+      * renders the target row to reach it, so a walk per question would render the same row once per
+      * question on every click.
+      *
+      * `controlBelow` is accumulated rather than tested at the leaf because it is a question about the
+      * whole chain: a click on the icon inside a button targets the icon, and the icon alone cannot say
+      * that a control was involved. `rootDepth` is what makes it strictly below: the dispatching element
+      * never answers for itself, or a button would decline its own click.
       */
-    private def targetSatisfies(
+    private def resolveTarget(
         node: UI,
         nodePath: Seq[String],
         targetPath: Seq[String],
-        predicate: Element => Boolean < Sync,
+        rootDepth: Int,
+        controlBelow: Boolean,
         mounts: MountDispatch
     )(using
         Frame
-    ): Boolean < Sync =
+    ): TargetFacts < Sync =
+        // A path that stops short still answers the control question: a control above a boundary the
+        // resolver cannot see through (a mount, a text leaf) counts, so the flag is carried out.
+        def unresolved(seen: Boolean): TargetFacts = TargetFacts(Absent, seen)
         node match
             case kc: KeyedChild[?] =>
-                targetSatisfies(kc.child, nodePath, targetPath, predicate, mounts)
+                resolveTarget(kc.child, nodePath, targetPath, rootDepth, controlBelow, mounts)
             case r: Reactive[?] =>
-                // A Reactive's rendered content occupies the same path as the boundary, so re-test at nodePath.
-                r.signal.current(using r.frame).map(cur => targetSatisfies(cur, nodePath, targetPath, predicate, mounts))
+                // A Reactive's rendered content occupies the same path as the boundary, so re-resolve at nodePath.
+                r.signal.current(using r.frame).map(cur => resolveTarget(cur, nodePath, targetPath, rootDepth, controlBelow, mounts))
             case Fragment(children) =>
-                if targetPath.size <= nodePath.size then false
+                if targetPath.size <= nodePath.size then unresolved(controlBelow)
                 else
                     val seg = targetPath(nodePath.size)
                     Maybe.fromOption(seg.toIntOption) match
                         case Present(i) if i >= 0 && i < children.size =>
-                            targetSatisfies(children(i), nodePath :+ seg, targetPath, predicate, mounts)
-                        case _ => false
+                            resolveTarget(children(i), nodePath :+ seg, targetPath, rootDepth, controlBelow, mounts)
+                        case _ => unresolved(controlBelow)
                     end match
             case fe: Foreach[?, ?] @unchecked =>
-                if targetPath.size <= nodePath.size then false
+                if targetPath.size <= nodePath.size then unresolved(controlBelow)
                 else
                     val seg = targetPath(nodePath.size)
                     fe.applyTyped {
@@ -765,49 +799,58 @@ private[kyo] object ReactiveUI:
                                     case Present(f) => items.indexWhere(it => f(it) == seg)
                                     case Absent     => Maybe.fromOption(seg.toIntOption).getOrElse(-1)
                                 if idx >= 0 && idx < items.size then
-                                    targetSatisfies(renderFn(idx, items(idx)), nodePath :+ seg, targetPath, predicate, mounts)
-                                else false
+                                    resolveTarget(renderFn(idx, items(idx)), nodePath :+ seg, targetPath, rootDepth, controlBelow, mounts)
+                                else unresolved(controlBelow)
                             }
                     }
             case e: Element =>
-                if targetPath.size <= nodePath.size then predicate(e)
+                val seen = controlBelow || (nodePath.size > rootDepth && isOwnControl(e))
+                if targetPath.size <= nodePath.size then TargetFacts(Present(e), seen)
                 else
                     val seg = targetPath(nodePath.size)
                     Maybe.fromOption(seg.toIntOption) match
                         case Present(i) if i >= 0 && i < e.children.size =>
-                            targetSatisfies(e.children(i), nodePath :+ seg, targetPath, predicate, mounts)
-                        case _ => false
+                            resolveTarget(e.children(i), nodePath :+ seg, targetPath, rootDepth, seen, mounts)
+                        case _ => unresolved(seen)
                     end match
+                end if
             // Text and RawHtml are leaf content with no kyo-addressable Element children, so no event
-            // target can resolve through them: neither can satisfy an Element predicate.
-            case _: Text | _: RawHtml => false
+            // target can resolve through them.
+            case _: Text | _: RawHtml => unresolved(controlBelow)
             // A mount's content lives with its instance, found through the dispatch table like the node's handler finds it, and
-            // occupies the node's path. An inert snapshot satisfies nothing, since no event reaches it.
+            // occupies the node's path. An inert snapshot resolves to nothing, since no event reaches it.
             case m: Mounted =>
                 mounts.lookup(nodePath).map {
-                    case Absent        => false
+                    case Absent        => unresolved(controlBelow)
                     case Present(cell) =>
                         cell.current.map {
-                            case MountState.Pending(Present(_)) => false
+                            case MountState.Pending(Present(_)) => unresolved(controlBelow)
                             case state                          =>
-                                targetSatisfies(state.content(MountedSpec(m, nodePath, Nil)), nodePath, targetPath, predicate, mounts)
+                                val content = state.content(MountedSpec(m, nodePath, Nil))
+                                resolveTarget(content, nodePath, targetPath, rootDepth, controlBelow, mounts)
                         }
                 }
+        end match
+    end resolveTarget
 
-    private def isTargetDisabled(elem: Element, myPath: Seq[String], targetPath: Seq[String], mounts: MountDispatch)(using
+    /** The facts a bubbling dispatch reads about its target, in a single resolution. */
+    private def targetFacts(elem: Element, myPath: Seq[String], targetPath: Seq[String], mounts: MountDispatch)(using
         Frame
-    ): Boolean < Sync =
-        targetSatisfies(elem, myPath, targetPath, isDisabled, mounts)
+    ): TargetFacts < Sync =
+        resolveTarget(elem, myPath, targetPath, myPath.size, false, mounts)
 
-    private def isTargetButton(elem: Element, myPath: Seq[String], targetPath: Seq[String], mounts: MountDispatch)(using
-        Frame
-    ): Boolean < Sync =
-        targetSatisfies(elem, myPath, targetPath, e => Kyo.lift(e.isInstanceOf[Button]), mounts)
-
-    private def isTargetSelect(elem: Element, myPath: Seq[String], targetPath: Seq[String], mounts: MountDispatch)(using
-        Frame
-    ): Boolean < Sync =
-        targetSatisfies(elem, myPath, targetPath, e => Kyo.lift(e.isInstanceOf[Select]), mounts)
+    /** Whether an element is a control in its own right, something the reader operates directly, as
+      * opposed to markup an ancestor made clickable.
+      *
+      * `Focusable` is the set: every input flavour, `Textarea`, `Select`, the checkbox/radio pair,
+      * `Button` and `Anchor`. An anchor qualifies only when it actually goes somewhere or does
+      * something, since `a` with neither an href nor a handler is inert markup that happens to be in
+      * the hierarchy.
+      */
+    private def isOwnControl(e: Element): Boolean = e match
+        case a: Anchor    => a.href.isDefined || a.attrs.onClick.nonEmpty || a.attrs.onClickEvt.nonEmpty
+        case _: Focusable => true
+        case _            => false
 
     /** Bubble-continue value after an element handled `event`: `false` (consume) only when the element set
       * `stopPropagation(true)` AND actually declared a handler for this event's type (`declared`). The result flows up the
@@ -825,7 +868,8 @@ private[kyo] object ReactiveUI:
         isTarget: Boolean,
         disabledTarget: Boolean = false,
         submitOrigin: Boolean = false,
-        selectTarget: Boolean = false
+        selectTarget: Boolean = false,
+        controlTarget: Boolean = false
     )(
         using Frame
     ): Boolean < Async =
@@ -834,7 +878,7 @@ private[kyo] object ReactiveUI:
             case ev: UIEvent.Click =>
                 // Disabled or hidden elements ignore their own click handler, but allow bubbling
                 unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isHidden(elem))) {
-                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
+                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position, controlTarget)
                     val self  = if isTarget then
                         invoke(attrs.onClickSelf).andThen(invokeWith(attrs.onClickSelfEvt, mouse))
                     else Kyo.lift(())
@@ -859,17 +903,25 @@ private[kyo] object ReactiveUI:
                         .andThen(formSubmit)
                         .andThen(keepBubbling(elem, declared))
                 }
+            case ev: UIEvent.ContextMenu =>
+                // Mirrors Click: a disabled or hidden target skips its own handler but still bubbles.
+                unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isHidden(elem))) {
+                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position)
+                    invoke(attrs.onContextMenu)
+                        .andThen(invokeWith(attrs.onContextMenuEvt, mouse))
+                        .andThen(keepBubbling(elem, attrs.onContextMenu.nonEmpty || attrs.onContextMenuEvt.nonEmpty))
+                }
             case ev: UIEvent.Focus =>
                 val isFocusable = elem.isInstanceOf[Focusable] || elem.attrs.tabIndex.nonEmpty
                 if isTarget && isFocusable then
-                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
+                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position)
                     invoke(attrs.onFocus).andThen(invokeWith(attrs.onFocusEvt, mouse)).andThen(true)
                 else if isTarget then Kyo.lift(false) // not focusable; reject
                 else true
                 end if
             case ev: UIEvent.Blur =>
                 if isTarget then
-                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
+                    val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position)
                     invoke(attrs.onBlur).andThen(invokeWith(attrs.onBlurEvt, mouse)).andThen(true)
                 else true
             case e: UIEvent.KeyDown =>
@@ -957,6 +1009,11 @@ private[kyo] object ReactiveUI:
                         case fi: FileInput => invokeWith(fi.onChange, e.value).andThen(true)
                         case _             => true
                 }
+            case e: UIEvent.FileSelect =>
+                // Bubbles like Change: the files ride the payload, nothing is read from the element here.
+                unlessInert(isTarget, isDisabled(elem)) {
+                    invokeWith(attrs.onFileSelect, e.files).andThen(keepBubbling(elem, attrs.onFileSelect.nonEmpty))
+                }
             case e: UIEvent.ChangeChecked =>
                 unlessInert(isTarget, isDisabled(elem)) {
                     elem match
@@ -985,15 +1042,15 @@ private[kyo] object ReactiveUI:
             case ev: UIEvent.Submit =>
                 elem match
                     case f: Form =>
-                        val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
+                        val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position)
                         invoke(f.onSubmit).andThen(invokeWith(f.onSubmitEvt, mouse)).andThen(true)
                     case _ => true
             case ev: UIEvent.Hover =>
-                val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
+                val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position)
                 invoke(attrs.onHover).andThen(invokeWith(attrs.onHoverEvt, mouse))
                     .andThen(keepBubbling(elem, attrs.onHover.nonEmpty || attrs.onHoverEvt.nonEmpty))
             case ev: UIEvent.Unhover =>
-                val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
+                val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position)
                 invoke(attrs.onUnhover).andThen(invokeWith(attrs.onUnhoverEvt, mouse))
                     .andThen(keepBubbling(elem, attrs.onUnhover.nonEmpty || attrs.onUnhoverEvt.nonEmpty))
             case ev: UIEvent.Scroll =>
@@ -1044,6 +1101,10 @@ private[kyo] object ReactiveUI:
                 invokeWith(attrs.onPointerMove, ev.pointer).andThen(keepBubbling(elem, attrs.onPointerMove.nonEmpty))
             case ev: UIEvent.PointerUp =>
                 invokeWith(attrs.onPointerUp, ev.pointer).andThen(keepBubbling(elem, attrs.onPointerUp.nonEmpty))
+            case ev: UIEvent.ScrollPosition =>
+                val sp = UI.ScrollPositionEvent(ev.scrollTop, ev.scrollLeft, ev.targetId)
+                invokeWith(attrs.onScrollPos, sp)
+                    .andThen(keepBubbling(elem, attrs.onScrollPos.nonEmpty))
             case _ => true
         end match
     end dispatchToElement
@@ -1228,23 +1289,26 @@ private[kyo] object ReactiveUI:
     )(using Frame): ValidatedHandler =
         (path, event) =>
             event match
-                case event: DragProtocol.ValidatedEvent.Click         => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.ClickSelf     => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Input         => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Change        => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.ChangeChecked => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.ChangeNumeric => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Submit        => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.KeyDown       => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.KeyUp         => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Focus         => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Blur          => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Scroll        => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.PointerDown   => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.PointerMove   => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.PointerUp     => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Hover         => safeDispatch(handle, path, event.wire)
-                case event: DragProtocol.ValidatedEvent.Unhover       => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.Click          => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.ClickSelf      => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.ContextMenu    => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.Input          => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.Change         => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.ChangeChecked  => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.ChangeNumeric  => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.Submit         => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.KeyDown        => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.KeyUp          => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.Focus          => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.Blur           => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.Scroll         => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.ScrollPosition => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.FileSelect     => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.PointerDown    => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.PointerMove    => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.PointerUp      => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.Hover          => safeDispatch(handle, path, event.wire)
+                case event: DragProtocol.ValidatedEvent.Unhover        => safeDispatch(handle, path, event.wire)
                 // A measure reply is the client's answer to a `requestMeasureById`, not an element event: the session
                 // completes the pending reply on UI.Commands before dispatch, so one never reaches the handler
                 // tree. Bubbling is the right answer for an event no element declared.
@@ -1359,6 +1423,7 @@ private[kyo] object ReactiveUI:
             // Never reaches here: the session completes a measure reply on UI.Commands before dispatch.
             case _: DragProtocol.ValidatedEvent.MeasureById | _: DragProtocol.ValidatedEvent.MeasureMissing => true
             case _: DragProtocol.ValidatedEvent.Click | _: DragProtocol.ValidatedEvent.ClickSelf |
+                _: DragProtocol.ValidatedEvent.ContextMenu |
                 _: DragProtocol.ValidatedEvent.Input | _: DragProtocol.ValidatedEvent.Change |
                 _: DragProtocol.ValidatedEvent.ChangeChecked | _: DragProtocol.ValidatedEvent.ChangeNumeric |
                 _: DragProtocol.ValidatedEvent.Submit | _: DragProtocol.ValidatedEvent.KeyDown |
@@ -1366,7 +1431,8 @@ private[kyo] object ReactiveUI:
                 _: DragProtocol.ValidatedEvent.Blur | _: DragProtocol.ValidatedEvent.Scroll |
                 _: DragProtocol.ValidatedEvent.Hover | _: DragProtocol.ValidatedEvent.Unhover |
                 _: DragProtocol.ValidatedEvent.PointerDown | _: DragProtocol.ValidatedEvent.PointerMove |
-                _: DragProtocol.ValidatedEvent.PointerUp =>
+                _: DragProtocol.ValidatedEvent.PointerUp |
+                _: DragProtocol.ValidatedEvent.ScrollPosition | _: DragProtocol.ValidatedEvent.FileSelect =>
                 safeDispatch(handle, path, event.wire)
 
     private def wakeExpiryScheduler(expiryWake: Channel[Unit])(using Frame): Unit < Sync =
