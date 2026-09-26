@@ -81,31 +81,31 @@ class UIRunRenderPageTest extends kyo.test.Test[Any]:
 
     "reactive UI re-emits complete document on signal change" in {
         // runRenderPage re-emits a full document on every signal change (inherited from runRender).
-        // The subscribe step also triggers an immediate re-render; the stream produces:
-        // (1) the initial render, (2) the subscribe-triggered re-render, (3) the signal-change
-        // re-render. All carry complete documents; the third reflects the updated signal value.
+        // Subscribe itself repaints nothing: the first emission already carries the region's current
+        // content, so a second identical document would be redundant traffic. The stream therefore
+        // produces exactly two documents: (1) the initial render and (2) the signal-change re-render.
         //
-        // A Channel is used as the stream sink so we can take emissions one at a time and
-        // synchronize deterministically: after taking 2 emissions the subscription waiter is
-        // guaranteed to be registered, so ref.set is safe to call without any sleep.
+        // A Channel is used as the stream sink so we can take emissions one at a time. The barrier
+        // before the set is the subscription's own park on `ref`, not a second emission, so no sleep
+        // and no redundant frame are involved.
         for
             ref <- Signal.initRef("initial")
             buf <- Channel.init[String](8)
             stream = UI.runRenderPage(UI.PageHead(title = "re-emit"))(ref.map(v => UI.span(v)))
-            _     <- Fiber.initUnscoped(stream.take(3).foreach(buf.put(_)))
-            first <- buf.take
-            _     <- buf.take // subscribe-triggered re-render; discard, just confirms subscription is ready
-            _     <- ref.set("updated")
-            third <- buf.take
+            _      <- Fiber.initUnscoped(stream.take(2).foreach(buf.put(_)))
+            first  <- buf.take
+            _      <- assertEventually(ref.waiters.map(_ >= 1))
+            _      <- ref.set("updated")
+            second <- buf.take
         yield
             // First emission is a complete document with the initial value
             assert(first.startsWith("<!DOCTYPE html>"))
             assert(first.contains("initial"))
             assert(first.contains("</html>"))
             // Signal-change emission is a complete document with the updated value
-            assert(third.startsWith("<!DOCTYPE html>"))
-            assert(third.contains("updated"))
-            assert(third.contains("</html>"))
+            assert(second.startsWith("<!DOCTYPE html>"))
+            assert(second.contains("updated"))
+            assert(second.contains("</html>"))
         end for
     }
 
