@@ -156,13 +156,17 @@ private[kyo] object ReactiveUI:
     /** The root of a mount session: creates the session's [[MountDispatch]] and records it on the returned node for `subscribe`. */
     def normalize(ui: UI, path: Seq[String], svg: Boolean = false): ReactiveUI < Sync =
         given Frame = ui.frame
+        // Same reason as HtmlRenderer.render: every child and row path is built with `:+`, which on a List
+        // root copies the whole prefix per node. A Vector root makes every derived path a Vector; paths are
+        // only built, compared and joined.
+        val rootPath = path.toVector
         for
             dispatch <- MountDispatch.init
             root     <- normalizeAt(
                 ui,
-                path,
+                rootPath,
                 svg,
-                ReactiveRegion.RegionIdentity.root(path),
+                ReactiveRegion.RegionIdentity.root(rootPath),
                 ReactiveRegion.ParentContext.Other,
                 dispatch,
                 rows = 0L,
@@ -352,9 +356,9 @@ private[kyo] object ReactiveUI:
                         contentDeepRows,
                         discoverRootBound = false
                     )
-                    attrSnap  <- Kyo.foreach(ui.attrs.reactiveAttrs.toSeq)((n, s) => s.current.map(v => n -> v))
-                    boolSnap  <- Kyo.foreach(ui.attrs.reactiveBoolAttrs.toSeq)((n, s) => s.current.map(v => n -> v))
-                    classSnap <- Kyo.foreach(ui.attrs.reactiveClasses.toSeq)((n, s) => s.current.map(v => n -> v))
+                    attrSnap  <- currentValues(ui.attrs.reactiveAttrs)
+                    boolSnap  <- currentValues(ui.attrs.reactiveBoolAttrs)
+                    classSnap <- currentValues(ui.attrs.reactiveClasses)
                 yield ReactiveUI(
                     path,
                     elementSignal,
@@ -371,9 +375,9 @@ private[kyo] object ReactiveUI:
                     reactiveAttrs = ui.attrs.reactiveAttrs,
                     reactiveBoolAttrs = ui.attrs.reactiveBoolAttrs,
                     reactiveClasses = ui.attrs.reactiveClasses,
-                    renderedAttrValues = attrSnap.toMap,
-                    renderedBoolAttrValues = boolSnap.toMap,
-                    renderedClassValues = classSnap.toMap
+                    renderedAttrValues = attrSnap,
+                    renderedBoolAttrValues = boolSnap,
+                    renderedClassValues = classSnap
                 )
                 end for
 
@@ -526,6 +530,13 @@ private[kyo] object ReactiveUI:
         require(lifetime > Duration.Zero, s"DragSessionLimits.lifetime must be positive: $lifetime")
     end DragSessionLimits
 
+    /** The current value of every bound signal in `channels`, by name. Most elements bind none, so an empty
+      * map answers without a loop.
+      */
+    private def currentValues[A](channels: Map[String, Signal[A]])(using Frame): Map[String, A] < Sync =
+        if channels.isEmpty then Map.empty[String, A]
+        else Kyo.foreach(channels.toSeq)((n, s) => s.current.map(v => n -> v)).map(_.toMap)
+
     /** Walk a static UI tree. Collect reactive children, build handle. */
     private def walkStatic(
         ui: UI,
@@ -553,68 +564,86 @@ private[kyo] object ReactiveUI:
                 val childParentContext = elem match
                     case _: Table => ReactiveRegion.ParentContext.HtmlTable
                     case _        => ReactiveRegion.ParentContext.Other
-                for childWalks <- Kyo.foreach(elem.children.toSeq.zipWithIndex) { (child, i) =>
-                        val childPath    = basePath :+ i.toString
-                        val childContext = context.child(i.toString)
-                        if needsOwnNode(child) then
-                            // Normalize into a ReactiveUI node so subscribeScoped wires the updates. Required
-                            // even for a const element carrying ONLY reactive attrs: otherwise it is not walked
-                            // into a node and its in-place-patch observers would never start.
-                            for rui <- normalizeAt(child, childPath, childSvg, childContext, childParentContext, cells, rows, deepRows)
-                            yield (Seq(rui), Seq.empty[(Int, Handler)])
-                        else
-                            for
-                                (innerKids, innerHandle) <-
-                                    walkStatic(child, childPath, childSvg, childContext, childParentContext, cells, rows, deepRows)
-                            yield (innerKids, Seq((i, innerHandle)))
-                        end if
-                    }
-                yield
-                    val reactiveChildren = childWalks.flatMap(_._1)
-                    val staticHandlers   = childWalks.flatMap(_._2)
-                    val handle: Handler  = (targetPath, event) =>
+                val kids     = Chunk.newBuilder[ReactiveUI]
+                val handlers = Chunk.newBuilder[(Int, Handler)]
+                Kyo.foreachIndexedDiscard(elem.children) { (i, child) =>
+                    val segment      = i.toString
+                    val childPath    = basePath :+ segment
+                    val childContext = context.child(segment)
+                    if needsOwnNode(child) then
+                        // Normalize into a ReactiveUI node so subscribeScoped wires the updates. Required
+                        // even for a const element carrying ONLY reactive attrs: otherwise it is not walked
+                        // into a node and its in-place-patch observers would never start.
+                        normalizeAt(child, childPath, childSvg, childContext, childParentContext, cells, rows, deepRows)
+                            .map(rui => discard(kids += rui))
+                    else
+                        walkStatic(child, childPath, childSvg, childContext, childParentContext, cells, rows, deepRows)
+                            .map { (innerKids, innerHandle) =>
+                                kids ++= innerKids
+                                discard(handlers += ((i, innerHandle)))
+                            }
+                    end if
+                }.andThen {
+                    val reactiveChildren: Seq[ReactiveUI]   = kids.result()
+                    val staticHandlers: Seq[(Int, Handler)] = handlers.result()
+                    val handle: Handler                     = (targetPath, event) =>
                         dispatch(elem, basePath, targetPath, event, reactiveChildren, staticHandlers, cells)
                     (reactiveChildren, handle)
-                end for
+                }
 
             case Fragment(children) =>
-                for childWalks <- Kyo.foreach(children.toSeq.zipWithIndex) { (child, i) =>
-                        val childPath = child match
-                            case kc: KeyedChild[?] => basePath :+ kc.key
-                            case _                 => basePath :+ i.toString
-                        val childContext = child match
-                            case kc: KeyedChild[?] => context.child(kc.key)
-                            case _                 => context.child(i.toString)
-                        // Three plain values rather than a tuple: this runs per row on every walk, dispatch included.
-                        val keyed = child.isInstanceOf[KeyedChild[?]]
-                        val depth = if keyed then basePath.size else 0
-                        val inner = child match
-                            case kc: KeyedChild[?] => kc.child
-                            case _                 => child
-                        val innerRows     = if keyed && depth < 63 then rows | (1L << depth) else rows
-                        val innerDeepRows = if keyed && depth >= 63 then depth :: deepRows else deepRows
+                val kids    = Chunk.newBuilder[ReactiveUI]
+                val handles = Chunk.newBuilder[Handler]
+                Kyo.foreachIndexedDiscard(children) { (i, child) =>
+                    // Three plain values rather than a tuple: this runs per row on every walk, dispatch included.
+                    val keyed   = child.isInstanceOf[KeyedChild[?]]
+                    val segment = child match
+                        case kc: KeyedChild[?] => kc.key
+                        case _                 => i.toString
+                    val childPath    = basePath :+ segment
+                    val childContext = context.child(segment)
+                    val depth        = if keyed then basePath.size else 0
+                    val inner        = child match
+                        case kc: KeyedChild[?] => kc.child
+                        case _                 => child
+                    val innerRows                                 = if keyed && depth < 63 then rows | (1L << depth) else rows
+                    val innerDeepRows                             = if keyed && depth >= 63 then depth :: deepRows else deepRows
+                    val walked: (Seq[ReactiveUI], Handler) < Sync =
                         if needsOwnNode(inner) then
                             // Same contract as an element's reactive child: a row whose root carries a binding channel (a keyed row
                             // with a reactive class, say) gets its own node, or its in-place-patch observers would never start.
-                            for rui <- normalizeAt(inner, childPath, svg, childContext, parentContext, cells, innerRows, innerDeepRows)
-                            yield (Seq(rui), rui.handle)
+                            normalizeAt(inner, childPath, svg, childContext, parentContext, cells, innerRows, innerDeepRows)
+                                .map(rui => (Seq(rui), rui.handle))
                         else walkStatic(inner, childPath, svg, childContext, parentContext, cells, innerRows, innerDeepRows)
-                        end if
+                    walked.map { (innerKids, innerHandle) =>
+                        kids ++= innerKids
+                        discard(handles += innerHandle)
                     }
-                yield
-                    val allKids    = childWalks.flatMap(_._1)
-                    val allHandles = childWalks.zipWithIndex.map { case ((_, h), i) => (i, h) }
-                    val keyMap     = children.toSeq.zipWithIndex.collect {
-                        case (kc: KeyedChild[?], i) => kc.key -> i
-                    }.toMap
+                }.andThen {
+                    val allKids    = kids.result()
+                    val allHandles = handles.result()
+                    // Only a fragment with keyed children needs the key lookup.
+                    val keyMap: Map[String, Int] =
+                        if children.exists(_.isInstanceOf[KeyedChild[?]]) then
+                            val b = Map.newBuilder[String, Int]
+                            var i = 0
+                            children.foreach { child =>
+                                child match
+                                    case kc: KeyedChild[?] => b += kc.key -> i
+                                    case _                 => ()
+                                i += 1
+                            }
+                            b.result()
+                        else Map.empty
                     val handle: Handler = (targetPath, event) =>
                         if targetPath.size > basePath.size then
                             val segment = targetPath(basePath.size)
                             val idx     = Maybe.fromOption(keyMap.get(segment)).orElse(Maybe.fromOption(segment.toIntOption))
-                            idx.flatMap(i => Maybe.fromOption(allHandles.lift(i)).map(_._2))
+                            idx.filter(i => i >= 0 && i < allHandles.length).map(allHandles(_))
                                 .fold(true: Boolean < Async)(h => h(targetPath, event))
                         else true
                     (allKids, handle)
+                }
 
             case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted =>
                 // When walkStatic is called with a Reactive, Foreach or Mounted as the top-level node
