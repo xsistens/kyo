@@ -830,6 +830,7 @@ private[kyo] object HtmlRenderer:
             case f: FileInput =>
                 w(sb, " type=\"file\"")
                 boolAttr(sb, "disabled", f.disabled)
+                boolAttr(sb, "multiple", f.multiple)
                 f.accept.foreach { accepts =>
                     val value = accepts.map {
                         case FileAccept.AnyImage             => "image/*"
@@ -956,6 +957,7 @@ private[kyo] object HtmlRenderer:
         if attrs.onClick.nonEmpty || attrs.onClickEvt.nonEmpty ||
             attrs.onClickSelf.nonEmpty || attrs.onClickSelfEvt.nonEmpty
         then events += "click"
+        if attrs.onContextMenu.nonEmpty || attrs.onContextMenuEvt.nonEmpty then events += "contextmenu"
         if attrs.onFocus.nonEmpty || attrs.onFocusEvt.nonEmpty then events += "focus"
         if attrs.onBlur.nonEmpty || attrs.onBlurEvt.nonEmpty then events += "blur"
         if attrs.onKeyDown.nonEmpty then events += "keydown"
@@ -970,6 +972,7 @@ private[kyo] object HtmlRenderer:
         if attrs.onDragOver.nonEmpty || attrs.onDragOverEvt.nonEmpty then events += "dragover"
         if attrs.onDrop.nonEmpty || attrs.onDropEvt.nonEmpty then events += "drop"
         if attrs.onSortMove.nonEmpty || attrs.onSortMoveEvt.nonEmpty then events += "sortmove"
+        if attrs.onScrollPos.nonEmpty then events += "scroll"
         // "input" event: when handler is set OR when .value(SignalRef) auto-binding is in use
         elem match
             case ti: TextInput if ti.onInput.nonEmpty || hasSignalRefValue(ti.value) => events += "input"
@@ -981,7 +984,7 @@ private[kyo] object HtmlRenderer:
             case bi: BooleanInput if bi.onChange.nonEmpty || hasSignalRefValue(bi.checked)     => events += "change"
             case ni: NumberInput if ni.onChangeNumeric.nonEmpty || hasSignalRefValue(ni.value) => events += "change"
             case ri: RangeInput if ri.onChange.nonEmpty || hasSignalRefValue(ri.value)         => events += "change"
-            case fi: FileInput if fi.onChange.nonEmpty                                         => events += "change"
+            case fi: FileInput if fi.onChange.nonEmpty || attrs.onFileSelect.nonEmpty          => events += "change"
             case sel: Select if hasSignalRefValue(sel.value)                                   => events += "change"
             case _                                                                             =>
         end match
@@ -991,6 +994,8 @@ private[kyo] object HtmlRenderer:
         if attrs.onPointerDown.nonEmpty then events += "pointerdown"
         if attrs.onPointerMove.nonEmpty then events += "pointermove"
         if attrs.onPointerUp.nonEmpty then events += "pointerup"
+        // fileselect marker so the client's change branch reads all files instead of only the first.
+        if attrs.onFileSelect.nonEmpty then events += "fileselect"
         val ev = events.result()
         if ev.nonEmpty then w(sb, s""" data-kyo-ev="${ev.mkString(",")}"""")
     end renderEventAttr
@@ -1895,9 +1900,14 @@ private[kyo] object HtmlRenderer:
            |  });
            |}
            |// Build a mouse payload, omitting targetId when absent (null JSON would break Maybe[String] decode).
-           |function mkMouse(mods,tid){var m={modifiers:mods};if(tid)m.targetId=tid;return m;}
+           |function mkMouse(mods,tid,pos){var m={modifiers:mods};if(tid)m.targetId=tid;if(pos)m.position=pos;return m;}
+           |// Viewport coordinates of a pointer event; the events without a pointer (focus, blur, submit) pass no third argument.
+           |function mkPos(e){return {x:e.clientX,y:e.clientY};}
            |// Build a keyboard payload, omitting targetId when absent.
            |function mkKbd(key,mods,tid){var k={key:key,modifiers:mods};if(tid)k.targetId=tid;return k;}
+           |// onScrollPosition: rAF-coalesce bursts to one post per frame; capture-phase catches non-bubbling scroll.
+           |var __scrRaf=0,__scrEl=null,__scrPath=null;
+           |function __scrFlush(){__scrRaf=0;if(__scrEl){var stid=__scrEl.id?__scrEl.id:null;var sp={path:__scrPath,scrollTop:__scrEl.scrollTop,scrollLeft:__scrEl.scrollLeft};if(stid)sp.targetId=stid;post({ScrollPosition:sp});}}
            |function handle(e){
            |  var el=fp(e.target);
            |  if(!el)return;
@@ -1934,13 +1944,35 @@ private[kyo] object HtmlRenderer:
            |    // An anchor the UI handles stays on the page; one it does not handle is a link, and the browser follows it.
            |    // A modified click (a new tab or window) and a download anchor keep their default; the handler runs either way.
            |    var kmod=e.ctrlKey||e.metaKey||e.shiftKey||e.altKey||e.button!==0;
-           |    var mid=e.target&&e.target.id?e.target.id:null;if(!kmod&&el.tagName&&el.tagName.toLowerCase()==='a'&&!el.hasAttribute("download")&&he(el,"click"))e.preventDefault();post({Click:{path:p,mouse:mkMouse({ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},mid)}});window._kyoClickSubmit=true;setTimeout(function(){window._kyoClickSubmit=false},0);
+           |    var mid=e.target&&e.target.id?e.target.id:null;if(!kmod&&el.tagName&&el.tagName.toLowerCase()==='a'&&!el.hasAttribute("download")&&he(el,"click"))e.preventDefault();post({Click:{path:p,mouse:mkMouse({ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},mid,mkPos(e))}});window._kyoClickSubmit=true;setTimeout(function(){window._kyoClickSubmit=false},0);
            |  }
+           |  // Right-click: preventDefault suppresses the native menu only when a handler was declared.
+           |  else if(t==="contextmenu"&&he(el,"contextmenu")){e.preventDefault();var cmid=e.target&&e.target.id?e.target.id:null;post({ContextMenu:{path:p,mouse:mkMouse({ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},cmid,mkPos(e))}});}
            |  else if(t==="input"&&he(el,"input"))post({Input:{path:p,value:e.target.value}});
            |  else if(t==="change"&&he(el,"change")){
            |    var tgt=e.target,typ=tgt.type;
            |    if(typ==="checkbox"||typ==="radio")post({ChangeChecked:{path:p,checked:tgt.checked}});
            |    else if(typ==="number"||typ==="range")post({ChangeNumeric:{path:p,value:parseFloat(tgt.value)}});
+           |    else if(typ==="file"){
+           |      // fileselect token: read all files (indexed, order preserved), post one FileSelect when all complete.
+           |      // Otherwise the first file's text goes out as a Change.
+           |      var files=tgt.files;
+           |      if(he(el,"fileselect")){
+           |        var n=files.length;
+           |        if(n>0){
+           |          var results=new Array(n);var doneCt=0;
+           |          for(var fidx=0;fidx<n;fidx++){(function(ix){
+           |            var f=files[ix];var r=new FileReader();
+           |            r.onload=function(){results[ix]={name:f.name,size:f.size,mimeType:f.type,content:r.result};doneCt++;if(doneCt===n)post({FileSelect:{path:p,files:results}});};
+           |            r.readAsText(f);
+           |          })(fidx);}
+           |        }
+           |      }else if(files.length>0){
+           |        var r0=new FileReader();
+           |        r0.onload=function(){post({Change:{path:p,value:r0.result}});};
+           |        r0.readAsText(files[0]);
+           |      }
+           |    }
            |    else post({Change:{path:p,value:tgt.value}});
            |  }else if(t==="submit"){e.preventDefault();if(!window._kyoClickSubmit&&he(el,"submit")){var smid=e.target&&e.target.id?e.target.id:null;post({Submit:{path:p,mouse:mkMouse({ctrl:false,alt:false,shift:false,meta:false},smid)}});}}
            |  else if(t==="keydown"){
@@ -2090,10 +2122,11 @@ private[kyo] object HtmlRenderer:
            |  else if(t==="keyup"&&he(el,"keyup")){var kutid=e.target&&e.target.id?e.target.id:null;post({KeyUp:{path:p,keyboard:mkKbd(e.key,{ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},kutid)}});}
            |  else if(t==="focus"&&he(el,"focus")){var ftid=e.target&&e.target.id?e.target.id:null;post({Focus:{path:p,mouse:mkMouse({ctrl:false,alt:false,shift:false,meta:false},ftid)}});}
            |  else if(t==="blur"&&he(el,"blur")){var btid=e.target&&e.target.id?e.target.id:null;post({Blur:{path:p,mouse:mkMouse({ctrl:false,alt:false,shift:false,meta:false},btid)}});}
-           |  else if(t==="mouseover"&&he(el,"mouseover")){var hotid=e.target&&e.target.id?e.target.id:null;post({Hover:{path:p,mouse:mkMouse({ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},hotid)}});}
-           |  else if(t==="mouseout"&&he(el,"mouseout")){var uhotid=e.target&&e.target.id?e.target.id:null;post({Unhover:{path:p,mouse:mkMouse({ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},uhotid)}});}
+           |  else if(t==="mouseover"&&he(el,"mouseover")){var hotid=e.target&&e.target.id?e.target.id:null;post({Hover:{path:p,mouse:mkMouse({ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},hotid,mkPos(e))}});}
+           |  else if(t==="mouseout"&&he(el,"mouseout")){var uhotid=e.target&&e.target.id?e.target.id:null;post({Unhover:{path:p,mouse:mkMouse({ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},uhotid,mkPos(e))}});}
            |  // Do NOT auto-call preventDefault: leave native-scroll suppression to the handler, matching DomBackend. Server-side rendering cannot synchronously decline the event, so the default is to NOT prevent.
            |  else if(t==="wheel"&&he(el,"wheel")){var whtid=e.target&&e.target.id?e.target.id:null;var sc={path:p,deltaX:e.deltaX,deltaY:e.deltaY,modifiers:{ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey}};if(whtid)sc.targetId=whtid;post({Scroll:sc});}
+           |  else if(t==="scroll"&&he(el,"scroll")){__scrEl=el;__scrPath=p;if(!__scrRaf)__scrRaf=requestAnimationFrame(__scrFlush);}
            |}
            |// ---- client-local input filter/mask (document-level beforeinput capture listener) ----
            |$inputMaskJs
@@ -2147,7 +2180,7 @@ private[kyo] object HtmlRenderer:
            |  else return;
            |  if(nv!==v)kyoSetVal(t,nv);
            |}
-           |["click","input","change","submit","keydown","keyup","focus","blur","mouseover","mouseout"].forEach(function(t){
+           |["click","contextmenu","input","change","submit","keydown","keyup","focus","blur","mouseover","mouseout"].forEach(function(t){
            |  document.body.addEventListener(t,handle,true);
            |});
            |document.body.addEventListener("wheel",handle,{capture:true,passive:false});
@@ -2193,6 +2226,7 @@ private[kyo] object HtmlRenderer:
            |document.body.addEventListener("pointerdown",ptrDown,true);
            |document.body.addEventListener("pointermove",ptrMove,true);
            |document.body.addEventListener("pointerup",ptrUp,true);
+           |document.body.addEventListener("scroll",handle,{capture:true,passive:true});
            |})();""".stripMargin
 
     // ---- SVG tag and attribute rendering ----

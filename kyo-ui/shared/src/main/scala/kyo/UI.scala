@@ -1012,14 +1012,55 @@ object UI:
         /** The chord with no modifier keys held. */
         val none: Modifiers = Modifiers()
 
-    /** The typed payload delivered to a typed `onClick`/`onClickSelf`/`onFocus`/`onBlur` handler.
+    /** One selected file delivered to an `onFileSelect` handler, and the wire payload of `UIEvent.FileSelect`.
+      *
+      * `name` is the file name, `size` its byte length, `mimeType` the browser-reported MIME type (empty string when the
+      * browser reports none), and `content` the file's text content (read via `FileReader.readAsText`). Public in the `UI`
+      * object and `derives Schema` so it doubles as the on-wire representation, mirroring how [[kyo.UI.Modifiers]] is both a
+      * public payload type and a wire field.
+      */
+    final case class FilePayload(
+        name: String,
+        size: Long,
+        mimeType: String,
+        content: String
+    ) derives CanEqual, Schema
+
+    /** A pointer position in viewport coordinates: CSS pixels from the top-left of the visible page, the frame
+      * `getBoundingClientRect` and [[kyo.UI.Rect]] already speak, so a point and a measured box can be compared without a
+      * conversion.
+      *
+      * Carried by [[kyo.UI.MouseEvent.position]] and by the drag protocol, which names it [[kyo.Drag.Point]]: one pointer
+      * position, one type, whichever event delivered it.
+      */
+    final case class Point(x: Double, y: Double) derives CanEqual, Schema
+
+    /** The typed payload delivered to a typed `onClick`/`onClickSelf`/`onContextMenu`/`onFocus`/`onBlur` handler.
       *
       * `targetId` is the `id` of the element the event fired on (`Absent` when that element has no id), and `modifiers` is the
       * [[kyo.UI.Modifiers]] chord at the time of the event.
+      *
+      * `position` is where the pointer was, in viewport coordinates. It is `Absent` for the events that have no pointer to
+      * report: `focus`, `blur` and `submit` are not mouse events in the browser either and carry no coordinates, so the
+      * `Maybe` says whether the event answered it rather than reporting a `(0, 0)` no one clicked. A menu that opens where
+      * the reader right-clicked reads it; a handler that only wants to know that a click happened ignores it.
+      *
+      * `onControl` says the click passed through an element that is a control of its own on its way to this handler: an
+      * anchor with an href, a button, or a form field strictly below the element being dispatched to. An element that makes
+      * a whole region clickable needs it to leave the controls inside that region alone: a table row that selects on click
+      * must not also select when the reader presses the row's edit button or follows a link in a cell. Without it such a
+      * region cannot tell the two apart, because a control that navigates natively declares no handler and therefore cannot
+      * consume the click with `stopPropagation` either.
+      *
+      * It is always `false` on the element the click landed on, so a control's own handler still runs. It does not resolve
+      * through a [[kyo.UI.mounted]] boundary, the same limit the disabled and button-target checks have: a control inside a
+      * mounted subtree reads as `false`.
       */
     final case class MouseEvent(
         targetId: Maybe[String],
-        modifiers: Modifiers
+        modifiers: Modifiers,
+        position: Maybe[Point] = Absent,
+        onControl: Boolean = false
     ) derives CanEqual
 
     /** The typed payload delivered to an `onKeyDown`/`onKeyUp` handler.
@@ -1072,6 +1113,17 @@ object UI:
         buttons: Int,
         targetId: Maybe[String]
     ) derives CanEqual, Schema
+
+    /** The payload delivered to an `onScrollPosition` handler: the element's resulting native scroll offset
+      * (`scrollTop`/`scrollLeft`) after a scroll gesture, plus the scrolled element's `id` (`Absent` when it has
+      * none). Unlike [[WheelEvent]] (a per-notch mouse-wheel delta), this reports the browser-owned scroll position
+      * and fires for every scroll input (wheel, scrollbar drag, touch, keyboard).
+      */
+    final case class ScrollPositionEvent(
+        scrollTop: Double,
+        scrollLeft: Double,
+        targetId: Maybe[String]
+    ) derives CanEqual
 
     /** The case-class abstract syntax tree that every [[kyo.UI]] factory returns.
       *
@@ -1328,6 +1380,19 @@ object UI:
             def onClickSelf[S](f: MouseEvent => Any < (Abort[Throwable] & Async & S))(using Isolate[S, Sync, S]): Self =
                 withAttrs(attrs.copy(onClickSelfEvt = Present(eraseHandlerFn(f))))
 
+            /** Runs `action` on right-click (the `contextmenu` event), ignoring the event payload. When the right-click lands on
+              * this element or a descendant, the client suppresses the browser's native context menu (`preventDefault`); a
+              * right-click on elements with no context-menu handler in their ancestor chain keeps the native menu.
+              */
+            def onContextMenu[S](action: => Any < (Abort[Throwable] & Async & S))(using Isolate[S, Sync, S]): Self =
+                withAttrs(attrs.copy(onContextMenu = Present(eraseHandler(Sync.defer(action)(using frame)))))
+
+            /** Runs `f` on right-click (the `contextmenu` event), receiving the [[kyo.UI.MouseEvent]] payload (target id, modifier
+              * chord). Same native-menu suppression as the payload-free overload.
+              */
+            def onContextMenu[S](f: MouseEvent => Any < (Abort[Throwable] & Async & S))(using Isolate[S, Sync, S]): Self =
+                withAttrs(attrs.copy(onContextMenuEvt = Present(eraseHandlerFn(f))))
+
             /** Runs `f` on key-down, receiving the [[kyo.UI.KeyboardEvent]] payload (typed key, modifier chord, target id). */
             def onKeyDown[S](f: KeyboardEvent => Any < (Abort[Throwable] & Async & S))(using Isolate[S, Sync, S]): Self =
                 withAttrs(attrs.copy(onKeyDown = Present(eraseHandlerFn(f))))
@@ -1469,6 +1534,28 @@ object UI:
               */
             def onPointerUp[S](f: PointerEvent => Any < (Abort[Throwable] & Async & S))(using Isolate[S, Sync, S]): Self =
                 withAttrs(attrs.copy(onPointerUp = Present(eraseHandlerFn(f))))
+
+            /** Runs `f` when files are selected on a descendant file input, receiving the full list of
+              * [[kyo.UI.FilePayload]] (name, size, MIME type, and text content of every selected file). The client reads all
+              * selected files (a `FileReader` per file, aggregated once every read completes) and posts a single `FileSelect`
+              * event; it bubbles like `Change`. Declaring this emits the `fileselect` token in `data-kyo-ev`. A file input
+              * with only `onChange` still receives the text content of one file.
+              */
+            def onFileSelect[S](f: Seq[FilePayload] => Any < (Abort[Throwable] & Async & S))(using Isolate[S, Sync, S]): Self =
+                withAttrs(attrs.copy(onFileSelect = Present(eraseHandlerFn(f))))
+
+            /** Runs `f` when this element is natively scrolled (a real `overflow:auto`/`scroll` viewport), receiving the
+              * [[kyo.UI.ScrollPositionEvent]] payload (`scrollTop`/`scrollLeft`). Unlike [[onScroll]] (a per-notch wheel
+              * delta), this fires for all scroll input (wheel, scrollbar drag, touch, keyboard) because the browser owns
+              * the scroll and reports the resulting position; the client rAF-coalesces bursts to one event per frame.
+              * Intended for server-authoritative virtual scrolling: the browser scrolls a full-height spacer natively and
+              * the server repositions the rendered window from the reported `scrollTop`. Emits the `scroll` token in
+              * `data-kyo-ev`.
+              */
+            def onScrollPosition[S](f: ScrollPositionEvent => Any < (Abort[Throwable] & Async & S))(using
+                Isolate[S, Sync, S]
+            ): Self =
+                withAttrs(attrs.copy(onScrollPos = Present(eraseHandlerFn(f))))
         end Interactive
 
         // ---- Layout traits ----
@@ -1749,6 +1836,8 @@ object UI:
             onClickEvt: Maybe[MouseEvent => Any < Async] = Absent,
             onClickSelf: Maybe[Any < Async] = Absent,
             onClickSelfEvt: Maybe[MouseEvent => Any < Async] = Absent,
+            onContextMenu: Maybe[Any < Async] = Absent,
+            onContextMenuEvt: Maybe[MouseEvent => Any < Async] = Absent,
             onKeyDown: Maybe[KeyboardEvent => Any < Async] = Absent,
             onKeyUp: Maybe[KeyboardEvent => Any < Async] = Absent,
             onFocus: Maybe[Any < Async] = Absent,
@@ -1780,6 +1869,8 @@ object UI:
             onPointerDown: Maybe[PointerEvent => Any < Async] = Absent,
             onPointerMove: Maybe[PointerEvent => Any < Async] = Absent,
             onPointerUp: Maybe[PointerEvent => Any < Async] = Absent,
+            onFileSelect: Maybe[Seq[UI.FilePayload] => Any < Async] = Absent,
+            onScrollPos: Maybe[ScrollPositionEvent => Any < Async] = Absent,
             ariaAttrs: Map[String, String] = Map.empty,
             dataAttrs: Map[String, String] = Map.empty,
             jsProps: Map[String, String] = Map.empty,
@@ -2561,12 +2652,16 @@ object UI:
             attrs: Attrs = Attrs(),
             accept: Maybe[Chunk[FileAccept]] = Absent,
             disabled: Maybe[Boolean] = Absent,
+            multiple: Maybe[Boolean] = Absent,
             onChange: Maybe[String => Any < Async] = Absent
         )(using val frame: Frame) extends Inline with Interactive with Focusable with HasDisabled with Void:
             type Self = FileInput
-            def withAttrs(a: Attrs): FileInput                = copy(attrs = a)
-            def accept(vs: FileAccept*): FileInput            = copy(accept = Present(Chunk.from(vs)))
-            def disabled(v: Boolean): FileInput               = copy(disabled = Present(v))
+            def withAttrs(a: Attrs): FileInput     = copy(attrs = a)
+            def accept(vs: FileAccept*): FileInput = copy(accept = Present(Chunk.from(vs)))
+            def disabled(v: Boolean): FileInput    = copy(disabled = Present(v))
+
+            /** Allow selecting more than one file (renders the HTML `multiple` attribute). */
+            def multiple(v: Boolean): FileInput               = copy(multiple = Present(v))
             def onChange(f: String => Any < Async): FileInput = copy(onChange = Present(f))
         end FileInput
 
