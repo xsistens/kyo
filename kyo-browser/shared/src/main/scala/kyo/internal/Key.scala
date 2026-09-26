@@ -131,11 +131,15 @@ private[kyo] object KeyInfo:
     private val PageUpKey     = KeyInfo("PageUp", 33, Absent, "PageUp", 0)
     private val PageDownKey   = KeyInfo("PageDown", 34, Absent, "PageDown", 0)
     private val DeleteKey     = KeyInfo("Delete", 46, Absent, "Delete", 0)
-    private val SpaceKey      = KeyInfo("Space", 32, Maybe(" "), "Space", 0)
-    private val ShiftKey      = KeyInfo("Shift", 16, Absent, "ShiftLeft", 8)
-    private val ControlKey    = KeyInfo("Control", 17, Absent, "ControlLeft", 2)
-    private val AltKey        = KeyInfo("Alt", 18, Absent, "AltLeft", 1)
-    private val MetaKey       = KeyInfo("Meta", 91, Absent, "MetaLeft", 4)
+    // `keyName` is the DOM `key` value, and the DOM calls the space bar `" "`; `"Space"` is its `code`,
+    // which is the `domCode` field beside it. Chrome does not recognize `"Space"` as a key value and
+    // dispatches an event whose `key` is the empty string, so a page saw no space bar at all: it could
+    // not type one, could not activate a button with one, and could not preventDefault its page scroll.
+    private val SpaceKey   = KeyInfo(" ", 32, Maybe(" "), "Space", 0)
+    private val ShiftKey   = KeyInfo("Shift", 16, Absent, "ShiftLeft", 8)
+    private val ControlKey = KeyInfo("Control", 17, Absent, "ControlLeft", 2)
+    private val AltKey     = KeyInfo("Alt", 18, Absent, "AltLeft", 1)
+    private val MetaKey    = KeyInfo("Meta", 91, Absent, "MetaLeft", 4)
 
     // --- Lookup ---
 
