@@ -17,8 +17,27 @@ class MountedTest extends kyo.test.Test[Any]:
 
     import UI.*
 
-    private class Recorder extends UIExchange:
+    /** @param keepsRows
+      *   answers a list patch the way the DOM backend does: only the changed rows are painted, the kept ones stay in place
+      */
+    private class Recorder(keepsRows: Boolean = false) extends UIExchange:
         private val paints = AtomicRef.Unsafe.init(Chunk.empty[(Seq[String], String)])(using AllowUnsafe.embrace.danger)
+
+        override def onListPatch(
+            region: ReactiveRegion,
+            path: Seq[String],
+            contentContext: ReactiveRegion.RegionIdentity,
+            parentContext: ReactiveRegion.ParentContext,
+            previous: Maybe[UI],
+            rows: Seq[kyo.internal.ListRow]
+        )(using Frame): Boolean < Async =
+            if !keepsRows then super.onListPatch(region, path, contentContext, parentContext, previous, rows)
+            else
+                Kyo.foreachDiscard(rows.filter(_.changed)) { row =>
+                    HtmlRenderer.render(row.ui, path :+ row.key).map(html =>
+                        Sync.Unsafe.defer(discard(paints.getAndUpdate(_.append((path :+ row.key, html)))))
+                    )
+                }.andThen(true)
 
         def onChange(
             region: ReactiveRegion,
@@ -48,11 +67,11 @@ class MountedTest extends kyo.test.Test[Any]:
 
     private def click(path: String*): UIEvent = UIEvent.Click(path, MouseEventData(UI.Modifiers.none, Absent))
 
-    private def mount[A](ui: UI)(f: (Recorder, (Seq[String], UIEvent) => Boolean < Async) => A < (Async & Scope))(using
-        Frame
-    ): A < Async =
+    private def mount[A](ui: UI, keepsRows: Boolean = false)(
+        f: (Recorder, (Seq[String], UIEvent) => Boolean < Async) => A < (Async & Scope)
+    )(using Frame): A < Async =
         Scope.run {
-            val recorder = new Recorder
+            val recorder = new Recorder(keepsRows)
             for
                 _    <- recorder.initial(ui)
                 root <- ReactiveUI.normalize(ui, Seq.empty)
@@ -498,7 +517,7 @@ class MountedTest extends kyo.test.Test[Any]:
         yield succeed
     }
 
-    "rows of a keyed list keep separate instances of the same keyed node across list changes" in {
+    private def rowsKeepTheirInstances(keepsRows: Boolean)(using Frame, kyo.test.AssertScope) =
         for
             runs  <- AtomicRef.init(Map.empty[String, Int])
             items <- Signal.initRef(Chunk("a", "b"))
@@ -506,7 +525,7 @@ class MountedTest extends kyo.test.Test[Any]:
                 UI.mounted(runs.updateAndGet(m => m.updated(id, m.getOrElse(id, 0) + 1)).map(m => span(s"$id:${m(id)}")))
                     .keyed("row")
             ui = div(items.foreachKeyed(identity)(id => div(row(id))))
-            _ <- mount(ui) { (recorder, _) =>
+            _ <- mount(ui, keepsRows) { (recorder, _) =>
                 for
                     _ <- showsEventually(recorder, Seq("0", "a", "0"), "a:1")
                     _ <- showsEventually(recorder, Seq("0", "b", "0"), "b:1")
@@ -518,6 +537,36 @@ class MountedTest extends kyo.test.Test[Any]:
             }
             counts <- runs.get
         yield assert(counts == Map("a" -> 1, "b" -> 1, "c" -> 1))
+
+    "rows of a keyed list keep separate instances of the same keyed node across list changes" in {
+        rowsKeepTheirInstances(keepsRows = false)
+    }
+
+    "rows a list patch leaves in place keep their keyed instances, and a new row with the same key gets its own" in {
+        rowsKeepTheirInstances(keepsRows = true)
+    }
+
+    "the same call site shown twice with one key inside a list row gives each slot its own instance" in {
+        for
+            runs  <- AtomicInt.init(0)
+            items <- Signal.initRef(Chunk("a"))
+            row = (_: String) =>
+                UI.Ast.Div(children =
+                    Chunk.from(Seq(1, 2).map(_ => UI.mounted(runs.incrementAndGet.map(n => span(s"runs:$n"))).keyed("same")))
+                )
+            ui = div(items.foreachKeyed(identity)(row))
+            _ <- mount(ui, keepsRows = true) { (recorder, _) =>
+                for
+                    _      <- showsEventually(recorder, Seq("0", "a", "1"), "runs:")
+                    _      <- items.set(Chunk("b", "a"))
+                    _      <- showsEventually(recorder, Seq("0", "b", "0"), "runs:")
+                    _      <- showsEventually(recorder, Seq("0", "b", "1"), "runs:")
+                    first  <- recorder.shown(Seq("0", "b", "0"))
+                    second <- recorder.shown(Seq("0", "b", "1"))
+                yield assert(first != second, s"both slots show $first")
+            }
+            total <- runs.get
+        yield assert(total == 4, s"runs: $total")
     }
 
     "the same call site shown twice with one key gives each slot its own instance" in {
@@ -779,6 +828,63 @@ class MountedTest extends kyo.test.Test[Any]:
             _ <- mount(ui)((recorder, _) => showsEventually(recorder, Seq("0"), "held"))
             r <- released.get
         yield assert(r)
+    }
+
+    "an interrupt while a rebuilt row subscribes still releases what the row had subscribed" in {
+        // A rebuilt row claims its keyed mount, whose instance has already published, and repaints it inline while the row
+        // is still subscribing. The exchange holds that paint, the region around the list closes meanwhile, and the list's
+        // fiber is interrupted inside the row: what the row had subscribed by then must still be released.
+        val held      = "held-mount"
+        val armed     = new java.util.concurrent.atomic.AtomicBoolean(false)
+        val published = new java.util.concurrent.atomic.AtomicBoolean(false)
+        val recorder  = new Recorder()
+        def holding(entered: Promise[Unit, Any], forever: Promise[Unit, Any]): UIExchange = new UIExchange:
+            def onChange(
+                region: ReactiveRegion,
+                path: Seq[String],
+                context: ReactiveRegion.RegionIdentity,
+                parentContext: ReactiveRegion.ParentContext,
+                previous: Maybe[UI],
+                ui: UI
+            )(using Frame): Unit < Async =
+                HtmlRenderer.render(ui, path).map { html =>
+                    if armed.get() && html.contains(held) then entered.completeUnitDiscard.andThen(forever.get)
+                    else
+                        if html.contains(held) then published.set(true)
+                        recorder.onChange(region, path, context, parentContext, previous, ui)
+                }
+        for
+            open    <- Signal.initRef(true)
+            items   <- Signal.initRef(Chunk(("a", 0)))
+            probe   <- Signal.initRef(0)
+            entered <- Promise.init[Unit, Any]
+            forever <- Promise.init[Unit, Any]
+            ui = div(open.map(o =>
+                if o then
+                    div(items.foreachKeyed(_._1)((k, v) =>
+                        div(
+                            probe.map(p => span(s"$k:$v:$p")),
+                            UI.mounted(Kyo.lift[UI, Async](span(held))).keyed("m").placeholder(span("..."))
+                        )
+                    )): UI
+                else span("closed"): UI
+            ))
+            _ <- Scope.run {
+                for
+                    _    <- recorder.initial(ui)
+                    root <- ReactiveUI.normalize(ui, Seq.empty)
+                    _    <- ReactiveUI.subscribe(root, holding(entered, forever))
+                    _    <- assertEventually(Sync.defer(published.get()))
+                    _    <- Sync.defer(armed.set(true))
+                    _    <- items.set(Chunk(("a", 1)))
+                    _    <- assertEventually(entered.done)
+                    _    <- open.set(false)
+                    _    <- assertEventually(recorder.shown(Seq("0")).map(_.contains("closed")))
+                    _    <- assertEventually(Sync.Unsafe.defer(probe.unsafe.waiters() == 0))
+                yield ()
+            }
+        yield succeed
+        end for
     }
 
 end MountedTest
