@@ -22,6 +22,7 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
           |function ba(root){__kyoLifecycle.push("animate:"+root.id);}
           |function kyoSpawnGhosts(){}
           |function sweepFocusAuto(){}
+          |function __kyoSyncField(el,name,value){if(name==="value"&&(el.tagName==="INPUT"||el.tagName==="TEXTAREA")&&el.value!==value)el.value=value;}
           |function kyoSetCaret(target,start,end){target.setSelectionRange(start,end);}""".stripMargin
 
     private def install(html: String): Unit =

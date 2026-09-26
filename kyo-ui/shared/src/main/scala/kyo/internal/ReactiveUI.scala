@@ -22,7 +22,18 @@ private[kyo] case class ReactiveUI(
     // what places a region's mount table, independently of the region's position among its siblings.
     origin: Maybe[Frame] = Absent,
     rows: Long = 0L,
-    deepRows: List[Int] = Nil
+    deepRows: List[Int] = Nil,
+    // Reactive channels carried from the element's Attrs; subscribeScoped forks the in-place-patch observers
+    // (empty for non-element / attribute-less nodes).
+    reactiveAttrs: Map[String, Signal[String]] = Map.empty,
+    reactiveBoolAttrs: Map[String, Signal[Boolean]] = Map.empty,
+    reactiveClasses: Map[String, Signal[Boolean]] = Map.empty,
+    // Render-time snapshots: the values the enclosing paint already put into the DOM. Subscribe skips an observer's first
+    // emission while it still equals its snapshot, so a fresh paint is not patched again.
+    renderedValue: Maybe[UI] = Absent,
+    renderedAttrValues: Map[String, String] = Map.empty,
+    renderedBoolAttrValues: Map[String, Boolean] = Map.empty,
+    renderedClassValues: Map[String, Boolean] = Map.empty
 )
 
 /** Where event dispatch finds a mounted node's live content.
@@ -139,6 +150,22 @@ private[kyo] object ReactiveUI:
         end for
     end normalize
 
+    /** The same tree without its render-time snapshots, for a normalize that painted nothing.
+      *
+      * The snapshots let subscribe skip a first emission the page already shows, which holds only where this normalize
+      * is the one the page was rendered from. A server session is not: the page came from an earlier HTTP render, and a
+      * reconnecting client still shows whatever the previous session last sent. Without snapshots every observer's first
+      * emission goes out, so a session starts by bringing the page to the current state.
+      */
+    def unpainted(rui: ReactiveUI): ReactiveUI =
+        rui.copy(
+            children = rui.children.map(unpainted),
+            renderedValue = Absent,
+            renderedAttrValues = Map.empty,
+            renderedBoolAttrValues = Map.empty,
+            renderedClassValues = Map.empty
+        )
+
     /* Normalization and the tree walk carry, for the mounted nodes and regions they meet, the session's dispatch table and which
      * depths of the path, since the enclosing reactive region, hold the key of a keyed list row: a bit per depth below 63 in `rows`,
      * and the rare deeper ones in `deepRows`. Both are read out of the path only when a mount or a region's table needs them, so the
@@ -193,7 +220,7 @@ private[kyo] object ReactiveUI:
                                 walkStatic(currentUI, path, svg, contentContext, contentParentContext, cells, rows = 0L, deepRows = Nil)
                             result <- freshHdl(targetPath, event)
                         yield result
-                }
+                }.copy(renderedValue = Present(current))
                 end for
 
             case ui: Foreach[?, ?] @unchecked =>
@@ -231,7 +258,7 @@ private[kyo] object ReactiveUI:
                                 walkStatic(currentUI, path, svg, contentContext, contentParentContext, cells, rows = 0L, deepRows = Nil)
                             result <- freshHdl(targetPath, event)
                         yield result
-                }
+                }.copy(renderedValue = Present(current))
                 end for
 
             case ui: Element =>
@@ -260,6 +287,9 @@ private[kyo] object ReactiveUI:
                         contentDeepRows,
                         discoverRootBound = false
                     )
+                    attrSnap  <- Kyo.foreach(ui.attrs.reactiveAttrs.toSeq)((n, s) => s.current.map(v => n -> v))
+                    boolSnap  <- Kyo.foreach(ui.attrs.reactiveBoolAttrs.toSeq)((n, s) => s.current.map(v => n -> v))
+                    classSnap <- Kyo.foreach(ui.attrs.reactiveClasses.toSeq)((n, s) => s.current.map(v => n -> v))
                 yield ReactiveUI(
                     path,
                     elementSignal,
@@ -272,8 +302,15 @@ private[kyo] object ReactiveUI:
                     discoverContentRootBound = false,
                     origin = Present(ui.frame),
                     rows = rows,
-                    deepRows = deepRows
+                    deepRows = deepRows,
+                    reactiveAttrs = ui.attrs.reactiveAttrs,
+                    reactiveBoolAttrs = ui.attrs.reactiveBoolAttrs,
+                    reactiveClasses = ui.attrs.reactiveClasses,
+                    renderedAttrValues = attrSnap.toMap,
+                    renderedBoolAttrValues = boolSnap.toMap,
+                    renderedClassValues = classSnap.toMap
                 )
+                end for
 
             case ui: Mounted =>
                 val spec           = MountedSpec(ui, path, rowKeys(path, rows, deepRows))
@@ -358,6 +395,18 @@ private[kyo] object ReactiveUI:
             case (ReactiveRegion.ParentContext.HtmlTable, ReactiveRegion.TableContent.Rows) => ReactiveRegion.ParentContext.Other
             case _                                                                          => parentContext
 
+    /** True when a child UI needs its own ReactiveUI node during a static walk: reactive nodes always, and an
+      * element whose ROOT carries a binding (a bound input ref or any reactive attr/bool-attr/class channel).
+      * Shared by the element-children and the fragment-children walk so the promotion rule cannot diverge
+      * between them.
+      */
+    private def needsOwnNode(ui: UI): Boolean = ui match
+        case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted => true
+        case el: Element                                    =>
+            collectSignalRef(el).nonEmpty || el.attrs.reactiveAttrs.nonEmpty
+            || el.attrs.reactiveBoolAttrs.nonEmpty || el.attrs.reactiveClasses.nonEmpty
+        case _ => false
+
     private type Handler = (Seq[String], UIEvent) => Boolean < Async
 
     private type ValidatedHandler = (Seq[String], DragProtocol.ValidatedEvent) => Boolean < Async
@@ -410,22 +459,18 @@ private[kyo] object ReactiveUI:
                 for childWalks <- Kyo.foreach(elem.children.toSeq.zipWithIndex) { (child, i) =>
                         val childPath    = basePath :+ i.toString
                         val childContext = context.child(i.toString)
-                        child match
-                            case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted =>
-                                for rui <- normalizeAt(child, childPath, childSvg, childContext, childParentContext, cells, rows, deepRows)
-                                yield (Seq(rui), Seq.empty[(Int, Handler)])
-                            case childElem: Element if collectSignalRef(childElem).nonEmpty =>
-                                // Element with SignalRef-bound attributes is reactive over those signals;
-                                // normalize it so subscribeNode wires updates.
-                                for rui <-
-                                        normalizeAt(childElem, childPath, childSvg, childContext, childParentContext, cells, rows, deepRows)
-                                yield (Seq(rui), Seq.empty[(Int, Handler)])
-                            case _ =>
-                                for
-                                    (innerKids, innerHandle) <-
-                                        walkStatic(child, childPath, childSvg, childContext, childParentContext, cells, rows, deepRows)
-                                yield (innerKids, Seq((i, innerHandle)))
-                        end match
+                        if needsOwnNode(child) then
+                            // Normalize into a ReactiveUI node so subscribeScoped wires the updates. Required
+                            // even for a const element carrying ONLY reactive attrs: otherwise it is not walked
+                            // into a node and its in-place-patch observers would never start.
+                            for rui <- normalizeAt(child, childPath, childSvg, childContext, childParentContext, cells, rows, deepRows)
+                            yield (Seq(rui), Seq.empty[(Int, Handler)])
+                        else
+                            for
+                                (innerKids, innerHandle) <-
+                                    walkStatic(child, childPath, childSvg, childContext, childParentContext, cells, rows, deepRows)
+                            yield (innerKids, Seq((i, innerHandle)))
+                        end if
                     }
                 yield
                     val reactiveChildren = childWalks.flatMap(_._1)
@@ -443,15 +488,21 @@ private[kyo] object ReactiveUI:
                         val childContext = child match
                             case kc: KeyedChild[?] => context.child(kc.key)
                             case _                 => context.child(i.toString)
-                        child match
-                            case kc: KeyedChild[?] =>
-                                val depth = basePath.size
-                                if depth < 63 then
-                                    walkStatic(kc.child, childPath, svg, childContext, parentContext, cells, rows | (1L << depth), deepRows)
-                                else walkStatic(kc.child, childPath, svg, childContext, parentContext, cells, rows, depth :: deepRows)
-                                end if
-                            case _ => walkStatic(child, childPath, svg, childContext, parentContext, cells, rows, deepRows)
-                        end match
+                        // Three plain values rather than a tuple: this runs per row on every walk, dispatch included.
+                        val keyed = child.isInstanceOf[KeyedChild[?]]
+                        val depth = if keyed then basePath.size else 0
+                        val inner = child match
+                            case kc: KeyedChild[?] => kc.child
+                            case _                 => child
+                        val innerRows     = if keyed && depth < 63 then rows | (1L << depth) else rows
+                        val innerDeepRows = if keyed && depth >= 63 then depth :: deepRows else deepRows
+                        if needsOwnNode(inner) then
+                            // Same contract as an element's reactive child: a row whose root carries a binding channel (a keyed row
+                            // with a reactive class, say) gets its own node, or its in-place-patch observers would never start.
+                            for rui <- normalizeAt(inner, childPath, svg, childContext, parentContext, cells, innerRows, innerDeepRows)
+                            yield (Seq(rui), rui.handle)
+                        else walkStatic(inner, childPath, svg, childContext, parentContext, cells, innerRows, innerDeepRows)
+                        end if
                     }
                 yield
                     val allKids    = childWalks.flatMap(_._1)
@@ -615,34 +666,75 @@ private[kyo] object ReactiveUI:
 
     private def formatDouble(v: Double): String = NumberFormat.double(v)
 
+    /** Is the boolean attribute `name` set on `elem` RIGHT NOW, statically or through the reactive channel a
+      * `Signal`-typed setter installs.
+      *
+      * `.disabled(Signal)` and `.readOnly(Signal)` do not wrap their element and do not fill the static field:
+      * they register a boolean-attribute channel (`Attrs.reactiveBoolAttrs`) that patches the live attribute
+      * in place. A guard reading only the static field therefore counts every signal-disabled element as
+      * enabled, and silently, because a browser suppresses the click on a rendered `disabled` button, so it shows
+      * only where dispatch decides for itself: the server transport, and any forged event.
+      *
+      * WHERE A CHANNEL EXISTS, THE CHANNEL IS THE VALUE: the static field is not consulted at all. Same rule
+      * the renderer follows (`renderElementAttrs`), and the only one consistent with the client, whose channel
+      * patch sets and REMOVES the attribute on every emission whatever the initial HTML said.
+      */
+    private def boolAttrNow(elem: Element, name: String, static: => Boolean)(using Frame): Boolean < Sync =
+        elem.attrs.reactiveBoolAttrs.get(name) match
+            case Some(sig) => sig.current
+            case None      => static
+
     /** Check if element is disabled. */
-    private def isDisabled(elem: Element): Boolean =
-        elem match
-            case hd: HasDisabled => hd.disabled.getOrElse(false)
-            case _               => false
+    private def isDisabled(elem: Element)(using Frame): Boolean < Sync =
+        boolAttrNow(
+            elem,
+            "disabled",
+            elem match
+                case hd: HasDisabled => hd.disabled.getOrElse(false)
+                case _               => false
+        )
 
-    /** Check if element is readOnly. */
-    private def isReadOnly(elem: Element): Boolean =
-        elem match
-            case ti: TextInput => ti.readOnly.getOrElse(false)
-            case _             => false
+    /** Check if element is readOnly. The channel name is the ATTRIBUTE spelling (`readonly`), not the setter's. */
+    private def isReadOnly(elem: Element)(using Frame): Boolean < Sync =
+        boolAttrNow(
+            elem,
+            "readonly",
+            elem match
+                case ti: TextInput => ti.readOnly.getOrElse(false)
+                case _             => false
+        )
 
-    /** Check if element is hidden. */
-    private def isHidden(elem: Element): Boolean =
-        elem.attrs.hidden.getOrElse(false)
+    /** A TARGET that is inert (disabled, hidden, read-only) ignores its own handler but still lets the event
+      * bubble, so this yields `true` (keep bubbling) without running `body`. Only the target is guarded: an
+      * ancestor on the bubble path is not inert just because the target was.
+      */
+    private def unlessInert(isTarget: Boolean, inert: => Boolean < Sync)(body: => Boolean < Async)(using
+        Frame
+    ): Boolean < Async =
+        if !isTarget then body
+        else inert.map(i => if i then true else body)
+
+    /** Check if element is hidden. Reads the channel too: `.hidden(Signal)` installs a boolean-attribute
+      * channel exactly like `.disabled(Signal)`, so the static field is empty whenever the signal form was used.
+      */
+    private def isHidden(elem: Element)(using Frame): Boolean < Sync =
+        boolAttrNow(elem, "hidden", elem.attrs.hidden.getOrElse(false))
 
     /** Resolve the (possibly reactive) node at `targetPath` and test `predicate` against the concrete element there.
       *
       * Mirrors the renderer's path scheme: element children are index-addressed, a `Reactive`'s rendered content occupies the same path as
       * the boundary, `Foreach` items live at `path :+ key` (or `:+ index`), and `Fragment` children at `path :+ index`. Resolving through
-      * these boundaries is what lets an element wrapped by a signal-typed setter (e.g. `.disabled(Signal)`, which wraps it in a `Reactive`)
+      * these boundaries is what lets an element wrapped by a signal-typed setter (e.g. `.hidden(Signal)`, which wraps it in a `Reactive`)
       * still be recognized by its concrete type, so button-click form submit and disabled detection keep working through such wrappers.
+      *
+      * The predicate is effectful because "is it disabled" is a question about the CURRENT value behind a
+      * channel, not about a field (see [[boolAttrNow]]).
       */
     private def targetSatisfies(
         node: UI,
         nodePath: Seq[String],
         targetPath: Seq[String],
-        predicate: Element => Boolean,
+        predicate: Element => Boolean < Sync,
         mounts: MountDispatch
     )(using
         Frame
@@ -710,12 +802,12 @@ private[kyo] object ReactiveUI:
     private def isTargetButton(elem: Element, myPath: Seq[String], targetPath: Seq[String], mounts: MountDispatch)(using
         Frame
     ): Boolean < Sync =
-        targetSatisfies(elem, myPath, targetPath, _.isInstanceOf[Button], mounts)
+        targetSatisfies(elem, myPath, targetPath, e => Kyo.lift(e.isInstanceOf[Button]), mounts)
 
     private def isTargetSelect(elem: Element, myPath: Seq[String], targetPath: Seq[String], mounts: MountDispatch)(using
         Frame
     ): Boolean < Sync =
-        targetSatisfies(elem, myPath, targetPath, _.isInstanceOf[Select], mounts)
+        targetSatisfies(elem, myPath, targetPath, e => Kyo.lift(e.isInstanceOf[Select]), mounts)
 
     /** Bubble-continue value after an element handled `event`: `false` (consume) only when the element set
       * `stopPropagation(true)` AND actually declared a handler for this event's type (`declared`). The result flows up the
@@ -741,8 +833,7 @@ private[kyo] object ReactiveUI:
         event match
             case ev: UIEvent.Click =>
                 // Disabled or hidden elements ignore their own click handler, but allow bubbling
-                if isTarget && (isDisabled(elem) || isHidden(elem)) then true
-                else
+                unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isHidden(elem))) {
                     val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers)
                     val self  = if isTarget then
                         invoke(attrs.onClickSelf).andThen(invokeWith(attrs.onClickSelfEvt, mouse))
@@ -767,6 +858,7 @@ private[kyo] object ReactiveUI:
                         .andThen(activateToggle)
                         .andThen(formSubmit)
                         .andThen(keepBubbling(elem, declared))
+                }
             case ev: UIEvent.Focus =>
                 val isFocusable = elem.isInstanceOf[Focusable] || elem.attrs.tabIndex.nonEmpty
                 if isTarget && isFocusable then
@@ -781,8 +873,7 @@ private[kyo] object ReactiveUI:
                     invoke(attrs.onBlur).andThen(invokeWith(attrs.onBlurEvt, mouse)).andThen(true)
                 else true
             case e: UIEvent.KeyDown =>
-                if isTarget && isDisabled(elem) then true
-                else
+                unlessInert(isTarget, isDisabled(elem)) {
                     val kbEvent = UI.KeyboardEvent(
                         key = Keyboard.fromString(e.keyboard.key),
                         modifiers = e.keyboard.modifiers,
@@ -827,6 +918,7 @@ private[kyo] object ReactiveUI:
                     else Kyo.lift(())
                     keyHandler.andThen(activateClick).andThen(activateToggle).andThen(selectCycle).andThen(formSubmit)
                         .andThen(keepBubbling(elem, attrs.onKeyDown.nonEmpty))
+                }
             case e: UIEvent.KeyUp =>
                 val kbEvent = UI.KeyboardEvent(
                     key = Keyboard.fromString(e.keyboard.key),
@@ -835,8 +927,7 @@ private[kyo] object ReactiveUI:
                 )
                 invokeWith(attrs.onKeyUp, kbEvent).andThen(keepBubbling(elem, attrs.onKeyUp.nonEmpty))
             case e: UIEvent.Input =>
-                if isTarget && (isDisabled(elem) || isReadOnly(elem)) then true
-                else
+                unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isReadOnly(elem))) {
                     elem match
                         case ti: TextInput =>
                             val autoSet = ti.value match
@@ -844,9 +935,9 @@ private[kyo] object ReactiveUI:
                                 case _                       => Kyo.lift(())
                             autoSet.andThen(invokeWith(ti.onInput, e.value)).andThen(true)
                         case _ => true
+                }
             case e: UIEvent.Change =>
-                if isTarget && (isDisabled(elem) || isReadOnly(elem)) then true
-                else
+                unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isReadOnly(elem))) {
                     elem match
                         case ti: TextInput =>
                             val autoSet = ti.value match
@@ -865,9 +956,9 @@ private[kyo] object ReactiveUI:
                             autoSet.andThen(invokeWith(pi.onChange, e.value)).andThen(true)
                         case fi: FileInput => invokeWith(fi.onChange, e.value).andThen(true)
                         case _             => true
+                }
             case e: UIEvent.ChangeChecked =>
-                if isTarget && isDisabled(elem) then true
-                else
+                unlessInert(isTarget, isDisabled(elem)) {
                     elem match
                         case bi: BooleanInput =>
                             val autoSet = bi.checked match
@@ -875,9 +966,9 @@ private[kyo] object ReactiveUI:
                                 case _                       => Kyo.lift(())
                             autoSet.andThen(invokeWith(bi.onChange, e.checked)).andThen(true)
                         case _ => true
+                }
             case e: UIEvent.ChangeNumeric =>
-                if isTarget && isDisabled(elem) then true
-                else
+                unlessInert(isTarget, isDisabled(elem)) {
                     elem match
                         case ni: NumberInput =>
                             val autoSet = ni.value match
@@ -890,6 +981,7 @@ private[kyo] object ReactiveUI:
                                 case _                       => Kyo.lift(())
                             autoSet.andThen(invokeWith(ri.onChange, e.value)).andThen(true)
                         case _ => true
+                }
             case ev: UIEvent.Submit =>
                 elem match
                     case f: Form =>
@@ -1388,62 +1480,136 @@ private[kyo] object ReactiveUI:
         dispatch: MountDispatch,
         pass: RegionKeys
     )(using Frame): Unit < (Async & Scope) =
-        if rui.mounted.nonEmpty then
-            subscribeMounted(rui, rui.mounted.get, exchange, signalChangeTime, mounts, dispatch)
-        else if rui.isConst then
-            val children = RegionKeys(rui.children)
-            Kyo.foreachDiscard(rui.children)(subscribeScoped(_, exchange, signalChangeTime, mounts, dispatch, children))
-        else
-            // The tree this region last rendered, so the exchange can send only what moved instead of the
-            // whole region.
-            // Unsafe: region-scoped, single-writer state created before the observe loop is forked, where no
-            // effect context exists to supply AllowUnsafe; only this region's own loop reads or writes it.
-            val rendered     = AtomicRef.Unsafe.init(Maybe.empty[UI])(using AllowUnsafe.embrace.danger)
-            val regionMounts = mounts.child(pass, rui)
-            // Per-value setup, run inside each value's fresh Scope: render the region and fork its children into
-            // that scope, so the next value (or an interrupt) tears them down by cascade.
-            def renderValue(current: UI): Unit < (Async & Scope) =
-                for
-                    now      <- Clock.now
-                    _        <- signalChangeTime.set(now)
-                    previous <- Sync.Unsafe.defer(rendered.getAndSet(Present(current)))
-                    _        <- exchange.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, previous, current)
-                    svgContext = rui.region match
-                        case _: ReactiveRegion.HtmlRange  => false
-                        case _: ReactiveRegion.SvgElement => true
-                    contentParentContext = nestedParentContext(rui.parentContext, current)
-                    (newKids, _) <- walkStatic(
-                        current,
-                        rui.path,
-                        svgContext,
-                        rui.contentContext,
-                        contentParentContext,
-                        dispatch,
-                        rows = 0L,
-                        deepRows = Nil,
-                        discoverRootBound = rui.discoverContentRootBound
-                    )
-                    keys = RegionKeys(newKids)
-                    _ <- regionMounts.beginWalk(newKids, keys)
-                    _ <- Kyo.foreachDiscard(newKids)(subscribeScoped(_, exchange, signalChangeTime, regionMounts, dispatch, keys))
-                    _ <- regionMounts.endWalk
-                yield ()
+        // Start the scoped in-place-patch observers for this node's reactive channels. Runs unconditionally: a
+        // no-op for attribute-less nodes, but an element carrying ONLY reactive attrs is `isConst = true` and
+        // would otherwise fork no observer of its own.
+        forkChannelObservers(
+            rui.path,
+            rui.reactiveAttrs,
+            rui.reactiveBoolAttrs,
+            rui.reactiveClasses,
+            exchange,
+            rui.renderedAttrValues,
+            rui.renderedBoolAttrValues,
+            rui.renderedClassValues
+        ).andThen {
+            if rui.mounted.nonEmpty then
+                subscribeMounted(rui, rui.mounted.get, exchange, signalChangeTime, mounts, dispatch)
+            else if rui.isConst then
+                // A constant node belongs to the enclosing region's pass, which already counts its children.
+                Kyo.foreachDiscard(rui.children)(subscribeScoped(_, exchange, signalChangeTime, mounts, dispatch, pass))
+            else
+                // The tree this region last rendered, so the exchange can send only what moved instead of the
+                // whole region.
+                // Unsafe: region-scoped, single-writer state created before the observe loop is forked, where no
+                // effect context exists to supply AllowUnsafe; only this region's own loop reads or writes it.
+                val rendered     = AtomicRef.Unsafe.init(Maybe.empty[UI])(using AllowUnsafe.embrace.danger)
+                val regionMounts = mounts.child(pass, rui)
+                def subscribeKids(kids: Seq[ReactiveUI]): Unit < (Async & Scope) =
+                    val keys = RegionKeys(kids)
+                    regionMounts.beginWalk(kids, keys)
+                        .andThen(Kyo.foreachDiscard(kids)(subscribeScoped(_, exchange, signalChangeTime, regionMounts, dispatch, keys)))
+                        .andThen(regionMounts.endWalk)
+                end subscribeKids
+                // Per-value setup, run inside each value's fresh Scope: render the region and fork its children into
+                // that scope, so the next value (or an interrupt) tears them down by cascade.
+                def renderValue(current: UI): Unit < (Async & Scope) =
+                    for
+                        now      <- Clock.now
+                        _        <- signalChangeTime.set(now)
+                        previous <- Sync.Unsafe.defer(rendered.getAndSet(Present(current)))
+                        _        <- exchange.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, previous, current)
+                        svgContext = rui.region match
+                            case _: ReactiveRegion.HtmlRange  => false
+                            case _: ReactiveRegion.SvgElement => true
+                        contentParentContext = nestedParentContext(rui.parentContext, current)
+                        (newKids, _) <- walkStatic(
+                            current,
+                            rui.path,
+                            svgContext,
+                            rui.contentContext,
+                            contentParentContext,
+                            dispatch,
+                            rows = 0L,
+                            deepRows = Nil,
+                            discoverRootBound = rui.discoverContentRootBound
+                        )
+                        _ <- forkRootChannels(rui.path, current, exchange)
+                        _ <- subscribeKids(newKids)
+                    yield ()
 
-            startOwnedFiber {
-                Abort.run[Throwable] {
-                    rui.signal.observe(renderValue)
-                }.map { result =>
-                    result.fold(
-                        _ => (),
-                        err => Log.error(s"Reactive subscription fiber failed at path=${rui.path.mkString(".")}", err),
-                        panic =>
-                            if panic.isInstanceOf[Interrupted] then ()
-                            else Log.error(s"Reactive subscription fiber failed at path=${rui.path.mkString(".")}", panic)
-                    )
+                startOwnedFiber {
+                    Abort.run[Throwable] {
+                        var first = true
+                        rui.signal.observe { current =>
+                            val isFirst = first
+                            first = false
+                            if isFirst && rui.renderedValue.exists(_.equals(current)) then
+                                // The enclosing render already painted exactly this value: skip the repaint and the
+                                // re-walk, but still subscribe the already-walked children, exactly as renderValue
+                                // would have. The value is recorded as this region's last render, so the NEXT emission
+                                // diffs against it rather than re-sending the whole region.
+                                Sync.Unsafe.defer(rendered.set(Present(current)))
+                                    .andThen(forkRootChannels(rui.path, current, exchange))
+                                    .andThen(subscribeKids(rui.children))
+                            else renderValue(current)
+                            end if
+                        }
+                    }.map { result =>
+                        result.fold(
+                            _ => (),
+                            err => Log.error(s"Reactive subscription fiber failed at path=${rui.path.mkString(".")}", err),
+                            panic =>
+                                if panic.isInstanceOf[Interrupted] then ()
+                                else Log.error(s"Reactive subscription fiber failed at path=${rui.path.mkString(".")}", panic)
+                        )
+                    }
                 }
-            }
-        end if
+            end if
+        }
     end subscribeScoped
+
+    /** Fork the scoped in-place-patch observers for one node's reactive attr/bool-attr/class channels at
+      * `path`. Shared by subscribeScoped (walked nodes) and by a region's renderValue (the painted ROOT
+      * element, which is absent from the walk's kids), so the two sites cannot drift apart.
+      */
+    /** Starts the channel observers of the element a region paints as its root. A walk only gives the root's children nodes of their
+      * own, so the root's channels at `path` are started here, in the current scope like the children's subscriptions.
+      */
+    private def forkRootChannels(path: Seq[String], content: UI, exchange: UIExchange)(using Frame): Unit < (Async & Scope) =
+        content match
+            case el: Element
+                if el.attrs.reactiveAttrs.nonEmpty || el.attrs.reactiveBoolAttrs.nonEmpty || el.attrs.reactiveClasses.nonEmpty =>
+                forkChannelObservers(path, el.attrs.reactiveAttrs, el.attrs.reactiveBoolAttrs, el.attrs.reactiveClasses, exchange)
+            case _ => Kyo.unit
+
+    private def forkChannelObservers(
+        path: Seq[String],
+        attrs: Map[String, Signal[String]],
+        boolAttrs: Map[String, Signal[Boolean]],
+        classes: Map[String, Signal[Boolean]],
+        exchange: UIExchange,
+        renderedAttrs: Map[String, String] = Map.empty,
+        renderedBools: Map[String, Boolean] = Map.empty,
+        renderedClasses: Map[String, Boolean] = Map.empty
+    )(using Frame): Unit < (Async & Scope) =
+        // Each channel is seeded with the render-time value: normalize happens-before the HTML render on every
+        // paint path, so the DOM already shows it, while a change landing between render and subscribe differs
+        // from it and still fires.
+        Kyo.foreachDiscard(attrs.toSeq) { case (name, sig) =>
+            Fiber.init(sig.observe(Maybe.fromOption(renderedAttrs.get(name)), Signal.defaultRepairInterval)(v =>
+                exchange.onAttrPatch(path, name, v)
+            )).unit
+        }.andThen(Kyo.foreachDiscard(boolAttrs.toSeq) { case (name, sig) =>
+            Fiber.init(sig.observe(Maybe.fromOption(renderedBools.get(name)), Signal.defaultRepairInterval)(v =>
+                exchange.onBoolAttrPatch(path, name, v)
+            )).unit
+        }).andThen(Kyo.foreachDiscard(classes.toSeq) { case (name, sig) =>
+            Fiber.init(sig.observe(Maybe.fromOption(renderedClasses.get(name)), Signal.defaultRepairInterval)(v =>
+                exchange.onClassPatch(path, name, v)
+            )).unit
+        })
+    end forkChannelObservers
 
     // ---- Mounted nodes ----
 
@@ -1502,6 +1668,12 @@ private[kyo] object ReactiveUI:
         end hashCode
     end RegionKey
 
+    /** The nodes one render pass of a region owns: its reactive children, and through a constant child (an element that only
+      * carries reactive attributes) that child's own, which the constant node subscribes in the same pass and the same table.
+      */
+    private def passMembers(kids: Seq[ReactiveUI]): Iterator[ReactiveUI] =
+        kids.iterator.flatMap(kid => if kid.isConst && kid.mounted.isEmpty then passMembers(kid.children) else Iterator.single(kid))
+
     /** The keys of the regions among one render pass's reactive children, computed on first use, which only a pass with mounts at or
       * below it ever makes.
       */
@@ -1510,7 +1682,7 @@ private[kyo] object ReactiveUI:
             val result = new java.util.IdentityHashMap[ReactiveUI, RegionKey]()
             // Keyed by the rank-0 key, whose hash is the cheap one.
             val ranks = new java.util.HashMap[RegionKey, Integer]()
-            kids.foreach { kid =>
+            passMembers(kids).foreach { kid =>
                 if kid.mounted.isEmpty && !kid.isConst then
                     val first = RegionKey(rowKeys(kid.path, kid.rows, kid.deepRows), kid.origin.fold[AnyRef](kid.path)(f => f), 0)
                     val rank  = Maybe(ranks.get(first)).fold(0)(_.intValue + 1)
@@ -1828,7 +2000,7 @@ private[kyo] object ReactiveUI:
             Sync.Unsafe.defer {
                 // The pass's keyed nodes by identity, each group in walk order.
                 val groups = new java.util.HashMap[MountIdentity, java.util.ArrayList[ReactiveUI]]()
-                kids.foreach { kid =>
+                passMembers(kids).foreach { kid =>
                     kid.mounted.flatMap(_.identity).foreach { identity =>
                         discard(groups.computeIfAbsent(identity, _ => new java.util.ArrayList[ReactiveUI](1)).add(kid))
                     }
@@ -1977,6 +2149,7 @@ private[kyo] object ReactiveUI:
                                 )
                                 keys = RegionKeys(kids)
                                 _ <- instance.children.beginWalk(kids, keys)
+                                _ <- forkRootChannels(rui.path, content, exchange)
                                 _ <- Kyo.foreachDiscard(kids)(
                                     subscribeScoped(_, exchange, signalChangeTime, instance.children, dispatch, keys)
                                 )
@@ -2156,29 +2329,6 @@ private[kyo] object ReactiveUI:
             case _                  => Absent
         end match
     end findPathById
-
-    /** Find all focusable element IDs in document order from a resolved UI tree. Skips disabled and hidden elements.
-      */
-    def findAllFocusableIds(ui: UI): Seq[String] =
-        val builder              = Seq.newBuilder[String]
-        def walk(node: UI): Unit = node match
-            case elem: Element =>
-                val disabled = elem match
-                    case hd: HasDisabled => hd.disabled.getOrElse(false)
-                    case _               => false
-                val hidden = elem.attrs.hidden.getOrElse(false)
-                if !disabled && !hidden then
-                    val focusable = elem.isInstanceOf[Focusable] || elem.attrs.tabIndex.nonEmpty
-                    if focusable then
-                        elem.attrs.identifier.foreach(id => builder += id)
-                end if
-                elem.children.foreach(walk)
-            case Fragment(children)   => children.foreach(walk)
-            case KeyedChild(_, child) => walk(child)
-            case _                    => ()
-        walk(ui)
-        builder.result()
-    end findAllFocusableIds
 
     /** Find element by ID in a resolved UI tree. */
     def findElementById(ui: UI, id: String): Maybe[Element] =
