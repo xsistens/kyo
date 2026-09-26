@@ -1593,22 +1593,31 @@ private[kyo] object ReactiveUI:
         renderedBools: Map[String, Boolean] = Map.empty,
         renderedClasses: Map[String, Boolean] = Map.empty
     )(using Frame): Unit < (Async & Scope) =
-        // Each channel is seeded with the render-time value: normalize happens-before the HTML render on every
-        // paint path, so the DOM already shows it, while a change landing between render and subscribe differs
-        // from it and still fires.
-        Kyo.foreachDiscard(attrs.toSeq) { case (name, sig) =>
-            Fiber.init(sig.observe(Maybe.fromOption(renderedAttrs.get(name)), Signal.defaultRepairInterval)(v =>
-                exchange.onAttrPatch(path, name, v)
-            )).unit
-        }.andThen(Kyo.foreachDiscard(boolAttrs.toSeq) { case (name, sig) =>
-            Fiber.init(sig.observe(Maybe.fromOption(renderedBools.get(name)), Signal.defaultRepairInterval)(v =>
-                exchange.onBoolAttrPatch(path, name, v)
-            )).unit
-        }).andThen(Kyo.foreachDiscard(classes.toSeq) { case (name, sig) =>
-            Fiber.init(sig.observe(Maybe.fromOption(renderedClasses.get(name)), Signal.defaultRepairInterval)(v =>
-                exchange.onClassPatch(path, name, v)
-            )).unit
-        })
+        // A channel's handler is one attribute write, so where the exchange offers a synchronous sink the
+        // channel binds through `Signal.onChange`: for a signal rooted in a SignalRef the patch runs inside the
+        // writer's own `set`, and the comparison with the previous value happens before any scheduler hop.
+        // An exchange without a sink (the server transport) runs the channel on its own fiber. Both are seeded
+        // with the render-time value: normalize happens-before the HTML render on every paint path, so the DOM
+        // already shows it, while a change landing between render and subscribe differs from it and still fires.
+        def bindAll[A](
+            signals: Map[String, Signal[A]],
+            rendered: Map[String, A],
+            patcher: Maybe[(Seq[String], String, A) => Unit],
+            slow: (String, A) => Unit < Async
+        )(using CanEqual[A, A]): Unit < (Async & Scope) =
+            if signals.isEmpty then Kyo.unit
+            else
+                Kyo.foreachDiscard(signals.toSeq) { (name, sig) =>
+                    val baseline = Maybe.fromOption(rendered.get(name))
+                    patcher match
+                        case Present(patch) => sig.onChange(baseline)(v => Sync.defer(patch(path, name, v)))
+                        case Absent         => Fiber.init(sig.observe(baseline, Signal.defaultRepairInterval)(slow(name, _))).unit
+                }
+        end bindAll
+
+        bindAll(attrs, renderedAttrs, exchange.attrPatcherNow, exchange.onAttrPatch(path, _, _))
+            .andThen(bindAll(boolAttrs, renderedBools, exchange.boolAttrPatcherNow, exchange.onBoolAttrPatch(path, _, _)))
+            .andThen(bindAll(classes, renderedClasses, exchange.classPatcherNow, exchange.onClassPatch(path, _, _)))
     end forkChannelObservers
 
     // ---- Mounted nodes ----

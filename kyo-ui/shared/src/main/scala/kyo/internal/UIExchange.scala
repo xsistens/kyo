@@ -29,4 +29,18 @@ private[kyo] trait UIExchange:
     def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async      = Kyo.unit
     def onBoolAttrPatch(path: Seq[String], name: String, value: Boolean)(using Frame): Unit < Async = Kyo.unit
     def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async       = Kyo.unit
+
+    /** Synchronous twins of the three channel patches above.
+      *
+      * A channel's whole job is one attribute write, so it needs no fiber to deliver it. These sinks run on the
+      * writer's stack, inside the `set` that changed the signal, and therefore must not suspend, which is why
+      * they return `Unit` rather than `Unit < Async`. Each is the same write as its `on*Patch` twin, and a backend
+      * offering one routes the effectful twin through it so the two cannot drift apart.
+      *
+      * `Absent` for an exchange with no synchronous sink (the server transport has to go over a wire), which keeps
+      * its channels on the fiber path.
+      */
+    def attrPatcherNow: Maybe[(Seq[String], String, String) => Unit]      = Absent
+    def boolAttrPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit] = Absent
+    def classPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit]    = Absent
 end UIExchange
