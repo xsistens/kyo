@@ -596,4 +596,114 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
         val el = dom.document.getElementById(id)
         if el == null then "" else el.textContent
 
+    "a list patch moves retained rows instead of rebuilding them" in {
+        // Only the rows that changed are rendered; every other row is named by key and keeps its DOM node. An
+        // expando on each row survives only if the patch moved the node rather than replacing it.
+        for
+            rows <- Signal.initRef(Chunk("a", "b", "c", "d"))
+            ui    = UI.div(UI.ul(rows.foreachKeyed(identity)(k => UI.li(k).id(s"row-$k"))).id("moved-list"))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("row-d") != null))
+            _     <- Sync.defer(Seq("a", "b", "c", "d").foreach(k =>
+                dom.document.getElementById(s"row-$k").asInstanceOf[scalajs.Dynamic].__mark = k
+            ))
+            _     <- rows.set(Chunk("d", "b", "e", "a"))
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("moved-list").textContent == "dbea"))
+            marks <- Sync.defer(Seq("d", "b", "e", "a").map(k =>
+                val mark = dom.document.getElementById(s"row-$k").asInstanceOf[scalajs.Dynamic].__mark
+                if scalajs.isUndefined(mark) then "-" else mark.asInstanceOf[String]
+            ))
+            gone <- Sync.defer(dom.document.getElementById("row-c") == null)
+            _    <- fiber.interrupt
+            _    <- fiber.getResult
+        yield assert(marks == Seq("d", "b", "-", "a") && gone, s"marks=$marks gone=$gone")
+        end for
+    }
+
+    "a row a list patch inserts or replaces runs its enter transition and takes its focus" in {
+        // The enter classes come off on the next animation frame; holding frames back keeps them readable.
+        val window                        = scalajs.Dynamic.global.window
+        val raf                           = window.requestAnimationFrame
+        def entering(id: String): Boolean =
+            Maybe(dom.document.getElementById(id)).exists(_.classList.contains("row-entering"))
+        for
+            rows <- Signal.initRef(Chunk("a" -> false, "b" -> false))
+            ui = UI.div(UI.ul(rows.foreachKeyed(_._1) {
+                case ("focus", _) => UI.li(UI.input.id("enter-focus").focusAuto(true)).id("enter-row-focus")
+                case (k, true)    => UI.div(k).id(s"enter-row-$k").enterTransition("row-entering")
+                case ("c", _)     => UI.li("c").id("enter-row-c").enterTransition("row-entering")
+                case (k, false)   => UI.li(k).id(s"enter-row-$k")
+            }))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("enter-row-b") != null))
+            _     <- Sync.defer(window.requestAnimationFrame =
+                ((_: scalajs.Function1[Double, Unit]) => 0): scalajs.Function1[scalajs.Function1[Double, Unit], Int]
+            )
+            _        <- rows.set(Chunk("a" -> false, "b" -> false, "c" -> false))
+            _        <- assertEventually(Sync.defer(dom.document.getElementById("enter-row-c") != null))
+            inserted <- Sync.defer(entering("enter-row-c"))
+            // A changed row whose root element changes is replaced rather than morphed.
+            _        <- rows.set(Chunk("a" -> false, "b" -> true, "c" -> false))
+            _        <- assertEventually(Sync.defer(dom.document.getElementById("enter-row-b").tagName == "DIV"))
+            replaced <- Sync.defer(entering("enter-row-b"))
+            _        <- rows.set(Chunk("a" -> false, "b" -> true, "c" -> false, "focus" -> false))
+            _        <- assertEventually(Sync.defer(dom.document.getElementById("enter-focus") != null))
+            focused  <- Sync.defer(Maybe(dom.document.activeElement).map(_.id).getOrElse(""))
+            _        <- Sync.defer(window.requestAnimationFrame = raf)
+            _        <- fiber.interrupt
+            _        <- fiber.getResult
+        yield assert(
+            inserted && replaced && focused == "enter-focus",
+            s"inserted=$inserted replaced=$replaced focused=$focused"
+        )
+        end for
+    }
+
+    "bound row labels keep writing through swap, removal, insertion and a row repaint" in {
+        // Every row holds a bound text region, and a list patch must leave the registry addressing each of them,
+        // whether the row stayed, moved, arrived, or was painted again. A registry that lost a row's range shows
+        // up here as a label that silently stops changing.
+        final case class Row(id: String, label: SignalRef[String]) derives CanEqual
+        def text(id: String): String =
+            Maybe(dom.document.getElementById(s"lbl-$id")).map(_.textContent).getOrElse("<gone>")
+        for
+            labels <- Kyo.foreach(Chunk("a", "b", "c", "d", "e"))(id => Signal.initRef(s"${id}0").map(Row(id, _)))
+            extra  <- Signal.initRef("f0").map(Row("f", _))
+            again  <- Signal.initRef("c1").map(Row("c", _))
+            rows   <- Signal.initRef(labels)
+            byId = labels.map(r => r.id -> r).toMap
+            ui   = UI.div(
+                UI.ul(rows.foreachKeyed(_.id)(row => UI.li(UI.span(row.label: Signal[String]).id(s"lbl-${row.id}")))).id("bound-list")
+            )
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && text("e") == "e0"))
+            // swap the ends
+            _ <- rows.set(Chunk(byId("e"), byId("b"), byId("c"), byId("d"), byId("a")))
+            _ <- assertEventually(Sync.defer(dom.document.getElementById("bound-list").textContent == "e0b0c0d0a0"))
+            _ <- byId("a").label.set("a1")
+            _ <- byId("b").label.set("b1")
+            _ <- assertEventually(Sync.defer(text("a") == "a1" && text("b") == "b1"))
+            // remove one, insert one, repaint one (same key, a different row value)
+            _ <- rows.set(Chunk(byId("e"), extra, again, byId("d"), byId("a")))
+            _ <- assertEventually(Sync.defer(dom.document.getElementById("bound-list").textContent == "e0f0c1d0a1"))
+            _ <- byId("b").label.set("b2")
+            _ <- extra.label.set("f1")
+            _ <- again.label.set("c2")
+            _ <- byId("d").label.set("d1")
+            _ <- assertEventually(Sync.defer(text("f") == "f1" && text("c") == "c2" && text("d") == "d1"))
+            // and the list still patches afterwards
+            _       <- rows.set(Chunk(byId("a"), byId("d")))
+            _       <- assertEventually(Sync.defer(dom.document.getElementById("bound-list").textContent == "a1d1"))
+            _       <- byId("a").label.set("a2")
+            _       <- assertEventually(Sync.defer(text("a") == "a2"))
+            removed <- Sync.defer(text("b"))
+            _       <- fiber.interrupt
+            _       <- fiber.getResult
+        yield assert(removed == "<gone>")
+        end for
+    }
+
 end DomBackendReactiveRangesTest
