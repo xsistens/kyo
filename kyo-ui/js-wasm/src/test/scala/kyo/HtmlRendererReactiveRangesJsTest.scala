@@ -22,6 +22,7 @@ class HtmlRendererReactiveRangesJsTest extends kyo.test.Test[Any]:
           |function ba(root){__kyoLifecycle.push("animate:"+root.id);}
           |function kyoSpawnGhosts(){}
           |function sweepFocusAuto(){}
+          |function sweepScrollAuto(){}
           |function __kyoPortalTwin(){return null;}
           |function __kyoAdoptPortals(){}
           |function __kyoRetireOrphanTwins(){}
