@@ -373,6 +373,22 @@ private[kyo] object HtmlRenderer:
                             }.andThen(closeInitialHost(sb, host))
                         end for
                 }
+
+            case m: Mounted =>
+                // Static/SSG projection of a mount is its placeholder; live, ReactiveUI.subscribeMounted patches
+                // the region when the node's cell publishes (synchronously, before paint, for an adopted keyed instance).
+                val region      = ReactiveRegion.from(context, namespace)
+                val placeholder = m.placeholderUI.getOrElse(UI.empty(using m.frame))
+                val host        = ReactiveRegion.renderHost(region, parentContext, ReactiveRegion.tableContent(placeholder))
+                renderTo(
+                    sb,
+                    placeholder,
+                    path,
+                    context.transparent,
+                    ReactiveRegion.namespace(host),
+                    cssRules,
+                    ReactiveRegion.contentParent(host),
+                    ReactiveRegion.BoundaryMode.Emit
     end renderTo
 
     private def renderBoundElementBoundary(
