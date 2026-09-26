@@ -754,6 +754,36 @@ object Signal:
             if !last.getAndSet(Present(image)).exists(_ == image) then cb(image)
     end Sub
 
+    /** A one-way view of another signal, deliberately not a [[SignalRef]]. See [[SignalRef.readOnly]].
+      *
+      * Every observation path forwards to the source, so the view costs one allocation and keeps the source's delivery protocol instead
+      * of falling back to the repairing loop.
+      */
+    final private class ReadOnly[A](source: Signal[A])(using CanEqual[A, A]) extends Signal[A]:
+
+        def currentWith[B, S](f: A => B < S)(using Frame): B < (S & Sync) = source.currentWith(f)
+
+        def nextWith[B, S](f: A => B < S)(using Frame): B < (S & Async) = source.nextWith(f)
+
+        override def observe[S](baseline: Maybe[A], repairInterval: Duration)(f: A => Unit < (S & Async & Scope))(using
+            Frame
+        ): Unit < (S & Async) =
+            source.observe(baseline, repairInterval)(f)
+
+        override def observeProjected[B, S](proj: A => B, baseline: Maybe[B], repairInterval: Duration)(
+            g: B => Unit < (S & Async & Scope)
+        )(using CanEqual[B, B], Frame): Unit < (S & Async) =
+            source.observeProjected(proj, baseline, repairInterval)(g)
+
+        override private[kyo] def unsafeObserveProjected[B](proj: A => B, baseline: Maybe[B], cb: B => Unit)(
+            using
+            CanEqual[B, B],
+            AllowUnsafe,
+            Frame
+        ): Maybe[() => Unit] =
+            source.unsafeObserveProjected(proj, baseline, cb)
+    end ReadOnly
+
     /** A mutable reference implementation of Signal that allows modification of its value over time.
       *
       * This class provides methods to get, set, and modify the contained value atomically. All operations are thread-safe and will properly
@@ -871,6 +901,17 @@ object Signal:
           *   The transformed value wrapped in combined effects S & Sync
           */
         inline def use[B, S](inline f: A => B < S)(using Frame): B < (S & Sync) = Sync.Unsafe.defer(f(_unsafe.get()))
+
+        /** A one-way view of this reference: the same values through the same delivery protocol, but not a `SignalRef`.
+          *
+          * A consumer that decides from the runtime class whether a binding is two-way treats a `SignalRef` as "write back to me", and a
+          * type ascription cannot say otherwise, since `ref: Signal[A]` leaves the runtime class untouched. This is how a caller hands out
+          * the values of a reference while keeping the writes to itself.
+          *
+          * @return
+          *   A `Signal[A]` forwarding every read and observation to this reference
+          */
+        def readOnly: Signal[A] = ReadOnly(this)
 
         /** Sets the reference to a new value.
           *
