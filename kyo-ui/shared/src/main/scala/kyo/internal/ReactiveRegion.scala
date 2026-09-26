@@ -1,5 +1,6 @@
 package kyo.internal
 
+import kyo.*
 import kyo.UI
 import kyo.UI.Ast.*
 
@@ -43,10 +44,19 @@ private[kyo] object ReactiveRegion:
 
     def tableContent(ui: UI): TableContent =
         ui match
-            case _: Thead | _: Tbody | _: Tfoot         => TableContent.AuthoredSections
-            case _: Tr                                  => TableContent.Rows
-            case _: Reactive[?]                         => TableContent.Transparent
-            case _: Foreach[?, ?]                       => TableContent.Transparent
+            case _: Thead | _: Tbody | _: Tfoot => TableContent.AuthoredSections
+            case _: Tr                          => TableContent.Rows
+            case _: Reactive[?]                 => TableContent.Transparent
+            case _: Foreach[?, ?]               => TableContent.Transparent
+            // A mount's static shape is its placeholder: that is what the renderer emits,
+            // and what the parser will therefore see. Classified as `Other`, a `foreach` of
+            // mounted rows would have its anchors written bare into the table, where the
+            // parser is free to open an implied <tbody> for a preceding row and capture one
+            // anchor but not the other, stranding the pair in different elements.
+            case mounted: Mounted =>
+                mounted.placeholderUI match
+                    case Present(placeholder) => tableContent(placeholder)
+                    case Absent               => TableContent.Transparent
             case KeyedChild(_, child)                   => tableContent(child)
             case Fragment(children) if children.isEmpty => TableContent.Other
             case Fragment(children)                     => tableContent(children)
