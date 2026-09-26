@@ -172,6 +172,18 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
         loop(baseline)
     end observe
 
+    /** The current value, read on the caller's stack with no suspension.
+      *
+      * `Present` when the read is a field read behind pure projections: a [[SignalRef]], a constant, and `map`/`changesTo`/`readOnly`
+      * chains over those. `Absent` for any other signal ([[Signal.initRaw]], the async combinators), which the caller then reads
+      * through [[current]].
+      *
+      * For a synchronous pass that reads many signals, such as a UI tree walk and its HTML render. Through [[current]] every read is a
+      * `Sync` suspension, which costs the pass a continuation for each frame enclosing the read. The value is the one [[current]]
+      * would produce at the same point of the same pass.
+      */
+    private[kyo] def unsafeCurrent()(using AllowUnsafe): Maybe[A] = Absent
+
     /** Fiber-free observation for trivial, non-suspending sinks.
       *
       * `cb` is invoked on the writer's own stack, inside the `set` that changed the projected image, instead of waking a fiber through the
@@ -260,6 +272,7 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
         Signal._initRawF(
             [C, S] => g => self.currentWith(a => g(f(a))),
             [C, S] => g => self.nextWith(a => g(f(a))),
+            allow => self.unsafeCurrent()(using allow).map(f),
             // Observed through the source's projected loop, which projects only when the source moved and delivers only
             // when the image moved. The baseline is already in image space.
             [S] => (baseline, ri, g) => self.observeProjected[B, S](f, baseline, ri)(g),
@@ -296,6 +309,7 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
         Signal._initRawF(
             [C, S] => g => self.currentWith(_ => g(b)),
             [C, S] => g => self.nextWith(_ => g(b)),
+            _ => Present(b),
             [S] => (baseline, ri, g) => observeSource[S](baseline.exists(_ == b), ri, g(b)),
             [C, S] =>
                 (proj, baseline, ri, g, canEqualC) =>
@@ -552,6 +566,7 @@ object Signal:
             // Completing this immediately would let a constant win every `awaitAny` arm, firing
             // `combineLatest(ref, const).next` with no change to report and spinning an enclosing `observe`.
             [B, S] => _ => Async.never,
+            _ => Present(value),
             // A constant cannot change, so there is nothing for a reconciliation timer to reconcile: the repairing loop would
             // re-arm a `nextWith`/`sleep` race every interval, forever, for each observer. Deliver once and hold the scope
             // instead; interrupting the observation still closes it.
@@ -689,6 +704,8 @@ object Signal:
     private inline def _initRawF[A](
         inline _currentWith: [B, S] => (A => B < S) => B < (S & Sync),
         inline _nextWith: [B, S] => (A => B < S) => B < (S & Async),
+        // The suspension-free read (see `unsafeCurrent`), composed down the chain like the projections below.
+        inline _unsafeCurrent: AllowUnsafe => Maybe[A],
         inline _observe: [S] => (Maybe[A], Duration, A => Unit < (S & Async & Scope)) => Unit < (S & Async),
         inline _observeProjected: [C, S] => (
             A => C,
@@ -714,6 +731,8 @@ object Signal:
                 _currentWith(f)
             def nextWith[B, S](f: A => B < S)(using frame: Frame): B < (S & Async) =
                 _nextWith(f)
+            override private[kyo] def unsafeCurrent()(using allow: AllowUnsafe): Maybe[A] =
+                _unsafeCurrent(allow)
             override def observe[S](baseline: Maybe[A], repairInterval: Duration)(f: A => Unit < (S & Async & Scope))(using
                 frame: Frame
             ): Unit < (S & Async) =
@@ -765,6 +784,8 @@ object Signal:
 
         def nextWith[B, S](f: A => B < S)(using Frame): B < (S & Async) = source.nextWith(f)
 
+        override private[kyo] def unsafeCurrent()(using AllowUnsafe): Maybe[A] = source.unsafeCurrent()
+
         override def observe[S](baseline: Maybe[A], repairInterval: Duration)(f: A => Unit < (S & Async & Scope))(using
             Frame
         ): Unit < (S & Async) =
@@ -795,6 +816,8 @@ object Signal:
     final class SignalRef[A] private[Signal] (_unsafe: SignalRef.Unsafe[A])(using CanEqual[A, A]) extends Signal[A]:
 
         def currentWith[B, S](f: A => B < S)(using Frame) = Sync.Unsafe.defer(f(unsafe.get()))
+
+        override private[kyo] def unsafeCurrent()(using AllowUnsafe): Maybe[A] = Present(unsafe.get())
 
         def nextWith[B, S](f: A => B < S)(using Frame) = Sync.Unsafe.defer(unsafe.next().safe.use(f))
 
