@@ -4,10 +4,16 @@ import kyo.*
 
 // --- Event payloads ---
 
-/** Mouse event payload on the wire. Reconstructed into UI.MouseEvent on the server. */
+/** Mouse event payload on the wire. Reconstructed into UI.MouseEvent on the server.
+  *
+  * `position` is the pointer's viewport position, sent only by the events that have one: click, contextmenu and the two
+  * hover events. Focus, blur and submit are not mouse events in the browser and carry no coordinates, so they leave it
+  * `Absent` (the field is omitted on the wire) rather than sending an invented origin.
+  */
 final private[kyo] case class MouseEventData(
     modifiers: UI.Modifiers,
-    targetId: Maybe[String]
+    targetId: Maybe[String],
+    position: Maybe[UI.Point] = Absent
 ) derives CanEqual, Schema
 
 /** Keyboard event payload on the wire. Reconstructed into UI.KeyboardEvent on the server. */
@@ -24,8 +30,11 @@ private[kyo] enum UIEvent derives CanEqual, Schema:
     def path: Seq[String]
     case Click(path: Seq[String], mouse: MouseEventData)
     case ClickSelf(path: Seq[String], mouse: MouseEventData)
+    case ContextMenu(path: Seq[String], mouse: MouseEventData)
     case Input(path: Seq[String], value: String)
     case Change(path: Seq[String], value: String)
+    // UI.FilePayload derives Schema, so it rides the wire directly (as UI.Modifiers does above).
+    case FileSelect(path: Seq[String], files: Seq[UI.FilePayload])
     case ChangeChecked(path: Seq[String], checked: Boolean)
     case ChangeNumeric(path: Seq[String], value: Double)
     case Submit(path: Seq[String], mouse: MouseEventData)
@@ -34,6 +43,8 @@ private[kyo] enum UIEvent derives CanEqual, Schema:
     case Focus(path: Seq[String], mouse: MouseEventData)
     case Blur(path: Seq[String], mouse: MouseEventData)
     case Scroll(path: Seq[String], deltaX: Double, deltaY: Double, modifiers: UI.Modifiers, targetId: Maybe[String])
+    // Browser-owned scrollTop/scrollLeft after a scroll gesture; distinct from Scroll (a per-notch wheel delta).
+    case ScrollPosition(path: Seq[String], scrollTop: Double, scrollLeft: Double, targetId: Maybe[String])
     case Hover(path: Seq[String], mouse: MouseEventData)
     case Unhover(path: Seq[String], mouse: MouseEventData)
     case DragStart(path: Seq[String], event: DragProtocol.StartData)
