@@ -1,6 +1,15 @@
 package kyo.internal
 
 import kyo.*
+import kyo.UI.Ast.*
+
+/** One row of a structural list patch: its key, the UI it paints from, and whether that UI is new.
+  *
+  * `changed = false` is the region's statement that it reused the row wholesale (same key, same item value,
+  * live observers never torn down), so the painted DOM is already correct and carries any in-place channel
+  * patches that landed on it. A backend that can address rows individually may skip such a row entirely.
+  */
+final private[kyo] case class ListRow(key: String, ui: UI, changed: Boolean)
 
 /** Reactive change notification. Transport-agnostic; each backend renders in its own format.
   *
@@ -43,4 +52,32 @@ private[kyo] trait UIExchange:
     def attrPatcherNow: Maybe[(Seq[String], String, String) => Unit]      = Absent
     def boolAttrPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit] = Absent
     def classPatcherNow: Maybe[(Seq[String], String, Boolean) => Unit]    = Absent
+
+    /** Structural patch of a keyed list region: the whole row order, with the rows that actually need
+      * repainting flagged.
+      *
+      * A list emission is the one change where the payload says almost nothing about the work: removing one
+      * row of a thousand and reordering a thousand rows both arrive as "here is the new list". Rendering that
+      * to a document and diffing it costs the size of the list, not the size of the change, and the region
+      * already knows which rows it reused.
+      *
+      * The default reassembles the fragment and goes through [[onChange]], which paints exactly what a whole-list
+      * repaint paints: a transport that cannot address rows individually loses nothing by not overriding.
+      */
+    def onListPatch(
+        region: ReactiveRegion,
+        path: Seq[String],
+        contentContext: ReactiveRegion.RegionIdentity,
+        parentContext: ReactiveRegion.ParentContext,
+        previous: Maybe[UI],
+        rows: Seq[ListRow]
+    )(using Frame): Unit < Async =
+        onChange(
+            region,
+            path,
+            contentContext,
+            parentContext,
+            previous,
+            Fragment[UI](Chunk.from(rows.map(r => KeyedChild[UI](r.key, r.ui))))
+        )
 end UIExchange
