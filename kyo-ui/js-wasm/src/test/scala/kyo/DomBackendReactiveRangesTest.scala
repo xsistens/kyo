@@ -592,4 +592,185 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
         )
     end mixedTableTopology
 
+    "a write to a region inside a just-closed portal leaves the regions outside it live" in {
+        // A write aimed at the region inside a portal whose twin already left the document, in the same step that
+        // closed it and again afterwards, must not take the page's other regions down with the dead one.
+        for
+            open  <- Signal.initRef(true)
+            inner <- Signal.initRef(0)
+            other <- Signal.initRef(0)
+            ui = UI.div(
+                UI.when(open)(UI.div.id("stpanel").portal(true)(inner.map(i => UI.span(s"i:$i").id("stin"): UI))),
+                other.map(o => UI.span(s"o:$o").id("stother"): UI)
+            )
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && text("stin") == "i:0"))
+            _     <- Kyo.foreachDiscard(1 to 5) { n =>
+                for
+                    _ <- open.set(false)
+                    _ <- inner.getAndUpdate(_ + 1)
+                    _ <- assertEventually(Sync.defer(dom.document.getElementById("stpanel") == null))
+                    // The twin is gone by now: this write can only reach a dead region.
+                    _ <- inner.getAndUpdate(_ + 1)
+                    _ <- other.set(n)
+                    _ <- assertEventually(Sync.defer(text("stother") == s"o:$n"))
+                    _ <- open.set(true)
+                    _ <- assertEventually(Sync.defer(text("stin") == s"i:${2 * n}"))
+                yield ()
+            }
+            _ <- fiber.interrupt
+            _ <- fiber.getResult
+        yield succeed
+        end for
+    }
+
+    "a portal that opens with a focus-auto field keeps the focus through its move to body" in {
+        // Focus seeding runs while the panel is still inline; the move to <body> drops DOM focus, so the adoption has
+        // to carry it over.
+        for
+            open <- Signal.initRef(false)
+            ui    = UI.div(UI.when(open)(UI.div.id("fpanel").portal(true)(UI.input.id("fin").focusAuto(true))))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed))
+            _     <- open.set(true)
+            _     <- assertEventually(Sync.defer(
+                Maybe(dom.document.getElementById("fpanel")).exists(_.parentNode eq dom.document.body)
+            ))
+            focused <- Sync.defer(dom.document.activeElement.id)
+            _       <- fiber.interrupt
+            _       <- fiber.getResult
+        yield assert(focused == "fin", s"focused=$focused")
+        end for
+    }
+
+    "a portal inside a portal is re-homed too, and both leave with the outer one" in {
+        def state: (Boolean, Boolean, Int) =
+            def atBody(id: String) = Maybe(dom.document.getElementById(id)).exists(_.parentNode eq dom.document.body)
+            (atBody("npo"), atBody("npi"), dom.document.querySelectorAll("[data-kyo-portal-slot]").length)
+        for
+            open <- Signal.initRef(true)
+            ui = UI.div(UI.when(open)(
+                UI.div.id("npo").portal(true)(UI.span("outer"), UI.div.id("npi").portal(true)(UI.span("inner")))
+            ))
+            ready = new DomTestEnv.MountReady
+            fiber  <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _      <- assertEventually(Sync.defer(ready.installed && state == (true, true, 2)))
+            _      <- open.set(false)
+            _      <- assertEventually(Sync.defer(dom.document.getElementById("npo") == null))
+            closed <- Sync.defer((dom.document.getElementById("npi") == null, state._3))
+            _      <- fiber.interrupt
+            _      <- fiber.getResult
+        yield assert(closed == (true, 0), s"closed=$closed")
+        end for
+    }
+
+    "a closing portal with a leave transition leaves through a ghost" in {
+        for
+            open <- Signal.initRef(true)
+            ui    = UI.div(UI.when(open)(UI.div.id("gpanel").portal(true).leaveTransition("gp-leave")(UI.span("x"))))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(
+                ready.installed && Maybe(dom.document.getElementById("gpanel")).exists(_.parentNode eq dom.document.body)
+            ))
+            _     <- open.set(false)
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("gpanel") == null))
+            state <- Sync.defer(
+                (dom.document.querySelector("[data-kyo-ghost]") != null, dom.document.querySelectorAll("[data-kyo-portal-slot]").length)
+            )
+            _ <- fiber.interrupt
+            _ <- fiber.getResult
+        yield assert(state == (true, 0), s"state=$state")
+        end for
+    }
+
+    "an SVG portal leaves an SVG group as its slot" in {
+        // A span cannot sit inside an <svg>, so the placeholder of an SVG element is a <g> in the SVG namespace.
+        val ui    = UI.div(Svg.svg(Svg.g.id("sgp").portal(true)(Svg.rect)).id("shost"))
+        val ready = new DomTestEnv.MountReady
+        for
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(
+                ready.installed && Maybe(dom.document.getElementById("sgp")).exists(_.parentNode eq dom.document.body)
+            ))
+            slot <- Sync.defer {
+                val s = dom.document.querySelector("#shost [data-kyo-portal-slot]")
+                if s == null then ("", "") else (s.tagName, s.namespaceURI)
+            }
+            _ <- fiber.interrupt
+            _ <- fiber.getResult
+        yield assert(slot == ("g", "http://www.w3.org/2000/svg"), s"slot=$slot")
+        end for
+    }
+
+    "local portaled region closed and reopened still updates" in {
+        for
+            open  <- Signal.initRef(true)
+            inner <- Signal.initRef(0)
+            ui = UI.div(
+                UI.button("toggle").id("lrt").onClick(open.getAndUpdate(!_).unit),
+                UI.button("inner").id("lri").onClick(inner.getAndUpdate(_ + 1).unit),
+                open.map(o =>
+                    if o then UI.div.id("lrpanel").portal(true)(inner.map(i => UI.span(s"v:$i").id("lrtxt"): UI)): UI
+                    else UI.span("closed").id("lrclosed"): UI
+                )
+            )
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && text("lrtxt") == "v:0"))
+            _     <- click("lrt")
+            _     <- assertEventually(Sync.defer(text("lrclosed") == "closed"))
+            _     <- click("lrt")
+            _     <- assertEventually(Sync.defer(text("lrtxt") == "v:0"))
+            _     <- click("lri")
+            _     <- assertEventually(Sync.defer(text("lrtxt") == "v:1"))
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield succeed
+        end for
+    }
+
+    "a repaint that puts text in front of an open portal keeps the portaled element and its focus" in {
+        // The slot is matched by the portal's path, not by position. Empty text paints no node, so the repaint puts
+        // a node in front of the slot while every path stays the same; paired by position, that text node would
+        // meet the slot, the slot would go and the adopted twin would be replaced by a fresh copy.
+        for
+            tick <- Signal.initRef(0)
+            ui = UI.div(tick.map(t =>
+                val panel = UI.div.id("psib-panel").portal(true)(UI.input.id("psib-in"))
+                UI.div.id("psib-host")(if t == 0 then "" else "x", panel): UI
+            ))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(
+                ready.installed && Maybe(dom.document.getElementById("psib-panel")).exists(_.parentNode eq dom.document.body)
+            ))
+            _ <- Sync.defer {
+                dom.document.getElementById("psib-panel").asInstanceOf[scalajs.Dynamic].__probe = 1
+                dom.document.getElementById("psib-in").asInstanceOf[dom.html.Input].focus()
+            }
+            _     <- tick.set(1)
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("psib-host").textContent == "x"))
+            state <- Sync.defer {
+                val panel = dom.document.getElementById("psib-panel")
+                val path  = panel.getAttribute("data-kyo-path")
+                (
+                    !scalajs.isUndefined(panel.asInstanceOf[scalajs.Dynamic].__probe),
+                    dom.document.activeElement.id,
+                    dom.document.querySelectorAll("#psib-host > [data-kyo-portal-slot]").length,
+                    dom.document.querySelectorAll(s"""[data-kyo-path="$path"]""").length
+                )
+            }
+            _ <- fiber.interrupt
+            _ <- fiber.getResult
+        yield assert(state == (true, "psib-in", 1, 1), s"state=$state")
+        end for
+    }
+
+    private def text(id: String): String =
+        val el = dom.document.getElementById(id)
+        if el == null then "" else el.textContent
+
 end DomBackendReactiveRangesTest
