@@ -745,7 +745,7 @@ private[kyo] object DomBackend:
             _       <- DomStyleSheet.injectBase()
             root    <- ReactiveUI.normalize(ui, Seq.empty)
             html    <- HtmlRenderer.render(ui, Seq.empty)
-            _       <- Sync.defer(container.innerHTML = html)
+            _       <- Sync.defer { noteMarkers(html); container.innerHTML = html }
             regions <- DomReactiveRegions.init(container)
             _       <- applyJsProps(container)
             _       <- Sync.defer(seedEnter(container, Set.empty))
@@ -1023,6 +1023,9 @@ private[kyo] object DomBackend:
                         if ReactiveRegion.owns(region, contentContext) then ReactiveRegion.BoundaryMode.Suppress
                         else ReactiveRegion.BoundaryMode.Emit
                     HtmlRenderer.renderRegion(ui, path, contentContext, region, parentContext, boundaryMode).flatMap { html =>
+                        // Every painted byte passes here, so this is where the optional-feature flags learn about
+                        // an attribute that only a later re-render brings in (see noteMarkers).
+                        noteMarkers(html)
                         Sync.defer(open).flatMap { stillOpen =>
                             if !stillOpen then Kyo.unit
                             else
@@ -1080,6 +1083,7 @@ private[kyo] object DomBackend:
                     Kyo.foreach(Chunk.from(rows.filter(_.changed))) { row =>
                         HtmlRenderer.renderRow(row.ui, path :+ row.key, contentContext.child(row.key), host)
                     }.map(_.mkString).flatMap { changed =>
+                        noteMarkers(changed)
                         Sync.defer(open).flatMap { isOpen =>
                             // A closed backend paints nothing, so there is nothing to subscribe again.
                             if !isOpen then true
@@ -1257,6 +1261,7 @@ private[kyo] object DomBackend:
       * one that was already on screen: an echo re-render of an open overlay must not steal focus back from the user.
       */
     private def focusAutoPaths(root: dom.Element): Set[String] =
+        if !saw(Marker.FocusAuto) then return Set.empty
         val els         = root.querySelectorAll("[data-kyo-focus-auto]")
         val descendants = (0 until els.length).flatMap { i =>
             Maybe(els(i).asInstanceOf[dom.Element].getAttribute("data-kyo-path")).toList
@@ -1278,6 +1283,8 @@ private[kyo] object DomBackend:
         seedFocusAuto(Seq(newRoot), oldSet)
 
     private def seedFocusAuto(newRoots: Seq[dom.Element], oldSet: Set[String]): Unit =
+        // An app that never renders the attribute pays no selector sweep for it (see noteMarkers).
+        if !saw(Marker.FocusAuto) then return
         val candidates = newRoots.flatMap { newRoot =>
             val els = newRoot.querySelectorAll("[data-kyo-focus-auto]")
             (if newRoot.hasAttribute("data-kyo-focus-auto") then Seq(newRoot) else Seq.empty) ++
@@ -1383,6 +1390,7 @@ private[kyo] object DomBackend:
       * panel under the reader. A patch that leaves the flag where it was scrolls nothing.
       */
     private def sweepScrollAuto(scroll: Boolean = true): Unit =
+        if !saw(Marker.ScrollAuto) then return
         val els   = document.querySelectorAll("[data-kyo-scroll-auto]")
         val list  = (0 until els.length).map(els(_).asInstanceOf[dom.Element])
         val now   = list.flatMap(el => Maybe(el.getAttribute("data-kyo-path")).toList).toSet
@@ -1459,6 +1467,7 @@ private[kyo] object DomBackend:
         Sync.defer(applyJsPropsSync(root))
 
     private def applyJsPropsSync(root: dom.Element): Unit =
+        if !saw(Marker.JsProp) then return
         val propPrefix = "data-kyo-prop-"
         // CSS has no attribute-name-prefix selector, so `[data-kyo-prop-*]` is not a valid selector and
         // throws SyntaxError. Visit the root and every descendant, reading property names directly from
@@ -1495,6 +1504,7 @@ private[kyo] object DomBackend:
       * that was already replaced again by then throws and is ignored.
       */
     private def beginAnimationsSync(root: dom.Element): Unit =
+        if !saw(Marker.SvgAnim) then return
         val anims = root.querySelectorAll("animate,animateTransform,animateMotion")
         if anims.length > 0 then
             discard(dom.window.requestAnimationFrame { (_: Double) =>
@@ -1849,10 +1859,64 @@ private[kyo] object DomBackend:
         if p == null || p.isEmpty then Seq.empty
         else p.split("\\.").toSeq
 
+    // ---- feature-marker gates ----
+
+    /** The optional features a patch scans for, as bits of [[markersIn]]. */
+    private[kyo] object Marker:
+        inline val Enter      = 1
+        inline val Leave      = 2
+        inline val FocusAuto  = 4
+        inline val ScrollAuto = 8
+        inline val JsProp     = 16
+        inline val SvgAnim    = 32
+        inline val Portal     = 64
+        inline val All        = 127
+    end Marker
+
+    /** The markers `html` carries, among those not already in `known`. */
+    private[kyo] def markersIn(html: String, known: Int = 0): Int =
+        var found = 0
+        if (known & Marker.Enter) == 0 && html.contains("data-kyo-enter") then found |= Marker.Enter
+        if (known & Marker.Leave) == 0 && html.contains("data-kyo-leave") then found |= Marker.Leave
+        if (known & Marker.FocusAuto) == 0 && html.contains("data-kyo-focus-auto") then found |= Marker.FocusAuto
+        if (known & Marker.ScrollAuto) == 0 && html.contains("data-kyo-scroll-auto") then found |= Marker.ScrollAuto
+        if (known & Marker.JsProp) == 0 && html.contains("data-kyo-prop-") then found |= Marker.JsProp
+        // Covers <animate, <animateTransform and <animateMotion in one search.
+        if (known & Marker.SvgAnim) == 0 && html.contains("<animate") then found |= Marker.SvgAnim
+        if (known & Marker.Portal) == 0 && html.contains("data-kyo-portal") then found |= Marker.Portal
+        found
+    end markersIn
+
+    /** The markers any HTML that entered this document carried.
+      *
+      * Sticky, and a clear bit is a proof rather than a guess: markup becomes DOM only through the boot
+      * `innerHTML`, a region repaint and a list patch, each of which records here first, and no code path adds
+      * these attributes to a live element (`data-kyo-ghost` is the only imperative one, and nothing scans for it).
+      * So while a bit is clear, every scan it guards would walk a subtree to return nothing.
+      *
+      * An app with no enter or leave transition, focus-auto, scroll-auto, JS property or SMIL animation skips all of
+      * these scans, including the `querySelectorAll("*")` for JS properties, which visits every descendant of every
+      * new row.
+      */
+    private var seenMarkers = 0
+
+    private def saw(marker: Int): Boolean = (seenMarkers & marker) != 0
+
+    private[kyo] def markersSeen: Int = seenMarkers
+
+    /** Forgets every marker, so a test can watch a document see one for the first time. Sound only once no markup that
+      * carried a marker is left in the document, since a clear bit stops the scans for it.
+      */
+    private[kyo] def forgetMarkers(): Unit = seenMarkers = 0
+
+    private def noteMarkers(html: String): Unit =
+        if seenMarkers != Marker.All then seenMarkers |= markersIn(html, seenMarkers)
+
     // ---- enter/leave transition mirror (SPA transport) ----
 
     /** The set of `data-kyo-path` values of every `data-kyo-enter` element inside `root`, `root` itself included. */
     private def enterPaths(root: dom.Element): Set[String] =
+        if !saw(Marker.Enter) then return Set.empty
         val els = root.querySelectorAll("[data-kyo-enter]")
         val ds  = (0 until els.length).flatMap { i =>
             Maybe(els(i).asInstanceOf[dom.Element].getAttribute("data-kyo-path")).toList
@@ -1872,6 +1936,7 @@ private[kyo] object DomBackend:
         seedEnter(Seq(newRoot), oldSet)
 
     private def seedEnter(newRoots: Seq[dom.Element], oldSet: Set[String]): Unit =
+        if !saw(Marker.Enter) then return
         newRoots.foreach { newRoot =>
             val els  = newRoot.querySelectorAll("[data-kyo-enter]")
             val cand =
@@ -1893,6 +1958,7 @@ private[kyo] object DomBackend:
     end seedEnter
 
     private def leavePaths(roots: Seq[dom.Element]): Set[String] =
+        if !saw(Marker.Leave) then return Set.empty
         roots.iterator.flatMap { root =>
             val descendants = root.querySelectorAll("[data-kyo-leave]")
             val elements    =
@@ -1900,9 +1966,11 @@ private[kyo] object DomBackend:
                     (0 until descendants.length).iterator.map(descendants(_).asInstanceOf[dom.Element])
             elements.flatMap(element => Maybe(element.getAttribute("data-kyo-path")).toList)
         }.toSet
+    end leavePaths
 
     /** The set of paths of `data-kyo-leave` elements in an HTML fragment that survive an element replacement. */
     private def leaveSurvSet(html: String): Set[String] =
+        if !saw(Marker.Leave) then return Set.empty
         val tpl = document.createElement("template").asInstanceOf[scalajs.js.Dynamic]
         tpl.innerHTML = html
         val content = tpl.content.asInstanceOf[dom.DocumentFragment]
@@ -1935,6 +2003,7 @@ private[kyo] object DomBackend:
         prepareLeaveGhosts(Seq(root), surv)
 
     private def prepareLeaveGhosts(roots: Seq[dom.Element], surv: Set[String]): Seq[(dom.Element, dom.Element, String)] =
+        if !saw(Marker.Leave) then return Seq.empty
         val cand = roots.flatMap { root =>
             val els = root.querySelectorAll("[data-kyo-leave]")
             (if root.getAttribute("data-kyo-leave") != null then Seq(root) else Seq.empty) ++
@@ -2168,10 +2237,11 @@ private[kyo] object DomBackend:
       *
       * Must run after focus and enter seeding, both of which are subtree-scoped and need the element inline. Reparenting drops DOM
       * focus, so focus and caret held inside the moved subtree are captured and re-applied after the move; the enter transition is
-      * unaffected, since its from-state classes release on the next frame.
+      * unaffected, since its from-state classes release on the next frame. A document that never received portal markup skips the
+      * scan (see [[seenMarkers]]).
       */
     private def adoptPortals(root: dom.Element): Unit =
-        if root != null then
+        if root != null && saw(Marker.Portal) then
             val els  = root.querySelectorAll("[data-kyo-portal]")
             val cand =
                 (if root.hasAttribute("data-kyo-portal") then Seq(root) else Seq.empty) ++
@@ -2213,16 +2283,17 @@ private[kyo] object DomBackend:
       * were adopted. A patch that only removes still runs it: it inserts nothing to adopt, but may have removed a placeholder.
       */
     private def retireOrphanTwins(): Unit =
-        val twins = document.querySelectorAll("body > [data-kyo-portal][data-kyo-path]")
-        (0 until twins.length).foreach { i =>
-            val twin = twins(i).asInstanceOf[dom.Element]
-            val p    = twin.getAttribute("data-kyo-path")
-            if document.querySelector(s"""[data-kyo-portal-slot="$p"]""") == null then
-                val ghosts = prepareLeaveGhosts(twin, Set.empty)
-                discard(document.body.removeChild(twin))
-                spawnGhosts(ghosts)
-            end if
-        }
+        if saw(Marker.Portal) then
+            val twins = document.querySelectorAll("body > [data-kyo-portal][data-kyo-path]")
+            (0 until twins.length).foreach { i =>
+                val twin = twins(i).asInstanceOf[dom.Element]
+                val p    = twin.getAttribute("data-kyo-path")
+                if document.querySelector(s"""[data-kyo-portal-slot="$p"]""") == null then
+                    val ghosts = prepareLeaveGhosts(twin, Set.empty)
+                    discard(document.body.removeChild(twin))
+                    spawnGhosts(ghosts)
+                end if
+            }
     end retireOrphanTwins
 
     // ---- pointer/drag delegation (SPA transport) ----
