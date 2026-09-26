@@ -253,10 +253,31 @@ private[kyo] object HtmlRenderer:
                 val tag  = tagName(elem)
                 val void = elem.isInstanceOf[Void]
                 renderBoundElementBoundary(sb, elem, context, namespace, parentContext, boundaryMode) {
-                    w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}"""")
-                    renderCommonAttrs(sb, elem, cssRules)
-                    renderEventAttr(sb, elem)
-                    for _ <- renderElementAttrs(sb, elem)
+                    // Reactive classes currently true, folded into the class list so SSR is correct. Empty when
+                    // none are bound, so the `class` attribute is byte-identical there.
+                    def openTag(extraClasses: Seq[String]): Unit =
+                        w(sb, s"""<$tag data-kyo-path="${pathAttr(path)}"""")
+                        renderCommonAttrs(
+                            sb,
+                            if extraClasses.isEmpty then elem.attrs
+                            else elem.attrs.copy(cssClasses = elem.attrs.cssClasses ++ extraClasses),
+                            elem.isInstanceOf[Svg.SvgElement],
+                            cssRules
+                        )
+                        renderEventAttr(sb, elem)
+                    end openTag
+                    // Reading a reactive class is an effect, so only an element that binds one suspends before its
+                    // tag is written. Every other element keeps the open tag on the eager path, which is what makes
+                    // an attribute the renderer rejects (an oversized drag config, say) fail where the render is
+                    // built rather than where it is later run.
+                    val opened: Unit < Sync =
+                        if elem.attrs.reactiveClasses.isEmpty then openTag(Seq.empty)
+                        else reactiveTrueClasses(elem.attrs).map(openTag)
+                    for
+                        _ <- opened
+                        _ <- renderElementAttrs(sb, elem)
+                        _ <- renderReactiveAttrs(sb, elem.attrs)
+                        _ <- renderReactiveBoolAttrs(sb, elem.attrs)
                     yield
                         if void then
                             w(sb, " />")
@@ -605,14 +626,20 @@ private[kyo] object HtmlRenderer:
         }
 
     private def renderCommonAttrs(sb: StringBuilder, elem: Element, cssRules: Maybe[CssCollector] = Absent)(using Frame): Unit =
-        val attrs = elem.attrs
+        renderCommonAttrs(sb, elem.attrs, elem.isInstanceOf[Svg.SvgElement], cssRules)
+
+    /** The `attrs` overload lets a caller render an element with a MODIFIED attribute set (the reactive
+      * classes currently true are folded into the class list) without rebuilding the element itself.
+      */
+    private def renderCommonAttrs(sb: StringBuilder, attrs: Attrs, isSvg: Boolean, cssRules: Maybe[CssCollector])(using Frame): Unit =
         attrs.identifier.foreach(id => w(sb, s""" id="${esc(id)}""""))
         val pseudoClass = registerPseudoClass(cssRules, attrs.uiStyle)
         val classes     = pseudoClass match
             case Present(cls) => attrs.cssClasses :+ cls
             case Absent       => attrs.cssClasses
         if classes.nonEmpty then w(sb, s""" class="${esc(classes.mkString(" "))}"""")
-        attrs.hidden.foreach(v => if v then w(sb, " hidden"))
+        // Skipped when a `.hidden(Signal)` channel owns the attribute; see renderElementAttrs on precedence.
+        if !attrs.reactiveBoolAttrs.contains("hidden") then attrs.hidden.foreach(v => if v then w(sb, " hidden"))
         attrs.tabIndex.foreach(n => w(sb, s""" tabindex="$n""""))
         attrs.focusTrap.foreach(v => if v then w(sb, """ data-kyo-focus-trap="1""""))
         attrs.focusGroup.foreach(id => w(sb, s""" data-kyo-focus-group="${esc(id)}""""))
@@ -622,7 +649,7 @@ private[kyo] object HtmlRenderer:
             w(sb, s""" data-kyo-drag-source="${esc(encodedDragSource(source))}"""")
             w(sb, s""" data-kyo-drag-source-key="${esc(source.key)}"""")
             val nativeActivation = source.activation == Drag.Activation.Native || source.activation == Drag.Activation.Both
-            if nativeActivation && !elem.isInstanceOf[Svg.SvgElement] then w(sb, """ draggable="true"""")
+            if nativeActivation && !isSvg then w(sb, """ draggable="true"""")
         }
         attrs.dropTarget.foreach { target =>
             w(sb, s""" data-kyo-drop-target="${esc(encodedDropTarget(target))}"""")
@@ -677,7 +704,42 @@ private[kyo] object HtmlRenderer:
         ci.inputMask.foreach(m => w(sb, s""" data-kyo-mask="${esc(m)}""""))
     end renderInputConstraints
 
+    /** Emits each reactive attribute's current value as an ordinary `name="value"` so SSR carries it; the client
+      * then patches it in place (HtmlOp.SetAttrByPath). Sorted for deterministic output.
+      */
+    private def renderReactiveAttrs(sb: StringBuilder, attrs: Attrs)(using Frame): Unit < Sync =
+        Kyo.foreachDiscard(attrs.reactiveAttrs.toSeq.sortBy(_._1)) { case (name, sig) =>
+            sig.current.map(v => w(sb, s""" $name="${esc(v)}""""))
+        }
+
+    /** Emits each reactive boolean attribute as a bare present attribute while its signal is true (mirrors
+      * `boolAttr`); the client toggles it in place (HtmlOp.SetBoolAttrByPath). Sorted for deterministic output.
+      */
+    private def renderReactiveBoolAttrs(sb: StringBuilder, attrs: Attrs)(using Frame): Unit < Sync =
+        Kyo.foreachDiscard(attrs.reactiveBoolAttrs.toSeq.sortBy(_._1)) { case (name, sig) =>
+            sig.current.map(v => if v then w(sb, s" $name"))
+        }
+
+    /** The reactive classes whose signal is currently true, for folding into the SSR class list; the client
+      * toggles them in place afterwards (HtmlOp.SetClassByPath). Empty (and cheap) when none are bound.
+      */
+    private def reactiveTrueClasses(attrs: Attrs)(using Frame): Seq[String] < Sync =
+        if attrs.reactiveClasses.isEmpty then Seq.empty
+        else
+            Kyo.foreach(attrs.reactiveClasses.toSeq.sortBy(_._1)) { case (name, sig) =>
+                sig.current.map(v => if v then name else "")
+            }.map(_.filter(_.nonEmpty))
+
     private def renderElementAttrs(sb: StringBuilder, elem: Element)(using Frame): Unit < Sync =
+        // WHERE A CHANNEL EXISTS, THE CHANNEL IS THE VALUE. Shadows the file-level `boolAttr` for the whole
+        // method, so a static value is dropped for any name a `Signal`-typed setter also bound. This is not a
+        // preference: it is what the client already does at runtime: the channel patches its attribute on
+        // every emission and REMOVES it on false, whatever the initial HTML said. Writing both here would
+        // paint an attribute the first patch then contradicts, and would leave `.disabled(true).disabled(sig)`
+        // meaning something different from `.disabled(sig).disabled(true)`.
+        def boolAttr(sb: StringBuilder, name: String, value: Maybe[Boolean]): Unit =
+            if !elem.attrs.reactiveBoolAttrs.contains(name) then HtmlRenderer.boolAttr(sb, name, value)
+        def owned(name: String): Boolean = elem.attrs.reactiveAttrs.contains(name)
         elem match
             case ci: ConstrainedInput => renderInputConstraints(sb, ci)
             case _                    => ()
@@ -813,14 +875,7 @@ private[kyo] object HtmlRenderer:
                 opt.value.foreach(v => w(sb, s""" value="${esc(v)}""""))
                 boolAttr(sb, "selected", opt.selected)
             case a: Anchor =>
-                a.href.foreach { href =>
-                    val value = href match
-                        case Href.Absolute(url)       => url.full
-                        case Href.Path(p)             => p
-                        case Href.Fragment(id)        => s"#$id"
-                        case Href.External(scheme, v) => s"$scheme:$v"
-                    w(sb, s""" href="${esc(value)}"""")
-                }
+                if !owned("href") then a.href.foreach(href => w(sb, s""" href="${esc(Href.attrValue(href))}""""))
                 a.download.foreach(name => w(sb, s""" download="${esc(name)}""""))
                 a.target.foreach { t =>
                     val tv = t match
@@ -831,16 +886,10 @@ private[kyo] object HtmlRenderer:
                     w(sb, s""" target="$tv"""")
                 }
             case img: Img =>
-                img.src.foreach { src =>
-                    val value = src match
-                        case ImgSrc.Absolute(url)       => url.full
-                        case ImgSrc.Path(p)             => p
-                        case ImgSrc.Data(mime, payload) => s"data:$mime;base64,$payload"
-                    w(sb, s""" src="${esc(value)}"""")
-                }
+                if !owned("src") then img.src.foreach(src => w(sb, s""" src="${esc(ImgSrc.attrValue(src))}""""))
                 img.alt.foreach(a => w(sb, s""" alt="${esc(a)}""""))
             case f: Iframe =>
-                f.src.foreach(s => w(sb, s""" src="${esc(s)}""""))
+                if !owned("src") then f.src.foreach(s => w(sb, s""" src="${esc(s)}""""))
                 f.frameTitle.foreach(t => w(sb, s""" title="${esc(t)}""""))
             case td: Td =>
                 td.colspan.foreach(n => w(sb, s""" colspan="$n""""))
@@ -1177,10 +1226,19 @@ private[kyo] object HtmlRenderer:
           |function __kyoMorphAttrs(from,to){
           |  var tag=from.tagName;
           |  var activeInput=(from===document.activeElement)&&(tag==="INPUT"||tag==="TEXTAREA");
+          |  // An attribute the imperative id-addressed channel owns is never reconciled: rendered HTML never carries
+          |  // the client-set value, so reconciling would clobber it. Twin of ownedAttrs in DomBackend.
+          |  var own=from.__kyoOwn||{};
+          |  // A field renders its value PROPERTY, and the property stops tracking the attribute the first time the
+          |  // user types, so writing the attribute alone is invisible on any field that has been typed into. The
+          |  // attribute may even be unchanged (both empty) when a ref write clears it, so the property is written on
+          |  // every pass. The focused field is the exception below: its own echo must not move the caret.
           |  for(var i=0;i<to.attributes.length;i++){var a=to.attributes[i];
-          |    if(from.getAttribute(a.name)!==a.value)from.setAttribute(a.name,a.value);}
+          |    if(!own[a.name]){
+          |      if(from.getAttribute(a.name)!==a.value)from.setAttribute(a.name,a.value);
+          |      if(!activeInput)__kyoSyncField(from,a.name,a.value);}}
           |  for(var j=from.attributes.length-1;j>=0;j--){var n=from.attributes[j].name;
-          |    if(!to.hasAttribute(n))from.removeAttribute(n);}
+          |    if(!own[n]&&!to.hasAttribute(n))from.removeAttribute(n);}
           |  // Active-input preservation: two-way binding echoes each keystroke back as a re-render. Never overwrite
           |  // the focused field's live value (its caret) with its own echo; assign only a genuine external change.
           |  if(activeInput){var v=tag==="TEXTAREA"?to.textContent:(to.getAttribute("value")||"");
@@ -1423,6 +1481,17 @@ private[kyo] object HtmlRenderer:
            |function kyoSetCaret(t,s,e){if(typeof t.setSelectionRange!=="function")return;
            |  try{t.setSelectionRange(s,e);}catch(er){if(er.name!=="InvalidStateError")throw er;}}
            |$reactiveRangesJs
+           |// A field renders its .value PROPERTY, and the property stops tracking the attribute the first time the
+           |// user types. Patching the attribute alone is therefore invisible on any touched field, so mirror it onto
+           |// the property. Assigning only on a real difference leaves a focused field's caret alone (the echo of the
+           |// user's own keystroke compares equal). Twin of DomBackend.syncFieldProperty; keep in lockstep.
+           |function __kyoSyncField(el,name,value){
+           |  if(name==="value"&&(el.tagName==="INPUT"||el.tagName==="TEXTAREA")&&el.value!==value)el.value=value;
+           |}
+           |// Mark an attr name as owned by the imperative id-addressed channel: names live in a __kyoOwn expando dict
+           |// ON the element (reclaimed with the node), which __kyoMorphAttrs reads to shield each owned attr from
+           |// reconciliation. Mirrors markOwned in DomBackend.
+           |function __kyoMark(el,n){(el.__kyoOwn||(el.__kyoOwn={}))[n]=true;}
            |${DragClientJs.script(basePath)}
            |var ws=null,__wsRetries=0,__wsGone=false,__live=false;
            |// Read-only test hook on the current socket; it follows each reconnect.
@@ -1561,12 +1630,46 @@ private[kyo] object HtmlRenderer:
            |      var rmir=rmiel.getBoundingClientRect();
            |      post({MeasureById:{path:[],id:op.RequestMeasureById.id,rectX:rmir.left,rectY:rmir.top,rectW:rmir.width,rectH:rmir.height,viewportW:window.innerWidth,viewportH:window.innerHeight}});
            |    }
+           |  }else if(op.SetClassById){
+           |    var scel=document.getElementById(op.SetClassById.id);if(scel){__kyoMark(scel,"class");scel.classList.toggle(op.SetClassById.className,op.SetClassById.on);}
+           |  }else if(op.SetStyleById){
+           |    var ssel=document.getElementById(op.SetStyleById.id);
+           |    if(ssel){__kyoMark(ssel,"style");var ssd=op.SetStyleById.css.split(";");for(var ssi=0;ssi<ssd.length;ssi++){var ssc=ssd[ssi].trim();if(!ssc)continue;var sso=ssc.indexOf(":");if(sso>0)ssel.style.setProperty(ssc.substring(0,sso).trim(),ssc.substring(sso+1).trim());}}
+           |  }else if(op.SetAttrById){
+           |    // set an attribute in place (element stays put, so a CSS `>` anchored on it keeps matching).
+           |    var sael=document.getElementById(op.SetAttrById.id);if(sael){__kyoMark(sael,op.SetAttrById.name);sael.setAttribute(op.SetAttrById.name,op.SetAttrById.value);__kyoSyncField(sael,op.SetAttrById.name,op.SetAttrById.value);}
+           |  }else if(op.SetAttrByPath){
+           |    // Regions carry no element of their own (comment markers), so the path resolves uniquely to the content element.
+           |    var sapp=op.SetAttrByPath.path.join(".");var sapel=document.querySelector(__kyoPathSel(sapp));if(sapel){__kyoMark(sapel,op.SetAttrByPath.name);sapel.setAttribute(op.SetAttrByPath.name,op.SetAttrByPath.value);__kyoSyncField(sapel,op.SetAttrByPath.name,op.SetAttrByPath.value);}
+           |  }else if(op.SetBoolAttrByPath){
+           |    var sbpp=op.SetBoolAttrByPath.path.join(".");var sbpel=document.querySelector(__kyoPathSel(sbpp));if(sbpel){__kyoMark(sbpel,op.SetBoolAttrByPath.name);if(op.SetBoolAttrByPath.value){sbpel.setAttribute(op.SetBoolAttrByPath.name,'');}else{sbpel.removeAttribute(op.SetBoolAttrByPath.name);}}
+           |  }else if(op.SetClassByPath){
+           |    // Path-addressed reactive class: toggle in place so CSS transitions fire; own "class" so a morph won't reconcile it.
+           |    var scpp=op.SetClassByPath.path.join(".");var scpel=document.querySelector(__kyoPathSel(scpp));if(scpel){__kyoMark(scpel,'class');scpel.classList.toggle(op.SetClassByPath.name,op.SetClassByPath.on);}
+           |  }else if(op.ObserveViewportById){
+           |    var vid=op.ObserveViewportById.id;
+           |    window.__kyoVpObs=window.__kyoVpObs||{};
+           |    if(!window.__kyoVpObs[vid]){
+           |      var vh=function(){var ve=document.getElementById(vid);if(ve){var vr=ve.getBoundingClientRect();post({MeasureById:{path:[],id:vid,rectX:vr.left,rectY:vr.top,rectW:vr.width,rectH:vr.height,viewportW:window.innerWidth,viewportH:window.innerHeight}});}};
+           |      window.__kyoVpObs[vid]=vh;
+           |      window.addEventListener("scroll",vh,true);
+           |      window.addEventListener("resize",vh);
+           |      vh();
+           |    }
+           |  }else if(op.UnobserveViewportById){
+           |    var uid=op.UnobserveViewportById.id;
+           |    if(window.__kyoVpObs&&window.__kyoVpObs[uid]){
+           |      var uh=window.__kyoVpObs[uid];
+           |      window.removeEventListener("scroll",uh,true);
+           |      window.removeEventListener("resize",uh);
+           |      delete window.__kyoVpObs[uid];
+           |    }
            |  }
            |};
            |// Shared verb whitelist for Command/CommandById; unknown verbs ignored (forward-compat).
            |function kyoApplyVerb(el,verb){
            |  if(!el)return;
-           |  if(verb==="focus"){if(typeof el.focus==="function")el.focus();}
+           |  if(verb==="focus"){var fs='input,textarea,select,button,a[href],[tabindex],[contenteditable]';var ft=(el.matches&&el.matches(fs))?el:(el.querySelector?el.querySelector(fs):null);if(ft&&typeof ft.focus==="function")ft.focus();}
            |  else if(verb==="scrollIntoView"){if(typeof el.scrollIntoView==="function")el.scrollIntoView({block:"nearest"});}
            |}
            |// A reactive range's id encodes its own path (ReactiveRegion.htmlId: 8 hex digits of segment length,
