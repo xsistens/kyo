@@ -565,4 +565,35 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
         )
     end mixedTableTopology
 
+    "local portaled region closed and reopened still updates" in {
+        for
+            open  <- Signal.initRef(true)
+            inner <- Signal.initRef(0)
+            ui = UI.div(
+                UI.button("toggle").id("lrt").onClick(open.getAndUpdate(!_).unit),
+                UI.button("inner").id("lri").onClick(inner.getAndUpdate(_ + 1).unit),
+                open.map(o =>
+                    if o then UI.div.id("lrpanel").portal(true)(inner.map(i => UI.span(s"v:$i").id("lrtxt"): UI)): UI
+                    else UI.span("closed").id("lrclosed"): UI
+                )
+            )
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && text("lrtxt") == "v:0"))
+            _     <- click("lrt")
+            _     <- assertEventually(Sync.defer(text("lrclosed") == "closed"))
+            _     <- click("lrt")
+            _     <- assertEventually(Sync.defer(text("lrtxt") == "v:0"))
+            _     <- click("lri")
+            _     <- assertEventually(Sync.defer(text("lrtxt") == "v:1"))
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield succeed
+        end for
+    }
+
+    private def text(id: String): String =
+        val el = dom.document.getElementById(id)
+        if el == null then "" else el.textContent
+
 end DomBackendReactiveRangesTest
