@@ -1488,18 +1488,45 @@ private[kyo] object ReactiveUI:
                 if skip then (): Unit < Async else f(v)
             }
         end observeSkippingRendered
+
+        // A channel's handler is one attribute write, so where the exchange offers a synchronous sink the
+        // channel binds through `Signal.onChange`: for a signal rooted in a SignalRef the patch runs inside the
+        // writer's own `set`, and the comparison with the previous value happens before any scheduler hop.
+        // An exchange without a sink (the server transport) runs the channel on its own fiber.
+        def bindOrFork[A](
+            name: String,
+            sig: Signal[A],
+            rendered: Maybe[A],
+            patcher: Maybe[(Seq[String], String, A) => Unit],
+            slow: A => Unit < Async
+        )(using CanEqual[A, A], Frame): Unit < (Async & Scope) =
+            patcher match
+                case Present(patch) => sig.onChange(rendered)(v => Sync.defer(patch(path, name, v)))
+                case Absent         => Fiber.init(observeSkippingRendered(sig, rendered)(slow)).unit
         Kyo.foreachDiscard(attrs.toSeq) { case (name, sig) =>
-            Fiber.init(observeSkippingRendered(sig, Maybe.fromOption(renderedAttrs.get(name)))(v =>
-                exchange.onAttrPatch(path, name, v)
-            )).unit
+            bindOrFork(
+                name,
+                sig,
+                Maybe.fromOption(renderedAttrs.get(name)),
+                exchange.attrPatcherNow,
+                v => exchange.onAttrPatch(path, name, v)
+            )
         }.andThen(Kyo.foreachDiscard(boolAttrs.toSeq) { case (name, sig) =>
-            Fiber.init(observeSkippingRendered(sig, Maybe.fromOption(renderedBools.get(name)))(v =>
-                exchange.onBoolAttrPatch(path, name, v)
-            )).unit
+            bindOrFork(
+                name,
+                sig,
+                Maybe.fromOption(renderedBools.get(name)),
+                exchange.boolAttrPatcherNow,
+                v => exchange.onBoolAttrPatch(path, name, v)
+            )
         }).andThen(Kyo.foreachDiscard(classes.toSeq) { case (name, sig) =>
-            Fiber.init(observeSkippingRendered(sig, Maybe.fromOption(renderedClasses.get(name)))(v =>
-                exchange.onClassPatch(path, name, v)
-            )).unit
+            bindOrFork(
+                name,
+                sig,
+                Maybe.fromOption(renderedClasses.get(name)),
+                exchange.classPatcherNow,
+                v => exchange.onClassPatch(path, name, v)
+            )
         })
     end forkChannelObservers
 
