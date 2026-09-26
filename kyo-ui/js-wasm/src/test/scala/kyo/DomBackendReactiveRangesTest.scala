@@ -320,6 +320,42 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
             assert(live)
     }
 
+    // Regression: the focused-field branch treated every focused input as two-way bound and wrote the incoming
+    // `value` attribute into it; an unbound field renders none, so a repaint around it while the reader typed
+    // emptied it.
+    "a repaint around a focused unbound field keeps what the reader typed" in {
+        for
+            outer <- Signal.initRef(0)
+            ui = UI.div(outer.map(o =>
+                UI.div(UI.input.id("focus-free"), UI.textarea.id("focus-free-area"), UI.span(s"o=$o").id("focus-free-status"))
+            ))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("focus-free") != null))
+            field <- element("focus-free")
+            area  <- element("focus-free-area")
+            _     <- Sync.defer {
+                area.value = "area kept"
+                discard(field.focus())
+                field.value = "kept"
+            }
+            _     <- outer.set(1)
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("focus-free-status").textContent == "o=1"))
+            _     <- Sync.defer(discard(area.focus()))
+            _     <- outer.set(2)
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("focus-free-status").textContent == "o=2"))
+            same  <- element("focus-free").map(_ eq field)
+            shown <- Sync.defer((field.value.asInstanceOf[String], area.value.asInstanceOf[String]))
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield
+            assert(same)
+            assert(shown == ("kept", "area kept"), s"the focused unbound fields show $shown after a repaint around them")
+    }
+
+    /** Edge whitespace, a line break and every character HTML escapes. */
+    private val TextareaTricky = "  a\n<b> & \"c\" 'd'  "
+
     "local own-bound text email and number inputs morph in place while focused" in {
         for
             text   <- Signal.initRef("one")
@@ -564,6 +600,148 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
         yield assert(shown == "b", s"the select shows '$shown' once its options arrived")
     }
 
+    // Regression: after the first click a checkbox shows its `checked` PROPERTY, which no longer follows the
+    // attribute, and the morph wrote only the attribute. A list's "Clear" emptied the selection, the `checked`
+    // attributes went, and every row the reader had ticked stayed ticked.
+    "a render that unchecks a checkbox the reader ticked clears the tick" in {
+        for
+            on <- Signal.initRef(false)
+            ui    = UI.div(on.map(v => UI.checkbox.id("tick").checked(v).onChange(on.set(_))))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("tick") != null))
+            box   <- element("tick")
+            _     <- Sync.defer(discard(box.click()))
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("tick").hasAttribute("checked")))
+            _     <- on.set(false)
+            _     <- assertEventually(Sync.defer(!dom.document.getElementById("tick").hasAttribute("checked")))
+            shown <- element("tick").map(_.checked.asInstanceOf[Boolean])
+            same  <- element("tick").map(_ eq box)
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield
+            assert(same)
+            assert(!shown, "the checkbox still shows the tick the app took back")
+    }
+
+    "a ref write unchecks a two-way bound checkbox the reader ticked" in {
+        for
+            on <- Signal.initRef(false)
+            ui    = UI.div(UI.checkbox.id("bound-tick").checked(on), on.map(v => UI.span(s"on=$v").id("bound-status")))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("bound-tick") != null))
+            _     <- element("bound-tick").map(box => discard(box.click()))
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("bound-status").textContent == "on=true"))
+            _     <- on.set(false)
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("bound-status").textContent == "on=false"))
+            _     <- assertEventually(Sync.defer(!dom.document.getElementById("bound-tick").hasAttribute("checked")))
+            shown <- element("bound-tick").map(_.checked.asInstanceOf[Boolean])
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield assert(!shown, "the two-way bound checkbox still shows the tick its ref took back")
+    }
+
+    "a render that moves a radio group back to the first choice checks it again" in {
+        for
+            choice <- Signal.initRef("a")
+            ui = UI.div(choice.map(c =>
+                UI.div(
+                    UI.radio.id("radio-a").name("g").checked(c == "a").onChange(on => if on then choice.set("a") else Kyo.unit),
+                    UI.radio.id("radio-b").name("g").checked(c == "b").onChange(on => if on then choice.set("b") else Kyo.unit)
+                )
+            ))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("radio-b") != null))
+            // The reader goes to b, back to a and to b again, so both radios have been toggled by hand.
+            _ <- Kyo.foreachDiscard(Seq("b", "a", "b")) { c =>
+                element(s"radio-$c").map(radio => discard(radio.click()))
+                    .andThen(assertEventually(Sync.defer(dom.document.getElementById(s"radio-$c").hasAttribute("checked"))))
+            }
+            _ <- choice.set("a")
+            _ <- assertEventually(Sync.defer(dom.document.getElementById("radio-a").hasAttribute("checked")))
+            a <- element("radio-a").map(_.checked.asInstanceOf[Boolean])
+            b <- element("radio-b").map(_.checked.asInstanceOf[Boolean])
+            _ <- fiber.interrupt
+            _ <- fiber.getResult
+        yield assert((a, b) == (true, false), s"the group shows a=$a b=$b after the app chose a")
+    }
+
+    // Guard for the fix above: an unbound checkbox renders no `checked` on every pass, so a repaint of the region
+    // around it must leave the reader's tick alone, as it leaves an unbound field's text.
+    "a repaint around an unbound checkbox keeps the reader's tick" in {
+        for
+            outer <- Signal.initRef(0)
+            ui    = UI.div(outer.map(o => UI.div(UI.checkbox.id("free-tick"), UI.span(s"o=$o").id("free-tick-status"))))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("free-tick") != null))
+            box   <- element("free-tick")
+            _     <- Sync.defer(discard(box.click()))
+            _     <- outer.set(1)
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("free-tick-status").textContent == "o=1"))
+            same  <- element("free-tick").map(_ eq box)
+            shown <- element("free-tick").map(_.checked.asInstanceOf[Boolean])
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield
+            assert(same)
+            assert(shown, "the unbound checkbox lost the reader's tick in a repaint around it")
+    }
+
+    "a render that selects an option the reader moved away from selects it again" in {
+        for
+            chosen <- Signal.initRef("a")
+            ui = UI.div(chosen.map(c =>
+                UI.select(
+                    UI.option("A").value("a").selected(c == "a"),
+                    UI.option("B").value("b").selected(c == "b"),
+                    UI.option("C").value("c").selected(c == "c")
+                ).id("opts")
+            ))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("opts") != null))
+            // The reader visits B and comes back to A; the app follows neither, its choice is still a.
+            _     <- choose("opts", "b")
+            _     <- choose("opts", "a")
+            _     <- chosen.set("b")
+            _     <- assertEventually(Sync.defer(dom.document.querySelector("#opts > option[value='b']").hasAttribute("selected")))
+            shown <- element("opts").map(_.value.asInstanceOf[String])
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield assert(shown == "b", s"the select shows '$shown' after the app selected b")
+    }
+
+    // Regression: `indeterminate` exists only as a property, set through a JS property that nothing ever set back,
+    // so a checkbox that left the mixed state kept its dash.
+    "a checkbox that leaves the mixed state loses its dash" in {
+        for
+            mixed <- Signal.initRef(true)
+            // One region paints the box and its status, so a status that moved says the box was painted too.
+            ui = UI.div(mixed.map(m =>
+                UI.div(UI.checkbox.id("mixed").indeterminate(m), UI.span(s"m=$m").id("mixed-status"))
+            ))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("mixed") != null))
+            first <- element("mixed").map(_.indeterminate.asInstanceOf[Boolean])
+            _     <- mixed.set(false)
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("mixed-status").textContent == "m=false"))
+            _     <- mixed.set(true)
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("mixed-status").textContent == "m=true"))
+            again <- element("mixed").map(_.indeterminate.asInstanceOf[Boolean])
+            _     <- mixed.set(false)
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("mixed-status").textContent == "m=false"))
+            shown <- element("mixed").map(_.indeterminate.asInstanceOf[Boolean])
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield
+            assert(first && again)
+            assert(!shown, "the checkbox still shows the mixed dash after leaving the mixed state")
+    }
+
     "range replacement applies JS properties on a top-level element" in {
         for
             state <- Signal.initRef(false)
@@ -626,6 +804,33 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
         yield
             assert(authoredState == ("applied", null, "local-semantic-host", false))
             assert(leaveGhost)
+    }
+
+    "a region repaint inserts in front of a last row whose first root changed its tag" in {
+        // A row whose first root changes its tag is replaced, not patched; matched from the tail, the replacement has
+        // to become the boundary the rest of the pass inserts in front of. Rows of two roots are not addressable by
+        // key, so the list repaints whole and the morph's own two-ended pass reconciles it.
+        for
+            rows <- Signal.initRef(Chunk(("a", false), ("b", false)))
+            ui = UI.div(
+                UI.div(rows.foreachKeyed(_._1)((k, asSpan) =>
+                    UI.fragment(
+                        if asSpan then UI.span(k).id(s"mt-${k}0") else UI.p(k).id(s"mt-${k}0"),
+                        UI.div(s"$k!").id(s"mt-${k}1")
+                    )
+                )).id("mthost"),
+                UI.span("after").id("mtafter")
+            )
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("mthost").textContent == "aa!bb!"))
+            _     <- rows.set(Chunk(("a", false), ("c", false), ("b", true)))
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("mthost").textContent == "aa!cc!bb!"))
+            state <- Sync.defer((dom.document.getElementById("mt-b0").tagName, dom.document.getElementById("mtafter").textContent))
+            _     <- fiber.interrupt
+            _     <- fiber.getResult
+        yield assert(state == ("SPAN", "after"), s"state=$state")
+        end for
     }
 
     private def topology: (rows: Int, groups: Int, spans: Int, anchorParent: String, staticCaptured: Boolean) =

@@ -1,5 +1,6 @@
 package kyo.internal
 
+import kyo.*
 import kyo.UI
 import kyo.UI.Ast.*
 
@@ -120,6 +121,36 @@ private[kyo] object ReactiveRegion:
         region match
             case HtmlRange(id)    => id == htmlId(identity)
             case SvgElement(path) => path == identity.path
+
+    /** The flag section a mount's opening marker carries after its id, `""` for everything that is not a mount.
+      *
+      * A region is delimited by comments, so a mount placeholder has no element of its own to hang state on and its
+      * marker is the only thing the client can read. `s` says the span IS a mount slot; `k` names the mount whose
+      * instance owns it the way the engine identifies it, by call site and key: a hash of the frame, then the key
+      * hex-encoded so no key can spell a comment terminator or a separator. The live counterpart is `m`, which the
+      * client stamps onto the marker once it has adopted the slot: an id never holds a space, so the space before the
+      * first flag separates the two unambiguously.
+      */
+    private[kyo] def mountSlotFlags(key: Maybe[Any], frame: Frame): String =
+        key match
+            case Present(value) =>
+                val text = value.toString
+                val out  = new StringBuilder(14 + text.length * 4)
+                out.append(" s k=")
+                out.append(Integer.toHexString(frame.hashCode))
+                out.append('.')
+                var i = 0
+                while i < text.length do
+                    appendHex(out, text.charAt(i).toInt, 4)
+                    i += 1
+                end while
+                out.toString
+            case Absent => " s"
+
+    /** The id part of a marker payload: everything up to the first flag separator. */
+    private[kyo] def markerIdOf(payload: String): String =
+        val space = payload.indexOf(' ')
+        if space < 0 then payload else payload.substring(0, space)
 
     private[kyo] def htmlId(path: Seq[String]): String =
         htmlId(RegionIdentity.root(path))
