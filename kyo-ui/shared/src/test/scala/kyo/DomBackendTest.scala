@@ -1,6 +1,7 @@
 package kyo
 
 import kyo.Browser.*
+import kyo.UI.foreachKeyed
 
 // DomBackend.scala is a JS-only source. These tests exercise its behaviour
 // end-to-end via the JVM browser test infrastructure (SSE/event POST cycle).
@@ -692,6 +693,98 @@ class DomBackendTest extends UITest:
                         "&&document.querySelector('[data-kyo-ghost]')!==null"
                 )
             yield assert(atBody && ok)
+        }
+    }
+
+    // A row whose root changes its tag cannot be patched in place, so the pass replaces it. When that row is matched
+    // from the tail, the replacement has to become the boundary the rest of the pass places rows in front of: the
+    // replaced node is no longer in the document.
+    "a list patch inserts in front of a last row whose root changed its tag" in {
+        val app: UI < Async =
+            for rows <- Signal.initRef(Chunk(("a", false), ("b", false)))
+            yield UI.div(
+                UI.button("go").id("ltgo").onClick(rows.set(Chunk(("a", false), ("c", false), ("b", true)))),
+                UI.div(rows.foreachKeyed(_._1)((k, asSpan) =>
+                    if asSpan then UI.span(k).id(s"lt-$k") else UI.p(k).id(s"lt-$k")
+                )).id("lthost"),
+                UI.span("after").id("ltafter")
+            )
+        withUI(app) {
+            for
+                _     <- Browser.assertText(Selector.id("lt-b"), "b")
+                _     <- Browser.click(Selector.id("ltgo"))
+                _     <- Browser.assertExists(Selector.id("lt-c"))
+                state <- Browser.eval(
+                    "[document.getElementById('lthost').textContent,document.getElementById('lt-b').tagName," +
+                        "document.getElementById('ltafter').textContent].join(',')"
+                )
+            yield assert(state == "acb,SPAN,after", s"state=$state")
+        }
+    }
+
+    "a region repaint inserts in front of a last row whose first root changed its tag" in {
+        // Rows of two roots are not addressable by key, so the list repaints whole and the morph's own two-ended
+        // pass reconciles it.
+        val app: UI < Async =
+            for rows <- Signal.initRef(Chunk(("a", false), ("b", false)))
+            yield UI.div(
+                UI.button("go").id("mtgo").onClick(rows.set(Chunk(("a", false), ("c", false), ("b", true)))),
+                UI.div(rows.foreachKeyed(_._1)((k, asSpan) =>
+                    UI.fragment(
+                        if asSpan then UI.span(k).id(s"mt-${k}0") else UI.p(k).id(s"mt-${k}0"),
+                        UI.div(s"$k!").id(s"mt-${k}1")
+                    )
+                )).id("mthost"),
+                UI.span("after").id("mtafter")
+            )
+        withUI(app) {
+            for
+                _     <- Browser.assertText(Selector.id("mt-b1"), "b!")
+                _     <- Browser.click(Selector.id("mtgo"))
+                _     <- Browser.assertExists(Selector.id("mt-c0"))
+                state <- Browser.eval(
+                    "[document.getElementById('mthost').textContent,document.getElementById('mt-b0').tagName," +
+                        "document.getElementById('mtafter').textContent].join(',')"
+                )
+            yield assert(state == "aa!cc!bb!,SPAN,after", s"state=$state")
+        }
+    }
+
+    "a list patch adopts a portal in a new row, keeps it while other rows change, and retires it with its row" in {
+        val app: UI < Async =
+            for rows <- Signal.initRef(Chunk(1, 2))
+            yield UI.div(
+                UI.button("add").id("lpadd").onClick(rows.set(Chunk(1, 2, 3))),
+                UI.button("prepend").id("lppre").onClick(rows.set(Chunk(0, 1, 2, 3))),
+                UI.button("drop").id("lpdrop").onClick(rows.set(Chunk(0, 1, 2))),
+                UI.ul(rows.foreachKeyed(_.toString)(i =>
+                    if i == 3 then UI.li.id("lprow")(UI.div.id("lppanel").portal(true)(UI.span("panel")))
+                    else UI.li(s"row $i").id(s"lprow-$i")
+                ))
+            )
+        val portalState =
+            """(function(){
+              |  var el=document.getElementById('lppanel');
+              |  var p=el?el.getAttribute('data-kyo-path'):'';
+              |  return [el!==null&&el.parentElement===document.body,
+              |          document.querySelectorAll('[data-kyo-portal-slot]').length,
+              |          el?document.querySelectorAll('[data-kyo-path="'+p+'"]').length:0].join(',');
+              |})()""".stripMargin
+        withUI(app) {
+            for
+                _       <- Browser.click(Selector.id("lpadd"))
+                _       <- Browser.assertText(Selector.id("lppanel"), "panel")
+                adopted <- Browser.eval(portalState)
+                _       <- Browser.click(Selector.id("lppre"))
+                _       <- Browser.assertText(Selector.id("lprow-0"), "row 0")
+                kept    <- Browser.eval(portalState)
+                _       <- Browser.click(Selector.id("lpdrop"))
+                _       <- Browser.assertNotExists(Selector.id("lppanel"))
+                retired <- Browser.eval(portalState)
+            yield assert(
+                adopted == "true,1,1" && kept == "true,1,1" && retired == "false,0,0",
+                s"adopted=$adopted kept=$kept retired=$retired"
+            )
         }
     }
 
