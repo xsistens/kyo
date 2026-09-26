@@ -9,6 +9,13 @@ class ReactiveRegionTest extends kyo.test.Test[Any]:
         assert(region == ReactiveRegion.HtmlRange("r0000000000000002d83dde00000000040022002d002d0000"))
     }
 
+    "code units and segment lengths on both sides of 256 encode alike and decode back" in {
+        val path = Seq("a" * 300, "ÿĀ￿")
+        val id   = ReactiveRegion.htmlId(path)
+        assert(id == "r0000012c" + "0061" * 300 + "00000003" + "00ff0100ffff")
+        assert(ReactiveRegion.pathOf(id) == Present(path))
+    }
+
     "path segment boundaries remain distinct" in {
         val joined = ReactiveRegion.from(Seq("ab"), svgContext = false)
         val split  = ReactiveRegion.from(Seq("a", "b"), svgContext = false)
