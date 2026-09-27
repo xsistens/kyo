@@ -20,8 +20,8 @@ class ReactiveUITest extends UITest:
     }
 
     "HtmlOp.ReplaceRange carries region id and inner html" in {
-        val op = HtmlOp.ReplaceRange("r000000010030", "<span>hello</span>")
-        assert(op.regionId == "r000000010030")
+        val op = HtmlOp.ReplaceRange("r.0", "<span>hello</span>")
+        assert(op.regionId == "r.0")
         assert(op.html == "<span>hello</span>")
     }
 
