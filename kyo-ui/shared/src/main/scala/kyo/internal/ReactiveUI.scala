@@ -302,9 +302,9 @@ private[kyo] object ReactiveUI:
                                 // the paint reuse already makes. A seeded row has no cached handler
                                 // yet; its cached rowUI is walked on demand (one row, not the list).
                                 if targetPath.size > path.size then
-                                    rows.snapshot.map { live =>
-                                        live.find(_.key == targetPath(path.size)) match
-                                            case Some(inst) =>
+                                    rows.find(targetPath(path.size)).map { live =>
+                                        live match
+                                            case Present(inst) =>
                                                 inst.handler match
                                                     case Present(h) => h(targetPath, event)
                                                     case Absent     =>
@@ -318,7 +318,7 @@ private[kyo] object ReactiveUI:
                                                                 mountDispatch
                                                             )._2(targetPath, event)
                                                         }
-                                            case None => fullWalk(targetPath, event)
+                                            case Absent => fullWalk(targetPath, event)
                                     }
                                 else fullWalk(targetPath, event)
                         }.copy(
@@ -2308,31 +2308,53 @@ private[kyo] object ReactiveUI:
     /** What keeps one row's subscriptions open: its channel releases and its Scope finalizer. */
     final private[kyo] class RowScope(val releases: ReleaseSink, val finalizer: Scope.Finalizer)
 
-    /** Per-region ownership of reusable Foreach rows, in list order. Mutation happens only from the owning
-      * region's sequential observe loop, so plain get/set on the ref suffices.
+    /** Per-region ownership of reusable Foreach rows, in list order, plus the same rows by key. Mutation
+      * happens only from the owning region's sequential observe loop, so plain get/set on the refs suffices.
+      *
+      * The key index is maintained incrementally (evicted keys leave it, fresh instances join it), so
+      * neither an emission nor an event lookup rebuilds a map over every live row.
       */
-    final private[kyo] class RowRegistry(rows: AtomicRef[Vector[RowInstance]]):
+    final private[kyo] class RowRegistry(
+        rows: AtomicRef[Vector[RowInstance]],
+        index: AtomicRef[Map[String, RowInstance]]
+    ):
         def snapshot(using Frame): Vector[RowInstance] < Sync = rows.get
 
-        def replaceAll(ordered: Seq[RowInstance])(using Frame): Unit < Sync =
-            rows.set(Vector.from(ordered))
+        def byKey(using Frame): Map[String, RowInstance] < Sync = index.get
 
-        /** Close-and-await every row whose key is not in `keep`: run before the new value paints, so a
+        def find(key: String)(using Frame): Maybe[RowInstance] < Sync =
+            index.get.map(m => Maybe.fromOption(m.get(key)))
+
+        /** Install the new list order; `fresh` are the instances this emission created, the others are
+          * already indexed.
+          */
+        def replaceAll(ordered: Seq[RowInstance], fresh: Seq[RowInstance])(using Frame): Unit < Sync =
+            rows.set(Vector.from(ordered)).andThen(
+                if fresh.isEmpty then Kyo.unit
+                else index.getAndUpdate(m => fresh.foldLeft(m)((acc, r) => acc.updated(r.key, r))).unit
+            )
+
+        /** Close-and-await every row whose key `keep` rejects: run before the new value paints, so a
           * vanished or changed row's observers are fully released while the old content is still on screen
           * (break-before-make, the region-level closed-and-awaited guarantee extended to rows).
           */
-        def evictExcept(keep: Set[String])(using Frame): Unit < Async =
+        def evictExcept(keep: String => Boolean)(using Frame): Unit < Async =
             for
-                old <- rows.getAndUpdate(_.filter(r => keep.contains(r.key)))
-                gone = old.filterNot(r => keep.contains(r.key))
+                old <- rows.getAndUpdate(_.filter(r => keep(r.key)))
+                gone = old.filterNot(r => keep(r.key))
+                _ <-
+                    if gone.isEmpty then Kyo.unit
+                    // A cleared list drops the whole index at once rather than one key at a time.
+                    else if gone.size == old.size then index.set(Map.empty)
+                    else index.getAndUpdate(_ -- gone.map(_.key)).unit
                 // The channel releases of every evicted row in one pass, then the finalizers, which for a
                 // plain row hold nothing and complete without suspending (initInline).
-                failures <- Sync.Unsafe.defer(gone.flatMap(_.scope.releases.releaseAll().toList))
+                failures <- Sync.Unsafe.defer(gone.flatMap(_.scope.releases.releaseAll()))
                 _        <- Kyo.foreachDiscard(failures)(t => Log.error("kyo-ui: a row's release failed", t))
                 _        <- Kyo.foreachDiscard(gone)(r => r.scope.finalizer.close(Absent).andThen(r.scope.finalizer.await))
             yield ()
 
-        def evictAll(using Frame): Unit < Async = evictExcept(Set.empty)
+        def evictAll(using Frame): Unit < Async = evictExcept(_ => false)
     end RowRegistry
 
     private[kyo] object RowRegistry:
@@ -2340,8 +2362,151 @@ private[kyo] object ReactiveUI:
 
         /** The registry for a pass that already holds the thread (see [[SignalNow]]). */
         def initNow()(using AllowUnsafe): RowRegistry =
-            new RowRegistry(AtomicRef.Unsafe.init(Vector.empty[RowInstance]).safe)
+            new RowRegistry(
+                AtomicRef.Unsafe.init(Vector.empty[RowInstance]).safe,
+                AtomicRef.Unsafe.init(Map.empty[String, RowInstance]).safe
+            )
     end RowRegistry
+
+    /** What one list emission changes, decided in a single pass over the items.
+      *
+      * Per position: the key, and the live row that survives there (same key, item compares equal) or
+      * `null` where the row is rebuilt. A key that repeats within the emission disables reuse for all of
+      * it. Everything is an array indexed by position, so an emission that moves two rows of a thousand
+      * costs the list one object per array and the change its rows, rather than a pass over the whole list
+      * that allocates per row for each of the map of old rows, the retained keys and the mount keys.
+      *
+      * `built` and `finalRows` are filled in by the caller for the rebuilt positions (the effects that walk
+      * and subscribe a row run there); the retained positions are filled here.
+      */
+    final private class RowPlan[T](
+        chunk: Chunk[T],
+        prev: Vector[RowInstance],
+        prevByKey: Map[String, RowInstance],
+        keyFn: T => String
+    ):
+        val items: Chunk.Indexed[T] = chunk.toIndexed
+        val size: Int               = items.length
+        val keys                    = new Array[String](size)
+        val built                   = new Array[RowPlan.Built](size)
+        val finalRows               = new Array[RowInstance](size)
+        private val retainedKeys    = new java.util.HashSet[String]()
+
+        val duplicates: Boolean =
+            val seen = new java.util.HashSet[String]()
+            var dup  = false
+            var i    = 0
+            while i < size do
+                val item = items(i)
+                val key  = keyFn(item)
+                keys(i) = key
+                if !seen.add(key) then dup = true
+                prevByKey.get(key) match
+                    case Some(inst) if inst.item.equals(item) => finalRows(i) = inst
+                    case _                                    => ()
+                i += 1
+            end while
+            dup
+        end duplicates
+
+        /** Positions whose row is rebuilt; the retained positions are complete once this is. */
+        val rebuilt: Chunk[Int] =
+            var i = 0
+            if duplicates then
+                while i < size do
+                    finalRows(i) = null
+                    i += 1
+            end if
+            var count = 0
+            i = 0
+            while i < size do
+                if finalRows(i) eq null then count += 1
+                i += 1
+            val idx = new Array[Int](count)
+            var j   = 0
+            i = 0
+            while i < size do
+                val inst = finalRows(i)
+                if inst eq null then
+                    idx(j) = i
+                    j += 1
+                else
+                    retainedKeys.add(inst.key)
+                    built(i) = new RowPlan.Built(inst.key, inst.item, inst.rowUI, inst.kids, inst.handler, Present(inst))
+                end if
+                i += 1
+            end while
+            Chunk.from(idx)
+        end rebuilt
+
+        def isRetained(key: String): Boolean = retainedKeys.contains(key)
+
+        /** Keys of the Mounted nodes among the rows' reactive children (all rows, or only the retained
+          * ones, which never re-claim, so a fresh claim of their key must warn). No allocation when there
+          * is none, which is the common case.
+          */
+        def mountKeys(retainedOnly: Boolean): Set[Any] =
+            var acc: Set[Any] = null
+            var i             = 0
+            while i < size do
+                val b = built(i)
+                if !retainedOnly || b.retained.isDefined then
+                    b.kids.foreach { kid =>
+                        kid.mountedSpec.foreach { spec =>
+                            spec.node.key.foreach { key =>
+                                if acc eq null then acc = Set.empty
+                                acc = acc + key
+                            }
+                        }
+                    }
+                end if
+                i += 1
+            end while
+            if acc eq null then Set.empty else acc
+        end mountKeys
+
+        def fragmentChildren(using Frame): Chunk[UI] =
+            val out = new Array[UI](size)
+            var i   = 0
+            while i < size do
+                out(i) = KeyedChild[UI](built(i).key, built(i).rowUI)
+                i += 1
+            Chunk.from(out)
+        end fragmentChildren
+
+        def listRows: Seq[ListRow] =
+            val out = new Array[ListRow](size)
+            var i   = 0
+            while i < size do
+                val b = built(i)
+                out(i) = ListRow(b.key, b.rowUI, b.retained.isEmpty)
+                i += 1
+            end while
+            scala.collection.immutable.ArraySeq.unsafeWrapArray(out)
+        end listRows
+
+        def reordered: Boolean =
+            if prev.size != size then true
+            else
+                var i = 0
+                while i < size && keys(i) == prev(i).key do i += 1
+                i < size
+
+        def finalRowsSeq: Seq[RowInstance] = scala.collection.immutable.ArraySeq.unsafeWrapArray(finalRows)
+
+        def freshRows: Seq[RowInstance] = rebuilt.map(i => finalRows(i)).toSeq
+    end RowPlan
+
+    private object RowPlan:
+        final class Built(
+            val key: String,
+            val item: Any,
+            val rowUI: UI,
+            val kids: Seq[ReactiveUI],
+            val handler: Maybe[Handler],
+            val retained: Maybe[RowInstance]
+        )
+    end RowPlan
 
     /** Subscribe a reusable keyed Foreach region: rows are owned by a RowRegistry instead of the per-value
       * Scope cascade. On each list emission only added rows and rows whose item value changed are re-rendered,
@@ -2429,7 +2594,7 @@ private[kyo] object ReactiveUI:
                                         KeyedChild[UI](r.key, r.rowUI)
                                     )))))
                                 )
-                                _ <- rows.replaceAll(built.toSeq)
+                                _ <- rows.replaceAll(built.toSeq, built.toSeq)
                                 // No paint happened, so no cost is charged, but the rows did come into existence,
                                 // in the enclosing region's paint. Same accounting as the region skip branch in
                                 // subscribeRegion.
@@ -2446,71 +2611,56 @@ private[kyo] object ReactiveUI:
 
                         def handle(items: Chunk[T]): Unit < (Async & Scope) =
                             for
-                                now  <- Clock.now
-                                _    <- signalChangeTime.set(now)
-                                prev <- rows.snapshot
-                                prevByKey  = prev.map(r => r.key -> r).toMap
-                                keyed      = Chunk.from(items.toSeq.zipWithIndex.map((item, i) => (keyFn(item), item, i)))
-                                duplicates = !distinctKeys(items)
+                                now       <- Clock.now
+                                _         <- signalChangeTime.set(now)
+                                prev      <- rows.snapshot
+                                prevByKey <- rows.byKey
+                                plan = new RowPlan[T](items, prev, prevByKey, keyFn)
                                 _ <-
-                                    if duplicates then
+                                    if plan.duplicates then
                                         Log.warn(
                                             s"kyo-ui: duplicate keys in foreachKeyed at ${path.mkString(".")} within one emission: " +
                                                 "row reuse is disabled for this emission (all rows rebuilt); use distinct keys"
                                         )
                                     else Kyo.unit
-                                retainedKeys =
-                                    if duplicates then Set.empty[String]
-                                    else keyed.collect { case (k, item, _) if prevByKey.get(k).exists(_.item.equals(item)) => k }.toSet
-                                _ <- rows.evictExcept(retainedKeys) // removed and changed rows close before the paint
-                                // One synchronous pass over the rows (see SignalNow), not an effect loop that
-                                // suspends per row.
-                                built <- Sync.Unsafe.defer {
-                                    keyed.map { (key, item, i) =>
-                                        prevByKey.get(key).filter(_ => retainedKeys.contains(key)) match
-                                            case Some(inst) => (key, item, inst.rowUI, inst.kids, inst.handler, Present(inst))
-                                            case None       =>
-                                                val rowUI       = renderFn(i, item)
-                                                val (kids, hdl) = walkRow(
-                                                    rowUI,
-                                                    path :+ key,
-                                                    svg,
-                                                    rui.contentContext.child(key),
-                                                    nestedParentContext(rui.parentContext, rowUI),
-                                                    mountDispatch
-                                                )
-                                                (key, item, rowUI, kids, Present(hdl), Absent: Maybe[RowInstance])
+                                _ <- rows.evictExcept(plan.isRetained) // removed and changed rows close before the paint
+                                // One synchronous pass over the rebuilt rows (see SignalNow), not an effect loop
+                                // that suspends per row.
+                                _ <- Sync.Unsafe.defer {
+                                    plan.rebuilt.foreach { i =>
+                                        val key         = plan.keys(i)
+                                        val item        = plan.items(i)
+                                        val rowUI       = renderFn(i, item)
+                                        val (kids, hdl) = walkRow(
+                                            rowUI,
+                                            path :+ key,
+                                            svg,
+                                            rui.contentContext.child(key),
+                                            nestedParentContext(rui.parentContext, rowUI),
+                                            mountDispatch
+                                        )
+                                        plan.built(i) = new RowPlan.Built(key, item, rowUI, kids, Present(hdl), Absent)
                                     }
                                 }
-                                // Both key sets are built inside the call, not bound as vals: evictExcept is
-                                // inline, so a region with no mounted node (the common case, and every row of
-                                // a plain keyed list) skips two full passes over every row plus their flattens
-                                // and Set builds, instead of computing them to hand a registry that would
-                                // discard them.
-                                _ <- regionMounts.evictExcept(
-                                    collectMountKeys(built.toSeq.flatMap((_, _, _, kids, _, _) => kids)),
-                                    collectMountKeys(built.toSeq.collect { case (_, _, _, kids, _, Present(_)) => kids }.flatten)
-                                )
-                                fragment =
-                                    Fragment[UI](Chunk.from(built.toSeq.map((key, _, rowUI, _, _, _) => KeyedChild[UI](key, rowUI))))
+                                // Both key sets are computed without an allocation when no row carries a
+                                // mounted node, which is every row of a plain keyed list.
+                                _ <- regionMounts.evictExcept(plan.mountKeys(retainedOnly = false), plan.mountKeys(retainedOnly = true))
+                                fragment = Fragment[UI](plan.fragmentChildren)
                                 previous <- Sync.Unsafe.defer(rendered.getAndSet(Present(fragment)))
                                 // A structural command addresses rows by key, so it can say nothing useful
                                 // about an emission whose keys are not unique: two rows would name one
                                 // slot. That emission already rebuilds every row and warns; it also keeps
                                 // the whole-fragment paint, where duplicates degrade positionally instead
-                                // of aliasing. `retained.isEmpty` is exactly "this row was re-rendered
-                                // above": retained iff key survived AND item compared equal, which is the
-                                // same condition under which the row's DOM was left alone.
-                                // A structural command addresses rows BY KEY, so a row that paints as several
-                                // roots or as none has nothing for a key to name. The wire cannot discover that
-                                // late and change its mind: once the untouched rows are left out of a frame, the
-                                // client has nothing to rebuild them from. So the shape is decided here, beside
-                                // the duplicate-key gate it restates, and without rendering anything.
-                                addressable = built.forall((_, _, rowUI, _, _, _) => HtmlRenderer.paintsAsKeyedRoot(rowUI))
+                                // of aliasing. Likewise a row that paints as several roots or as none has
+                                // nothing for a key to name. The wire cannot discover that late and change
+                                // its mind: once the untouched rows are left out of a frame, the client has
+                                // nothing to rebuild them from. So the shape is decided here, beside the
+                                // duplicate-key gate it restates, and without rendering anything.
+                                addressable = plan.built.forall(b => HtmlRenderer.paintsAsKeyedRoot(b.rowUI))
                                 probe   <- Devtools.newProbe
                                 started <- if probe.isEmpty then Kyo.lift(Duration.Zero) else Clock.nowMonotonic
                                 _       <- Devtools.probe.let(probe) {
-                                    if duplicates || !addressable then
+                                    if plan.duplicates || !addressable then
                                         exchange.onChange(
                                             rui.region,
                                             path,
@@ -2526,7 +2676,7 @@ private[kyo] object ReactiveUI:
                                             rui.contentContext,
                                             rui.parentContext,
                                             previous,
-                                            built.toSeq.map((key, _, rowUI, _, _, retained) => ListRow(key, rowUI, retained.isEmpty))
+                                            plan.listRows
                                         )
                                 }
                                 _ <- reportListPatch(
@@ -2534,17 +2684,17 @@ private[kyo] object ReactiveUI:
                                     UI.RenderCause.Signal,
                                     probe,
                                     started,
-                                    changedRows = built.count((_, _, _, _, _, retained) => retained.isEmpty),
-                                    totalRows = built.size,
-                                    reordered = !built.toSeq.corresponds(prev)((b, p) => b._1 == p.key)
+                                    changedRows = plan.rebuilt.length,
+                                    totalRows = plan.size,
+                                    reordered = plan.reordered
                                 )
-                                finalRows <- Kyo.foreach(built) { (key, item, rowUI, kids, hdl, retained) =>
-                                    retained match
-                                        case Present(inst) => Kyo.lift(inst)
-                                        case Absent        =>
-                                            rowRunner(kids).map(fiber => new RowInstance(key, item, rowUI, kids, hdl, fiber))
+                                _ <- Kyo.foreachDiscard(plan.rebuilt) { i =>
+                                    val b = plan.built(i)
+                                    rowRunner(b.kids).map(fiber =>
+                                        plan.finalRows(i) = new RowInstance(b.key, b.item, b.rowUI, b.kids, b.handler, fiber)
+                                    )
                                 }
-                                _ <- rows.replaceAll(finalRows.toSeq)
+                                _ <- rows.replaceAll(plan.finalRowsSeq, plan.freshRows)
                             yield ()
 
                         Abort.run[Throwable] {
