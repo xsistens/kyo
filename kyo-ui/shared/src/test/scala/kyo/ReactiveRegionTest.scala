@@ -4,15 +4,40 @@ import kyo.internal.ReactiveRegion
 
 class ReactiveRegionTest extends kyo.test.Test[Any]:
 
-    "HTML regions encode path segments with UTF-16 lengths and code units" in {
-        val region = ReactiveRegion.from(Seq("", "😀", "\"--\u0000"), svgContext = false)
-        assert(region == ReactiveRegion.HtmlRange("r0000000000000002d83dde00000000040022002d002d0000"))
+    "HTML regions write a dot per segment, plain [0-9A-Za-z_] as is and any other unit as $ plus four hex" in {
+        val region = ReactiveRegion.from(Seq("", "😀", "\"--\u0000", "user_42"), svgContext = false)
+        assert(region == ReactiveRegion.HtmlRange("r..$d83d$de00.$0022$002d$002d$0000.user_42"))
+        assert(ReactiveRegion.htmlId(Seq("1", "0", "0", "2", "1", "0")) == "r.1.0.0.2.1.0")
+        assert(ReactiveRegion.htmlId(Seq.empty) == "r")
     }
 
-    "code units and segment lengths on both sides of 256 encode alike and decode back" in {
-        val path = Seq("a" * 300, "ÿĀ￿")
+    "the path reads back out of the id, whatever the segments hold" in {
+        val paths = Seq(
+            Seq.empty[String],
+            Seq(""),
+            Seq("", ""),
+            Seq("1", "0", "0", "2"),
+            Seq("a.b", "c~d", "e$f", "$r"),
+            Seq("😀", " ", "--", "<!-->", "\u0000", "ÄÖÜ"),
+            Seq("a-b", "user-42")
+        )
+        paths.foreach { path =>
+            val id = ReactiveRegion.htmlId(path)
+            assert(ReactiveRegion.isValidHtmlId(id), id)
+            assert(ReactiveRegion.pathOf(id) == Present(path), id)
+            assert(!id.exists(c => c == ' ' || c == '>' || c == '<' || c == '"' || c == '\''), id)
+            assert(!id.contains("--"), id)
+        }
+        val nested = ReactiveRegion.RegionIdentity.root(Seq("a.b", "2")).transparent.transparent
+        assert(ReactiveRegion.htmlId(nested) == "r.a$002eb.2~2")
+        assert(ReactiveRegion.pathOf(ReactiveRegion.htmlId(nested)) == Present(Seq("a.b", "2")))
+        assert(ReactiveRegion.baseIdOf(ReactiveRegion.htmlId(nested)) == "r.a$002eb.2")
+    }
+
+    "code units on both sides of 256 escape alike and decode back" in {
+        val path = Seq("a" * 300, "\u00ff\u0100\uffff")
         val id   = ReactiveRegion.htmlId(path)
-        assert(id == "r0000012c" + "0061" * 300 + "00000003" + "00ff0100ffff")
+        assert(id == "r." + "a" * 300 + ".$00ff$0100$ffff")
         assert(ReactiveRegion.pathOf(id) == Present(path))
     }
 
@@ -31,19 +56,39 @@ class ReactiveRegionTest extends kyo.test.Test[Any]:
         val deeper   = direct.transparent
         val emptyKey = root.child("")
         val ids      = Seq(root, direct, deeper, emptyKey).map(ReactiveRegion.htmlId)
-        val base     = "r00000006006e00650073007400650064"
-        assert(ids == Seq(base, s"${base}n00000001", s"${base}n00000002", s"${base}00000000"))
+        assert(ids == Seq("r.nested", "r.nested~1", "r.nested~2", "r.nested."))
         assert(ids.distinct.size == ids.size)
     }
 
     "region id validation accepts encoded paths and tagged nesting only" in {
         val valid = Seq(
             "r",
-            "r00000000",
-            "r000000010061",
-            "r000000010061n00000001"
+            "r.",
+            "r..",
+            "r.a",
+            "r.a~1",
+            "r.a~10",
+            "r~3",
+            "r.a$002e.b_9",
+            "r.$0024r"
         )
-        val invalid = Seq("", "r1", "r000000010061n00000000", "r000000010061n1", "r00000001006g")
+        val invalid = Seq(
+            "",
+            "r1",
+            "ra",
+            "n",
+            "r.a~0",
+            "r.a~01",
+            "r.a~",
+            "r.a~1x",
+            "r.a~1~1",
+            "r.a$00",
+            "r.a$00zz",
+            "r.a$00AB",
+            "r.a b",
+            "r.a-b",
+            "r.a$"
+        )
         assert(valid.forall(ReactiveRegion.isValidHtmlId))
         assert(invalid.forall(id => !ReactiveRegion.isValidHtmlId(id)))
     }

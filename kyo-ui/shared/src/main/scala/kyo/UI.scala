@@ -541,6 +541,11 @@ object UI:
 
         /** Send a whitelisted imperative `verb` to the element at `path`. v1 verbs: `"focus"`, `"scrollIntoView"`. Unknown
           * verbs are silently ignored by the client (forward-compatible).
+          *
+          * The client finds the element by its `data-kyo-path`, which only an addressable element renders (a control,
+          * an element with a handler, a reactive binding or an `id`, a keyed row root, an SVG node), so a plain layout
+          * element is not reachable this way: give it an `id`, or use the id-addressed twins ([[commandById]],
+          * [[requestMeasureById]]).
           */
         def command(path: Seq[String], verb: String)(using Frame): Unit < Async =
             emit(internal.HtmlOp.Command(path, verb))

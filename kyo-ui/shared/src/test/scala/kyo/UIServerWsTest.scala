@@ -189,11 +189,11 @@ class UIServerWsTest extends kyo.test.Test[Any]:
     }
 
     "HtmlOp.ReplaceRange has an exact stable JSON representation and round-trips" in {
-        val op      = HtmlOp.ReplaceRange("r000000010030", "<tbody><tr><td>x</td></tr></tbody>")
+        val op      = HtmlOp.ReplaceRange("r.0", "<tbody><tr><td>x</td></tr></tbody>")
         val encoded = Json.encode[HtmlOp](op)
         assert(
             encoded ==
-                """{"ReplaceRange":{"regionId":"r000000010030","html":"<tbody><tr><td>x</td></tr></tbody>"}}"""
+                """{"ReplaceRange":{"regionId":"r.0","html":"<tbody><tr><td>x</td></tr></tbody>"}}"""
         )
         assert(Json.decode[HtmlOp](encoded) == Result.Success(op))
     }
