@@ -64,7 +64,7 @@ class SvgReactiveTest extends kyo.test.Test[Any]:
         val root     = UI.div(emptySig.foreach(i => UI.span(i.toString)))
         for html <- HtmlRenderer.render(root, Seq.empty)
         yield
-            assert(html.contains("<!--kyo-rs:r000000010030--><!--kyo-re:r000000010030-->"))
+            assert(html.contains("<!--kyo-rs:r.0--><!--kyo-re:r.0-->"))
             assert(!html.contains("data-kyo-reactive"))
         end for
     }
