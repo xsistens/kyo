@@ -12,7 +12,7 @@ private[kyo] object HtmlRenderer:
     // costs nothing on the render(...) path (cssRules stays Absent there).
     private type CssCollector = scala.collection.mutable.LinkedHashMap[String, String]
 
-    /** Render a UI tree to HTML with data-kyo-path attributes. */
+    /** Render a UI tree to HTML; the elements a client addresses carry `data-kyo-path` (see [[carriesPath]]). */
     def render(ui: UI, path: Seq[String])(using Frame): String < Sync =
         // Every descendant extends the path with `:+`, and `Seq.empty` is a List, whose `:+` copies the
         // whole prefix per node. Normalizing once at the entry makes those appends Vector appends; paths
@@ -177,7 +177,8 @@ private[kyo] object HtmlRenderer:
             namespace,
             cssRules,
             parentContext,
-            ReactiveRegion.BoundaryMode.Emit
+            ReactiveRegion.BoundaryMode.Emit,
+            keyedRoot = true
         )
     end renderRowInto
 
@@ -391,7 +392,8 @@ private[kyo] object HtmlRenderer:
         namespace: ReactiveRegion.Namespace,
         cssRules: Maybe[CssCollector] = Absent,
         parentContext: ReactiveRegion.ParentContext,
-        boundaryMode: ReactiveRegion.BoundaryMode
+        boundaryMode: ReactiveRegion.BoundaryMode,
+        keyedRoot: Boolean = false
     )(using AllowUnsafe, Frame): Unit =
         ui match
             case dd: Dropdown =>
@@ -405,9 +407,15 @@ private[kyo] object HtmlRenderer:
                     // Reactive classes currently true, folded into the class list so SSR is correct. Empty when
                     // none are bound, so the `class` attribute is byte-identical there.
                     def openTag(extraClasses: Seq[String]): Unit =
-                        discard(sb.append('<').append(tag).append(" data-kyo-path=\""))
-                        appendPath(sb, path)
-                        discard(sb.append('"'))
+                        discard(sb.append('<').append(tag))
+                        // The event attribute first: whether one was written is half of the path decision, and
+                        // it is known only by walking the handlers, which this does once.
+                        val events = renderEventAttr(sb, elem)
+                        if events || carriesPath(elem, namespace, keyedRoot) then
+                            discard(sb.append(" data-kyo-path=\""))
+                            appendPath(sb, path)
+                            discard(sb.append('"'))
+                        end if
                         renderCommonAttrs(
                             sb,
                             if extraClasses.isEmpty then elem.attrs
@@ -415,7 +423,6 @@ private[kyo] object HtmlRenderer:
                             elem.isInstanceOf[Svg.SvgElement],
                             cssRules
                         )
-                        renderEventAttr(sb, elem)
                     end openTag
                     openTag(reactiveTrueClasses(elem.attrs))
                     renderElementAttrs(sb, elem)
@@ -491,7 +498,7 @@ private[kyo] object HtmlRenderer:
                 }
 
             case KeyedChild(_, child) =>
-                renderTo(sb, child, path, context, namespace, cssRules, parentContext, boundaryMode)
+                renderTo(sb, child, path, context, namespace, cssRules, parentContext, boundaryMode, keyedRoot = true)
 
             case r: Reactive[?] =>
                 val region  = ReactiveRegion.from(context, namespace)
@@ -524,6 +531,7 @@ private[kyo] object HtmlRenderer:
                         val content = ReactiveRegion.tableContent(rendered.iterator.map(_._2))
                         val host    = ReactiveRegion.renderHost(region, parentContext, content)
                         openInitialHost(sb, host)
+                        val keyed = keyFn.nonEmpty
                         rendered.foreach { (key, child) =>
                             renderTo(
                                 sb,
@@ -533,7 +541,8 @@ private[kyo] object HtmlRenderer:
                                 ReactiveRegion.namespace(host),
                                 cssRules,
                                 ReactiveRegion.contentParent(host),
-                                ReactiveRegion.BoundaryMode.Emit
+                                ReactiveRegion.BoundaryMode.Emit,
+                                keyedRoot = keyed
                             )
                         }
                         closeInitialHost(sb, host)
@@ -1101,7 +1110,10 @@ private[kyo] object HtmlRenderer:
         case Present(_: Bound.Ref[?]) => true
         case _                        => false
 
-    private def renderEventAttr(sb: StringBuilder, elem: Element): Unit =
+    /** Writes `data-kyo-ev` with every event the element's handlers and bindings make the client forward, and
+      * answers whether there was one.
+      */
+    private def renderEventAttr(sb: StringBuilder, elem: Element): Boolean =
         // Written as they are found: the attribute opens with the first event and closes at the end, so a
         // plain element allocates nothing here.
         var first                   = true
@@ -1152,8 +1164,41 @@ private[kyo] object HtmlRenderer:
         // fileselect marker so the client's change branch reads all files instead of only the first.
         if attrs.onFileSelect.nonEmpty then add("fileselect")
         if !first then sb.append('"')
-        ()
+        !first
     end renderEventAttr
+
+    /** Whether an element renders its `data-kyo-path`.
+      *
+      * The attribute is what a client reads to name an element to the server and to find one the server named,
+      * and it is read on exactly these: an element that declares a handler (the event's path; reported by
+      * [[renderEventAttr]] as it writes `data-kyo-ev`, so the two cannot drift apart), a control (the
+      * dispatcher's target facts: disabled, submitting button, "a control below"), a keyed row root (the key the
+      * reconciliation and a list patch match rows by), an element with a reactive attribute or class (patched in
+      * place by path), an element the client-side machinery addresses (focus seeding and restore, focus groups,
+      * enter and leave transitions, portals, drag, scroll-auto, JS props), an element the application gave an
+      * `id` to, and every SVG element (a region update replaces a lowered SVG node by its path). A plain element,
+      * a `td` holding text or a layout `div`, is named by nobody, and most elements of a large page are plain. An
+      * event inside a plain element reports the nearest
+      * carrying ancestor, which is where the dispatcher's bubble arrives anyway; the one question that asks
+      * whether the click landed on that element itself travels as `MouseEventData.self`. The path-addressed
+      * `UI.Commands.command` and `requestMeasure` reach a carrying element only, which is why an `id` counts: it
+      * is how an application says it means to address an element that has nothing else to be addressed for.
+      */
+    private[kyo] def carriesPath(elem: Element, namespace: ReactiveRegion.Namespace, keyedRoot: Boolean): Boolean =
+        keyedRoot ||
+            namespace == ReactiveRegion.Namespace.Svg ||
+            elem.isInstanceOf[Svg.SvgElement] ||
+            elem.isInstanceOf[Focusable] ||
+            addressedByClient(elem.attrs)
+
+    private def addressedByClient(attrs: Attrs): Boolean =
+        attrs.identifier.nonEmpty ||
+            attrs.reactiveAttrs.nonEmpty || attrs.reactiveBoolAttrs.nonEmpty || attrs.reactiveClasses.nonEmpty ||
+            attrs.tabIndex.nonEmpty || attrs.focusTrap.nonEmpty || attrs.focusGroup.nonEmpty ||
+            attrs.focusAuto.nonEmpty || attrs.focusRestore.nonEmpty ||
+            attrs.dragSource.nonEmpty || attrs.dropTarget.nonEmpty || attrs.scrollAuto.nonEmpty ||
+            attrs.enterTransition.nonEmpty || attrs.leaveTransition.nonEmpty || attrs.portal.nonEmpty ||
+            attrs.jsProps.nonEmpty
 
     // ---- Helpers ----
 
@@ -1330,13 +1375,10 @@ private[kyo] object HtmlRenderer:
           |function kyoMaskNormalize(mask,val){var ts=kyoMaskParse(mask);return kyoMaskFormat(ts,kyoMaskRaw(ts,val));}""".stripMargin
 
     private[kyo] val reactiveRangesJs: String =
-        """function kyoRangeId(id){
-          |  if(typeof id!=="string"||!/^r[0-9a-f]*(?:n[0-9a-f]{8})?$/.test(id))return false;
-          |  var suffix=id.indexOf("n",1),end=suffix<0?id.length:suffix;
-          |  if(suffix>=0&&id.slice(suffix+1)==="00000000")return false;
-          |  var i=1;while(i<end){if(i+8>end)return false;var n=parseInt(id.slice(i,i+8),16);i+=8;
-          |    if(!isFinite(n)||i+n*4>end)return false;i+=n*4;}
-          |  return i===end;
+        """// Twin of ReactiveRegion.isValidHtmlId: `r`, a dot and a segment per path segment (verbatim [0-9A-Za-z_],
+          |// `$` + 4 hex for any other UTF-16 unit), then an optional `~` and a decimal depth without a leading zero.
+          |function kyoRangeId(id){
+          |  return typeof id==="string"&&/^r(?:\.(?:[0-9A-Za-z_]|\$[0-9a-f]{4})*)*(?:~[1-9][0-9]*)?$/.test(id);
           |}
           |function kyoRangeFail(message){throw new Error("kyo-ui reactive range: "+message);}
           |// A marker payload may carry a flag section after its id (a mount slot, and the m the client stamps on once
@@ -1825,30 +1867,12 @@ private[kyo] object HtmlRenderer:
     /** The server-push client script. `private[kyo]` so KeyPolicyTest can hold the two copies of the
       * keyboard rules against each other; nothing outside this module builds it.
       */
-    private[kyo] def clientJs(basePath: String): String =
-        s"""(function(){
-           |var base="$basePath";
-           |var __q=[];
-           |// Mirrors DomBackend.setSelection: the one place that knows the two ways a caret move can be a no-op.
-           |// Elements outside input and textarea (select, contenteditable) have no setSelectionRange at all, and
-           |// on input types without a text selection (email, number) it throws InvalidStateError; in both cases
-           |// the value is set and only the caret stays put. Every other exception is a real failure and propagates.
-           |function kyoSetCaret(t,s,e){if(typeof t.setSelectionRange!=="function")return;
-           |  try{t.setSelectionRange(s,e);}catch(er){if(er.name!=="InvalidStateError")throw er;}}
-           |$reactiveRangesJs
-           |// A field renders its .value PROPERTY, and the property stops tracking the attribute the first time the
-           |// user types. Patching the attribute alone is therefore invisible on any touched field, so mirror it onto
-           |// the property. Assigning only on a real difference leaves a focused field's caret alone (the echo of the
-           |// user's own keystroke compares equal). Twin of DomBackend.syncFieldProperty; keep in lockstep.
-           |function __kyoSyncField(el,name,value){
-           |  if(name==="value"&&(el.tagName==="INPUT"||el.tagName==="TEXTAREA")&&el.value!==value)el.value=value;
-           |}
-           |// Mark an attr name as owned by the imperative id-addressed channel: names live in a __kyoOwn expando dict
-           |// ON the element (reclaimed with the node), which __kyoMorphAttrs reads to shield each owned attr from
-           |// reconciliation. Mirrors markOwned in DomBackend.
-           |function __kyoMark(el,n){(el.__kyoOwn||(el.__kyoOwn={}))[n]=true;}
-           |${DragClientJs.script(basePath)}
-           |var ws=null,__wsRetries=0,__wsGone=false,__live=false;
+    /** The client's transport, registry and path helpers. A template of its own, with no arguments, because
+      * `clientJs` is one interpolated template and the JVM keeps a template's literal text as a single constant of
+      * at most 64 KB; an `s` template like the outer one, so the escapes it holds read the same way there and here.
+      */
+    private[kyo] val clientCoreJs: String =
+        s"""var ws=null,__wsRetries=0,__wsGone=false,__live=false;
            |// Read-only test hook on the current socket; it follows each reconnect.
            |Object.defineProperty(window,"__kyoWs",{get:function(){return ws;},configurable:true});
            |var __dragRt=null,__dragCleanup=null;
@@ -1928,9 +1952,9 @@ private[kyo] object HtmlRenderer:
            |  }else if(op.ReadDropFile||op.ReadDropDirectory||op.CancelDropRead){
            |    try{__dragRt.serveDropRead(op);}catch(error){kyoClientError(error);}
            |  }else if(op.PatchList){
-          |    try{__kyoApplyList(op.PatchList.regionId,op.PatchList.keys,op.PatchList.changedKeys,op.PatchList.changed);}
-          |    catch(error){kyoClientError(error);}
-          |  }else if(op.ReplaceRange){
+           |    try{__kyoApplyList(op.PatchList.regionId,op.PatchList.keys,op.PatchList.changedKeys,op.PatchList.changed);}
+           |    catch(error){kyoClientError(error);}
+           |  }else if(op.ReplaceRange){
            |    try{kyoRangeReplace(op.ReplaceRange.regionId,op.ReplaceRange.html);}catch(error){kyoClientError(error);}
            |  }else if(op.Replace){
            |    var p=op.Replace.path.join(".");
@@ -2034,36 +2058,85 @@ private[kyo] object HtmlRenderer:
            |  if(verb==="focus"){var fs='input,textarea,select,button,a[href],[tabindex],[contenteditable]';var ft=(el.matches&&el.matches(fs))?el:(el.querySelector?el.querySelector(fs):null);if(ft&&typeof ft.focus==="function")ft.focus();}
            |  else if(verb==="scrollIntoView"){if(typeof el.scrollIntoView==="function")el.scrollIntoView({block:"nearest"});}
            |}
-           |// A reactive range's id encodes its own path (ReactiveRegion.htmlId: 8 hex digits of segment length,
-           |// then 4 hex digits per UTF-16 unit, optional 'n' + depth suffix), so the path is read back out of the
-           |// id rather than re-encoded here. Returns null for anything that is not a range id.
+           |// A reactive range's id encodes its own path (ReactiveRegion.htmlId: `.` and the segment per path segment,
+           |// a unit outside [0-9A-Za-z_] written as `$$` + 4 hex, optional `~` + depth suffix), so the path is read
+           |// back out of the id rather than re-encoded here. Returns null for anything that is not a range id.
            |function __kyoRangeIdPath(id){
-           |  if(!id||id.charAt(0)!=="r")return null;
-           |  var end=id.indexOf("n",1);if(end<0)end=id.length;
-           |  var i=1,segs=[];
+           |  if(!kyoRangeId(id))return null;
+           |  var end=id.indexOf("~");if(end<0)end=id.length;
+           |  var segs=[],i=1;
            |  while(i<end){
-           |    if(i+8>end)return null;
-           |    var len=parseInt(id.substring(i,i+8),16);i+=8;
-           |    var s="";
-           |    for(var k=0;k<len;k++){if(i+4>end)return null;s+=String.fromCharCode(parseInt(id.substring(i,i+4),16));i+=4;}
-           |    segs.push(s);
+           |    var j=i+1,s="";
+           |    while(j<end&&id.charAt(j)!=="."){
+           |      if(id.charAt(j)==="$$"){s+=String.fromCharCode(parseInt(id.substring(j+1,j+5),16));j+=5;}
+           |      else{s+=id.charAt(j);j++;}
+           |    }
+           |    segs.push(s);i=j;
            |  }
            |  return segs.join(".");
            |}
            |function __kyoPathSel(p){var bs=String.fromCharCode(92),q=String.fromCharCode(34);var s=String(p).split(bs).join(bs+bs).split(q).join(bs+q);return '[data-kyo-path='+q+s+q+']';}
+           |// The id a path encodes to at nesting depth zero (ReactiveRegion.htmlId), so the common lookup is one
+           |// table read instead of a decode of every id the registry holds.
+           |function __kyoRangeIdOf(p){
+           |  var segs=p===""?[]:String(p).split("."),id="r";
+           |  for(var i=0;i<segs.length;i++){
+           |    id+=".";var s=segs[i];
+           |    for(var k=0;k<s.length;k++){
+           |      var c=s.charAt(k);
+           |      if(/[0-9A-Za-z_]/.test(c))id+=c;
+           |      else{var h=s.charCodeAt(k).toString(16);while(h.length<4)h="0"+h;id+="$$"+h;}
+           |    }
+           |  }
+           |  return id;
+           |}
+           |function __kyoFirstElIn(pair){
+           |  var n=pair.start.nextSibling;
+           |  while(n&&n!==pair.end){if(n.nodeType===1)return n;n=n.nextSibling;}
+           |  return null;
+           |}
            |// Path-addressed command/measure target: the element carrying the path, else the first element inside
            |// the reactive range that owns the path (a range is delimited by comments, so it has no element of its own).
            |function __kyoResolveEl(p){
            |  var el=document.querySelector(__kyoPathSel(p));
            |  if(el)return el;
+           |  if(!__kyoRanges)return null;
+           |  var direct=__kyoRanges.get(__kyoRangeIdOf(p));
+           |  if(direct)return __kyoFirstElIn(direct);
+           |  // Only a range nested transparently (depth suffix) or a segment that itself holds a dot gets here.
            |  var found=null;
-           |  if(__kyoRanges)__kyoRanges.forEach(function(pair,id){
+           |  __kyoRanges.forEach(function(pair,id){
            |    if(found||__kyoRangeIdPath(id)!==p)return;
-           |    var n=pair.start.nextSibling;
-           |    while(n&&n!==pair.end){if(n.nodeType===1&&!found)found=n;n=n.nextSibling;}
+           |    found=__kyoFirstElIn(pair);
            |  });
            |  return found;
            |}
+           |""".stripMargin
+
+    private[kyo] def clientJs(basePath: String): String =
+        s"""(function(){
+           |var base="$basePath";
+           |var __q=[];
+           |// Mirrors DomBackend.setSelection: the one place that knows the two ways a caret move can be a no-op.
+           |// Elements outside input and textarea (select, contenteditable) have no setSelectionRange at all, and
+           |// on input types without a text selection (email, number) it throws InvalidStateError; in both cases
+           |// the value is set and only the caret stays put. Every other exception is a real failure and propagates.
+           |function kyoSetCaret(t,s,e){if(typeof t.setSelectionRange!=="function")return;
+           |  try{t.setSelectionRange(s,e);}catch(er){if(er.name!=="InvalidStateError")throw er;}}
+           |$reactiveRangesJs
+           |// A field renders its .value PROPERTY, and the property stops tracking the attribute the first time the
+           |// user types. Patching the attribute alone is therefore invisible on any touched field, so mirror it onto
+           |// the property. Assigning only on a real difference leaves a focused field's caret alone (the echo of the
+           |// user's own keystroke compares equal). Twin of DomBackend.syncFieldProperty; keep in lockstep.
+           |function __kyoSyncField(el,name,value){
+           |  if(name==="value"&&(el.tagName==="INPUT"||el.tagName==="TEXTAREA")&&el.value!==value)el.value=value;
+           |}
+           |// Mark an attr name as owned by the imperative id-addressed channel: names live in a __kyoOwn expando dict
+           |// ON the element (reclaimed with the node), which __kyoMorphAttrs reads to shield each owned attr from
+           |// reconciliation. Mirrors markOwned in DomBackend.
+           |function __kyoMark(el,n){(el.__kyoOwn||(el.__kyoOwn={}))[n]=true;}
+           |${DragClientJs.script(basePath)}
+           |$clientCoreJs
            |function fp(el){
            |  while(el&&el!==document.body){
            |    if(el.hasAttribute("data-kyo-path"))return el;
@@ -2336,8 +2409,9 @@ private[kyo] object HtmlRenderer:
            |    if(id!==exceptId)el.hidden=true;
            |  });
            |}
-           |// Build a mouse payload, omitting targetId when absent (null JSON would break Maybe[String] decode).
-           |function mkMouse(mods,tid,pos){var m={modifiers:mods};if(tid)m.targetId=tid;if(pos)m.position=pos;return m;}
+           |// Build a mouse payload, omitting targetId when absent (null JSON would break Maybe[String] decode). `self`
+           |// is false only when the DOM target sat inside the element the path names (see MouseEventData.self).
+           |function mkMouse(mods,tid,pos,self){var m={modifiers:mods};if(tid)m.targetId=tid;if(pos)m.position=pos;if(self===false)m.self=false;return m;}
            |// Viewport coordinates of a pointer event; the events without a pointer (focus, blur, submit) pass no third argument.
            |function mkPos(e){return {x:e.clientX,y:e.clientY};}
            |// Build a keyboard payload, omitting targetId when absent.
@@ -2385,7 +2459,7 @@ private[kyo] object HtmlRenderer:
            |    // An anchor the UI handles stays on the page; one it does not handle is a link, and the browser follows it.
            |    // A modified click (a new tab or window) and a download anchor keep their default; the handler runs either way.
            |    var kmod=e.ctrlKey||e.metaKey||e.shiftKey||e.altKey||e.button!==0;
-           |    var mid=e.target&&e.target.id?e.target.id:null;if(!kmod&&el.tagName&&el.tagName.toLowerCase()==='a'&&!el.hasAttribute("download")&&he(el,"click"))e.preventDefault();post({Click:{path:p,mouse:mkMouse({ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},mid,mkPos(e))}});window._kyoClickSubmit=true;setTimeout(function(){window._kyoClickSubmit=false},0);
+           |    var mid=e.target&&e.target.id?e.target.id:null;if(!kmod&&el.tagName&&el.tagName.toLowerCase()==='a'&&!el.hasAttribute("download")&&he(el,"click"))e.preventDefault();post({Click:{path:p,mouse:mkMouse({ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},mid,mkPos(e),e.target===el)}});window._kyoClickSubmit=true;setTimeout(function(){window._kyoClickSubmit=false},0);
            |  }
            |  // Right-click: preventDefault suppresses the native menu only when a handler was declared.
            |  else if(t==="contextmenu"&&he(el,"contextmenu")){e.preventDefault();var cmid=e.target&&e.target.id?e.target.id:null;post({ContextMenu:{path:p,mouse:mkMouse({ctrl:e.ctrlKey,alt:e.altKey,shift:e.shiftKey,meta:e.metaKey},cmid,mkPos(e))}});}
