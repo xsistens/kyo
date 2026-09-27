@@ -1,6 +1,8 @@
 package kyo.internal
 
 import kyo.*
+import kyo.internal.DomReactiveRegions.eachSpanNode
+import kyo.internal.DomReactiveRegions.spanClose
 import org.scalajs.dom
 import org.scalajs.dom.document
 import scala.annotation.tailrec
@@ -151,19 +153,6 @@ private[kyo] object DomBackend:
     // pairing them up positionally would rewrite marker text and hand the registry a range that is no longer there.
     // The morph therefore walks LOGICAL children, where an opening marker stands for its whole span.
 
-    /** The matching close marker for the span `open` starts, `Absent` when the run is unbalanced (the caller then
-      * treats the comment as an ordinary node). Ids are unique among siblings, so a direct match suffices.
-      */
-    private def spanClose(open: dom.Node, id: String): Maybe[dom.Node] =
-        var node   = open.nextSibling
-        var result = Maybe.empty[dom.Node]
-        while result.isEmpty && node != null do
-            if DomReactiveRegions.endMarkerId(node).contains(id) then result = Present(node)
-            node = node.nextSibling
-        end while
-        result
-    end spanClose
-
     /** The reconciliation key of a logical child: an element's `data-kyo-path`, a span's range id, else `Absent` for
       * text and plain comments, which reconcile positionally. A portal slot carries no path of its own and is keyed
       * by the path of the element it stands in for, so the incoming portal element finds it wherever it sits.
@@ -182,19 +171,6 @@ private[kyo] object DomBackend:
             case Present(marker) => marker.nextSibling
             case Absent          => node.nextSibling
     end logicalNext
-
-    /** Apply `f` to every node of the logical child starting at `first`, its markers included. */
-    private def eachSpanNode(first: dom.Node)(f: dom.Node => Unit): Unit =
-        val last = DomReactiveRegions.startMarkerId(first).flatMap(spanClose(first, _)).getOrElse(first)
-        var node = first
-        var stop = false
-        while !stop && node != null do
-            val next = node.nextSibling
-            stop = node eq last
-            f(node)
-            node = next
-        end while
-    end eachSpanNode
 
     private def removeLogical(parent: dom.Element, node: dom.Node): Unit =
         eachSpanNode(node)(current => discard(parent.removeChild(current)))
@@ -391,7 +367,12 @@ private[kyo] object DomBackend:
       * region about which rows are on screen cannot be matched either. The caller then repaints the whole list,
       * which needs no such structure because it diffs whole documents.
       */
-    private def applyListPatch(target: DomReactiveRegions.MorphTarget, path: Seq[String], rows: Seq[ListRow]): Boolean =
+    private def applyListPatch(
+        target: DomReactiveRegions.MorphTarget,
+        scope: DomReactiveRegions.PatchScope,
+        path: Seq[String],
+        rows: Seq[ListRow]
+    ): Boolean =
         val parent   = target.parent.asInstanceOf[dom.Element]
         val pathAttr = path.mkString(".")
 
@@ -454,6 +435,18 @@ private[kyo] object DomBackend:
                 i += 1
             end while
 
+            // Told before anything moves: the morph may drop markers, and a dropped marker's id is unreadable after.
+            i = 0
+            while i < leaving.length do
+                scope.retire(leaving(i))
+                i += 1
+            end while
+            i = 0
+            while i < repainted.length do
+                scope.retire(repainted(i))
+                i += 1
+            end while
+
             // Focus spans the WHOLE region, not just the disturbed rows: a retained row keeps its DOM, but MOVING
             // it is a remove and an insert, which blurs whatever it holds. A pure reorder disturbs no row at all
             // and is precisely the case that would drop the caret if this were scoped to the disturbed ones.
@@ -474,7 +467,12 @@ private[kyo] object DomBackend:
                 val to = toNodes(index)
                 if to == null then from
                 else
-                    val at = patchLogical(parent, from, to)
+                    // Where the result will stand: a patch may replace `from` outright, so the run is bracketed by
+                    // its neighbours rather than named by a node that might not survive.
+                    val before = from.previousSibling
+                    val until  = logicalNext(from)
+                    val at     = patchLogical(parent, from, to)
+                    scope.placed(if before == null then parent.firstChild else before.nextSibling, until)
                     if at ne from then logicalElementsOf(js.Array(at)).foreach(touched += _)
                     else
                         from match
@@ -530,7 +528,9 @@ private[kyo] object DomBackend:
                     toNodes(index) match
                         case null => ()
                         case node =>
+                            val before   = cursor.previousSibling
                             val inserted = insertLogicalClone(parent, node, cursor)
+                            scope.placed(if before == null then parent.firstChild else before.nextSibling, cursor)
                             logicalElementsOf(js.Array(inserted)).foreach(touched += _)
                 end if
                 index += 1
@@ -1152,7 +1152,7 @@ private[kyo] object DomBackend:
                             // A closed backend paints nothing, so there is nothing to subscribe again.
                             if !isOpen then true
                             else
-                                regions.withRegionFragment(regionId, changed)(applyListPatch(_, path, rows)).flatMap {
+                                regions.withRegionFragment(regionId, changed)(applyListPatch(_, _, path, rows)).flatMap {
                                     applied =>
                                         if applied then
                                             Sync.defer(regions.forgetFingerprint(regionId))
