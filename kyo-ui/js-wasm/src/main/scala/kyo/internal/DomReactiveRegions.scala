@@ -14,6 +14,25 @@ final private[kyo] class DomReactiveRegions private (
 
     private var open = true
 
+    /** The fingerprint of what each range was last painted with, filled only while a devtools sink observes (see
+      * `DomBackend.noteWasted`). Kept here because this is where a range's end is known: an entry leaves with its range.
+      */
+    private val fingerprints = mutable.HashMap.empty[String, Long]
+
+    /** Records `fingerprint` as range `regionId`'s latest paint and answers whether the previous paint had the same one.
+      * A first value never repeats: the range may stand where an earlier one with the same markup was torn down.
+      */
+    private[kyo] def repaintRepeats(regionId: String, fingerprint: Long, firstValue: Boolean): Boolean =
+        val repeats = !firstValue && fingerprints.get(regionId).contains(fingerprint)
+        fingerprints(regionId) = fingerprint
+        repeats
+    end repaintRepeats
+
+    /** Forgets range `regionId`'s fingerprint after a change that painted no whole region (a list patch), so the next
+      * repaint is not compared against markup the range no longer shows.
+      */
+    private[kyo] def forgetFingerprint(regionId: String): Unit = discard(fingerprints.remove(regionId))
+
     def replace(regionId: String, html: String)(using Frame): Unit < Sync =
         replaceWith(regionId, html, keepCurrent = false)(_ => false)((_, _) => ())((_, _, _) => ())
 
@@ -172,6 +191,7 @@ final private[kyo] class DomReactiveRegions private (
             removed.foreach { id =>
                 ranges.remove(id)
                 discard(inserted.remove(id))
+                discard(fingerprints.remove(id))
             }
             val insertedRoots = (liveHost, incomingContent) match
                 case (
@@ -238,7 +258,11 @@ final private[kyo] class DomReactiveRegions private (
     )(using Frame): Unit =
         removed.foreach(ranges.remove)
         val live = rescanRange(regionId, endpoints)
-        removed.foreach(id => if !live.contains(id) then discard(inserted.remove(id)))
+        removed.foreach { id =>
+            if !live.contains(id) then
+                discard(inserted.remove(id))
+                discard(fingerprints.remove(id))
+        }
         ranges.addAll(live)
         incomingMarkup.foreach { (id, markup) =>
             if live.contains(id) && (!removed.contains(id) || inserted.contains(id)) then inserted(id) = markup
@@ -313,6 +337,7 @@ final private[kyo] class DomReactiveRegions private (
                 open = false
                 ranges.clear()
                 inserted.clear()
+                fingerprints.clear()
         }
 
     private def ensureOpen()(using Frame): Unit =
