@@ -242,4 +242,40 @@ class ForeachReuseTest extends kyo.test.Test[Any]:
         }
     }
 
+    "keyed mounted nodes inside retained rows survive an emission, a removed row's is released" in {
+        // The emission's mount-key sets are what keep a retained row's mounted instance claimed: a wrong
+        // (empty) keep set would evict every instance, and a retained row is never re-walked, so nothing
+        // would bring it back.
+        def component(key: String, runs: AtomicInteger, released: AtomicInteger): UI < (Async & Scope) =
+            for
+                _ <- Sync.defer(discard(runs.incrementAndGet()))
+                _ <- Scope.ensure(Sync.defer(discard(released.incrementAndGet())))
+            yield UI.span(s"instance:$key")
+        Scope.run {
+            for
+                runs     <- Sync.defer(new AtomicInteger(0))
+                released <- Sync.defer(new AtomicInteger(0))
+                rows     <- Signal.initRef(Chunk("a", "b", "c"))
+                rec = new Recording
+                ui  = UI.ul(rows.foreachKeyed(identity) { item =>
+                    UI.li(UI.mounted(component(item, runs, released)).keyed(item))
+                })
+                root <- ReactiveUI.normalize(ui, Seq.empty)
+                _    <- ReactiveUI.subscribe(root, rec.exchange)
+                _    <- assertEventually(Sync.defer(runs.get == 3))
+                _    <- parked(rows, 1)
+                _    <- rows.getAndUpdate(_.append("d"))
+                _    <- assertEventually(Sync.defer(runs.get == 4))
+                // The emission is through, and with it every eviction it makes, once the region waits on the list again.
+                _ <- parked(rows, 1)
+                afterAppend = released.get
+                _ <- rows.getAndUpdate(_.filter(_ != "b"))
+                _ <- assertEventually(Sync.defer(released.get == afterAppend + 1))
+                _ <- parked(rows, 1)
+            yield
+                assert(afterAppend == 0, s"expected no instance released by appending a row, got $afterAppend")
+                assert(runs.get == 4, s"expected the retained rows' instances to be kept, got ${runs.get} runs")
+        }
+    }
+
 end ForeachReuseTest
