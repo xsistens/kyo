@@ -146,6 +146,27 @@ class UIServerTest extends UITest:
         }
     }
 
+    "a devtools overlay reaches only the pages of the handlers built under it, not another app in the process" in {
+        val hooks = kyo.internal.Devtools.ServerHooks("/*kyo-dev-overlay*/", () => "{}")
+        cancelOnUnsupportedPlatform {
+            for
+                withDevtools <- kyo.internal.Devtools.server.let(Present(hooks))(UI.runHandlers("/dev")(UI.div("dev")))
+                plain        <- UI.runHandlers("/plain")(UI.div("plain"))
+                server       <- HttpServer.init(0, "localhost")((withDevtools ++ plain)*)
+                fetched      <- Abort.run[HttpException] {
+                    for
+                        dev   <- HttpClient.getText(s"http://localhost:${server.port}/dev")
+                        other <- HttpClient.getText(s"http://localhost:${server.port}/plain")
+                    yield (dev, other)
+                }
+            yield
+                val (dev, other) = fetched.getOrElse(("", ""))
+                assert(fetched.isSuccess, fetched.toString)
+                assert(dev.contains("kyo-dev-overlay"), dev)
+                assert(!other.contains("kyo-dev-overlay"), other)
+        }
+    }
+
     "the served HTML is rendered for the request's path and query, under the base and at the base itself" in {
         withPages { origin =>
             Abort.run[HttpException] {
