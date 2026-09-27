@@ -9,11 +9,29 @@ private[kyo] object UIServer:
 
     def handlers(basePath: String)(ui: => UI < Async)(using Frame): Seq[HttpHandler[?, ?, ?]] < Sync =
         val base = normalizePath(basePath)
-        Sync.defer(Seq(
-            getPage(base, basePath, Sync.defer(ui)),
-            wsRoute(base, Sync.defer(ui))
-        ))
+        sessionServing.map { serve =>
+            Seq(
+                getPage(base, basePath, serve.pageScript, Sync.defer(ui)),
+                HttpHandler.webSocket(s"$base/_kyo/ws")((_, ws) => serve(ws, Sync.defer(ui)))
+            )
+        }
     end handlers
+
+    /** Serves a session under the devtools installation in effect where this is called.
+      *
+      * kyo-http runs a handler on a fiber of its own, which inherits nothing from whoever built the handlers, so a sink the
+      * caller installed with [[kyo.UI.devtools]] would not reach the session's regions. The handlers read it here, at build
+      * time, and put it back on every session they serve.
+      */
+    private[kyo] def sessionServing(using Frame): SessionServer < Sync =
+        Devtools.sink.use(sink => Devtools.server.use(hooks => new SessionServer(sink, hooks)))
+
+    /** Serves sessions under the devtools installation captured by [[sessionServing]]. */
+    final private[kyo] class SessionServer(devtoolsSink: Maybe[UI.RenderEvent => Unit], hooks: Maybe[Devtools.ServerHooks]):
+        def pageScript: Maybe[String]                                                                = hooks.map(_.pageScript)
+        def apply(ws: HttpWebSocket, ui: => UI < Async)(using Frame): Unit < (Async & Abort[Closed]) =
+            Devtools.sink.let(devtoolsSink)(Devtools.server.let(hooks)(serveSession(ws, ui)))
+    end SessionServer
 
     /** The query parameter the client puts the page's path and query in when it opens the session socket. */
     val pageParam: String = "kyo-page"
@@ -23,14 +41,16 @@ private[kyo] object UIServer:
       */
     def handlers(basePath: String, head: UI.PageHead)(ui: UI.Request => UI < Async)(using Frame): Seq[HttpHandler[?, ?, ?]] < Sync =
         val base = normalizePath(basePath)
-        Sync.defer(Seq(
-            requestPage(HttpRoute.getText(if base.isEmpty then "/" else base), base, head, ui),
-            requestPage(HttpRoute.getRaw(HttpPath.Literal(base) / HttpPath.Capture.Rest("page")).response(_.bodyText), base, head, ui),
-            HttpHandler.webSocket(s"$base/_kyo/ws") { (request, ws) =>
-                val page = request.query(pageParam).map(HttpUrl.fromUri).getOrElse(HttpUrl.fromUri(base))
-                serveSession(ws, Sync.defer(ui(requestOf(base, page))))
-            }
-        ))
+        sessionServing.map { serve =>
+            Seq(
+                requestPage(HttpRoute.getText(if base.isEmpty then "/" else base), base, head, ui),
+                requestPage(HttpRoute.getRaw(HttpPath.Literal(base) / HttpPath.Capture.Rest("page")).response(_.bodyText), base, head, ui),
+                HttpHandler.webSocket(s"$base/_kyo/ws") { (request, ws) =>
+                    val page = request.query(pageParam).map(HttpUrl.fromUri).getOrElse(HttpUrl.fromUri(base))
+                    serve(ws, Sync.defer(ui(requestOf(base, page))))
+                }
+            )
+        }
     end handlers
 
     private def requestPage[In](
@@ -59,7 +79,9 @@ private[kyo] object UIServer:
         UI.Request(path, query)
     end requestOf
 
-    private def getPage(base: String, pagePath: String, ui: => UI < Async)(using Frame): HttpHandler[?, ?, ?] =
+    private def getPage(base: String, pagePath: String, devtoolsScript: Maybe[String], ui: => UI < Async)(using
+        Frame
+    ): HttpHandler[?, ?, ?] =
         HttpRoute.getText(pagePath).handler { _ =>
             for
                 uiTree        <- ui
@@ -69,7 +91,7 @@ private[kyo] object UIServer:
                 // here in a real stylesheet instead, after the base reset (renderPage already orders
                 // baseCss before css).
                 css  = rules.map(_._2).mkString
-                page = HtmlRenderer.renderPage("kyo-ui", html, css, base)
+                page = HtmlRenderer.renderPage("kyo-ui", html, css, base, devtoolsScript)
             yield HttpResponse.ok(page)
                 .addHeader("Content-Type", "text/html; charset=utf-8")
         }
@@ -116,6 +138,10 @@ private[kyo] object UIServer:
                             DragFiles.local.let(Present(files)) {
                                 for
                                     sub <- ReactiveUI.subscribe(root, exchange)
+                                    // Devtools statistics ride this connection, on a fiber bound to the
+                                    // session Scope so they end with it. Nothing is forked unless an overlay
+                                    // is registered, which no build without kyo-ui-devtools ever does.
+                                    _ <- devtoolsPump(ws)
                                     // Single-consumer drain: element handlers run in ARRIVAL order on one fiber, the twin of
                                     // the browser mount's drain in DomBackend, so a blur and the focus that follows it apply in
                                     // that order.
@@ -148,10 +174,30 @@ private[kyo] object UIServer:
             yield ()
         }
 
-    private def wsRoute(base: String, ui: => UI < Async)(using Frame): HttpHandler[?, ?, ?] =
-        HttpHandler.webSocket(s"$base/_kyo/ws") { (_, ws) =>
-            serveSession(ws, ui)
+    /** Ship devtools statistics over this session's socket until it closes; a no-op unless the handlers serving it were
+      * built under a devtools installation.
+      *
+      * A poll rather than a push from the store: the store is written by every region fiber of every session
+      * and reading it on a timer is what keeps those writes free of any knowledge that a devtool exists. A
+      * frame lost to a closed socket is dropped, since the numbers describe a moment that has passed.
+      */
+    private def devtoolsPump(ws: HttpWebSocket)(using Frame): Unit < (Async & Scope) =
+        Devtools.server.use {
+            case Absent         => Kyo.unit
+            case Present(hooks) =>
+                Fiber.init(
+                    Loop.forever {
+                        Sync.defer(hooks.stats())
+                            .map(payload =>
+                                Abort.runPartial[Closed](
+                                    ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](HtmlOp.DevtoolsStats(payload))))
+                                ).unit
+                            )
+                            .andThen(Async.sleep(Devtools.statsInterval))
+                    }
+                ).unit
         }
+    end devtoolsPump
 
     private def wsExchange(ws: HttpWebSocket, seenClasses: Set[String])(using Frame): UIExchange =
         new UIExchange:
@@ -205,6 +251,10 @@ private[kyo] object UIServer:
                         discard(sentBelowRegion.put(path, rendered.map((opPath, html, _) => (opPath, html)).toMap))
                         val changed = rendered.filterNot((opPath, html, _) => previouslySent.get(opPath).contains(html))
                         Kyo.foreachDiscard(changed)((opPath, html, rules) => send(HtmlOp.Replace(opPath, html), rules))
+                            // The wasted-render report falls out of the filter this branch already applies:
+                            // an emission whose every candidate rendered byte-identically to the last one puts
+                            // nothing on the socket, and that is precisely a render that was for nothing.
+                            .andThen(Devtools.notePaint(changed.foldLeft(0)(_ + _._2.length), wasted = changed.isEmpty))
                     }
                 end if
             end onChange
@@ -242,7 +292,7 @@ private[kyo] object UIServer:
                             send(
                                 HtmlOp.PatchList(id, rows.map(_.key), html),
                                 rules
-                            ).andThen(true)
+                            ).andThen(Devtools.notePaint(html.length, wasted = false)).andThen(true)
                         }
                     // An SVG region replaces its own group element; there is no row range to address.
                     case _: ReactiveRegion.SvgElement =>
@@ -281,7 +331,10 @@ private[kyo] object UIServer:
                         val replaceOp = region match
                             case ReactiveRegion.HtmlRange(id) => HtmlOp.ReplaceRange(id, html)
                             case _: ReactiveRegion.SvgElement => HtmlOp.Replace(path, HtmlRenderer.wrapReactiveRegion(region, html))
-                        send(replaceOp, rules)
+                        // Never wasted: a whole-region replace is sent unconditionally, because the client
+                        // compares against the live DOM before applying and that is what repairs a field the
+                        // user has typed into.
+                        send(replaceOp, rules).andThen(Devtools.notePaint(html.length, wasted = false))
                 }
             end sendRegion
 
