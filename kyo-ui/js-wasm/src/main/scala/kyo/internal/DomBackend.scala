@@ -1013,6 +1013,56 @@ private[kyo] object DomBackend:
 
         private[kyo] def close(using Frame): Unit < Sync = Sync.defer { open = false }
 
+        /** Fingerprint of the HTML each region painted last, kept only while a devtools sink is observing.
+          *
+          * The server transport learns "this render changed nothing" for free, because it compares rendered
+          * bytes against what it last sent in order to decide what to put on the socket. This one has no such
+          * comparison to borrow: it renders the region and morphs, and a morph that finds everything equal is
+          * indistinguishable from the outside. So it is asked here, on the string the paint already produced.
+          *
+          * A fingerprint, not the HTML: keeping the painted bytes of the whole tree alive would double the
+          * page's memory to answer one boolean. Length in the high word, hash in the low, which makes a
+          * collision require both to agree, and the cost of one is a render reported as wasted that was not.
+          *
+          * A region's first value (`previous` absent) is never compared: an earlier region may have been torn down
+          * at the same place, and a fresh region's paint is not a repeat of it. A later value is compared with the
+          * fingerprint of the region's last observed paint, and where there is none, because the last paint was the
+          * enclosing render's or a list patch changed the range since, `previous` is rendered once to get one. An HTML
+          * range keeps its fingerprint in the range registry, which drops it with the range; an SVG region keeps it on
+          * its element, which a repaint replaces.
+          *
+          * Answers the fingerprint of `html` for the caller to record once the paint landed, `Absent` with no sink.
+          */
+        private def noteWasted(previous: Maybe[UI], html: String, known: => Maybe[Long])(render: UI => String < Sync)(using
+            Frame
+        ): Maybe[Long] < Sync =
+            def fingerprint(of: String): Long = (of.length.toLong << 32) | (of.hashCode() & 0xffffffffL)
+            Devtools.observing.map { observing =>
+                if !observing then Maybe.empty[Long]
+                else
+                    val last: Maybe[Long] < Sync = previous match
+                        case Absent      => Absent
+                        case Present(ui) =>
+                            Sync.defer(known).map {
+                                case Absent => render(ui).map(prior => Present(fingerprint(prior)))
+                                case found  => found
+                            }
+                    last.map { last =>
+                        val current = fingerprint(html)
+                        Devtools.notePaint(html.length, last.contains(current)).andThen(Present(current))
+                    }
+            }
+        end noteWasted
+
+        private def lastFingerprint(region: ReactiveRegion): Maybe[Long] =
+            region match
+                case ReactiveRegion.HtmlRange(regionId)   => regions.fingerprint(regionId)
+                case svgRegion: ReactiveRegion.SvgElement =>
+                    Maybe(document.querySelector(pathSelector(svgRegion.path.mkString(".")))).flatMap { element =>
+                        val stored = element.asInstanceOf[scalajs.js.Dynamic].__kyoFingerprint
+                        if scalajs.js.isUndefined(stored) then Absent else Present(stored.asInstanceOf[String].toLong)
+                    }
+
         // In-process: the update is a DOM write, not bytes on a wire, so this replaces the region whole
         // (morphing where it can) rather than diffing it. `previous` is what the server-side exchange
         // uses to send only what moved; here an absent `previous` marks the region's first value, whose
@@ -1033,9 +1083,12 @@ private[kyo] object DomBackend:
                         else ReactiveRegion.BoundaryMode.Emit
                     HtmlRenderer.renderRegion(ui, path, contentContext, region, parentContext, boundaryMode).flatMap { html =>
                         // Every painted byte passes here, so this is where the optional-feature flags learn about
-                        // an attribute that only a later re-render brings in (see noteMarkers).
+                        // an attribute that only a later re-render brings in (see noteMarkers), and where a
+                        // devtools sink learns whether this render produced anything (see noteWasted).
                         noteMarkers(html)
-                        Sync.defer(open).flatMap { stillOpen =>
+                        noteWasted(previous, html, lastFingerprint(region))(
+                            HtmlRenderer.renderRegion(_, path, contentContext, region, parentContext, boundaryMode)
+                        ).map(noted => (noted, open)).flatMap { (noted, stillOpen) =>
                             if !stillOpen then Kyo.unit
                             else
                                 val applied = region match
@@ -1058,9 +1111,13 @@ private[kyo] object DomBackend:
                                                 regions.replaceWith(regionId, html, keepCurrent = previous.isEmpty)(tryMorphRange)(
                                                     prepareRangePatch
                                                 )(finishRangePatch)
+                                                    .andThen(Sync.defer(noted.foreach(regions.recordFingerprint(regionId, _))))
                                         }
                                     case svgRegion: ReactiveRegion.SvgElement =>
-                                        replaceSvg(svgRegion, html)
+                                        replaceSvg(svgRegion, html).map(shown =>
+                                            for fingerprint <- noted; element <- shown do
+                                                element.asInstanceOf[scalajs.js.Dynamic].__kyoFingerprint = fingerprint.toString
+                                        )
                                 applied.andThen(Sync.defer(diagnostics.regionApplied()))
                         }
                     }
@@ -1096,7 +1153,12 @@ private[kyo] object DomBackend:
                             if !isOpen then true
                             else
                                 regions.withRegionFragment(regionId, changed)(applyListPatch(_, path, rows)).flatMap {
-                                    applied => if applied then true else repaint
+                                    applied =>
+                                        if applied then
+                                            Sync.defer(regions.forgetFingerprint(regionId))
+                                                .andThen(Devtools.notePaint(changed.length, wasted = false))
+                                                .andThen(true)
+                                        else repaint
                                 }
                         }
                     }
@@ -1210,12 +1272,15 @@ private[kyo] object DomBackend:
             sweepScrollAuto()
         end finishRangePatch
 
-        private def replaceSvg(region: ReactiveRegion.SvgElement, html: String)(using Frame): Unit < Sync =
+        /** Replaces the SVG region's element with `html`, answering the element that shows it afterwards. */
+        private def replaceSvg(region: ReactiveRegion.SvgElement, html: String)(using Frame): Maybe[dom.Element] < Sync =
             Sync.defer {
                 val pathAttr  = region.path.mkString(".")
                 val finalHtml = HtmlRenderer.wrapReactiveRegion(region, html)
                 val element   = document.querySelector(pathSelector(pathAttr))
-                if element != null && element.outerHTML != finalHtml then
+                if element == null then Absent
+                else if element.outerHTML == finalHtml then Present(element)
+                else
                     val active = Maybe(document.activeElement).filter(el => (el ne document.body) && element.contains(el))
                     val (selectionStart, selectionEnd) = active.map(readSelection).getOrElse((Absent, Absent))
                     val activePath                     = active.flatMap(el => Maybe(el.getAttribute("data-kyo-path")))
@@ -1233,6 +1298,7 @@ private[kyo] object DomBackend:
                     seedFocusAuto(updated, oldFocus)
                     spawnGhosts(ghosts)
                     sweepFocusAuto()
+                    Maybe.fromOption(updated.headOption)
                 end if
             }
         end replaceSvg
