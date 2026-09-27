@@ -9,11 +9,19 @@ import kyo.*
   * `position` is the pointer's viewport position, sent only by the events that have one: click, contextmenu and the two
   * hover events. Focus, blur and submit are not mouse events in the browser and carry no coordinates, so they leave it
   * `Absent` (the field is omitted on the wire) rather than sending an invented origin.
+  *
+  * `self` says whether the DOM target was the element the event's path names, rather than something inside it. An
+  * element without handlers, controls or bindings renders no `data-kyo-path` of its own (see
+  * `HtmlRenderer.carriesPath`), so a click on it is reported under the nearest ancestor that carries one, and the path
+  * alone does not say whether that ancestor was clicked itself, which is the one thing `onClickSelf` asks. The
+  * dispatcher's other target questions (disabled, submitting button, a control below) are answered by the carrying
+  * element.
   */
 final private[kyo] case class MouseEventData(
     modifiers: UI.Modifiers,
     targetId: Maybe[String],
-    position: Maybe[UI.Point] = Absent
+    position: Maybe[UI.Point] = Absent,
+    self: Boolean = true
 ) derives CanEqual, Schema
 
 /** Keyboard event payload on the wire. Reconstructed into UI.KeyboardEvent on the server. */
