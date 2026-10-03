@@ -290,7 +290,9 @@ object ApolloClientWriter:
           * `valueOf` for an enum with a parameterized case, so both are emitted over the
           * known cases only: `values` lists them, `valueOf` finds one by name or is
           * `Absent` (never `Unknown__`, never a throw). The lookup table's `$` suffix
-          * cannot collide with a case, as no GraphQL name contains `$`.
+          * cannot collide with a case, as no GraphQL name contains `$`; it is written
+          * in backticks, as the `field$sel` classes are, because Scala 3.9 warns on a
+          * plain identifier containing `$`.
           */
         private def emitEnum(e: EnumTypeDefinition): GeneratedSource =
             val name     = e.name
@@ -312,10 +314,10 @@ object ApolloClientWriter:
            |  /** The cases the schema declared, in declaration order; never `Unknown__`. */
            |  val values: Chunk[$name] = Chunk($cases)
            |
-           |  private val byName$$: Map[String, $name] = values.map(v => v.toString -> v).toMap
+           |  private val `byName$$`: Map[String, $name] = values.map(v => v.toString -> v).toMap
            |
            |  /** The declared case named `name`, or `Absent`; never `Unknown__`. */
-           |  def valueOf(name: String): Maybe[$name] = Maybe.fromOption(byName$$.get(name))
+           |  def valueOf(name: String): Maybe[$name] = Maybe.fromOption(`byName$$`.get(name))
            |
            |  /** GraphQL enums are bare-name strings on the wire — a string transform,
            |    * not sum-type derivation (which breaks the Scala.js linker at kyo RC5). */
