@@ -1477,4 +1477,52 @@ class SignalTest extends kyo.test.Test[Any]:
         }
     }
 
+    "projected observation" - {
+        "an observer of a map runs only when the map's own value changes" in {
+            for
+                ref  <- Signal.initRef(1)
+                seen <- AtomicRef.init(Chunk.empty[Boolean])
+                sig = ref.map(_ > 0)
+                fiber  <- Fiber.initUnscoped(sig.observe(recordValue(seen, _)))
+                _      <- assertEventually(ref.waiters.map(_ == 1))
+                _      <- ref.set(2)
+                _      <- assertEventually(ref.waiters.map(_ == 1))
+                still  <- seen.get
+                _      <- ref.set(-1)
+                _      <- pollUntil(seen.get.map(_.size == 2))
+                result <- seen.get
+                _      <- fiber.interrupt
+            yield assert(still == Chunk(true) && result == Chunk(true, false))
+        }
+
+        "an idle observer of a map chain holds exactly one waiter on the leaf" in {
+            for
+                ref  <- Signal.initRef(0)
+                seen <- AtomicRef.init(Chunk.empty[Int])
+                sig = ref.map(v => v).map(v => v).map(v => v)
+                fiber <- Fiber.initUnscoped(sig.observe(10.millis)(recordValue(seen, _)))
+                _     <- pollUntil(seen.get.map(_.nonEmpty))
+                _     <- Async.sleep(100.millis)
+                w     <- ref.waiters
+                _     <- fiber.interrupt
+            yield assert(w == 1, s"map chain left $w waiters on the leaf")
+        }
+
+        "a constant delivers once and holds its scope across would-be repair intervals" in {
+            for
+                seen     <- AtomicRef.init(Chunk.empty[Int])
+                released <- AtomicRef.init(false)
+                fiber    <- Fiber.initUnscoped(Signal.initConst(7).observe(10.millis) { v =>
+                    Scope.ensure(released.set(true)).andThen(recordValue(seen, v))
+                })
+                _         <- pollUntil(seen.get.map(_.nonEmpty))
+                _         <- Async.sleep(100.millis)
+                values    <- seen.get
+                duringRun <- released.get
+                _         <- fiber.interrupt
+                afterStop <- pollUntil(released.get)
+            yield assert(values == Chunk(7) && !duringRun && afterStop)
+        }
+    }
+
 end SignalTest
