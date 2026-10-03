@@ -199,13 +199,17 @@ private[kyo] object ReactiveUI:
       */
     def normalize(ui: UI, path: Seq[String], svg: Boolean = false): ReactiveUI < Sync =
         given Frame = ui.frame
+        // Same reason as HtmlRenderer.render: every child and row path is built with `:+`, which on a List
+        // root copies the whole prefix per node. A Vector root makes every derived path a Vector; paths are
+        // only built, compared and joined.
+        val rootPath = path.toVector
         for
             mountDispatch <- MountDispatch.init
             root          <- normalizeWith(
                 ui,
-                path,
+                rootPath,
                 svg,
-                ReactiveRegion.RegionIdentity.root(path),
+                ReactiveRegion.RegionIdentity.root(rootPath),
                 ReactiveRegion.ParentContext.Other,
                 mountDispatch
             )
@@ -328,9 +332,9 @@ private[kyo] object ReactiveUI:
                     collectSignalRef(ui).fold((Signal.initConst(ui: UI), true))(ref => (ref.changesTo(ui: UI), false))
                 for
                     (kids, hdl) <- walkStatic(ui, path, svg, regionIdentity, parentContext, mountDispatch, discoverRootBound = false)
-                    attrSnap    <- Kyo.foreach(ui.attrs.reactiveAttrs.toSeq)((n, s) => s.current.map(v => n -> v))
-                    boolSnap    <- Kyo.foreach(ui.attrs.reactiveBoolAttrs.toSeq)((n, s) => s.current.map(v => n -> v))
-                    classSnap   <- Kyo.foreach(ui.attrs.reactiveClasses.toSeq)((n, s) => s.current.map(v => n -> v))
+                    attrSnap    <- currentValues(ui.attrs.reactiveAttrs)
+                    boolSnap    <- currentValues(ui.attrs.reactiveBoolAttrs)
+                    classSnap   <- currentValues(ui.attrs.reactiveClasses)
                 yield ReactiveUI(
                     path,
                     elementSignal,
@@ -344,9 +348,9 @@ private[kyo] object ReactiveUI:
                     reactiveAttrs = ui.attrs.reactiveAttrs,
                     reactiveBoolAttrs = ui.attrs.reactiveBoolAttrs,
                     reactiveClasses = ui.attrs.reactiveClasses,
-                    renderedAttrValues = attrSnap.toMap,
-                    renderedBoolAttrValues = boolSnap.toMap,
-                    renderedClassValues = classSnap.toMap
+                    renderedAttrValues = attrSnap,
+                    renderedBoolAttrValues = boolSnap,
+                    renderedClassValues = classSnap
                 )
                 end for
 
@@ -474,6 +478,13 @@ private[kyo] object ReactiveUI:
     end DragSessionLimits
 
     /** Walk a static UI tree. Collect reactive children, build handle. */
+    /** The current value of every bound signal in `channels`, by name. Most elements bind none, so an empty
+      * map answers without a loop.
+      */
+    private def currentValues[A](channels: Map[String, Signal[A]])(using Frame): Map[String, A] < Sync =
+        if channels.isEmpty then Map.empty[String, A]
+        else Kyo.foreach(channels.toSeq)((n, s) => s.current.map(v => n -> v)).map(_.toMap)
+
     private def walkStatic(
         ui: UI,
         basePath: Seq[String],
@@ -498,40 +509,46 @@ private[kyo] object ReactiveUI:
                 val childParentContext = elem match
                     case _: Table => ReactiveRegion.ParentContext.HtmlTable
                     case _        => ReactiveRegion.ParentContext.Other
-                for childWalks <- Kyo.foreach(elem.children.toSeq.zipWithIndex) { (child, i) =>
-                        val childPath    = basePath :+ i.toString
-                        val childContext = context.child(i.toString)
-                        if needsOwnNode(child) then
-                            // Normalize into a ReactiveUI node so subscribeScoped wires the updates. Required
-                            // even for a const element carrying ONLY reactive attrs: otherwise it is not walked
-                            // into a node and its in-place-patch observers would never start.
-                            for rui <- normalizeWith(child, childPath, childSvg, childContext, childParentContext, mountDispatch)
-                            yield (Seq(rui), Seq.empty[(Int, Handler)])
-                        else
-                            for (innerKids, innerHandle) <-
-                                    walkStatic(child, childPath, childSvg, childContext, childParentContext, mountDispatch)
-                            yield (innerKids, Seq((i, innerHandle)))
-                        end if
-                    }
-                yield
-                    val reactiveChildren = childWalks.flatMap(_._1)
-                    val staticHandlers   = childWalks.flatMap(_._2)
-                    val handle: Handler  = (targetPath, event) =>
+                val kids     = Chunk.newBuilder[ReactiveUI]
+                val handlers = Chunk.newBuilder[(Int, Handler)]
+                Kyo.foreachIndexedDiscard(elem.children) { (i, child) =>
+                    val segment      = i.toString
+                    val childPath    = basePath :+ segment
+                    val childContext = context.child(segment)
+                    if needsOwnNode(child) then
+                        // Normalize into a ReactiveUI node so subscribeScoped wires the updates. Required
+                        // even for a const element carrying only reactive attrs: otherwise it is not walked
+                        // into a node and its in-place-patch observers would never start.
+                        normalizeWith(child, childPath, childSvg, childContext, childParentContext, mountDispatch)
+                            .map(rui => discard(kids += rui))
+                    else
+                        walkStatic(child, childPath, childSvg, childContext, childParentContext, mountDispatch)
+                            .map { (innerKids, innerHandle) =>
+                                kids ++= innerKids
+                                discard(handlers += ((i, innerHandle)))
+                            }
+                    end if
+                }.andThen {
+                    val reactiveChildren: Seq[ReactiveUI]   = kids.result()
+                    val staticHandlers: Seq[(Int, Handler)] = handlers.result()
+                    val handle: Handler                     = (targetPath, event) =>
                         dispatch(elem, basePath, targetPath, event, reactiveChildren, staticHandlers)
                     (reactiveChildren, handle)
-                end for
+                }
 
             case Fragment(children) =>
-                for childWalks <- Kyo.foreach(children.toSeq.zipWithIndex) { (child, i) =>
-                        val childPath = child match
-                            case kc: KeyedChild[?] => basePath :+ kc.key
-                            case _                 => basePath :+ i.toString
-                        val childContext = child match
-                            case kc: KeyedChild[?] => context.child(kc.key)
-                            case _                 => context.child(i.toString)
-                        val inner = child match
-                            case kc: KeyedChild[?] => kc.child
-                            case _                 => child
+                val kids    = Chunk.newBuilder[ReactiveUI]
+                val handles = Chunk.newBuilder[Handler]
+                Kyo.foreachIndexedDiscard(children) { (i, child) =>
+                    val segment = child match
+                        case kc: KeyedChild[?] => kc.key
+                        case _                 => i.toString
+                    val childPath    = basePath :+ segment
+                    val childContext = context.child(segment)
+                    val inner        = child match
+                        case kc: KeyedChild[?] => kc.child
+                        case _                 => child
+                    val walked: (Seq[ReactiveUI], Handler) < Sync =
                         if needsOwnNode(inner) then
                             // Same contract as an Element's reactive child: the renderer paints the
                             // node's own anchor at childPath (no content descent), so normalize there
@@ -541,26 +558,39 @@ private[kyo] object ReactiveUI:
                             // reactive updates silently dropped). Element roots with binding channels
                             // (e.g. a keyed row carrying a reactive class) are promoted by the same
                             // predicate, or their in-place-patch observers would never start.
-                            for rui <- normalizeWith(inner, childPath, svg, childContext, parentContext, mountDispatch)
-                            yield (Seq(rui), rui.handle)
+                            normalizeWith(inner, childPath, svg, childContext, parentContext, mountDispatch)
+                                .map(rui => (Seq(rui), rui.handle))
                         else
                             walkStatic(inner, childPath, svg, childContext, parentContext, mountDispatch)
-                        end if
+                    walked.map { (innerKids, innerHandle) =>
+                        kids ++= innerKids
+                        discard(handles += innerHandle)
                     }
-                yield
-                    val allKids    = childWalks.flatMap(_._1)
-                    val allHandles = childWalks.zipWithIndex.map { case ((_, h), i) => (i, h) }
-                    val keyMap     = children.toSeq.zipWithIndex.collect {
-                        case (kc: KeyedChild[?], i) => kc.key -> i
-                    }.toMap
+                }.andThen {
+                    val allKids    = kids.result()
+                    val allHandles = handles.result()
+                    // Only a fragment with keyed children needs the key lookup.
+                    val keyMap: Map[String, Int] =
+                        if children.exists(_.isInstanceOf[KeyedChild[?]]) then
+                            val b = Map.newBuilder[String, Int]
+                            var i = 0
+                            children.foreach { child =>
+                                child match
+                                    case kc: KeyedChild[?] => b += kc.key -> i
+                                    case _                 => ()
+                                i += 1
+                            }
+                            b.result()
+                        else Map.empty
                     val handle: Handler = (targetPath, event) =>
                         if targetPath.size > basePath.size then
                             val segment = targetPath(basePath.size)
                             val idx     = Maybe.fromOption(keyMap.get(segment)).orElse(Maybe.fromOption(segment.toIntOption))
-                            idx.flatMap(i => Maybe.fromOption(allHandles.lift(i)).map(_._2))
+                            idx.filter(i => i >= 0 && i < allHandles.length).map(allHandles(_))
                                 .fold(true: Boolean < Async)(h => h(targetPath, event))
                         else true
                     (allKids, handle)
+                }
 
             case _: Reactive[?] | _: Foreach[?, ?] | _: Mounted =>
                 // When walkStatic is called with a Reactive, Foreach, or Mounted as the top-level node
@@ -1851,31 +1881,43 @@ private[kyo] object ReactiveUI:
                 if bound then Kyo.unit
                 else Fiber.init(observeSkippingRendered(sig, rendered)(slow)).unit
             }
-        Kyo.foreachDiscard(attrs.toSeq) { case (name, sig) =>
-            bindOrFork(
-                name,
-                sig,
-                Maybe.fromOption(renderedAttrs.get(name)),
-                exchange.attrPatcherNow,
-                v => exchange.onAttrPatch(path, name, v)
-            )
-        }.andThen(Kyo.foreachDiscard(boolAttrs.toSeq) { case (name, sig) =>
-            bindOrFork(
-                name,
-                sig,
-                Maybe.fromOption(renderedBools.get(name)),
-                exchange.boolAttrPatcherNow,
-                v => exchange.onBoolAttrPatch(path, name, v)
-            )
-        }).andThen(Kyo.foreachDiscard(classes.toSeq) { case (name, sig) =>
-            bindOrFork(
-                name,
-                sig,
-                Maybe.fromOption(renderedClasses.get(name)),
-                exchange.classPatcherNow,
-                v => exchange.onClassPatch(path, name, v)
-            )
-        })
+        val attrObservers: Unit < (Async & Scope) =
+            if attrs.isEmpty then Kyo.unit
+            else
+                Kyo.foreachDiscard(attrs.toSeq) { case (name, sig) =>
+                    bindOrFork(
+                        name,
+                        sig,
+                        Maybe.fromOption(renderedAttrs.get(name)),
+                        exchange.attrPatcherNow,
+                        v => exchange.onAttrPatch(path, name, v)
+                    )
+                }
+        val boolObservers: Unit < (Async & Scope) =
+            if boolAttrs.isEmpty then Kyo.unit
+            else
+                Kyo.foreachDiscard(boolAttrs.toSeq) { case (name, sig) =>
+                    bindOrFork(
+                        name,
+                        sig,
+                        Maybe.fromOption(renderedBools.get(name)),
+                        exchange.boolAttrPatcherNow,
+                        v => exchange.onBoolAttrPatch(path, name, v)
+                    )
+                }
+        val classObservers: Unit < (Async & Scope) =
+            if classes.isEmpty then Kyo.unit
+            else
+                Kyo.foreachDiscard(classes.toSeq) { case (name, sig) =>
+                    bindOrFork(
+                        name,
+                        sig,
+                        Maybe.fromOption(renderedClasses.get(name)),
+                        exchange.classPatcherNow,
+                        v => exchange.onClassPatch(path, name, v)
+                    )
+                }
+        attrObservers.andThen(boolObservers).andThen(classObservers)
     end forkChannelObservers
 
     /** Try to bind one channel without a fiber; `false` means the caller must fork. The release is registered
