@@ -660,6 +660,7 @@ private[kyo] object HtmlRenderer:
         attrs.dragSource match
             case Present(source) => w(sb, s""" data-kyo-drag-key="${esc(source.key)}"""")
             case Absent          => attrs.dropTarget.foreach(target => w(sb, s""" data-kyo-drag-key="${esc(target.key)}""""))
+        attrs.scrollAuto.foreach(v => if v then w(sb, """ data-kyo-scroll-auto="1""""))
         // Marker only: stop-propagation is decided server-side in ReactiveUI.dispatchToElement; the client never reads this.
         attrs.stopPropagation.foreach(v => if v then w(sb, """ data-kyo-stop="1""""))
         // enter/leave transition class lists (read client-side by the patch-application code).
@@ -1523,12 +1524,24 @@ private[kyo] object HtmlRenderer:
           |  for(var pi=0;pi<finalRoots.length;pi++)__kyoPortalSweep(finalRoots[pi]);
           |  __kyoPortalSweep(null);
           |  sweepFocusAuto();
+          |  // A patch that left the flag on a different element scrolls that element into view; one that left it
+          |  // where it was scrolls nothing.
+          |  sweepScrollAuto(true);
           |}
           |var __kyoRanges=kyoRangeScan(document.body);
           |window.addEventListener("pagehide",function(){if(__kyoRanges){__kyoRanges.clear();__kyoRanges=null;}});
           |function kyoClientError(error){if(window.console&&console.error)console.error(error);}""".stripMargin
 
-    private def clientJs(basePath: String): String =
+    /** The keys that activate a button, and the keys that follow a link, as JavaScript conditions.
+      * Named here so the client script's line stays readable; the values are [[KeyPolicy]]'s.
+      */
+    private val jsButtonActivation = KeyPolicy.jsKeyTest(KeyPolicy.buttonActivationKeys)
+    private val jsLinkActivation   = KeyPolicy.jsKeyTest(KeyPolicy.linkActivationKeys)
+
+    /** The server-push client script. `private[kyo]` so KeyPolicyTest can hold the two copies of the
+      * keyboard rules against each other; nothing outside this module builds it.
+      */
+    private[kyo] def clientJs(basePath: String): String =
         s"""(function(){
            |var base="$basePath";
            |var __q=[];
@@ -1653,7 +1666,7 @@ private[kyo] object HtmlRenderer:
            |      // Portal upkeep over what this replace inserted (twin of DomBackend.portalSweep).
            |      if(nel)__kyoPortalSweep(nel);
            |    }
-           |    sweepFocusAuto();
+           |    sweepFocusAuto();sweepScrollAuto(true);
            |  }else if(op.Remove){
            |    var p=op.Remove.path.join(".");
            |    var el=document.querySelector('[data-kyo-path="'+p+'"]');
@@ -1662,7 +1675,7 @@ private[kyo] object HtmlRenderer:
            |    kyoSpawnGhosts(__rgh);
            |    // The removed subtree may have held portal placeholders: retire their body twins.
            |    __kyoPortalSweep(null);
-           |    sweepFocusAuto();
+           |    sweepFocusAuto();sweepScrollAuto(true);
            |  }else if(op.InjectCss){
            |    var s=document.createElement("style");
            |    s.textContent=op.InjectCss.css;
@@ -1955,6 +1968,23 @@ private[kyo] object HtmlRenderer:
            |    }
            |  }
            |}
+           |// Scroll-into-view for [data-kyo-scroll-auto]: the flag moves with a roving highlight, so the carrier
+           |// set is what tells a moved flag from a re-rendered one. Mirrors DomBackend.sweepScrollAuto.
+           |var __scrollAutoPaths={};
+           |function sweepScrollAuto(scroll){
+           |  var els=document.querySelectorAll("[data-kyo-scroll-auto]");
+           |  var now={},fresh=null;
+           |  for(var i=0;i<els.length;i++){
+           |    var p=els[i].getAttribute("data-kyo-path");
+           |    if(p===null)continue;
+           |    now[p]=true;
+           |    if(fresh===null&&!__scrollAutoPaths[p])fresh=els[i];
+           |  }
+           |  __scrollAutoPaths=now;
+           |  // block:"nearest" moves the nearest scrollable ancestor by the least it can, and not at all when the
+           |  // element is already visible, which is what a highlight walking within view wants.
+           |  if(scroll&&fresh&&typeof fresh.scrollIntoView==='function')fresh.scrollIntoView({block:"nearest",inline:"nearest"});
+           |}
            |// Focus seeding/restore for [data-kyo-focus-auto]/[data-kyo-focus-restore]; __focusReturnStack stacks {fa, ret|null, restore}.
            |// Mirrors DomBackend.focusReturnStack for the SPA transport.
            |var __focusReturnStack=[];
@@ -2006,6 +2036,9 @@ private[kyo] object HtmlRenderer:
            |kyoEnterSeed(document.body,{});
            |// Initial mount: everything server-rendered is new (empty old set), like native autofocus.
            |seedFocusAuto(document.body,{});
+           |// Record what already carries the scroll flag without acting on it: a page that arrives with a
+           |// highlight has not moved it, and scrolling on load would fight the browser's own restoration.
+           |sweepScrollAuto(false);
            |// Portal adopt for the initial paint: a portal element present at load re-homes immediately.
            |__kyoPortalSweep(document.body);
            |// Dropdown helpers: close all dropdowns except the given id
@@ -2030,6 +2063,10 @@ private[kyo] object HtmlRenderer:
            |  if(!el)return;
            |  var p=pa(el),t=e.type;
            |  if(t==="click"){
+           |    // preventActivation: an inert region declines the click's default too, so a readonly checkbox does
+           |    // not toggle under the pointer either. The click still posts, since the component has already
+           |    // dropped the handler that would have acted on it.
+           |    if(e.target&&e.target.closest&&e.target.closest('[data-kyo-inert]'))e.preventDefault();
            |    // Dropdown trigger click: open/close the option list.
            |    // Skip isTrusted=false synthetic clicks (e.g. from runSpaceClickSynthesis after Space keydown).
            |    if(e.isTrusted!==false&&e.target&&e.target.getAttribute('data-kyo-dropdown-trigger')){
@@ -2093,13 +2130,46 @@ private[kyo] object HtmlRenderer:
            |    else post({Change:{path:p,value:tgt.value}});
            |  }else if(t==="submit"){e.preventDefault();if(!window._kyoClickSubmit&&he(el,"submit")){var smid=e.target&&e.target.id?e.target.id:null;post({Submit:{path:p,mouse:mkMouse({ctrl:false,alt:false,shift:false,meta:false},smid)}});}}
            |  else if(t==="keydown"){
+           |    // preventActivation: a region that declared itself inert declines the browser default for the keys
+           |    // that change a native control's value, so a readonly checkbox stays focusable instead of being
+           |    // disabled. The keydown still posts below. KeyPolicy is the rule; KeyPolicyTest holds this against it.
+           |    if(e.target&&e.target.closest&&e.target.closest('[data-kyo-inert]')&&(${KeyPolicy.jsKeyTest(
+              KeyPolicy.activationKeys
+          )}))e.preventDefault();
            |    // preventScrollKeys: suppress native page-scroll for nav keys in a data-kyo-scroll-keys region; keydown still posts below.
+           |    // Every key and tag list below is interpolated from KeyPolicy, which the SPA client calls directly,
+           |    // so the two transports cannot answer this differently; KeyPolicyTest holds this text against it.
            |    if(e.target&&e.target.closest&&e.target.closest('[data-kyo-scroll-keys]')){
-           |      var __sk=e.target,__ed=(/^(INPUT|TEXTAREA|SELECT)$$/.test(__sk.tagName)||__sk.isContentEditable);
-           |      var __vc=(/^(TEXTAREA|SELECT)$$/.test(__sk.tagName)||__sk.isContentEditable);
-           |      var __vk=(e.key==="ArrowUp"||e.key==="ArrowDown"||e.key==="PageUp"||e.key==="PageDown");
-           |      var __hk=(e.key==="ArrowLeft"||e.key==="ArrowRight"||e.key==="Home"||e.key==="End");
-           |      if((__vk&&!__vc)||(__hk&&!__ed))e.preventDefault();
+           |      var __sk=e.target,__ed=(/^(${KeyPolicy.jsTagTest(KeyPolicy.editableTags)})$$/.test(__sk.tagName)||__sk.isContentEditable);
+           |      var __vc=(/^(${KeyPolicy.jsTagTest(KeyPolicy.verticalConsumerTags)})$$/.test(__sk.tagName)||__sk.isContentEditable);
+           |      var __sa=(/^(${KeyPolicy.jsTagTest(KeyPolicy.spaceActivatedTags)})$$/.test(__sk.tagName));
+           |      var __vk=(${KeyPolicy.jsKeyTest(KeyPolicy.verticalScrollKeys)});
+           |      var __hk=(${KeyPolicy.jsKeyTest(KeyPolicy.edgeScrollKeys)});
+           |      // Space is here for the same reason the arrows are: a list that is one tab stop has no
+           |      // native control to consume it, so a Space that picks the highlighted row would also scroll
+           |      // the page a screenful. It stays with whatever would type it or activate on it.
+           |      var __spk=(e.key===" "&&!__ed&&!__sa);
+           |      if((__vk&&!__vc)||(__hk&&!__ed)||__spk)e.preventDefault();
+           |    }
+           |    // An element with a click handler is activated twice once a keydown is posted at all: once
+           |    // by the browser, once by the dispatcher, which emulates that activation where no browser
+           |    // does it. Suppress the browser's, so it acts once and its own onKeyDown still sees the key.
+           |    // A button takes Enter and Space, an anchor Enter alone (Space scrolls with a link focused).
+           |    // The dispatcher answers a keydown by synthesizing the click it stands for (at the
+           |    // button for keyboard activation, at the form's default button for implicit submission),
+           |    // so the browser's own would be the second one. Twin of KeyPolicy.doubleActivates;
+           |    // FormActivationTest holds this script against it.
+           |    if(e.target&&e.target.tagName&&he(e.target,"keydown")){
+           |      var __own=e.target.getAttribute("data-kyo-ev");
+           |      var __ck=!!(__own&&__own.split(",").indexOf("click")>=0);
+           |      var __tg=e.target.tagName;
+           |      var __inf=!!(e.target.closest&&e.target.closest("form"));
+           |      // An anchor keeps the click-handler gate: suppressing Enter on a plain link would take
+           |      // its navigation with it, and navigation is the one thing the dispatcher does not carry.
+           |      var __act=(__tg==="BUTTON")?($jsButtonActivation)
+           |               :(__tg==="A")?(__ck&&($jsLinkActivation))
+           |               :(__inf&&e.key==="Enter");
+           |      if(__act)e.preventDefault();
            |    }
            |    // Focus-trap: when Tab is pressed inside a [data-kyo-focus-trap="1"] container,
            |    // wrap focus within the trap's focusable children instead of escaping to the page.
