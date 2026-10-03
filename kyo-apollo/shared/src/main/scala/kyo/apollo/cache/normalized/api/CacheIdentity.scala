@@ -4,7 +4,6 @@ import kyo.Chunk
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.SelectionBuilder
 import kyo.apollo.api.SelectionList
-import kyo.apollo.api.SelectorOf
 import kyo.apollo.api.TypeName
 import scala.NamedTuple.AnyNamedTuple
 import scala.compiletime.erasedValue
@@ -22,8 +21,8 @@ import scala.compiletime.summonFrom
   *
   * {{{
   * object CacheIdentities:
-  *     given CacheIdentity[Country]     = CacheIdentity.by(_.code)
-  *     given CacheIdentity[CountryEdge] = CacheIdentity.by(_.cursor)
+  *     given CacheIdentity[Country]     = CacheIdentity.by(Country)(_.code)
+  *     given CacheIdentity[CountryEdge] = CacheIdentity.by(CountryEdge)(_.cursor)
   * }}}
   *
   * Consumed in two roles, which is the point of declaring it once: the
@@ -48,23 +47,28 @@ end CacheIdentity
 
 object CacheIdentity:
 
-    /** Declare `Origin`'s identity by selecting its key field(s) with the
-      * generated selectors — `CacheIdentity.by[Country](_.code)`; a composite key
-      * lists them (`by[Book](_.isbn, _.edition)`). `Origin` is named: the key
-      * lambdas receive its selector object, which is found from the marker alone. The captured [[CompiledField]]s carry the
-      * schema field type, so a spread can force the key fields into any document
-      * it is spliced into without re-declaring them.
+    /** Declare `Origin`'s identity by selecting its key field(s) with the generated selectors:
+      * `CacheIdentity.by(Country)(_.code)`; a composite key lists them (`by(Book)(_.isbn, _.edition)`).
+      *
+      * The argument is the generated selector object, which each key lambda receives. The captured
+      * [[CompiledField]]s carry the schema field type, so a spread can force the key fields into any document it
+      * is spliced into without re-declaring them. The type name is resolved where the selection is applied (the
+      * result is a context function), so the entry point takes no `using` clause; see [[Fragment.of]] for why
+      * that matters to an IDE.
       */
-    def by[Origin](using sel: SelectorOf[Origin], origin: TypeName[Origin]): ByBuilder[Origin, sel.S] =
-        new ByBuilder[Origin, sel.S](sel.selector)
+    def by[Origin, S <: SelectionList[S, Origin, ?]](selector: S): ByBuilder[Origin, S] =
+        new ByBuilder[Origin, S](selector)
 
-    final class ByBuilder[Origin, S](protected val selector: S)(using origin: TypeName[Origin])
-        extends SelectionList[S, Origin, [K <: AnyNamedTuple] =>> CacheIdentity[Origin]]:
-        protected def fromFields[K <: AnyNamedTuple](select: SelectionBuilder.Fields[Origin, K]): CacheIdentity[Origin] =
+    final class ByBuilder[Origin, S](protected val selector: S)
+        extends SelectionList[S, Origin, [K <: AnyNamedTuple] =>> TypeName[Origin] ?=> CacheIdentity[Origin]]:
+        protected def fromFields[K <: AnyNamedTuple](
+            select: SelectionBuilder.Fields[Origin, K]
+        ): TypeName[Origin] ?=> CacheIdentity[Origin] =
+            val origin = summon[TypeName[Origin]]
             val fields = select.selections.collect { case f: CompiledField => f }
             require(
                 fields.nonEmpty,
-                s"CacheIdentity.by[${origin.name}] must select at least one key field"
+                s"CacheIdentity.by(${origin.name}) must select at least one key field"
             )
             new CacheIdentity(origin.name, fields)
         end fromFields

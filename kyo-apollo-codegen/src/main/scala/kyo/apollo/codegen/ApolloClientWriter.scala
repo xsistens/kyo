@@ -514,12 +514,11 @@ object ApolloClientWriter:
           *
           * The object IS the selector every lambda receives: a nested selection
           * `_.images(_.url, _.width)` applies `_.url` to `Image`, so completion lists
-          * exactly `Image`'s members and no import is needed. Non-root objects carry a
-          * `given SelectorOf` so the library's entry points (`Fragment.entity[Album]`,
-          * `CacheIdentity.by`) find the object from the marker alone. Every object is
-          * itself a `SelectionList`, so a factored selection reads `Image(_.url, _.width)`
-          * and an operation with several root fields
-          * `Queries(_.me(_.id), _.featured(_.name)).toQuery(...)`.
+          * exactly `Image`'s members and no import is needed. Every object is itself a
+          * `SelectionList`, so a factored selection reads `Image(_.url, _.width)`, an
+          * operation with several root fields `Queries(_.me(_.id), _.featured(_.name)).toQuery(...)`,
+          * and the library's entry points take the object as their argument
+          * (`Fragment.entity(Album)(...)`, `CacheIdentity.by(Album)(...)`).
           */
         private def renderSelectorObject(
             objectName: String,
@@ -537,8 +536,8 @@ object ApolloClientWriter:
             // object lists an operation's root fields. Non-root object types also
             // carry a `given TypeName[Origin]` (in the trait's companion, so it is
             // auto-summoned) that names the type at runtime for `ClientField` (local
-            // `@client` state), and the `given SelectorOf` the library's list entry
-            // points summon; the operation roots get their `TypeName` from `core`.
+            // `@client` state) and for the library's entry points; the operation roots
+            // get their `TypeName` from `core`.
             val listMembers =
                 s"""protected def selector: $objectName.type = this
              |protected def fromFields[D <: scala.NamedTuple.AnyNamedTuple](sel: SelectionBuilder.Fields[$originName, D]): SelectionBuilder.Fields[$originName, D] =
@@ -548,7 +547,6 @@ object ApolloClientWriter:
             val givens =
                 if emitTrait then
                     s"""given TypeName[$originName] = TypeName("$originName")
-             |given SelectorOf.Aux[$originName, $objectName.type] = SelectorOf($objectName)
              |
              |""".stripMargin + listMembers
                 else listMembers

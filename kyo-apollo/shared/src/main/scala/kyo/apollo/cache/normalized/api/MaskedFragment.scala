@@ -20,7 +20,7 @@ import scala.collection.immutable.VectorMap
   *
   * {{{
   * object CountryCard:
-  *     val fields = Fragment.entity[Country](_.name.capital)
+  *     val fields = Fragment.entity(Country)(_.name, _.capital)
   *
   *     def view(ref: fields.Ref)(using ApolloClient, Frame) =
   *         Apollo.fragment(ref).map(render)

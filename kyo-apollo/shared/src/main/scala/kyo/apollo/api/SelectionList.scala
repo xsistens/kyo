@@ -7,7 +7,7 @@ import scala.NamedTuple.Concat
   * and combines them into a single selection with `~`, left to right:
   *
   * {{{
-  * Fragment.embedded[Image](
+  * Fragment.embedded(Image)(
   *   _.url,
   *   _.vibrantColor,
   * )

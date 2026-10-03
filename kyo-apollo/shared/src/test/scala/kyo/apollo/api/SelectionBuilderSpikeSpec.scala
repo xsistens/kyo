@@ -32,9 +32,12 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
 
     sealed trait Continent
 
-    object Country:
-        given TypeName[Country]                     = TypeName("Country")
-        given SelectorOf.Aux[Country, Country.type] = SelectorOf(Country)
+    object Country extends SelectionList[Country.type, Country, [D <: AnyNamedTuple] =>> SelectionBuilder.Fields[Country, D]]:
+        given TypeName[Country] = TypeName("Country")
+
+        protected def selector: Country.type                                                                                        = this
+        protected def fromFields[D <: AnyNamedTuple](sel: SelectionBuilder.Fields[Country, D]): SelectionBuilder.Fields[Country, D] =
+            sel
 
         def code: SelectionBuilder.Deferrable[Country, (code: String)] =
             SelectionBuilder.scalar("code", CompiledNamedType("ID").notNull, ScalarCodec.id)
@@ -64,7 +67,7 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
     end Continent
 
     object CountryName:
-        val fields = Fragment.embedded[Country](_.name)
+        val fields = Fragment.embedded(Country)(_.name)
 
     object Queries:
         def country[A <: AnyNamedTuple](code: String)(

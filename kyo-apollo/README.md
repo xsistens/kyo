@@ -10,17 +10,21 @@ import kyo.apollo.api.RootQuery
 import kyo.apollo.api.RootSubscription
 import kyo.apollo.api.ScalarCodec
 import kyo.apollo.api.SelectionBuilder
-import kyo.apollo.api.SelectorOf
+import kyo.apollo.api.SelectionList
 import kyo.apollo.api.TypeName
 
 // The selector layer kyo-apollo-codegen emits for the schema shown in "Getting Started",
 // written out by hand so this README compiles against kyo-apollo alone. The object is
-// what a selection lambda receives (`_.code`); `SelectorOf` lets the library find it.
+// what a selection lambda receives (`_.code`), and the argument the library's entry points
+// take (`Fragment.entity(Country)(...)`, `CacheIdentity.by(Country)(...)`).
 sealed trait Country
 
-object Country:
-    given TypeName[Country]                     = TypeName("Country")
-    given SelectorOf.Aux[Country, Country.type] = SelectorOf(Country)
+object Country extends SelectionList[Country.type, Country, [D <: scala.NamedTuple.AnyNamedTuple] =>> SelectionBuilder.Fields[Country, D]]:
+    given TypeName[Country] = TypeName("Country")
+
+    protected def selector: Country.type = this
+    protected def fromFields[D <: scala.NamedTuple.AnyNamedTuple](sel: SelectionBuilder.Fields[Country, D]): SelectionBuilder.Fields[Country, D] =
+        sel
 
     def code: SelectionBuilder.Deferrable[Country, (code: String)] =
         SelectionBuilder.scalar("code", CompiledNamedType("ID").notNull, ScalarCodec.id)
@@ -338,7 +342,7 @@ that read it. A `CacheIdentity` declares which fields identify a type:
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.*
 
-given CacheIdentity[Country] = CacheIdentity.by[Country](_.code)
+given CacheIdentity[Country] = CacheIdentity.by(Country)(_.code)
 
 val cached: ApolloClient.Config =
     config.normalizedCache(MemoryCache(maxSize = 10_000), CacheIdentity.generator(summon[CacheIdentity[Country]]))

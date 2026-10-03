@@ -55,97 +55,87 @@ end Fragment
 
 object Fragment:
 
-    /** Build a [[Fragment]] from a list of field selections — the ergonomic entry
-      * point.
+    /** Build a [[Fragment]] from a list of field selections, the ergonomic entry point.
       *
-      * `Fragment.of[Country](_.code, _.name, _.capital)` derives the fragment's
-      * codec and `rootField` from the generated selectors (the same machinery
-      * `toQuery` uses), so no hand-written `CompiledField` / `Schema` is needed.
-      * The GraphQL type the fragment applies to comes from `given TypeName[Origin]`,
-      * which codegen emits beside the phantom marker — naming it a second time as a
-      * string was redundant and let a typo through to runtime.
+      * `Fragment.of(Country)(_.code, _.name, _.capital)` derives the fragment's codec and `rootField` from the
+      * generated selectors (the same machinery `toQuery` uses), so no hand-written `CompiledField` / `Schema` is
+      * needed. The argument is the generated selector object of the type; each lambda receives it, and the
+      * result type `D` is inferred from the selection. The GraphQL type the fragment applies to comes from
+      * `given TypeName[Origin]`, which codegen emits beside the selector object.
       *
-      * The `Origin` type argument is supplied; the result type `D` is inferred from
-      * the selection, so only `Origin` is named. Returns a [[Builder]] — a
-      * [[kyo.apollo.api.SelectionList]] whose `apply` takes one lambda per field
-      * and delegates to [[kyo.apollo.api.toFragment]].
+      * The selector object is passed as a value and every given the result needs is resolved where the
+      * selection is applied (the result is a context function), so the entry point takes no `using` clause.
+      * That is what keeps the lambdas typed in an IDE: a method with a `using` clause whose result is applied
+      * directly to a lambda list leaves the lambdas untyped in the IntelliJ Scala plugin.
       *
-      * @tparam Origin the phantom selection origin (e.g. `Country`)
+      * @param selector the generated selector object of `Origin` (e.g. `Country`)
       */
-    def of[Origin](using sel: SelectorOf[Origin], tn: TypeName[Origin]): Builder[Origin, sel.S] =
-        new Builder[Origin, sel.S](sel.selector)
+    def of[Origin, S <: SelectionList[S, Origin, ?]](selector: S): Builder[Origin, S] =
+        new Builder[Origin, S](selector)
 
-    /** The partially-applied [[of]] — carries `Origin` so the selection infers `D`.
-      * `Fragment.of[Country](_.code, _.name)` is `of[Country].apply(_.code, _.name)`.
-      */
-    final class Builder[Origin, S](protected val selector: S)(using TypeName[Origin])
-        extends SelectionList[S, Origin, Fragment]:
-        protected def fromFields[D <: AnyNamedTuple](sel: SelectionBuilder.Fields[Origin, D]): Fragment[D] =
+    /** The partially-applied [[of]]: carries the selector object so the selection infers `D`. */
+    final class Builder[Origin, S](protected val selector: S)
+        extends SelectionList[S, Origin, [D <: AnyNamedTuple] =>> TypeName[Origin] ?=> Fragment[D]]:
+        protected def fromFields[D <: AnyNamedTuple](sel: SelectionBuilder.Fields[Origin, D]): TypeName[Origin] ?=> Fragment[D] =
             sel.toFragment
     end Builder
 
-    /** Declare a colocated, masked fragment on an entity type — see
-      * [[EntityFragment]] for the full contract. Requires the type's
-      * [[CacheIdentity]] so a spread's ref always resolves to the entity record
-      * (never a positional path key), and derives the fragment's name from the
-      * declaration site via [[kyo.Frame]] — globally unique by construction,
-      * with neither typos nor collisions expressible.
+    /** Declare a colocated, masked fragment on an entity type; see [[EntityFragment]] for the full contract.
+      *
+      * Requires the type's [[CacheIdentity]] so a spread's ref always resolves to the entity record (never a
+      * positional path key), and derives the fragment's name from the declaration site via [[kyo.Frame]],
+      * globally unique by construction, with neither typos nor collisions expressible. Both are resolved where
+      * the selection is applied, as for [[of]].
       *
       * {{{
       * object CountryCard:
-      *     val fields = Fragment.entity[Country](
+      *     val fields = Fragment.entity(Country)(
       *         _.name,
       *         _.capital,
       *     )
       * }}}
       */
-    def entity[Origin](using
-        sel: SelectorOf[Origin],
-        identity: CacheIdentity[Origin],
-        origin: TypeName[Origin],
-        frame: kyo.Frame
-    ): EntityBuilder[Origin, sel.S] =
-        new EntityBuilder[Origin, sel.S](sel.selector)
+    def entity[Origin, S <: SelectionList[S, Origin, ?]](selector: S): EntityBuilder[Origin, S] =
+        new EntityBuilder[Origin, S](selector)
 
-    final class EntityBuilder[Origin, S](protected val selector: S)(using
-        identity: CacheIdentity[Origin],
-        origin: TypeName[Origin],
-        frame: kyo.Frame
-    ) extends SelectionList[S, Origin, [D <: AnyNamedTuple] =>> EntityFragment[Origin, D]]:
+    final class EntityBuilder[Origin, S](protected val selector: S)
+        extends SelectionList[
+            S,
+            Origin,
+            [D <: AnyNamedTuple] =>> (CacheIdentity[Origin], TypeName[Origin], kyo.Frame) ?=> EntityFragment[Origin, D]
+        ]:
         protected def fromFields[D <: AnyNamedTuple](
             selection: SelectionBuilder.Fields[Origin, D]
-        ): EntityFragment[Origin, D] =
+        ): (CacheIdentity[Origin], TypeName[Origin], kyo.Frame) ?=> EntityFragment[Origin, D] =
             EntityFragment(
-                fragmentName = frame.className,
-                typeName = origin.name,
-                identity = identity,
+                fragmentName = summon[kyo.Frame].className,
+                typeName = summon[TypeName[Origin]].name,
+                identity = summon[CacheIdentity[Origin]],
                 selection = selection,
                 cacheFragment = selection.toFragment
             )
     end EntityBuilder
 
-    /** Declare a colocated, masked fragment on an object with no independent
-      * identity (a `PageInfo`, a value object) — see [[EmbeddedFragment]]. No
-      * [[CacheIdentity]] is required: the ref carries the value, and updates
-      * flow through the parent's reactivity.
+    /** Declare a colocated, masked fragment on an object with no independent identity (a `PageInfo`, a value
+      * object); see [[EmbeddedFragment]]. No [[CacheIdentity]] is required: the ref carries the value, and
+      * updates flow through the parent's reactivity.
+      *
+      * {{{
+      * object CoverImage:
+      *     val fields = Fragment.embedded(Image)(_.url, _.vibrantColor)
+      * }}}
       */
-    def embedded[Origin](using
-        sel: SelectorOf[Origin],
-        origin: TypeName[Origin],
-        frame: kyo.Frame
-    ): EmbeddedBuilder[Origin, sel.S] =
-        new EmbeddedBuilder[Origin, sel.S](sel.selector)
+    def embedded[Origin, S <: SelectionList[S, Origin, ?]](selector: S): EmbeddedBuilder[Origin, S] =
+        new EmbeddedBuilder[Origin, S](selector)
 
-    final class EmbeddedBuilder[Origin, S](protected val selector: S)(using
-        origin: TypeName[Origin],
-        frame: kyo.Frame
-    ) extends SelectionList[S, Origin, [D <: AnyNamedTuple] =>> EmbeddedFragment[Origin, D]]:
+    final class EmbeddedBuilder[Origin, S](protected val selector: S)
+        extends SelectionList[S, Origin, [D <: AnyNamedTuple] =>> (TypeName[Origin], kyo.Frame) ?=> EmbeddedFragment[Origin, D]]:
         protected def fromFields[D <: AnyNamedTuple](
             selection: SelectionBuilder.Fields[Origin, D]
-        ): EmbeddedFragment[Origin, D] =
+        ): (TypeName[Origin], kyo.Frame) ?=> EmbeddedFragment[Origin, D] =
             EmbeddedFragment(
-                fragmentName = frame.className,
-                typeName = origin.name,
+                fragmentName = summon[kyo.Frame].className,
+                typeName = summon[TypeName[Origin]].name,
                 selection = selection
             )
     end EmbeddedBuilder

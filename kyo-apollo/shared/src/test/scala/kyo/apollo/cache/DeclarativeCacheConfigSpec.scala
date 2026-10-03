@@ -301,18 +301,23 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
                 sealed trait FeedRoot
                 sealed trait FeedConn
                 sealed trait FeedEdge
-                given TypeName[FeedRoot]             = TypeName("Query")
-                given TypeName[FeedConn]             = TypeName("FeedConnection")
-                given TypeName[FeedEdge]             = TypeName("FeedEdge")
-                given SelectorOf.Aux[FeedEdge, Unit] = SelectorOf(())
-                given CacheIdentity[FeedEdge]        = CacheIdentity.by[FeedEdge](_ =>
-                    SelectionBuilder.scalar[FeedEdge, (cursor: String), String](
-                        "cursor",
-                        CompiledNamedType("String").notNull,
-                        ScalarCodec.string
-                    )
-                )
-                val feed = new FieldSelector[FeedRoot, FeedConn]:
+                given TypeName[FeedRoot] = TypeName("Query")
+                given TypeName[FeedConn] = TypeName("FeedConnection")
+                given TypeName[FeedEdge] = TypeName("FeedEdge")
+                object FeedEdges
+                    extends SelectionList[
+                        FeedEdges.type,
+                        FeedEdge,
+                        [D <: scala.NamedTuple.AnyNamedTuple] =>> SelectionBuilder.Fields[FeedEdge, D]
+                    ]:
+                    protected def selector: FeedEdges.type = this
+                    protected def fromFields[D <: scala.NamedTuple.AnyNamedTuple](sel: SelectionBuilder.Fields[FeedEdge, D])
+                        : SelectionBuilder.Fields[FeedEdge, D]                          = sel
+                    def cursor: SelectionBuilder.Deferrable[FeedEdge, (cursor: String)] =
+                        SelectionBuilder.scalar("cursor", CompiledNamedType("String").notNull, ScalarCodec.string)
+                end FeedEdges
+                given CacheIdentity[FeedEdge] = CacheIdentity.by(FeedEdges)(_.cursor)
+                val feed                      = new FieldSelector[FeedRoot, FeedConn]:
                     def fieldName = "feed"
                 val edges = new FieldSelector[FeedConn, FeedEdge]:
                     def fieldName = "edges"

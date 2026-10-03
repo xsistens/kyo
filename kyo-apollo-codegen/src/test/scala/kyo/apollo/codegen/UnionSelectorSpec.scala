@@ -56,7 +56,11 @@ class UnionSelectorSpec extends kyo.test.Test[Any]:
             val src = sourceOf("PlayableItem.scala")
             assert(!src.contains("extension ["), src)
             assert(!src.contains("SelectionBuilder.empty"), src)
-            assert(src.contains("given SelectorOf.Aux[PlayableItem, PlayableItem.type] = SelectorOf(PlayableItem)"), src)
+            // What the library entry points take (`Fragment.entity(PlayableItem)(...)`): the object as a
+            // `SelectionList` over itself, with its `TypeName` in the companion's implicit scope.
+            assert(src.contains("object PlayableItem extends SelectionList[PlayableItem.type, PlayableItem, "), src)
+            assert(src.contains("given TypeName[PlayableItem] = TypeName(\"PlayableItem\")"), src)
+            assert(!src.contains("SelectorOf"), src)
         }
 
         "a union-typed field is an object selector, not a String scalar" in {

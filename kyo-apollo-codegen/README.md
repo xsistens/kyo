@@ -216,7 +216,7 @@ import kyo.apollo.ApolloClient
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.CacheIdentity
 
-given CacheIdentity[Country] = CacheIdentity.by[Country](_.code)
+given CacheIdentity[Country] = CacheIdentity.by(Country)(_.code)
 
 val cachedConfig =
     ApolloClient.Config("https://countries.example/graphql").normalizedCache(MemoryCache(), SchemaIdentities.generator)

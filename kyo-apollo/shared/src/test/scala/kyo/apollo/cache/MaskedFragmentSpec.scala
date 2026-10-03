@@ -30,15 +30,17 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
 
     sealed trait CountryT
     object CountryT:
-        given TypeName[CountryT]                      = TypeName("Country")
-        given SelectorOf.Aux[CountryT, GCountry.type] = SelectorOf(GCountry)
+        given TypeName[CountryT] = TypeName("Country")
 
     sealed trait PageInfoT
     object PageInfoT:
-        given TypeName[PageInfoT]                       = TypeName("PageInfo")
-        given SelectorOf.Aux[PageInfoT, GPageInfo.type] = SelectorOf(GPageInfo)
+        given TypeName[PageInfoT] = TypeName("PageInfo")
 
-    object GCountry:
+    object GCountry
+        extends SelectionList[GCountry.type, CountryT, [D <: scala.NamedTuple.AnyNamedTuple] =>> SelectionBuilder.Fields[CountryT, D]]:
+        protected def selector: GCountry.type = this
+        protected def fromFields[D <: scala.NamedTuple.AnyNamedTuple](sel: SelectionBuilder.Fields[CountryT, D])
+            : SelectionBuilder.Fields[CountryT, D]                      = sel
         def code: SelectionBuilder.Deferrable[CountryT, (code: String)] =
             SelectionBuilder.scalar("code", CompiledNamedType("ID").notNull, ScalarCodec.string)
         def name: SelectionBuilder.Deferrable[CountryT, (name: String)] =
@@ -53,7 +55,11 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             SelectionBuilder.scalar("emoji", CompiledNamedType("String").notNull, ScalarCodec.string)
     end GCountry
 
-    object GPageInfo:
+    object GPageInfo
+        extends SelectionList[GPageInfo.type, PageInfoT, [D <: scala.NamedTuple.AnyNamedTuple] =>> SelectionBuilder.Fields[PageInfoT, D]]:
+        protected def selector: GPageInfo.type = this
+        protected def fromFields[D <: scala.NamedTuple.AnyNamedTuple](sel: SelectionBuilder.Fields[PageInfoT, D])
+            : SelectionBuilder.Fields[PageInfoT, D]                                     = sel
         def hasNextPage: SelectionBuilder.Deferrable[PageInfoT, (hasNextPage: Boolean)] =
             SelectionBuilder.scalar("hasNextPage", CompiledNamedType("Boolean").notNull, ScalarCodec.boolean)
         def endCursor: SelectionBuilder.Deferrable[PageInfoT, (endCursor: Maybe[String])] =
@@ -64,18 +70,18 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             )
     end GPageInfo
 
-    given CacheIdentity[CountryT] = CacheIdentity.by[CountryT](_.code)
+    given CacheIdentity[CountryT] = CacheIdentity.by(GCountry)(_.code)
 
     // --- colocated fragments, declared the way components would -----------------
 
     object CountryCard:
-        val fields = Fragment.entity[CountryT](_.name, _.capital)
+        val fields = Fragment.entity(GCountry)(_.name, _.capital)
 
     object CountryFlag:
-        val fields = Fragment.entity[CountryT](_.emoji)
+        val fields = Fragment.entity(GCountry)(_.emoji)
 
     object PageBadge:
-        val fields = Fragment.embedded[PageInfoT](_.hasNextPage, _.endCursor)
+        val fields = Fragment.embedded(GPageInfo)(_.hasNextPage, _.endCursor)
 
     // --- root query plumbing -----------------------------------------------------
 

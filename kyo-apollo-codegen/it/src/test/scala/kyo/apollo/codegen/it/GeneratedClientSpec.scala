@@ -19,7 +19,7 @@ class GeneratedClientSpec extends kyo.test.Test[Any]:
 
     given CanEqual[Any, Any] = CanEqual.derived
 
-    given CacheIdentity[Country] = CacheIdentity.by[Country](_.code)
+    given CacheIdentity[Country] = CacheIdentity.by(Country)(_.code)
 
     /** A client over `engine` whose normalized cache keys records through the generated
       * `SchemaIdentities` (Country by code, every other type by id).
