@@ -356,6 +356,37 @@ object UI:
                 Fiber.init[E, A, S, S2](v).map(fiber => fiber.onComplete(r => supervision.report(r)).andThen(fiber))
         }
 
+    /** Installs the app's sink for non-fatal failures: where every [[kyo.UI.notify]] below it lands.
+      *
+      * The mount error routing (`.onError`, then the default error node) REPLACES a node's content. A failure that should
+      * be surfaced while the content stays on screen needs the other half, one that annotates instead. Wrap the runner once:
+      *
+      * {{{
+      * val banner: SignalRef[Maybe[String]] = ...
+      * UI.notices(err => banner.set(Present(err.getMessage)))(UI.runMount(shell, "#app"))
+      * }}}
+      *
+      * The sink rides an inheritable `Local`, so it reaches mount effects, the fibers they fork with [[kyo.UI.fork]] and
+      * the tree's event handlers. With no sink installed, a notice is logged rather than dropped. Under the server-push
+      * transport the kyo-http session fibers do not inherit the context of the `runHandlers` caller, so a sink installed
+      * around `runHandlers` does not reach them, the same limit that applies to any context a mounted effect reads there.
+      */
+    def notices[A, S](sink: Throwable => Unit < Async)(v: A < S)(using Frame): A < S =
+        ReactiveUI.noticeSink.let(Present(sink))(v)
+
+    /** Reports a failure that should be surfaced without replacing any content: a background feed that died while its last
+      * data is still worth showing, a refetch that failed over data already on screen.
+      *
+      * Routes to the nearest enclosing [[kyo.UI.notices]] sink, and is logged when there is none. A failure that invalidates
+      * what a node shows belongs to the mount error routing instead: fail the mount effect, or fork the feed with
+      * [[kyo.UI.fork]] so supervision flips the node.
+      */
+    def notify(t: Throwable)(using Frame): Unit < Async =
+        ReactiveUI.noticeSink.use {
+            case Present(sink) => sink(t)
+            case Absent        => Log.warn("kyo-ui: notice with no UI.notices sink installed", t)
+        }
+
     /** Builder-style modifiers for [[kyo.UI.Ast.Mounted]], following the attrs-API idiom. */
     object MountedOps:
         extension (m: Mounted)
