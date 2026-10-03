@@ -1,0 +1,18 @@
+import { attach } from "./cdp.mjs";
+const c = await attach();
+await c.go((process.argv[2]||"http://localhost:8080") + "/c/scrollpanel");
+const sc = `[...document.querySelectorAll('.p-scrollpanel *')].find(e => e.scrollHeight > e.clientHeight + 2)`;
+await c.ev(`(() => { const s = ${sc}; s.scrollIntoView({block:'center'}); s.focus(); return 1; })()`);
+await c.sleep(300);
+console.log("focused the scroller:", await c.ev(`document.activeElement === (${sc})`));
+const top = `Math.round((${sc}).scrollTop)`;
+console.log("scrollTop before:", await c.ev(top));
+await c.key("ArrowDown"); await c.key("ArrowDown");
+console.log("after ArrowDown x2:", await c.ev(top));
+await c.key("PageDown");
+console.log("after PageDown:", await c.ev(top));
+await c.key("End");
+console.log("after End:", await c.ev(top));
+console.log("--- can Tab reach it? focus the element before it, then Tab ---");
+await c.ev(`(() => { const s = ${sc}; const prev = document.querySelector('a[href], button'); prev.focus(); return prev.tagName; })()`);
+c.close();
