@@ -251,8 +251,12 @@ object Drag:
     /** Stable identifier of a collection participating in a move. */
     final case class Location(collection: String) derives CanEqual, Schema
 
-    /** Pointer coordinates in the viewport. */
-    final case class Point(x: Double, y: Double) derives CanEqual, Schema
+    /** Pointer coordinates in the viewport: [[kyo.UI.Point]] under the name the drag protocol calls it by. A drag position
+      * and a click position are the same measurement, so they are the same type, and a value crosses between them without
+      * a conversion.
+      */
+    type Point = UI.Point
+    val Point: UI.Point.type = UI.Point
 
     /** Browser file metadata with a validated exact media type and the token used to retrieve its content. */
     final case class FileMeta(
