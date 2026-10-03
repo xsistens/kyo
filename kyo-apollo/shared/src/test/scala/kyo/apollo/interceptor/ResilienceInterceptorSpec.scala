@@ -199,11 +199,11 @@ class ResilienceInterceptorSpec extends kyo.test.Test[Any]:
                                 terminal <- RecordingTerminal.scripted(networkFail, networkFail, data(42))
                                 fiber    <- consume(RetryOnErrorInterceptor(schedule = schedule, jitter = 0.5), terminal)
                                 _        <- control.awaitPendingSleepers(1)
-                                _        <- control.advance(wait1 - 1.milli, Duration.Zero)
+                                _        <- control.advance(wait1.minusOrZero(1.milli), Duration.Zero)
                                 early1   <- terminal.calls
                                 _        <- control.advance(1.milli, Duration.Zero)
                                 _        <- control.awaitPendingSleepers(1)
-                                _        <- control.advance(wait2 - 1.milli, Duration.Zero)
+                                _        <- control.advance(wait2.minusOrZero(1.milli), Duration.Zero)
                                 early2   <- terminal.calls
                                 _        <- control.advance(1.milli, Duration.Zero)
                                 _        <- fiber.get
