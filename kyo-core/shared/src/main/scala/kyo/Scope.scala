@@ -297,8 +297,7 @@ object Scope:
                     // caller's `await` would travel into the drain and stop the finalizers halfway (#1928).
                     val promise = Promise.Unsafe.initUninterruptible[Unit, Any]().safe
 
-                    // Set by `close` before it spawns the drain. The drain claims the queue on its own fiber, so the
-                    // queue's state cannot tell a caller in the step after the close that a close was requested.
+                    // Set by `close`, so `awaitIfClosed` knows a close was requested even by a close that lost the claim.
                     val closing = AtomicBoolean.Unsafe.init(false)
 
                     def ensure(v: Maybe[Error[Any]] => Any < (Async & Abort[Throwable]))(using Frame): Unit < Sync =
@@ -325,7 +324,10 @@ object Scope:
                     end ensureUnsafe
 
                     private[kyo] def addChild(child: Finalizer)(using Frame, AllowUnsafe): Unit =
-                        discard(children.offer(child))
+                        // A child that arrives after the close missed the drain that closes children, so it is
+                        // closed here: a nested run never outlives a parent that has already closed.
+                        if !children.offer(child).contains(true) then
+                            Sync.Unsafe.evalOrThrow(child.close(Absent))
 
                     private[kyo] val forked: Finalizer = new Forked(this)
 
@@ -336,51 +338,73 @@ object Scope:
                             "This finalizer is already closed. This may happen if a background fiber escapes the scope of a 'Scope.run' call."
                         )
 
-                    /** The claim on the queue's backlog and the drain of it are one detached fiber, spawned as this close's only
-                      * step. Claiming here and draining in a continuation would leave a window between the two steps: an interrupt
-                      * honored there abandons the continuation with the backlog already claimed, and the close that runs from the
-                      * abandonment finds it claimed and rightly leaves it alone, so the finalizers in it never run (#1928). Inside
-                      * the fiber the handover is awaited rather than continued, because an `ensure` that began before this close may
-                      * still be committing its task.
+                    /** Claims the backlog and the nested runs in this close's own step, so a registration that comes after the
+                      * close is refused rather than depending on whether a drain has started. A scope that holds nothing
+                      * completes here; otherwise the drain of what was claimed is spawned in the same step. Claiming and
+                      * spawning are one synchronous step: there is no continuation between them for an interrupt to abandon
+                      * with the backlog already claimed, which is how finalizers were lost before (#1928). The drain awaits
+                      * a claim that has not settled, because an `ensure` that began before this close may still be committing
+                      * its task. A close that loses the claim to an earlier one does nothing; that earlier close owns the drain.
                       */
                     def close(ex: Maybe[Error[Any]])(using Frame): Unit < Sync =
                         Sync.Unsafe.defer {
                             closing.set(true)
-                            // Open: by decision there is no backpressure on abnormal exit yet. This spawns the drain of the
-                            // scope's async finalizers and returns, so a joiner can observe an interrupted fiber's result while a
-                            // finalizer is still running. It will be fixed here, once. Until then a change that meets the
-                            // consequence does not work around it: it adds a pendingUntilFixed leaf whose reason starts with this
-                            // marker and whose body proves the cause is this drain (a finalizer the leaf holds on a latch, then
-                            // the early result), so the leaf turns red the day the wait lands.
-                            spawn {
-                                Sync.Unsafe.defer(queue.close().safe.get).map {
-                                    case Absent         => Kyo.unit
-                                    case Present(tasks) =>
-                                        val nested =
-                                            Sync.Unsafe.defer(children.close()).map(_.safe.get).map {
-                                                case Present(cs) =>
-                                                    Async.foreachDiscard(cs) { child =>
-                                                        child.close(ex).andThen(child.await)
-                                                    }
-                                                case Absent => Kyo.unit
-                                            }
-                                        val own =
-                                            if tasks.isEmpty then Kyo.unit
-                                            else
-                                                Async.foreachDiscard(tasks.reverse, parallelism) { task =>
-                                                    Abort.run[Throwable](task(ex))
-                                                        .map(_.foldError(
-                                                            _ => (),
-                                                            ex => Log.error("Scope finalizer failed", ex.exception)
-                                                        ))
-                                                }
-                                        // Completed whatever the drain met, so a waiter is never left at a scope that has finished releasing.
-                                        Abort.run[Throwable](nested.andThen(own))
-                                            .map(_.foldError(_ => (), ex => Log.error("Scope close failed", ex.exception)))
-                                            .andThen(promise.completeUnitDiscard)
-                                }
-                            }
+                            val tasks = queue.close()
+                            if !settledEmpty(tasks, owner = false) then
+                                val nested = children.close()
+                                if settledEmpty(tasks, owner = true) && settledEmpty(nested, owner = true) then
+                                    promise.unsafe.completeUnitDiscard()
+                                else
+                                    // Open: by decision there is no backpressure on abnormal exit yet. This spawns the drain of the
+                                    // scope's async finalizers and returns, so a joiner can observe an interrupted fiber's result while a
+                                    // finalizer is still running. It will be fixed here, once. Until then a change that meets the
+                                    // consequence does not work around it: it adds a pendingUntilFixed leaf whose reason starts with this
+                                    // marker and whose body proves the cause is this drain (a finalizer the leaf holds on a latch, then
+                                    // the early result), so the leaf turns red the day the wait lands.
+                                    spawn(drain(ex, tasks, nested))
+                                end if
+                            end if
                         }
+
+                    /** Whether `claim` has settled with nothing to run: as the owner, an empty backlog; otherwise, a lost claim. */
+                    private def settledEmpty[A](claim: Fiber.Unsafe[Maybe[Seq[A]], Any], owner: Boolean)(using Frame): Boolean =
+                        claim.poll() match
+                            case Present(result) =>
+                                result.value.exists(_.eval match
+                                    case Present(claimed) => owner && claimed.isEmpty
+                                    case Absent           => !owner)
+                            case Absent => false
+
+                    private def drain(
+                        ex: Maybe[Error[Any]],
+                        tasks: Fiber.Unsafe[Maybe[Seq[Maybe[Error[Any]] => Any < (Async & Abort[Throwable])]], Any],
+                        nested: Fiber.Unsafe[Maybe[Seq[Finalizer]], Any]
+                    )(using Frame): Unit < Async =
+                        val closeNested =
+                            nested.safe.get.map {
+                                case Present(cs) =>
+                                    Async.foreachDiscard(cs) { child =>
+                                        child.close(ex).andThen(child.await)
+                                    }
+                                case Absent => Kyo.unit
+                            }
+                        val own =
+                            tasks.safe.get.map {
+                                case Present(ts) if ts.nonEmpty =>
+                                    Async.foreachDiscard(ts.reverse, parallelism) { task =>
+                                        Abort.run[Throwable](task(ex))
+                                            .map(_.foldError(
+                                                _ => (),
+                                                ex => Log.error("Scope finalizer failed", ex.exception)
+                                            ))
+                                    }
+                                case _ => Kyo.unit
+                            }
+                        // Completed whatever the drain met, so a waiter is never left at a scope that has finished releasing.
+                        Abort.run[Throwable](closeNested.andThen(own))
+                            .map(_.foldError(_ => (), ex => Log.error("Scope close failed", ex.exception)))
+                            .andThen(promise.completeUnitDiscard)
+                    end drain
 
                     def await(using Frame): Unit < Async = promise.get
 
