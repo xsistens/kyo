@@ -1081,6 +1081,110 @@ class ScopeTest extends kyo.test.Test[Any]:
         }
     }
 
+    "close claims at once" - {
+
+        // Counts the drains a finalizer spawns, and runs each on a fiber of its own as `Finalizer.init` does.
+        def counted(spawns: AtomicInt.Unsafe)(using Frame): Scope.Finalizer =
+            import AllowUnsafe.embrace.danger
+            Scope.Finalizer.Unsafe.init(1) { drain =>
+                discard(spawns.incrementAndGet())
+                discard(Fiber.Unsafe.init(drain))
+            }
+        end counted
+
+        "a finalizer that holds nothing completes its close without a drain fiber" in {
+            import AllowUnsafe.embrace.danger
+            val spawns    = AtomicInt.Unsafe.init(0)
+            val finalizer = counted(spawns)
+            for
+                _ <- finalizer.close(Absent)
+                _ <- finalizer.await
+            yield assert(spawns.get() == 0, s"an empty close spawned ${spawns.get()} drains")
+            end for
+        }
+
+        "a finalizer that holds a release runs it on a drain fiber" in {
+            import AllowUnsafe.embrace.danger
+            val spawns    = AtomicInt.Unsafe.init(0)
+            val finalizer = counted(spawns)
+            for
+                released <- AtomicInt.init(0)
+                _        <- finalizer.ensure(_ => released.incrementAndGet)
+                _        <- finalizer.close(Absent)
+                _        <- finalizer.await
+                r        <- released.get
+            yield assert(r == 1 && spawns.get() == 1, s"released $r times with ${spawns.get()} drains")
+            end for
+        }
+
+        "a finalizer whose only content is a nested run closes it" in {
+            import AllowUnsafe.embrace.danger
+            val spawns = AtomicInt.Unsafe.init(0)
+            val parent = counted(spawns)
+            val child  = counted(spawns)
+            for
+                released <- AtomicInt.init(0)
+                _        <- child.ensure(_ => released.incrementAndGet)
+                _        <- Sync.Unsafe.defer(parent.addChild(child))
+                _        <- parent.close(Absent)
+                _        <- parent.await
+                r        <- released.get
+            yield assert(r == 1, s"the nested run's release ran $r times")
+            end for
+        }
+
+        "a second close spawns no drain of its own" in {
+            import AllowUnsafe.embrace.danger
+            val spawns    = AtomicInt.Unsafe.init(0)
+            val finalizer = counted(spawns)
+            for
+                _ <- finalizer.ensure(_ => ())
+                _ <- finalizer.close(Absent)
+                _ <- finalizer.close(Absent)
+                _ <- finalizer.await
+            yield assert(spawns.get() == 1, s"two closes spawned ${spawns.get()} drains")
+            end for
+        }
+
+        // The close's own step claims the queue, so a registration made after it is refused whether the scope
+        // held anything or not, instead of depending on whether the drain fiber has started yet.
+        "an ensure after the close is refused and runs detached" in {
+            import AllowUnsafe.embrace.danger
+            val spawns = AtomicInt.Unsafe.init(0)
+            Kyo.foreach(Chunk(false, true)) { holdsRelease =>
+                val finalizer = counted(spawns)
+                for
+                    released <- AtomicInt.init(0)
+                    _        <- if holdsRelease then finalizer.ensure(_ => ()) else Kyo.unit
+                    _        <- finalizer.close(Absent)
+                    result   <- Abort.run[Any](finalizer.ensure(_ => released.incrementAndGet))
+                    _        <- assertEventually(released.get.map(_ == 1))
+                    _        <- finalizer.await
+                yield result
+                end for
+            }.map { results =>
+                assert(results.forall(_.panic.exists(_.isInstanceOf[Closed])), s"late registrations were not refused: $results")
+            }
+        }
+
+        // A late nested run would otherwise be dropped: the parent's drain has already taken its children.
+        "a nested run added after the close is closed at once" in {
+            import AllowUnsafe.embrace.danger
+            val spawns = AtomicInt.Unsafe.init(0)
+            val parent = counted(spawns)
+            val child  = counted(spawns)
+            for
+                released <- AtomicInt.init(0)
+                _        <- child.ensure(_ => released.incrementAndGet)
+                _        <- parent.close(Absent)
+                _        <- Sync.Unsafe.defer(parent.addChild(child))
+                _        <- child.await
+                r        <- released.get
+            yield assert(r == 1, s"the late nested run's release ran $r times")
+            end for
+        }
+    }
+
     "finalizers lost under interrupt (#1928)" - {
 
         // The interrupt races the scope's own close rather than landing in the body: `close` `become`s the
