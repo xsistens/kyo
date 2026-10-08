@@ -132,7 +132,27 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
       * @param f
       *   The per-value setup, run inside a fresh `Scope`
       */
-    def observe[S](repairInterval: Duration)(f: A => Unit < (S & Async & Scope))(using Frame): Unit < (S & Async) =
+    final def observe[S](repairInterval: Duration)(f: A => Unit < (S & Async & Scope))(using Frame): Unit < (S & Async) =
+        observe(Absent, repairInterval)(f)
+
+    /** Like [[observe]] but seeded: `f` is skipped while the current value still equals `baseline`.
+      *
+      * With `Absent` this is exactly [[observe]]. With `Present(v)` the loop treats `v` as the last observed value: the initial emission is
+      * skipped when the current value still equals it, and the first differing value is delivered as usual. It serves a caller that already
+      * processed a value (e.g. painted it) and only wants what changed since. The baseline is the value the caller processed, not the value
+      * current at subscription: a write landing between the two is then delivered rather than taken for already seen.
+      *
+      * This is the overridable observation primitive: [[SignalRef]] replaces the repairing loop with an exact register/validate/await
+      * protocol (see there), and `map` delegates to its source's loop.
+      *
+      * @param baseline
+      *   The value already processed by the caller: `f` is not run while `current` still equals it
+      * @param repairInterval
+      *   How often a parked observation re-reads `current` to reconcile a missed wakeup on the repair path
+      * @param f
+      *   The per-value setup, run inside a fresh `Scope`
+      */
+    def observe[S](baseline: Maybe[A], repairInterval: Duration)(f: A => Unit < (S & Async & Scope))(using Frame): Unit < (S & Async) =
         // Repairing default. Each value runs inside a fresh `Scope.run`; the inner `holdUntilChanged` loops until `current`
         // differs from the value `f` set up, so an idle repair timer NEVER closes a still-current value's scope. The scope
         // closes (releasing what `f` forked) only when the value actually changes; then the outer loop re-reads `current`.
@@ -147,7 +167,7 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                 else
                     Scope.run(f(cur).andThen(holdUntilChanged(cur))).andThen(loop(Present(cur)))
             }
-        loop(Absent)
+        loop(baseline)
     end observe
 
     /** Creates a new signal by applying a transformation function to this signal's values.
@@ -165,7 +185,19 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
         Signal._initRawF(
             [C, S] => g => self.currentWith(a => g(f(a))),
             [C, S] => g => self.nextWith(a => g(f(a))),
-            [S] => (ri, g) => self.observe[S](ri)(a => g(f(a)))
+            [S] =>
+                (baseline, ri, g) =>
+                    baseline match
+                        case Present(b0) =>
+                            // Translate the B-space baseline into an A-space seed by sampling the source: skip
+                            // while the source still holds a value whose image equals the baseline. A source
+                            // change whose image happens to equal the baseline re-emits it, consistent with a
+                            // mapped observe already re-emitting equal images for distinct source values.
+                            self.currentWith { a0 =>
+                                if f(a0) == b0 then self.observe[S](Present(a0), ri)(a => g(f(a)))
+                                else self.observe[S](Absent, ri)(a => g(f(a)))
+                            }
+                        case _ => self.observe[S](Absent, ri)(a => g(f(a)))
         )
 
     /** Dynamically switches to an inner signal based on the current value.
@@ -174,8 +206,9 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
       * that change. This is switchMap semantics (no monad laws): the previous inner is implicitly dropped on outer change. The caller
       * re-arms via `nextWith` in a loop matching the `streamChanges` driver pattern.
       *
-      * Note: like `streamChanges`, may skip intermediate values if changes occur faster than they can be processed. The read/arm race
-      * window in `SignalRef` propagates here.
+      * Note: like `streamChanges`, may skip intermediate values if changes occur faster than they can be processed. The combinator's own
+      * await/re-read window applies here (a write landing between the wakeup and the re-read is coalesced); observation over it is
+      * reconciled within the repair interval.
       *
       * @param f
       *   The function that produces an inner signal from the current value
@@ -242,27 +275,29 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
 
     /** Creates a stream that emits only when the signal's value changes.
       *
-      * This method produces a stream that emits values only when they differ from the previous value. Note that rapid changes may result in
-      * some intermediate values being skipped if they occur faster than they can be processed.
+      * This method produces a stream that emits values only when they differ from the previous value, starting with the value current at
+      * subscription. Note that rapid changes may result in some intermediate values being skipped if they occur faster than they can be
+      * processed. Built on [[observe]], so the latest value is never stranded: exact on a [[SignalRef]] (and `map` chains rooted in one),
+      * reconciled within [[Signal.defaultRepairInterval]] on combinator-derived signals.
       *
       * @return
       *   A stream that emits only when values change
       */
     final def streamChanges(using Frame, Tag[Emit[Chunk[A]]]): Stream[A, Async] =
-        Stream(
-            Loop(Maybe.empty[A]) { last =>
-                currentWith { curr =>
-                    if last.forall(_ != curr) then
-                        Emit.valueWith(Chunk(curr))(Loop.continue(Present(curr)))
-                    else
-                        nextWith { a =>
-                            Emit.valueWith(Chunk(a))(Loop.continue(Present(a)))
-                        }
-                }
+        streamChanges(Absent)
 
-            }
-        )
-    end streamChanges
+    /** Like [[streamChanges]] but seeded, as [[observe]] with a baseline is: the stream starts with the first value that differs from
+      * `baseline`, so a caller that already processed `v` passes `Present(v)` and receives only what changed since.
+      *
+      * @param baseline
+      *   The value already processed by the caller; `Absent` makes this [[streamChanges]]
+      */
+    final def streamChanges(baseline: Maybe[A])(using Frame, Tag[Emit[Chunk[A]]]): Stream[A, Async] =
+        streamChanges(baseline, Signal.defaultRepairInterval)
+
+    /** Like [[streamChanges]] with a baseline, and an explicit reconciliation interval for combinator-derived signals. */
+    final def streamChanges(baseline: Maybe[A], repairInterval: Duration)(using Frame, Tag[Emit[Chunk[A]]]): Stream[A, Async] =
+        Stream(observe[Emit[Chunk[A]]](baseline, repairInterval)(a => Emit.value(Chunk(a))))
 
 end Signal
 
@@ -522,7 +557,7 @@ object Signal:
     private inline def _initRawF[A](
         inline _currentWith: [B, S] => (A => B < S) => B < (S & Sync),
         inline _nextWith: [B, S] => (A => B < S) => B < (S & Async),
-        inline _observe: [S] => (Duration, A => Unit < (S & Async & Scope)) => Unit < (S & Async)
+        inline _observe: [S] => (Maybe[A], Duration, A => Unit < (S & Async & Scope)) => Unit < (S & Async)
     )(
         using
         frame: Frame,
@@ -533,8 +568,10 @@ object Signal:
                 _currentWith(f)
             def nextWith[B, S](f: A => B < S)(using frame: Frame): B < (S & Async) =
                 _nextWith(f)
-            override def observe[S](repairInterval: Duration)(f: A => Unit < (S & Async & Scope))(using frame: Frame): Unit < (S & Async) =
-                _observe(repairInterval, f)
+            override def observe[S](baseline: Maybe[A], repairInterval: Duration)(f: A => Unit < (S & Async & Scope))(using
+                frame: Frame
+            ): Unit < (S & Async) =
+                _observe(baseline, repairInterval, f)
         end new
     end _initRawF
 
@@ -565,7 +602,9 @@ object Signal:
           *
           * `repairInterval` is not used: only signals that can miss a wakeup need it.
           */
-        override def observe[S](repairInterval: Duration)(f: A => Unit < (S & Async & Scope))(using Frame): Unit < (S & Async) =
+        override def observe[S](baseline: Maybe[A], repairInterval: Duration)(f: A => Unit < (S & Async & Scope))(using
+            Frame
+        ): Unit < (S & Async) =
             def nextSince(v0: Long): Unit < Async =
                 Sync.Unsafe.defer {
                     if _unsafe.version() != v0 then ()
@@ -592,7 +631,7 @@ object Signal:
                     if last.exists(_ == cur) then nextSince(v0).andThen(loop(last))
                     else Scope.run(f(cur).andThen(hold(v0, cur))).andThen(loop(Present(cur)))
                 }
-            loop(Absent)
+            loop(baseline)
         end observe
 
         /** Retrieves the current value of the reference.
