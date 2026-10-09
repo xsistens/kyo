@@ -75,7 +75,7 @@ abstract class Local[A] extends Serializable:
       *   The result of running the effect with the modified value
       */
     def let[B, S](value: A)(v: B < S)(using Frame): B < S =
-        scoped(
+        Local.scoped(
             Map.empty[Local[?], AnyRef].updated(this, value.asInstanceOf[AnyRef]),
             _.updated(this, value.asInstanceOf[AnyRef])
         )(v)
@@ -90,33 +90,11 @@ abstract class Local[A] extends Serializable:
       *   The result of running the effect with the updated value
       */
     def update[B, S](f: A => A)(v: B < S)(using Frame): B < S =
-        scoped(
+        Local.scoped(
             Map(this -> f(default).asInstanceOf[AnyRef]),
             map => map.updated(this, f(map.getOrElse(this, default).asInstanceOf[A]).asInstanceOf[AnyRef])
         )(v)
 
-    // All locals share one tag, so every binding installs these strategies.
-    private def scoped[B, S](
-        ifUndefined: Map[Local[?], AnyRef],
-        ifDefined: Map[Local[?], AnyRef] => Map[Local[?], AnyRef]
-    )(v: B < S)(using Frame): B < S =
-        ContextEffect.handle(
-            Tag[State],
-            ifUndefined,
-            ifDefined,
-            fork = map =>
-                map.foldLeft(Map.empty[Local[?], AnyRef]) { case (acc, (local, value)) =>
-                    local.asInstanceOf[Local[AnyRef]].fork(value) match
-                        case Maybe.Present(v) => acc.updated(local, v)
-                        case Maybe.Absent     => acc
-                },
-            join = (held, _, forked) =>
-                held.map { case (local, value) =>
-                    forked.get(local) match
-                        case Some(fv) => local -> local.asInstanceOf[Local[AnyRef]].join(value, fv)
-                        case None     => local -> value
-                }
-        )(v)
 end Local
 
 /** Companion object for Local, providing utility methods for creating Local instances. */
@@ -172,6 +150,35 @@ object Local:
       */
     private[kyo] def snapshotWith[B, S](f: Map[Local[?], AnyRef] => B < S)(using Frame): B < S =
         ContextEffect.suspendWith(Tag[State], Map.empty[Local[?], AnyRef])(f)
+
+    /** Runs `v` with exactly the locals of `snapshot` bound, as [[snapshotWith]] took them: what `v` reads is what a computation read
+      * where the snapshot was taken, also where `v` runs outside any fiber, as an effect evaluated in place does.
+      */
+    private[kyo] def restore[B, S](snapshot: Map[Local[?], AnyRef])(v: B < S)(using Frame): B < S =
+        scoped(snapshot, _ => snapshot)(v)
+
+    // All locals share one tag, so every binding installs these strategies.
+    private def scoped[B, S](
+        ifUndefined: Map[Local[?], AnyRef],
+        ifDefined: Map[Local[?], AnyRef] => Map[Local[?], AnyRef]
+    )(v: B < S)(using Frame): B < S =
+        ContextEffect.handle(
+            Tag[State],
+            ifUndefined,
+            ifDefined,
+            fork = map =>
+                map.foldLeft(Map.empty[Local[?], AnyRef]) { case (acc, (local, value)) =>
+                    local.asInstanceOf[Local[AnyRef]].fork(value) match
+                        case Maybe.Present(v) => acc.updated(local, v)
+                        case Maybe.Absent     => acc
+                },
+            join = (held, _, forked) =>
+                held.map { case (local, value) =>
+                    forked.get(local) match
+                        case Some(fv) => local -> local.asInstanceOf[Local[AnyRef]].join(value, fv)
+                        case None     => local -> value
+                }
+        )(v)
 
     object internal:
 

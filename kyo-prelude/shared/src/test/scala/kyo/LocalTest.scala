@@ -174,4 +174,23 @@ class LocalTest extends kyo.test.Test[Any]:
 
     }
 
+    "restore" - {
+        "binds the locals of a snapshot where nothing else binds them" in {
+            val number   = Local.init(10)
+            val name     = Local.init("default")
+            val snapshot =
+                number.let(20)(name.let("taken")(Local.snapshotWith(identity))).eval
+            val read = Local.restore(snapshot)(number.use(n => name.use(s => (n, s)))).eval
+            assert(read == (20, "taken"))
+        }
+
+        "binds exactly the snapshot, so a local bound around it but not in it reads its default" in {
+            val number   = Local.init(10)
+            val name     = Local.init("default")
+            val snapshot = number.let(20)(Local.snapshotWith(identity)).eval
+            val read     = name.let("around")(Local.restore(snapshot)(number.use(n => name.use(s => (n, s))))).eval
+            assert(read == (20, "default"))
+        }
+    }
+
 end LocalTest
