@@ -202,10 +202,19 @@ extension [D](call: ApolloCall[D])
                 // then not offered either). Every caller stands behind a read that
                 // SUCCEEDED, which settles the miss a `CacheFirst` refetch may have been
                 // asked for: `refetched` is cleared in the same compare-and-set.
+                // The read also settles the feud stop: during a flight it is the refetch's
+                // own write-back, which answers the cause the refetch went out for;
+                // outside one it is someone else's write, after which a repeat of that
+                // miss is a new break, not a feud.
                 def adopt(keys: Set[CacheKey], gen: Long): Boolean =
                     hold(keys)(s =>
                         if !s.active || gen < s.gen then Absent
-                        else Present(s.copy(keys = keys, gen = gen, refetched = false))
+                        else
+                            val settled =
+                                if s.inflight && s.refetchCause.isDefined then
+                                    s.copy(answered = s.refetchCause, feudWarned = s.feudWarned && s.answered == s.refetchCause)
+                                else s.copy(answered = Absent, feudWarned = false)
+                            Present(settled.copy(keys = keys, gen = gen, refetched = false))
                     )
 
                 // The write-back fallback for a networked response the store cannot read
@@ -398,15 +407,31 @@ extension [D](call: ApolloCall[D])
                 // field in every response (each write-back publishes a watched key, each
                 // re-read misses again) is an endless chain of network requests out of a
                 // single watch.
-                def refetchOnce(failure: CacheReadFailure): Unit < Sync = Sync.Unsafe.defer(settleMiss(failure))
+                //
+                // The feud stop (Apollo Client 4.3, #13406) is the other half: a miss
+                // whose cause the last refetch already answered — its write-back read
+                // succeeded, and someone else's write broke the read again — is not
+                // refetched. Two watches selecting the same object without its key field
+                // would otherwise take turns forever. The watch keeps its last value,
+                // and the diagnostics report the first such repeat.
+                def refetchOnce(failure: CacheReadFailure): Unit < Sync =
+                    Sync.Unsafe.defer(settleMiss(
+                        failure,
+                        MissCause(s"${failure.getClass.getName}: ${failure.message}", store.destructiveWrites)
+                    ))
 
-                @tailrec def settleMiss(failure: CacheReadFailure): Unit < Sync =
+                @tailrec def settleMiss(failure: CacheReadFailure, cause: MissCause): Unit < Sync =
                     val s = state.get()
                     if !s.active then Kyo.unit
                     else if s.refetched && s.inflight then Kyo.unit // settled once, at the end of the flight
                     else if s.refetched then emitMiss(failure)
-                    else if state.compareAndSet(s, s.copy(refetched = true)) then requestRefetch()
-                    else settleMiss(failure)
+                    else if s.answered.contains(cause) then
+                        if s.feudWarned then Kyo.unit
+                        else if state.compareAndSet(s, s.copy(feudWarned = true)) then
+                            store.cacheDiagnostics.feudStopped(request.operation.name, failure.message)
+                        else settleMiss(failure, cause)
+                    else if state.compareAndSet(s, s.copy(refetched = true, refetchCause = Present(cause))) then requestRefetch()
+                    else settleMiss(failure, cause)
                     end if
                 end settleMiss
 
@@ -495,6 +520,12 @@ end WatchObserver
   * `refetcher` is the fiber that runs those refetches, set once it has started;
   * the `Scope` that started it interrupts it when the watch ends.
   *
+  * The feud stop rides the same cell: `refetchCause` is the miss the current or last
+  * `CacheFirst` refetch went out for, `answered` that cause once a read succeeded
+  * during its flight (the refetch's own write-back cured it), and `feudWarned`
+  * whether a repeat of it was reported. A read that succeeds outside a flight
+  * clears `answered`.
+  *
   * Transitions go through `copy`, so a further per-watch fact is added as a
   * field here and rides the same CAS rather than a second cell.
   */
@@ -505,7 +536,10 @@ final private[normalized] case class WatchState(
     inflight: Boolean,
     rerun: Boolean,
     refetched: Boolean,
-    refetcher: Maybe[Fiber[Unit, Any]]
+    refetcher: Maybe[Fiber[Unit, Any]],
+    refetchCause: Maybe[MissCause],
+    answered: Maybe[MissCause],
+    feudWarned: Boolean
 )
 
 private[normalized] object WatchState:
@@ -517,6 +551,16 @@ private[normalized] object WatchState:
             inflight = false,
             rerun = false,
             refetched = false,
-            refetcher = Absent
+            refetcher = Absent,
+            refetchCause = Absent,
+            answered = Absent,
+            feudWarned = false
         )
 end WatchState
+
+/** What a `CacheFirst` miss is "the same" by: the read failure's description (the
+  * record and field it could not find) and the store's
+  * [[ApolloStore.destructiveWrites]] count when it happened, so a miss after an
+  * imperative removal is a new cause even where it reads the same.
+  */
+final private[normalized] case class MissCause(failure: String, removals: Long) derives CanEqual
