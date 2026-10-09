@@ -14,21 +14,75 @@ private[kyo] object HtmlRenderer:
 
     /** Render a UI tree to HTML with data-kyo-path attributes. */
     def render(ui: UI, path: Seq[String])(using Frame): String < Sync =
-        val sb = new StringBuilder
         // Every descendant extends the path with `:+`, and `Seq.empty` is a List, whose `:+` copies the
         // whole prefix per node. Normalizing once at the entry makes those appends Vector appends; paths
         // are only ever built, compared and joined, and Seq equality holds across both.
         val root = path.toVector
-        renderTo(
-            sb,
-            ui,
-            root,
-            ReactiveRegion.RegionIdentity.root(root),
-            ReactiveRegion.Namespace.Html,
-            parentContext = ReactiveRegion.ParentContext.Other,
-            boundaryMode = ReactiveRegion.BoundaryMode.Emit
-        ).andThen(sb.toString)
+        pass(ui) {
+            val sb = new StringBuilder
+            renderTo(
+                sb,
+                ui,
+                root,
+                ReactiveRegion.RegionIdentity.root(root),
+                ReactiveRegion.Namespace.Html,
+                parentContext = ReactiveRegion.ParentContext.Other,
+                boundaryMode = ReactiveRegion.BoundaryMode.Emit
+            )
+            sb.toString
+        }
     end render
+
+    /** One render pass as a `Sync` effect.
+      *
+      * The render is a synchronous recursion whose only effects are signal reads, so it runs as one effect
+      * that reads through [[SignalNow]] rather than suspending at every bound node, which would cost the pass
+      * a continuation for each frame between the read and the row loop.
+      *
+      * A tree that binds no signal renders where the effect is built: an attribute the renderer rejects (an
+      * oversized drag config, say) then fails at the call rather than at the run, which is what a caller of
+      * `render` expects. Reading such a tree is pure, so the `AllowUnsafe` handed to the pass is never spent on
+      * an effect. A tree that binds a signal renders when the effect runs.
+      */
+    private inline def pass[A](ui: UI)(inline body: AllowUnsafe ?=> A)(using Frame): A < Sync =
+        if bindsSignal(ui) then Sync.Unsafe.defer(body)
+        else body(using AllowUnsafe.embrace.danger)
+
+    /** The rows a list patch changed, rendered into one string under one effect. */
+    private[kyo] def renderRows(
+        rows: Seq[ListRow],
+        path: Seq[String],
+        context: ReactiveRegion.RegionIdentity,
+        host: ReactiveRegion.RenderHost
+    )(using Frame): String < Sync =
+        Sync.Unsafe.defer {
+            val sb = new StringBuilder
+            rows.foreach { row =>
+                if row.changed then renderRowInto(sb, row.ui, path :+ row.key, context.child(row.key), host, Absent)
+            }
+            sb.toString
+        }
+
+    /** Whether rendering `ui` reads a signal anywhere: the reactive nodes, an element with a reactive
+      * attribute, bool-attribute or class channel, and a control bound to a ref. Mirrors every read
+      * [[renderTo]] performs, and a mount's placeholder is read like any other tree.
+      */
+    private def bindsSignal(ui: UI): Boolean =
+        ui match
+            case _: Reactive[?] | _: Foreach[?, ?] => true
+            case el: Element                       =>
+                el.attrs.reactiveClasses.nonEmpty || el.attrs.reactiveAttrs.nonEmpty || el.attrs.reactiveBoolAttrs.nonEmpty
+                || ReactiveUI.collectSignalRef(el).nonEmpty
+                || (el match
+                    case ta: Textarea => hasSignalRefValue(ta.value)
+                    case dd: Dropdown => hasSignalRefValue(dd.value)
+                    case s: Select    => hasSignalRefValue(s.value)
+                    case _            => false)
+                || el.children.exists(bindsSignal)
+            case Fragment(children)   => children.exists(bindsSignal)
+            case KeyedChild(_, child) => bindsSignal(child)
+            case m: Mounted           => m.placeholderUI.exists(bindsSignal)
+            case _: Text | _: RawHtml => false
 
     private[kyo] def renderRegion(ui: UI, path: Seq[String])(using Frame): String < Sync =
         renderRegion(ui, path, ReactiveRegion.RegionIdentity.root(path))
@@ -82,7 +136,11 @@ private[kyo] object HtmlRenderer:
         context: ReactiveRegion.RegionIdentity,
         host: ReactiveRegion.RenderHost
     )(using Frame): String < Sync =
-        renderRowInto(ui, path, context, host, Absent).map(_._1)
+        pass(ui) {
+            val sb = new StringBuilder
+            renderRowInto(sb, ui, path, context, host, Absent)
+            sb.toString
+        }
 
     /** [[renderRow]] plus the pseudo-state rules the row introduced, for the transport that has to ship them. */
     private[kyo] def renderRowWithCss(
@@ -91,18 +149,22 @@ private[kyo] object HtmlRenderer:
         context: ReactiveRegion.RegionIdentity,
         host: ReactiveRegion.RenderHost
     )(using Frame): (String, Chunk[(String, String)]) < Sync =
-        val css = new CssCollector
-        renderRowInto(ui, path, context, host, Present(css)).map((html, _) => (html, Chunk.from(css)))
+        pass(ui) {
+            val sb  = new StringBuilder
+            val css = new CssCollector
+            renderRowInto(sb, ui, path, context, host, Present(css))
+            (sb.toString, Chunk.from(css))
+        }
     end renderRowWithCss
 
     private def renderRowInto(
+        sb: StringBuilder,
         ui: UI,
         path: Seq[String],
         context: ReactiveRegion.RegionIdentity,
         host: ReactiveRegion.RenderHost,
         cssRules: Maybe[CssCollector]
-    )(using Frame): (String, Unit) < Sync =
-        val sb                         = new StringBuilder
+    )(using AllowUnsafe, Frame): Unit =
         val (namespace, parentContext) = host match
             case _: ReactiveRegion.RenderHost.HtmlTableBody =>
                 (ReactiveRegion.Namespace.Html, ReactiveRegion.ParentContext.Other)
@@ -116,7 +178,7 @@ private[kyo] object HtmlRenderer:
             cssRules,
             parentContext,
             ReactiveRegion.BoundaryMode.Emit
-        ).andThen((sb.toString, ()))
+        )
     end renderRowInto
 
     private[kyo] def renderRegion(
@@ -127,9 +189,12 @@ private[kyo] object HtmlRenderer:
         parentContext: ReactiveRegion.ParentContext,
         boundaryMode: ReactiveRegion.BoundaryMode
     )(using Frame): String < Sync =
-        val sb   = new StringBuilder
         val host = ReactiveRegion.renderHost(region, parentContext, ReactiveRegion.tableContent(ui))
-        renderHostedContent(sb, ui, path, context, host, boundaryMode).andThen(sb.toString)
+        pass(ui) {
+            val sb = new StringBuilder
+            renderHostedContent(sb, ui, path, context, host, boundaryMode)
+            sb.toString
+        }
     end renderRegion
 
     /** Render a UI tree to HTML, additionally collecting the CSS rule(s) for every pseudo-state
@@ -144,20 +209,22 @@ private[kyo] object HtmlRenderer:
       * rule, in first-encountered order.
       */
     private[kyo] def renderWithCss(ui: UI, path: Seq[String])(using Frame): (String, Chunk[(String, String)]) < Sync =
-        val sb   = new StringBuilder
-        val css  = new CssCollector
         val root = path.toVector
-        renderTo(
-            sb,
-            ui,
-            root,
-            ReactiveRegion.RegionIdentity.root(root),
-            ReactiveRegion.Namespace.Html,
-            cssRules = Present(css),
-            parentContext = ReactiveRegion.ParentContext.Other,
-            boundaryMode = ReactiveRegion.BoundaryMode.Emit
-        )
-            .andThen((sb.toString, Chunk.from(css)))
+        pass(ui) {
+            val sb  = new StringBuilder
+            val css = new CssCollector
+            renderTo(
+                sb,
+                ui,
+                root,
+                ReactiveRegion.RegionIdentity.root(root),
+                ReactiveRegion.Namespace.Html,
+                cssRules = Present(css),
+                parentContext = ReactiveRegion.ParentContext.Other,
+                boundaryMode = ReactiveRegion.BoundaryMode.Emit
+            )
+            (sb.toString, Chunk.from(css))
+        }
     end renderWithCss
 
     private[kyo] def renderRegionWithCss(ui: UI, path: Seq[String])(using
@@ -187,11 +254,13 @@ private[kyo] object HtmlRenderer:
         parentContext: ReactiveRegion.ParentContext,
         boundaryMode: ReactiveRegion.BoundaryMode
     )(using Frame): (String, Chunk[(String, String)]) < Sync =
-        val sb       = new StringBuilder
-        val css      = new CssCollector
-        val host     = ReactiveRegion.renderHost(region, parentContext, ReactiveRegion.tableContent(ui))
-        val rendered = renderHostedContent(sb, ui, path, context, host, boundaryMode, Present(css))
-        rendered.andThen((sb.toString, Chunk.from(css)))
+        val host = ReactiveRegion.renderHost(region, parentContext, ReactiveRegion.tableContent(ui))
+        pass(ui) {
+            val sb  = new StringBuilder
+            val css = new CssCollector
+            renderHostedContent(sb, ui, path, context, host, boundaryMode, Present(css))
+            (sb.toString, Chunk.from(css))
+        }
     end renderRegionWithCss
 
     private def renderHostedContent(
@@ -202,7 +271,7 @@ private[kyo] object HtmlRenderer:
         host: ReactiveRegion.RenderHost,
         boundaryMode: ReactiveRegion.BoundaryMode,
         cssRules: Maybe[CssCollector] = Absent
-    )(using Frame): Unit < Sync =
+    )(using AllowUnsafe, Frame): Unit =
         host match
             case ReactiveRegion.RenderHost.HtmlTableBody(id) =>
                 w(sb, s"<tbody data-kyo-range-host=\"$id\">")
@@ -215,7 +284,8 @@ private[kyo] object HtmlRenderer:
                     cssRules,
                     ReactiveRegion.ParentContext.Other,
                     boundaryMode
-                ).andThen(w(sb, "</tbody>"))
+                )
+                w(sb, "</tbody>")
             case host =>
                 renderTo(
                     sb,
@@ -322,9 +392,7 @@ private[kyo] object HtmlRenderer:
         cssRules: Maybe[CssCollector] = Absent,
         parentContext: ReactiveRegion.ParentContext,
         boundaryMode: ReactiveRegion.BoundaryMode
-    )(using
-        Frame
-    ): Unit < Sync =
+    )(using AllowUnsafe, Frame): Unit =
         ui match
             case dd: Dropdown =>
                 renderBoundElementBoundary(sb, dd, context, namespace, parentContext, boundaryMode) {
@@ -349,63 +417,56 @@ private[kyo] object HtmlRenderer:
                         )
                         renderEventAttr(sb, elem)
                     end openTag
-                    // Reading a reactive class is an effect, so only an element that binds one suspends before its
-                    // tag is written. Every other element keeps the open tag on the eager path, which is what makes
-                    // an attribute the renderer rejects (an oversized drag config, say) fail where the render is
-                    // built rather than where it is later run.
-                    val opened: Unit < Sync =
-                        if elem.attrs.reactiveClasses.isEmpty then openTag(Seq.empty)
-                        else reactiveTrueClasses(elem.attrs).map(openTag)
-                    for
-                        _ <- opened
-                        _ <- renderElementAttrs(sb, elem)
-                        _ <- renderReactiveAttrs(sb, elem.attrs)
-                        _ <- renderReactiveBoolAttrs(sb, elem.attrs)
-                    yield
-                        if void then
-                            w(sb, " />")
-                            elem match
-                                case ta: Textarea =>
-                                    sb.delete(sb.length - 3, sb.length)
-                                    w(sb, ">")
-                                    renderTextareaValue(sb, ta).andThen(w(sb, "</textarea>"))
-                                case _: Iframe =>
-                                    // iframe is not a void element: it needs an explicit closing tag.
-                                    sb.delete(sb.length - 3, sb.length)
-                                    w(sb, "></iframe>")
-                                case _ => ()
-                            end match
-                        else
-                            w(sb, ">")
-                            // ForeignObject bridges back to HTML, so reset svg context to false. It MUST be
-                            // matched before SvgElement (ForeignObject IS an SvgElement).
-                            val childNamespace = elem match
-                                case _: Svg.ForeignObject => ReactiveRegion.Namespace.Html
-                                case _: Svg.SvgElement    => ReactiveRegion.Namespace.Svg
-                                case _                    => namespace
-                            val childParentContext = elem match
-                                case _: Table => ReactiveRegion.ParentContext.HtmlTable
-                                case _        => ReactiveRegion.ParentContext.Other
-                            val textChild: Unit < Sync = elem match
-                                case t: Svg.Title => w(sb, esc(t.text)); Kyo.unit
-                                case d: Svg.Desc  => w(sb, esc(d.text)); Kyo.unit
-                                case _            => Kyo.unit
-                            textChild.andThen(
-                                Kyo.foreachIndexedDiscard(elem.children) { (i, child) =>
-                                    renderTo(
-                                        sb,
-                                        child,
-                                        path :+ i.toString,
-                                        context.child(i.toString),
-                                        childNamespace,
-                                        cssRules,
-                                        childParentContext,
-                                        ReactiveRegion.BoundaryMode.Emit
-                                    )
-                                }.andThen(discard(sb.append("</").append(tag).append('>')))
+                    openTag(reactiveTrueClasses(elem.attrs))
+                    renderElementAttrs(sb, elem)
+                    renderReactiveAttrs(sb, elem.attrs)
+                    renderReactiveBoolAttrs(sb, elem.attrs)
+                    if void then
+                        w(sb, " />")
+                        elem match
+                            case ta: Textarea =>
+                                sb.delete(sb.length - 3, sb.length)
+                                w(sb, ">")
+                                renderTextareaValue(sb, ta)
+                                w(sb, "</textarea>")
+                            case _: Iframe =>
+                                // iframe is not a void element: it needs an explicit closing tag.
+                                sb.delete(sb.length - 3, sb.length)
+                                w(sb, "></iframe>")
+                            case _ => ()
+                        end match
+                    else
+                        w(sb, ">")
+                        // ForeignObject bridges back to HTML, so reset svg context to false. It must be
+                        // matched before SvgElement (ForeignObject IS an SvgElement).
+                        val childNamespace = elem match
+                            case _: Svg.ForeignObject => ReactiveRegion.Namespace.Html
+                            case _: Svg.SvgElement    => ReactiveRegion.Namespace.Svg
+                            case _                    => namespace
+                        val childParentContext = elem match
+                            case _: Table => ReactiveRegion.ParentContext.HtmlTable
+                            case _        => ReactiveRegion.ParentContext.Other
+                        elem match
+                            case t: Svg.Title => w(sb, esc(t.text))
+                            case d: Svg.Desc  => w(sb, esc(d.text))
+                            case _            => ()
+                        end match
+                        var i = 0
+                        elem.children.foreach { child =>
+                            renderTo(
+                                sb,
+                                child,
+                                path :+ i.toString,
+                                context.child(i.toString),
+                                childNamespace,
+                                cssRules,
+                                childParentContext,
+                                ReactiveRegion.BoundaryMode.Emit
                             )
-                        end if
-                    end for
+                            i += 1
+                        }
+                        discard(sb.append("</").append(tag).append('>'))
+                    end if
                 }
 
             case UI.Ast.RawHtml(value) =>
@@ -417,7 +478,8 @@ private[kyo] object HtmlRenderer:
             case Fragment(children) =>
                 // Use key for KeyedChild, index for everything else. This matches the path scheme
                 // walkStatic uses, so server-side event routing aligns with rendered data-kyo-path.
-                Kyo.foreachIndexedDiscard(children) { (i, child) =>
+                var i = 0
+                children.foreach { child =>
                     val childPath = child match
                         case kc: KeyedChild[?] => path :+ kc.key
                         case _                 => path :+ i.toString
@@ -425,57 +487,56 @@ private[kyo] object HtmlRenderer:
                         case kc: KeyedChild[?] => context.child(kc.key)
                         case _                 => context.child(i.toString)
                     renderTo(sb, child, childPath, childContext, namespace, cssRules, parentContext, ReactiveRegion.BoundaryMode.Emit)
+                    i += 1
                 }
 
             case KeyedChild(_, child) =>
                 renderTo(sb, child, path, context, namespace, cssRules, parentContext, boundaryMode)
 
             case r: Reactive[?] =>
-                val region = ReactiveRegion.from(context, namespace)
-                for current <- r.signal.current(using r.frame)
-                yield
-                    val host = ReactiveRegion.renderHost(region, parentContext, ReactiveRegion.tableContent(current))
-                    openInitialHost(sb, host)
-                    renderTo(
-                        sb,
-                        current,
-                        path,
-                        context.transparent,
-                        ReactiveRegion.namespace(host),
-                        cssRules,
-                        ReactiveRegion.contentParent(host),
-                        ReactiveRegion.BoundaryMode.Emit
-                    ).andThen(closeInitialHost(sb, host))
-                end for
+                val region  = ReactiveRegion.from(context, namespace)
+                val current = SignalNow(r.signal)(using summon[AllowUnsafe], r.frame)
+                val host    = ReactiveRegion.renderHost(region, parentContext, ReactiveRegion.tableContent(current))
+                openInitialHost(sb, host)
+                renderTo(
+                    sb,
+                    current,
+                    path,
+                    context.transparent,
+                    ReactiveRegion.namespace(host),
+                    cssRules,
+                    ReactiveRegion.contentParent(host),
+                    ReactiveRegion.BoundaryMode.Emit
+                )
+                closeInitialHost(sb, host)
 
             case fe: Foreach[?, ?] @unchecked =>
                 val region = ReactiveRegion.from(context, namespace)
                 fe.applyTyped {
                     [T] => (signal, keyFn, renderFn) =>
-                        for items <- signal.current(using fe.frame)
-                        yield
-                            val rendered = items.toSeq.zipWithIndex.map { (item, i) =>
-                                val key = keyFn match
-                                    case Present(f) => f(item)
-                                    case Absent     => i.toString
-                                (key, renderFn(i, item))
-                            }
-                            val content = ReactiveRegion.tableContent(rendered.iterator.map(_._2))
-                            val host    = ReactiveRegion.renderHost(region, parentContext, content)
-                            openInitialHost(sb, host)
-                            Kyo.foreachDiscard(rendered) { (key, child) =>
-                                renderTo(
-                                    sb,
-                                    child,
-                                    path :+ key,
-                                    context.child(key),
-                                    ReactiveRegion.namespace(host),
-                                    cssRules,
-                                    ReactiveRegion.contentParent(host),
-                                    ReactiveRegion.BoundaryMode.Emit
-                                )
-                            }.andThen(closeInitialHost(sb, host))
-                        end for
+                        val items    = SignalNow(signal)(using summon[AllowUnsafe], fe.frame)
+                        val rendered = items.toSeq.zipWithIndex.map { (item, i) =>
+                            val key = keyFn match
+                                case Present(f) => f(item)
+                                case Absent     => i.toString
+                            (key, renderFn(i, item))
+                        }
+                        val content = ReactiveRegion.tableContent(rendered.iterator.map(_._2))
+                        val host    = ReactiveRegion.renderHost(region, parentContext, content)
+                        openInitialHost(sb, host)
+                        rendered.foreach { (key, child) =>
+                            renderTo(
+                                sb,
+                                child,
+                                path :+ key,
+                                context.child(key),
+                                ReactiveRegion.namespace(host),
+                                cssRules,
+                                ReactiveRegion.contentParent(host),
+                                ReactiveRegion.BoundaryMode.Emit
+                            )
+                        }
+                        closeInitialHost(sb, host)
                 }
 
             case m: Mounted =>
@@ -494,7 +555,8 @@ private[kyo] object HtmlRenderer:
                     cssRules,
                     ReactiveRegion.contentParent(host),
                     ReactiveRegion.BoundaryMode.Emit
-                ).andThen(closeInitialHost(sb, host))
+                )
+                closeInitialHost(sb, host)
     end renderTo
 
     private def renderBoundElementBoundary(
@@ -504,7 +566,7 @@ private[kyo] object HtmlRenderer:
         namespace: ReactiveRegion.Namespace,
         parentContext: ReactiveRegion.ParentContext,
         boundaryMode: ReactiveRegion.BoundaryMode
-    )(render: => Unit < Sync)(using Frame): Unit < Sync =
+    )(render: => Unit)(using Frame): Unit =
         val host = (namespace, boundaryMode, ReactiveUI.collectSignalRef(elem)) match
             case (ReactiveRegion.Namespace.Html, ReactiveRegion.BoundaryMode.Emit, Present(_)) =>
                 Present(
@@ -516,7 +578,8 @@ private[kyo] object HtmlRenderer:
                 )
             case _ => Absent
         host.foreach(openInitialHost(sb, _))
-        render.andThen(host.foreach(closeInitialHost(sb, _)))
+        render
+        host.foreach(closeInitialHost(sb, _))
     end renderBoundElementBoundary
 
     /** Open a region's host. `flags` is the marker's flag section, empty for every region but a mount slot (see
@@ -535,31 +598,25 @@ private[kyo] object HtmlRenderer:
             case ReactiveRegion.RenderHost.HtmlTableBody(id)   => w(sb, s"<!--kyo-re:$id--></tbody>")
             case _: ReactiveRegion.RenderHost.SvgGroup         => w(sb, "</g>")
 
-    private def renderTextareaValue(sb: StringBuilder, ta: Textarea)(using Frame): Unit < Sync =
+    private def renderTextareaValue(sb: StringBuilder, ta: Textarea)(using AllowUnsafe, Frame): Unit =
         ta.value match
             case Present(Bound.Const(s)) => w(sb, esc(masked(ta.inputMask, s)))
-            case Present(Bound.Ref(ref)) =>
-                for str <- ref.get
-                yield w(sb, esc(masked(ta.inputMask, str)))
-            case _ => ()
+            case Present(Bound.Ref(ref)) => w(sb, esc(masked(ta.inputMask, SignalNow(ref))))
+            case _                       => ()
 
     // ---- Dropdown (custom div-based overlay) ----
 
     private def renderDropdown(sb: StringBuilder, dd: Dropdown, path: Seq[String], cssRules: Maybe[CssCollector])(using
+        AllowUnsafe,
         Frame
-    ): Unit < Sync =
+    ): Unit =
         val baseId = dd.attrs.identifier.getOrElse("")
         // Read current selected value for initial highlight
-        val currentValueEffect: Unit < Sync = dd.value match
-            case Present(Bound.Ref(ref)) =>
-                ref.get.map { currentVal =>
-                    renderDropdownWithValue(sb, dd, path, baseId, currentVal, cssRules)
-                }
-            case Present(Bound.Const(s)) =>
-                renderDropdownWithValue(sb, dd, path, baseId, s, cssRules)
-            case _ =>
-                renderDropdownWithValue(sb, dd, path, baseId, "", cssRules)
-        currentValueEffect
+        val currentVal = dd.value match
+            case Present(Bound.Ref(ref)) => SignalNow(ref)
+            case Present(Bound.Const(s)) => s
+            case _                       => ""
+        renderDropdownWithValue(sb, dd, path, baseId, currentVal, cssRules)
     end renderDropdown
 
     private def renderDropdownWithValue(
@@ -816,34 +873,29 @@ private[kyo] object HtmlRenderer:
     /** Emits each reactive attribute's current value as an ordinary `name="value"` so SSR carries it; the client
       * then patches it in place (HtmlOp.SetAttrByPath). Sorted for deterministic output.
       */
-    private def renderReactiveAttrs(sb: StringBuilder, attrs: Attrs)(using Frame): Unit < Sync =
-        if attrs.reactiveAttrs.isEmpty then Kyo.unit
-        else
-            Kyo.foreachDiscard(attrs.reactiveAttrs.toSeq.sortBy(_._1)) { case (name, sig) =>
-                sig.current.map(v => w(sb, s""" $name="${esc(v)}""""))
+    private def renderReactiveAttrs(sb: StringBuilder, attrs: Attrs)(using AllowUnsafe, Frame): Unit =
+        if attrs.reactiveAttrs.nonEmpty then
+            attrs.reactiveAttrs.toSeq.sortBy(_._1).foreach { (name, sig) =>
+                w(sb, s""" $name="${esc(SignalNow(sig))}"""")
             }
 
     /** Emits each reactive boolean attribute as a bare present attribute while its signal is true (mirrors
       * `boolAttr`); the client toggles it in place (HtmlOp.SetBoolAttrByPath). Sorted for deterministic output.
       */
-    private def renderReactiveBoolAttrs(sb: StringBuilder, attrs: Attrs)(using Frame): Unit < Sync =
-        if attrs.reactiveBoolAttrs.isEmpty then Kyo.unit
-        else
-            Kyo.foreachDiscard(attrs.reactiveBoolAttrs.toSeq.sortBy(_._1)) { case (name, sig) =>
-                sig.current.map(v => if v then w(sb, s" $name"))
+    private def renderReactiveBoolAttrs(sb: StringBuilder, attrs: Attrs)(using AllowUnsafe, Frame): Unit =
+        if attrs.reactiveBoolAttrs.nonEmpty then
+            attrs.reactiveBoolAttrs.toSeq.sortBy(_._1).foreach { (name, sig) =>
+                if SignalNow(sig) then w(sb, s" $name")
             }
 
     /** The reactive classes whose signal is currently true, for folding into the SSR class list; the client
       * toggles them in place afterwards (HtmlOp.SetClassByPath). Empty (and cheap) when none are bound.
       */
-    private def reactiveTrueClasses(attrs: Attrs)(using Frame): Seq[String] < Sync =
+    private def reactiveTrueClasses(attrs: Attrs)(using AllowUnsafe, Frame): Seq[String] =
         if attrs.reactiveClasses.isEmpty then Seq.empty
-        else
-            Kyo.foreach(attrs.reactiveClasses.toSeq.sortBy(_._1)) { case (name, sig) =>
-                sig.current.map(v => if v then name else "")
-            }.map(_.filter(_.nonEmpty))
+        else attrs.reactiveClasses.toSeq.sortBy(_._1).collect { case (name, sig) if SignalNow(sig) => name }
 
-    private def renderElementAttrs(sb: StringBuilder, elem: Element)(using Frame): Unit < Sync =
+    private def renderElementAttrs(sb: StringBuilder, elem: Element)(using AllowUnsafe, Frame): Unit =
         // WHERE A CHANNEL EXISTS, THE CHANNEL IS THE VALUE. Shadows the file-level `boolAttr` for the whole
         // method, so a static value is dropped for any name a `Signal`-typed setter also bound. This is not a
         // preference: it is what the client already does at runtime: the channel patches its attribute on
@@ -869,77 +921,67 @@ private[kyo] object HtmlRenderer:
             case r: Radio =>
                 w(sb, " type=\"radio\"")
                 boolAttr(sb, "disabled", r.disabled)
-                renderCheckedAttr(sb, r.checked).andThen {
-                    r.name.foreach(n => w(sb, s""" name="${esc(n)}""""))
-                }
+                renderCheckedAttr(sb, r.checked)
+                r.name.foreach(n => w(sb, s""" name="${esc(n)}""""))
             case i: Input =>
-                w(sb, " type=\"text\"");
+                w(sb, " type=\"text\"")
                 renderValueAttr(sb, i.value, i.inputMask)
-                    .andThen {
-                        boolAttr(sb, "disabled", i.disabled); boolAttr(sb, "readonly", i.readOnly);
-                        i.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
-                    }
+                boolAttr(sb, "disabled", i.disabled)
+                boolAttr(sb, "readonly", i.readOnly)
+                i.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
             case p: PasswordInput =>
-                w(sb, " type=\"password\"");
+                w(sb, " type=\"password\"")
                 renderValueAttr(sb, p.value, p.inputMask)
-                    .andThen {
-                        boolAttr(sb, "disabled", p.disabled); boolAttr(sb, "readonly", p.readOnly);
-                        p.placeholder.foreach(p2 => w(sb, s""" placeholder="${esc(p2)}""""))
-                    }
+                boolAttr(sb, "disabled", p.disabled)
+                boolAttr(sb, "readonly", p.readOnly)
+                p.placeholder.foreach(p2 => w(sb, s""" placeholder="${esc(p2)}""""))
             case e: EmailInput =>
-                w(sb, " type=\"email\"");
+                w(sb, " type=\"email\"")
                 renderValueAttr(sb, e.value, e.inputMask)
-                    .andThen {
-                        boolAttr(sb, "disabled", e.disabled); boolAttr(sb, "readonly", e.readOnly);
-                        e.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
-                    }
+                boolAttr(sb, "disabled", e.disabled)
+                boolAttr(sb, "readonly", e.readOnly)
+                e.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
             case t: TelInput =>
-                w(sb, " type=\"tel\"");
+                w(sb, " type=\"tel\"")
                 renderValueAttr(sb, t.value, t.inputMask)
-                    .andThen {
-                        boolAttr(sb, "disabled", t.disabled); boolAttr(sb, "readonly", t.readOnly);
-                        t.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
-                    }
+                boolAttr(sb, "disabled", t.disabled)
+                boolAttr(sb, "readonly", t.readOnly)
+                t.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
             case u: UrlInput =>
-                w(sb, " type=\"url\"");
+                w(sb, " type=\"url\"")
                 renderValueAttr(sb, u.value, u.inputMask)
-                    .andThen {
-                        boolAttr(sb, "disabled", u.disabled); boolAttr(sb, "readonly", u.readOnly);
-                        u.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
-                    }
+                boolAttr(sb, "disabled", u.disabled)
+                boolAttr(sb, "readonly", u.readOnly)
+                u.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
             case s: SearchInput =>
-                w(sb, " type=\"search\"");
+                w(sb, " type=\"search\"")
                 renderValueAttr(sb, s.value, s.inputMask)
-                    .andThen {
-                        boolAttr(sb, "disabled", s.disabled); boolAttr(sb, "readonly", s.readOnly);
-                        s.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
-                    }
+                boolAttr(sb, "disabled", s.disabled)
+                boolAttr(sb, "readonly", s.readOnly)
+                s.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
             case n: NumberInput =>
                 w(sb, " type=\"number\"")
-                renderValueAttr(sb, n.value).andThen {
-                    boolAttr(sb, "disabled", n.disabled); boolAttr(sb, "readonly", n.readOnly)
-                    n.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
-                    n.min.foreach(v => w(sb, s""" min="${fmtD(v)}""""))
-                    n.max.foreach(v => w(sb, s""" max="${fmtD(v)}""""))
-                    n.step.foreach(v => w(sb, s""" step="${fmtD(v)}""""))
-                }
+                renderValueAttr(sb, n.value)
+                boolAttr(sb, "disabled", n.disabled)
+                boolAttr(sb, "readonly", n.readOnly)
+                n.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
+                n.min.foreach(v => w(sb, s""" min="${fmtD(v)}""""))
+                n.max.foreach(v => w(sb, s""" max="${fmtD(v)}""""))
+                n.step.foreach(v => w(sb, s""" step="${fmtD(v)}""""))
             case d: DateInput  => w(sb, " type=\"date\""); renderPickerAttrs(sb, d)
             case t: TimeInput  => w(sb, " type=\"time\""); renderPickerAttrs(sb, t)
             case c: ColorInput => w(sb, " type=\"color\""); renderPickerAttrs(sb, c)
             case r: RangeInput =>
                 w(sb, " type=\"range\"")
                 boolAttr(sb, "disabled", r.disabled)
-                val rv: Unit < Sync = r.value match
+                r.value match
                     case Present(Bound.Const(d)) => w(sb, s""" value="${fmtD(d)}"""")
-                    case Present(Bound.Ref(ref)) =>
-                        for d <- ref.get
-                        yield w(sb, s""" value="${fmtD(d)}"""")
-                    case _ => ()
-                rv.andThen {
-                    r.min.foreach(v => w(sb, s""" min="${fmtD(v)}""""))
-                    r.max.foreach(v => w(sb, s""" max="${fmtD(v)}""""))
-                    r.step.foreach(v => w(sb, s""" step="${fmtD(v)}""""))
-                }
+                    case Present(Bound.Ref(ref)) => w(sb, s""" value="${fmtD(SignalNow(ref))}"""")
+                    case _                       => ()
+                end match
+                r.min.foreach(v => w(sb, s""" min="${fmtD(v)}""""))
+                r.max.foreach(v => w(sb, s""" max="${fmtD(v)}""""))
+                r.step.foreach(v => w(sb, s""" step="${fmtD(v)}""""))
             case f: FileInput =>
                 w(sb, " type=\"file\"")
                 boolAttr(sb, "disabled", f.disabled)
@@ -970,12 +1012,10 @@ private[kyo] object HtmlRenderer:
                 ta.placeholder.foreach(p => w(sb, s""" placeholder="${esc(p)}""""))
             case sel: Select =>
                 boolAttr(sb, "disabled", sel.disabled)
-                val selValue: Unit < Sync = sel.value match
+                sel.value match
                     case Present(Bound.Const(s)) => w(sb, s""" value="${esc(s)}"""")
-                    case Present(Bound.Ref(ref)) =>
-                        for s <- ref.get
-                        yield w(sb, s""" value="${esc(s)}"""")
-                    case _ =>
+                    case Present(Bound.Ref(ref)) => w(sb, s""" value="${esc(SignalNow(ref))}"""")
+                    case _                       =>
                         // Fall back to first Opt child with selected(true)
                         val selected = Maybe.fromOption(sel.children.toSeq.collectFirst {
                             case opt: Opt if opt.selected == Present(true) =>
@@ -984,7 +1024,7 @@ private[kyo] object HtmlRenderer:
                         selected match
                             case Present(v) if v.nonEmpty => w(sb, s""" value="${esc(v)}"""")
                             case _                        => ()
-                selValue
+                end match
             case opt: Opt =>
                 opt.value.foreach(v => w(sb, s""" value="${esc(v)}""""))
                 boolAttr(sb, "selected", opt.selected)
@@ -1021,13 +1061,11 @@ private[kyo] object HtmlRenderer:
     private def boolAttr(sb: StringBuilder, name: String, value: Maybe[Boolean]): Unit =
         value.foreach(v => if v then w(sb, s" $name"))
 
-    private def renderCheckedAttr(sb: StringBuilder, value: Maybe[Bound[Boolean]])(using Frame): Unit < Sync =
+    private def renderCheckedAttr(sb: StringBuilder, value: Maybe[Bound[Boolean]])(using AllowUnsafe, Frame): Unit =
         value match
             case Present(Bound.Const(b)) => if b then w(sb, " checked")
-            case Present(Bound.Ref(ref)) =>
-                for b <- ref.get
-                yield if b then w(sb, " checked")
-            case _ => ()
+            case Present(Bound.Ref(ref)) => if SignalNow(ref) then w(sb, " checked")
+            case _                       => ()
 
     /** Render a value attribute, reading SignalRef if needed. */
     /** Formats a value about to be displayed through the element's mask, if it carries one.
@@ -1045,16 +1083,15 @@ private[kyo] object HtmlRenderer:
         mask.fold(value)(InputMasking.maskNormalize(_, value))
 
     private def renderValueAttr(sb: StringBuilder, value: Maybe[Bound[String]], mask: Maybe[String] = Absent)(using
+        AllowUnsafe,
         Frame
-    ): Unit < Sync =
+    ): Unit =
         value match
             case Present(Bound.Const(s)) => w(sb, s""" value="${esc(masked(mask, s))}"""")
-            case Present(Bound.Ref(ref)) =>
-                for s <- ref.get
-                yield w(sb, s""" value="${esc(masked(mask, s))}"""")
-            case _ => ()
+            case Present(Bound.Ref(ref)) => w(sb, s""" value="${esc(masked(mask, SignalNow(ref)))}"""")
+            case _                       => ()
 
-    private def renderPickerAttrs(sb: StringBuilder, pi: PickerInput)(using Frame): Unit < Sync =
+    private def renderPickerAttrs(sb: StringBuilder, pi: PickerInput)(using AllowUnsafe, Frame): Unit =
         boolAttr(sb, "disabled", pi.disabled)
         renderValueAttr(sb, pi.value)
 
