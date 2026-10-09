@@ -693,7 +693,7 @@ object Signal:
         final class Unsafe[A] private (
             currentRef: AtomicRef.Unsafe[A],
             nextPromise: AtomicRef.Unsafe[Promise.Unsafe[A, Any]],
-            versionRef: AtomicLong.Unsafe
+            versionRef: AtomicInt.Unsafe
         )(using CanEqual[A, A]):
 
             def get()(using AllowUnsafe): A = currentRef.get()
@@ -701,7 +701,7 @@ object Signal:
             /** Monotonic change counter, incremented once per distinct-value update. `SignalRef.observe` uses it
               * to validate that no write landed between reading `current` and capturing the next-change promise.
               */
-            def version()(using AllowUnsafe): Long = versionRef.get()
+            def version()(using AllowUnsafe): Long = versionRef.get().toLong
 
             def set(value: A)(using AllowUnsafe): Unit =
                 discard(getAndSet(value))
@@ -778,7 +778,7 @@ object Signal:
                 Unsafe(
                     AtomicRef.Unsafe.init(initial),
                     AtomicRef.Unsafe.init(Promise.Unsafe.initUninterruptible()),
-                    AtomicLong.Unsafe.init(0L)
+                    AtomicInt.Unsafe.init(0)
                 )
         end Unsafe
 
