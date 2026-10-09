@@ -107,6 +107,19 @@ final class ApolloStore(
       */
     def currentGeneration(using Frame): Long < Sync = generation.get
 
+    /** Counts the imperative removals ([[evict]], [[remove]], [[clearAll]]), bumped
+      * before the removal publishes. A `CacheFirst` watch that stopped refetching a
+      * repeating miss (a cache feud) refetches again once this has moved: the miss
+      * then stems from an invalidation, not from a feuding write.
+      */
+    private val removals = AtomicLong.Unsafe.init(0L)(using AllowUnsafe.embrace.danger)
+
+    private[normalized] def destructiveWrites(using AllowUnsafe): Long = removals.get()
+
+    private def countRemoval(using Frame): Unit < Sync = Sync.Unsafe.defer(discard(removals.incrementAndGet()))
+
+    private[normalized] def cacheDiagnostics: CacheDiagnostics = diagnostics
+
     /** One optimistic layer: the records (by key) a mutation wrote *optimistically*
       * before its network round-trip, tagged by the mutation's id.
       */
@@ -866,7 +879,7 @@ final class ApolloStore(
       * @param cascade  whether to also evict the records `cacheKey` references
       */
     def evict(cacheKey: CacheKey, cascade: Boolean = false)(using Frame): Set[CacheKey] < Sync =
-        sweep(state => if cascade then subtree(state.allRecords, cacheKey) else Set(cacheKey))
+        countRemoval.andThen(sweep(state => if cascade then subtree(state.allRecords, cacheKey) else Set(cacheKey)))
 
     /** `start` and every record transitively reachable from it over the `all`
       * snapshot — the keys a cascading [[evict]] removes. The traversal walks
@@ -889,7 +902,7 @@ final class ApolloStore(
     end subtree
 
     /** Drop every record from the backing cache. */
-    def clearAll(using Frame): Unit < Sync = cache.clearAll
+    def clearAll(using Frame): Unit < Sync = countRemoval.andThen(cache.clearAll)
 
     /** Encode typed `data` into its response `data` map through its [[JsonCodec]] —
       * the write-side inverse of the decode the transport performs, so normalization
