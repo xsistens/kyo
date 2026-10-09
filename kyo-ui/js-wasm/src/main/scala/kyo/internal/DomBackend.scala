@@ -1079,9 +1079,7 @@ private[kyo] object DomBackend:
                         parentContext,
                         ReactiveRegion.tableContent(rows.iterator.map(_.ui))
                     )
-                    Kyo.foreach(Chunk.from(rows.filter(_.changed))) { row =>
-                        HtmlRenderer.renderRow(row.ui, path :+ row.key, contentContext.child(row.key), host)
-                    }.map(_.mkString).flatMap { changed =>
+                    HtmlRenderer.renderRows(rows, path, contentContext, host).flatMap { changed =>
                         noteMarkers(changed)
                         Sync.defer(open).flatMap { isOpen =>
                             // A closed backend paints nothing, so there is nothing to subscribe again.
