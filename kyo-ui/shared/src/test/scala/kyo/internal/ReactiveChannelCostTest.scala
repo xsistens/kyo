@@ -2,6 +2,7 @@ package kyo.internal
 
 import java.util.concurrent.atomic.AtomicInteger
 import kyo.*
+import kyo.UI.foreachKeyed
 
 /** What the callback binding of the reactive channels costs, asserted by counting rather than by timing.
   *
@@ -23,6 +24,7 @@ class ReactiveChannelCostTest extends kyo.test.Test[Any]:
 
     final private class Recording:
         val patches  = new AtomicInteger(0)
+        val paints   = new AtomicInteger(0)
         val exchange = new UIExchange:
             def onChange(
                 region: ReactiveRegion,
@@ -31,7 +33,7 @@ class ReactiveChannelCostTest extends kyo.test.Test[Any]:
                 parentContext: ReactiveRegion.ParentContext,
                 previous: Maybe[UI],
                 changed: UI
-            )(using Frame): Unit < Async = Kyo.unit
+            )(using Frame): Unit < Async = Sync.defer(discard(paints.incrementAndGet()))
             private def bump(): Unit     = discard(patches.incrementAndGet())
             override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
                 Sync.defer(bump())
@@ -121,6 +123,26 @@ class ReactiveChannelCostTest extends kyo.test.Test[Any]:
             // deselects row 0. Comparing source values instead of each channel's image would deliver to all
             // thousand rows on every move and produce the same output.
             yield assert(after3 == 2 && after8 == 4, s"first=$after3 second=$after8 (expected 2 then 4)")
+        }
+    }
+
+    "an evicted keyed row releases its channel bindings" in {
+        Scope.run {
+            for
+                sel  <- Signal.initRef(false)
+                rows <- Signal.initRef(Chunk.from(0 until fanOut))
+                rec = new Recording
+                ui  = UI.div(rows.foreachKeyed(_.toString)(_ => UI.span("x").cssClass("hot", sel: Signal[Boolean])))
+                root <- ReactiveUI.normalize(ui, Seq.empty)
+                _    <- ReactiveUI.subscribe(root, rec.exchange)
+                _    <- assertEventually(sel.waiters.map(_ == 1))
+                _    <- rows.set(Chunk.from(0 until fanOut / 2))
+                // The rows leave before the list paints, so a paint means the eviction is done.
+                _ <- assertEventually(Sync.defer(rec.paints.get == 1))
+                _ <- sel.set(true)
+                after = rec.patches.get
+            // The half that left must not be written to, and the half that stayed must, before `set` returns.
+            yield assert(after == fanOut / 2, s"expected ${fanOut / 2} patches after evicting half the rows, got $after")
         }
     }
 
