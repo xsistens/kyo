@@ -649,24 +649,21 @@ final class ApolloStore(
             changed <- Channel.init[Unit](1)
             watched <- AtomicRef.init(Set(key))
             _       <- retain(Set(key))
-            // Registered before the first read, so a write landing during it re-reads.
-            _ <- addChangedKeysListener { keys =>
-                watched.get.map(dependent =>
-                    if keys.exists(dependent.contains) then Abort.run[Closed](changed.offer(())).unit else Kyo.unit
-                )
-            }
-            first   <- readRef(ref, key)
-            initial <- first match
-                case Present((data, keys)) => watched.set(keys).andThen(data)
-                case Absent                => ref.value
-        yield Stream.init(Seq(initial)).concat(
-            changed.streamUntilClosed().collect { _ =>
-                readRef(ref, key).map {
-                    case Present((data, keys)) => watched.set(keys).andThen(Present(data))
-                    case Absent                => Absent
+            again = Abort.run[Closed](changed.offer(())).unit
+            _ <- addChangedKeysListener(keys => watched.get.map(dependent => if keys.exists(dependent.contains) then again else Kyo.unit))
+            // A read can depend on a record the listener does not check yet. A write to
+            // it that lands before the read's keys are installed bumped the generation
+            // (always before the listeners run), so a moved generation reads once more.
+            follow = currentGeneration.map { before =>
+                readRef(ref, key).map { read =>
+                    read.fold(Kyo.unit)((_, keys) => watched.set(keys))
+                        .andThen(currentGeneration.map(after => if after != before then again else Kyo.unit))
+                        .andThen(read.map(_._1))
                 }
             }
-        )
+            first   <- follow
+            initial <- first.fold[D < Abort[ApolloParseException]](ref.value)(data => data)
+        yield Stream.init(Seq(initial)).concat(changed.streamUntilClosed().collect(_ => follow))
     end followRef
 
     /** The key the store gives `ref`'s entity, or `Absent` when its generator gives
