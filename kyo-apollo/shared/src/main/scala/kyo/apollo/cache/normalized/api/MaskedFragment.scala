@@ -1,5 +1,7 @@
 package kyo.apollo.cache.normalized.api
 
+import kyo.<
+import kyo.Abort
 import kyo.Chunk
 import kyo.Frame
 import kyo.Maybe
@@ -22,14 +24,16 @@ import scala.collection.immutable.VectorMap
   * object CountryCard:
   *     val fields = Fragment.entity[Country](_.name.capital)
   *
-  *     def view(ref: fields.Ref)(using ApolloClient, Frame) =
-  *         Apollo.fragment(ref).map(render)
+  *     def view(client: ApolloClient, ref: fields.Ref)(using Frame) =
+  *         client.apolloStore.watchFragment(ref).foreach(render)
   * }}}
   *
   * Spreading it into a parent selection contributes exactly ONE named-tuple
   * element — the [[Ref]] — regardless of how many fields the fragment selects,
-  * and the parent cannot reach those fields through it: the ref's contents are
-  * `private[apollo]`, and only `Apollo.fragment` opens them. When a parent
+  * and the parent's result type does not reach those fields: the ref's contents
+  * are `private[apollo]`, and reading them takes an explicit opener ([[Ref.value]],
+  * `ApolloStore.readFragment(ref)`, `ApolloStore.watchFragment(ref)`), which by
+  * convention only the component that declared the fragment calls. When a parent
   * legitimately needs a field the child also shows, it selects that field
   * itself (`Country.name ~ CountryCard.fields.spread`) — fetched once (the
   * duplicate merges), but the parent's dependency is explicit rather than
@@ -65,7 +69,7 @@ final class EntityFragment[Origin, D <: AnyNamedTuple] private[apollo] (
       * `equals`/`hashCode` over the fragment and the captured slice, and a
       * `toString` naming only the fragment — while the response fields it
       * captured ride along `private[apollo]` so a cache write of decoded data
-      * stays lossless and `Apollo.fragment` can seed without a cache round-trip.
+      * stays lossless and [[value]] answers without a cache round-trip.
       *
       * A plain `final class`, not a case class: a case class is a `Product`, and
       * `productIterator` would hand the masked fields out to any generic printer.
@@ -91,6 +95,12 @@ final class EntityFragment[Origin, D <: AnyNamedTuple] private[apollo] (
           * missing or mistyping one of them is a failure.
           */
         private[apollo] def decoded(using Frame): Result[ApolloParseException, D] = selection.decode(Json.JObj(raw))
+
+        /** The fragment's fields as the response that carried this ref delivered them.
+          * A later write to the entity does not change it; `ApolloStore.readFragment(ref)`
+          * reads the cached record and `ApolloStore.watchFragment(ref)` follows it.
+          */
+        def value(using Frame): D < Abort[ApolloParseException] = Abort.get(decoded)
 
         override def equals(other: Any): Boolean = other match
             case that: EntityFragment[?, ?]#Ref => (that.definition eq outer) && that.raw == raw
@@ -181,8 +191,8 @@ final class EmbeddedFragment[Origin, D <: AnyNamedTuple] private[apollo] (
 ):
     outer =>
 
-    /** The masked handle: carries the captured response slice, opens only for
-      * `Apollo.fragment`. No cache key — the object has no identity. A plain
+    /** The masked handle: carries the captured response slice, opened by
+      * [[value]]. No cache key — the object has no identity. A plain
       * `final class` for the same reason as [[EntityFragment.Ref]]: no `Product`
       * view onto the masked fields.
       */
@@ -194,7 +204,13 @@ final class EmbeddedFragment[Origin, D <: AnyNamedTuple] private[apollo] (
         /** The fragment's fields decoded from the captured response slice; a slice
           * missing or mistyping one of them is a failure.
           */
-        private[apollo] def value(using Frame): Result[ApolloParseException, D] = selection.decode(Json.JObj(raw))
+        private[apollo] def decoded(using Frame): Result[ApolloParseException, D] = selection.decode(Json.JObj(raw))
+
+        /** The fragment's fields. The object has no cache identity, so this is all
+          * there is to read: a newer value arrives as a new ref in the parent's next
+          * result.
+          */
+        def value(using Frame): D < Abort[ApolloParseException] = Abort.get(decoded)
 
         override def equals(other: Any): Boolean = other match
             case that: EmbeddedFragment[?, ?]#Ref => (that.definition eq outer) && that.raw == raw

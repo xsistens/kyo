@@ -2,7 +2,9 @@ package kyo.apollo.cache
 
 import kyo.Abort
 import kyo.Absent
+import kyo.Channel
 import kyo.Chunk
+import kyo.Fiber
 import kyo.Maybe
 import kyo.Present
 import kyo.Result
@@ -300,20 +302,20 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             val decoded                   = q.dataCodec.decode(parse(body)).getOrThrow
             val ref: PageBadge.fields.Ref = decoded.pageInfo.pageBadge
             assert(decoded.pageInfo.hasNextPage == true)
-            assert(ref.value == Result.succeed((hasNextPage = true, endCursor = Present("c42"))))
+            assert(ref.decoded == Result.succeed((hasNextPage = true, endCursor = Present("c42"))))
             assert(!ref.toString.contains("c42"))
             assert(!(ref: Any).isInstanceOf[Product])
             typeCheckFailure("ref.productIterator")("productIterator")
         }
     }
 
-    "the store keys a ref (K-HIGH-52)" - {
+    "the store keys a ref" - {
 
         "a ref reads through the store's own key generator, even when the store keys the type differently" in {
             // The fragment's CacheIdentity keys Country by `code`; this store keys it by
             // `name`. The response is normalized into `Country:Germany`. A key the ref
-            // computed from its own identity (`Country:DE`) names a record that was never
-            // written — before K-HIGH-52 exactly that read was a CacheMissException.
+            // computed from its own identity (`Country:DE`) would name a record that was
+            // never written, and the read would miss.
             val s = new ApolloStore(
                 MemoryCache(),
                 cacheKeyGenerator = TypePolicyCacheKeyGenerator.of(TypePolicy("Country", List("name")))
@@ -372,6 +374,102 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             val decoded = q.dataCodec.decode(parse(germanyBody)).getOrThrow
             val ref     = decoded.country.card
             assert(keyed(store(), ref.typeName, ref.raw) == Result.succeed(CacheKey("Country", "DE")))
+        }
+    }
+
+    "opening a ref" - {
+
+        val q                                       = countryField(GCountry.code ~ CountryCard.fields.spread).toQuery("Q")
+        val decoded                                 = q.dataCodec.decode(parse(germanyBody)).getOrThrow
+        val ref                                     = decoded.country.countryCard
+        val germany                                 = CacheKey("Country", "DE")
+        val nameCap                                 = Fragment.of[CountryT](_ ~ GCountry.name ~ GCountry.capital)
+        def moveTo(s: ApolloStore, capital: String) =
+            s.writeFragment(nameCap, germany, (name = "Germany", capital = Present(capital)))
+
+        "value decodes the fields the response carried" in {
+            ref.value.map(fields => assert(fields == (name = "Germany", capital = Present("Berlin"))))
+        }
+
+        "an embedded ref's value is its fields" in {
+            val pq   = pageInfoField(PageBadge.fields.spread).toQuery("Q")
+            val body = """{"pageInfo":{"__typename":"PageInfo","hasNextPage":false,"endCursor":null}}"""
+            pq.dataCodec.decode(parse(body)).getOrThrow.pageInfo.pageBadge.value.map { fields =>
+                assert(fields == (hasNextPage = false, endCursor = Absent))
+            }
+        }
+
+        "readFragment reads the record as the store holds it now, not the captured slice" in {
+            val s = store()
+            for
+                _      <- s.writeOperation(q, decoded)
+                _      <- moveTo(s, "Bonn")
+                cached <- s.readFragment(ref)
+                slice  <- ref.value
+            yield
+                assert(cached.capital == Present("Bonn"))
+                assert(slice.capital == Present("Berlin"))
+            end for
+        }
+
+        "readFragment falls back to the captured slice when the store has no record" in {
+            store().readFragment(ref).map(fields => assert(fields.capital == Present("Berlin")))
+        }
+
+        "readFragment falls back to the captured slice when the store gives the type no identity" in {
+            val s = new ApolloStore(MemoryCache())
+            s.writeOperation(q, decoded).andThen(s.readFragment(ref)).map(fields => assert(fields.name == "Germany"))
+        }
+
+        "watchFragment emits the record, then again after a write that changes it" in {
+            val s = store()
+            for
+                _       <- s.writeOperation(q, decoded)
+                emitted <- Channel.init[Maybe[String]](4)
+                watch   <- Fiber.init(s.watchFragment(ref).take(2).foreach(fields => emitted.put(fields.capital)))
+                // The listener is registered before the first read, so once the first value
+                // is out, the write below is seen.
+                first  <- emitted.take
+                _      <- moveTo(s, "Bonn")
+                second <- emitted.take
+                _      <- watch.get
+            yield
+                assert(first == Present("Berlin"))
+                assert(second == Present("Bonn"))
+            end for
+        }
+
+        "watchFragment keeps its last value while the record is gone, and follows it once it is back" in {
+            val s = store()
+            for
+                _       <- s.writeOperation(q, decoded)
+                emitted <- Channel.init[Maybe[String]](4)
+                watch   <- Fiber.init(s.watchFragment(ref).take(2).foreach(fields => emitted.put(fields.capital)))
+                first   <- emitted.take
+                _       <- s.evict(germany)
+                _       <- moveTo(s, "Bonn")
+                second  <- emitted.take
+                _       <- watch.get
+            yield
+                assert(first == Present("Berlin"))
+                // The eviction emitted nothing; the next value is the record written back.
+                assert(second == Present("Bonn"))
+            end for
+        }
+
+        "watchFragment retains the record while it runs" in {
+            val s = store()
+            for
+                _ <- s.writeOperation(q, decoded)
+                // Unreachable from any root once the query's root no longer points at it.
+                _         <- s.writeOperation(countryField(GCountry.code).toQuery("Other"), (country = (code = "FR")))
+                emitted   <- Channel.init[Maybe[String]](4)
+                watch     <- Fiber.init(s.watchFragment(ref).foreach(fields => emitted.put(fields.capital)))
+                _         <- emitted.take
+                collected <- s.garbageCollect
+                _         <- watch.interrupt
+            yield assert(!collected.contains(germany), s"collected while watched: $collected")
+            end for
         }
     }
 end MaskedFragmentSpec

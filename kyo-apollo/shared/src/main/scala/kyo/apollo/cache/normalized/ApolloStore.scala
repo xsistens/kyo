@@ -4,16 +4,22 @@ import kyo.<
 import kyo.Abort
 import kyo.Absent
 import kyo.AllowUnsafe
+import kyo.Async
 import kyo.AtomicLong
 import kyo.AtomicRef
+import kyo.Channel
 import kyo.Chunk
+import kyo.Closed
+import kyo.Emit
 import kyo.Frame
 import kyo.Kyo
 import kyo.Maybe
 import kyo.Present
 import kyo.Result
 import kyo.Scope
+import kyo.Stream
 import kyo.Sync
+import kyo.Tag
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
 import kyo.apollo.api.JsonCodec
@@ -21,11 +27,13 @@ import kyo.apollo.api.Operation
 import kyo.apollo.cache.normalized.api.*
 import kyo.apollo.cache.normalized.internal.CacheBatchReader
 import kyo.apollo.cache.normalized.internal.Normalizer
+import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.exception.CacheMissException
 import kyo.apollo.exception.CacheReadFailure
 import kyo.apollo.exception.NoCacheIdentityException
 import kyo.apollo.json.Json
 import kyo.discard
+import scala.NamedTuple.AnyNamedTuple
 import scala.collection.mutable
 
 /** The coordinator that turns typed operation data into cache records and back,
@@ -592,6 +600,93 @@ final class ApolloStore(
             fragmentVariablesOf(fragment),
             cacheKeyResolver,
             fieldPolicies
+        )
+
+    /** Read a masked entity fragment's fields from the record its ref names, as the
+      * store holds it now (optimistic layers included). When the store has no
+      * readable record for it (evicted, or a type the store's key generator gives no
+      * identity), the fields the ref captured from its response answer instead, so a
+      * ref always reads as something. A captured slice that does not decode as the
+      * fragment's fields is the row's failure.
+      */
+    def readFragment[Origin, D <: AnyNamedTuple](ref: EntityFragment[Origin, D]#Ref)(using
+        Frame
+    ): D < (Sync & Abort[ApolloParseException]) =
+        keyOfRef(ref).map {
+            case Present(key) =>
+                readRef(ref, key).map {
+                    case Present((data, _)) => data
+                    case Absent             => ref.value
+                }
+            case Absent => ref.value
+        }
+
+    /** Follow a masked entity fragment's record: emits [[readFragment]]'s value
+      * first, then the record's value again after every write that changes a record
+      * the last read depended on. A write that leaves the record unreadable (an
+      * eviction mid-life) emits nothing, so the stream keeps its last value until the
+      * record is back. While the stream runs, the record stays retained for
+      * [[garbageCollect]]; it ends with the `Scope` it runs in. A type the store gives
+      * no identity has no record to follow: the stream emits the ref's own fields
+      * once and ends.
+      */
+    def watchFragment[Origin, D <: AnyNamedTuple](ref: EntityFragment[Origin, D]#Ref)(using
+        Frame,
+        Tag[Emit[Chunk[D]]]
+    ): Stream[D, Async & Scope & Abort[ApolloParseException]] =
+        Stream.unwrap {
+            keyOfRef(ref).map {
+                case Absent       => Stream.init(ref.value.map(Seq(_)))
+                case Present(key) => followRef(ref, key)
+            }
+        }
+
+    private def followRef[Origin, D <: AnyNamedTuple](ref: EntityFragment[Origin, D]#Ref, key: CacheKey)(using
+        Frame,
+        Tag[Emit[Chunk[D]]]
+    ): Stream[D, Async & Scope & Abort[ApolloParseException]] < (Sync & Scope & Abort[ApolloParseException]) =
+        for
+            changed <- Channel.init[Unit](1)
+            watched <- AtomicRef.init(Set(key))
+            _       <- retain(Set(key))
+            // Registered before the first read, so a write landing during it re-reads.
+            _ <- addChangedKeysListener { keys =>
+                watched.get.map(dependent =>
+                    if keys.exists(dependent.contains) then Abort.run[Closed](changed.offer(())).unit else Kyo.unit
+                )
+            }
+            first   <- readRef(ref, key)
+            initial <- first match
+                case Present((data, keys)) => watched.set(keys).andThen(data)
+                case Absent                => ref.value
+        yield Stream.init(Seq(initial)).concat(
+            changed.streamUntilClosed().collect { _ =>
+                readRef(ref, key).map {
+                    case Present((data, keys)) => watched.set(keys).andThen(Present(data))
+                    case Absent                => Absent
+                }
+            }
+        )
+    end followRef
+
+    /** The key the store gives `ref`'s entity, or `Absent` when its generator gives
+      * the type no identity.
+      */
+    private def keyOfRef[Origin, D <: AnyNamedTuple](ref: EntityFragment[Origin, D]#Ref)(using Frame): Maybe[CacheKey] < Sync =
+        Abort.run[CacheReadFailure](keyOf(ref.typeName, ref.raw)).map {
+            case Result.Success(key)  => Present(key)
+            case Result.Failure(_)    => Absent
+            case Result.Panic(defect) => Abort.panic(defect)
+        }
+
+    /** `ref`'s fields read from the record under `key`, with the keys the read
+      * depended on, or `Absent` when the cache cannot satisfy them.
+      */
+    private def readRef[Origin, D <: AnyNamedTuple](ref: EntityFragment[Origin, D]#Ref, key: CacheKey)(using
+        Frame
+    ): Maybe[(D, Set[CacheKey])] < Sync =
+        Abort.recover[CacheReadFailure](_ => Maybe.empty[(D, Set[CacheKey])])(
+            readFragmentWithKeys(ref.definition.cacheFragment, key).map((data, keys) => Maybe((data, keys + key)))
         )
 
     /** Read `operation`'s cached data, apply `update`, and write the result back —
