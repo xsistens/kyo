@@ -1,0 +1,12 @@
+# Query with an input-object variable that carries an enum. Exercises: list
+# selection, custom-scalar field (`updatedAt`), and enum-in-input handling.
+query GetCountries($filter: CountryFilter) {
+  countries(filter: $filter) {
+    __typename
+    code
+    name
+    emoji
+    continent
+    updatedAt
+  }
+}

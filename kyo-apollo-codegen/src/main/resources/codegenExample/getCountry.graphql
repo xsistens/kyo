@@ -1,0 +1,14 @@
+# Query with a required scalar variable ($code: ID!) driving a field argument —
+# the canonical single-entity fetch the normalized cache keys on.
+query GetCountry($code: ID!) {
+  country(code: $code) {
+    __typename
+    code
+    name
+    native
+    capital
+    emoji
+    continent
+    currencies
+  }
+}
