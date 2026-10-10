@@ -30,8 +30,8 @@ class ApolloInterceptorChainSpec extends kyo.test.Test[Any]:
 
     /** A query whose `data` is a single `{ "value": Int }` object. */
     final case class ValueQuery() extends Query.Normalizable[Int]:
-        def name: String     = "Value"
-        def document: String = "query Value { value }"
+        def name: String              = "Value"
+        def document: String          = "query Value { value }"
         val dataCodec: JsonCodec[Int] =
             JsonCodec.fromSchema(using summon[Schema[ValueData]].transform[Int](_.value)(ValueData.apply))
         def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
@@ -60,7 +60,7 @@ class ApolloInterceptorChainSpec extends kyo.test.Test[Any]:
         }
 
         "interceptors run in order and can transform the response stream" in {
-            var order = List.empty[String]
+            var order                  = List.empty[String]
             val tap: ApolloInterceptor = new ApolloInterceptor:
                 def intercept[D](
                     request: ApolloRequest[D],
@@ -97,7 +97,7 @@ class ApolloInterceptorChainSpec extends kyo.test.Test[Any]:
 
         "proceeding past the terminal interceptor is a wiring error" in {
             val chain = DefaultApolloInterceptorChain(Chunk.empty, 0)
-            val _ = intercept[IllegalStateException] {
+            val _     = intercept[IllegalStateException] {
                 chain.proceed(ApolloRequest(ValueQuery(), TestIds.requestUuid))
             }
         }

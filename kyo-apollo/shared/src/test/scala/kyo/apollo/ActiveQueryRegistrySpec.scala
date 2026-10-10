@@ -23,7 +23,7 @@ class ActiveQueryRegistrySpec extends kyo.test.Test[Any]:
     "two registrations released in either order leave the other intact" in {
         for
             registry <- ActiveQueryRegistry.init
-            _ <- Scope.run {
+            _        <- Scope.run {
                 for
                     _ <- registry.register("a", refetch)
                     _ <- Scope.run(registry.register("b", refetch))
@@ -66,7 +66,7 @@ class ActiveQueryRegistrySpec extends kyo.test.Test[Any]:
     "reset hooks are owned by their Scope and share the id sequence" in {
         for
             registry <- ActiveQueryRegistry.init
-            _ <- Scope.run {
+            _        <- Scope.run {
                 for
                     _     <- registry.registerResetHook(())
                     _     <- registry.register("a", refetch)
@@ -90,7 +90,7 @@ class ActiveQueryRegistrySpec extends kyo.test.Test[Any]:
             for
                 registry <- ActiveQueryRegistry.init
                 latch    <- Latch.init(1)
-                forks <- Kyo.foreach(1 to fibers) { i =>
+                forks    <- Kyo.foreach(1 to fibers) { i =>
                     Fiber.init(
                         latch.await.andThen(Loop.repeat(perFiber)(registry.register(s"q$i", refetch)))
                     )

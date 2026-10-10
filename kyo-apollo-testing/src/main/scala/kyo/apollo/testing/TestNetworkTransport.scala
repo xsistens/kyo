@@ -92,7 +92,7 @@ final class QueueTestNetworkTransport private (
         script.getAndUpdate(_.drop(1)).map { queued =>
             queued.headMaybe match
                 case Present(build) => build(request.requestUuid).asInstanceOf[ApolloResponse[D]]
-                case Absent =>
+                case Absent         =>
                     Abort.panic(new NoSuchElementException(
                         s"QueueTestNetworkTransport: no response enqueued for operation '${request.operation.name}'"
                     ))
@@ -135,7 +135,7 @@ final class MapTestNetworkTransport private (
         registry.get.map { routes =>
             routes.get(request.operation.document) match
                 case Some(build) => build(request.requestUuid).asInstanceOf[ApolloResponse[D]]
-                case None =>
+                case None        =>
                     Abort.panic(new NoSuchElementException(
                         s"MapTestNetworkTransport: no response registered for operation '${request.operation.name}'"
                     ))

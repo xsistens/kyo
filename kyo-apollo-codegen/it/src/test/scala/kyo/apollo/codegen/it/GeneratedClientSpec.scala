@@ -62,7 +62,7 @@ class GeneratedClientSpec extends kyo.test.Test[Any]:
 
         "an unknown enum value decodes to Unknown__, and encodes back as its name" in {
             val query = Queries.usersByColor(Color.Unknown__("TEAL"))(_.id.favoriteColor).toQuery()
-            val body =
+            val body  =
                 """{"data":{"usersByColor":[{"__typename":"User","id":"u1","favoriteColor":"TEAL"},{"__typename":"User","id":"u2","favoriteColor":"RED"}]}}"""
             val colors = Present(Chunk(Present(Color.Unknown__("TEAL")), Present(Color.RED)))
             for

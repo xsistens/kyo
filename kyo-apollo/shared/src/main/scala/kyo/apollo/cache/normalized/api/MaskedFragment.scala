@@ -271,7 +271,7 @@ private[apollo] object MaskedFragment:
         def nameOf(t: Term): String = t match
             case Inlined(_, _, inner) => nameOf(inner)
             case Typed(inner, _)      => nameOf(inner)
-            case t =>
+            case t                    =>
                 val sym = t.symbol
                 if sym.exists && sym.owner.exists && sym.owner.flags.is(Flags.Module) then
                     sym.owner.name

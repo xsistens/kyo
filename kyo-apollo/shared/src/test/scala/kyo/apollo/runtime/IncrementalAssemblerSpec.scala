@@ -226,7 +226,7 @@ class IncrementalAssemblerSpec extends kyo.test.Test[Any]:
 
         "a Malformed part ends the delivery with its own ApolloParseException" in {
             val broken = ApolloParseException(Json.JStr("{not json}"), "a JSON document")
-            val parts = Stream.init(
+            val parts  = Stream.init(
                 Seq(
                     part("""{"data":{"country":{"code":"DE"}},"hasNext":true}"""),
                     MultipartPart.Malformed(broken),

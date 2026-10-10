@@ -37,7 +37,7 @@ object DocumentPrinter:
         selections.flatMap {
             case field: CompiledField if field.client => Chunk.empty
             case field: CompiledField                 => Chunk(field.copy(selections = pruneClient(field.selections)))
-            case fragment: CompiledFragment =>
+            case fragment: CompiledFragment           =>
                 Chunk(fragment.copy(selections = pruneClient(fragment.selections)))
         }
 
@@ -47,11 +47,11 @@ object DocumentPrinter:
     private def renderSelection(selection: CompiledSelection): String = selection match
         case field: CompiledField =>
             val alias = field.alias.fold("")(a => s"$a: ")
-            val args =
+            val args  =
                 if field.arguments.isEmpty then ""
                 else field.arguments.map(renderArgument).mkString("(", ", ", ")")
             val directive = field.stream.fold("")(renderStream)
-            val sub =
+            val sub       =
                 if field.selections.isEmpty then ""
                 else s" ${renderSelectionSet(field.selections)}"
             s"$alias${field.name}$args$directive$sub"
@@ -96,7 +96,7 @@ object DocumentPrinter:
         case Json.JInt(_) | Json.JDec(_) | Json.JNum(_) => json.render         // JSON numbers are GraphQL number literals
         case Json.JStr(v)                               => Json.JStr(v).render // reuse JSON string escaping
         case Json.JArr(items)                           => items.map(renderLiteral).mkString("[", ", ", "]")
-        case Json.JObj(fields) =>
+        case Json.JObj(fields)                          =>
             fields.map((k, v) => s"$k: ${renderLiteral(v)}").mkString("{ ", ", ", " }")
         case Json.JUpload(_) => "null" // uploads are never inline literals; render defensively
 

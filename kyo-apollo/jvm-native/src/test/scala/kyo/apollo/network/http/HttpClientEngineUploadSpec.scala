@@ -21,7 +21,7 @@ class HttpClientEngineUploadSpec extends kyo.test.Test[Any]:
         val operations = """{"query":"mutation($f:Upload!){upload(file:$f)}","variables":{"file":null}}"""
         val mapField   = """{"0":["variables.file"]}"""
         val fileBytes  = "hello-upload".getBytes(StandardCharsets.UTF_8)
-        val form = HttpRequestBody.Multipart(Chunk(
+        val form       = HttpRequestBody.Multipart(Chunk(
             textPart("operations", operations),
             textPart("map", mapField),
             HttpRequest.Part("0", Present("hello.txt"), Present("text/plain"), Span.fromUnsafe(fileBytes))
@@ -30,8 +30,8 @@ class HttpClientEngineUploadSpec extends kyo.test.Test[Any]:
         // The server echoes back exactly what it received over the multipart body, so the
         // assertions fail loudly if the engine sent an empty POST (the pre-fix behavior).
         val route = HttpRoute.postRaw("upload").request(_.bodyMultipart).response(_.bodyText)
-        val ep = route.handler { req =>
-            val parts = req.fields.body
+        val ep    = route.handler { req =>
+            val parts                          = req.fields.body
             def partText(name: String): String =
                 parts.find(_.name == name).map(p => new String(p.data.toArrayUnsafe, StandardCharsets.UTF_8)).getOrElse("<none>")
             val fileP    = parts.find(_.name == "0")
@@ -44,7 +44,7 @@ class HttpClientEngineUploadSpec extends kyo.test.Test[Any]:
         }
 
         HttpServer.init(0, "127.0.0.1")(ep).map { server =>
-            val engine = new HttpClientEngine
+            val engine  = new HttpClientEngine
             val request = HttpEngine.request(
                 HttpMethod.POST,
                 HttpUrl(Present("http"), "127.0.0.1", server.port, "/upload", Absent),

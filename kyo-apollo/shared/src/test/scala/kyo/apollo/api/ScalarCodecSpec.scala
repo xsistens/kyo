@@ -85,7 +85,7 @@ class ScalarCodecSpec extends kyo.test.Test[Any]:
         "a wrong scalar in a response" - {
 
             val count = SelectionBuilder.scalar[RootQuery, (count: Int), Int]("count", CompiledNamedType("Int").notNull, ScalarCodec.int)
-            val tags = SelectionBuilder.scalar[RootQuery, (tags: Chunk[String]), Chunk[String]](
+            val tags  = SelectionBuilder.scalar[RootQuery, (tags: Chunk[String]), Chunk[String]](
                 "tags",
                 CompiledNamedType("String").notNull.list.notNull,
                 ScalarCodec.chunk(ScalarCodec.string)

@@ -91,7 +91,7 @@ private[ws] object KyoHttpWebSocketConnection:
         done: Fiber.Promise[Unit, Abort[ApolloWebSocketClosedException]],
         opened: Fiber.Promise[HttpWebSocket, Abort[ApolloException]]
     )(using Frame): Unit < (Async & Scope) =
-        val config = HttpWebSocket.Config(subprotocols = protocol.toSeq)
+        val config  = HttpWebSocket.Config(subprotocols = protocol.toSeq)
         val connect =
             HttpClient.webSocket(url, HttpHeaders.empty, config) { ws =>
                 opened.completeDiscard(Result.succeed(ws)).andThen(drain(ws, incomingCh, done))

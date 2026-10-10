@@ -64,7 +64,7 @@ extension [Origin, A](sb: SelectionBuilder[Origin, A])
             sb,
             new JsonCodec[B]:
                 def decode(json: Json)(using Frame): Result[ApolloParseException, B] = schemaCodec.decode(json)
-                def encode(value: B): Json =
+                def encode(value: B): Json                                           =
                     SelectionBuilder.fillAbsentNullables(schemaCodec.encode(value), sb.selections)
         )
     end mapInto
@@ -196,7 +196,7 @@ extension [Origin, A <: AnyNamedTuple](sb: SelectionBuilder.Bidirectional[Origin
     def toFragment(using origin: TypeName[Origin]): Fragment[A] =
         val typeName = origin.name
         new Fragment[A]:
-            val dataCodec: JsonCodec[A] = sb
+            val dataCodec: JsonCodec[A]  = sb
             val rootField: CompiledField =
                 CompiledField(typeName, CompiledNamedType(typeName), selections = sb.selections)
         end new
@@ -294,8 +294,8 @@ abstract private class Built(
     opName: String,
     parts: (Chunk[CompiledSelection], Chunk[SelectionBuilder.Arg])
 ):
-    val name: String          = opName
-    lazy val document: String = DocumentPrinter.render(kind, opName, parts._2, parts._1)
+    val name: String             = opName
+    lazy val document: String    = DocumentPrinter.render(kind, opName, parts._2, parts._1)
     val rootField: CompiledField =
         CompiledField("data", CompiledNamedType(rootType), selections = parts._1)
     val variables: Json = variablesOf(parts._2)

@@ -25,7 +25,7 @@ class CodegenModuleSpec extends kyo.test.Test[Any]:
 
     /** Read a `codegenExample` fixture off the test classpath. */
     private def resource(name: String): String =
-        val path = s"/codegenExample/$name"
+        val path   = s"/codegenExample/$name"
         val stream = Option(getClass.getResourceAsStream(path))
             .getOrElse(sys.error(s"fixture not found on classpath: $path"))
         Using.resource(Source.fromInputStream(stream, "UTF-8"))(_.mkString)

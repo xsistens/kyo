@@ -17,7 +17,7 @@ class MaybeOpsSpec extends kyo.test.Test[Any]:
     "Maybe.orFailWith" - {
 
         "Present yields the value and never builds the exception" in {
-            var evaluated = false
+            var evaluated              = false
             def ex: CacheMissException =
                 evaluated = true
                 CacheMissException(CacheKey("Unbuilt", "1"))

@@ -48,7 +48,7 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
     final private case class KeyedQuery(selections: Chunk[CompiledSelection]) extends Query.Normalizable[Int]:
         def name                      = "Q"; def document = "query Q { ... }"
         val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema[Int]
-        def rootField: CompiledField =
+        def rootField: CompiledField  =
             CompiledField("data", CompiledNamedType("Query"), selections = selections)
         def variables: Json = Json.JObj(VectorMap.empty)
     end KeyedQuery
@@ -68,7 +68,7 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
         def name                             = "Player"
         def document                         = "query Player { playbackState { __typename isPlaying } }"
         val dataCodec: JsonCodec[PlayerData] = JsonCodec.fromSchema[PlayerData]
-        def rootField: CompiledField =
+        def rootField: CompiledField         =
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
@@ -82,7 +82,7 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
         def name                            = "Pause"
         def document                        = "mutation Pause { pausePlayback { __typename isPlaying } }"
         val dataCodec: JsonCodec[PauseData] = JsonCodec.fromSchema[PauseData]
-        def rootField: CompiledField =
+        def rootField: CompiledField        =
             CompiledField(
                 "data",
                 CompiledNamedType("Mutation"),
@@ -152,7 +152,7 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
         def name                           = "Feed"
         def document                       = "query Feed { feed { ... } }"
         val dataCodec: JsonCodec[FeedData] = JsonCodec.fromSchema[FeedData]
-        def rootField: CompiledField =
+        def rootField: CompiledField       =
             CompiledField("data", CompiledNamedType("Query"), selections = Chunk(connectionField(Absent, after)))
         def variables: Json = Json.JObj(VectorMap.empty)
     end FeedQuery
@@ -160,7 +160,7 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
     /** `feed(first: 2) { … }` as a fragment on `Query`, written at the root key. */
     object FeedFragment extends Fragment[FeedData]:
         val dataCodec: JsonCodec[FeedData] = JsonCodec.fromSchema[FeedData]
-        def rootField: CompiledField =
+        def rootField: CompiledField       =
             CompiledField("data", CompiledNamedType("Query"), selections = Chunk(connectionField(Absent, Absent)))
     end FeedFragment
 
@@ -173,7 +173,7 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
         def name                               = "TwoPages"
         def document                           = "query TwoPages { a: feed { ... } b: feed(after: \"c2\") { ... } }"
         val dataCodec: JsonCodec[TwoPagesData] = JsonCodec.fromSchema[TwoPagesData]
-        def rootField: CompiledField =
+        def rootField: CompiledField           =
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
@@ -301,9 +301,9 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
                 sealed trait FeedRoot
                 sealed trait FeedConn
                 sealed trait FeedEdge
-                given TypeName[FeedRoot] = TypeName("Query")
-                given TypeName[FeedConn] = TypeName("FeedConnection")
-                given TypeName[FeedEdge] = TypeName("FeedEdge")
+                given TypeName[FeedRoot]      = TypeName("Query")
+                given TypeName[FeedConn]      = TypeName("FeedConnection")
+                given TypeName[FeedEdge]      = TypeName("FeedEdge")
                 given CacheIdentity[FeedEdge] = CacheIdentity.by(_ =>
                     SelectionBuilder.scalar[FeedEdge, (cursor: String), String](
                         "cursor",
@@ -376,7 +376,7 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
             val policies = FieldPolicies.of(
                 FieldPolicy("Feed", "edges", merge = Present(ConnectionFieldPolicy.unionByReference))
             )
-            val merger = RecordMerger.fieldPolicies(policies)
+            val merger   = RecordMerger.fieldPolicies(policies)
             val existing = Record(
                 CacheKey("Feed", "1"),
                 Map(FieldKey.Typename -> tn("Feed"), fk("edges") -> RecordValue.RList(Chunk(ref(CacheKey("E", "1")))))
@@ -397,7 +397,7 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
             val policies = FieldPolicies.of(
                 FieldPolicy("Feed", "edges", merge = Present(ConnectionFieldPolicy.unionByReference))
             )
-            val merger = RecordMerger.fieldPolicies(policies)
+            val merger   = RecordMerger.fieldPolicies(policies)
             val existing = Record(
                 CacheKey("Saved", "1"),
                 Map(
@@ -504,7 +504,7 @@ class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
             // before the store ever sees the records. Replacing field-wise instead keeps
             // only `b`'s edges.
             val store = connectionStore()
-            val data = TwoPagesData(
+            val data  = TwoPagesData(
                 a = page(List("c1" -> "1", "c2" -> "2"), "c2", hasNext = true).feed,
                 b = page(List("c3" -> "3"), "c3", hasNext = false).feed
             )

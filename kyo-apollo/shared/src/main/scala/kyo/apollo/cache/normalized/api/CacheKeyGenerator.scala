@@ -77,7 +77,7 @@ final class IdCacheKeyGenerator(
     private def idKey(obj: Map[String, Json]): Maybe[CacheKey] =
         for
             typename <- Maybe.fromOption(obj.get("__typename").collect { case Json.JStr(t) => t })
-            id <- Maybe.fromOption(
+            id       <- Maybe.fromOption(
                 keyFields.iterator
                     .flatMap(obj.get)
                     .flatMap(CacheKey.scalarString(_).iterator)

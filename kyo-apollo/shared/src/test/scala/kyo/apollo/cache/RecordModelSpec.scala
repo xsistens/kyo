@@ -122,12 +122,12 @@ class RecordModelSpec extends kyo.test.Test[Any]:
         // --- Record ---------------------------------------------------------------
 
         "Record.references collects references from fields and nested lists" in {
-            val refA = CacheReference(CacheKey("Country", "DE"))
-            val refB = CacheReference(CacheKey("Country", "FR"))
+            val refA   = CacheReference(CacheKey("Country", "DE"))
+            val refB   = CacheReference(CacheKey("Country", "FR"))
             val record = Record(
                 CacheKey.QueryRoot,
                 Map(
-                    fk("name") -> RecordValue.scalar(Json.JStr("root")),
+                    fk("name")      -> RecordValue.scalar(Json.JStr("root")),
                     fk("countries") -> RecordValue.RList(
                         Chunk(RecordValue.Reference(refA), RecordValue.Reference(refB))
                     ),

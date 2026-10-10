@@ -15,7 +15,7 @@ class WsProtocolSpec extends kyo.test.Test[Any]:
 
     given CanEqual[Any, Any] = CanEqual.derived
 
-    private val payload = Json.JObj(scala.collection.immutable.VectorMap("token" -> Json.JStr("abc")))
+    private val payload     = Json.JObj(scala.collection.immutable.VectorMap("token" -> Json.JStr("abc")))
     private val requestBody = Json.JObj(
         scala.collection.immutable.VectorMap(
             "query"         -> Json.JStr("subscription S { ticks }"),

@@ -100,10 +100,10 @@ final class MockServer private (
             responses.getAndUpdate(_.drop(1)).map { queued =>
                 queued.headMaybe match
                     case Present(respond) => respond(request)
-                    case Absent =>
+                    case Absent           =>
                         fallback.get.map {
                             case Present(respond) => respond(request)
-                            case Absent =>
+                            case Absent           =>
                                 Abort.panic(new NoSuchElementException(
                                     s"MockServer: no response enqueued for request to ${request.url.baseUrl}"
                                 ))

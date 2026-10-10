@@ -37,8 +37,8 @@ class HttpTransportRoundTripSpec extends kyo.test.Test[Any]:
 
     /** A query whose `data` is a single `{ "value": Int }` object. */
     final case class ValueQuery() extends Query.Normalizable[Int]:
-        def name: String     = "Value"
-        def document: String = "query Value { value }"
+        def name: String              = "Value"
+        def document: String          = "query Value { value }"
         val dataCodec: JsonCodec[Int] =
             JsonCodec.fromSchema(using summon[Schema[ValueData]].transform[Int](_.value)(ValueData.apply))
         def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
@@ -51,7 +51,7 @@ class HttpTransportRoundTripSpec extends kyo.test.Test[Any]:
       * canned response — the "fake transport" the unit tests run against.
       */
     final private class CapturingEngine(response: HttpEngine.Response) extends HttpEngine:
-        var lastRequest: Maybe[HttpEngine.Request] = Absent
+        var lastRequest: Maybe[HttpEngine.Request]                                         = Absent
         def execute(request: HttpEngine.Request)(using Frame): HttpEngine.Response < Async =
             lastRequest = Present(request)
             response
@@ -94,7 +94,7 @@ class HttpTransportRoundTripSpec extends kyo.test.Test[Any]:
         }
 
         "a per-request header rides through to the wire request" in {
-            val engine = CapturingEngine(HttpEngine.response(HttpStatus.OK, """{"data":{"value":1}}"""))
+            val engine  = CapturingEngine(HttpEngine.response(HttpStatus.OK, """{"data":{"value":1}}"""))
             val request =
                 ApolloRequest(ValueQuery(), TestIds.requestUuid, httpHeaders = HttpHeaders.empty.add("Authorization", "Bearer t"))
             transportWith(engine).execute(request).map { _ =>

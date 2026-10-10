@@ -43,8 +43,8 @@ class ApolloCalibanSmokeSpec extends kyo.test.Test[Any]:
 
     /** A `{ value: Int }` query mirroring [[WsTestSupport.ValueSubscription]]. */
     final case class ValueQuery() extends Query.Normalizable[Int]:
-        def name: String     = "Value"
-        def document: String = "query Value { value }"
+        def name: String              = "Value"
+        def document: String          = "query Value { value }"
         val dataCodec: JsonCodec[Int] =
             JsonCodec.fromSchema(using summon[Schema[WsTestSupport.ValueData]].transform[Int](_.value)(WsTestSupport.ValueData.apply))
         def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
@@ -65,7 +65,7 @@ class ApolloCalibanSmokeSpec extends kyo.test.Test[Any]:
         for
             interpreter <- Resolvers.get(api(10, 20, 30))
             server      <- Resolvers.run(interpreter)
-            client <- ApolloClient.init(
+            client      <- ApolloClient.init(
                 ApolloClient.Config(s"http://localhost:${server.port}/api/graphql")
                     .webSocketServerUrl(s"ws://localhost:${server.port}/api/graphql/ws")
             )

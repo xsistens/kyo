@@ -85,7 +85,7 @@ class ClientFieldEmissionSpec extends kyo.test.Test[Any]:
         }
 
         "a client field on an unknown type is a hard codegen error" in {
-            val bad = cfg.copy(clientFields = List(ClientFieldDecl("Nope", "x", "Boolean", "false")))
+            val bad   = cfg.copy(clientFields = List(ClientFieldDecl("Nope", "x", "Boolean", "false")))
             val threw =
                 try
                     ApolloClientWriter.writeClientFields(schema, bad); false

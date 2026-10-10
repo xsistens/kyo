@@ -58,11 +58,11 @@ class CacheSpec extends kyo.test.Test[Any]:
 
     /** `query { library { __typename id name books { __typename id title author { __typename id name } } } }` */
     final case class LibraryQuery() extends Query.Normalizable[LibraryData]:
-        def name = "LibraryQuery"
+        def name     = "LibraryQuery"
         def document =
             "query LibraryQuery { library { __typename id name books { __typename id title author { __typename id name } } } }"
         val dataCodec: JsonCodec[LibraryData] = JsonCodec.fromSchema[LibraryData]
-        def rootField: CompiledField =
+        def rootField: CompiledField          =
             obj(
                 "data",
                 "Query",
@@ -131,7 +131,7 @@ class CacheSpec extends kyo.test.Test[Any]:
     final case class StatsQuery() extends Query.Normalizable[StatsData]:
         def name                            = "StatsQuery"; def document = "query StatsQuery { stats { label } }"
         val dataCodec: JsonCodec[StatsData] = JsonCodec.fromSchema[StatsData]
-        def rootField: CompiledField =
+        def rootField: CompiledField        =
             obj("data", "Query", Chunk(obj("stats", "Stats", Chunk(leaf("label")))))
         def variables: Json = Json.JObj(VectorMap.empty)
     end StatsQuery
@@ -157,11 +157,11 @@ class CacheSpec extends kyo.test.Test[Any]:
         CompiledField("covers", CompiledListType(CompiledNamedType("Image")), selections = subfields)
 
     final case class WideQuery() extends Query.Normalizable[WideData]:
-        def name = "WideQuery"
+        def name     = "WideQuery"
         def document =
             "query WideQuery { album { __typename id covers { url alt } } }"
         val dataCodec: JsonCodec[WideData] = JsonCodec.fromSchema[WideData]
-        def rootField: CompiledField =
+        def rootField: CompiledField       =
             obj(
                 "data",
                 "Query",
@@ -175,11 +175,11 @@ class CacheSpec extends kyo.test.Test[Any]:
     end WideQuery
 
     final case class FeaturedQuery() extends Query.Normalizable[FeaturedData]:
-        def name = "FeaturedQuery"
+        def name     = "FeaturedQuery"
         def document =
             "query FeaturedQuery { featured { __typename id covers { url } } }"
         val dataCodec: JsonCodec[FeaturedData] = JsonCodec.fromSchema[FeaturedData]
-        def rootField: CompiledField =
+        def rootField: CompiledField           =
             obj(
                 "data",
                 "Query",
@@ -208,7 +208,7 @@ class CacheSpec extends kyo.test.Test[Any]:
             Frame
         ): kyo.apollo.network.http.HttpEngine.Response < Async =
             calls += 1
-            kyo.apollo.network.http.HttpEngine.response(HttpStatus(status), libraryBody)
+            kyo.apollo.network.http.HttpEngine.response(HttpStatus.init(status).getOrThrow, libraryBody)
         end execute
     end CountingEngine
 

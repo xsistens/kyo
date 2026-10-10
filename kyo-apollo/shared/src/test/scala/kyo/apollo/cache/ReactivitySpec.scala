@@ -56,7 +56,7 @@ class ReactivitySpec extends kyo.test.Test[Any]:
         def name                           = "CurrentUser"
         def document                       = "query CurrentUser { user { __typename id name } }"
         val dataCodec: JsonCodec[UserData] = JsonCodec.fromSchema[UserData]
-        def rootField: CompiledField =
+        def rootField: CompiledField       =
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
@@ -71,7 +71,7 @@ class ReactivitySpec extends kyo.test.Test[Any]:
       */
     object UserFragment extends Fragment[User]:
         val dataCodec: JsonCodec[User] = JsonCodec.fromSchema[User]
-        def rootField: CompiledField =
+        def rootField: CompiledField   =
             CompiledField("user", CompiledNamedType("User"), selections = userSelections)
     end UserFragment
 
@@ -241,7 +241,7 @@ class ReactivitySpec extends kyo.test.Test[Any]:
         "two watchers over the same record both react; closing one leaves the other live" in {
             watching { (client, first) =>
                 for
-                    _ <- first.pull.next
+                    _      <- first.pull.next
                     second <- ObservedWatch.open(
                         client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.CacheOnly)
                     )
@@ -259,7 +259,7 @@ class ReactivitySpec extends kyo.test.Test[Any]:
                     // Close only the first; the second still re-emits.
                     _    <- first.close
                     left <- client.apolloStore.changedKeys.subscriberCount
-                    _ <- Sync.defer(
+                    _    <- Sync.defer(
                         client.apolloStore
                             .writeFragment(UserFragment, CacheKey("User", "1"), User("User", "1", "Carol"))
                     )

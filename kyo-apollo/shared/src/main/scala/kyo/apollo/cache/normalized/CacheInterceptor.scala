@@ -58,7 +58,7 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
                 // With optimistic data the store is additionally overlaid before the
                 // network call and reconciled against the reply.
                 request.optimisticData match
-                    case Absent => network(request, chain)
+                    case Absent              => network(request, chain)
                     case Present(optimistic) =>
                         request.operation match
                             case operation: Operation.Normalizable[D] =>
@@ -239,7 +239,7 @@ final class CacheInterceptor(private[normalized] val store: ApolloStore) extends
         val changed: Set[CacheKey] < Sync =
             if !response.hasTransportError then
                 response.data match
-                    case Absent => Set.empty[CacheKey]
+                    case Absent        => Set.empty[CacheKey]
                     case Present(data) =>
                         request.operation match
                             case operation: Operation.Normalizable[D] => store.writeOperation(operation, data)

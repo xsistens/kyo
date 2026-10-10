@@ -34,7 +34,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
     final case class TestQuery(selections: Chunk[CompiledSelection]) extends Query.Normalizable[Int]:
         def name                      = "Q"; def document = "query Q { ... }"
         val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema[Int]
-        def rootField: CompiledField =
+        def rootField: CompiledField  =
             CompiledField("data", CompiledNamedType("Query"), selections = selections)
         def variables: Json = Json.JObj(VectorMap.empty)
     end TestQuery
@@ -88,7 +88,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
     final case class BookQuery() extends Query.Normalizable[BookData]:
         def name                           = "BookQuery"; def document = "query BookQuery { book { __typename id title } }"
         val dataCodec: JsonCodec[BookData] = JsonCodec.fromSchema[BookData]
-        def rootField: CompiledField =
+        def rootField: CompiledField       =
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
@@ -207,7 +207,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
 
         "a matching inline fragment's fields are read when the record's __typename matches" in {
             val fragment = CompiledFragment("Book", Chunk("Book"), Chunk(leaf("title")))
-            val records = Map(
+            val records  = Map(
                 CacheKey.QueryRoot -> Record(
                     CacheKey.QueryRoot,
                     Map(fk("node") -> RecordValue.reference(CacheKey("Book", "9")))
@@ -279,7 +279,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
         }
 
         "a defective codec is a panic of the typed read, not a miss" in {
-            val op = BookQuery()
+            val op      = BookQuery()
             val records = Normalizer.normalize(
                 op,
                 Map("book" -> Json.JObj(Map("__typename" -> jstr("Book"), "id" -> jstr("42"), "title" -> jstr("Dune"))))
@@ -306,7 +306,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
             // book(id: "42") is served from the Book:42 record even though the root has
             // no `book(...)` field of its own.
             val records = Map(
-                CacheKey.QueryRoot -> Record(CacheKey.QueryRoot, Map.empty),
+                CacheKey.QueryRoot     -> Record(CacheKey.QueryRoot, Map.empty),
                 CacheKey("Book", "42") -> Record(
                     CacheKey("Book", "42"),
                     Map(fk("id") -> RecordValue.Scalar(jstr("42")), fk("title") -> RecordValue.Scalar(jstr("Dune")))
@@ -325,7 +325,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
         }
 
         "normalize then read returns typed data equal to the original response" in {
-            val op = BookQuery()
+            val op   = BookQuery()
             val data = Map(
                 "book" -> Json.JObj(
                     Map("__typename" -> jstr("Book"), "id" -> jstr("42"), "title" -> jstr("Dune"))
@@ -341,7 +341,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
         }
 
         "reading a partial store through the typed path is a CacheMissException" in {
-            val op = BookQuery()
+            val op   = BookQuery()
             val data = Map(
                 "book" -> Json.JObj(
                     Map("__typename" -> jstr("Book"), "id" -> jstr("42"), "title" -> jstr("Dune"))
@@ -353,13 +353,13 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
         }
 
         "readWithDependentKeys captures the root and every reference target visited" in {
-            val op = BookQuery()
+            val op   = BookQuery()
             val data = Map(
                 "book" -> Json.JObj(
                     Map("__typename" -> jstr("Book"), "id" -> jstr("42"), "title" -> jstr("Dune"))
                 )
             )
-            val records = Normalizer.normalize(op, data)
+            val records       = Normalizer.normalize(op, data)
             val (typed, keys) =
                 CacheBatchReader.readWithDependentKeys(op, RecordLoader(records)).getOrThrow
             // Data path is identical to `read`; keys are the root plus the linked Book.
@@ -371,7 +371,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
             val selections = Chunk(
                 listOf(obj("countries", "Country", Chunk(leaf("__typename"), leaf("code"), leaf("name"))))
             )
-            val op = TestQuery(selections)
+            val op   = TestQuery(selections)
             val data = Map(
                 "countries" -> Json.JArr(
                     Chunk(
@@ -395,14 +395,14 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
             // P2-26: the reader used to resolve every reference with its own lookup. The
             // root is level one, the hundred items level two — two loads in total.
             val itemKeys = Chunk.from(1 to 100).map(i => CacheKey("Item", i.toString))
-            val records = itemKeys.map(k => k -> Record(k, Map(fk("id") -> RecordValue.Scalar(jstr(k.render))))).toMap +
+            val records  = itemKeys.map(k => k -> Record(k, Map(fk("id") -> RecordValue.Scalar(jstr(k.render))))).toMap +
                 (CacheKey.QueryRoot -> Record(
                     CacheKey.QueryRoot,
                     Map(fk("items") -> RecordValue.RList(itemKeys.map(RecordValue.reference)))
                 ))
             val loader     = CountingLoader(records)
             val selections = Chunk(listOf(obj("items", "Item", Chunk(leaf("id")))))
-            val data =
+            val data       =
                 new CacheBatchReader(loader, Map.empty, CacheKey.QueryRoot).toData(TestQuery(selections).rootField).getOrThrow
             assert(data.fields("items").asInstanceOf[Json.JArr].items.size == 100)
             assert(loader.batches == Chunk(1, 100), s"one load per level, got batch sizes ${loader.batches}")
@@ -413,7 +413,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
             // for 201 records.
             val itemKeys   = Chunk.from(1 to 100).map(i => CacheKey("Item", i.toString))
             val authorKeys = Chunk.from(1 to 100).map(i => CacheKey("Author", i.toString))
-            val items = itemKeys.zip(authorKeys).map((item, author) =>
+            val items      = itemKeys.zip(authorKeys).map((item, author) =>
                 item -> Record(item, Map(fk("author") -> RecordValue.reference(author)))
             )
             val authors = authorKeys.map(k => k -> Record(k, Map(fk("name") -> RecordValue.Scalar(jstr(k.render)))))
@@ -442,7 +442,7 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
                 ),
                 CacheKey("Book", "1") -> Record(CacheKey("Book", "1"), Map(fk("title") -> RecordValue.Scalar(jstr("Dune"))))
             )
-            val loader = CountingLoader(records)
+            val loader     = CountingLoader(records)
             val selections =
                 Chunk(listOf(obj("books", "Book", Chunk(leaf("title")))), obj("featured", "Book", Chunk(leaf("title"))))
             val _ = new CacheBatchReader(loader, Map.empty, CacheKey.QueryRoot).toData(TestQuery(selections).rootField)
@@ -452,8 +452,8 @@ class CacheBatchReaderSpec extends kyo.test.Test[Any]:
 
     /** A loader over fixed records that remembers the size of every batch it served. */
     final private class CountingLoader(records: Map[CacheKey, Record]) extends RecordLoader:
-        private var sizes       = Chunk.empty[Int]
-        def batches: Chunk[Int] = sizes
+        private var sizes                                      = Chunk.empty[Int]
+        def batches: Chunk[Int]                                = sizes
         def load(keys: Chunk[CacheKey]): Map[CacheKey, Record] =
             sizes = sizes.append(keys.size)
             RecordLoader(records).load(keys)

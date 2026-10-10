@@ -36,7 +36,7 @@ class ApolloLiveServerSpec extends kyo.test.Test[Any]:
 
     /** A `{ value: Int }` query mirroring [[WsTestSupport.ValueSubscription]]. */
     final case class ValueQuery() extends Query.Normalizable[Int]:
-        def name: String = "Value"
+        def name: String     = "Value"
         def document: String =
             "query Value { value }"
         val dataCodec: JsonCodec[Int] =

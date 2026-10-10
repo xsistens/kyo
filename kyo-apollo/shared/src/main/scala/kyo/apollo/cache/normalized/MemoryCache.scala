@@ -76,13 +76,13 @@ final class MemoryCache(
 
     def read[A](f: RecordLoader => A)(using Frame): A < Sync =
         state.get.map { snapshot =>
-            val now     = nowMillis()
-            val used    = Chunk.newBuilder[CacheKey]
-            val expired = Chunk.newBuilder[(CacheKey, Entry)]
+            val now                  = nowMillis()
+            val used                 = Chunk.newBuilder[CacheKey]
+            val expired              = Chunk.newBuilder[(CacheKey, Entry)]
             val loader: RecordLoader = keys =>
                 keys.foldLeft(Map.empty[CacheKey, Record]) { (loaded, key) =>
                     snapshot.entries.get(key) match
-                        case None => loaded
+                        case None        => loaded
                         case Some(entry) =>
                             live(entry.record, now) match
                                 case Present(record) =>
@@ -110,8 +110,8 @@ final class MemoryCache(
             val (changes, a) = f(before.asRecordState(live(_, now)))
             if doNotStore || (changes.merge.isEmpty && changes.remove.isEmpty) then (before, (Set.empty[CacheKey], a))
             else
-                val removed = changes.remove.filter(before.entries.contains)
-                val date    = writeDate(cacheHeaders, now)
+                val removed           = changes.remove.filter(before.entries.contains)
+                val date              = writeDate(cacheHeaders, now)
                 val (merged, changed) = changes.merge.foldLeft((before.removeAll(removed), removed)) {
                     case ((s, changedKeys), incoming) =>
                         val existing                = Maybe.fromOption(s.entries.get(incoming.key)).map(_.record)
@@ -235,7 +235,7 @@ final class MemoryCache(
     private def expireFields(record: Record, now: Long): Maybe[Record] =
         if maxAge < 0 then Present(record)
         else
-            val dates = fieldDates(record)
+            val dates         = fieldDates(record)
             val expiredFields = record.fields.keySet.filter { field =>
                 dates.get(dateSlot(field)).flatMap(Json.integral(_).toOption).exists(date => now - date > maxAge)
             }
@@ -245,7 +245,7 @@ final class MemoryCache(
                 if liveFields.isEmpty then Absent
                 else
                     val liveDates = dates -- expiredFields.map(dateSlot)
-                    val metadata =
+                    val metadata  =
                         if liveDates.isEmpty then record.metadata - FieldDatesMetaKey
                         else record.metadata + (FieldDatesMetaKey -> Json.JObj(liveDates))
                     Present(record.copy(fields = liveFields, metadata = metadata))

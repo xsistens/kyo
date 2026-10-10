@@ -116,7 +116,7 @@ object WsFrames:
 
     /** `graphql-transport-ws` server frames. */
     val modern: WsFrames = new WsFrames:
-        val ack: String = """{"type":"connection_ack"}"""
+        val ack: String                          = """{"type":"connection_ack"}"""
         def next(id: String, value: Int): String =
             s"""{"id":"$id","type":"next","payload":{"data":{"value":$value}}}"""
         def error(id: String, message: String): String =
@@ -126,7 +126,7 @@ object WsFrames:
 
     /** `subscriptions-transport-ws` server frames. */
     val legacy: WsFrames = new WsFrames:
-        val ack: String = """{"type":"connection_ack"}"""
+        val ack: String                          = """{"type":"connection_ack"}"""
         def next(id: String, value: Int): String =
             s"""{"id":"$id","type":"data","payload":{"data":{"value":$value}}}"""
         def error(id: String, message: String): String =

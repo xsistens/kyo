@@ -62,7 +62,7 @@ object SubscriptionWsProtocol extends WsProtocol:
 
     def parse(text: String): WsMessage =
         asObject(text) match
-            case None => WsMessage.Unknown(text)
+            case None         => WsMessage.Unknown(text)
             case Some(fields) =>
                 val id      = idOf(fields)
                 val payload = payloadOf(fields)
@@ -70,7 +70,7 @@ object SubscriptionWsProtocol extends WsProtocol:
                     case WsProtocol.Type.ConnectionAck   => WsMessage.ConnectionAck(payload)
                     case WsProtocol.Type.ConnectionError => WsMessage.ConnectionError(payload)
                     case Type.KeepAlive                  => WsMessage.KeepAlive
-                    case Type.Data =>
+                    case Type.Data                       =>
                         id.fold(WsMessage.Unknown(text))(i => WsMessage.Data(i, payload.getOrElse(Json.JNull)))
                     case WsProtocol.Type.Error =>
                         id.fold(WsMessage.Unknown(text))(i => WsMessage.Error(i, payload.getOrElse(Json.JNull)))

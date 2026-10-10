@@ -36,7 +36,7 @@ class StoreConcurrencySpec extends kyo.test.Test[Any]:
         def name                            = "Album"
         def document                        = "query Album { album { __typename id title } }"
         val dataCodec: JsonCodec[AlbumData] = JsonCodec.fromSchema[AlbumData]
-        def rootField: CompiledField =
+        def rootField: CompiledField        =
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
@@ -52,7 +52,7 @@ class StoreConcurrencySpec extends kyo.test.Test[Any]:
         def name                           = "Tags"
         def document                       = "query Tags { tags }"
         val dataCodec: JsonCodec[TagsData] = JsonCodec.fromSchema[TagsData]
-        def rootField: CompiledField =
+        def rootField: CompiledField       =
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
@@ -77,7 +77,7 @@ class StoreConcurrencySpec extends kyo.test.Test[Any]:
         def name                               = "TwoUsers"
         def document                           = "query TwoUsers { first { __typename id name friend { __typename id name } } }"
         val dataCodec: JsonCodec[TwoUsersData] = JsonCodec.fromSchema[TwoUsersData]
-        def rootField: CompiledField =
+        def rootField: CompiledField           =
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),

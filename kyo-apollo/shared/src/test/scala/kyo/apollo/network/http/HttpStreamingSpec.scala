@@ -45,7 +45,7 @@ class HttpStreamingSpec extends kyo.test.Test[Any]:
         }
 
         "a Chunked body's Scope finalizer runs when its scope closes" in {
-            var cleaned = false
+            var cleaned                          = false
             val s: Stream[String, Async & Scope] =
                 Stream.unwrap(
                     Scope.ensure(Sync.defer { cleaned = true }).andThen(Stream.init(Seq("x", "y")))

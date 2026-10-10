@@ -67,7 +67,7 @@ final class HttpRequestComposer(defaultHttpMethod: HttpMethod = HttpMethod.POST)
         request: ApolloRequest[D]
     ): HttpEngine.Request =
         val extensions = apqExtensions(request)
-        val bodyJson =
+        val bodyJson   =
             if request.sendDocument then OperationRequestBody(request.operation, extensions)
             else bodyWithoutDocument(request, extensions)
         val (nulledBody, uploads) = extractUploads(bodyJson, "")
@@ -99,7 +99,7 @@ final class HttpRequestComposer(defaultHttpMethod: HttpMethod = HttpMethod.POST)
         path: String
     ): (Json, List[(String, Upload)]) = json match
         case Json.JUpload(upload) => (Json.JNull, List((path, upload)))
-        case Json.JObj(fields) =>
+        case Json.JObj(fields)    =>
             val (newFields, uploads) =
                 fields.foldLeft((VectorMap.empty[String, Json], List.empty[(String, Upload)])) {
                     case ((accFields, accUploads), (key, value)) =>
@@ -126,7 +126,7 @@ final class HttpRequestComposer(defaultHttpMethod: HttpMethod = HttpMethod.POST)
         uploads: List[(String, Upload)]
     ): HttpRequestBody =
         val indexed = uploads.zipWithIndex
-        val map = Json.JObj(VectorMap.from(indexed.map { case ((path, _), index) =>
+        val map     = Json.JObj(VectorMap.from(indexed.map { case ((path, _), index) =>
             index.toString -> Json.JArr(Chunk(Json.JStr(path)))
         }))
         val files = indexed.map { case ((_, upload), index) =>

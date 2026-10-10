@@ -73,11 +73,11 @@ class GarbageCollectionSpec extends kyo.test.Test[Any]:
     final case class UpdateUserData(updateUser: User) derives Schema
 
     final case class UpdateUserNameMutation(newName: String) extends Mutation.Normalizable[UpdateUserData]:
-        def name = "UpdateUserName"
+        def name     = "UpdateUserName"
         def document =
             "mutation UpdateUserName($name: String!) { updateUser(name: $name) { __typename id name } }"
         val dataCodec: JsonCodec[UpdateUserData] = JsonCodec.fromSchema[UpdateUserData]
-        def rootField: CompiledField =
+        def rootField: CompiledField             =
             CompiledField(
                 "data",
                 CompiledNamedType("Mutation"),
@@ -95,7 +95,7 @@ class GarbageCollectionSpec extends kyo.test.Test[Any]:
         def name                           = "User"
         def document                       = "query User { user { __typename id name } }"
         val dataCodec: JsonCodec[UserData] = JsonCodec.fromSchema[UserData]
-        def rootField: CompiledField =
+        def rootField: CompiledField       =
             CompiledField("data", CompiledNamedType("Query"), selections = Chunk(userField("user")))
         def variables: Json = Json.JObj(VectorMap.empty)
     end UserQuery
@@ -354,7 +354,7 @@ class GarbageCollectionSpec extends kyo.test.Test[Any]:
             // closing both frees it.
             val orphan = CacheKey("Orphan", "1")
             for
-                s <- graphStore()
+                s      <- graphStore()
                 sweeps <- Scope.run {
                     s.retain(Set(orphan)).andThen {
                         Scope.run(s.retain(Set(orphan)).andThen(s.garbageCollect)).map(inner => s.garbageCollect.map((inner, _)))

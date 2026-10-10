@@ -77,7 +77,7 @@ object CodegenRunner:
       * there, so unchanged regenerations keep a stable modification time.
       */
     private def writeIfChanged(target: Path, contents: String): Path =
-        val bytes = contents.getBytes("UTF-8")
+        val bytes     = contents.getBytes("UTF-8")
         val unchanged =
             Files.exists(target) && java.util.Arrays.equals(Files.readAllBytes(target), bytes)
         if !unchanged then Files.write(target, bytes): Unit
@@ -127,10 +127,10 @@ object CodegenRunner:
         @annotation.tailrec
         def loop(rest: List[String], acc: Acc): Acc =
             rest match
-                case Nil => acc
+                case Nil                                                                            => acc
                 case name :: tail if Single(name) || name == "--scalar" || name == "--client-field" =>
                     tail match
-                        case Nil => throw CodegenException.MissingValue(name)
+                        case Nil           => throw CodegenException.MissingValue(name)
                         case value :: next =>
                             if name == "--scalar" then loop(next, acc.copy(scalars = value :: acc.scalars))
                             else if name == "--client-field" then
@@ -138,7 +138,7 @@ object CodegenRunner:
                             else if acc.single.contains(name) then throw CodegenException.RepeatedOption(name)
                             else loop(next, acc.copy(single = acc.single.updated(name, value)))
                 case other :: _ => throw CodegenException.UnknownOption(other)
-        val acc = loop(args, Acc())
+        val acc                            = loop(args, Acc())
         def required(name: String): String =
             acc.single.getOrElse(name, throw CodegenException.MissingOption(name))
         Options(

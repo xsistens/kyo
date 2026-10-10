@@ -51,10 +51,10 @@ class GraphQLResponseSpec extends kyo.test.Test[Any]:
 
     /** Same operation, but its codec has a defect: decoding throws a non-decode exception. */
     private val defectiveOp: Query[Hero] = new Query.Normalizable[Hero]:
-        def name: String             = "Hero"
-        def document: String         = "query Hero { name }"
-        def rootField: CompiledField = CompiledField("data", CompiledNamedType("Query"))
-        def variables: Json          = Json.JObj(VectorMap.empty)
+        def name: String               = "Hero"
+        def document: String           = "query Hero { name }"
+        def rootField: CompiledField   = CompiledField("data", CompiledNamedType("Query"))
+        def variables: Json            = Json.JObj(VectorMap.empty)
         def dataCodec: JsonCodec[Hero] = new JsonCodec[Hero]:
             def decode(json: Json)(using Frame): Result[ApolloParseException, Hero] = throw new ClassCastException("defective codec")
             def encode(value: Hero): Json                                           = Json.JNull

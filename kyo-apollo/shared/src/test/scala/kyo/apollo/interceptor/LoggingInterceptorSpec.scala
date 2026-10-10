@@ -68,7 +68,7 @@ class LoggingInterceptorSpec extends kyo.test.Test[Any]:
             for
                 probe    <- LogProbe.init
                 executed <- AtomicInt.init
-                _ <- probe.run(chainOver(CountingEngine(executed)).proceed(request(
+                _        <- probe.run(chainOver(CountingEngine(executed)).proceed(request(
                     "Authorization"       -> "Bearer x",
                     "cookie"              -> "id=42",
                     "PROXY-AUTHORIZATION" -> "Basic cHJveHk=",
@@ -77,7 +77,7 @@ class LoggingInterceptorSpec extends kyo.test.Test[Any]:
                 lines <- probe.lines
             yield
                 val messages = lines.map(_.message)
-                val leaked =
+                val leaked   =
                     messages.filter(m => m.contains("Bearer x") || m.contains("id=42") || m.contains("cHJveHk=") || m.contains("s3cr3t"))
                 assert(leaked.isEmpty, s"a credential reached the log: $leaked")
                 assert(messages.exists(_.contains("Authorization: <redacted>")), s"$messages")

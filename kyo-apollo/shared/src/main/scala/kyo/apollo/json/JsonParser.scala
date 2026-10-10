@@ -60,10 +60,10 @@ object JsonParser:
             else if d.isPosInfinity then Json.JStr("Infinity")
             else if d.isNegInfinity then Json.JStr("-Infinity")
             else Json.JNum(d)
-        case Structure.Value.BigNum(d)      => Json.JDec(d)
-        case Structure.Value.Str(s)         => Json.JStr(s)
-        case Structure.Value.Sequence(es)   => Json.JArr(es.map(fromStructure))
-        case Structure.Value.Record(fields) => Json.JObj(VectorMap.from(fields.iterator.map((k, v) => k -> fromStructure(v))))
+        case Structure.Value.BigNum(d)           => Json.JDec(d)
+        case Structure.Value.Str(s)              => Json.JStr(s)
+        case Structure.Value.Sequence(es)        => Json.JArr(es.map(fromStructure))
+        case Structure.Value.Record(fields)      => Json.JObj(VectorMap.from(fields.iterator.map((k, v) => k -> fromStructure(v))))
         case Structure.Value.MapEntries(entries) =>
             val stringKeyed = entries.forall {
                 case (Structure.Value.Str(_), _) => true
@@ -75,7 +75,7 @@ object JsonParser:
                 Json.JArr(entries.map((k, v) => Json.JObj(VectorMap("key" -> fromStructure(k), "value" -> fromStructure(v)))))
             end if
         case Structure.Value.VariantCase(name, payload) => Json.JObj(VectorMap(name -> fromStructure(payload)))
-        case Structure.Value.Bytes(bytes) =>
+        case Structure.Value.Bytes(bytes)               =>
             Json.JStr(java.util.Base64.getEncoder.encodeToString(bytes.toArray))
         case Structure.Value.Instant(instant)   => Json.JStr(instant.toString)
         case Structure.Value.Duration(duration) => Json.JStr(duration.toString)

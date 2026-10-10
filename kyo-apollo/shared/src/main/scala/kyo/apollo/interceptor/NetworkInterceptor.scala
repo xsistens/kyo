@@ -47,7 +47,7 @@ final class NetworkInterceptor(
             case _: Subscription[?] =>
                 webSocketTransport match
                     case Some(ws) => ws.subscribe(request)
-                    case None =>
+                    case None     =>
                         Stream.init(
                             Seq(
                                 ApolloResponse.fromException(

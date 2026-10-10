@@ -167,7 +167,7 @@ class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:
                 for
                     chainP <- Promise.init[HttpInterceptorChain, Any]
                     stop   <- Latch.init(1)
-                    owner <- Fiber.init(Scope.run {
+                    owner  <- Fiber.init(Scope.run {
                         BatchingHttpInterceptor.init(interval).map { batching =>
                             chainP.completeDiscard(Result.succeed(chainOf(batching, engine))).andThen(stop.await)
                         }

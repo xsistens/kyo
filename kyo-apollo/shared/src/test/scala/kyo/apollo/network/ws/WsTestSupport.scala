@@ -32,8 +32,8 @@ object WsTestSupport:
       * emitted value is the streamed event so assertions read as plain integers.
       */
     final case class ValueSubscription() extends Subscription.Normalizable[Int]:
-        def name: String     = "Value"
-        def document: String = "subscription Value { value }"
+        def name: String              = "Value"
+        def document: String          = "subscription Value { value }"
         val dataCodec: JsonCodec[Int] =
             JsonCodec.fromSchema(using summon[Schema[ValueData]].transform[Int](_.value)(ValueData.apply))
         def rootField: CompiledField =
@@ -45,7 +45,7 @@ object WsTestSupport:
 
     /** Server-frame builders for the modern `graphql-transport-ws` protocol. */
     object modern:
-        val ack: String = """{"type":"connection_ack"}"""
+        val ack: String                          = """{"type":"connection_ack"}"""
         def next(id: String, value: Int): String =
             s"""{"id":"$id","type":"next","payload":{"data":{"value":$value}}}"""
         def error(id: String, message: String): String =
@@ -56,7 +56,7 @@ object WsTestSupport:
 
     /** Server-frame builders for the legacy `subscriptions-transport-ws` protocol. */
     object legacy:
-        val ack: String = """{"type":"connection_ack"}"""
+        val ack: String                          = """{"type":"connection_ack"}"""
         def data(id: String, value: Int): String =
             s"""{"id":"$id","type":"data","payload":{"data":{"value":$value}}}"""
         def error(id: String, message: String): String =

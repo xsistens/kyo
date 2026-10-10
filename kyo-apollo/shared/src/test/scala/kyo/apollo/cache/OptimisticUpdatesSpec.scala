@@ -59,7 +59,7 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
         def name                           = "CurrentUser"
         def document                       = "query CurrentUser { user { __typename id name } }"
         val dataCodec: JsonCodec[UserData] = JsonCodec.fromSchema[UserData]
-        def rootField: CompiledField =
+        def rootField: CompiledField       =
             CompiledField("data", CompiledNamedType("Query"), selections = Chunk(userField("user")))
         def variables: Json = Json.JObj(VectorMap.empty)
     end CurrentUserQuery
@@ -67,11 +67,11 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
     final case class UpdateUserData(updateUser: User) derives Schema
 
     final case class UpdateUserNameMutation(newName: String) extends Mutation.Normalizable[UpdateUserData]:
-        def name = "UpdateUserName"
+        def name     = "UpdateUserName"
         def document =
             "mutation UpdateUserName($name: String!) { updateUser(name: $name) { __typename id name } }"
         val dataCodec: JsonCodec[UpdateUserData] = JsonCodec.fromSchema[UpdateUserData]
-        def rootField: CompiledField =
+        def rootField: CompiledField             =
             CompiledField(
                 "data",
                 CompiledNamedType("Mutation"),
@@ -87,11 +87,11 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
       * read loads them in two separate batches, which a layer change can fall between.
       */
     final case class TwoUsersQuery() extends Query.Normalizable[TwoUsersData]:
-        def name = "TwoUsers"
+        def name     = "TwoUsers"
         def document =
             "query TwoUsers { first { __typename id name friend { __typename id name } } }"
         val dataCodec: JsonCodec[TwoUsersData] = JsonCodec.fromSchema[TwoUsersData]
-        def rootField: CompiledField =
+        def rootField: CompiledField           =
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
@@ -409,7 +409,7 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
             cachedClient(ScriptedEngine(mutationFails = false), belowCache = List(RaisingInterceptor)).map { client =>
                 val store = client.apolloStore
                 for
-                    _ <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                    _      <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
                     result <- Abort.run[Throwable](Scope.run(
                         client
                             .mutation(UpdateUserNameMutation("Bob"))
@@ -436,7 +436,7 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
                     _         <- client.query(CurrentUserQuery()).fetchPolicy(FetchPolicy.NetworkOnly).execute
                     published <- AtomicRef.init(Chunk.empty[Set[CacheKey]])
                     _         <- store.addChangedKeysListener(keys => published.updateAndGet(_.append(keys)).unit)
-                    response <- Scope.run(
+                    response  <- Scope.run(
                         client
                             .mutation(UpdateUserNameMutation("Bob"))
                             .optimisticUpdates(updateData("BobOptimistic"))
@@ -466,7 +466,7 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
                 engine   <- HeldMutationEngine.init(Chunk(arrivedA, arrivedB))
                 client   <- cachedClient(engine)
                 store = client.apolloStore
-                call = client
+                call  = client
                     .mutation(UpdateUserNameMutation("Bob"))
                     .optimisticUpdates(updateData("BobOptimistic"))
                     .fetchPolicy(FetchPolicy.NetworkOnly)
@@ -507,7 +507,7 @@ class OptimisticUpdatesSpec extends kyo.test.Test[Any]:
                     layersAtFailure <- AtomicRef.init(Chunk.empty[String])
                     published       <- AtomicRef.init(Chunk.empty[Set[CacheKey]])
                     _               <- store.addChangedKeysListener(keys => published.updateAndGet(_.append(keys)).unit)
-                    _ <- Sync.defer(cache.arm(
+                    _               <- Sync.defer(cache.arm(
                         before = store.optimisticLayerIds
                             .map(ids => layersAtFailure.set(ids))
                             .andThen(Abort.panic(new IllegalStateException("the backend refused the commit"))),

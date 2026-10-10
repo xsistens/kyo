@@ -27,7 +27,7 @@ class ApolloResponseSpec extends kyo.test.Test[Any]:
     "ApolloResponse" - {
 
         "fromGraphQLResponse copies data/extensions and attaches the uuid" in {
-            val id = TestIds.requestUuid
+            val id  = TestIds.requestUuid
             val gql = GraphQLResponse(
                 data = Present(Hero("Luke")),
                 errors = Chunk.empty,
@@ -83,7 +83,7 @@ class ApolloResponseSpec extends kyo.test.Test[Any]:
         }
 
         "hasTransportError separates a transport failure from the server's errors" in {
-            val dropped = ApolloResponse.fromException[Hero](TestIds.requestUuid, new ApolloNetworkException("dropped"))
+            val dropped  = ApolloResponse.fromException[Hero](TestIds.requestUuid, new ApolloNetworkException("dropped"))
             val answered = ApolloResponse.fromGraphQLResponse(
                 TestIds.requestUuid,
                 GraphQLResponse(data = Present(Hero("Luke")), errors = Chunk(GraphQLError("partial")))

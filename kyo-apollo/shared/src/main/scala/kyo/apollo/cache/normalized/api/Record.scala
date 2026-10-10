@@ -46,7 +46,7 @@ object RecordValue:
     def scalar(value: Json): RecordValue = value match
         case Json.JNull                                                                => Null
         case Json.JStr(_) | Json.JInt(_) | Json.JDec(_) | Json.JNum(_) | Json.JBool(_) => Scalar(value)
-        case composite =>
+        case composite                                                                 =>
             throw IllegalArgumentException(
                 s"RecordValue.scalar expects a JSON scalar, got ${composite.getClass.getSimpleName}"
             )

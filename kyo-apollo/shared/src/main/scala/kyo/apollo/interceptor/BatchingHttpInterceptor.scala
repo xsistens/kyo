@@ -48,7 +48,7 @@ import kyo.apollo.network.http.HttpRequestBody
   *
   * The wire round trip always runs in a caller's fiber, never in the window
   * fiber: the window (or the size cap) only cuts the batch and hands it to its
-  * first member, the *lead*, which sends under `Async.mask` and completes the
+  * first member, the *lead*, which sends under `Async.uninterruptible` and completes the
   * other members. Batches from consecutive windows therefore travel concurrently,
   * and an interrupt aimed at the lead cannot lose the batch: it is deferred past
   * the send, and if it lands before the send starts, the remaining members are
@@ -83,18 +83,22 @@ final class BatchingHttpInterceptor private (
             turn    <- Promise.init[Turn, Abort[HttpEngineFailure]]
             claimed <- AtomicBoolean.init
             me = Pending(request, json, chain, turn, claimed)
-            queued <- pending.updateAndGet(_.map(_.append(me)))
-            response <- queued match
-                case Absent => Abort.panic(closed)
-                case Present(batch) =>
-                    kick(batch.length).andThen {
-                        Sync.ensure(outcome => outcome.fold(())(_ => withdraw(me))) {
+            // The finalizer is in place before `me` is queued: an interrupt landing between the two would otherwise
+            // leave `me` in the queue with nothing to take it out. `withdraw` of a caller that never got queued is a no-op.
+            // The type argument is load-bearing: inferred from `()`, `fold` types as Unit and the withdraw is built and
+            // discarded unrun.
+            response <- Sync.ensure(outcome => outcome.fold[Unit < Sync](())(_ => withdraw(me))) {
+                pending.updateAndGet(_.map(_.append(me))).map {
+                    case Absent         => Abort.panic(closed)
+                    case Present(batch) =>
+                        kick(batch.length).andThen {
                             turn.get.map {
                                 case Turn.Done(response) => response
-                                case Turn.Lead(batch)    => Async.mask(claim(me).andThen(send(batch)))
+                                case Turn.Lead(batch)    => Async.uninterruptible(claim(me).andThen(send(batch)))
                             }
                         }
-                    }
+                }
+            }
         yield response
     end enqueue
 
@@ -247,7 +251,7 @@ object BatchingHttpInterceptor:
             self = new BatchingHttpInterceptor(batchInterval, maxBatchSize, pending, window, frame)
             // Registered before the fiber so it runs after the fiber is interrupted:
             // nothing dispatches any more, so whoever is still queued is answered here.
-            _ <- Scope.ensure(pending.getAndSet(Absent).map(_.fold(())(self.fail(_, self.closed))))
+            _ <- Scope.ensure(pending.getAndSet(Absent).map(_.fold[Unit < Sync](())(self.fail(_, self.closed))))
             _ <- Fiber.init(
                 Abort.run[Closed](Loop.forever(window.take.andThen(Async.sleep(batchInterval)).andThen(self.dispatch))).unit
             )

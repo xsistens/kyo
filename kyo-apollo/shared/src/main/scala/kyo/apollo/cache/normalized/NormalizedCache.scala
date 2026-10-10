@@ -181,7 +181,7 @@ object NormalizedCache:
       */
     def mergeRecords(existing: Maybe[Record], incoming: Record): (Record, Set[FieldKey]) =
         existing match
-            case Absent => (incoming, incoming.fieldKeys)
+            case Absent       => (incoming, incoming.fieldKeys)
             case Present(old) =>
                 val changedFields = incoming.fields.iterator.collect {
                     case (fieldKey, value) if !old.fields.get(fieldKey).contains(value) => fieldKey

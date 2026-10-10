@@ -31,7 +31,7 @@ class FragmentSpec extends kyo.test.Test[Any]:
     /** A `... on User { __typename id name }` fragment, rooted at a `User` record. */
     object UserFragment extends Fragment[UserFields]:
         val dataCodec: JsonCodec[UserFields] = JsonCodec.fromSchema[UserFields]
-        def rootField: CompiledField =
+        def rootField: CompiledField         =
             CompiledField(
                 "user",
                 CompiledNamedType("User"),
@@ -51,7 +51,7 @@ class FragmentSpec extends kyo.test.Test[Any]:
         def name                           = "CurrentUser"
         def document                       = "query CurrentUser { user { __typename id name } }"
         val dataCodec: JsonCodec[UserData] = JsonCodec.fromSchema[UserData]
-        def rootField: CompiledField =
+        def rootField: CompiledField       =
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
@@ -87,7 +87,7 @@ class FragmentSpec extends kyo.test.Test[Any]:
 
     object ProfileFragment extends Fragment[ProfileFields]:
         val dataCodec: JsonCodec[ProfileFields] = JsonCodec.fromSchema[ProfileFields]
-        def rootField: CompiledField =
+        def rootField: CompiledField            =
             CompiledField("user", CompiledNamedType("User"), selections = avatarSelections)
     end ProfileFragment
 
@@ -95,7 +95,7 @@ class FragmentSpec extends kyo.test.Test[Any]:
         def name                              = "Profile"
         def document                          = "query Profile { user { __typename id avatar { url } } }"
         val dataCodec: JsonCodec[ProfileData] = JsonCodec.fromSchema[ProfileData]
-        def rootField: CompiledField =
+        def rootField: CompiledField          =
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),

@@ -160,7 +160,7 @@ final class Normalizer(
         field: CompiledField,
         path: List[String]
     ): RecordValue = value match
-        case Json.JNull => RecordValue.Null
+        case Json.JNull       => RecordValue.Null
         case Json.JArr(items) =>
             RecordValue.RList(items.zipWithIndex.map { (item, index) =>
                 compositeValue(item, field, path :+ index.toString)

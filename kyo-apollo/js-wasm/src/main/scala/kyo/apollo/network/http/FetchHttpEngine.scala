@@ -58,7 +58,7 @@ final class FetchHttpEngine extends HttpEngine:
                         for
                             response <- dom.fetch(request.url.full, requestInit(request, controller.signal)): Future[dom.Response]
                             text     <- response.text(): Future[String]
-                        yield HttpEngine.response(HttpStatus(response.status), text, readHeaders(response.headers))
+                        yield HttpEngine.response(statusOf(response.status), text, readHeaders(response.headers))
                     }
                     .map(fiber => fetched(fiber.get))
             }
@@ -75,7 +75,7 @@ final class FetchHttpEngine extends HttpEngine:
                 Fiber
                     .fromFuture {
                         dom.fetch(request.url.full, requestInit(request, controller.signal)).flatMap { response =>
-                            val status  = HttpStatus(response.status)
+                            val status  = statusOf(response.status)
                             val headers = readHeaders(response.headers)
                             if isMultipart(Option(response.headers.get("Content-Type"))) then
                                 Future.successful(
@@ -90,6 +90,11 @@ final class FetchHttpEngine extends HttpEngine:
             }
         }
 
+    /** A status outside 100 to 599 (an opaque `fetch` reply reports 0) fails the
+      * `Future` it is read in, so it reaches [[fetched]] like a rejected fetch.
+      */
+    private def statusOf(code: Int)(using Frame): HttpStatus = HttpStatus.init(code).getOrThrow
+
     /** The `fetch` boundary: a rejected promise reaches kyo as a panic of the bridged
       * fiber and becomes the engine failure. An interrupt stays an interrupt, and so
       * does a rejection with `AbortError`: only this engine's own controller aborts a
@@ -97,8 +102,8 @@ final class FetchHttpEngine extends HttpEngine:
       */
     private def fetched[A](result: A < Async)(using Frame): A < (Async & Abort[HttpEngineFailure]) =
         Abort.run[Throwable](result).map {
-            case Result.Success(value)                => value
-            case Result.Panic(interrupt: Interrupted) => Abort.panic(interrupt)
+            case Result.Success(value)                                                => value
+            case Result.Panic(interrupt: Interrupted)                                 => Abort.panic(interrupt)
             case Result.Panic(e: js.JavaScriptException) if isAbortError(e.exception) =>
                 Abort.panic(Interrupted(summon[Frame], Present("the fetch was aborted")))
             case Result.Error(rejection) => Abort.fail(ApolloNetworkException(cause = rejection))
@@ -125,8 +130,8 @@ final class FetchHttpEngine extends HttpEngine:
         }
         init.headers = headers
         request.fields.body match
-            case HttpRequestBody.Empty      => ()
-            case HttpRequestBody.Text(json) => init.body = json
+            case HttpRequestBody.Empty            => ()
+            case HttpRequestBody.Text(json)       => init.body = json
             case HttpRequestBody.Multipart(parts) =>
                 val data = new dom.FormData()
                 parts.foreach { part =>

@@ -68,7 +68,7 @@ final class LoggingInterceptor(redact: Set[String] = LoggingInterceptor.sensitiv
       */
     private def shownBody(body: HttpRequestBody)(using Frame): Maybe[String] =
         body match
-            case HttpRequestBody.Empty => Absent
+            case HttpRequestBody.Empty      => Absent
             case HttpRequestBody.Text(text) =>
                 JsonParser.parse(text) match
                     case Result.Success(json) => Present(LoggingInterceptor.withoutVariableValues(json).render)

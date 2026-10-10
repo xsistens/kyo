@@ -87,7 +87,7 @@ final class ChangedKeysSubject:
         Abort.run[Throwable](subscription.onChangedKeys(changedKeys)).map {
             case Result.Success(_)            => Kyo.unit
             case Result.Error(e: Interrupted) => Abort.panic(e)
-            case Result.Error(e) =>
+            case Result.Error(e)              =>
                 Log.error(
                     s"changed-keys subscriber registered at ${subscription.registeredAt.position.show} failed on a " +
                         s"publish of ${changedKeys.size} key(s); the subscribers after it still receive it",
