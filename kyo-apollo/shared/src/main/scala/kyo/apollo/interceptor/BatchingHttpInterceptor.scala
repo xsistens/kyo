@@ -52,7 +52,9 @@ import kyo.apollo.network.http.HttpRequestBody
   * other members. Batches from consecutive windows therefore travel concurrently,
   * and an interrupt aimed at the lead cannot lose the batch: it is deferred past
   * the send, and if it lands before the send starts, the remaining members are
-  * re-queued at the front and a new window opens.
+  * re-queued at the front and a new window opens. A caller that leaves while its
+  * batch is being cut answers its own turn first, so the lead passes to the next
+  * member.
   */
 final class BatchingHttpInterceptor private (
     batchInterval: Duration,
@@ -126,22 +128,37 @@ final class BatchingHttpInterceptor private (
       */
     private def dispatch(using Frame): Unit < Sync =
         pending.getAndUpdate(_.map(_ => Chunk.empty)).map {
-            case Present(batch) if !batch.isEmpty =>
-                batch(0).turn.completeDiscard(Result.succeed(Turn.Lead(batch)))
-            case _ => ()
+            case Present(batch) => handOff(batch)
+            case Absent         => ()
         }
 
-    /** Finalizer of a caller that did not complete normally (interrupted, or its
-      * send failed). Leaves the queue if still queued; and if the caller had been
-      * made lead but never claimed the batch, gives the batch back to the queue so
-      * the other members are not stranded.
+    /** Make the first member still waiting the lead of the rest of `batch`. A
+      * member that left between the cut and this hand-off has answered its own
+      * turn ([[withdraw]]), so the lead passes over it instead of being lost.
       */
-    private def withdraw(me: Pending)(using Frame): Unit < Sync =
+    private def handOff(batch: Chunk[Pending])(using Frame): Unit < Sync =
+        if batch.isEmpty then ()
+        else
+            batch(0).turn.complete(Result.succeed(Turn.Lead(batch))).map { led =>
+                if led then () else handOff(batch.drop(1))
+            }
+
+    /** Finalizer of a caller that did not complete normally (interrupted, or its
+      * send failed). Leaves the queue if still queued and answers its own turn, so
+      * a batch cut with it inside passes it over. If the turn already held the
+      * lead but the caller never claimed the batch, gives the batch back to the
+      * queue so the other members are not stranded.
+      */
+    private def withdraw(me: Pending)(using frame: Frame): Unit < Sync =
         pending.getAndUpdate(_.map(_.filter(_ ne me))).andThen {
-            me.turn.poll.map {
-                case Present(Result.Success(Turn.Lead(batch))) =>
-                    claim(me).map(won => if won then requeue(batch.filter(_ ne me)) else ())
-                case _ => ()
+            me.turn.complete(Result.panic(Interrupted(frame))).map { left =>
+                if left then ()
+                else
+                    me.turn.poll.map {
+                        case Present(Result.Success(Turn.Lead(batch))) =>
+                            claim(me).map(won => if won then requeue(batch.filter(_ ne me)) else ())
+                        case _ => ()
+                    }
             }
         }
 
@@ -151,17 +168,20 @@ final class BatchingHttpInterceptor private (
     private def claim(me: Pending)(using Frame): Boolean < Sync =
         me.claimed.compareAndSet(false, true)
 
-    /** Put `rest` back at the front of the queue (they are older than anything
-      * queued since) and react as if they had just arrived — unless the `Scope`
-      * has ended, in which case they are answered like every other stranded caller.
+    /** Put the members of `rest` still waiting back at the front of the queue
+      * (they are older than anything queued since) and react as if they had just
+      * arrived — unless the `Scope` has ended, in which case they are answered
+      * like every other stranded caller.
       */
     private def requeue(rest: Chunk[Pending])(using Frame): Unit < Sync =
-        if rest.isEmpty then ()
-        else
-            pending.updateAndGet(_.map(rest.concat(_))).map {
-                case Present(all) => kick(all.length)
-                case Absent       => fail(rest, closed)
-            }
+        Kyo.filter(rest)(_.turn.done.map(!_)).map { waiting =>
+            if waiting.isEmpty then ()
+            else
+                pending.updateAndGet(_.map(waiting.concat(_))).map {
+                    case Present(all) => kick(all.length)
+                    case Absent       => fail(waiting, closed)
+                }
+        }
 
     /** The lead's send: one unwrapped request for a batch of one, otherwise the
       * JSON array of every body on the lead's chain/URL/headers. Every other
