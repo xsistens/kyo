@@ -956,8 +956,8 @@ val placeIsLabelled: kyo.apollo.api.Query.Normalizable[(country: Maybe[(code: St
 
 The printed document carries the fragment's fields directly in the selection; the
 server never sees a `fragment` definition. A masked spread decodes to an opaque
-`CountryPlace.fields.Ref` under the field `countryPlace`, so only code that owns the
-fragment reads its fields.
+`CountryPlace.fields.Ref` under the field `countryPlace`, so the parent operation
+cannot read the fragment's fields through it.
 
 **Why:** a misspelled fragment name in a document string is found at runtime. A
 fragment value that does not exist is a compile error, the IDE navigates to its

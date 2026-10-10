@@ -197,7 +197,7 @@ object TestApolloClient:
 
     /** A client with a normalized cache (keyed by `keyFields`, default `id`) over
       * `engine`, so a query read and a store write share a record — required by
-      * `watch()` / `watchSignal`. Each evaluation gets a fresh cache.
+      * `watch()`. Each evaluation gets a fresh cache.
       */
     def cached(
         engine: HttpEngine,

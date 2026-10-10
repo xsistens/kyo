@@ -133,7 +133,7 @@ final class ApolloClient private (
       * while assembling their streams — cache reads, devtools bookkeeping, the
       * transport's engine call) run only when the stream is consumed, never when
       * the effect value is constructed. This is what makes `ApolloCall.stream` (and
-      * everything built on it — `.data`, a handle's held `refetch`) genuinely cold.
+      * everything built on it: `execute`, `watch()`) genuinely cold.
       */
     private[apollo] def executeAsStream[D](
         request: ApolloRequest.Builder[D]
@@ -242,15 +242,6 @@ final class ApolloCall[D] private[apollo] (
       * installed it is inert metadata.
       */
     def fetchPolicy(policy: FetchPolicy): ApolloCall[D] =
-        withRequest(_.addExecutionContext(ExecutionContext.Empty + policy))
-
-    /** Pin the [[ErrorPolicy]] for this call — how `.data` treats GraphQL `errors`
-      * (react-apollo `errorPolicy`). Rides the request's [[ExecutionContext]] like
-      * [[fetchPolicy]]; the `.data` effect reads it back. `Ignore`/`All` make `.data`
-      * return the `data` despite GraphQL errors; `None` (default) raises them. Has no
-      * effect on `.response`, which always exposes `data` + `errors`.
-      */
-    def errorPolicy(policy: ErrorPolicy): ApolloCall[D] =
         withRequest(_.addExecutionContext(ExecutionContext.Empty + policy))
 
     /** Build a sibling call over an updated builder. Package-private so the cache

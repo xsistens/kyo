@@ -20,7 +20,7 @@ import scala.NamedTuple.NamedTuple
   * The whole point is that local state is a first-class cache citizen: `write`
   * goes through [[kyo.apollo.cache.normalized.ApolloStore.writeFragment]], which
   * merges the value into the record and publishes the changed key, so every
-  * watcher/`watchSignal` that read this field re-emits — reactivity for free, the
+  * `watch()` that read this field re-emits — reactivity for free, the
   * same pathway a network response takes. The field is pruned from the printed
   * document (the server never sees it) and yields [[default]] on a read miss.
   *
