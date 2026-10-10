@@ -127,5 +127,39 @@ class PagedBySpec extends kyo.test.Test[Any]:
                 assert(read.countriesPage.pageInfo.hasNextPage == false)
             end for
         }
+
+        "a watch on the first page re-emits with the longer list when the next page lands" in {
+            // The server answers the first page, or the second when the request carries its cursor.
+            val engine = new kyo.apollo.network.http.HttpEngine:
+                def execute(request: kyo.apollo.network.http.HttpEngine.Request)(using
+                    Frame
+                ): kyo.apollo.network.http.HttpEngine.Response < Async =
+                    val second = request.fields.body.text.exists(_.contains("cFR"))
+                    val data   = if second then body(Seq("IT", "ES"), Absent) else body(Seq("DE", "FR"), Present("cFR"))
+                    kyo.apollo.network.http.HttpEngine.response(HttpStatus.OK, s"""{"data":${data.render}}""")
+                end execute
+            for
+                client <- kyo.apollo.ApolloClient.init(
+                    kyo.apollo.ApolloClient.Config("https://example.com/graphql")
+                        .httpEngine(engine)
+                        .normalizedCache(
+                            MemoryCache(),
+                            CacheIdentity.generator(summon[CacheIdentity[CountryT]], summon[CacheIdentity[EdgeT]]),
+                            fieldPolicies = FieldPolicies.fromList(ConnectionFieldPolicy("Query", "countriesPage", "CountryConnection"))
+                        )
+                )
+                emitted <- Channel.init[Chunk[String]](4)
+                watch   <- Fiber.init(client.query(page(Absent)).watch().take(2).foreach { r =>
+                    emitted.put(r.data.fold(Chunk.empty[String])(_.countriesPage.edges.map(_.node.code)))
+                })
+                first  <- emitted.take
+                _      <- client.query(page(Present("cFR"))).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                second <- emitted.take
+                _      <- watch.get
+            yield
+                assert(first == Chunk("DE", "FR"))
+                assert(second == Chunk("DE", "FR", "IT", "ES"))
+            end for
+        }
     }
 end PagedBySpec

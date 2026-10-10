@@ -12,8 +12,8 @@ import kyo.apollo.api.ScalarCodec
 import kyo.apollo.api.SelectionBuilder
 import kyo.apollo.api.TypeName
 
-// The selector layer kyo-apollo-codegen emits for the schema shown in "Getting Started",
-// written out by hand so this README compiles against kyo-apollo alone.
+// The selector layer for the schemas shown in this README ("Getting Started", "Uploads",
+// "Pagination"), written out by hand so this README compiles against kyo-apollo alone.
 sealed trait Country
 
 object Country:
@@ -349,22 +349,31 @@ val live: ApolloClient.Config =
         .webSocketConnectionPayload(Json.JObj(VectorMap("authToken" -> Json.JStr("<token>"))))
         .webSocketReopenWhen(WebSocketNetworkTransport.reconnectAlways)
         .webSocketBackoff(Schedule.exponentialBackoff(500.millis, 2.0, 30.seconds))
-        .webSocketConnectTimeout(10.seconds)
+        .webSocketConnectTimeout(5.seconds)
         .subscriptionBufferSize(64)
 ```
 
-On an abnormal drop, the predicate passed to `webSocketReopenWhen` receives the failure
-and the attempt number and decides whether to reopen; a reopened socket sends
-`connection_init` again and resubscribes every active subscription, waiting between
-attempts as `webSocketBackoff` schedules. `subscriptionBufferSize` bounds how many
-responses one subscription holds for a consumer that has not taken them yet; when it
-is full, the socket is not read further until the consumer catches up.
+On an abnormal drop, every active subscription first receives a response whose `error`
+is the drop (an `ApolloWebSocketClosedException`), and its stream stays open. The
+predicate passed to `webSocketReopenWhen` receives that failure and the attempt number
+and decides whether to reopen; a reopened socket sends `connection_init` again and
+resubscribes every active subscription under its original id, waiting between attempts
+as `webSocketBackoff` schedules. When the schedule has no delay left, the subscriptions
+end with the failure, as they do without reconnection. This is the subscriptions'
+retry: `RetryOnErrorInterceptor` never retries a subscription.
+
+`subscriptionBufferSize` (256 by default) bounds how many responses one subscription
+holds for a consumer that has not taken them yet. When it is full, the socket is not
+read further until that consumer catches up, and since one socket carries every
+subscription, a slow consumer holds the others back too.
 
 ### Uploads
 
-A file travels as an `Upload`, a `Span[Byte]` with a file name and a content type. An
-operation whose variables carry one is sent as a multipart request, following the
-GraphQL multipart request spec, whatever the `httpMethod`:
+A form that attaches a file (a flag image, an avatar) sends it inside the mutation. The
+file travels as an `Upload`, a `Span[Byte]` with a file name and a content type, and an
+operation whose variables carry one is sent as a multipart request following the
+GraphQL multipart request spec: under `POST` or another body method as that method,
+under `GET` as a `POST`, because a file cannot ride a URL:
 
 ```graphql
 scalar Upload
@@ -383,6 +392,12 @@ end uploadFlag
 ```
 
 On JS and Wasm, `UploadJs.fromFile` turns a browser `File` into an `Upload`.
+
+kyo-apollo-codegen generates an argument of a schema's `Upload` scalar as an `Upload`
+sent through `ScalarCodec.upload`, unless the build maps the scalar to another type. A
+file can only be an operation argument: an input object field of type `Upload` stops
+generation with an error naming the field, since an input object is encoded without a
+place for a file.
 
 ## What a selection can do
 
@@ -462,8 +477,11 @@ emissions as the server appends the remaining items.
 
 ### Custom scalars
 
-A schema's own scalars (`DateTime`, `Long`, `JSON`) decode into whatever Scala type the
-build maps them to; the type needs a kyo `Schema`. The mapping is a codegen setting:
+A schema's own scalars (`DateTime`, `Long`, `JSON`) should decode into a Scala type, not
+a string. The mapping is a codegen option, `--scalar DateTime=java.time.Instant` on the
+`CodegenRunner` command line, or in kyo's own build the `apolloScalarMappings` setting.
+The mapped type needs a kyo `Schema`, which codegen supplies itself for
+`java.time.Instant`:
 
 ```scala doctest:expect=skipped
 apolloScalarMappings := Map("DateTime" -> "java.time.Instant", "Long" -> "scala.Long")
@@ -477,31 +495,8 @@ def population: SelectionBuilder.Deferrable[Country, (population: Long)] =
     SelectionBuilder.scalar("population", CompiledNamedType("Long").notNull, ScalarCodec.fromSchema[Long])
 ```
 
-A custom scalar without a mapping is generated as `String`, the raw wire value.
-
-### Local fields (`@client`)
-
-UI state that belongs to an entity but not to the server (a starred country, a
-selected row) lives in the cache as a client field. It is selected like a server
-field, never sent to the server, and reads its default until something writes it:
-
-```scala
-import kyo.apollo.cache.normalized.api.CacheKey
-
-val isFavorite = ClientField.create[Country, Boolean]("isFavorite", default = false)
-
-val favourites = Queries.countries(Country.code ~ Country.name ~ isFavorite.select).toQuery()
-
-def star(client: ApolloClient, code: String): Set[CacheKey] < Sync =
-    isFavorite.write(client, code, true)
-```
-
-`write` stores the value on the record `Country:<code>` and publishes it, so every watch
-that selected `isFavorite` re-emits, the same way a server response would make it.
-`read(client, code)` reads it back, and `writeRoot`/`readRoot` keep a value on the query
-root instead of an entity. kyo-apollo-codegen declares client fields from the build
-(`--client-field "Country.isFavorite: Boolean = false"`), so they appear next to the
-server fields on the generated selector.
+A custom scalar without a mapping is generated as `String`, the raw wire value; the one
+exception is `Upload`, generated as a file (see [Uploads](#uploads)).
 
 ### What the selection types allow
 
@@ -650,8 +645,9 @@ other's read incomplete. A watch whose refetch already answered a miss does not 
 when another write brings the same miss back. It keeps its last value, as Apollo Client
 4.3 does, and the store's `CacheDiagnostics` (`normalizedCache(..., diagnostics =
 CacheDiagnostics.toStdErr)`) reports it once. A read that succeeds after another write,
-an `evict`, `remove` or `clearAll`, or data the cache dropped by expiry or eviction lets
-the watch refetch that miss again.
+an `evict`, `remove` or `clearAll` ([Removing data](#removing-data)), or data the cache
+dropped by expiry or eviction ([Bounding the cache](#bounding-the-cache)) lets the watch
+refetch that miss again.
 
 The store behind the cache is `client.apolloStore`. Writes through it publish the
 records they change, so watches react to them as they do to network responses, and
@@ -747,8 +743,8 @@ val bounded = MemoryCache(maxSize = 5_000, maxAge = 5 * 60 * 1000L)
 ```
 
 An expired field reads as missing, so the next `CacheFirst` call asks the server for it
-again. Expiry publishes nothing: a watch sees the missing field when a write makes it
-re-read.
+again. Neither expiry nor eviction publishes anything: a watch sees the missing data
+when a write makes it re-read.
 
 ### Pagination
 
@@ -766,8 +762,9 @@ type CountryEdge { cursor: String! node: Country! }
 type PageInfo { hasNextPage: Boolean! endCursor: String }
 ```
 
-The cache needs the policy and an identity for the edges, and `pagedBy` turns the query
-into a function from cursor to page:
+The cache needs the policy and an identity for the edges, because edges without one are
+keyed by their position and each page would replace the last. `pagedBy` turns the
+query into a function from cursor to page:
 
 ```scala
 import kyo.apollo.cache.normalized.*
@@ -808,10 +805,12 @@ page lands. Without a `ConnectionFieldPolicy`, a `FieldPolicy` with `keyArgs` an
 
 ### Removing data
 
-`evict(key)` removes a record and publishes the removal, so a watch that read it reacts
-the way its refetch policy says: under `CacheOnly` it emits the miss as an error value,
-under `CacheFirst` it asks the server. `cascade = true` also removes every record
-reachable from it:
+Some data has to leave the cache before it expires: a record the server deleted, or
+everything a signed-out user saw. `evict(key)` removes a record and publishes the
+removal, so a watch that read it reacts the way its refetch policy says: under
+`CacheOnly` it emits the miss as an error value, under `CacheFirst` and `NetworkOnly` it
+asks the server. `cascade = true` also removes every record reachable from it,
+including shared records such as a country another query still shows:
 
 ```scala
 def forgetGermany(client: ApolloClient): Set[CacheKey] < Sync =
@@ -819,9 +818,80 @@ def forgetGermany(client: ApolloClient): Set[CacheKey] < Sync =
 ```
 
 `remove(key)` removes one record without the cascade, `clearAll` empties the store,
-`publish(keys)` makes the watches of those records re-read without changing anything,
+`publish(keys)` makes the watches of those records react as if they had changed,
+without changing anything,
 and `extract()` returns the whole cache as JSON in the shape Apollo Client's
 `cache.extract()` uses, for debugging and the devtools.
+
+### Local fields (`@client`)
+
+UI state that belongs to an entity but not to the server (a starred country, a
+selected row) lives in the cache as a client field. It is selected like a server
+field, never sent to the server, and reads its default until something writes it:
+
+```scala
+import kyo.apollo.cache.normalized.api.CacheKey
+
+val isFavorite = ClientField.create[Country, Boolean]("isFavorite", default = false)
+
+val favourites = Queries.countries(Country.code ~ Country.name ~ isFavorite.select).toQuery()
+
+def star(client: ApolloClient, code: String): Set[CacheKey] < Sync =
+    isFavorite.write(client, code, true)
+```
+
+`write` needs the normalized cache: it stores the value on the record `Country:<code>`,
+the key the `CacheIdentity` above gives a country, and publishes it, so every watch that
+selected `isFavorite` re-emits as it does after a server response. A server response
+never overwrites a client field, so local state survives a refetch, which a value
+written with `updateFragment` does not.
+`read(client, code)` reads it back, and `writeRoot`/`readRoot` keep a value on the query
+root instead of an entity. kyo-apollo-codegen declares client fields from the build
+(`--client-field "Country.isFavorite: Boolean = false"`), so they appear next to the
+server fields on the generated selector.
+
+### Fragments a component owns
+
+A screen built from components wants each component to declare the fields it shows,
+and the page's query to fetch them without coming to depend on them. A masked fragment
+does that. It is declared next to the component, spread into the page's query, and the
+query's result carries only an opaque reference to it:
+
+```scala
+object CountryPlace:
+    val fields = Fragment.entity[Country](_ ~ Country.name ~ Country.capital)
+
+val placeQuery = Queries.country("DE")(Country.code ~ CountryPlace.fields.spread).toQuery()
+```
+
+<!-- doctest:scope=inherited
+```scala
+val placeIsLabelled: kyo.apollo.api.Query.Normalizable[(country: Maybe[(code: String, countryPlace: CountryPlace.fields.Ref)])] =
+    placeQuery
+```
+-->
+
+The spread decodes to a `CountryPlace.fields.Ref` under the field `countryPlace`, so the
+page's code cannot read `name` or `capital` through it, and a field the component adds
+later cannot become something the page relies on. The component opens the ref:
+`ref.value` gives the fields as the response delivered them. For a `Fragment.entity`
+ref, which names a record, `apolloStore.readFragment(ref)` reads the record as the cache
+holds it now (or the delivered fields, if the record is gone), and
+`apolloStore.watchFragment(ref)` follows it, emitting again whenever a write changes it
+and keeping the record from garbage collection while it runs. A `Fragment.embedded` ref,
+for an object without an identity such as a `PageInfo`, opens through `value` only:
+
+```scala
+def renderPlace(client: ApolloClient, ref: CountryPlace.fields.Ref): Unit < (Async & Scope & Abort[ApolloParseException]) =
+    client.apolloStore.watchFragment(ref).foreach { place =>
+        Log.info(s"${place.name}: ${place.capital.getOrElse("no capital")}")
+    }
+```
+
+`Fragment.of` is the unmasked form: a typed selection on one type that the store reads
+and writes by key (`readFragment`, `writeFragment`, `updateFragment`), with nothing to
+spread. Use it for cache access, and `Fragment.entity`/`Fragment.embedded` for the data a
+component owns.
 
 ## HTTP layer
 
@@ -885,10 +955,12 @@ Requests that arrive within 20 milliseconds of the first one then leave as one H
 request, each query is sent as its hash first and in full only when the server does not
 know it, and
 a network failure or a 5xx status is retried three times with growing pauses.
-Subscriptions are never retried, and a GraphQL error is an answer, not a failure to
-retry.
+Subscriptions are never retried (a dropped socket reopens through
+`webSocketReopenWhen`, see [Configuring the subscription socket](#configuring-the-subscription-socket)),
+and a GraphQL error is an answer, not a failure to retry.
 
-Both interceptors take their policy as parameters. `retryWhen` chooses which failures
+The defaults are a starting point, and both the retry and the logging interceptor take
+their policy as parameters. `retryWhen` chooses which failures
 are worth another attempt (the default, `RetryOnErrorInterceptor.transportErrors`, is a
 network failure or a 5xx status), and `jitter` spreads the pauses so that many clients
 do not retry in step. `LoggingInterceptor` takes the header names it must never print:
@@ -1203,38 +1275,16 @@ const cache = new InMemoryCache({
 ```
 
 kyo-apollo's fragments are values (`Fragment.of`, and `Fragment.entity` /
-`Fragment.embedded` for masked fragments) that an operation references like any other
-Scala value:
+`Fragment.embedded` for masked fragments, see
+[Fragments a component owns](#fragments-a-component-owns)) that an operation references
+like any other Scala value:
 
 ```scala
-object CountryPlace:
-    val fields = Fragment.entity[Country](_ ~ Country.name ~ Country.capital)
-
 val germanyWithPlace = Queries.country("DE")(Country.code ~ CountryPlace.fields.spread).toQuery()
 ```
 
-<!-- doctest:scope=inherited
-```scala
-val placeIsLabelled: kyo.apollo.api.Query.Normalizable[(country: Maybe[(code: String, countryPlace: CountryPlace.fields.Ref)])] =
-    germanyWithPlace
-```
--->
-
 The printed document carries the fragment's fields directly in the selection; the
-server never sees a `fragment` definition. A masked spread decodes to an opaque
-`CountryPlace.fields.Ref` under the field `countryPlace`, so the parent operation
-cannot read the fragment's fields through it. The code that declared the fragment
-opens the ref: `ref.value` gives the fields as the response delivered them,
-`apolloStore.readFragment(ref)` reads the record as the cache holds it now, and
-`apolloStore.watchFragment(ref)` follows it, emitting again whenever a write changes
-it:
-
-```scala
-def renderPlace(client: ApolloClient, ref: CountryPlace.fields.Ref): Unit < (Async & Scope & Abort[ApolloParseException]) =
-    client.apolloStore.watchFragment(ref).foreach { place =>
-        Log.info(s"${place.name}: ${place.capital.getOrElse("no capital")}")
-    }
-```
+server never sees a `fragment` definition.
 
 **Why:** a misspelled fragment name in a document string is found at runtime. A
 fragment value that does not exist is a compile error, the IDE navigates to its
