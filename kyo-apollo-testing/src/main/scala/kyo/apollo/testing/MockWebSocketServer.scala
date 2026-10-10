@@ -6,9 +6,8 @@ import kyo.apollo.exception.ApolloWebSocketClosedException
 import kyo.apollo.network.ws.WebSocketConnection
 import kyo.apollo.network.ws.WebSocketEngine
 
-/** A scripted, in-memory WebSocket server for subscription tests, promoted from
-  * `core`'s `FakeWebSocket.scala` (the connection/engine pair) and
-  * `WsTestSupport.scala` (the dual-protocol server-frame builders) — ADR §2a/§5.
+/** A scripted, in-memory WebSocket server for subscription tests, with
+  * server-frame builders for both protocols.
   *
   * It plays the role of the server below the [[WebSocketConnection]] seam: a test
   * injects it as the client's `webSocketEngine`, then scripts the handshake and
@@ -100,7 +99,7 @@ object MockWebSocketServer:
     case object Legacy extends Protocol
 end MockWebSocketServer
 
-/** The dual-protocol server-frame builders promoted from `WsTestSupport`. A
+/** The dual-protocol server-frame builders. A
   * [[WsFrames]] instance produces the `{ value: Int }` event shape for one
   * protocol; [[WsFrames.modern]] / [[WsFrames.legacy]] are the two families.
   */
@@ -142,7 +141,6 @@ end WsFrames
   * synchronously. The incoming channel ends with the same `Absent` marker the
   * platform engines put (see [[WebSocketConnection.untilEnd]]), so frames scripted
   * right before a close are delivered exactly as a real socket would deliver them.
-  * Promoted from `core`'s `FakeWebSocket.scala` (native-kyo seam).
   */
 final class FakeWebSocketConnection extends WebSocketConnection:
     private given Frame = Frame.internal
@@ -213,8 +211,8 @@ final class FakeWebSocketConnection extends WebSocketConnection:
 end FakeWebSocketConnection
 
 /** An engine that always hands back `conn`, recording each open's url/protocol.
-  * Promoted from `core`'s `FakeWebSocket.scala` — the low-level form beneath
-  * [[MockWebSocketServer]] for specs that want the raw connection.
+  * The low-level form beneath [[MockWebSocketServer]], for specs that want the
+  * raw connection.
   */
 final class FakeWebSocketEngine(conn: FakeWebSocketConnection) extends WebSocketEngine:
     private val opensRef =
@@ -232,7 +230,7 @@ end FakeWebSocketEngine
   * order, so a reconnect gets a brand-new socket instead of the already-
   * terminated first one. Every opened connection is retained in [[conns]] so a
   * test can drive whichever socket generation it is interested in, and handed out
-  * once through [[nextConnection]]. Promoted from `core`'s `FakeWebSocket.scala`.
+  * once through [[nextConnection]].
   */
 final class FreshWebSocketEngine extends WebSocketEngine:
     private given Frame = Frame.internal

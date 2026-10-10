@@ -15,8 +15,8 @@ import kyo.apollo.network.http.HttpRequestBody
   * Covers coalescing within a window, the size cap, the unwrapped single request,
   * the pass-through GET, the failure shapes (non-2xx shared, an engine failure
   * shared as that failure, malformed array fails all with an engine failure, a
-  * throwing send panics all), and the two ownership contracts from
-  * P1-40: an interrupted caller is not sent on its behalf, and ending the owning
+  * throwing send panics all), and the two ownership contracts:
+  * an interrupted caller is not sent on its behalf, and ending the owning
   * `Scope` stops the window and answers whoever is still waiting.
   */
 class BatchingHttpInterceptorSpec extends kyo.test.Test[Any]:

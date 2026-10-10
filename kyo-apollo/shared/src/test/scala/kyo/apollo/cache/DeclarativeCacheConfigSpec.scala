@@ -13,7 +13,7 @@ import kyo.apollo.cache.normalized.internal.Normalizer
 import kyo.apollo.json.Json
 import scala.collection.immutable.VectorMap
 
-/** Unit + end-to-end tests for Phase 07 declarative cache configuration:
+/** Unit + end-to-end tests for declarative cache configuration:
   * [[TypePolicy]] / [[TypePolicyCacheKeyGenerator]] (custom key fields),
   * [[FieldKey]] `keyArgs` filtering, [[FieldPolicy]] read redirects and custom
   * merges, and [[ConnectionFieldPolicy]] paginated-list merging through the

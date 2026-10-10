@@ -30,7 +30,7 @@ import scala.collection.immutable.VectorMap
   * stdlib `Option`/`List` never appear in a result type.
   *
   *   - `Origin` is a phantom scoping type (one empty marker per GraphQL object
-  *     type, plus `RootQuery`/`RootMutation`/`RootSubscription` from `core`). It
+  *     type, plus `RootQuery`/`RootMutation`/`RootSubscription` from kyo-apollo). It
   *     has no instances and no runtime footprint; it only stops a `Country`
   *     selector from being combined into a `Continent` selection.
   *   - `A` is the selection's result type — a named tuple for the composable
@@ -698,7 +698,7 @@ extension [Origin, A <: AnyNamedTuple](sb: SelectionBuilder.Deferrable[Origin, A
 end extension
 
 /** Phantom `Origin` markers for the three operation roots. Universal (not
-  * schema-specific), so they live in `core`; generated `Queries`/`Mutations`/
+  * schema-specific), so they live in kyo-apollo; generated `Queries`/`Mutations`/
   * `Subscriptions` selector objects root their selections in these, and the
   * terminal `toQuery`/`toMutation`/`toSubscription` extensions key on them.
   */
