@@ -110,6 +110,37 @@ Three companion modules complete it:
 - [kyo-apollo-itserver](../kyo-apollo-itserver/README.md) is the GraphQL server the
   cross-platform end-to-end suite runs against (not published).
 
+## When to use kyo-apollo
+
+Reach for kyo-apollo when a kyo program talks to a GraphQL server and the results
+should arrive as kyo values: a `Maybe` for a nullable field, a `Stream` for a
+subscription, an `Abort` row for a failure, a `Scope` that closes the socket. It gives
+you:
+
+- **The compiler checks the operations.** An operation is Scala code against selectors
+  generated from the schema, and its result type is built from the fields it selects.
+  When the schema drops a field, regenerating the selectors turns every operation that
+  still selects it into a compile error at that line. Operations need no `.graphql`
+  files and no code generation step of their own.
+- **One place to look for failure.** Network drops, HTTP statuses, unparsable bodies,
+  cache misses and the server's GraphQL `errors` all arrive in one sealed
+  `ApolloException`, so a `match` over it is checked for exhaustiveness.
+- **Live data from the cache.** A watched query re-emits whenever any operation, a
+  subscription event or a direct store write changes a record it read, which is what a
+  screen or a long-running job that mirrors server state needs.
+- **The same code on four platforms.** JVM, Scala Native, Scala.js and WebAssembly run
+  the same API; only the engine underneath changes.
+- **Tests without a server.** kyo-apollo-testing scripts responses at the HTTP, the
+  operation and the WebSocket layer.
+
+It is not the right fit when the program does not run on kyo effects (a `Future`, ZIO or
+cats-effect code base would wrap every call), when the cache has to survive a restart
+(`MemoryCache` is the only shipped `NormalizedCache`; persistence means implementing
+one), when codegen has to run in a build other than kyo's
+own (there is no sbt plugin yet; such a build runs
+`kyo.apollo.codegen.CodegenRunner` itself), or when the server only speaks GraphQL 17's
+`pending`/`completed` incremental format.
+
 ## Getting Started
 
 Add the dependency to your `build.sbt`:
@@ -234,23 +265,43 @@ just a stream with two elements.
 
 ## What a selection can do
 
-What a selection supports is its type, so a misuse does not compile:
+A selection says which fields an operation reads, and its type says what the operation
+can do with them.
 
-- Every `SelectionBuilder[Origin, A]` decodes a response (`decode` returns a
-  `Result[ApolloParseException, A]`). A `SelectionBuilder.Bidirectional` also
-  encodes: named-tuple selections and `mapInto[C]` projections are, `map(f)`
-  projections are not.
-- Only `SelectionBuilder.Fields` (named-tuple selections) combine with `~`.
-- Only `SelectionBuilder.Deferrable` selections, whose last-added operand is a
-  single field selector, take `.deferred` and `.streamed`; `.streamed` also needs
-  that field to be a list. The empty selection, a `defer(...)` group, a union
-  branch, a fragment spread and a `@client` field do not.
-- A nested field takes a bidirectional child, so `map` projects the whole selection
-  an operation is built from, never a child (use `mapInto` there).
-- A bidirectional root builds a normalizable operation (`Query.Normalizable`, ...),
-  the only kind `ApolloStore.writeOperation`/`updateOperation` accept. A query built
-  from a `map` projection runs and decodes normally, but the cache interceptor does
-  not normalize its responses; it logs each skip at debug level.
+A field whose type is a union or an interface returns objects of several types, and a
+selection picks fields per type. `SelectionBuilder.onType("Track", child)` selects one
+branch; it decodes to `Maybe[A]`, `Absent` when the object is of another type, and
+kyo-apollo-codegen emits it as `on<Type>` on the union's selector object
+([kyo-apollo-codegen](../kyo-apollo-codegen/README.md) shows it on a generated schema).
+
+A named tuple is the right result while the data stays close to the call. When it moves
+into a domain model, project it. `mapInto[C]` decodes the selection into a case class
+whose field names match the selected ones, and stays bidirectional, so the operation
+still reaches the cache:
+
+```scala
+final case class CountryCard(code: String, name: String, capital: Maybe[String]) derives Schema
+
+val card = Queries.country("DE")((Country.code ~ Country.name ~ Country.capital).mapInto[CountryCard]).toQuery()
+```
+
+`card` is a `Query.Normalizable[(country: Maybe[CountryCard])]`. `map(f)` takes any
+function instead, which makes it decode-only: the operation below returns the capital
+directly, but its responses are not normalized and `updateOperation` does not accept it.
+
+```scala
+val capitalOfGermany: Query[Maybe[String]] =
+    Queries.country("DE")(Country.capital).map(_.country.flatMap(_.capital)).toQuery()
+```
+
+Use `mapInto` for anything a watch or a store update touches, and `map` for one-off
+reads where only the projected value matters.
+
+<!-- doctest:scope=inherited
+```scala
+val cardIsTyped: kyo.apollo.api.Query.Normalizable[(country: Maybe[CountryCard])] = card
+```
+-->
 
 Deferring a field makes its value `Maybe` until the deferred part arrives, and the
 response stream emits again when a part changes the data:
@@ -269,8 +320,44 @@ val progressiveIsTyped: kyo.apollo.api.Query.Normalizable[(country: Maybe[(code:
 ```
 -->
 
+To defer several fields as one unit, group them with `defer(label, selection)`. The
+label becomes the field name of the group, whose value is `Maybe` until the part
+arrives:
+
+```scala
+val withDetails = Queries.country("DE")(Country.code ~ defer("details", Country.name ~ Country.capital)).toQuery()
+```
+
+<!-- doctest:scope=inherited
+```scala
+val withDetailsIsTyped: kyo.apollo.api.Query.Normalizable[
+    (country: Maybe[(code: String, details: Maybe[(name: String, capital: Maybe[String])])])
+] = withDetails
+```
+-->
+
 A list field marked `.streamed(initialCount)` keeps its `Chunk` type and grows across
 emissions as the server appends the remaining items.
+
+### What the selection types allow
+
+The rules above follow from the selection types, so a misuse does not compile:
+
+- Every `SelectionBuilder[Origin, A]` decodes a response (`decode` returns a
+  `Result[ApolloParseException, A]`). A `SelectionBuilder.Bidirectional` also
+  encodes: named-tuple selections and `mapInto[C]` projections are, `map(f)`
+  projections are not.
+- Only `SelectionBuilder.Fields` (named-tuple selections) combine with `~`.
+- Only `SelectionBuilder.Deferrable` selections, whose last-added operand is a
+  single field selector, take `.deferred` and `.streamed`; `.streamed` also needs
+  that field to be a list. The empty selection, a `defer(...)` group, a union
+  branch, a fragment spread and a `@client` field do not.
+- A nested field takes a bidirectional child, so `map` projects the whole selection
+  an operation is built from, never a child (use `mapInto` there).
+- A bidirectional root builds a normalizable operation (`Query.Normalizable`, ...),
+  the only kind `ApolloStore.writeOperation`/`updateOperation` accept. A query built
+  from a `map` projection runs and decodes normally, but the cache interceptor does
+  not normalize its responses; it logs each skip at debug level.
 
 ## Failures
 
@@ -304,7 +391,8 @@ row can name exactly the failures of its operation: `ApolloExecuteFailure` for
 executing an operation, `CacheReadFailure` for a store read (the row of
 `ApolloStore.readOperation` and `readFragment`), `HttpEngineFailure` for an HTTP
 round-trip that received no response (the row of `HttpEngine.execute` and of every
-`HttpInterceptor`). `ApolloConfigException` belongs to none: it is a construction
+`HttpInterceptor`), `ApolloParseFailure` for a response envelope that does not decode
+(the row of `GraphQLResponse.parse`). `ApolloConfigException` belongs to none: it is a construction
 error. To move a response onto a row, fail with its error and unwrap the data with
 `orFailWith`:
 
@@ -326,10 +414,12 @@ panic, so it is never mistaken for a response the server sent.
 
 ## Normalized cache
 
-`normalizedCache` installs a cache on a `Config`; every client created from that
-`Config` shares its store. Records are keyed by type and identity, so the same country
-read by two different queries is stored once, and a write to it reaches every watch
-that read it. A `CacheIdentity` declares which fields identify a type:
+When several operations read the same object, they should see the same value, and a
+change to it should reach all of them. The normalized cache does that: records are
+keyed by type and identity, so the same country read by two different queries is
+stored once, and a write to it reaches every watch that read it. `normalizedCache`
+installs it on a `Config`, and every client created from that `Config` shares its
+store. A `CacheIdentity` declares which fields identify a type:
 
 ```scala
 import kyo.apollo.cache.normalized.*
@@ -345,9 +435,26 @@ A type without an identity is keyed by its `id` (or `_id`) field, or by its path
 below the nearest keyed parent. kyo-apollo-codegen emits `SchemaIdentities.generator`, which
 collects every `CacheIdentity` given in scope.
 
-Each call picks a `FetchPolicy`: `CacheFirst` (the default), `NetworkOnly`,
-`CacheOnly`, `NetworkFirst`, `CacheAndNetwork`, `NoCache` or `Standby`. `watch()`
-turns a query into a live stream: it emits the first result under the call's policy
+Each call picks a `FetchPolicy`, by how fresh the result has to be:
+
+- `CacheFirst` (the default) answers from the cache and asks the server only on a miss:
+  data that changes rarely.
+- `CacheAndNetwork` emits the cached result at once and the server's after it: a screen
+  that should show something immediately and then catch up.
+- `NetworkFirst` asks the server and falls back to the cache on a network error: a
+  client that has to keep working offline. `NetworkOnly` always asks the server and
+  writes the answer back.
+- `CacheOnly` never asks the server, and a miss is an error value; `Standby` serves a
+  hit and emits nothing on a miss, for a query that waits for someone else to fill
+  the cache.
+- `NoCache` neither reads nor writes the cache: a one-off request whose answer should
+  not reach any watch.
+
+> **Caution:** `Standby` on a miss produces an empty stream, and `execute` takes the
+> first element of the stream, so `.fetchPolicy(FetchPolicy.Standby).execute` panics
+> with a `NoSuchElementException` on a miss. Use `Standby` with `watch()` or `stream`.
+
+`watch()` turns a query into a live stream: it emits the first result under the call's policy
 and emits again whenever a record that result was read from changes, whether a
 mutation response, a subscription event or a direct store write changed it:
 
@@ -365,8 +472,15 @@ A watch re-reads the cache when its records change (`RefetchPolicy.CacheOnly`, t
 default); `refetchPolicy(RefetchPolicy.NetworkOnly)` asks the server again instead. An
 unrelated write notifies nobody, and closing the watch's `Scope` ends it.
 
-`RefetchPolicy.CacheFirst` re-reads and asks the server only when the read misses. It
-asks once per miss: a miss its refetch did not cure is emitted as the value. When two
+`RefetchPolicy.CacheFirst` re-reads and asks the server only when the read misses,
+which suits a watch whose records another operation can leave incomplete:
+
+```scala
+def capitalsFillingGaps(client: ApolloClient) =
+    client.query(germany).refetchPolicy(RefetchPolicy.CacheFirst).watch()
+```
+
+It asks once per miss: a miss its refetch did not cure is emitted as the value. When two
 operations select the same object without its key field, each one's write leaves the
 other's read incomplete. A watch whose refetch already answered a miss does not refetch
 when another write brings the same miss back. It keeps its last value, as Apollo Client
@@ -394,9 +508,53 @@ def renameLocally(client: ApolloClient): Maybe[String] < (Sync & Abort[CacheRead
 end renameLocally
 ```
 
+A local change that has no server operation behind it (a rename the user has not saved
+yet, a counter the client keeps) is an update. `updateOperation` reads an operation's
+result from the cache, applies a function to the typed value and writes the result
+back, in one atomic step; watches react as they do to a network response:
+
+```scala
+import kyo.apollo.cache.normalized.api.CacheKey
+
+def renameInCache(client: ApolloClient): Set[CacheKey] < Sync =
+    client.apolloStore.updateOperation(card) { data =>
+        (country = data.country.map(_.copy(name = "Deutschland")))
+    }
+```
+
+The function runs again when a concurrent write commits first, so it has to be pure. A
+result that is not cached leaves the store unchanged and returns no keys.
+
+`updateOperation` goes through an operation's root, so it only reaches records that
+operation reads. To change one record wherever it sits, address it by its key with a
+fragment, a typed selection on one type:
+
+```scala
+import kyo.apollo.cache.normalized.api.*
+
+val place = Fragment.of[Country](_ ~ Country.name ~ Country.capital)
+
+def moveCapitalLocally(client: ApolloClient): Set[CacheKey] < Sync =
+    client.apolloStore.updateFragment(place, CacheKey("Country", "DE")) { current =>
+        (name = current.name, capital = Present("Bonn"))
+    }
+```
+
+Every query that read `Country:DE` sees the new capital, whichever field led it there.
+`readFragment` and `writeFragment` read and write the same shape without a function.
+
 A mutation can show its result before the server answers: `optimisticUpdates(data)`
 writes `data` as a layer on top of the cache, watches see it at once, and the layer is
-replaced by the real response or dropped if the mutation fails.
+replaced by the real response or dropped if the mutation fails:
+
+```scala
+import kyo.apollo.network.ApolloResponse
+
+def moveToBonn(client: ApolloClient): ApolloResponse[(updateCapital: (code: String, capital: Maybe[String]))] < (Async & Scope) =
+    client.mutation(moveCapital)
+        .optimisticUpdates((updateCapital = (code = "DE", capital = Present("Bonn"))))
+        .execute
+```
 
 `garbageCollect` removes the records no operation root reaches any more. A live watch
 keeps the records of its last read, and `retain` keeps chosen records for as long as
@@ -415,39 +573,6 @@ def collectKeeping(client: ApolloClient): Set[CacheKey] < (Sync & Async) =
 
 `MemoryCache` also bounds the cache by record count (LRU) and expires records and
 fields by age (`expireAfterMillis`, `maxAge`).
-
-## Type conventions
-
-The module follows kyo's `CONTRIBUTING.md`: **model types and return types carry
-kyo data types; the standard library appears only as input.**
-
-- A nullable GraphQL field decodes to `Maybe[T]`, a list field to `Chunk[T]`
-  (`SelectionBuilder.Nesting`, `ScalarCodec.maybe` / `ScalarCodec.chunk`); the
-  named-tuple result of every query is therefore `Maybe`/`Chunk`-typed, and the
-  codegen emits the same types for selectors, input case classes and
-  argument defaults (`= Absent`).
-- `CompiledField.alias`/`stream`, `CompiledFragment.defer`, `DeferDirective.if`,
-  `StreamDirective.if` are `Maybe`; `selections`, `arguments`, `possibleTypes`
-  are `Chunk`.
-- `FieldPolicy(keyArgs: Maybe[Chunk[String]], read: Maybe[...], merge: Maybe[...])`;
-  a `FieldValueMerger` receives the existing value as `Maybe[RecordValue]`.
-- A union branch (`SelectionBuilder.onType`) decodes to `Maybe[A]`; a `@defer`
-  group to `Maybe[S]`.
-- The happy-path unwrap of a `Maybe` into a typed error channel is
-  `maybe.orFailWith(e: E)` (`MaybeOps`, `E <: ApolloException`).
-- Inputs that only collect values (`FieldPolicies.fromList(policies: Seq[...])`,
-  `ClientField.writeAll(values: Seq[...])`) accept any `Seq`, `Chunk` included.
-
-### Documented exceptions
-
-- **`Map[String, Json]`**: a JSON object (`Json.JObj`) is a keyed map by
-  definition; there is no kyo map type, and insertion order (which the printer
-  and the cache rely on) is kept with `scala.collection.immutable.VectorMap`.
-  The same holds for `variables: Map[String, Json]` and record field maps.
-- **`Set[String]`**: the set of changed record keys published after a write
-  (`NormalizedCache.merge`, `ChangedKeysSubject`, `ClientField.write*`) is a
-  membership set with no ordering; kyo has no `Set`, so `scala.collection.immutable.Set`
-  stays.
 
 ## HTTP layer
 
@@ -481,6 +606,8 @@ The engine seam itself exists because kyo-http's JS transport is bound to Node s
 and does not run in a browser: on JS/Wasm the engine sends through `fetch`, on
 JVM/Native it delegates to `kyo.HttpClient`.
 
+### Interceptors: authentication, batching, persisted queries, retries, logging
+
 Interceptors wrap the engine on two tiers. `addHttpInterceptor` adds an
 `HttpInterceptor`, which sees requests and responses on the wire
 (`AuthorizationHeaderInterceptor`, `LoggingInterceptor`, `BatchingHttpInterceptor`).
@@ -488,6 +615,29 @@ Interceptors wrap the engine on two tiers. `addHttpInterceptor` adds an
 streams (`AutoPersistedQueryInterceptor`, `RetryOnErrorInterceptor`, the cache).
 `LoggingInterceptor` writes no variable value: the `variables` of a JSON body are
 redacted and a `GET` request is logged without its query string.
+
+A client usually stacks several of them. The batching interceptor runs a window fiber,
+so it is created in a `Scope` like the client:
+
+```scala
+import kyo.apollo.interceptor.*
+
+val withInterceptors: ApolloClient.Config < (Sync & Scope) =
+    BatchingHttpInterceptor.init(batchInterval = 20.millis, maxBatchSize = 20).map { batching =>
+        config
+            .addHttpInterceptor(AuthorizationHeaderInterceptor("Bearer <token>"))
+            .addHttpInterceptor(batching)
+            .addInterceptor(AutoPersistedQueryInterceptor())
+            .addInterceptor(RetryOnErrorInterceptor(schedule = Schedule.exponentialBackoff(200.millis, 2.0, 5.seconds).take(3)))
+    }
+```
+
+Requests that arrive within 20 milliseconds of the first one then leave as one HTTP
+request, each
+query is sent as its hash first and in full only when the server does not know it, and
+a network failure or a 5xx status is retried three times with growing pauses.
+Subscriptions are never retried, and a GraphQL error is an answer, not a failure to
+retry.
 
 ## Devtools
 
@@ -520,31 +670,365 @@ the shared suites:
 `Upload(bytes, fileName, contentType)` carries a file as a `Span[Byte]` on every row;
 `UploadJs.fromFile` bridges a browser `File` on JS and Wasm.
 
+## Type conventions
+
+The module follows kyo's `CONTRIBUTING.md`: **model types and return types carry
+kyo data types; the standard library appears only as input.**
+
+- A nullable GraphQL field decodes to `Maybe[T]`, a list field to `Chunk[T]`
+  (`SelectionBuilder.Nesting`, `ScalarCodec.maybe` / `ScalarCodec.chunk`); the
+  named-tuple result of every query is therefore `Maybe`/`Chunk`-typed, and the
+  codegen emits the same types for selectors, input case classes and
+  argument defaults (`= Absent`).
+- `CompiledField.alias`/`stream`, `CompiledFragment.defer`, `DeferDirective.if`,
+  `StreamDirective.if` are `Maybe`; `selections`, `arguments`, `possibleTypes`
+  are `Chunk`.
+- `FieldPolicy(keyArgs: Maybe[Chunk[String]], read: Maybe[...], merge: Maybe[...])`;
+  a `FieldValueMerger` receives the existing value as `Maybe[RecordValue]`.
+- A union branch (`SelectionBuilder.onType`) decodes to `Maybe[A]`; a `@defer`
+  group to `Maybe[S]`.
+- The happy-path unwrap of a `Maybe` into a typed error channel is
+  `maybe.orFailWith(e: E)` (`MaybeOps`, `E <: ApolloException`).
+- Inputs that only collect values (`FieldPolicies.fromList(policies: Seq[...])`,
+  `ClientField.writeAll(values: Seq[...])`) accept any `Seq`, `Chunk` included.
+
+### Documented exceptions
+
+- **`Map[String, Json]`**: a JSON object (`Json.JObj`) is a keyed map by
+  definition, held in a `scala.collection.immutable.VectorMap`, which keeps the
+  insertion order the printer and the cache rely on. The same holds for
+  `variables: Map[String, Json]` and record field maps. kyo-data's `OrderedDict`
+  also keeps insertion order; moving the JSON model onto it is an open point.
+- **`Set[String]`**: the set of changed record keys published after a write
+  (`NormalizedCache.merge`, `ChangedKeysSubject`, `ClientField.write*`) is a
+  membership set with no ordering; kyo has no `Set`, so `scala.collection.immutable.Set`
+  stays.
+
+## Putting it together
+
+A screen that shows Germany's capital and lets the user change it combines most of the
+pieces above: a cached client behind authentication, batching and retries, a watch that
+renders every change, and a mutation whose result appears before the server confirms
+it. Failures leave the response on the `Abort[ApolloException]` row:
+
+```scala
+import kyo.apollo.cache.normalized.*
+import kyo.apollo.exception.*
+import kyo.apollo.interceptor.*
+
+def saveCapital(client: ApolloClient, capital: String): Maybe[String] < (Async & Scope & Abort[ApolloException]) =
+    val save = Mutations.updateCapital("DE", capital)(Country.code ~ Country.capital).toMutation()
+    client.mutation(save)
+        .optimisticUpdates((updateCapital = (code = "DE", capital = Present(capital))))
+        .execute
+        .map { response =>
+            response.error match
+                case Present(error) => Abort.fail(error)
+                case Absent         => response.data.map(_.updateCapital.capital).orFailWith(DefaultApolloException("no data"))
+        }
+end saveCapital
+
+def capitalPage(token: String): Maybe[String] < (Async & Scope & Abort[ApolloException]) =
+    for
+        batching <- BatchingHttpInterceptor.init()
+        client   <- ApolloClient.init(
+            cached
+                .addHttpInterceptor(AuthorizationHeaderInterceptor(s"Bearer $token"))
+                .addHttpInterceptor(batching)
+                .addInterceptor(RetryOnErrorInterceptor())
+        )
+        _ <- Fiber.init(client.query(card).fetchPolicy(FetchPolicy.CacheAndNetwork).watch().foreach { response =>
+            Log.info(s"capital: ${response.data.flatMap(_.country).flatMap(_.capital)}")
+        })
+        saved <- saveCapital(client, "Bonn")
+    yield saved
+```
+
+The watch logs its first result and then a line for every write that changes the
+`Country:DE` record it read. The optimistic layer is such a write, so "Bonn" is logged
+before the server has answered. When the page's `Scope` ends, the watch fiber, the
+batching window and the client close with it.
+
 ## Differences from Apollo Client and apollo-kotlin
 
-These differences are deliberate:
+kyo-apollo takes its engine from apollo-kotlin: the normalized cache, the interceptor
+chain and the WebSocket protocols behave as they do there. The fetch policies are
+apollo-kotlin's five plus Apollo Client's `NoCache` and `Standby`, and a `CacheFirst`
+refetch stops on a repeating miss as in Apollo Client 4.3. Where its API
+deviates from apollo-kotlin or from Apollo Client (the TypeScript client), the reason is
+one of three: a kyo convention (failures as values, resources owned by a `Scope`), a
+mistake the compiler can catch instead of the running program, or a lifetime that should
+not depend on a matching call. Each entry shows the other client's code, kyo-apollo's,
+and why they differ.
 
-- **One failure value.** GraphQL `errors` are not a separate response field: they
-  arrive as an `ApolloGraphQLException` in `ApolloResponse.error`, and
-  `ApolloResponse.errors` is a projection of it. Store reads fail on a typed
-  `Abort[CacheReadFailure]` row instead of throwing.
-- **A client is a scoped resource.** `ApolloClient.init` ties the client to a `Scope`,
-  and its configuration is an immutable `Config` value, not a mutable builder.
-- **No operation classes.** Operations are written inline against the schema's
-  selector objects, and their results are named tuples; kyo-apollo-codegen reads the
-  schema only, never operation documents.
-- **`RefetchPolicy` has three cases**, `CacheOnly`, `NetworkOnly` and `CacheFirst`,
-  where apollo-kotlin's `refetchPolicy` takes a whole `FetchPolicy`: only these three
-  mean something different for a watch.
-- **No field-level `cache.modify`.** A record is updated as a whole and typed, through
-  `ApolloStore.updateOperation` or `ApolloStore.updateFragment`.
-- **No fragment registry.** Fragments are values (`Fragment.entity`,
-  `Fragment.embedded`) that a selection imports and spreads; a printed document inlines
-  each spread as `... on Type { ... }` instead of a named `fragment` definition.
-- **A retain ends with its `Scope`** instead of a matching `release` call.
-- **Incremental delivery** requests `multipart/mixed; deferSpec=20220824` and also
-  reads the older single `{data, path}` patch shape.
-- **`ApolloResponse.complete` says whether more parts are coming**, not whether the data
-  is whole. Apollo Client's `dataState` narrows the result type at `@defer` boundaries.
-  Here a deferred field is `Maybe` in the result type already, so `complete` only tracks
-  the delivery, like Apollo Client's `NetworkStatus.streaming`.
+### One failure value instead of `exception` and `errors`
+
+apollo-kotlin 4 reports a failure in two fields, and a store read throws:
+
+```kotlin
+val response = apolloClient.query(CountryQuery(code = "DE")).execute()
+when {
+    response.exception != null -> showOffline(response.exception) // no response arrived
+    response.errors != null -> showErrors(response.errors)         // the server answered with errors
+    else -> showCountry(response.data?.country)
+}
+val cached = apolloClient.apolloStore.readOperation(CountryQuery(code = "DE")) // throws CacheMissException
+```
+
+In kyo-apollo, `ApolloResponse.error` is the only field to check. The server's errors
+arrive there as an `ApolloGraphQLException` (`response.errors` reads them as typed
+`GraphQLError`s), next to a partial `data` when the server sent one. A store read
+declares its miss on the `Abort[CacheReadFailure]` row:
+
+```scala
+import kyo.apollo.exception.*
+
+def capitalOrReason(client: ApolloClient): String < (Async & Scope) =
+    client.query(germany).execute.map { response =>
+        response.error match
+            case Present(error) => describe(error)
+            case Absent         => response.data.flatMap(_.country).flatMap(_.capital).getOrElse("no capital")
+    }
+```
+
+**Why:** two fields mean two places to forget. `ApolloException` is sealed, so `describe`
+(in [Failures](#failures)) is checked for exhaustiveness, and a new failure case is
+reported by the compiler at every match that misses it, instead of falling into the
+`else` branch. A store read whose type names its
+failure cannot be called as if it always succeeded, and `Abort.fail(error)` moves a
+response failure onto the same row kyo code already handles.
+
+### The client is a scoped resource, configured by a value
+
+apollo-kotlin's client is `Closeable`, and closing it covers the client alone:
+
+```kotlin
+ApolloClient.Builder()
+    .serverUrl("https://countries.example/graphql")
+    .build()
+    .use { apolloClient -> run(apolloClient) }
+```
+
+kyo-apollo creates the client in a `Scope` (`ApolloClient.init`, or `ApolloClient.use`
+for a block), and its configuration is an immutable `Config`:
+
+```scala
+val tenantA = config.addHttpHeader("X-Tenant", "a")
+val tenantB = config.addHttpHeader("X-Tenant", "b")
+
+def perTenant: (ApolloClient, ApolloClient) < (Sync & Scope) =
+    for
+        a <- ApolloClient.init(tenantA)
+        b <- ApolloClient.init(tenantB)
+    yield (a, b)
+```
+
+**Why:** a client owns a WebSocket, fibers and, with batching, a window fiber, and the
+watches, subscriptions and retains created from it are resources too. In a `Scope` they
+all close on every exit, an interrupt included, without one `use` block per resource. A
+`Config` value can be derived per tenant or per test without a builder and without one
+variant seeing the other's headers.
+
+> **Note:** a `Config` with `normalizedCache` carries its store, so tenants derived from
+> a cached `Config` share one cache. Install the cache per tenant when their data must
+> not mix.
+
+### Operations are Scala values, not generated classes
+
+apollo-kotlin generates a class per operation from a `.graphql` file:
+
+```graphql
+# src/main/graphql/Country.graphql
+query Country($code: ID!) {
+  country(code: $code) { code name capital }
+}
+```
+
+```kotlin
+val response = apolloClient.query(CountryQuery(code = "DE")).execute()
+val capital: String? = response.data?.country?.capital
+```
+
+kyo-apollo writes the same operation in Scala, against selectors generated from the
+schema alone:
+
+```scala
+def countryQuery(code: String) = Queries.country(code)(Country.code ~ Country.name ~ Country.capital).toQuery()
+
+val nameOnly = Queries.countries(Country.name).toQuery()
+```
+
+**Why:** the codegen runs when the schema changes, not when an operation does, so adding
+or changing an operation needs no build step. An operation is an ordinary value: a
+function can build it from parameters (`countryQuery`), and a selection can be shared
+between operations. Each result type is a named tuple of exactly the selected fields, so
+`nameOnly` has no `capital` to read by mistake, and there are no near-identical `Country`
+classes per operation to convert between.
+
+### `RefetchPolicy` is its own type with three cases
+
+apollo-kotlin passes a `FetchPolicy` for what a watch does when the cache changes:
+
+```kotlin
+apolloClient.query(CountryQuery(code = "DE"))
+    .refetchPolicy(FetchPolicy.CacheFirst)
+    .watch()
+```
+
+kyo-apollo has `RefetchPolicy.CacheOnly` (re-read, the default), `NetworkOnly` (ask the
+server) and `CacheFirst` (re-read, ask the server on a miss); `fetchPolicy` keeps all
+seven cases for the first result:
+
+```scala
+def germanyLive(client: ApolloClient) =
+    client.query(germany)
+        .fetchPolicy(FetchPolicy.CacheAndNetwork)
+        .refetchPolicy(RefetchPolicy.CacheFirst)
+        .watch()
+```
+
+**Why:** apollo-kotlin's `refetchPolicy` takes its five-case `FetchPolicy`, though a
+refetch starts after a write has already changed the cache, so only three reactions
+are distinct: re-read, ask the server, or ask only on a miss. `CacheAndNetwork` as a
+refetch would emit the value it just re-read and then ask the server anyway. A type
+with exactly those three cases rejects the others at compile time.
+
+### Typed updates instead of `cache.modify`
+
+Apollo Client changes single fields by name, through a callback per field:
+
+```ts
+// with typePolicies: { Country: { keyFields: ["code"] } }
+cache.modify({
+  id: cache.identify({ __typename: "Country", code: "DE" }),
+  fields: { capital: () => "Bonn" },
+});
+```
+
+kyo-apollo updates a typed value, either an operation's result or one record through a
+fragment (see [Normalized cache](#normalized-cache)):
+
+```scala
+import kyo.apollo.cache.normalized.api.*
+
+def bonn(client: ApolloClient): Set[CacheKey] < Sync =
+    client.apolloStore.updateFragment(place, CacheKey("Country", "DE"))(current => (name = current.name, capital = Present("Bonn")))
+```
+
+**Why:** `cache.modify` addresses fields by name. With its `cache.modify<Country>` type
+parameter TypeScript checks those names, but the modifier still receives the raw stored
+value (a reference, for an object field), so writing a nested object means building the
+cache's representation by hand. Here the update receives and returns the selection's
+own typed value, nested objects included. The update is one atomic step that is
+re-applied when a concurrent write wins, and it publishes the changed records to watches
+exactly as a server response does.
+
+### Fragments are values, without a registry
+
+Apollo Client shares a fragment by name, through a registry the cache is created with:
+
+```ts
+const cache = new InMemoryCache({
+  fragments: createFragmentRegistry(gql`
+    fragment CountryPlace on Country { name capital }
+  `),
+});
+// query Germany { country(code: "DE") { code ...CountryPlace } }
+```
+
+kyo-apollo's fragments are values (`Fragment.of`, and `Fragment.entity` /
+`Fragment.embedded` for masked fragments) that an operation references like any other
+Scala value:
+
+```scala
+object CountryPlace:
+    val fields = Fragment.entity[Country](_ ~ Country.name ~ Country.capital)
+
+val germanyWithPlace = Queries.country("DE")(Country.code ~ CountryPlace.fields.spread).toQuery()
+```
+
+<!-- doctest:scope=inherited
+```scala
+val placeIsLabelled: kyo.apollo.api.Query.Normalizable[(country: Maybe[(code: String, countryPlace: CountryPlace.fields.Ref)])] =
+    germanyWithPlace
+```
+-->
+
+The printed document carries the fragment's fields directly in the selection; the
+server never sees a `fragment` definition. A masked spread decodes to an opaque
+`CountryPlace.fields.Ref` under the field `countryPlace`, so only code that owns the
+fragment reads its fields.
+
+**Why:** a misspelled fragment name in a document string is found at runtime. A
+fragment value that does not exist is a compile error, the IDE navigates to its
+definition, and no registry has to be set up before the first query runs.
+
+### A retain ends with its `Scope`
+
+Apollo Client keeps a record from garbage collection between two calls:
+
+```ts
+cache.retain("Country:DE");
+// ...
+cache.release("Country:DE");
+```
+
+kyo-apollo's `retain` holds the records for as long as the enclosing `Scope` is open.
+Once `Scope.run` returns, the retain is gone, so the collection after it may remove
+`Country:DE` if no operation root reaches it:
+
+```scala
+def collectAfterLeaving(client: ApolloClient): Set[CacheKey] < (Sync & Async) =
+    Scope.run(client.apolloStore.retain(Set(CacheKey("Country", "DE"))))
+        .andThen(client.apolloStore.garbageCollect)
+```
+
+**Why:** a `release` that an exception or an early return skips keeps the record for the
+life of the cache. A `Scope` runs the release on every exit.
+
+### Incremental delivery reads two formats
+
+apollo-kotlin requests `multipart/mixed; deferSpec=20220824`, and Apollo Client 4 does
+when it is configured with `incrementalHandler: new Defer20220824Handler()`. That
+format's parts carry an `incremental` array:
+
+```json
+{"incremental": [{"data": {"capital": "Berlin"}, "path": ["country"]}], "hasNext": false}
+```
+
+kyo-apollo requests the same format and also reads the older single-patch shape:
+
+```json
+{"data": {"capital": "Berlin"}, "path": ["country"], "hasNext": false}
+```
+
+**Why:** servers built on the earlier draft of `@defer` still send the second shape, and
+a client that reads both works against either. The GraphQL 17 `pending`/`completed`
+format, which Apollo Client 4.1+ reads through `GraphQL17Alpha9Handler`, is not read: a
+server that sends only that format does not work with kyo-apollo.
+
+### `complete` tracks the delivery, not the data
+
+Apollo Client 4 narrows the result type with `dataState`, which says whether deferred
+parts are still missing:
+
+```ts
+const { data, dataState } = useQuery(GERMANY_WITH_DEFERRED_CAPITAL);
+if (dataState === "complete") render(data.country?.capital);
+```
+
+In kyo-apollo a deferred field is already `Maybe` in the result type, so
+`ApolloResponse.complete` only says whether more parts are coming, like Apollo Client's
+`NetworkStatus.streaming`:
+
+```scala
+def finalCapital(client: ApolloClient): Chunk[Maybe[String]] < (Async & Scope) =
+    client.query(progressive).stream
+        .filter(_.complete)
+        .map(_.data.flatMap(_.country).flatMap(_.capital).flatMap(identity))
+        .run
+```
+
+**Why:** the type already forces the code to handle a part that has not arrived, so a
+second flag for the same fact would only repeat it. `complete` answers the one question
+the type cannot: whether to keep waiting.
