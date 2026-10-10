@@ -1,7 +1,9 @@
 package kyo.apollo.runtime
 
 import kyo.*
+import kyo.apollo.exception.DefaultApolloException
 import kyo.apollo.network.ApolloResponse
+import kyo.apollo.network.Uuid
 
 /** The asynchronous **effect/result contract** for executing one GraphQL
   * operation — the value an [[kyo.apollo.interceptor.ApolloInterceptor]] chain is
@@ -50,13 +52,24 @@ trait ApolloCall[D]:
       * so the two can never disagree: it takes the first emission.
       *
       * The effect carries a transport/GraphQL error *inside*
-      * `ApolloResponse.error` (a value); it raises outright only if the stream
-      * completes without emitting (a `NoSuchElementException`) or the chain raises a
-      * wiring error.
+      * `ApolloResponse.error` (a value). A stream that ends without emitting
+      * (`FetchPolicy.Standby` on a cache miss) is answered the same way: a response
+      * whose error says no response arrived, under a request id of its own, since
+      * no request reached the chain's end. Only a wiring error of the chain raises.
       */
     def execute(using
         Frame,
         Tag[Emit[Chunk[ApolloResponse[D]]]]
     ): ApolloResponse[D] < (Async & Scope) =
-        stream.take(1).run.map(_.head)
+        stream.take(1).run.map { responses =>
+            responses.headMaybe match
+                case Present(response) => response
+                case Absent            =>
+                    Uuid.random.map(ApolloResponse.fromException[D](
+                        _,
+                        DefaultApolloException(
+                            "no response: the call's stream ended without emitting (FetchPolicy.Standby emits nothing on a cache miss)"
+                        )
+                    ))
+        }
 end ApolloCall

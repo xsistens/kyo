@@ -450,9 +450,9 @@ Each call picks a `FetchPolicy`, by how fresh the result has to be:
 - `NoCache` neither reads nor writes the cache: a one-off request whose answer should
   not reach any watch.
 
-> **Caution:** `Standby` on a miss produces an empty stream, and `execute` takes the
-> first element of the stream, so `.fetchPolicy(FetchPolicy.Standby).execute` panics
-> with a `NoSuchElementException` on a miss. Use `Standby` with `watch()` or `stream`.
+> **Note:** `Standby` on a miss produces an empty stream, so `execute`, which waits for
+> one response, answers with a response whose `error` says no response arrived. Use
+> `Standby` with `watch()` or `stream` to wait for someone else to fill the cache.
 
 `watch()` turns a query into a live stream: it emits the first result under the call's policy
 and emits again whenever a record that result was read from changes, whether a
