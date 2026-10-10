@@ -3,7 +3,8 @@
 # A small "countries" domain (inspired by the public countries.trevorblades.com
 # API) extended with a Mutation and a Subscription so the generator's fixtures
 # cover ALL three GraphQL operation kinds. It also intentionally exercises every
-# kind of type the generator emits: a custom scalar (`DateTime`), enums
+# kind of type the generator emits: a custom scalar (`DateTime`), the file scalar
+# (`Upload`), enums
 # (`Continent`, `Color`), input object types (`CountryFilter`, `UpdateCountryInput`),
 # an interface (`Node`), a union (`SearchResult`), list/non-null wrappers, and
 # nullable fields.
@@ -14,6 +15,9 @@
 
 "An ISO-8601 timestamp — a custom scalar, mapped to a Scala type via scalarMapping."
 scalar DateTime
+
+"A file, per the GraphQL multipart request spec; generated as `kyo.apollo.Upload` when unmapped."
+scalar Upload
 
 "The seven continents; generated as a Scala 3 `enum` with a string-transform `Schema`."
 enum Continent {
@@ -128,6 +132,8 @@ type Query {
 type Mutation {
   "Mutate a country and return the updated record."
   updateCountry(input: UpdateCountryInput!): Country!
+  "Attach a flag image to a country; the file travels as a multipart part."
+  uploadFlag(code: ID!, file: Upload!): Country!
 }
 
 type Subscription {
