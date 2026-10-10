@@ -957,7 +957,18 @@ val placeIsLabelled: kyo.apollo.api.Query.Normalizable[(country: Maybe[(code: St
 The printed document carries the fragment's fields directly in the selection; the
 server never sees a `fragment` definition. A masked spread decodes to an opaque
 `CountryPlace.fields.Ref` under the field `countryPlace`, so the parent operation
-cannot read the fragment's fields through it.
+cannot read the fragment's fields through it. The code that declared the fragment
+opens the ref: `ref.value` gives the fields as the response delivered them,
+`apolloStore.readFragment(ref)` reads the record as the cache holds it now, and
+`apolloStore.watchFragment(ref)` follows it, emitting again whenever a write changes
+it:
+
+```scala
+def renderPlace(client: ApolloClient, ref: CountryPlace.fields.Ref): Unit < (Async & Scope & Abort[ApolloParseException]) =
+    client.apolloStore.watchFragment(ref).foreach { place =>
+        Log.info(s"${place.name}: ${place.capital.getOrElse("no capital")}")
+    }
+```
 
 **Why:** a misspelled fragment name in a document string is found at runtime. A
 fragment value that does not exist is a compile error, the IDE navigates to its
