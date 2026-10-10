@@ -101,6 +101,18 @@ extension [D](call: ApolloCall[D])
                 var active                = true
                 var watchSet: Set[String] = Set.empty
 
+                // Feud stop (Apollo Client 4.3, #13406): two `CacheFirst` watchers whose
+                // writes leave each other's read incomplete would otherwise refetch in turn
+                // forever. `lastMiss` is the miss the running or last successful refetch
+                // answered; the same miss again is dropped, keeping the last emitted value.
+                // It is cleared by a failed refetch and by a complete read that the
+                // watcher's own refetch did not cause (Apollo never broadcasts a query's
+                // write back to itself), and an imperative removal since then re-arms it.
+                // Unlike the state above, this is touched from the refetch fiber too (on the
+                // JVM another thread), so it lives in atomics.
+                val ownRefetches = AtomicInt.Unsafe.init(0)
+                val feud         = AtomicRef.Unsafe.init(FeudState.Idle)
+
                 def offer(response: ApolloResponse[D]): Unit =
                     val _ = channel.unsafe.offer(response)
 
@@ -142,6 +154,7 @@ extension [D](call: ApolloCall[D])
                     Try(store.readOperationWithKeys(request.operation)) match
                         case Success((data, keys)) =>
                             watchSet = keys
+                            if ownRefetches.get() == 0 then feud.set(FeudState.Idle) else markAnswered()
                             if active then offer(CacheResponses.hit(request, data, keys))
                         case Failure(cause) => onMiss(cause)
 
@@ -149,13 +162,58 @@ extension [D](call: ApolloCall[D])
                 def emitMiss(cause: Throwable): Unit =
                     if active && watchSet.nonEmpty then offer(CacheResponses.miss(request, cause))
 
+                def refetchOnMiss(cause: Throwable): Unit =
+                    // A CacheMissException's message names the record and field that are missing.
+                    val miss = (s"${cause.getClass.getName}: ${cause.getMessage}", store.destructiveWrites)
+                    // `getAndUpdate` applies the transition atomically; the decision is read
+                    // off the state it replaced, so exactly one caller refetches or warns. A
+                    // repeat before the refetch answered is covered by it; only a repeat after
+                    // the answer landed is a feud.
+                    val prev = feud.getAndUpdate(s =>
+                        if !s.lastMiss.contains(miss) then FeudState(Present(miss), answered = false, warned = false)
+                        else if s.answered then s.copy(warned = true)
+                        else s
+                    )
+                    if !prev.lastMiss.contains(miss) then
+                        refetchOverNetwork { written =>
+                            if !written then discard(feud.getAndUpdate(s => if s.lastMiss.contains(miss) then FeudState.Idle else s))
+                        }
+                    else if prev.answered && !prev.warned then
+                        store.cacheDiagnostics.feudStopped(request.operation.name, cause.getMessage)
+                    end if
+                end refetchOnMiss
+
+                // The refetch's data reached the store: a repeat of the miss from here on
+                // means another write broke the read again.
+                def markAnswered(): Unit =
+                    discard(feud.getAndUpdate(s => if s.lastMiss.isDefined then s.copy(answered = true) else s))
+
                 // NetworkOnly update: re-run the operation over the network (which writes
                 // the response back into the store) and emit the networked value.
-                def refetchOverNetwork(): Unit =
+                // `onSettled` learns whether a response with data reached the store. It runs
+                // once, before the final response is emitted (the `ensure` only covers an
+                // interrupted stream), so whoever sees that emission sees the refetch settled.
+                def refetchOverNetwork(onSettled: Boolean => Unit = _ => ()): Unit =
                     val networked = request.newBuilder
                         .addExecutionContext(ExecutionContext.Empty + FetchPolicy.NetworkOnly)
                         .build()
-                    spawn(client.executeAsStream(networked))
+                    var written = false
+                    val settled = AtomicBoolean.Unsafe.init(false)
+                    def settle(): Unit =
+                        if settled.compareAndSet(false, true) then
+                            discard(ownRefetches.decrementAndGet())
+                            onSettled(written)
+                    discard(ownRefetches.incrementAndGet())
+                    val run = Sync.ensure(Sync.defer(settle())) {
+                        client.executeAsStream(networked).foreach { response =>
+                            if response.data.isDefined && !response.hasTransportError then
+                                written = true
+                                markAnswered()
+                            if response.complete || response.hasTransportError then settle()
+                            emitFresh(response)
+                        }
+                    }
+                    val _ = Fiber.Unsafe.init[Throwable, Unit](Scope.run(run))
                 end refetchOverNetwork
 
                 def onChangedKeys(changedKeys: Set[String]): Unit =
@@ -163,7 +221,7 @@ extension [D](call: ApolloCall[D])
                         refetchPolicy match
                             case RefetchPolicy.CacheOnly   => reread(emitMiss)
                             case RefetchPolicy.NetworkOnly => refetchOverNetwork()
-                            case RefetchPolicy.CacheFirst  => reread(_ => refetchOverNetwork())
+                            case RefetchPolicy.CacheFirst  => reread(refetchOnMiss)
 
                 // Subscribe to the store *before* the initial fetch so a write landing
                 // during the fetch is never missed; the empty `watchSet` guards against
@@ -184,3 +242,13 @@ extension [D](call: ApolloCall[D])
         }
     end watch
 end extension
+
+/** A `CacheFirst` watcher's feud-stop state: the miss its running or last successful
+  * refetch is for (with the store's removal count at that time), whether that
+  * refetch's data has reached the store, and whether a repeat after that was already
+  * reported. Immutable, so one `AtomicRef` swap moves all three.
+  */
+final private case class FeudState(lastMiss: Maybe[(String, Long)], answered: Boolean, warned: Boolean)
+
+private object FeudState:
+    val Idle: FeudState = FeudState(Absent, answered = false, warned = false)

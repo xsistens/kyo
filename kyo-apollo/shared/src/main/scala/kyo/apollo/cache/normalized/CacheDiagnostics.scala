@@ -11,8 +11,12 @@ import kyo.apollo.json.Json
   * entitled to refuse. Handed to [[ApolloStore]] like the other policies, and
   * [[CacheDiagnostics.off]] by default.
   *
-  * There is exactly one warning today, and it is the hazard that comes with storing an
-  * object that has no identity: such an object is addressed by its INDEX under its
+  * Both warnings are about objects stored without an identity. The second,
+  * [[feudStopped]], is the watcher-side symptom: two operations select the same
+  * id-less object differently, each write leaves the other's read incomplete, and a
+  * `CacheFirst` watcher stops refetching rather than loop.
+  *
+  * The first is the hazard that comes with such an object inside a list: it is addressed by its
   * parent ([[kyo.apollo.cache.normalized.internal.Normalizer]]), so a write of a
   * reordered or shortened list merges element-wise into the slot the previous element
   * held. Fields the new occupant did not mention survive from the old one, and the read
@@ -75,6 +79,22 @@ final case class CacheDiagnostics(sink: Maybe[String => Unit]):
                     end if
                 }
             end if
+        }
+
+    /** Report that a `CacheFirst` watcher on `operationName` dropped a miss it had
+      * already refetched once — Apollo Client 4.3's "stopped refetching" warning.
+      * Emitted once per feud; the watcher re-arms it when the miss changes.
+      */
+    private[normalized] def feudStopped(operationName: String, missing: String): Unit =
+        sink.foreach { emit =>
+            emit(
+                s"kyo-apollo: stopped refetching '$operationName' because the same incomplete cache " +
+                    s"result was already refetched ($missing). Another operation is most likely " +
+                    s"overwriting an object this one selects without its key field, so each write " +
+                    s"leaves the other's read incomplete. Select the key field in every operation " +
+                    s"that writes the object, declare a cache identity for its type, or give the " +
+                    s"field a merge policy so partial writes combine."
+            )
         }
 end CacheDiagnostics
 

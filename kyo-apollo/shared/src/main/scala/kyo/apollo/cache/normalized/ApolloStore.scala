@@ -1,5 +1,7 @@
 package kyo.apollo.cache.normalized
 
+import kyo.AllowUnsafe
+import kyo.AtomicLong
 import kyo.Maybe
 import kyo.Present
 import kyo.apollo.api.JsonCodec
@@ -55,6 +57,17 @@ final class ApolloStore(
       * directly. Empty of subscribers until a caller opts in.
       */
     val changedKeys: ChangedKeysSubject = new ChangedKeysSubject
+
+    /** Bumped by every imperative removal ([[remove]], [[evict]], [[clearAll]]). A
+      * `CacheFirst` watcher that stopped refetching a repeating miss resumes once this
+      * moves: the miss now stems from an invalidation, not from a feuding write.
+      */
+    private given AllowUnsafe    = AllowUnsafe.embrace.danger
+    private val destructiveCount = AtomicLong.Unsafe.init(0L)
+
+    private[normalized] def destructiveWrites: Long = destructiveCount.get()
+
+    private[normalized] def cacheDiagnostics: CacheDiagnostics = diagnostics
 
     /** Optimistic record layers, keyed by mutation id and stacked in application
       * order. Each layer is the set of records (by key) a mutation wrote
@@ -465,7 +478,9 @@ final class ApolloStore(
       */
     def remove(key: String): Boolean =
         val removed = cache.remove(key)
-        if removed then publish(Set(key))
+        if removed then
+            discard(destructiveCount.incrementAndGet())
+            publish(Set(key))
         removed
     end remove
 
@@ -547,7 +562,9 @@ final class ApolloStore(
         val removed =
             if !cascade then if cache.remove(cacheKey.key) then Set(cacheKey.key) else Set.empty
             else cascadeEvict(cacheKey.key)
-        if removed.nonEmpty then publish(removed)
+        if removed.nonEmpty then
+            discard(destructiveCount.incrementAndGet())
+            publish(removed)
         removed
     end evict
 
@@ -574,7 +591,9 @@ final class ApolloStore(
     end cascadeEvict
 
     /** Drop every record from the backing cache. */
-    def clearAll(): Unit = cache.clearAll()
+    def clearAll(): Unit =
+        discard(destructiveCount.incrementAndGet())
+        cache.clearAll()
 
     /** Encode typed `data` into its response `data` map through its [[JsonCodec]] —
       * the write-side inverse of the decode the transport performs, so normalization
