@@ -41,7 +41,7 @@ class WatcherSpec extends kyo.test.Test[Any]:
         def name                           = "CurrentUser"
         def document                       = "query CurrentUser { user { __typename id name } }"
         val dataCodec: JsonCodec[UserData] = JsonCodec.fromSchema[UserData]
-        def rootField: CompiledField =
+        def rootField: CompiledField       =
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
@@ -68,7 +68,7 @@ class WatcherSpec extends kyo.test.Test[Any]:
       */
     object UserFragment extends Fragment[User]:
         val dataCodec: JsonCodec[User] = JsonCodec.fromSchema[User]
-        def rootField: CompiledField =
+        def rootField: CompiledField   =
             CompiledField(
                 "user",
                 CompiledNamedType("User"),
@@ -116,10 +116,13 @@ class WatcherSpec extends kyo.test.Test[Any]:
                 if n == 1 then response
                 else
                     Sync.ensure { (error: Maybe[Result.Error[Any]]) =>
+                        // Ended from outside is a panic: `Interrupted` when the stop reaches a running slice, the kernel's
+                        // "fiber abandoned" when the fiber is released while parked here on the gate. This call never
+                        // panics on its own, so either one is the close reaching it.
                         val how = error match
-                            case Absent                                => "answered"
-                            case Present(Result.Panic(_: Interrupted)) => "interrupted"
-                            case Present(_)                            => "failed"
+                            case Absent                     => "answered"
+                            case Present(Result.Panic(_))   => "interrupted"
+                            case Present(Result.Failure(_)) => "failed"
                         ended.fold(Kyo.unit)(_.completeDiscard(Result.succeed(how)))
                     }(arrived.release.andThen(gate.await).andThen(response))
                 end if
@@ -407,7 +410,7 @@ class WatcherSpec extends kyo.test.Test[Any]:
                 calls  <- AtomicInt.init(0)
                 client <- cachedClient(DefectEngine(calls, defective = 2))
                 _      <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                watch <- ObservedWatch.open(
+                watch  <- ObservedWatch.open(
                     query(client)
                         .fetchPolicy(FetchPolicy.CacheOnly)
                         .refetchPolicy(RefetchPolicy.NetworkOnly)
@@ -500,7 +503,7 @@ class WatcherSpec extends kyo.test.Test[Any]:
             for
                 client <- cachedClient(CountingEngine(), cache)
                 _      <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                _ <- cache.arm(CacheKey("User", "1")) {
+                _      <- cache.arm(CacheKey("User", "1")) {
                     client.apolloStore.writeFragment(UserFragment, CacheKey("User", "1"), User("User", "1", "Bob")).unit
                 }
                 pull   <- StreamProbe.Pull.open(query(client).fetchPolicy(FetchPolicy.CacheOnly).watch())
@@ -529,7 +532,7 @@ class WatcherSpec extends kyo.test.Test[Any]:
             for
                 client  <- cachedClient(engine)
                 written <- AtomicBoolean.init(false)
-                watch <- ObservedWatch.open(
+                watch   <- ObservedWatch.open(
                     query(client).fetchPolicy(FetchPolicy.NetworkOnly),
                     onOffered = _ =>
                         written.compareAndSet(false, true).map { first =>
@@ -571,7 +574,7 @@ class WatcherSpec extends kyo.test.Test[Any]:
             for
                 client <- cachedClient(engine)
                 _      <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                watch <- ObservedWatch.open(
+                watch  <- ObservedWatch.open(
                     query(client)
                         .fetchPolicy(FetchPolicy.CacheOnly)
                         .refetchPolicy(RefetchPolicy.CacheFirst)
@@ -603,7 +606,7 @@ class WatcherSpec extends kyo.test.Test[Any]:
                     calls  <- AtomicInt.init(0)
                     client <- cachedClient(SleepingEngine(clock, calls), cache)
                     _      <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                    watch <- ObservedWatch.open(
+                    watch  <- ObservedWatch.open(
                         query(client)
                             .fetchPolicy(FetchPolicy.CacheOnly)
                             .refetchPolicy(RefetchPolicy.CacheFirst)
@@ -652,7 +655,7 @@ class WatcherSpec extends kyo.test.Test[Any]:
             for
                 client <- cachedClient(engine)
                 _      <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                watch <- ObservedWatch.open(
+                watch  <- ObservedWatch.open(
                     query(client)
                         .fetchPolicy(FetchPolicy.CacheOnly)
                         .refetchPolicy(RefetchPolicy.CacheFirst)
@@ -694,7 +697,7 @@ class WatcherSpec extends kyo.test.Test[Any]:
                 gate    <- Latch.init(1)
                 client  <- cachedClient(GatedEngine(calls, arrived, gate))
                 _       <- query(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
-                watch <- ObservedWatch.open(
+                watch   <- ObservedWatch.open(
                     query(client)
                         .fetchPolicy(FetchPolicy.CacheOnly)
                         .refetchPolicy(RefetchPolicy.NetworkOnly)

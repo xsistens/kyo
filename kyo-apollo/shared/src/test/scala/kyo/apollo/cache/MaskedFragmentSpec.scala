@@ -148,7 +148,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
         }
 
         "the ref carries the RESPONSE __typename, so an interface fragment keys the concrete type" in {
-            val q = countryField(GCountry.code ~ CountryCard.fields.spread).toQuery("Q")
+            val q    = countryField(GCountry.code ~ CountryCard.fields.spread).toQuery("Q")
             val body =
                 """{"country":{"__typename":"SpecialCountry","code":"DE","name":"Germany","capital":null}}"""
             val ref = q.dataCodec.decode(parse(body)).getOrThrow.country.countryCard
@@ -164,7 +164,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             val q       = countryField(GCountry.code ~ CountryCard.fields.spread).toQuery("Q")
             val germany = q.dataCodec.decode(parse(germanyBody)).getOrThrow.country.countryCard
             val again   = q.dataCodec.decode(parse(germanyBody)).getOrThrow.country.countryCard
-            val france = q.dataCodec.decode(
+            val france  = q.dataCodec.decode(
                 parse("""{"country":{"__typename":"Country","code":"FR","name":"France","capital":"Paris"}}""")
             ).getOrThrow.country.countryCard
             assert(germany == again)
@@ -294,7 +294,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
     "embedded fragments" - {
 
         "spread decodes to a value-carrying ref with no cache key" in {
-            val q = pageInfoField(GPageInfo.hasNextPage ~ PageBadge.fields.spread).toQuery("Q")
+            val q    = pageInfoField(GPageInfo.hasNextPage ~ PageBadge.fields.spread).toQuery("Q")
             val body =
                 """{"pageInfo":{"__typename":"PageInfo","hasNextPage":true,"endCursor":"c42"}}"""
             val decoded                   = q.dataCodec.decode(parse(body)).getOrThrow
@@ -340,7 +340,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
             val decoded = q.dataCodec.decode(parse(germanyBody)).getOrThrow
             val ref     = decoded.country.countryCard
             for
-                _ <- s.writeOperation(q, decoded)
+                _    <- s.writeOperation(q, decoded)
                 read <- Abort.run[CacheReadFailure](
                     s.keyOf(ref.typeName, ref.raw).map(s.readFragment(CountryCard.fields.cacheFragment, _))
                 )

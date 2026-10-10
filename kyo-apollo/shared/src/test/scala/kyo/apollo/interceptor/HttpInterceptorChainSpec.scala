@@ -42,7 +42,7 @@ class HttpInterceptorChainSpec extends kyo.test.Test[Any]:
         }
 
         "AuthorizationHeaderInterceptor appends the auth header before the engine" in {
-            var got = Option.empty[HttpEngine.Request]
+            var got   = Option.empty[HttpEngine.Request]
             val chain = DefaultHttpInterceptorChain(
                 Chunk(AuthorizationHeaderInterceptor("Bearer t0ken")),
                 0,
@@ -54,7 +54,7 @@ class HttpInterceptorChainSpec extends kyo.test.Test[Any]:
         }
 
         "AuthorizationHeaderInterceptor honours a custom header name" in {
-            var got = Option.empty[HttpEngine.Request]
+            var got   = Option.empty[HttpEngine.Request]
             val chain = DefaultHttpInterceptorChain(
                 Chunk(AuthorizationHeaderInterceptor("k3y", headerName = "X-Api-Key")),
                 0,
@@ -66,7 +66,7 @@ class HttpInterceptorChainSpec extends kyo.test.Test[Any]:
         }
 
         "interceptors run in registration order, wrapping the engine" in {
-            var order = List.empty[String]
+            var order              = List.empty[String]
             val a: HttpInterceptor = new HttpInterceptor:
                 def intercept(req: HttpEngine.Request, next: HttpInterceptorChain)(using
                     Frame
@@ -96,7 +96,7 @@ class HttpInterceptorChainSpec extends kyo.test.Test[Any]:
         }
 
         "asEngine runs the request through the chain as a plain HttpEngine" in {
-            var got = Option.empty[HttpEngine.Request]
+            var got    = Option.empty[HttpEngine.Request]
             val engine = HttpInterceptorChain.asEngine(
                 List(AuthorizationHeaderInterceptor("Bearer z")),
                 recordingEngine(r => got = Some(r))

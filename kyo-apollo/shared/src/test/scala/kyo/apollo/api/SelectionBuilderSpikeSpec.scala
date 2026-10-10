@@ -122,7 +122,7 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
         def f10: SelectionBuilder.Deferrable[Wide, (f10: Int)]           = int("f10")
         def g1: SelectionBuilder.Deferrable[Wide, (g1: Maybe[String])]   = text("g1")
         def g2: SelectionBuilder.Deferrable[Wide, (g2: Int)]             = int("g2")
-        def f12: SelectionBuilder.Deferrable[Wide, (f12: Int)] =
+        def f12: SelectionBuilder.Deferrable[Wide, (f12: Int)]           =
             SelectionBuilder.scalar(
                 "f12",
                 CompiledNamedType("Int").notNull,
@@ -136,7 +136,7 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
         def f17: SelectionBuilder.Deferrable[Wide, (f17: Int)]           = int("f17")
         def f18: SelectionBuilder.Deferrable[Wide, (f18: Int)]           = int("f18")
         def f19: SelectionBuilder.Deferrable[Wide, (f19: Int)]           = int("f19")
-        def f20: SelectionBuilder.Deferrable[Wide, (f20: Int)] =
+        def f20: SelectionBuilder.Deferrable[Wide, (f20: Int)]           =
             SelectionBuilder.scalar(
                 "f20",
                 CompiledNamedType("Int").notNull,
@@ -261,7 +261,7 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
 
             val before = Seq("f01" -> int(1), "f02" -> int(2), "f03" -> int(3), "f04" -> int(4), "f05" -> Json.JNull)
             val middle = Seq("f06" -> int(6), "f07" -> Json.JStr("seven"), "f08" -> int(8), "f09" -> int(9))
-            val after = Seq(
+            val after  = Seq(
                 "f12" -> int(12),
                 "f13" -> int(13),
                 "f14" -> int(14),

@@ -35,7 +35,7 @@ class DeferSpec extends kyo.test.Test[Any]:
         def name: String               = "Q"
         def document: String           = "query Q { country { code ... @defer(label: \"capital\") { capital } } }"
         val dataCodec: JsonCodec[Data] = JsonCodec.fromSchema[Data]
-        def rootField: CompiledField = CompiledField(
+        def rootField: CompiledField   = CompiledField(
             "data",
             CompiledNamedType("Query"),
             selections = Chunk(
@@ -87,7 +87,7 @@ class DeferSpec extends kyo.test.Test[Any]:
         HttpNetworkTransport("https://x/graphql", engine)
 
     private def respond(status: Int, ct: String, body: String): HttpEngine.Request => HttpEngine.Response < Async =
-        _ => HttpEngine.response(HttpStatus(status), body, HttpHeaders.empty.add("Content-Type", ct))
+        _ => HttpEngine.response(HttpStatus.init(status).getOrThrow, body, HttpHeaders.empty.add("Content-Type", ct))
 
     "transport.executeStreaming" - {
 

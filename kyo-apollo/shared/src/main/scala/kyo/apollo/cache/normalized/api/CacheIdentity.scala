@@ -89,7 +89,7 @@ object CacheIdentity:
     inline def collectAll[T <: Tuple]: Chunk[CacheIdentity[?]] =
         inline erasedValue[T] match
             case _: EmptyTuple => Chunk.empty
-            case _: (h *: t) =>
+            case _: (h *: t)   =>
                 summonFrom {
                     case ci: CacheIdentity[`h`] => ci +: collectAll[t]
                     case _                      => collectAll[t]

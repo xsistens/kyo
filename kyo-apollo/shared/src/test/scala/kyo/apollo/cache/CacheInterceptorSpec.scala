@@ -34,7 +34,7 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
         def name                                = "Countries"
         def document                            = "query Countries { countries { __typename code name } }"
         val dataCodec: JsonCodec[CountriesData] = JsonCodec.fromSchema[CountriesData]
-        def rootField: CompiledField =
+        def rootField: CompiledField            =
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
@@ -57,10 +57,10 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
       * left) with a codec whose decode is defective.
       */
     final case class DefectiveCountriesQuery() extends Query.Normalizable[CountriesData]:
-        def name                     = "Countries"
-        def document                 = CountriesQuery().document
-        def rootField: CompiledField = CountriesQuery().rootField
-        def variables: Json          = Json.JObj(VectorMap.empty)
+        def name                                = "Countries"
+        def document                            = CountriesQuery().document
+        def rootField: CompiledField            = CountriesQuery().rootField
+        def variables: Json                     = Json.JObj(VectorMap.empty)
         def dataCodec: JsonCodec[CountriesData] = new JsonCodec[CountriesData]:
             def decode(json: Json)(using Frame): Result[ApolloParseException, CountriesData] =
                 throw IllegalStateException("defective codec")
@@ -106,7 +106,7 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
             request: kyo.apollo.network.http.HttpEngine.Request
         )(using Frame): kyo.apollo.network.http.HttpEngine.Response < Async =
             calls += 1
-            kyo.apollo.network.http.HttpEngine.response(HttpStatus(status), body)
+            kyo.apollo.network.http.HttpEngine.response(HttpStatus.init(status).getOrThrow, body)
         end execute
     end CountingEngine
 
@@ -308,11 +308,11 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
     final case class DeleteCountryData(deleteCountry: Country) derives Schema
 
     final case class DeleteCountryMutation(code: String) extends Mutation.Normalizable[DeleteCountryData]:
-        def name = "DeleteCountry"
+        def name     = "DeleteCountry"
         def document =
             s"""mutation DeleteCountry { deleteCountry(id: "$code") { __typename code name } }"""
         val dataCodec: JsonCodec[DeleteCountryData] = JsonCodec.fromSchema[DeleteCountryData]
-        def rootField: CompiledField =
+        def rootField: CompiledField                =
             CompiledField(
                 "data",
                 CompiledNamedType("Mutation"),

@@ -363,7 +363,7 @@ final class ApolloStore(
         def planned(state: RecordState): (RecordChanges, (Chunk[String], A)) =
             val (changes, result) = plan(state)
             val records           = changes.merge
-            val warnings =
+            val warnings          =
                 if !diagnostics.enabled || records.isEmpty then Chunk.empty[String]
                 else
                     val stored = state.load(records.map(_.key))
@@ -521,7 +521,7 @@ final class ApolloStore(
         // object node compiles the implicit `__typename` selection) would abort
         // with a cache miss. Stamp it from the fragment's own type; a codec that
         // already emits one wins.
-        val encoded = encode(fragment.dataCodec, data)
+        val encoded  = encode(fragment.dataCodec, data)
         val enriched =
             if encoded.contains("__typename") then encoded
             else encoded + ("__typename" -> Json.JStr(fragment.rootField.fieldType.leafType.name))
@@ -844,7 +844,7 @@ final class ApolloStore(
       */
     private def reachableKeys(all: Map[CacheKey, Record], layers: Chunk[Layer], pinned: Set[CacheKey]): Set[CacheKey] =
         val optimisticRecords = layers.iterator.flatMap(_.records.values).toList
-        val seeds =
+        val seeds             =
             Set(CacheKey.QueryRoot, CacheKey.MutationRoot, CacheKey.SubscriptionRoot) ++
                 optimisticRecords.iterator.map(_.key) ++
                 optimisticRecords.iterator.flatMap(_.references.iterator.map(_.key)) ++
@@ -912,7 +912,7 @@ final class ApolloStore(
     private def encode[D](codec: JsonCodec[D], data: D): Map[String, Json] =
         codec.encode(data) match
             case Json.JObj(fields) => fields
-            case other =>
+            case other             =>
                 throw IllegalArgumentException(
                     s"Operation data must encode to a JSON object, got ${other.getClass.getSimpleName}"
                 )

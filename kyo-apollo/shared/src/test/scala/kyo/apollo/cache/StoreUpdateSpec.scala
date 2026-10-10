@@ -27,7 +27,7 @@ class StoreUpdateSpec extends kyo.test.Test[Any]:
         def name                           = "CurrentUser"
         def document                       = "query CurrentUser { user { __typename id name } }"
         val dataCodec: JsonCodec[UserData] = JsonCodec.fromSchema[UserData]
-        def rootField: CompiledField =
+        def rootField: CompiledField       =
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
@@ -48,7 +48,7 @@ class StoreUpdateSpec extends kyo.test.Test[Any]:
 
     object UserFragment extends Fragment[User]:
         val dataCodec: JsonCodec[User] = JsonCodec.fromSchema[User]
-        def rootField: CompiledField =
+        def rootField: CompiledField   =
             CompiledField(
                 "user",
                 CompiledNamedType("User"),

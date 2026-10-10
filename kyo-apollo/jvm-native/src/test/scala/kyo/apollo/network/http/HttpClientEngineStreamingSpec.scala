@@ -52,9 +52,9 @@ class HttpClientEngineStreamingSpec extends kyo.test.Test[Any]:
       * vs `executeStreaming` is the interceptor's job; here we call executeStreaming directly).
       */
     final private case class Ping() extends kyo.apollo.api.Query[Int]:
-        def name: String              = "Ping"
-        def document: String          = "query Ping { ping }"
-        val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema[Int]
+        def name: String                            = "Ping"
+        def document: String                        = "query Ping { ping }"
+        val dataCodec: JsonCodec[Int]               = JsonCodec.fromSchema[Int]
         def rootField: kyo.apollo.api.CompiledField =
             kyo.apollo.api.CompiledField("data", kyo.apollo.api.CompiledNamedType("Query"))
         def variables: kyo.apollo.json.Json = kyo.apollo.json.Json.JObj(scala.collection.immutable.VectorMap.empty)
@@ -112,7 +112,7 @@ class HttpClientEngineStreamingSpec extends kyo.test.Test[Any]:
         val contentType = s"multipart/mixed; boundary=$boundary"
 
         val route = HttpRoute.postRaw("graphql").request(_.bodyText).response(_.bodyStream)
-        val ep = route.handler { _ =>
+        val ep    = route.handler { _ =>
             kyo.HttpResponse.ok.addField("body", serverBody).setHeader("Content-Type", contentType)
         }
 
@@ -149,7 +149,7 @@ class HttpClientEngineStreamingSpec extends kyo.test.Test[Any]:
         for
             firstReceived <- Latch.init(1)
             secondSent    <- AtomicBoolean.init(false)
-            route = HttpRoute.postRaw("graphql").request(_.bodyText).response(_.bodyStream)
+            route      = HttpRoute.postRaw("graphql").request(_.bodyText).response(_.bodyStream)
             serverBody = Stream
                 .init(Seq(span(first)))
                 .concat(Stream.unwrap(firstReceived.await.andThen(secondSent.set(true)).andThen(Stream.init(Seq(span(second))))))

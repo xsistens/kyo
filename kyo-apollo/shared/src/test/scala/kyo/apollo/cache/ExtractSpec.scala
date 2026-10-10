@@ -27,7 +27,7 @@ class ExtractSpec extends kyo.test.Test[Any]:
         def name                                = "Countries"
         def document                            = "query Countries { countries { __typename code name } }"
         val dataCodec: JsonCodec[CountriesData] = JsonCodec.fromSchema[CountriesData]
-        def rootField: CompiledField =
+        def rootField: CompiledField            =
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
@@ -64,7 +64,7 @@ class ExtractSpec extends kyo.test.Test[Any]:
         def name                           = "CurrentUser"
         def document                       = "query CurrentUser { user { __typename id name } }"
         val dataCodec: JsonCodec[UserData] = JsonCodec.fromSchema[UserData]
-        def rootField: CompiledField =
+        def rootField: CompiledField       =
             CompiledField("data", CompiledNamedType("Query"), selections = Chunk(userField("user")))
         def variables: Json = Json.JObj(VectorMap.empty)
     end CurrentUserQuery
@@ -72,11 +72,11 @@ class ExtractSpec extends kyo.test.Test[Any]:
     final case class UpdateUserData(updateUser: User) derives Schema
 
     final case class RenameMutation(newName: String) extends Mutation.Normalizable[UpdateUserData]:
-        def name = "Rename"
+        def name     = "Rename"
         def document =
             "mutation Rename($name: String!) { updateUser(name: $name) { __typename id name } }"
         val dataCodec: JsonCodec[UpdateUserData] = JsonCodec.fromSchema[UpdateUserData]
-        def rootField: CompiledField =
+        def rootField: CompiledField             =
             CompiledField(
                 "data",
                 CompiledNamedType("Mutation"),

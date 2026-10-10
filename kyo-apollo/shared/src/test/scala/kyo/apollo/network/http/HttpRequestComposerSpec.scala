@@ -50,7 +50,7 @@ class HttpRequestComposerSpec extends kyo.test.Test[Any]:
         def name: String              = "Mini"
         def document: String          = "query Mini($limit: Int!) { x }"
         val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema[Int]
-        def rootField: CompiledField = CompiledField(
+        def rootField: CompiledField  = CompiledField(
             "data",
             CompiledNamedType("Query"),
             selections = Chunk(

@@ -40,7 +40,7 @@ class StoreSpec extends kyo.test.Test[Any]:
         def name                                = "Countries"
         def document                            = "query Countries { countries { __typename code name } }"
         val dataCodec: JsonCodec[CountriesData] = JsonCodec.fromSchema[CountriesData]
-        def rootField: CompiledField =
+        def rootField: CompiledField            =
             CompiledField(
                 "data",
                 CompiledNamedType("Query"),
@@ -63,10 +63,10 @@ class StoreSpec extends kyo.test.Test[Any]:
       * a `CountriesQuery` write left) with a codec whose decode is defective.
       */
     final case class DefectiveCountriesQuery() extends Query.Normalizable[CountriesData]:
-        def name                     = "Countries"
-        def document                 = CountriesQuery().document
-        def rootField: CompiledField = CountriesQuery().rootField
-        def variables: Json          = Json.JObj(VectorMap.empty)
+        def name                                = "Countries"
+        def document                            = CountriesQuery().document
+        def rootField: CompiledField            = CountriesQuery().rootField
+        def variables: Json                     = Json.JObj(VectorMap.empty)
         def dataCodec: JsonCodec[CountriesData] = new JsonCodec[CountriesData]:
             def decode(json: Json)(using Frame): Result[ApolloParseException, CountriesData] =
                 throw IllegalStateException("defective codec")
@@ -102,7 +102,7 @@ class StoreSpec extends kyo.test.Test[Any]:
         }
 
         "mergeRecords reports nothing changed when identical fields are re-written" in {
-            val existing = rec(CacheKey("Book", "1"), fk("id") -> scalar("1"))
+            val existing     = rec(CacheKey("Book", "1"), fk("id") -> scalar("1"))
             val (_, changed) =
                 NormalizedCache.mergeRecords(Present(existing), rec(CacheKey("Book", "1"), fk("id") -> scalar("1")))
             assert(changed == Set.empty[CacheKey])

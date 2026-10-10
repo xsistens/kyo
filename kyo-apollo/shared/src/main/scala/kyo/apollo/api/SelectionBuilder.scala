@@ -91,7 +91,7 @@ object SelectionBuilder:
             Frame
         ): Result[ApolloParseException, Any] =
             this match
-                case Leaf => child(json)
+                case Leaf            => child(json)
                 case Nullable(inner) =>
                     json match
                         case Json.JNull => Result.succeed(Absent)
@@ -102,7 +102,7 @@ object SelectionBuilder:
                         case other            => Result.fail(ApolloParseException(other, "a GraphQL list"))
 
         private[api] def encode(value: Any, child: Any => Json): Json = this match
-            case Leaf => child(value)
+            case Leaf            => child(value)
             case Nullable(inner) =>
                 value.asInstanceOf[Maybe[Any]] match
                     case Absent     => Json.JNull
@@ -239,9 +239,9 @@ object SelectionBuilder:
         decodeValue: (Json, Frame) => Result[ApolloParseException, Any],
         encodeValue: Any => Json
     ) extends Deferrable[Origin, A]:
-        private[api] val arity: Int              = 1
-        val selections: Chunk[CompiledSelection] = Chunk(compiled)
-        private[api] val argEntries: Chunk[Arg]  = ownArgs ++ childArgs
+        private[api] val arity: Int                                       = 1
+        val selections: Chunk[CompiledSelection]                          = Chunk(compiled)
+        private[api] val argEntries: Chunk[Arg]                           = ownArgs ++ childArgs
         private[api] def deferLast[R <: AnyNamedTuple]: Fields[Origin, R] =
             Deferred[Origin, R](compiled.responseName, Absent, this, single = true)
         private[api] def streamLast(initialCount: Int, condition: Maybe[String]): Deferrable[Origin, A] =
@@ -332,7 +332,7 @@ object SelectionBuilder:
         child: Fields[Origin, ? <: AnyNamedTuple],
         single: Boolean
     ) extends Fields[Origin, R]:
-        private[api] val arity: Int = 1
+        private[api] val arity: Int              = 1
         val selections: Chunk[CompiledSelection] =
             Chunk(
                 CompiledFragment("", Chunk.empty, child.selections, defer = Present(DeferDirective(label, condition)))
@@ -429,7 +429,7 @@ object SelectionBuilder:
                             case Some(value) if field.selections.nonEmpty =>
                                 acc.updated(field.responseName, fillNested(value, field.selections))
                             case Some(_) => acc
-                            case None =>
+                            case None    =>
                                 field.fieldType match
                                     case _: CompiledNotNullType => acc
                                     case _                      => acc.updated(field.responseName, Json.JNull)
@@ -539,7 +539,7 @@ object SelectionBuilder:
         child: Bidirectional[?, A]
     ): Fields[Origin, R] =
         new Fields[Origin, R]:
-            private[api] val arity: Int = 1
+            private[api] val arity: Int              = 1
             val selections: Chunk[CompiledSelection] =
                 Chunk(CompiledFragment(typeName, Chunk(typeName), child.selections))
             private[api] val argEntries: Chunk[Arg] = child.argEntries
@@ -548,12 +548,12 @@ object SelectionBuilder:
             ): Result[ApolloParseException, Unit] =
                 row.get("__typename") match
                     case Some(Json.JStr(`typeName`)) => child.decode(Json.JObj(row)).map(v => out(offset) = Present(v))
-                    case _ =>
+                    case _                           =>
                         out(offset) = Absent
                         Result.unit
             private[api] def encodeInto(value: Product, offset: Int, out: RowBuilder): Unit =
                 value.productElement(offset).asInstanceOf[Maybe[A]] match
-                    case Absent => ()
+                    case Absent     => ()
                     case Present(v) =>
                         withTypename(child.encode(v), typeName) match
                             case Json.JObj(fields) => discard(out ++= fields)

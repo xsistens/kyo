@@ -56,7 +56,7 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
         def name                           = "CurrentUser"
         def document                       = "query CurrentUser { user { __typename id name } }"
         val dataCodec: JsonCodec[UserData] = JsonCodec.fromSchema[UserData]
-        def rootField: CompiledField =
+        def rootField: CompiledField       =
             CompiledField("data", CompiledNamedType("Query"), selections = Chunk(userField("user")))
         def variables: Json = Json.JObj(VectorMap.empty)
     end CurrentUserQuery
@@ -65,11 +65,11 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
     final case class UpdateUserData(updateUser: User) derives Schema
 
     final case class UpdateUserNameMutation(newName: String) extends Mutation.Normalizable[UpdateUserData]:
-        def name = "UpdateUserName"
+        def name     = "UpdateUserName"
         def document =
             "mutation UpdateUserName($name: String!) { updateUser(name: $name) { __typename id name } }"
         val dataCodec: JsonCodec[UpdateUserData] = JsonCodec.fromSchema[UpdateUserData]
-        def rootField: CompiledField =
+        def rootField: CompiledField             =
             CompiledField(
                 "data",
                 CompiledNamedType("Mutation"),
@@ -86,7 +86,7 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
         def name                                  = "UserUpdated"
         def document                              = "subscription UserUpdated { userUpdated { __typename id name } }"
         val dataCodec: JsonCodec[UserUpdatedData] = JsonCodec.fromSchema[UserUpdatedData]
-        def rootField: CompiledField =
+        def rootField: CompiledField              =
             CompiledField(
                 "data",
                 CompiledNamedType("Subscription"),
@@ -107,7 +107,7 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
         def execute(
             request: kyo.apollo.network.http.HttpEngine.Request
         )(using Frame): kyo.apollo.network.http.HttpEngine.Response < Async =
-            val text = request.fields.body.text.getOrElse("")
+            val text    = request.fields.body.text.getOrElse("")
             val payload =
                 if text.contains("UpdateUserName") then
                     val name = """"name":"([^"]*)"""".r.findAllMatchIn(text).map(_.group(1)).toList.last

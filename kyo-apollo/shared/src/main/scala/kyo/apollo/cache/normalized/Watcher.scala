@@ -155,9 +155,9 @@ extension [D](call: ApolloCall[D])
         Frame,
         Tag[Emit[Chunk[ApolloResponse[D]]]]
     ): ResponseStream[D] =
-        val client  = call.apolloClient
-        val builder = call.requestBuilder
-        val store   = client.apolloStore
+        val client        = call.apolloClient
+        val builder       = call.requestBuilder
+        val store         = client.apolloStore
         val refetchPolicy =
             builder.executionContext.get(RefetchPolicy).getOrElse(RefetchPolicy.Default)
 
@@ -182,7 +182,7 @@ extension [D](call: ApolloCall[D])
                 def hold(keys: Set[CacheKey])(transition: WatchState => Maybe[WatchState]): Boolean =
                     val s = state.get()
                     transition(s) match
-                        case Absent => false
+                        case Absent        => false
                         case Present(next) =>
                             if s.keys == keys && state.compareAndSet(s, next) then true
                             else store.swapRetained(keys)(install(transition))
@@ -390,7 +390,7 @@ extension [D](call: ApolloCall[D])
                 // which emits the miss (or a hit, if a concurrent write cured it meanwhile).
                 def finishRefetch(): Unit < Sync =
                     Sync.Unsafe.defer {
-                        val before = state.getAndUpdate(_.copy(inflight = false, rerun = false))
+                        val before   = state.getAndUpdate(_.copy(inflight = false, rerun = false))
                         val followUp =
                             if before.rerun then requestRefetch()
                             else if before.refetched then reread(emitMiss)
