@@ -365,6 +365,15 @@ A watch re-reads the cache when its records change (`RefetchPolicy.CacheOnly`, t
 default); `refetchPolicy(RefetchPolicy.NetworkOnly)` asks the server again instead. An
 unrelated write notifies nobody, and closing the watch's `Scope` ends it.
 
+`RefetchPolicy.CacheFirst` re-reads and asks the server only when the read misses. It
+asks once per miss: a miss its refetch did not cure is emitted as the value. When two
+operations select the same object without its key field, each one's write leaves the
+other's read incomplete. A watch whose refetch already answered a miss does not refetch
+when another write brings the same miss back. It keeps its last value, as Apollo Client
+4.3 does, and the store's `CacheDiagnostics` (`normalizedCache(..., diagnostics =
+CacheDiagnostics.toStdErr)`) reports it once. A read that succeeds after another write,
+or an `evict`, `remove` or `clearAll`, lets the watch refetch that miss again.
+
 The store behind the cache is `client.apolloStore`. Writes through it publish the
 records they change, so watches react to them as they do to network responses, and
 reads fail on the `Abort[CacheReadFailure]` row when the cache does not hold every
@@ -534,3 +543,7 @@ These differences are deliberate:
 - **A retain ends with its `Scope`** instead of a matching `release` call.
 - **Incremental delivery** requests `multipart/mixed; deferSpec=20220824` and also
   reads the older single `{data, path}` patch shape.
+- **`ApolloResponse.complete` says whether more parts are coming**, not whether the data
+  is whole. Apollo Client's `dataState` narrows the result type at `@defer` boundaries.
+  Here a deferred field is `Maybe` in the result type already, so `complete` only tracks
+  the delivery, like Apollo Client's `NetworkStatus.streaming`.
