@@ -15,14 +15,14 @@ import scala.util.Using
   * The operation-document counterpart to [[SchemaLoader]]: it turns executable
   * `.graphql` files into the
   * [[caliban.parsing.adt.Definition.ExecutableDefinition.OperationDefinition]]
-  * (and [[FragmentDefinition]]) ASTs. The generator itself reads no operation
+  * (and [[caliban.parsing.adt.Definition.ExecutableDefinition.FragmentDefinition]]) ASTs. The generator itself reads no operation
   * documents ([[ApolloClientWriter]] is schema-driven). Uses the same
   * [[caliban.parsing.Parser]] as [[SchemaLoader]], so schema SDL and operation
   * documents share one parser.
   */
 object DocumentParser:
 
-    /** Parse an in-memory operation document string into a [[Document]].
+    /** Parse an in-memory operation document string into a [[caliban.parsing.adt.Document]].
       *
       * @throws CodegenException if the document fails to parse.
       */
