@@ -22,13 +22,13 @@ import scala.util.Using
   */
 object SchemaLoader:
 
-    /** Parse an in-memory SDL string into a schema [[Document]].
+    /** Parse an in-memory SDL string into a schema [[caliban.parsing.adt.Document]].
       *
       * @throws CodegenException if the SDL fails to parse.
       */
     def fromString(sdl: String): Document = parse(sdl, "schema SDL")
 
-    /** Load and parse a local `.graphql` SDL file into a schema [[Document]].
+    /** Load and parse a local `.graphql` SDL file into a schema [[caliban.parsing.adt.Document]].
       *
       * @throws CodegenException if the file is unreadable or the SDL fails to parse.
       */
