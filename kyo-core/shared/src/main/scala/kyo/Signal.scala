@@ -1,5 +1,6 @@
 package kyo
 
+import kyo.scheduler.IOPromise
 import scala.annotation.implicitNotFound
 import scala.annotation.nowarn
 import scala.annotation.tailrec
@@ -100,16 +101,17 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
       * closed before the next `f` runs, at most one value's children are alive at a time and no waiter or fiber accumulates across changes.
       *
       * It is designed never to permanently miss the latest value, even under a write that races the observation, and never to tear a
-      * still-current value's `Scope` down on an idle timer. Delivery comes in two tiers. A [[SignalRef]] (and a `map` chain rooted in one)
-      * observes exactly: a version-validated register/validate/await protocol makes every change wake the observer immediately, with no
-      * repair timer armed at all (see the `SignalRef.observeProjected` override). Combinator-derived signals (`zip`, `combineLatest`, `switchMap`,
-      * `zipAll`, `combineLatestAll`, custom `initRaw`) use the repairing loop: it reads `current`, runs `f`, then re-arms a
+      * still-current value's `Scope` down on an idle timer. Delivery comes in two tiers. A signal whose value comes from [[SignalRef]]s
+      * alone (a `SignalRef`, and any `map`, `zip`, `combineLatest`, `switchMap`, `zipAll`, `combineLatestAll` built on them, or a constant)
+      * observes exactly: a version-validated register/validate/await protocol over every ref the value was read from makes every change
+      * wake the observer immediately, with no repair timer armed at all (see the `SignalRef.observeProjected` override). A signal defined
+      * with `initRaw`, and a combinator over one, uses the repairing loop: it reads `current`, runs `f`, then re-arms a
       * `nextWith`/`Async.sleep(repairInterval)` race that holds the value's `Scope` open until the next change. A write that lands in the
       * window between reading `current` and registering `nextWith` is missed by the immediate wakeup and reconciled when the repair timer
       * next fires and re-reads `current` (the hold re-waits on a still-current value, so a repair timer never closes its `Scope`). So the
       * final value is always delivered: immediately in the common case, and within `repairInterval` in the worst case when a write races
-      * that window on a derived signal. Correctness never depends on `repairInterval` ; only the worst-case reconciliation latency does.
-      * This variant uses [[Signal.defaultRepairInterval]].
+      * that window on such a signal. Correctness never depends on `repairInterval` ; only the worst-case reconciliation latency does. This
+      * variant uses [[Signal.defaultRepairInterval]].
       *
       * @param f
       *   The per-value setup, run inside a fresh `Scope`; it may fork scoped children (`Fiber.init`) and should return once setup is done,
@@ -122,15 +124,16 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
 
     /** Like [[observe]] but with an explicit reconciliation interval.
       *
-      * The loop is the repairing form: it tracks the last observed value and, while the current value is unchanged, re-arms a
-      * `nextWith`/`Async.sleep(repairInterval)` race so a missed wakeup is reconciled within `repairInterval` WITHOUT tearing the still-current
-      * value's `Scope` down. The hold loops until `current` actually differs, so a repair timer firing on a still-current value re-waits and
-      * keeps the per-value `Scope` open.
+      * On a signal that observes exactly (see [[observe]]) the interval is not used. Otherwise the loop is the repairing form: it tracks
+      * the last observed value and, while the current value is unchanged, re-arms a `nextWith`/`Async.sleep(repairInterval)` race so a
+      * missed wakeup is reconciled within `repairInterval` WITHOUT tearing the still-current value's `Scope` down. The hold loops
+      * until `current` actually differs, so a repair timer firing on a still-current value re-waits and keeps the per-value `Scope` open.
       *
       * @param repairInterval
-      *   How often a parked observation re-reads `current` to reconcile a missed wakeup on the repair path; ignored by exact observers
-      *   (`SignalRef` and `map` chains rooted in one), which never miss a wakeup. `Duration.Infinity` arms no timer: the observation then
-      *   waits on `nextWith` alone and a missed wakeup stays missed until the next change
+      *   How often a parked observation re-reads `current` to reconcile a missed wakeup on the repair path; ignored by exact observers,
+      *   which never miss a wakeup. `Duration.Infinity` arms no timer: the repairing loop then waits on `nextWith` alone and a missed
+      *   wakeup stays missed until the next change. Under it, `zip` and `zipAll` keep their `nextWith` semantics and wait for every input
+      *   to change, so their observation takes the repairing loop
       * @param f
       *   The per-value setup, run inside a fresh `Scope`
       */
@@ -168,7 +171,8 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
       * `==` for equal inputs (a rendered UI tree never is): projecting again on every repair tick would count each tick as a change. `proj`
       * must therefore be a pure function of the source value.
       *
-      * This default is the repairing loop described on [[observe]].
+      * This default observes exactly while [[readExact]] answers, with the protocol of the `SignalRef.observeProjected` override over
+      * every ref the value was read from. From the first read that does not answer on, it runs the repairing loop described on [[observe]].
       *
       * @param proj
       *   The view to observe, a pure function of the source value
@@ -183,7 +187,8 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
         g: B => Unit < (S & Async & Scope)
     )(using CanEqual[B, B], Frame): Unit < (S & Async) =
         Sync.defer {
-            val image = Signal.lastProjection(proj)
+            val image     = Signal.lastProjection(proj)
+            val anyChange = repairInterval.isFinite
             // An infinite interval arms no timer: the loop then waits on `nextWith` alone, as `streamChanges` does.
             def await: Unit < Async =
                 if repairInterval.isFinite then Async.race(Seq(nextWith(_ => ()), Async.sleep(repairInterval))).unit
@@ -191,15 +196,57 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
             // Loops until the image differs from `b`, so an idle repair timer never closes a still-current image's scope.
             def holdUntilChanged(b: B): Unit < (S & Async) =
                 await.andThen(currentWith(c => if image(c) == b then holdUntilChanged(b) else (): Unit < (S & Async)))
-            def loop(last: Maybe[B]): Unit < (S & Async) =
+            // Cleared by the first read that is not exact, after which the observation stays on the repairing loop: without that
+            // a signal over `initRaw` would run its exact parts twice per wakeup, once for the attempt and once for `currentWith`.
+            var exact = true
+
+            def holdExact(read: Signal.ExactRead, b: B): Unit < (S & Async) =
+                read.awaitChange.andThen(Sync.Unsafe.defer {
+                    val again = new Signal.ExactRead
+                    readExact(again, anyChange) match
+                        case Present(c) => if image(c) == b then holdExact(again, b) else (): Unit < (S & Async)
+                        case Absent     =>
+                            exact = false
+                            currentWith(c => if image(c) == b then holdUntilChanged(b) else (): Unit < (S & Async))
+                    end match
+                })
+            def repairing(last: Maybe[B]): Unit < (S & Async) =
                 currentWith { cur =>
                     val b = image(cur)
                     if last.exists(_ == b) then await.andThen(loop(last))
                     else Scope.run(g(b).andThen(holdUntilChanged(b))).andThen(loop(Present(b)))
                 }
+            def loop(last: Maybe[B]): Unit < (S & Async) =
+                if !exact then repairing(last)
+                else
+                    Sync.Unsafe.defer {
+                        val read = new Signal.ExactRead
+                        readExact(read, anyChange) match
+                            case Present(cur) =>
+                                val b = image(cur)
+                                if last.exists(_ == b) then read.awaitChange.andThen(loop(last))
+                                else Scope.run(g(b).andThen(holdExact(read, b))).andThen(loop(Present(b)))
+                            case Absent =>
+                                exact = false
+                                repairing(last)
+                        end match
+                    }
             loop(baseline)
         }
     end observeProjected
+
+    /** Reads the current value together with every [[SignalRef]] it comes from, recording each ref with its version in `read`, or answers
+      * `Absent` when the value does not come from refs alone, as for a signal defined with [[Signal.initRaw]].
+      *
+      * A signal that answers can be observed without a repair timer: its value can only change through a write to one of the recorded
+      * refs, which moves that ref's version. `SignalRef` answers with itself, `map` and `switchMap` with what they read through, and the
+      * other combinators with their inputs.
+      *
+      * @param anyChange
+      *   Whether the caller re-reads on a change of any input, as an observation with a repair timer ends up doing. `zip` and `zipAll`
+      *   answer only then: their `nextWith` waits for every input to change, and an observation without a timer keeps that.
+      */
+    private[kyo] def readExact(read: Signal.ExactRead, anyChange: Boolean)(using AllowUnsafe): Maybe[A] = Absent
 
     /** Creates a new signal by applying a transformation function to this signal's values.
       *
@@ -224,7 +271,8 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                     Sync.defer {
                         val p = Signal.lastProjection(proj)
                         self.observeProjected[C, S](a => p(f(a)), baseline, ri)(g)(using canEqualC, frame)
-                    }
+                    },
+            (read, anyChange) => self.readExact(read, anyChange).map(a => f(a))
         )
 
     /** This signal's changes, carrying `b` in place of its own values.
@@ -249,6 +297,8 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                     // `g(image)` inside the lambda: each delivery builds the caller's setup afresh, as `observe` does.
                     if baseline.exists(_ == image) then self.currentWith(a0 => self.observe[S](Present(a0), ri)(_ => g(image)))
                     else self.observe[S](Absent, ri)(_ => g(image))
+            ,
+            (read, anyChange) => self.readExact(read, anyChange).map(_ => b)
         )
     end changesTo
 
@@ -259,8 +309,10 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
       * re-arms via `nextWith` in a loop matching the `streamChanges` driver pattern.
       *
       * Note: like `streamChanges`, may skip intermediate values if changes occur faster than they can be processed. The combinator's own
-      * await/re-read window applies here (a write landing between the wakeup and the re-read is coalesced); observation over it is
-      * reconciled within the repair interval.
+      * await/re-read window applies to `next` (a write landing between the wakeup and the re-read is coalesced). An observation is exact
+      * while this signal and every inner signal it has selected so far are; from the first inner signal that is not (one defined with
+      * `initRaw`), a missed write is reconciled within the repair interval, or with `Duration.Infinity` (no timer) only with the next
+      * change.
       *
       * @param f
       *   The function that produces an inner signal from the current value
@@ -269,9 +321,9 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
       */
     @nowarn("msg=anonymous")
     inline def switchMap[B](inline f: A => Signal[B])(using CanEqual[B, B], Frame): Signal[B] =
-        Signal.initRaw(
-            currentWith = [C, S] => g => self.currentWith(a => f(a).currentWith(g)),
-            nextWith = [C, S] =>
+        Signal._initExact(
+            [C, S] => g => self.currentWith(a => f(a).currentWith(g)),
+            [C, S] =>
                 g =>
                     self.currentWith { a =>
                         val inner = f(a)
@@ -279,10 +331,14 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
                             .andThen(self.currentWith { a2 =>
                                 (if a2 == a then inner else f(a2)).currentWith(g)
                             })
-                    }
+                    },
+            (read, anyChange) => self.readExact(read, anyChange).flatMap(a => f(a).readExact(read, anyChange))
         )
 
     /** Pairs this signal with another, waiting for both to change before emitting.
+      *
+      * The wait for both belongs to `next` and to `streamChanges`. [[observe]] with a finite repair interval delivers the current pair on
+      * a change of either input, as it always did once the repair timer fired; over [[SignalRef]]s it does so at once.
       *
       * @param other
       *   The signal to pair with
@@ -291,9 +347,12 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
       */
     @nowarn("msg=anonymous")
     inline def zip[B](other: Signal[B])(using CanEqual[(A, B), (A, B)], Frame): Signal[(A, B)] =
-        Signal.initRaw(
-            currentWith = [C, S] => g => self.currentWith(a => other.currentWith(b => g((a, b)))),
-            nextWith = [C, S] => g => Async.zip(self.next, other.next).andThen(self.currentWith(a => other.currentWith(b => g((a, b)))))
+        Signal._initExact(
+            [C, S] => g => self.currentWith(a => other.currentWith(b => g((a, b)))),
+            [C, S] => g => Async.zip(self.next, other.next).andThen(self.currentWith(a => other.currentWith(b => g((a, b))))),
+            (read, anyChange) =>
+                if !anyChange then Absent
+                else self.readExact(read, anyChange).flatMap(a => other.readExact(read, anyChange).map(b => (a, b)))
         )
 
     /** Pairs this signal with another, emitting when either changes (Rx combineLatest semantics).
@@ -307,9 +366,10 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
       */
     @nowarn("msg=anonymous")
     inline def combineLatest[B](other: Signal[B])(using CanEqual[(A, B), (A, B)], Frame): Signal[(A, B)] =
-        Signal.initRaw(
-            currentWith = [C, S] => g => self.currentWith(a => other.currentWith(b => g((a, b)))),
-            nextWith = [C, S] => g => Signal.awaitAny(Seq(self, other)).andThen(self.currentWith(a => other.currentWith(b => g((a, b)))))
+        Signal._initExact(
+            [C, S] => g => self.currentWith(a => other.currentWith(b => g((a, b)))),
+            [C, S] => g => Signal.awaitAny(Seq(self, other)).andThen(self.currentWith(a => other.currentWith(b => g((a, b))))),
+            (read, anyChange) => self.readExact(read, anyChange).flatMap(a => other.readExact(read, anyChange).map(b => (a, b)))
         )
 
     /** Creates a stream that continuously emits the current value of the signal.
@@ -329,11 +389,12 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
       *
       * This method produces a stream that emits values only when they differ from the previous value, starting with the value current at
       * subscription. Note that rapid changes may result in some intermediate values being skipped if they occur faster than they can be
-      * processed. Built on [[observe]], so on a [[SignalRef]] (and `map` chains rooted in one) the latest value is never stranded.
+      * processed. Built on [[observe]], so on a signal that observes exactly the latest value is never stranded.
       *
-      * A combinator-derived signal waits on `nextWith` with no repair timer, so an idle stream costs nothing. A write landing between its
-      * read and its re-registration is then emitted only with the next change; pass a finite `repairInterval` to
-      * `streamChanges(baseline, repairInterval)` to reconcile it on a timer instead.
+      * A signal defined with `initRaw`, a combinator over one, and a `zip` or `zipAll` (which emit only once every input has changed) wait
+      * on `nextWith` with no repair timer, so an idle stream costs nothing. A write landing between their read and their re-registration
+      * is then emitted only with the next change; pass a finite `repairInterval` to `streamChanges(baseline, repairInterval)` to reconcile
+      * it on a timer instead.
       *
       * @return
       *   A stream that emits only when values change
@@ -350,8 +411,9 @@ sealed abstract class Signal[A](using CanEqual[A, A]) extends Serializable:
     final def streamChanges(baseline: Maybe[A])(using Frame, Tag[Emit[Chunk[A]]]): Stream[A, Async] =
         streamChanges(baseline, Duration.Infinity)
 
-    /** Like [[streamChanges]] with a baseline, and a reconciliation interval for combinator-derived signals: a finite one re-reads the
-      * value on a timer while the stream waits, which closes the read/register gap at the cost of one wakeup per interval.
+    /** Like [[streamChanges]] with a baseline, and a reconciliation interval for signals that do not observe exactly: a finite one
+      * re-reads the value on a timer while the stream waits, which closes the read/register gap at the cost of one wakeup per interval.
+      * A `zip` or `zipAll` then emits on a change of any input.
       */
     final def streamChanges(baseline: Maybe[A], repairInterval: Duration)(using Frame, Tag[Emit[Chunk[A]]]): Stream[A, Async] =
         Stream(observe[Emit[Chunk[A]]](baseline, repairInterval)(a => Emit.value(Chunk(a))))
@@ -366,8 +428,9 @@ object Signal:
       *
       * It bounds how soon a missed wakeup is reconciled by re-reading `current`: a write that races the observation's
       * read/register window is delivered within this interval. Real changes are otherwise immediate, so this can be
-      * generous; it exists to bound that rare race, not to drive normal updates. Exact observers ([[SignalRef]] and
-      * `map` chains rooted in one) never miss a wakeup and ignore it entirely, arming no timer at all.
+      * generous; it exists to bound that rare race, not to drive normal updates. Exact observers (signals whose value
+      * comes from [[SignalRef]]s alone, see [[Signal.observe]]) never miss a wakeup and ignore it entirely, arming no
+      * timer at all.
       */
     val defaultRepairInterval: Duration = 1.second
 
@@ -408,6 +471,9 @@ object Signal:
 
     /** Zips a sequence of signals, waiting for all to change before emitting.
       *
+      * As for [[Signal.zip]], the wait for all belongs to `next` and to `streamChanges`; [[Signal.observe]] with a finite repair interval
+      * delivers on a change of any input.
+      *
       * @param signals
       *   The signals to zip
       * @return
@@ -425,9 +491,10 @@ object Signal:
             case 1 => signals.head.map(Chunk(_))
             case n =>
                 val sigs = Chunk.from(signals, n)
-                initRaw(
-                    currentWith = [B, S] => f => Kyo.foreach(sigs)(_.current).map(f),
-                    nextWith = [B, S] => f => Async.foreachDiscard(sigs, sigs.size)(_.next).andThen(Kyo.foreach(sigs)(_.current).map(f))
+                _initExact(
+                    [B, S] => f => Kyo.foreach(sigs)(_.current).map(f),
+                    [B, S] => f => Async.foreachDiscard(sigs, sigs.size)(_.next).andThen(Kyo.foreach(sigs)(_.current).map(f)),
+                    (read, anyChange) => if !anyChange then Absent else readAllExact(sigs, read, anyChange)
                 )
 
     /** Zips a sequence of signals, emitting when any changes.
@@ -446,10 +513,24 @@ object Signal:
             case 1 => signals.head.map(Chunk(_))
             case n =>
                 val sigs = Chunk.from(signals, n)
-                initRaw(
-                    currentWith = [C, S] => g => Kyo.foreach(sigs)(_.current).map(g),
-                    nextWith = [C, S] => g => awaitAny(sigs).andThen(Kyo.foreach(sigs)(_.current).map(g))
+                _initExact(
+                    [C, S] => g => Kyo.foreach(sigs)(_.current).map(g),
+                    [C, S] => g => awaitAny(sigs).andThen(Kyo.foreach(sigs)(_.current).map(g)),
+                    (read, anyChange) => readAllExact(sigs, read, anyChange)
                 )
+
+    private[kyo] def readAllExact[A](sigs: Chunk[Signal[A]], read: ExactRead, anyChange: Boolean)(using AllowUnsafe): Maybe[Chunk[A]] =
+        val values                                 = new Array[Any](sigs.size)
+        @tailrec def loop(i: Int): Maybe[Chunk[A]] =
+            if i == values.length then Present(Chunk.fromNoCopy(values).asInstanceOf[Chunk[A]])
+            else
+                sigs(i).readExact(read, anyChange) match
+                    case Present(a) =>
+                        values(i) = a
+                        loop(i + 1)
+                    case Absent => Absent
+        loop(0)
+    end readAllExact
 
     private inline val missingCanEqual =
         "Cannot create Signal because values of type '${A}' cannot be compared for equality to detect changes. Make sure there is a 'CanEqual[${A}, ${A}]' instance available."
@@ -536,6 +617,8 @@ object Signal:
                     val image = proj(value)
                     if baseline.exists(_ == image) then Async.never[Unit]
                     else Scope.run(g(image).andThen(Async.never[Unit]))
+            ,
+            (_, _) => Present(value)
         )
 
     /** Creates a new immutable signal with a constant value and applies a transformation function.
@@ -641,7 +724,28 @@ object Signal:
         end new
     end _initRaw
 
-    // Like _initRaw but also supplies `observeProjected`, letting a structural combinator delegate observation to its
+    // Like _initRaw but also supplies `readExact`, for the combinators whose value comes from their inputs alone.
+    @nowarn("msg=anonymous")
+    private inline def _initExact[A](
+        inline _currentWith: [B, S] => (A => B < S) => B < (S & Sync),
+        inline _nextWith: [B, S] => (A => B < S) => B < (S & Async),
+        inline _readExact: (ExactRead, Boolean) => AllowUnsafe ?=> Maybe[A]
+    )(
+        using
+        frame: Frame,
+        canEqual: CanEqual[A, A]
+    ): Signal[A] =
+        new Signal[A]:
+            def currentWith[B, S](f: A => B < S)(using frame: Frame): B < (S & Sync) =
+                _currentWith(f)
+            def nextWith[B, S](f: A => B < S)(using frame: Frame): B < (S & Async) =
+                _nextWith(f)
+            override private[kyo] def readExact(read: ExactRead, anyChange: Boolean)(using AllowUnsafe): Maybe[A] =
+                _readExact(read, anyChange)
+        end new
+    end _initExact
+
+    // Like _initExact but also supplies `observeProjected`, letting a structural combinator delegate observation to its
     // source's loop rather than running a second repair loop over its own `currentWith`/`nextWith`. `map` uses this so a
     // `map`-over-leaf chain observes through one loop rooted at the leaf.
     @nowarn("msg=anonymous")
@@ -654,7 +758,8 @@ object Signal:
             Duration,
             C => Unit < (S & Async & Scope),
             CanEqual[C, C]
-        ) => Unit < (S & Async)
+        ) => Unit < (S & Async),
+        inline _readExact: (ExactRead, Boolean) => AllowUnsafe ?=> Maybe[A]
     )(
         using
         frame: Frame,
@@ -669,6 +774,8 @@ object Signal:
                 g: C => Unit < (S & Async & Scope)
             )(using canEqualC: CanEqual[C, C], frame: Frame): Unit < (S & Async) =
                 _observeProjected(proj, baseline, repairInterval, g, canEqualC)
+            override private[kyo] def readExact(read: ExactRead, anyChange: Boolean)(using AllowUnsafe): Maybe[A] =
+                _readExact(read, anyChange)
         end new
     end _initRawF
 
@@ -687,7 +794,99 @@ object Signal:
             g: B => Unit < (S & Async & Scope)
         )(using CanEqual[B, B], Frame): Unit < (S & Async) =
             source.observeProjected(proj, baseline, repairInterval)(g)
+
+        override private[kyo] def readExact(read: ExactRead, anyChange: Boolean)(using AllowUnsafe): Maybe[A] =
+            source.readExact(read, anyChange)
     end ReadOnly
+
+    /** The [[SignalRef]]s an exact read went through, each with the version it had before its value was read (see
+      * [[Signal.readExact]]), and the wakeup an observation of that read parks on.
+      *
+      * [[awaitChange]] registers this on the next-change promise of every recorded ref and checks the versions again, as
+      * `SignalRef.observeProjected` does for one ref. Once this completes, by a change or by the interrupt of the parked observer, it
+      * deregisters from all of those promises, so a source that does not change keeps no registration of it. One instance serves one read
+      * and at most one wait.
+      */
+    final private[kyo] class ExactRead extends IOPromise[Nothing, Unit] with (Result[Any, Any] => Unit):
+        private var refs: Array[SignalRef.Unsafe[?]]    = null
+        private var versions: Array[Long]               = null
+        private var size                                = 0
+        private var watched: Array[IOPromise[Any, Any]] = null
+        // Published after the registrations and read by `onComplete`: one of the two sides sees the other (see `watch`).
+        @volatile private var watchedCount = 0
+
+        def add(ref: SignalRef.Unsafe[?], version: Long): Unit =
+            if refs == null then
+                refs = new Array(4)
+                versions = new Array(4)
+            else if size == refs.length then
+                val r = new Array[SignalRef.Unsafe[?]](size * 2)
+                val v = new Array[Long](size * 2)
+                System.arraycopy(refs, 0, r, 0, size)
+                System.arraycopy(versions, 0, v, 0, size)
+                refs = r
+                versions = v
+            end if
+            refs(size) = ref
+            versions(size) = version
+            size += 1
+        end add
+
+        def changed()(using AllowUnsafe): Boolean =
+            @tailrec def loop(i: Int): Boolean = i < size && (refs(i).version() != versions(i) || loop(i + 1))
+            loop(0)
+
+        /** Returns once one of the recorded refs has changed since the read.
+          *
+          * If the parked observer is interrupted, its finalizer completes this and removes the registrations itself, since a change that
+          * completed this just before may still be removing them on the writer's thread. An interrupted fiber runs its finalizers before
+          * its result is set, so for an observer interrupted while parked, whoever awaits its result finds every registration already
+          * removed. An observer that a change resumed before it parked does not get this: the writer may still be removing for a moment.
+          */
+        def awaitChange(using Frame): Unit < Async =
+            Sync.Unsafe.defer {
+                if changed() then ()
+                else
+                    watch()
+                    if changed() then
+                        completeDiscard(Result.unit)
+                        (): Unit < Async
+                    else
+                        Sync.ensure { (error: Maybe[Result.Error[Any]]) =>
+                            // Winning the completion runs `unwatch` here through `onComplete`; losing it, the writer's may still run.
+                            if error.isDefined && !complete(Result.unit) then unwatch()
+                        }(Async.useResult(this)(_ => ()))
+                    end if
+            }
+
+        private def watch()(using AllowUnsafe): Unit =
+            val promises                    = new Array[IOPromise[Any, Any]](size)
+            @tailrec def loop(i: Int): Unit =
+                if i < size then
+                    val p = refs(i).next().lower.asInstanceOf[IOPromise[Any, Any]]
+                    promises(i) = p
+                    p.onComplete(this)
+                    loop(i + 1)
+            loop(0)
+            watched = promises
+            // A change may have completed this while the loop ran, and its `onComplete` may have read the count before this write.
+            watchedCount = size
+            if done() then unwatch()
+        end watch
+
+        private def unwatch(): Unit =
+            val n                           = watchedCount
+            @tailrec def loop(i: Int): Unit =
+                if i < n then
+                    discard(watched(i).remove(this))
+                    loop(i + 1)
+            loop(0)
+        end unwatch
+
+        def apply(r: Result[Any, Any]): Unit = completeDiscard(Result.unit)
+
+        override protected def onComplete(): Unit = unwatch()
+    end ExactRead
 
     /** A mutable reference implementation of Signal that allows modification of its value over time.
       *
@@ -702,6 +901,10 @@ object Signal:
         def currentWith[B, S](f: A => B < S)(using Frame) = Sync.Unsafe.defer(f(unsafe.get()))
 
         def nextWith[B, S](f: A => B < S)(using Frame) = Sync.Unsafe.defer(unsafe.next().safe.use(f))
+
+        override private[kyo] def readExact(read: ExactRead, anyChange: Boolean)(using AllowUnsafe): Maybe[A] =
+            read.add(_unsafe, _unsafe.version())
+            Present(_unsafe.get())
 
         /** Observes exactly, without a repair timer, through a version-validated register/validate/await protocol.
           *
