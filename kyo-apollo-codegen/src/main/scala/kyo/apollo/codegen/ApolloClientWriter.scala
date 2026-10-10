@@ -425,7 +425,7 @@ object ApolloClientWriter:
                 fields.map(f => FieldSpec(f.name, f.ofType, f.args.map(a => ArgSpec(a.name, a.ofType))))
             val objects = schema.objectTypeDefinitions.map { obj =>
                 roots.get(obj.name) match
-                    // Roots use the universal `RootQuery`/… markers from `core` (imported via
+                    // Roots use the universal `RootQuery`/… markers from kyo-apollo (imported via
                     // the wildcard), so no per-schema phantom trait is emitted for them.
                     case Some((origin, objectName)) =>
                         renderSelectorObject(objectName, origin, obj.name, specs(obj.fields), Nil, emitTrait = false)
@@ -508,7 +508,7 @@ object ApolloClientWriter:
         /** Render an `object <objectName>` of selector methods rooted in `originName`,
           * optionally preceded by its own `sealed trait <originName>` phantom marker
           * (object, interface and union types own theirs; the operation roots share
-          * `core`'s). `branches` are the object types an `on<Type>` inline-fragment
+          * kyo-apollo's). `branches` are the object types an `on<Type>` inline-fragment
           * branch is emitted for: the implementors of an interface, the members of a
           * union, none for an object type.
           */
@@ -527,7 +527,7 @@ object ApolloClientWriter:
             // and the lambda `_.code` read fields without repeating the type name.
             // They also carry a `given TypeName[Origin]` (in the trait's companion, so
             // it is auto-summoned) that names the type at runtime for `ClientField`
-            // (local `@client` state); the operation roots get theirs from `core`.
+            // (local `@client` state); the operation roots get theirs from kyo-apollo.
             val typeNameGiven =
                 if emitTrait then s"given TypeName[$originName] = TypeName(\"$originName\")\n\n" else ""
             // Client `@client` accessors (`_.code.isFavorite`) as a separate extension
@@ -541,7 +541,7 @@ object ApolloClientWriter:
                 fields.flatMap(f => scalaTypeOf(f.ofType) :: f.args.map(a => scalaTypeOf(a.ofType)))
             val scalarImport = customScalarImport(scalaTypes)
             // Client accessors call `sb.clientField(...)` and reference `ClientFields`,
-            // both reachable through `kyo.apollo.*` (the extension lives in `core`).
+            // both reachable through `kyo.apollo.*` (the extension lives in kyo-apollo).
             val clientImport = if clientFieldsFor(gqlType).nonEmpty then "\nimport kyo.apollo.*" else ""
             val traitDecl    = if emitTrait then s"sealed trait $originName\n\n" else ""
             // `Maybe`/`Chunk`/`Absent` for nullable/list fields and argument defaults.
@@ -663,8 +663,8 @@ object ApolloClientWriter:
           * Fields with DEFAULTED args need one indirection: an extension method
           * desugars into the same `object Origin` namespace as the plain selector
           * `def field(args…)`, and Scala forbids two overloads that BOTH declare
-          * default arguments. Same Option-D trick as the `` `field$sel` `` selector
-          * classes — hoist the args onto the sole `apply` of a dedicated
+          * default arguments. The way out is the one the `` `field$sel` `` selector
+          * classes take: hoist the args onto the sole `apply` of a dedicated
           * `` `field$chain` `` class reached through a parameterless accessor. The
           * call site keeps the exact `_.field(args…)(sub)` shape. Returns the
           * optional chain-class declaration plus the accessor.

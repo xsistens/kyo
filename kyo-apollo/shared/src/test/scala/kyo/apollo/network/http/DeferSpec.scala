@@ -151,7 +151,7 @@ class DeferSpec extends kyo.test.Test[Any]:
         }
 
         "emissions carry `complete`: false while payloads are outstanding, true on the final one" in {
-            // The C4 streaming marker: hasNext:true → complete=false, the terminal
+            // The streaming marker: hasNext:true → complete=false, the terminal
             // hasNext:false → complete=true. A view keys its "loading more" affordance
             // on this instead of guessing from emission counts.
             val t = transport(engineOf(respond(200, contentType, multipart)))

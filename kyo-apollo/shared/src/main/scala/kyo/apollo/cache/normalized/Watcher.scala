@@ -13,7 +13,7 @@ import kyo.apollo.network.ExecutionContext
 import kyo.apollo.runtime.ResponseStream
 import scala.annotation.tailrec
 
-/** Reactive `watch()` — the Phase 05 payload that turns a one-shot operation into
+/** Reactive `watch()`, which turns a one-shot operation into
   * a live stream.
   *
   * These extensions live in the cache package (not on the core `ApolloCall`/
@@ -83,7 +83,7 @@ extension [D](call: ApolloCall[D])
       * write (one whose changed keys do not intersect this read's `dependentKeys`)
       * notifies nobody.
       *
-      * ==How the effect pivot (Schritt 2.2) implements it==
+      * ==How it is implemented==
       *
       * A per-watch unbounded [[Channel]] backs the stream; its `streamUntilClosed`
       * is the stream body. The change notification is an effect the store runs on

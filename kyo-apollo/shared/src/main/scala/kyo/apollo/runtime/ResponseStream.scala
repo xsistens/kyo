@@ -3,7 +3,7 @@ package kyo.apollo.runtime
 import kyo.*
 import kyo.apollo.network.ApolloResponse
 
-/** The uniform effect-stream every operation produces (Schritt 2.2).
+/** The uniform effect-stream every operation produces.
   *
   * A single network reply, a cache-then-network pair, and a long-lived
   * subscription all share this one type — a Kyo [[Stream]] of [[ApolloResponse]]
@@ -14,7 +14,7 @@ import kyo.apollo.network.ApolloResponse
   * `Stream` is contravariant in its effect parameter, so `Async <: Async & Scope`
   * makes `Stream[V, Async] <: Stream[V, Async & Scope]`.
   *
-  * `core` is Kyo-effect-native: the interceptor chains speak Kyo `Stream` end to
+  * kyo-apollo is Kyo-effect-native: the interceptor chains speak Kyo `Stream` end to
   * end and `kyo-ui` binds those effects directly, with no framework bridge in
   * between.
   */

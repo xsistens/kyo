@@ -7,8 +7,8 @@ import kyo.apollo.StreamProbe
   * [[HttpEngine.StreamResponse]] / [[HttpStreamBody]]): the default buffers a
   * non-streaming engine's body, and a `Chunked` body streams its text chunks in
   * order with a `Scope`-bound teardown. `FetchHttpEngine`'s real `ReadableStream`
-  * reader needs a live `fetch` + multipart server, so it is exercised in the
-  * browser (C7) rather than here; this proves the seam its override plugs into.
+  * reader needs a live `fetch` + multipart server, so it is not exercised here;
+  * this proves the seam its override plugs into.
   */
 class HttpStreamingSpec extends kyo.test.Test[Any]:
 

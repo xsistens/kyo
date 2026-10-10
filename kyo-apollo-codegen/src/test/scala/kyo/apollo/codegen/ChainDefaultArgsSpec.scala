@@ -6,10 +6,9 @@ package kyo.apollo.codegen
   * declare default arguments. The writer therefore hoists the args of such a
   * field onto the sole `apply` of a dedicated `` `field$chain` `` class reached
   * through a parameterless accessor (the extension-level mirror of the
-  * `` `field$sel` `` Option-D trick), keeping the `_.field(args…)(sub)` call
-  * shape. Surfaced by the spotify-showcase schema, whose connection fields
-  * (`tracks(first, after)`) sit on non-root object types — the countries schema
-  * never had one.
+  * `` `field$sel` `` selector classes), keeping the `_.field(args…)(sub)` call
+  * shape. The case needs a connection field (`tracks(first, after)`) on a
+  * non-root object type, which the countries schema does not have.
   */
 class ChainDefaultArgsSpec extends kyo.test.Test[Any]:
 

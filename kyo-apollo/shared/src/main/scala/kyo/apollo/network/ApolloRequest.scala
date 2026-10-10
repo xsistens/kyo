@@ -14,7 +14,7 @@ import kyo.apollo.api.Operation
   * metadata the transport needs — one execution of an operation.
   *
   * This carries **no serialization logic**: the body is composed by
-  * [[kyo.apollo.network.http.HttpRequestComposer]] (Task 3), which reads these
+  * [[kyo.apollo.network.http.HttpRequestComposer]], which reads these
   * fields and delegates to [[kyo.apollo.api.OperationRequestBody]] — the single
   * source of request-body serialization. The APQ flags ([[sendApqExtensions]] /
   * [[sendDocument]]) are declared here so the composer can add persisted-query

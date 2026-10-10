@@ -10,19 +10,18 @@ import scala.NamedTuple.AnyNamedTuple
 import scala.NamedTuple.Empty
 import scala.collection.immutable.VectorMap
 
-/** Spike / Go-No-Go gate for the inline `SelectionBuilder` design.
+/** The inline `SelectionBuilder` design end to end, without the generator.
   *
   * The hand-written selector layer below (phantom `Origin` markers + `Country` /
-  * `Queries` objects) mimics exactly what the schema-driven generator will emit,
-  * so this proves the whole approach end to end *before* the generator exists:
+  * `Queries` objects) mimics exactly what the schema-driven generator emits, so
+  * this pins the selector design independently of kyo-apollo-codegen:
   *   - named-tuple `~` concatenation types correctly (`(name: …) ~ (capital: …)`),
   *   - a nested optional object selection composes and decodes,
   *   - the structural codec round-trips response JSON ⇄ named tuple,
-  *   - and — critically — all of it LINKS and RUNS under Scala.js / kyo RC5,
-  *     because nothing on this path uses `derives` (the sum-type derivation that
-  *     breaks the linker at RC5).
+  *   - and all of it links and runs under Scala.js, because nothing on this path
+  *     uses sum-type `derives`.
   */
-class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
+class HandWrittenSelectorSpec extends kyo.test.Test[Any]:
 
     given CanEqual[Any, Any] = CanEqual.derived
 
@@ -154,7 +153,7 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
 
     // --- Tests -----------------------------------------------------------------
 
-    "SelectionBuilder spike" - {
+    "hand-written selectors" - {
 
         "named-tuple ~ concat + structural decode of a nested optional object" in {
             val sel = Queries.country("DE")(Country.name ~ Country.capital)
@@ -382,4 +381,4 @@ class SelectionBuilderSpikeSpec extends kyo.test.Test[Any]:
             }
         }
     }
-end SelectionBuilderSpikeSpec
+end HandWrittenSelectorSpec

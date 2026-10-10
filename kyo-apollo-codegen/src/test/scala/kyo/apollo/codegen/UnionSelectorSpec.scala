@@ -4,8 +4,7 @@ package kyo.apollo.codegen
   * phantom marker trait + one `on<Member>` inline-fragment branch per member,
   * value + lambda overloads, plus chainable accessors), and a field whose leaf
   * type is a union is emitted as an OBJECT selector (nested selection), never a
-  * scalar. Surfaced by the spotify-showcase schema (`union PlayableItem = Track |
-  * Episode`).
+  * scalar (`union PlayableItem = Track | Episode`).
   */
 class UnionSelectorSpec extends kyo.test.Test[Any]:
 

@@ -8,8 +8,8 @@ import kyo.apollo.json.Json
   *
   * Both are pure functions — argument → wire text (outgoing) and wire text →
   * [[WsMessage]] (incoming) — so they are tested here in isolation, without any
-  * socket or transport. The multiplexing transport that drives them lands with
-  * its own fake-connection tests in a later Phase 06 task.
+  * socket or transport. The multiplexing transport that drives them is tested
+  * against a fake connection in [[WebSocketNetworkTransportSpec]].
   */
 class WsProtocolSpec extends kyo.test.Test[Any]:
 

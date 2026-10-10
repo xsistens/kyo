@@ -13,14 +13,13 @@ import kyo.apollo.network.ApolloResponse
 import scala.collection.immutable.VectorMap
 import scala.collection.mutable.ListBuffer
 
-/** Phase 05 Task 8 — the cohesive end-to-end reactivity suite.
+/** The cohesive end-to-end reactivity suite.
   *
   * Where the per-feature specs each verify one seam in isolation
   * ([[CacheBatchReaderSpec]] dependency capture, [[ChangedKeysSubjectSpec]] /
   * [[StoreSpec]] the bus, [[WatcherSpec]] a single watcher, [[FragmentSpec]] the
   * fragment APIs), this suite drives the *whole* reactive loop through one
-  * watcher lifecycle and asserts, in one narrative, every behavior Task 8 calls
-  * out:
+  * watcher lifecycle and asserts, in one narrative, every reactive behavior:
   *
   *   1. dependency-key capture during reads,
   *   2. `changedKeys` emission on writes,
@@ -42,7 +41,7 @@ class ReactivitySpec extends kyo.test.Test[Any]:
     // --- fixture: a `CurrentUser` query + a `User` fragment on the same record --
 
     // `__typename` field named verbatim to match the GraphQL wire form (kyo-schema
-    // encodes field names as-is; the old ObjectAdapter mapped `typename` onto it).
+    // encodes field names as-is).
     final case class User(__typename: String, id: String, name: String) derives Schema
     final case class UserData(user: User) derives Schema
 

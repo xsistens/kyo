@@ -5,8 +5,7 @@ import kyo.apollo.exception.ApolloNetworkException
 import kyo.apollo.exception.HttpEngineFailure
 import kyo.apollo.network.http.HttpEngine
 
-/** The single, parameterized fake [[HttpEngine]] that collapses the ~11 inline
-  * doubles the audit found across the suite (ADR §2b): the capturing engine
+/** A single, parameterized fake [[HttpEngine]] covering the usual doubles: the capturing engine
   * (records the request, returns a canned body), the counting engine (fixed
   * body, call count), the recording-with-callback engine, and the anonymous
   * canned / failing engines. Every request is recorded in [[requests]] (with a
@@ -30,8 +29,7 @@ import kyo.apollo.network.http.HttpEngine
   *     into an `ApolloResponse.error` value).
   *
   * For a reply parked on a gate (observe `Loading` before releasing the
-  * response), use [[GatedHttpEngine]] instead — the one gate-on-a-`Promise`
-  * engine promoted as-is from `KyoTestSupport`.
+  * response), use [[GatedHttpEngine]] instead.
   */
 final class TestHttpEngine private (
     responder: HttpEngine.Request => HttpEngine.Response < (Async & Abort[HttpEngineFailure]),
@@ -85,9 +83,7 @@ end TestHttpEngine
 /** An [[HttpEngine]] that parks every reply on a gate until [[release]] is
   * called, so a watcher's first (network) emission can be deferred
   * deterministically — a test observes `Loading` before the response, then
-  * `Success` after. Promoted as-is from `KyoTestSupport.GatedEngine` (ADR §2a:
-  * the only gate-on-a-`Promise` engine, essential for reactive `Loading` →
-  * `Success` assertions), with the request-recording of [[TestHttpEngine]] added.
+  * `Success` after. Records requests like [[TestHttpEngine]].
   */
 final class GatedHttpEngine(responseBody: String, status: HttpStatus = HttpStatus.OK) extends HttpEngine:
     private given Frame = Frame.internal

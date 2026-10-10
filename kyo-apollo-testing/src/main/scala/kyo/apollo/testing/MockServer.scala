@@ -12,9 +12,8 @@ import kyo.apollo.network.http.HttpEngine
   * run operations, then [[takeRequest]] / inspect [[requests]] to assert on what
   * the client actually sent.
   *
-  * Built by promoting the document-routing engines (`RoutingEngine` /
-  * `ScriptedEngine`) and the capturing/counting request-assertion machinery
-  * catalogued in ADR §2b behind a queue + expectations façade. Responses are
+  * Document routing and capturing/counting request assertions sit behind a
+  * queue + expectations façade. Responses are
   * served FIFO; when the queue is exhausted an optional [[default]] handler
   * answers (otherwise the round-trip panics with a `NoSuchElementException`, so a
   * missing `enqueue` surfaces loudly rather than hanging). For per-operation

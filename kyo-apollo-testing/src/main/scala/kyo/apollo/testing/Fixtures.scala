@@ -10,10 +10,8 @@ import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloRequest
 import scala.collection.immutable.VectorMap
 
-/** The shared GraphQL fixtures the specs re-declared inline across the suite
-  * (ADR §2b), promoted into one place: the `{ "value": Int }` operation family
-  * (from `WsTestSupport`/`ResilienceInterceptorSpec`) and the `User:1` record
-  * family (from `MutationWatcherSpec`/`ReactivitySpec`/`KyoTestSupport`).
+/** Shared GraphQL fixtures: the `{ "value": Int }` operation family and the
+  * `User:1` record family.
   *
   * Two shapes cover nearly every double:
   *
@@ -61,8 +59,8 @@ object Fixtures:
         def variables: Json           = Json.JObj(VectorMap.empty)
     end ValueSubscription
 
-    /** An [[ApolloRequest]] for the `value` subscription (mirrors the promoted
-      * `WsTestSupport.request()` convenience), with a fresh id minted when it runs.
+    /** An [[ApolloRequest]] for the `value` subscription, with a fresh id minted
+      * when it runs.
       */
     def valueRequest(using Frame): ApolloRequest[Int] < Sync = ApolloRequest.builder(ValueSubscription()).build
 

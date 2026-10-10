@@ -10,8 +10,8 @@ import kyo.apollo.network.http.HttpEngine
 import kyo.apollo.network.http.HttpRequestBody
 import kyo.apollo.runtime.ResponseStream
 
-/** Validates the promoted `kyo.apollo.testing` doubles behave as the specs that once
-  * declared them inline relied on: the unified [[TestHttpEngine]], the
+/** Validates that the `kyo.apollo.testing` doubles behave as their users rely on:
+  * the unified [[TestHttpEngine]], the
   * [[MockServer]], the operation-layer [[QueueTestNetworkTransport]] /
   * [[MapTestNetworkTransport]], the [[TestApolloClient]] builders (incl. cache
   * integration), the scripted [[MockWebSocketServer]], and [[StreamProbe]] — all

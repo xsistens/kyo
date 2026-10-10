@@ -11,7 +11,7 @@ import kyo.apollo.cache.normalized.internal.Normalizer
 import kyo.apollo.json.Json
 import scala.collection.immutable.VectorMap
 
-/** Unit tests for Phase 04 normalization ([[Normalizer]]): walking an operation's
+/** Unit tests for normalization ([[Normalizer]]): walking an operation's
   * selection tree over a response `data` map to produce flat, linked
   * [[Record]]s.
   */

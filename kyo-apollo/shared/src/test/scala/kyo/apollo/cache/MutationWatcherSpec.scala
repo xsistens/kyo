@@ -14,7 +14,7 @@ import kyo.apollo.network.ws.FakeWebSocketConnection
 import kyo.apollo.network.ws.FakeWebSocketEngine
 import scala.collection.immutable.VectorMap
 
-/** Phase 05 Task 5: mutations update the cache and fan their changed keys out to
+/** Mutations update the cache and fan their changed keys out to
   * watchers. A `CurrentUserQuery` is watched while an `UpdateUserNameMutation`
   * runs through the *real* network chain — the [[kyo.apollo.cache.normalized.CacheInterceptor]]
   * write-back normalizes the mutation payload exactly like a query, merges it into
@@ -34,8 +34,7 @@ class MutationWatcherSpec extends kyo.test.Test[Any]:
     // --- fixtures ---------------------------------------------------------------
 
     // `__typename` is a legal Scala identifier and kyo-schema encodes field names
-    // verbatim, so the field is named `__typename` to match the GraphQL wire form
-    // (the old ObjectAdapter mapped a `typename` field onto the `__typename` key).
+    // verbatim, so the field is named `__typename` to match the GraphQL wire form.
     final case class User(__typename: String, id: String, name: String) derives Schema
 
     private def userField(field: String): CompiledField =

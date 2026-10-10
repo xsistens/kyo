@@ -15,7 +15,7 @@
 "An ISO-8601 timestamp — a custom scalar, mapped to a Scala type via scalarMapping."
 scalar DateTime
 
-"The seven continents; maps to a Scala 3 `enum` with adapters (codegen Task 4)."
+"The seven continents; generated as a Scala 3 `enum` with a string-transform `Schema`."
 enum Continent {
   AFRICA
   ANTARCTICA

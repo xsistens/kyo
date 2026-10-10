@@ -8,7 +8,7 @@ import kyo.apollo.cache.TestKeys.*
 import kyo.apollo.cache.normalized.api.*
 import kyo.apollo.json.Json
 
-/** Unit tests for Phase 04 cache-key generation: [[CacheKeyGenerator]] /
+/** Unit tests for cache-key generation: [[CacheKeyGenerator]] /
   * [[IdCacheKeyGenerator]] (write side) and [[CacheKeyResolver]] (read side).
   */
 class CacheKeyGenerationSpec extends kyo.test.Test[Any]:

@@ -10,7 +10,7 @@ import kyo.apollo.cache.normalized.api.*
 import kyo.apollo.json.Json
 import scala.collection.immutable.VectorMap
 
-/** Unit tests for the Phase 04 record model: [[Record]] / [[RecordValue]],
+/** Unit tests for the record model: [[Record]] / [[RecordValue]],
   * [[CacheKey]], [[CacheReference]], and [[FieldKey]].
   */
 class RecordModelSpec extends kyo.test.Test[Any]:

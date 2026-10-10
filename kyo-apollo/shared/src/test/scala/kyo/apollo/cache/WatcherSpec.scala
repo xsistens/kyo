@@ -16,7 +16,7 @@ import kyo.apollo.json.Json
 import kyo.apollo.network.ApolloResponse
 import scala.collection.immutable.VectorMap
 
-/** Phase 05 Task 4 tests: a `watch()` re-emits when a record its last read
+/** A `watch()` re-emits when a record its last read
   * depended on changes (from a mutation or a direct `apolloStore` write), stays
   * silent on unrelated writes, and stops emitting once cancelled. Driven through
   * a fake [[kyo.apollo.network.http.HttpEngine]] and the synchronous, network-free
@@ -33,7 +33,7 @@ class WatcherSpec extends kyo.test.Test[Any]:
     // --- fixture: a `CurrentUser` query returning a single id-keyed `User` ------
 
     // `__typename` field named verbatim to match the GraphQL wire form (kyo-schema
-    // encodes field names as-is; the old ObjectAdapter mapped `typename` onto it).
+    // encodes field names as-is).
     final case class User(__typename: String, id: String, name: String) derives Schema
     final case class UserData(user: User) derives Schema
 
@@ -161,7 +161,7 @@ class WatcherSpec extends kyo.test.Test[Any]:
     end SleepingEngine
 
     /** A cache that can hide one record from every read while writes to it still
-      * land (and still report changed keys): the permanent miss of P2-34 — a record
+      * land (and still report changed keys): a permanent miss — a record
       * the write-back keeps touching but the watched read can never be satisfied by.
       */
     final private class HoleCache(delegate: NormalizedCache) extends NormalizedCacheDecorator(delegate):
@@ -179,7 +179,7 @@ class WatcherSpec extends kyo.test.Test[Any]:
     /** A cache whose read can be armed once: the first read that loads `key` after
       * arming completes normally and THEN runs `write`, before the read returns to the
       * store — so the write lands, on the reading fiber itself, between a read and the
-      * moment the read's key set is adopted by the watch. That is the P2-33 window,
+      * moment the read's key set is adopted by the watch. That is the adoption window,
       * reproduced single-threaded and without a thread block (the re-read runs inside
       * the publisher's `publish`, so a latch there would park the writer).
       */
@@ -319,7 +319,7 @@ class WatcherSpec extends kyo.test.Test[Any]:
         }
 
         "no emission reaches the channel after the scope closed" in {
-            // The interleaving P2-32 is about: a NetworkOnly refetch is on the wire when
+            // The interleaving at stake: a NetworkOnly refetch is on the wire when
             // the watch's Scope closes. The late response arrives on a detached fetch
             // fiber and must find the watch inactive — one CAS flips `active`, and the
             // store's publisher no longer reaches the (unsubscribed) watcher either.
@@ -363,7 +363,7 @@ class WatcherSpec extends kyo.test.Test[Any]:
         }
 
         "a refetch fiber does not outlive its watch" in {
-            // P2-40. A NetworkOnly refetch is parked on the engine when the watch's Scope
+            // A NetworkOnly refetch is parked on the engine when the watch's Scope
             // closes. The refetch fiber belongs to that Scope, so the close interrupts the
             // request in flight: the engine sees its call end by interruption even though
             // the gate opens right after, and nothing reaches the consumer. A detached
@@ -403,7 +403,7 @@ class WatcherSpec extends kyo.test.Test[Any]:
         }
 
         "a failing refetch surfaces as a response" in {
-            // P2-40. The refetch's engine call panics. The watch's consumer sees that as an
+            // The refetch's engine call panics. The watch's consumer sees that as an
             // error response, and the watch goes on: the next write's refetch answers.
             // A detached fiber that swallows its failure emits nothing for the first write.
             for
@@ -454,7 +454,7 @@ class WatcherSpec extends kyo.test.Test[Any]:
         }
 
         "a write landing between the re-read and the key-set adoption is not lost" in {
-            // P2-33, the re-read window. The watch depends on {QUERY_ROOT, User:1}. A
+            // The adoption window on a re-read. The watch depends on {QUERY_ROOT, User:1}. A
             // write re-points the root at User:2, whose changed keys hit QUERY_ROOT and
             // start the re-read; while that re-read has already loaded User:2 (as "Bob")
             // but not yet adopted {QUERY_ROOT, User:2}, a second write renames User:2 to
@@ -493,7 +493,7 @@ class WatcherSpec extends kyo.test.Test[Any]:
         }
 
         "establishFrom stamps the generation of its own read" in {
-            // P2-33, the establishing window: the interceptor's initial CacheOnly read
+            // The adoption window when the watch establishes: the interceptor's initial CacheOnly read
             // has loaded User:1 ("Alice") when a fragment write renames it to "Bob". The
             // watch's key set is still empty, so the publish reaches nobody; the response
             // carries Alice and the generation its read was current at. Adopting that
@@ -593,7 +593,7 @@ class WatcherSpec extends kyo.test.Test[Any]:
         }
 
         "CacheFirst does not loop on a permanent miss" in {
-            // P2-34. User:1 is removed AND hidden from every read, so the watched read
+            // User:1 is removed AND hidden from every read, so the watched read
             // misses for good, while each network answer differs (a volatile field) and
             // its write-back publishes User:1 — which the watch depends on. Without the
             // once-per-cause rule that is an endless chain: write-back → re-read misses →

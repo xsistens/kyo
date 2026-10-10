@@ -10,8 +10,7 @@ import kyo.apollo.network.CacheInfo
 /** The two cache-served [[ApolloResponse]] shapes — a hit carrying data and its
   * `dependentKeys`, and a miss carrying the [[CacheReadFailure]] as a value —
   * built in one place so the [[CacheInterceptor]] (initial reads) and the
-  * `watch()` extension (re-reads) stamp identical metadata. Extracted rather than
-  * duplicated: the "one metadata model" reuse rule from the Phase 05 design.
+  * `watch()` extension (re-reads) stamp identical metadata.
   */
 private[normalized] object CacheResponses:
 

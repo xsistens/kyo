@@ -10,13 +10,13 @@ import kyo.apollo.exception.CacheMissException
 import kyo.apollo.json.Json
 import scala.collection.immutable.VectorMap
 
-/** Phase 05 Task 6: direct fragment/cache access. A [[Fragment]] reads from and
+/** Direct fragment/cache access. A [[Fragment]] reads from and
   * writes to a *specific* [[CacheKey]] without a full operation, reusing the same
   * `Normalizer` (write) and `CacheBatchReader` (read) machinery as an operation —
   * only rooted at the caller's key. These tests cover the round-trip, the
   * dependency-key capture, the change notification `writeFragment` publishes, and
   * the cross-path sharing that lets an imperative fragment write update the very
-  * record a full query reads (the seam Task 8's watcher test builds on).
+  * record a full query reads (the seam [[ReactivitySpec]] builds on).
   */
 class FragmentSpec extends kyo.test.Test[Any]:
 

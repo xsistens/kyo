@@ -4,16 +4,13 @@ import kyo.*
 
 /** Effect-native stream probes for the kyo-test suites.
   *
-  * `core` is kyo-effect-native (an operation yields `ApolloResponse[D] < (Async
+  * kyo-apollo is kyo-effect-native (an operation yields `ApolloResponse[D] < (Async
   * & Scope)`, an interceptor chain a `Stream[ApolloResponse[D], Async & Scope]`)
-  * and, since the move to kyo-test, so are the specs: each test leaf body IS a
-  * kyo effect the runner discharges, so there is no `Future` to bridge into. The
-  * old `KyoTestRun` object — which shuttled an effect/stream into a `Future` for
-  * munit to await — is therefore gone; what remains here is the one genuinely
-  * reused, non-trivial piece: a channel-backed [[Pull]] handle for specs that
-  * interleave synchronous side effects (store writes, scripted socket frames)
-  * between *exact*, ordered stream emissions. Everything else a spec used to get
-  * from the bridge is now a one-liner on the effect itself (`stream.run`,
+  * and so are the specs: each test leaf body IS a kyo effect the runner
+  * discharges, so there is no `Future` to bridge into. What this provides is a
+  * channel-backed [[Pull]] handle for specs that interleave synchronous side
+  * effects (store writes, scripted socket frames) between *exact*, ordered stream
+  * emissions. Anything simpler is a one-liner on the effect itself (`stream.run`,
   * `stream.take(1).run`), inlined at the call site.
   *
   * `collect` / `first` are kept only as readable names for those one-liners; they

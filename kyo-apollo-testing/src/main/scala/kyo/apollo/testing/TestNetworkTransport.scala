@@ -25,15 +25,13 @@ import kyo.apollo.runtime.ResponseStream
   * real network/socket is touched and any cache interceptor installed *above* it
   * still normalizes the canned response exactly as it would a networked one.
   *
-  * Promoted from `ResilienceInterceptorSpec.ScriptedApollo` + the canned
-  * `ApolloResponse` builders (ADR §5). Two flavors:
+  * Two flavors:
   *
-  *   - [[QueueTestNetworkTransport]] — FIFO scripted responses (generalizes
-  *     `ScriptedApollo`): the next `enqueue`d response answers the next request,
-  *     regardless of which operation it is.
-  *   - [[MapTestNetworkTransport]] — a per-operation registry (generalizes the
-  *     document-routing `RoutingEngine`): responses keyed by operation, so
-  *     arrival order does not matter.
+  *   - [[QueueTestNetworkTransport]] — FIFO scripted responses: the next
+  *     `enqueue`d response answers the next request, regardless of which
+  *     operation it is.
+  *   - [[MapTestNetworkTransport]] — a per-operation registry: responses keyed by
+  *     operation, so arrival order does not matter.
   *
   * A request is recorded, and its response picked, when the stream it returns is
   * consumed — a stream that is built and dropped is not counted, and a stream
@@ -66,7 +64,7 @@ end TestNetworkTransport
 
 /** FIFO scripted responses: the next [[enqueue]]d builder answers the next
   * request. Panics (loudly) when the script is exhausted, so a missing `enqueue`
-  * is a visible test failure rather than a hang. Generalizes `ScriptedApollo`.
+  * is a visible test failure rather than a hang.
   * Build one with [[QueueTestNetworkTransport.init]].
   */
 final class QueueTestNetworkTransport private (
@@ -112,7 +110,7 @@ end QueueTestNetworkTransport
 
 /** A per-operation registry keyed by the operation's document text: [[register]]
   * a response for an operation, and every request for that operation is answered
-  * with it (order-independent). Generalizes the document-routing `RoutingEngine`.
+  * with it (order-independent).
   * Build one with [[MapTestNetworkTransport.init]].
   */
 final class MapTestNetworkTransport private (
@@ -153,8 +151,7 @@ object MapTestNetworkTransport:
 end MapTestNetworkTransport
 
 /** Canned [[ApolloResponse]] builders — the `data` / `networkError` /
-  * `httpError` / `graphqlError` factories promoted from
-  * `ResilienceInterceptorSpec` (ADR §5). Each yields a `Uuid => ApolloResponse`
+  * `httpError` / `graphqlError` factories. Each yields a `Uuid => ApolloResponse`
   * so the transport stamps the answered request's id.
   */
 object TestResponses:
@@ -180,9 +177,7 @@ object TestResponses:
         uuid => ApolloResponse.fromException(uuid, cause)
 end TestResponses
 
-/** The `ApolloClient` test factories (ADR §5) — the `cacheless` / `cached`
-  * factories generalizing `KyoTestSupport.cacheless`/`cached` and the ~9
-  * `cachedClient`/`clientFor` copies scattered across the specs. Each creates a
+/** The `ApolloClient` test factories, `cacheless` and `cached`. Each creates a
   * ready-to-run client against a fake [[HttpEngine]] or a [[TestNetworkTransport]],
   * with an optional normalized cache keyed by `id`, owned by the enclosing `Scope`
   * ([[ApolloClient.init]]) — a test leaf's `Scope` closes it.

@@ -70,7 +70,7 @@ object WebSocketConnection:
       * and the close in one burst (the ordinary end of a finite subscription) would
       * otherwise drop both frames for a consumer that has not drained yet; the shared
       * bridge `kyo.apollo.network.MarkedChannel` documents both traps it avoids. Public
-      * so the promoted `kyo-apollo-testing` double drives the same contract as the
+      * so the `kyo-apollo-testing` double drives the same contract as the
       * engines.
       */
     def untilEnd(frames: Channel[Maybe[String]])(using Frame): Stream[String, Async] =

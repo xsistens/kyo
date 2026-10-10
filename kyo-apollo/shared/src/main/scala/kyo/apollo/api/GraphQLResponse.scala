@@ -13,10 +13,9 @@ import kyo.apollo.json.Json
   *
   * All three fields can be populated simultaneously: GraphQL permits a partial
   * `data` result alongside a non-empty `errors` list, plus top-level
-  * `extensions` metadata. `extensions` is passed through as raw JSON (added in
-  * Task 6 with a default so Phase 01 `GraphQLResponse(data, errors)`
-  * constructions keep compiling). Build one from wire JSON via
-  * [[GraphQLResponse.parse]].
+  * `extensions` metadata. `extensions` is passed through as raw JSON and
+  * defaults to empty, so `GraphQLResponse(data, errors)` is a complete
+  * response. Build one from wire JSON via [[GraphQLResponse.parse]].
   */
 final case class GraphQLResponse[D](
     data: Maybe[D],

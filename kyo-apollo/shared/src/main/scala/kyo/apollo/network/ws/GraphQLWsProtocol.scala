@@ -16,8 +16,8 @@ import kyo.apollo.json.Json
   *   - either → `{"type":"ping","payload"?:{…}}` / `{"type":"pong","payload"?:{…}}`
   *
   * Cancellation and normal server completion share the `complete` frame, so
-  * [[stopOperation]] emits `complete` — consistent with the Task 1 decision that
-  * a subscriber's cancellation is a protocol `complete` for its id.
+  * [[stopOperation]] emits `complete`: a subscriber's cancellation is a protocol
+  * `complete` for its id.
   */
 object GraphQLWsProtocol extends WsProtocol:
     import WsProtocol.*

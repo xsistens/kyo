@@ -16,7 +16,7 @@ import kyo.apollo.runtime.ResponseStream
 /** The terminal HTTP transport: takes an [[ApolloRequest]], sends it over an
   * [[HttpEngine]], and returns a fully-decoded [[ApolloResponse]].
   *
-  * It is the single place where failures become values (Phase 03's contract):
+  * It is the single place where failures become values:
   * the engine's typed failure, a non-2xx status and an unparseable body are
   * folded into `ApolloResponse.error`, so the returned effect never fails for
   * those conditions.
