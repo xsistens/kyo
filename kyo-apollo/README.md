@@ -51,6 +51,20 @@ object Queries:
             sel,
             SelectionBuilder.Nesting.Listed(SelectionBuilder.Nesting.Leaf)
         )
+
+    def countriesPage[A](first: Int, after: Maybe[String])(
+        sel: SelectionBuilder.Bidirectional[CountryConnection, A]
+    ): SelectionBuilder.Deferrable[RootQuery, (countriesPage: A)] =
+        SelectionBuilder.obj(
+            "countriesPage",
+            CompiledNamedType("CountryConnection").notNull,
+            Chunk(
+                SelectionBuilder.Arg("first", CompiledNamedType("Int").notNull, ScalarCodec.int.encode(first)),
+                SelectionBuilder.Arg("after", CompiledNamedType("String"), ScalarCodec.maybe(ScalarCodec.string).encode(after))
+            ),
+            sel,
+            SelectionBuilder.Nesting.Leaf
+        )
 end Queries
 
 object Mutations:
@@ -63,6 +77,20 @@ object Mutations:
             Chunk(
                 SelectionBuilder.Arg("code", CompiledNamedType("ID").notNull, ScalarCodec.id.encode(code)),
                 SelectionBuilder.Arg("capital", CompiledNamedType("String").notNull, ScalarCodec.string.encode(capital))
+            ),
+            sel,
+            SelectionBuilder.Nesting.Leaf
+        )
+
+    def uploadFlag[A](code: String, file: kyo.apollo.Upload)(
+        sel: SelectionBuilder.Bidirectional[Country, A]
+    ): SelectionBuilder.Deferrable[RootMutation, (uploadFlag: A)] =
+        SelectionBuilder.obj(
+            "uploadFlag",
+            CompiledNamedType("Country").notNull,
+            Chunk(
+                SelectionBuilder.Arg("code", CompiledNamedType("ID").notNull, ScalarCodec.id.encode(code)),
+                SelectionBuilder.Arg("file", CompiledNamedType("Upload").notNull, ScalarCodec.upload.encode(file))
             ),
             sel,
             SelectionBuilder.Nesting.Leaf
@@ -81,6 +109,47 @@ object Subscriptions:
             SelectionBuilder.Nesting.Leaf
         )
 end Subscriptions
+
+// The connection types behind `Queries.countriesPage`, shown in "Pagination".
+sealed trait CountryConnection
+object CountryConnection:
+    given TypeName[CountryConnection] = TypeName("CountryConnection")
+
+    def edges[A](sel: SelectionBuilder.Bidirectional[CountryEdge, A])
+        : SelectionBuilder.Deferrable[CountryConnection, (edges: Chunk[A])] =
+        SelectionBuilder.obj(
+            "edges",
+            CompiledNamedType("CountryEdge").notNull.list.notNull,
+            Chunk.empty,
+            sel,
+            SelectionBuilder.Nesting.Listed(SelectionBuilder.Nesting.Leaf)
+        )
+
+    def pageInfo[A](sel: SelectionBuilder.Bidirectional[PageInfo, A]): SelectionBuilder.Deferrable[CountryConnection, (pageInfo: A)] =
+        SelectionBuilder.obj("pageInfo", CompiledNamedType("PageInfo").notNull, Chunk.empty, sel, SelectionBuilder.Nesting.Leaf)
+end CountryConnection
+
+sealed trait CountryEdge
+object CountryEdge:
+    given TypeName[CountryEdge] = TypeName("CountryEdge")
+
+    def cursor: SelectionBuilder.Deferrable[CountryEdge, (cursor: String)] =
+        SelectionBuilder.scalar("cursor", CompiledNamedType("String").notNull, ScalarCodec.string)
+
+    def node[A](sel: SelectionBuilder.Bidirectional[Country, A]): SelectionBuilder.Deferrable[CountryEdge, (node: A)] =
+        SelectionBuilder.obj("node", CompiledNamedType("Country").notNull, Chunk.empty, sel, SelectionBuilder.Nesting.Leaf)
+end CountryEdge
+
+sealed trait PageInfo
+object PageInfo:
+    given TypeName[PageInfo] = TypeName("PageInfo")
+
+    def hasNextPage: SelectionBuilder.Deferrable[PageInfo, (hasNextPage: Boolean)] =
+        SelectionBuilder.scalar("hasNextPage", CompiledNamedType("Boolean").notNull, ScalarCodec.boolean)
+
+    def endCursor: SelectionBuilder.Deferrable[PageInfo, (endCursor: Maybe[String])] =
+        SelectionBuilder.scalar("endCursor", CompiledNamedType("String"), ScalarCodec.maybe(ScalarCodec.string))
+end PageInfo
 
 val config = ApolloClient.Config("https://countries.example/graphql")
 ```
@@ -263,6 +332,58 @@ Most servers accept subscriptions on a URL of their own; set it with
 operation runs through the same interceptor chain, and a cache-then-network read is
 just a stream with two elements.
 
+### Configuring the subscription socket
+
+A server that authenticates subscriptions reads a payload from the socket's
+`connection_init` message, and a long-lived client has to survive a dropped
+connection. Both are `Config` settings:
+
+```scala
+import kyo.apollo.json.Json
+import kyo.apollo.network.ws.WebSocketNetworkTransport
+import scala.collection.immutable.VectorMap
+
+val live: ApolloClient.Config =
+    config
+        .webSocketServerUrl("wss://countries.example/graphql")
+        .webSocketConnectionPayload(Json.JObj(VectorMap("authToken" -> Json.JStr("<token>"))))
+        .webSocketReopenWhen(WebSocketNetworkTransport.reconnectAlways)
+        .webSocketBackoff(Schedule.exponentialBackoff(500.millis, 2.0, 30.seconds))
+        .webSocketConnectTimeout(10.seconds)
+        .subscriptionBufferSize(64)
+```
+
+On an abnormal drop, the predicate passed to `webSocketReopenWhen` receives the failure
+and the attempt number and decides whether to reopen; a reopened socket sends
+`connection_init` again and resubscribes every active subscription, waiting between
+attempts as `webSocketBackoff` schedules. `subscriptionBufferSize` bounds how many
+responses one subscription holds for a consumer that has not taken them yet; when it
+is full, the socket is not read further until the consumer catches up.
+
+### Uploads
+
+A file travels as an `Upload`, a `Span[Byte]` with a file name and a content type. An
+operation whose variables carry one is sent as a multipart request, following the
+GraphQL multipart request spec, whatever the `httpMethod`:
+
+```graphql
+scalar Upload
+
+type Mutation {
+  uploadFlag(code: ID!, file: Upload!): Country!
+}
+```
+
+```scala
+def uploadFlag(client: ApolloClient, png: Span[Byte]): Maybe[String] < (Async & Scope) =
+    val flag = Upload(png, "flag.png", "image/png")
+    client.mutation(Mutations.uploadFlag("DE", flag)(Country.code ~ Country.name).toMutation()).execute
+        .map(_.data.map(_.uploadFlag.name))
+end uploadFlag
+```
+
+On JS and Wasm, `UploadJs.fromFile` turns a browser `File` into an `Upload`.
+
 ## What a selection can do
 
 A selection says which fields an operation reads, and its type says what the operation
@@ -338,6 +459,49 @@ val withDetailsIsTyped: kyo.apollo.api.Query.Normalizable[
 
 A list field marked `.streamed(initialCount)` keeps its `Chunk` type and grows across
 emissions as the server appends the remaining items.
+
+### Custom scalars
+
+A schema's own scalars (`DateTime`, `Long`, `JSON`) decode into whatever Scala type the
+build maps them to; the type needs a kyo `Schema`. The mapping is a codegen setting:
+
+```scala doctest:expect=skipped
+apolloScalarMappings := Map("DateTime" -> "java.time.Instant", "Long" -> "scala.Long")
+```
+
+The generated selector for a `population: Long!` field then decodes through
+`ScalarCodec.fromSchema`, which is also what a hand-written selector uses:
+
+```scala
+def population: SelectionBuilder.Deferrable[Country, (population: Long)] =
+    SelectionBuilder.scalar("population", CompiledNamedType("Long").notNull, ScalarCodec.fromSchema[Long])
+```
+
+A custom scalar without a mapping is generated as `String`, the raw wire value.
+
+### Local fields (`@client`)
+
+UI state that belongs to an entity but not to the server (a starred country, a
+selected row) lives in the cache as a client field. It is selected like a server
+field, never sent to the server, and reads its default until something writes it:
+
+```scala
+import kyo.apollo.cache.normalized.api.CacheKey
+
+val isFavorite = ClientField.create[Country, Boolean]("isFavorite", default = false)
+
+val favourites = Queries.countries(Country.code ~ Country.name ~ isFavorite.select).toQuery()
+
+def star(client: ApolloClient, code: String): Set[CacheKey] < Sync =
+    isFavorite.write(client, code, true)
+```
+
+`write` stores the value on the record `Country:<code>` and publishes it, so every watch
+that selected `isFavorite` re-emits, the same way a server response would make it.
+`read(client, code)` reads it back, and `writeRoot`/`readRoot` keep a value on the query
+root instead of an entity. kyo-apollo-codegen declares client fields from the build
+(`--client-field "Country.isFavorite: Boolean = false"`), so they appear next to the
+server fields on the generated selector.
 
 ### What the selection types allow
 
@@ -571,8 +735,93 @@ def collectKeeping(client: ApolloClient): Set[CacheKey] < (Sync & Async) =
     }
 ```
 
-`MemoryCache` also bounds the cache by record count (LRU) and expires records and
-fields by age (`expireAfterMillis`, `maxAge`).
+### Bounding the cache
+
+A cache that lives as long as the program needs bounds. `MemoryCache` evicts the least
+recently used records past `maxSize`, and expires data by age: a whole record after
+`expireAfterMillis`, a single field after `maxAge`, each counted from when it was
+written:
+
+```scala
+val bounded = MemoryCache(maxSize = 5_000, maxAge = 5 * 60 * 1000L)
+```
+
+An expired field reads as missing, so the next `CacheFirst` call asks the server for it
+again. Expiry publishes nothing: a watch sees the missing field when a write makes it
+re-read.
+
+### Pagination
+
+A list that arrives page by page should read as one list. Relay-style connections
+(`edges`, `pageInfo`, an `after` cursor) get that from a `ConnectionFieldPolicy`: every
+page writes into the same cache slot, and the edges of later pages are appended to the
+earlier ones instead of replacing them. The schema:
+
+```graphql
+type Query {
+  countriesPage(first: Int!, after: String): CountryConnection!
+}
+type CountryConnection { edges: [CountryEdge!]! pageInfo: PageInfo! }
+type CountryEdge { cursor: String! node: Country! }
+type PageInfo { hasNextPage: Boolean! endCursor: String }
+```
+
+The cache needs the policy and an identity for the edges, and `pagedBy` turns the query
+into a function from cursor to page:
+
+```scala
+import kyo.apollo.cache.normalized.*
+import kyo.apollo.cache.normalized.api.*
+
+given CacheIdentity[CountryEdge] = CacheIdentity.by(_ ~ CountryEdge.cursor)
+
+val paged: ApolloClient.Config =
+    config.normalizedCache(
+        MemoryCache(),
+        CacheIdentity.generator(summon[CacheIdentity[Country]], summon[CacheIdentity[CountryEdge]]),
+        fieldPolicies = FieldPolicies.fromList(ConnectionFieldPolicy("Query", "countriesPage", "CountryConnection"))
+    )
+
+val countryPage =
+    Queries.countriesPage(first = 20, after = Absent)(
+        CountryConnection.edges(CountryEdge.cursor ~ CountryEdge.node(Country.code ~ Country.name)) ~
+            CountryConnection.pageInfo(PageInfo.hasNextPage ~ PageInfo.endCursor)
+    ).pagedBy()
+
+def loadAllPages(client: ApolloClient): Unit < (Async & Scope) =
+    Loop(Maybe.empty[String]) { cursor =>
+        client.query(countryPage(cursor)).fetchPolicy(FetchPolicy.NetworkOnly).execute.map { response =>
+            response.data.map(_.countriesPage.pageInfo) match
+                case Present(info) if info.hasNextPage => Loop.continue(info.endCursor)
+                case _                                 => Loop.done(())
+        }
+    }
+```
+
+`countryPage(Absent)` is the first page and `countryPage(Present(cursor))` the one after
+`cursor`; every page has the same document, only the `after` variable differs. Pages
+are fetched with `NetworkOnly` because all of them share one cache slot, so a
+`CacheFirst` call for the second page would be answered by the first. A watch on
+`countryPage(Absent)` reads that slot, so it re-emits with the longer list each time a
+page lands. Without a `ConnectionFieldPolicy`, a `FieldPolicy` with `keyArgs` and a
+`merge` function does the same for a list that is not a Relay connection.
+
+### Removing data
+
+`evict(key)` removes a record and publishes the removal, so a watch that read it reacts
+the way its refetch policy says: under `CacheOnly` it emits the miss as an error value,
+under `CacheFirst` it asks the server. `cascade = true` also removes every record
+reachable from it:
+
+```scala
+def forgetGermany(client: ApolloClient): Set[CacheKey] < Sync =
+    client.apolloStore.evict(CacheKey("Country", "DE"), cascade = true)
+```
+
+`remove(key)` removes one record without the cascade, `clearAll` empties the store,
+`publish(keys)` makes the watches of those records re-read without changing anything,
+and `extract()` returns the whole cache as JSON in the shape Apollo Client's
+`cache.extract()` uses, for debugging and the devtools.
 
 ## HTTP layer
 
@@ -633,11 +882,28 @@ val withInterceptors: ApolloClient.Config < (Sync & Scope) =
 ```
 
 Requests that arrive within 20 milliseconds of the first one then leave as one HTTP
-request, each
-query is sent as its hash first and in full only when the server does not know it, and
+request, each query is sent as its hash first and in full only when the server does not
+know it, and
 a network failure or a 5xx status is retried three times with growing pauses.
 Subscriptions are never retried, and a GraphQL error is an answer, not a failure to
 retry.
+
+Both interceptors take their policy as parameters. `retryWhen` chooses which failures
+are worth another attempt (the default, `RetryOnErrorInterceptor.transportErrors`, is a
+network failure or a 5xx status), and `jitter` spreads the pauses so that many clients
+do not retry in step. `LoggingInterceptor` takes the header names it must never print:
+
+```scala
+import kyo.apollo.exception.*
+
+val onlyNetworkFailures = RetryOnErrorInterceptor(
+    schedule = Schedule.fixed(1.second).take(2),
+    jitter = 0.2,
+    retryWhen = _.isInstanceOf[ApolloNetworkException]
+)
+
+val logging = LoggingInterceptor(redact = LoggingInterceptor.sensitiveHeaders + "X-Api-Key")
+```
 
 ## Devtools
 
