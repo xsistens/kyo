@@ -508,7 +508,7 @@ private[kyo] object ReactiveUI:
         staticHandlers: Seq[(Int, Handler)]
     )(using Frame): Boolean < Async =
         if targetPath == myPath then
-            dispatchToElement(elem, event, isTarget = true)
+            dispatchToElement(elem, event, isTarget = true, selfPath = myPath)
         else if targetPath.startsWith(myPath) && targetPath.size > myPath.size then
             val childSegment = targetPath(myPath.size)
             val childIdx     = Maybe.fromOption(childSegment.toIntOption)
@@ -539,7 +539,13 @@ private[kyo] object ReactiveUI:
                 // field (see boolAttrNow), so it is read from the resolved element rather than carried.
                 targetDisabled <-
                     if isClick then facts.target.fold(Kyo.lift(false))(isDisabled) else Kyo.lift(false)
-                targetIsButton = isClick && facts.target.exists(_.isInstanceOf[Button])
+                // A button's type decides whether activating it submits, not its element kind:
+                // `type="button"` submits nothing in a browser (see ButtonActivation). `Absent` here
+                // means the target is no button at all, which is not the same as "a button that does
+                // not submit".
+                targetButtonSubmits = facts.target match
+                    case Present(b: Button) => Present(ButtonActivation.submits(b.attrs.jsProps.getOrElse("type", "")))
+                    case _                  => Absent
                 targetIsSelect = isKeyDown && facts.target.exists(_.isInstanceOf[Select])
                 // Whether a control of the reader's own stands between this element and the target,
                 // reported to the handler rather than acted on here: only the handler knows whether
@@ -549,8 +555,9 @@ private[kyo] object ReactiveUI:
                     elem,
                     event,
                     isTarget = false,
+                    selfPath = myPath,
                     disabledTarget = targetDisabled,
-                    submitOrigin = targetIsButton,
+                    submitOrigin = isClick && targetButtonSubmits.getOrElse(false),
                     selectTarget = targetIsSelect,
                     controlTarget = targetOnControl
                 )
@@ -565,6 +572,61 @@ private[kyo] object ReactiveUI:
             end for
         else
             true
+
+    /** Where a keydown records the element whose click it stands for, read by [[subscribe]]'s wrapper once
+      * the keydown has finished bubbling.
+      *
+      * HTML has exactly one route to a form submit: an activation behaviour, which runs as part of a
+      * click. Keyboard activation of a button is a click the browser fires, and Enter in a field is
+      * implicit submission, which the specification also defines as firing a click, at the form's
+      * default button. Neither is "submit on a key". Recording a path here and dispatching a real click
+      * at it afterwards keeps activation on that one path: an ancestor sees a keyboard activation
+      * exactly as it sees a mouse click, and a form submits from that click.
+      */
+    private val activationTarget: Local[Maybe[AtomicRef[Maybe[Seq[String]]]]] = Local.init(Absent)
+
+    /** Record that this keydown's activation is a click at `path`, unless one is already recorded.
+      *
+      * First writer wins, and the order is the bubble order: the target runs before its ancestors, so a
+      * button's own activation is what a form sees rather than the form's implicit submission.
+      */
+    private def recordActivation(path: Seq[String])(using Frame): Unit < Async =
+        activationTarget.use {
+            case Present(ref) => ref.updateAndGet(existing => if existing.isDefined then existing else Present(path)).unit
+            case Absent       => Kyo.lift(())
+        }
+
+    /** The form's default button: the first button in tree order whose `type` submits, as HTML defines it.
+      *
+      * Only the statically known children are walked. A button behind a signal is not found, and the
+      * caller falls back to submitting the form directly, the answer HTML gives a form with no submit
+      * button at all.
+      */
+    private def defaultSubmitButton(elem: Element, basePath: Seq[String]): Maybe[Seq[String]] =
+        val start: Maybe[Seq[String]] = Absent
+        elem.children.toSeq.zipWithIndex.foldLeft(start) { case (found, (child, i)) =>
+            if found.isDefined then found
+            else
+                val childPath = basePath :+ i.toString
+                child match
+                    case b: Button if ButtonActivation.submits(b.attrs.jsProps.getOrElse("type", "")) =>
+                        Present(childPath)
+                    case c: Element => defaultSubmitButton(c, childPath)
+                    case _          => Absent
+                end match
+        }
+    end defaultSubmitButton
+
+    /** Submit the form itself, HTML's fallback when implicit submission finds no default button to click.
+      *
+      * Skipped when the keydown already recorded an activation: that click reaches this form on its own
+      * and submitting here as well would be the double all over again.
+      */
+    private def submitDirectly(f: Form)(using Frame): Unit < Async =
+        activationTarget.use {
+            case Present(ref) => ref.get.map(recorded => if recorded.isDefined then Kyo.lift(()) else invoke(f.onSubmit))
+            case Absent       => invoke(f.onSubmit)
+        }
 
     /** Invoke a Maybe[Any < Async] handler, discarding the result. */
     private def invoke(handler: Maybe[Any < Async])(using Frame): Unit < Async =
@@ -815,11 +877,19 @@ private[kyo] object ReactiveUI:
 
     /** Dispatch event to element. isTarget=true when element is the click target, false on bubble. disabledTarget=true when the original
       * click target was disabled (prevents Form onSubmit on bubble).
+      *
+      * `submitOrigin` is the only question left about whether the button under the event submits, and
+      * it is asked on the click path alone. Keyboard activation reaches that same path as a synthesized
+      * click (see [[activationTarget]]), so there is nothing for the keydown path to decide.
+      *
+      * `selfPath` is this element's own path, needed because a keydown records where its activation
+      * click belongs rather than acting on it here.
       */
     private def dispatchToElement(
         elem: Element,
         event: UIEvent,
         isTarget: Boolean,
+        selfPath: Seq[String] = Seq.empty,
         disabledTarget: Boolean = false,
         submitOrigin: Boolean = false,
         selectTarget: Boolean = false,
@@ -839,8 +909,9 @@ private[kyo] object ReactiveUI:
                     // Checkbox/radio toggle is handled by UIControlSession.click() which dispatches
                     // ChangeChecked after Click. Don't toggle here to avoid double-toggle.
                     val activateToggle = Kyo.lift(())
-                    // When a Click on a Button bubbles to a Form, trigger onSubmit (browser behavior)
-                    // Only Button clicks submit forms (not radio, checkbox, or input clicks)
+                    // When a Click on a submitting Button bubbles to a Form, trigger onSubmit (browser
+                    // behavior). Not every Button: `type="button"` and `type="reset"` activate without
+                    // submitting (see ButtonActivation).
                     val formSubmit = if !isTarget && !disabledTarget && submitOrigin then
                         elem match
                             case f: Form =>
@@ -886,14 +957,24 @@ private[kyo] object ReactiveUI:
                         targetId = e.keyboard.targetId
                     )
                     val keyHandler = invokeWith(attrs.onKeyDown, kbEvent)
-                    // Enter/Space on button/anchor triggers onClick (browser behavior)
-                    val activateClick = if isTarget && (e.keyboard.key == "Enter" || e.keyboard.key == " ") then
+                    // Keyboard activation, emulated here so a component behaves the same where no browser
+                    // runs it (the TUI, the pure tests). The browser's own activation is suppressed by
+                    // KeyPolicy.doubleActivates, so exactly one of the two reaches the handler.
+                    //
+                    // A button takes Enter and Space; an anchor takes Enter alone. That is not a
+                    // simplification of the browser but the browser: Space with a link focused scrolls
+                    // the page, it does not follow the link, and the ARIA link pattern says the same.
+                    val activateClick = if isTarget && KeyPolicy.activatesButton(e.keyboard.key) then
                         elem match
-                            case _: Button => invoke(attrs.onClick)
-                            case _: Anchor => invoke(attrs.onClick)
-                            case _         => Kyo.lift(())
+                            case _: Button                                            => recordActivation(selfPath)
+                            case _: Anchor if KeyPolicy.activatesLink(e.keyboard.key) => recordActivation(selfPath)
+                            case _                                                    => Kyo.lift(())
                     else Kyo.lift(())
-                    // Enter/Space on checkbox/radio triggers onChange (browser behavior)
+                    // Enter/Space on checkbox/radio triggers onChange. Space is the browser's; Enter is
+                    // kyo's own, kept deliberately so a checkbox answers the same key in the TUI, where
+                    // Enter is the one activation key a terminal reliably delivers. The client shim
+                    // synthesizes the same Enter click for browser parity (see HtmlRenderer's keydown
+                    // branch), so both transports agree.
                     val activateToggle = if isTarget && (e.keyboard.key == "Enter" || e.keyboard.key == " ") then
                         elem match
                             case cb: Checkbox =>
@@ -915,13 +996,24 @@ private[kyo] object ReactiveUI:
                                 case sel: Select => cycleSelectOption(sel, forward = e.keyboard.key != "ArrowUp")
                                 case _           => Kyo.lift(())
                         else Kyo.lift(())
-                    // Enter key bubbling to Form triggers onSubmit (browser behavior)
-                    // Enter on Select should NOT submit; it interacts with the dropdown
-                    val formSubmit = if !isTarget && e.keyboard.key == "Enter" && !selectTarget then
-                        elem match
-                            case f: Form => invoke(f.onSubmit)
-                            case _       => Kyo.lift(())
-                    else Kyo.lift(())
+                    // Implicit submission: HTML's rule for Enter in a field, and the only thing a keydown
+                    // does about submitting. The specification fires a click at the form's default
+                    // button, so that is what gets recorded; the form's own onSubmit runs from that
+                    // click, through the same `submitOrigin` a mouse click uses. A form with no
+                    // reachable submit button has no click to fire, and HTML submits it directly.
+                    //
+                    // Nothing is recorded when the target already recorded its own activation (a
+                    // button's Enter is that button's click, not the form's implicit submission), and
+                    // Enter on a Select is a dropdown interaction rather than a submit.
+                    val formSubmit =
+                        if !isTarget && e.keyboard.key == "Enter" && !selectTarget then
+                            elem match
+                                case f: Form =>
+                                    defaultSubmitButton(f, selfPath) match
+                                        case Present(buttonPath) => recordActivation(buttonPath)
+                                        case Absent              => submitDirectly(f)
+                                case _ => Kyo.lift(())
+                        else Kyo.lift(())
                     keyHandler.andThen(activateClick).andThen(activateToggle).andThen(selectCycle).andThen(formSubmit)
                         .andThen(keepBubbling(elem, attrs.onKeyDown.nonEmpty))
                 }
@@ -1220,7 +1312,13 @@ private[kyo] object ReactiveUI:
                 case Present(d) => Kyo.lift(d)
                 case Absent     => MountDispatch.init
             _ <- subscribeScoped(rui, exchange, signalChangeTime, rootMounts, mountDispatch)
-            validatedHandle = dragHandle(rui.handle, dragSessions, dragMutex, expiryWake, dragLimits)
+            // Keyboard activation is synthesized at the bottom, on the tree's own handler, because the
+            // two transports enter at different heights: the browser mount goes through `handle`, and
+            // the server-push session through `handleValidated` (UIServer). Wrapping either one alone
+            // suppresses the browser's activation on both while replacing it on only one, which is a
+            // button that stops working rather than one that works twice.
+            activating      = activatingHandle(rui.handle)
+            validatedHandle = dragHandle(activating, dragSessions, dragMutex, expiryWake, dragLimits)
         yield Subscription(
             (path, event) =>
                 DragProtocol.validateEventAndDomain(event, DragProtocol.Limits.default) match
@@ -1232,6 +1330,38 @@ private[kyo] object ReactiveUI:
             () => expiryWorkers.get,
             dragMutex
         )
+
+    /** Turns a keydown's recorded activation into the click it stands for.
+      *
+      * A browser answers Enter or Space on a button by firing a click at it, and Enter in a field by
+      * firing one at the form's default button; the form submit is that click's activation behaviour,
+      * never the key's. This is where kyo does the same: the keydown bubbles first, recording at most
+      * one path in [[activationTarget]], and the click is dispatched at that path afterwards, through
+      * the whole chain, so ancestors see it exactly as they see a mouse click.
+      *
+      * Dispatching it after the keydown has finished is what keeps the order the platform has, with the
+      * element's own `onKeyDown` running before its activation. Only a keydown records, so the click
+      * this dispatches cannot record another: there is no recursion here.
+      */
+    private def activatingHandle(handle: Handler)(using Frame): Handler =
+        (path, event) =>
+            event match
+                case kd: UIEvent.KeyDown =>
+                    for
+                        recorded <- AtomicRef.init(Maybe.empty[Seq[String]])
+                        keep     <- activationTarget.let(Present(recorded))(handle(path, kd))
+                        target   <- recorded.get
+                        _        <- target.fold(Kyo.lift(())) { clickPath =>
+                            handle(
+                                clickPath,
+                                UIEvent.Click(
+                                    clickPath,
+                                    MouseEventData(modifiers = kd.keyboard.modifiers, targetId = kd.keyboard.targetId)
+                                )
+                            ).unit
+                        }
+                    yield keep
+                case _ => handle(path, event)
 
     private def dragHandle(
         handle: Handler,

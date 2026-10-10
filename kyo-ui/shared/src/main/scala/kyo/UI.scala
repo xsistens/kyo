@@ -1372,6 +1372,24 @@ object UI:
               */
             def focusRestore(v: Boolean): Self = withAttrs(attrs.copy(focusRestore = Present(v)))
 
+            /** Declarative scroll-into-view: whenever a patch leaves this element carrying the flag and the element that
+              * carried it before was a different one (or none), the client scrolls it into view with `block: "nearest"`,
+              * which moves the nearest scrollable ancestor by the least it can and leaves it alone when the element is
+              * already visible.
+              *
+              * This is what a roving highlight needs and cannot get any other way. A moving DOM focus is scrolled into
+              * view by the browser itself, but a highlight is a class plus `aria-activedescendant` on a container that
+              * never moves, so nothing follows it: in a list capped at a few rows the highlight walks out of the panel,
+              * and in a long page list it walks off the screen. Marking the highlighted row with this flag is one line
+              * per host and covers the two moments that matter, the highlight moving and a panel opening onto a row that
+              * was never on screen, the second of which a `scrollIntoView` command cannot: the row does not exist yet
+              * when the handler runs.
+              *
+              * Unlike [[focusAuto]] it re-fires as the flag moves between elements, since that is the movement it
+              * follows; a re-render that leaves the flag where it was scrolls nothing.
+              */
+            def scrollAuto(v: Boolean): Self = withAttrs(attrs.copy(scrollAuto = Present(v)))
+
             /** Opt-in per-level event consumption: when the dispatch walk (innermost target first, then ancestors) reaches
               * this element AND it declared a handler for the event's type, the event stops here so handlers on elements
               * above do not fire. Only consumes event types this element actually handles; others pass through, and the
@@ -1521,7 +1539,12 @@ object UI:
               * movement or an option change, not a page scroll). A single-line input stays suppressed for vertical keys:
               * that is the combobox case where `ArrowDown` drives the listbox highlight. Horizontal/edge keys
               * (`ArrowLeft`/`ArrowRight`/`Home`/`End`) are suppressed only when the focused target is NOT a text-editable
-              * field, so caret movement inside a filter input keeps working.
+              * field, so caret movement inside a filter input keeps working. Space is suppressed for the same reason the
+              * arrows are, since a list that is one tab stop has no native control to consume it, and left alone wherever
+              * it would type or activate (a text field, a `button`, a `summary`); a link does not consume it either, so
+              * Space on an anchor inside the region is suppressed too.
+              *
+              * The rule itself is `kyo.internal.KeyPolicy`, which both clients answer from.
               *
               * Declarative by necessity: a kyo-ui handler runs asynchronously (and remotely on the server-push
               * transport), so it cannot decline the browser default in time. Both transports therefore read the emitted
@@ -1529,6 +1552,25 @@ object UI:
               * the imperative `event.preventDefault()` a component library calls in every arrow-key handler.
               */
             def preventScrollKeys: Self = withAttrs(attrs.copy(dataAttrs = attrs.dataAttrs.updated("kyo-scroll-keys", "1")))
+
+            /** Marks this element (and its subtree) inert to its own activation: the client declines the browser's
+              * default for a click and for the keys that change a native control's value, while leaving the element
+              * focusable and leaving every event still forwarded.
+              *
+              * This is what makes a readonly control expressible. HTML's `readonly` attribute does not apply to a
+              * checkbox, a radio or a button, so a library that wants "focusable, reads its value, refuses to change
+              * it" has two options: mark it natively `disabled`, which takes it out of the tab order and makes
+              * readonly indistinguishable from disabled to a keyboard or a screen reader, or decline the default. A
+              * kyo handler cannot decline it: it runs asynchronously, and remotely on the server-push transport, so
+              * the browser has already toggled the box by the time it is asked. Declaring it here moves the decision
+              * to the client, which is the same reason [[preventScrollKeys]] is declarative.
+              *
+              * Space and the four arrows are suppressed (a checkbox toggles, a radio group walks, a range's thumb
+              * moves); Enter is not, because it changes no native value and submitting the form around a readonly
+              * field is still the reader's to do. The rule itself is `kyo.internal.KeyPolicy`, which both clients
+              * answer from.
+              */
+            def preventActivation: Self = withAttrs(attrs.copy(dataAttrs = attrs.dataAttrs.updated("kyo-inert", "1")))
 
             /** Runs `f` on pointer-down over this element, receiving the [[kyo.UI.PointerEvent]] payload (local x/y, target rect,
               * button mask). Declaring this starts a drag session: the client calls `setPointerCapture` on pointer-down, so the
@@ -1844,6 +1886,7 @@ object UI:
             focusGroup: Maybe[String] = Absent,
             focusAuto: Maybe[Boolean] = Absent,
             focusRestore: Maybe[Boolean] = Absent,
+            scrollAuto: Maybe[Boolean] = Absent,
             stopPropagation: Maybe[Boolean] = Absent,
             enterTransition: Maybe[String] = Absent,
             leaveTransition: Maybe[String] = Absent,
