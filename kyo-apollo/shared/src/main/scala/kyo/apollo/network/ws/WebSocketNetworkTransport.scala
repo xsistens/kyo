@@ -114,13 +114,16 @@ final class WebSocketNetworkTransport private[apollo] (
 
     // ---- primitives (plain data structures, allocated with the transport) -----
 
-    private val ids: AtomicLong.Unsafe                = AtomicLong.Unsafe.init(0L)(using AllowUnsafe.embrace.danger)
-    private val timerTokens: AtomicLong               = AtomicLong.Unsafe.init(0L)(using AllowUnsafe.embrace.danger).safe
-    private val stateRef: AtomicRef[State]            = AtomicRef.Unsafe.init(State.initial)(using AllowUnsafe.embrace.danger).safe
-    private val ownerStarted: AtomicBoolean           = AtomicBoolean.Unsafe.init(false)(using AllowUnsafe.embrace.danger).safe
-    private val ownerExited: Fiber.Promise[Unit, Any] = Fiber.Promise.Unsafe.init[Unit, Any]()(using AllowUnsafe.embrace.danger).safe
-    private val closing: Fiber.Promise[Unit, Any]     = Fiber.Promise.Unsafe.init[Unit, Any]()(using AllowUnsafe.embrace.danger).safe
-    private val mailbox: Channel[Msg] =
+    private val ids: AtomicLong.Unsafe      = AtomicLong.Unsafe.init(0L)(using AllowUnsafe.embrace.danger)
+    private val timerTokens: AtomicLong     = AtomicLong.Unsafe.init(0L)(using AllowUnsafe.embrace.danger).safe
+    private val stateRef: AtomicRef[State]  = AtomicRef.Unsafe.init(State.initial)(using AllowUnsafe.embrace.danger).safe
+    private val ownerStarted: AtomicBoolean = AtomicBoolean.Unsafe.init(false)(using AllowUnsafe.embrace.danger).safe
+    // Uninterruptible: a fiber interrupted while awaiting a promise completes it with the interrupt, so one
+    // `deliver` race whose `closing` side lost would mark the transport closing for every later delivery, which
+    // then dropped its frame and handed the socket credit back. Each is completed by its event only.
+    private val ownerExited: Fiber.Promise[Unit, Any] = uninterruptiblePromise
+    private val closing: Fiber.Promise[Unit, Any]     = uninterruptiblePromise
+    private val mailbox: Channel[Msg]                 =
         Channel.Unsafe.init[Msg](Int.MaxValue, Access.MultiProducerSingleConsumer)(using summon[Frame], AllowUnsafe.embrace.danger).safe
 
     // ---- public API -----------------------------------------------------------
@@ -162,7 +165,7 @@ final class WebSocketNetworkTransport private[apollo] (
     def close(gracePeriod: Duration)(using Frame): Unit < Async =
         awaitRoutes(gracePeriod)
             .andThen(closing.completeUnitDiscard)
-            .andThen(Async.mask(requestShutdown))
+            .andThen(Async.uninterruptible(requestShutdown))
             .andThen(ownerExited.get)
 
     /** [[close]] with a 30-second grace period. */
@@ -179,7 +182,7 @@ final class WebSocketNetworkTransport private[apollo] (
     ): ResponseStream[D] < (Async & Scope) =
         for
             channel <- Channel.init[ApolloResponse[D]](subscriptionBufferSize)
-            ended   <- Fiber.Promise.init[Unit, Any]
+            ended   <- Sync.Unsafe.defer(uninterruptiblePromise)
             subscriber = Subscriber(
                 id = id,
                 startFrame = protocol.startOperation(id, OperationRequestBody(request.operation)),
@@ -203,7 +206,9 @@ final class WebSocketNetworkTransport private[apollo] (
             )
             registered <- Abort.run[Closed](mailbox.offer(Msg.Register(subscriber)))
         yield registered match
-            case Result.Success(_) => channel.streamUntilClosed()
+            // Chunks of at most one buffer: an unbounded drain keeps taking while the owner refills, so the
+            // consumer's hand would not count against `subscriptionBufferSize`.
+            case Result.Success(_) => channel.streamUntilClosed(subscriptionBufferSize)
             case _                 => closedStream(request)
     end register
 
@@ -357,7 +362,7 @@ final class WebSocketNetworkTransport private[apollo] (
 
     private def onCancel(s: State, id: String)(using Frame): Unit < (Async & Scope) =
         s.routes.get(id) match
-            case None => Kyo.unit
+            case None    => Kyo.unit
             case Some(_) =>
                 val sendStop = s.phase match
                     case Phase.Open(_, conn, _, _) => conn.send(protocol.stopOperation(id))
@@ -410,7 +415,7 @@ final class WebSocketNetworkTransport private[apollo] (
                     case (Some(text), Present(conn)) => conn.send(text)
                     case _                           => Kyo.unit
             case WsMessage.Pong(_) | WsMessage.KeepAlive => Kyo.unit
-            case WsMessage.Data(id, payload) =>
+            case WsMessage.Data(id, payload)             =>
                 s.routes.get(id) match
                     case Some(sub) => sub.deliverData(payload)
                     case None      => unroutable("next", id)
@@ -439,7 +444,7 @@ final class WebSocketNetworkTransport private[apollo] (
       */
     private def onAck(s: State, c: Phase.Connecting)(using Frame): Unit < (Async & Scope) =
         c.conn match
-            case Absent => Kyo.unit // frames are handed over only after `Opened`
+            case Absent        => Kyo.unit // frames are handed over only after `Opened`
             case Present(conn) =>
                 stopFiber(c.ackTimer)
                     .andThen(stateRef.set(s.copy(phase = Phase.Open(c.gen, conn, c.socket, Absent))))
@@ -456,7 +461,7 @@ final class WebSocketNetworkTransport private[apollo] (
         else
             s.phase match
                 case c: Phase.Connecting => handshakeFailure(s, c, cause.getOrElse(normalClose))
-                case open: Phase.Open =>
+                case open: Phase.Open    =>
                     cause match
                         case Present(drop) if s.routes.nonEmpty && reconnectWhen(drop, 1L) =>
                             Clock.now.map(now => backoff.next(now)).map {
@@ -607,8 +612,8 @@ final class WebSocketNetworkTransport private[apollo] (
     private def worker(body: Unit < (Async & Scope))(using Frame): Worker < (Sync & Scope) =
         for
             entered  <- AtomicBoolean.init(false)
-            released <- Fiber.Promise.init[Unit, Any]
-            fiber <- Fiber.init(
+            released <- Sync.Unsafe.defer(uninterruptiblePromise)
+            fiber    <- Fiber.init(
                 Scope.run(Scope.ensure(released.completeUnitDiscard).andThen(entered.set(true)).andThen(body))
             )
         yield Worker(fiber, entered, released)
@@ -626,7 +631,7 @@ final class WebSocketNetworkTransport private[apollo] (
 
     private def ackTimeout(c: Phase.Connecting, framesSeen: Long)(using Frame): ApolloNetworkException =
         val detail = c.conn match
-            case Absent => "the socket did not open (connecting or the WebSocket upgrade hung), 0 frames received"
+            case Absent                        => "the socket did not open (connecting or the WebSocket upgrade hung), 0 frames received"
             case Present(_) if framesSeen == 0 =>
                 "0 frames received: the endpoint sent nothing back (is this a GraphQL WebSocket endpoint?)"
             case Present(_) =>
@@ -725,6 +730,12 @@ object WebSocketNetworkTransport:
                 subscriptionBufferSize
             )
         ).map(transport => transport.start.andThen(Scope.ensure(transport.close)).andThen(transport))
+
+    /** A promise that only its event completes: interrupting a fiber that awaits it leaves it pending, so a waiter's
+      * fate never reaches the other waiters (as in kyo's own `Gate`). For the transport's shared lifecycle signals.
+      */
+    private def uninterruptiblePromise: Fiber.Promise[Unit, Any] =
+        Fiber.Promise.Unsafe.initUninterruptible[Unit, Any]()(using AllowUnsafe.embrace.danger).safe
 
     private def normalClose(using Frame): ApolloWebSocketClosedException =
         ApolloWebSocketClosedException(WebSocketConnection.NormalClosure)

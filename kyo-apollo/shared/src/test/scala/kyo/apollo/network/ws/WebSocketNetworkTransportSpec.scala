@@ -141,7 +141,7 @@ class WebSocketNetworkTransportSpec extends kyo.test.Test[Any]:
                     doneA <- Fiber.init(Scope.run(StreamProbe.collect(a)))
                     pullB <- StreamProbe.Pull.open(b)
                     _     <- established(f.conn, "0", "1")
-                    _ <- Sync.defer {
+                    _     <- Sync.defer {
                         f.conn.server(next("0", 1))
                         f.conn.server(next("1", 2))
                         f.conn.server(complete("0"))
@@ -158,30 +158,31 @@ class WebSocketNetworkTransportSpec extends kyo.test.Test[Any]:
             }
         }
 
-        "a next, complete and the socket's clean close in one burst still deliver both frames, then end cleanly" in Clock
-            .withTimeControl { _ =>
-                fixture().map { f =>
-                    val a = f.transport.subscribe(request())
-                    for
-                        doneA <- Fiber.init(Scope.run(StreamProbe.collect(a)))
-                        _     <- established(f.conn, "0")
-                        // The ordinary end of a finite subscription: the server's last `next`,
-                        // its `complete` and its close frame arrive back-to-back, before the
-                        // transport's drain has taken any of them. Both frames must still
-                        // reach the subscriber, and the socket's clean close must not turn
-                        // into an ApolloWebSocketClosedException value after the `complete`.
-                        _ <- Sync.defer {
-                            f.conn.server(next("0", 1))
-                            f.conn.server(complete("0"))
-                            f.conn.serverClose()
-                        }
-                        seen <- doneA.get
-                    yield
-                        assert(seen.flatMap(_.data) == List(1))
-                        assert(seen.forall(_.error.isEmpty), s"expected a clean end after complete, got $seen")
-                    end for
+        "a next, complete and the socket's clean close in one burst still deliver both frames, then end cleanly" in
+            Clock
+                .withTimeControl { _ =>
+                    fixture().map { f =>
+                        val a = f.transport.subscribe(request())
+                        for
+                            doneA <- Fiber.init(Scope.run(StreamProbe.collect(a)))
+                            _     <- established(f.conn, "0")
+                            // The ordinary end of a finite subscription: the server's last `next`,
+                            // its `complete` and its close frame arrive back-to-back, before the
+                            // transport's drain has taken any of them. Both frames must still
+                            // reach the subscriber, and the socket's clean close must not turn
+                            // into an ApolloWebSocketClosedException value after the `complete`.
+                            _ <- Sync.defer {
+                                f.conn.server(next("0", 1))
+                                f.conn.server(complete("0"))
+                                f.conn.serverClose()
+                            }
+                            seen <- doneA.get
+                        yield
+                            assert(seen.flatMap(_.data) == List(1))
+                            assert(seen.forall(_.error.isEmpty), s"expected a clean end after complete, got $seen")
+                        end for
+                    }
                 }
-            }
 
         "a server ping is answered with a pong" in Clock.withTimeControl { _ =>
             for
@@ -259,31 +260,32 @@ class WebSocketNetworkTransportSpec extends kyo.test.Test[Any]:
             end for
         }
 
-        "a dropped socket reconnects, re-runs connection_init, and resubscribes active subscriptions" in Clock
-            .withTimeControl { control =>
-                val engine = new FreshWebSocketEngine
-                for
-                    transport <- reconnecting(engine, Schedule.fixed(1.second))
-                    pull      <- StreamProbe.Pull.open(transport.subscribe(request()))
-                    c0        <- engine.nextConnection
-                    _         <- established(c0, "0")
-                    _         <- Sync.defer(c0.server(next("0", 1)))
-                    first     <- pull.next
-                    _         <- Sync.defer(c0.drop(1011, "boom"))
-                    dropped   <- pull.next
-                    _         <- control.awaitPendingSleepers(1) // the reconnect backoff is armed
-                    _ = assert(engine.conns.size == 1) // no reopen until backoff elapses
-                    _      <- control.advance(1.second, Duration.Zero)
-                    c1     <- engine.nextConnection
-                    _      <- established(c1, "0")
-                    _      <- Sync.defer(c1.server(next("0", 2)))
-                    second <- pull.next
-                yield
-                    assert(first.data == Present(1))
-                    assert(wsClosed(dropped, 1011))
-                    assert(second.data == Present(2))
-                end for
-            }
+        "a dropped socket reconnects, re-runs connection_init, and resubscribes active subscriptions" in
+            Clock
+                .withTimeControl { control =>
+                    val engine = new FreshWebSocketEngine
+                    for
+                        transport <- reconnecting(engine, Schedule.fixed(1.second))
+                        pull      <- StreamProbe.Pull.open(transport.subscribe(request()))
+                        c0        <- engine.nextConnection
+                        _         <- established(c0, "0")
+                        _         <- Sync.defer(c0.server(next("0", 1)))
+                        first     <- pull.next
+                        _         <- Sync.defer(c0.drop(1011, "boom"))
+                        dropped   <- pull.next
+                        _         <- control.awaitPendingSleepers(1) // the reconnect backoff is armed
+                        _ = assert(engine.conns.size == 1) // no reopen until backoff elapses
+                        _      <- control.advance(1.second, Duration.Zero)
+                        c1     <- engine.nextConnection
+                        _      <- established(c1, "0")
+                        _      <- Sync.defer(c1.server(next("0", 2)))
+                        second <- pull.next
+                    yield
+                        assert(first.data == Present(1))
+                        assert(wsClosed(dropped, 1011))
+                        assert(second.data == Present(2))
+                    end for
+                }
 
         "a reconnect opens its socket only after the dropped one is released" in Clock.withTimeControl { control =>
             // Releasing a connection's Scope takes 5s here; the backoff is 1s.
@@ -376,55 +378,57 @@ class WebSocketNetworkTransportSpec extends kyo.test.Test[Any]:
             end for
         }
 
-        "with reconnection disabled a socket drop terminates the subscription with a WS-closed value" in Clock
-            .withTimeControl { _ =>
-                val engine = new FreshWebSocketEngine
-                for
-                    transport <- WebSocketNetworkTransport.init(
-                        serverUrl = url,
-                        engine = engine,
-                        reconnectWhen = WebSocketNetworkTransport.reconnectNever
-                    )
-                    done <- Fiber.init(Scope.run(StreamProbe.collect(transport.subscribe(request()))))
-                    c0   <- engine.nextConnection
-                    _    <- established(c0, "0")
-                    _    <- Sync.defer(c0.drop(1011, "boom"))
-                    seen <- done.get
-                yield
-                    assert(seen.exists(wsClosed(_, 1011)))
-                    assert(engine.conns.size == 1)
-                end for
-            }
-
-        "cancelling the last subscription during a reconnect backoff resets to idle, not stranded" in Clock
-            .withTimeControl { _ =>
-                val engine = new FreshWebSocketEngine
-                reconnecting(engine, Schedule.fixed(1.second)).map { transport =>
-                    val first  = transport.subscribe(request()) // id "0"
-                    val second = transport.subscribe(request()) // id "1"
+        "with reconnection disabled a socket drop terminates the subscription with a WS-closed value" in
+            Clock
+                .withTimeControl { _ =>
+                    val engine = new FreshWebSocketEngine
                     for
-                        // Takes the drop value and ends: its Scope has sent the Cancel when `get` returns.
-                        firstDone <- Fiber.init(Scope.run(first.take(1).run))
-                        c0        <- engine.nextConnection
-                        _         <- established(c0, "0")
-                        _         <- Sync.defer(c0.drop(1011, "boom")) // abnormal drop -> reconnect backoff armed
-                        dropped   <- firstDone.get
-                        // The reconnect existed only to resubscribe the now-gone route, so the
-                        // machine is idle again: a fresh subscription opens a NEW socket at once,
-                        // without the clock moving. On a stranded machine it would wait for an
-                        // ack of a socket that is never opened.
-                        pull  <- StreamProbe.Pull.open(second)
-                        c1    <- engine.nextConnection
-                        _     <- established(c1, "1")
-                        _     <- Sync.defer(c1.server(next("1", 7)))
-                        event <- pull.next
+                        transport <- WebSocketNetworkTransport.init(
+                            serverUrl = url,
+                            engine = engine,
+                            reconnectWhen = WebSocketNetworkTransport.reconnectNever
+                        )
+                        done <- Fiber.init(Scope.run(StreamProbe.collect(transport.subscribe(request()))))
+                        c0   <- engine.nextConnection
+                        _    <- established(c0, "0")
+                        _    <- Sync.defer(c0.drop(1011, "boom"))
+                        seen <- done.get
                     yield
-                        assert(dropped.exists(wsClosed(_, 1011)))
-                        assert(event.data == Present(7))
-                        assert(engine.conns.size == 2)
+                        assert(seen.exists(wsClosed(_, 1011)))
+                        assert(engine.conns.size == 1)
                     end for
                 }
-            }
+
+        "cancelling the last subscription during a reconnect backoff resets to idle, not stranded" in
+            Clock
+                .withTimeControl { _ =>
+                    val engine = new FreshWebSocketEngine
+                    reconnecting(engine, Schedule.fixed(1.second)).map { transport =>
+                        val first  = transport.subscribe(request()) // id "0"
+                        val second = transport.subscribe(request()) // id "1"
+                        for
+                            // Takes the drop value and ends: its Scope has sent the Cancel when `get` returns.
+                            firstDone <- Fiber.init(Scope.run(first.take(1).run))
+                            c0        <- engine.nextConnection
+                            _         <- established(c0, "0")
+                            _         <- Sync.defer(c0.drop(1011, "boom")) // abnormal drop -> reconnect backoff armed
+                            dropped   <- firstDone.get
+                            // The reconnect existed only to resubscribe the now-gone route, so the
+                            // machine is idle again: a fresh subscription opens a NEW socket at once,
+                            // without the clock moving. On a stranded machine it would wait for an
+                            // ack of a socket that is never opened.
+                            pull  <- StreamProbe.Pull.open(second)
+                            c1    <- engine.nextConnection
+                            _     <- established(c1, "1")
+                            _     <- Sync.defer(c1.server(next("1", 7)))
+                            event <- pull.next
+                        yield
+                            assert(dropped.exists(wsClosed(_, 1011)))
+                            assert(event.data == Present(7))
+                            assert(engine.conns.size == 2)
+                        end for
+                    }
+                }
 
         "a subscription after close yields a closed value instead of hanging" in Clock.withTimeControl { _ =>
             for
@@ -442,39 +446,41 @@ class WebSocketNetworkTransportSpec extends kyo.test.Test[Any]:
             end for
         }
 
-        "a transport closed before its first subscription opens nothing and answers a subscription with a closed value" in Clock
-            .withTimeControl { _ =>
-                for
-                    f         <- fixture()
-                    _         <- f.transport.closeNow
-                    afterward <- Scope.run(StreamProbe.collect(f.transport.subscribe(request())))
-                yield
-                    assert(afterward.size == 1)
-                    assert(wsClosed(afterward.head, WebSocketConnection.NormalClosure))
-                    assert(f.engine.opens.isEmpty)
-                end for
-            }
+        "a transport closed before its first subscription opens nothing and answers a subscription with a closed value" in
+            Clock
+                .withTimeControl { _ =>
+                    for
+                        f         <- fixture()
+                        _         <- f.transport.closeNow
+                        afterward <- Scope.run(StreamProbe.collect(f.transport.subscribe(request())))
+                    yield
+                        assert(afterward.size == 1)
+                        assert(wsClosed(afterward.head, WebSocketConnection.NormalClosure))
+                        assert(f.engine.opens.isEmpty)
+                    end for
+                }
 
-        "the Scope a transport is created in closes it: its socket is closed and a later subscription gets the closed value" in Clock
-            .withTimeControl { _ =>
-                for
-                    f <- Scope.run {
-                        for
-                            f    <- fixture()
-                            pull <- StreamProbe.Pull.open(f.transport.subscribe(request()))
-                            _    <- established(f.conn, "0")
-                            _    <- Sync.defer(f.conn.server(next("0", 1)))
-                            _    <- pull.next
-                        yield f
-                    }
-                    afterward <- Scope.run(StreamProbe.collect(f.transport.subscribe(request())))
-                yield
-                    assert(f.conn.closedWith.map(_._1) == Some(WebSocketConnection.NormalClosure))
-                    assert(afterward.size == 1)
-                    assert(wsClosed(afterward.head, WebSocketConnection.NormalClosure))
-                    assert(f.engine.opens.size == 1)
-                end for
-            }
+        "the Scope a transport is created in closes it: its socket is closed and a later subscription gets the closed value" in
+            Clock
+                .withTimeControl { _ =>
+                    for
+                        f <- Scope.run {
+                            for
+                                f    <- fixture()
+                                pull <- StreamProbe.Pull.open(f.transport.subscribe(request()))
+                                _    <- established(f.conn, "0")
+                                _    <- Sync.defer(f.conn.server(next("0", 1)))
+                                _    <- pull.next
+                            yield f
+                        }
+                        afterward <- Scope.run(StreamProbe.collect(f.transport.subscribe(request())))
+                    yield
+                        assert(f.conn.closedWith.map(_._1) == Some(WebSocketConnection.NormalClosure))
+                        assert(afterward.size == 1)
+                        assert(wsClosed(afterward.head, WebSocketConnection.NormalClosure))
+                        assert(f.engine.opens.size == 1)
+                    end for
+                }
 
         "close and subscribe racing never hang: the subscription gets exactly one closed value" in Clock.withTimeControl {
             _ =>
@@ -548,36 +554,37 @@ class WebSocketNetworkTransportSpec extends kyo.test.Test[Any]:
             end for
         }
 
-        "an unknown frame is logged at warn without its content, and a frame for an unknown id at debug" in Clock
-            .withTimeControl { _ =>
-                for
-                    probe <- LogProbe.init
-                    _ <- probe.run {
-                        for
-                            // Created inside the probe: the owner fiber logs through the context it is started in.
-                            f <- fixture()
-                            _ <- StreamProbe.Pull.open(f.transport.subscribe(request()))
-                            _ <- established(f.conn, "0")
-                            _ <- Sync.defer {
-                                f.conn.server("""{"type":"data","id":"0","payload":{"token":"s3cr3t"}}""")
-                                f.conn.server(next("7", 1))
-                                f.conn.server(ping)
-                            }
-                            _ <- f.conn.awaitSent(_ == pong) // both frames before the ping were processed
-                        yield ()
-                    }
-                    lines <- probe.lines
-                yield
-                    val warns  = lines.filter(_.level == Log.Level.warn).map(_.message)
-                    val debugs = lines.filter(_.level == Log.Level.debug).map(_.message)
-                    assert(
-                        warns.exists(m => m.contains("type 'data'") && m.contains("graphql-transport-ws")),
-                        s"warn lines: $warns"
-                    )
-                    assert(!lines.exists(_.message.contains("s3cr3t")), s"a log line carries the frame's content: $lines")
-                    assert(debugs.exists(m => m.contains("'next'") && m.contains("'7'")), s"debug lines: $debugs")
-                end for
-            }
+        "an unknown frame is logged at warn without its content, and a frame for an unknown id at debug" in
+            Clock
+                .withTimeControl { _ =>
+                    for
+                        probe <- LogProbe.init
+                        _     <- probe.run {
+                            for
+                                // Created inside the probe: the owner fiber logs through the context it is started in.
+                                f <- fixture()
+                                _ <- StreamProbe.Pull.open(f.transport.subscribe(request()))
+                                _ <- established(f.conn, "0")
+                                _ <- Sync.defer {
+                                    f.conn.server("""{"type":"data","id":"0","payload":{"token":"s3cr3t"}}""")
+                                    f.conn.server(next("7", 1))
+                                    f.conn.server(ping)
+                                }
+                                _ <- f.conn.awaitSent(_ == pong) // both frames before the ping were processed
+                            yield ()
+                        }
+                        lines <- probe.lines
+                    yield
+                        val warns  = lines.filter(_.level == Log.Level.warn).map(_.message)
+                        val debugs = lines.filter(_.level == Log.Level.debug).map(_.message)
+                        assert(
+                            warns.exists(m => m.contains("type 'data'") && m.contains("graphql-transport-ws")),
+                            s"warn lines: $warns"
+                        )
+                        assert(!lines.exists(_.message.contains("s3cr3t")), s"a log line carries the frame's content: $lines")
+                        assert(debugs.exists(m => m.contains("'next'") && m.contains("'7'")), s"debug lines: $debugs")
+                    end for
+                }
 
         "the owner runs in the context the transport was created in, not the first subscriber's" in Clock.withTimeControl { _ =>
             for
@@ -623,6 +630,50 @@ class WebSocketNetworkTransportSpec extends kyo.test.Test[Any]:
                     assert(readAhead - 1 <= 2 * bufferSize + 3, s"${readAhead - 1} data frames read ahead of the consumer")
                     assert(seen == Chunk.from(1 to frames))
                 end for
+            }
+        }
+
+        "a delivery that waited for a full subscription does not drop the frame after it" in Clock.withTimeControl { _ =>
+            // A delivery into a full channel races its put against the transport's closing signal. With a buffer
+            // of one, frame 1 is in the consumer's hand, frame 2 in the buffer, frame 3 waits in that race and the
+            // drain holds frame 4: the fifth socket read (the ack first) is the barrier. One consumer step lets
+            // the put of frame 3 win. The sixth read, the `complete`, happens once the owner has handed that credit
+            // back and taken frame 4, which then meets a full channel again (frame 2 in hand, frame 3 buffered).
+            // Had the race's losing waiter completed the closing signal, that delivery would return at once and
+            // drop frame 4, and the `complete` would end the stream after frame 3.
+            //
+            // The sixth read proves frame 4 was handed to the owner, not that the owner is delivering it yet, and a
+            // waiting owner is not observable from outside. Releasing the consumer before that delivery leaves room
+            // for frame 4, so one round can miss a dropping transport, never fail a correct one; the rounds make a
+            // miss unlikely.
+            val rounds = 20
+
+            def round: Chunk[Int] < (Async & Scope & Abort[Closed]) =
+                fixture(bufferSize = 1).map { f =>
+                    val subscription = f.transport.subscribe(request())
+                    for
+                        step     <- Channel.init[Unit](4)
+                        received <- AtomicRef.init(Chunk.empty[Int])
+                        consumer <- Fiber.init(Scope.run(subscription.foreach { r =>
+                            step.take.andThen(received.getAndUpdate(_.append(r.data.getOrElse(-1))))
+                        }))
+                        _ <- established(f.conn, "0")
+                        _ <- Sync.defer {
+                            (1 to 4).foreach(i => f.conn.server(next("0", i)))
+                            f.conn.server(complete("0"))
+                        }
+                        _    <- f.conn.awaitFramesRead(1 + 4)
+                        _    <- step.put(())
+                        _    <- f.conn.awaitFramesRead(1)
+                        _    <- Kyo.foreachDiscard(Chunk.from(2 to 4))(_ => step.put(()))
+                        _    <- consumer.get
+                        seen <- received.get
+                    yield seen
+                    end for
+                }
+            Kyo.foreach(Chunk.from(1 to rounds))(_ => Scope.run(round)).map { seen =>
+                val dropped = seen.filter(_ != Chunk.from(1 to 4))
+                assert(dropped.isEmpty, s"${dropped.size} of $rounds rounds dropped a frame after a waiting delivery: $dropped")
             }
         }
     }
