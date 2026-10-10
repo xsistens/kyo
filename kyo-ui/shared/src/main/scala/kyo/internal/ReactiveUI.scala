@@ -1032,7 +1032,10 @@ private[kyo] object ReactiveUI:
                 // Disabled or hidden elements ignore their own click handler, but allow bubbling
                 unlessInert(isTarget, isDisabled(elem).map(d => if d then true else isHidden(elem))) {
                     val mouse = UI.MouseEvent(ev.mouse.targetId, ev.mouse.modifiers, ev.mouse.position, controlTarget)
-                    val self  = if isTarget then
+                    // The target element is the nearest one that carries a path, so `isTarget` alone would also hold
+                    // for a click on a plain descendant; `self` is the client's word that it was this element.
+                    val onSelf = isTarget && ev.mouse.self
+                    val self   = if onSelf then
                         invoke(attrs.onClickSelf).andThen(invokeWith(attrs.onClickSelfEvt, mouse))
                     else Kyo.lift(())
                     // Checkbox/radio toggle is handled by UIControlSession.click() which dispatches
@@ -1047,9 +1050,9 @@ private[kyo] object ReactiveUI:
                                 invoke(f.onSubmit).andThen(invokeWith(f.onSubmitEvt, mouse))
                             case _ => Kyo.lift(())
                     else Kyo.lift(())
-                    // Self handlers only count as "declared" when they actually fired (isTarget).
+                    // Self handlers only count as "declared" when they actually fired.
                     val declared = attrs.onClick.nonEmpty || attrs.onClickEvt.nonEmpty ||
-                        (isTarget && (attrs.onClickSelf.nonEmpty || attrs.onClickSelfEvt.nonEmpty))
+                        (onSelf && (attrs.onClickSelf.nonEmpty || attrs.onClickSelfEvt.nonEmpty))
                     self
                         .andThen(invokeWith(attrs.onClickEvt, mouse))
                         .andThen(invoke(attrs.onClick))

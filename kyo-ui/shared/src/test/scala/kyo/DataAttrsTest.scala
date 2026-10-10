@@ -10,7 +10,7 @@ class DataAttrsTest extends kyo.test.Test[Any]:
         HtmlRenderer.render(ui, Seq.empty)
 
     "data(name, value) renders data-user-id and does not collide with data-kyo-path" in {
-        val html = renderHtml(UI.span.data("user-id", "42"))
+        val html = renderHtml(UI.span.data("user-id", "42").onClick(()))
         html.map { s =>
             assert(s.contains("""data-user-id="42""""))
             assert(s.contains("data-kyo-path"))

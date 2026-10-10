@@ -560,9 +560,13 @@ class HtmlRendererTest extends UITest:
         }
     }
 
-    "data-kyo-path attribute present (edge)" in {
-        withUI(UI.div(UI.span("test").id("s"))) {
-            Browser.assertAttributeSatisfies(Selector.id("s"), "data-kyo-path", "ignore")(_.nonEmpty).unit
+    "data-kyo-path marks the elements a client addresses and no others" in {
+        withUI(UI.div(UI.span("test").cssClass("plain"), UI.span("hot").id("h").onClick(()), UI.input.id("i"))) {
+            for
+                _     <- Browser.assertAttributeSatisfies(Selector.id("h"), "data-kyo-path", "ignore")(_.nonEmpty)
+                _     <- Browser.assertAttributeSatisfies(Selector.id("i"), "data-kyo-path", "ignore")(_.nonEmpty)
+                plain <- Browser.evalBoolean("!document.querySelector('.plain').hasAttribute('data-kyo-path')")
+            yield assert(plain)
         }
     }
 

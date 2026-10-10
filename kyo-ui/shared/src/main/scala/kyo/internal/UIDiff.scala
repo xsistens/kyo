@@ -12,8 +12,8 @@ import scala.annotation.tailrec
   * background, the axes, the gridlines, every tick label and the legend along with the marks that actually
   * moved, once a second, per connected viewer.
   *
-  * Every element renders with its own `data-kyo-path`, and the client resolves a `Replace` by that path, so a
-  * nested element is addressable exactly the way the boundary is. This decides which nodes CAN be addressed;
+  * Every SVG element renders with its own `data-kyo-path` (`HtmlRenderer.carriesPath`), and the client resolves
+  * a `Replace` by that path, so a nested SVG element is addressable exactly the way the boundary is. This decides which nodes CAN be addressed;
   * what actually goes on the wire is decided downstream, by comparing each candidate's rendered HTML against
   * what was last sent for that path.
   *
@@ -92,8 +92,8 @@ private[kyo] object UIDiff:
 
     /** Whether a child can be replaced on its own.
       *
-      * Only an element renders a tag carrying `data-kyo-path`, which is what the client resolves a `Replace`
-      * against; a fragment, a text node or raw html has no node of its own to address. A nested reactive
+      * Only an element renders a tag, and every SVG element's tag carries `data-kyo-path`, which is what the
+      * client resolves a `Replace` against; a fragment, a text node or raw html has no node of its own to address. A nested reactive
       * region is an element in the rendered output but owns its own subscription, so replacing it from the
       * enclosing region would clobber a subtree that updates itself.
       */
