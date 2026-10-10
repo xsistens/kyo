@@ -87,7 +87,7 @@ extension [A](sb: SelectionBuilder[RootQuery, A])
 
     /** Shortcut fusing [[toQuery]] with [[kyo.apollo.call]]: build the operation and
       * bind it to the `given ApolloClient` in one step, yielding the [[ApolloCall]]
-      * the fluent chain hangs off (`.fetchPolicy` / `.data` / `.watchSignal` / …).
+      * the fluent chain hangs off (`.fetchPolicy`, `.execute`, `.watch()`, ...).
       * The phantom root in `SelectionBuilder[Root*, A]` erases, so the three root
       * variants are same-named overloads disambiguated via `@targetName`.
       */

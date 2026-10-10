@@ -5,8 +5,8 @@ import kyo.apollo.api.Query
 import kyo.apollo.api.Subscription
 
 /** Bind an inline operation to a `given ApolloClient`, yielding the [[ApolloCall]]
-  * the whole fluent chain hangs off (`.fetchPolicy` / `.optimisticUpdates` /
-  * `.data` / `.watchSignal` / `.execute` / `.watch` / …).
+  * the whole fluent chain hangs off (`.fetchPolicy`, `.optimisticUpdates`,
+  * `.execute`, `.watch()`, ...).
   *
   * `client.query`/`mutation`/`subscription` are pure factories that only wrap the
   * operation in an [[ApolloCall]], so the single missing hop to run an inline
@@ -16,8 +16,8 @@ import kyo.apollo.api.Subscription
   *
   * {{{
   * given ApolloClient = client
-  * val warmed  = getCountry.call.fetchPolicy(FetchPolicy.NetworkOnly).data
-  * val listSig = getCountries.call.fetchPolicy(FetchPolicy.CacheOnly).watchSignal
+  * val warmed = getCountry.call.fetchPolicy(FetchPolicy.NetworkOnly).execute
+  * val live   = getCountries.call.fetchPolicy(FetchPolicy.CacheOnly).watch()
   * }}}
   *
   * Defined on the concrete `Query`/`Mutation`/`Subscription` subtypes (not on the
