@@ -1,13 +1,20 @@
 package kyo.apollo.cache
 
+import kyo.<
 import kyo.Abort
 import kyo.Absent
+import kyo.AllowUnsafe
+import kyo.AtomicBoolean
+import kyo.AtomicRef
 import kyo.Channel
 import kyo.Chunk
 import kyo.Fiber
+import kyo.Frame
+import kyo.Kyo
 import kyo.Maybe
 import kyo.Present
 import kyo.Result
+import kyo.Sync
 import kyo.apollo.api.*
 import kyo.apollo.cache.normalized.*
 import kyo.apollo.cache.normalized.api.*
@@ -469,6 +476,36 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
                 collected <- s.garbageCollect
                 _         <- watch.interrupt
             yield assert(!collected.contains(germany), s"collected while watched: $collected")
+            end for
+        }
+
+        "watchFragment reads again when a write lands while a read is installing its keys" in {
+            // The cache publishes a change to a record the listener does not check yet in the
+            // middle of the first read: the shape of a write to a nested record the read is
+            // about to depend on. Only the generation can tell the stream to read once more.
+            given AllowUnsafe = AllowUnsafe.embrace.danger
+            val armed         = AtomicBoolean.Unsafe.init(false)
+            val target        = AtomicRef.Unsafe.init(Maybe.empty[ApolloStore])
+            val cache         = new NormalizedCacheDecorator(MemoryCache()):
+                override def read[A](f: RecordLoader => A)(using Frame): A < Sync =
+                    val publish = if armed.compareAndSet(true, false) then
+                        target.get().fold(Kyo.unit)(_.publish(Set(CacheKey("Nested", "1"))))
+                    else Kyo.unit
+                    publish.andThen(delegate.read(f))
+                end read
+            val s = new ApolloStore(cache, cacheKeyGenerator = CacheIdentity.generator(summon[CacheIdentity[CountryT]]))
+            target.set(Present(s))
+            for
+                _       <- s.writeOperation(q, decoded)
+                _       <- Sync.defer(armed.set(true))
+                emitted <- Channel.init[Maybe[String]](4)
+                watch   <- Fiber.init(s.watchFragment(ref).take(2).foreach(fields => emitted.put(fields.capital)))
+                first   <- emitted.take
+                second  <- emitted.take
+                _       <- watch.get
+            yield
+                assert(first == Present("Berlin"))
+                assert(second == Present("Berlin"))
             end for
         }
     }
