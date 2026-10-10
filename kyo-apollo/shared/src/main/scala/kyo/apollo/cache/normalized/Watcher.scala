@@ -413,12 +413,15 @@ extension [D](call: ApolloCall[D])
                 // succeeded, and someone else's write broke the read again — is not
                 // refetched. Two watches selecting the same object without its key field
                 // would otherwise take turns forever. The watch keeps its last value,
-                // and the diagnostics report the first such repeat.
+                // and the diagnostics report the first such repeat. A removal or an
+                // expiry or eviction in between makes the repeat a new cause.
                 def refetchOnce(failure: CacheReadFailure): Unit < Sync =
-                    Sync.Unsafe.defer(settleMiss(
-                        failure,
-                        MissCause(s"${failure.getClass.getName}: ${failure.message}", store.destructiveWrites)
-                    ))
+                    store.cache.dropped.map { dropped =>
+                        Sync.Unsafe.defer(settleMiss(
+                            failure,
+                            MissCause(s"${failure.getClass.getName}: ${failure.message}", store.destructiveWrites, dropped)
+                        ))
+                    }
 
                 @tailrec def settleMiss(failure: CacheReadFailure, cause: MissCause): Unit < Sync =
                     val s = state.get()
@@ -559,8 +562,10 @@ private[normalized] object WatchState:
 end WatchState
 
 /** What a `CacheFirst` miss is "the same" by: the read failure's description (the
-  * record and field it could not find) and the store's
-  * [[ApolloStore.destructiveWrites]] count when it happened, so a miss after an
-  * imperative removal is a new cause even where it reads the same.
+  * record and field it could not find), the store's
+  * [[ApolloStore.destructiveWrites]] count and the cache's
+  * [[NormalizedCache.dropped]] count when it happened, so a miss after an
+  * imperative removal, an expiry or an eviction is a new cause even where it reads
+  * the same.
   */
-final private[normalized] case class MissCause(failure: String, removals: Long) derives CanEqual
+final private[normalized] case class MissCause(failure: String, removals: Long, dropped: Long) derives CanEqual

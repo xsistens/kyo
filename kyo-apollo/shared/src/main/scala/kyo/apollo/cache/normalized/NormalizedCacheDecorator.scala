@@ -43,4 +43,6 @@ abstract class NormalizedCacheDecorator(protected val delegate: NormalizedCache)
     def allRecords(using Frame): Map[CacheKey, Record] < Sync = delegate.allRecords
 
     override def sizeLimit: Maybe[Int] = delegate.sizeLimit
+
+    override def dropped(using Frame): Long < Sync = delegate.dropped
 end NormalizedCacheDecorator
