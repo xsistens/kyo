@@ -372,7 +372,8 @@ other's read incomplete. A watch whose refetch already answered a miss does not 
 when another write brings the same miss back. It keeps its last value, as Apollo Client
 4.3 does, and the store's `CacheDiagnostics` (`normalizedCache(..., diagnostics =
 CacheDiagnostics.toStdErr)`) reports it once. A read that succeeds after another write,
-or an `evict`, `remove` or `clearAll`, lets the watch refetch that miss again.
+an `evict`, `remove` or `clearAll`, or data the cache dropped by expiry or eviction lets
+the watch refetch that miss again.
 
 The store behind the cache is `client.apolloStore`. Writes through it publish the
 records they change, so watches react to them as they do to network responses, and

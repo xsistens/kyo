@@ -109,8 +109,9 @@ final class ApolloStore(
 
     /** Counts the imperative removals ([[evict]], [[remove]], [[clearAll]]), bumped
       * before the removal publishes. A `CacheFirst` watch that stopped refetching a
-      * repeating miss (a cache feud) refetches again once this has moved: the miss
-      * then stems from an invalidation, not from a feuding write.
+      * repeating miss (a cache feud) refetches again once this, or the cache's
+      * [[NormalizedCache.dropped]], has moved: the miss then stems from an
+      * invalidation, an expiry or an eviction, not from a feuding write.
       */
     private val removals = AtomicLong.Unsafe.init(0L)(using AllowUnsafe.embrace.danger)
 

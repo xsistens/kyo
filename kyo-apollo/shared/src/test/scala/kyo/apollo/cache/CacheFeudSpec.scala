@@ -125,7 +125,9 @@ class CacheFeudSpec extends kyo.test.Test[Any]:
         def touchRoot(using Frame): Unit < Sync = store.publish(Set(CacheKey.QueryRoot))
     end Feud
 
-    private def feud(using Frame): Feud < (Sync & Scope) =
+    private def feud(using Frame): Feud < (Sync & Scope) = feud(MemoryCache())
+
+    private def feud(cache: MemoryCache)(using Frame): Feud < (Sync & Scope) =
         val engine        = FeudEngine()
         given AllowUnsafe = AllowUnsafe.embrace.danger
         val warnings      = AtomicRef.Unsafe.init(Chunk.empty[String])
@@ -135,7 +137,7 @@ class CacheFeudSpec extends kyo.test.Test[Any]:
             ApolloClient.Config("https://example.com/graphql")
                 .httpEngine(engine)
                 .normalizedCache(
-                    MemoryCache(),
+                    cache,
                     IdCacheKeyGenerator(List("id")),
                     diagnostics = CacheDiagnostics.to { msg =>
                         discard(warnings.updateAndGet(_ :+ msg))
@@ -179,6 +181,29 @@ class CacheFeudSpec extends kyo.test.Test[Any]:
                 _ = assert(f.warned.isEmpty, s"a miss after a removal is no feud: ${f.warned}")
                 _ <- named.awaitRefetchEnded
             yield assert(f.engine.nameCalls.get()(using AllowUnsafe.embrace.danger) == 3)
+            end for
+        }
+
+        "a miss that recurs because the answer expired is refetched again" in {
+            // Every field is stamped when written and lives `maxAge` on the cache's own clock. Expiry
+            // empties `QUERY_ROOT`, the refetch answers that miss, and the answer expires in turn: the
+            // same miss again, but caused by the cache dropping data, not by a feuding write.
+            given AllowUnsafe = AllowUnsafe.embrace.danger
+            val maxAge        = 1000L
+            val now           = AtomicLong.Unsafe.init(0L)
+            def expire        = Sync.defer(discard(now.addAndGet(maxAge + 1)))
+            for
+                f     <- feud(MemoryCache(maxAge = maxAge, nowMillis = () => now.get()))
+                named <- f.watchName
+                _     <- named.awaitEstablished
+                _     <- expire
+                _     <- f.touchRoot
+                _     <- named.awaitRefetchEnded
+                _     <- expire
+                _     <- f.touchRoot
+                _ = assert(f.warned.isEmpty, s"an expired answer is no feud: ${f.warned}")
+                _ <- named.awaitRefetchEnded
+            yield assert(f.engine.nameCalls.get() == 3, s"${f.engine.nameCalls.get()} ViewerName requests")
             end for
         }
 

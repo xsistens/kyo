@@ -245,6 +245,40 @@ class StoreSpec extends kyo.test.Test[Any]:
             end for
         }
 
+        // --- MemoryCache: dropped -------------------------------------------------
+
+        "an expired field counts as dropped once, however often it is read" in {
+            var now   = 0L
+            val cache = MemoryCache(maxAge = 100L, nowMillis = () => now)
+            for
+                _      <- cache.merge(Chunk(rec(key("A"), fk("x") -> scalar("1"))))
+                _      <- Sync.defer { now = 50L }
+                _      <- cache.merge(Chunk(rec(key("A"), fk("y") -> scalar("2")))) // y is younger than x
+                _      <- Sync.defer { now = 120L }                                 // x has expired, y has not
+                first  <- cache.loadRecord(key("A"))
+                second <- cache.loadRecord(key("A"))
+                n      <- cache.dropped
+            yield
+                assert(first.map(_.fields.keySet) == Present(Set(fk("y"))))
+                assert(second == first)
+                assert(n == 1L)
+            end for
+        }
+
+        "eviction counts as dropped, and clearAll does not reset the count" in {
+            val cache = MemoryCache(maxSize = 1)
+            for
+                _       <- cache.merge(Chunk(rec(key("A"), fk("x") -> scalar("1"))))
+                _       <- cache.merge(Chunk(rec(key("B"), fk("x") -> scalar("2")))) // evicts A
+                evicted <- cache.dropped
+                _       <- cache.clearAll
+                cleared <- cache.dropped
+            yield
+                assert(evicted == 1L)
+                assert(cleared == 1L)
+            end for
+        }
+
         "writeOperation normalizes into id-keyed records and reports the changed keys" in {
             val s = store()
             for
