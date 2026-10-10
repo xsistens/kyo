@@ -315,7 +315,7 @@ def requireCapital(client: ApolloClient): String < (Async & Scope & Abort[Apollo
     client.query(germany).execute.map { response =>
         response.error match
             case Present(error) => Abort.fail(error)
-            case Absent =>
+            case Absent         =>
                 response.data.flatMap(_.country).flatMap(_.capital)
                     .orFailWith(DefaultApolloException("Germany has no capital in the response"))
     }

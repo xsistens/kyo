@@ -90,7 +90,7 @@ import kyo.apollo.api.*
 val germany = Queries.country("DE")(_.code.name.capital).toQuery()
 
 val nameAndCapital = Country.name ~ Country.capital
-val europe =
+val europe         =
     Queries.countries(filter = Present(CountryFilter(continent = Present(Continent.EUROPE), search = Absent)))(nameAndCapital)
         .toQuery()
 ```
