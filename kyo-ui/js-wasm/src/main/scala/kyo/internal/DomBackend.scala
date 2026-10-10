@@ -1291,7 +1291,8 @@ private[kyo] object DomBackend:
                         val me       = e.asInstanceOf[dom.MouseEvent]
                         val mouse    = MouseEventData(
                             modifiers = UI.Modifiers(me.ctrlKey, me.altKey, me.shiftKey, me.metaKey),
-                            targetId = targetId
+                            targetId = targetId,
+                            position = Present(UI.Point(me.clientX, me.clientY))
                         )
                         // Prevent the browser's default navigation only when the anchor carries a kyo
                         // click handler (so the handler, not the href, drives the action). A plain href
@@ -1309,6 +1310,19 @@ private[kyo] object DomBackend:
                         clickSubmitGuard = true
                         discard(dom.window.setTimeout(() => clickSubmitGuard = false, 0))
                         Present(UIEvent.Click(path, mouse))
+                    else if t == "contextmenu" && evTypes.contains("contextmenu") then
+                        // Suppress the native menu only when a handler was declared (this branch fired).
+                        e.preventDefault()
+                        val targetId = Maybe(e.target.asInstanceOf[dom.Element].id).filter(_.nonEmpty)
+                        val me       = e.asInstanceOf[dom.MouseEvent]
+                        Present(UIEvent.ContextMenu(
+                            path,
+                            MouseEventData(
+                                modifiers = UI.Modifiers(me.ctrlKey, me.altKey, me.shiftKey, me.metaKey),
+                                targetId = targetId,
+                                position = Present(UI.Point(me.clientX, me.clientY))
+                            )
+                        ))
                     else if t == "input" && evTypes.contains("input") then
                         Present(UIEvent.Input(path, e.target.asInstanceOf[dom.html.Input].value))
                     else if t == "change" && evTypes.contains("change") then
@@ -1320,15 +1334,40 @@ private[kyo] object DomBackend:
                             Present(UIEvent.ChangeNumeric(path, tgt.value.toDouble))
                         else if typ == "file" then
                             val files = tgt.files
-                            if files.length > 0 then
-                                val reader = new dom.FileReader()
-                                reader.onload = (_: dom.Event) =>
-                                    val content = reader.result.asInstanceOf[String]
-                                    val ev      = UIEvent.Change(path, content)
-                                    fireFromJs(events, dispatch(path, ev).unit)
-                                reader.readAsText(files(0))
+                            if evTypes.contains("fileselect") then
+                                // A FileReader per file, indexed so order survives; post FileSelect once all complete.
+                                val n = files.length
+                                if n > 0 then
+                                    val results = scala.collection.mutable.ArrayBuffer.fill[Maybe[UI.FilePayload]](n)(Absent)
+                                    var doneCt  = 0
+                                    var i       = 0
+                                    while i < n do
+                                        val ix     = i
+                                        val f      = files(ix)
+                                        val reader = new dom.FileReader()
+                                        reader.onload = (_: dom.Event) =>
+                                            val content = reader.result.asInstanceOf[String]
+                                            results(ix) = Present(UI.FilePayload(f.name, f.size.toLong, f.`type`, content))
+                                            doneCt += 1
+                                            if doneCt == n then
+                                                val payloads = results.toSeq.collect { case Present(p) => p }
+                                                fireFromJs(events, dispatch(path, UIEvent.FileSelect(path, payloads)).unit)
+                                        reader.readAsText(f)
+                                        i += 1
+                                    end while
+                                end if
+                                Absent
+                            else
+                                // Without onFileSelect: the first file's text as a Change.
+                                if files.length > 0 then
+                                    val reader = new dom.FileReader()
+                                    reader.onload = (_: dom.Event) =>
+                                        val content = reader.result.asInstanceOf[String]
+                                        fireFromJs(events, dispatch(path, UIEvent.Change(path, content)).unit)
+                                    reader.readAsText(files(0))
+                                end if
+                                Absent
                             end if
-                            Absent
                         else
                             Present(UIEvent.Change(path, tgt.value))
                         end if
@@ -1382,7 +1421,8 @@ private[kyo] object DomBackend:
                             path,
                             MouseEventData(
                                 modifiers = UI.Modifiers(me.ctrlKey, me.altKey, me.shiftKey, me.metaKey),
-                                targetId = hoverTargetId
+                                targetId = hoverTargetId,
+                                position = Present(UI.Point(me.clientX, me.clientY))
                             )
                         ))
                     else if t == "mouseout" && evTypes.contains("mouseout") then
@@ -1392,7 +1432,8 @@ private[kyo] object DomBackend:
                             path,
                             MouseEventData(
                                 modifiers = UI.Modifiers(me.ctrlKey, me.altKey, me.shiftKey, me.metaKey),
-                                targetId = unhoverTargetId
+                                targetId = unhoverTargetId,
+                                position = Present(UI.Point(me.clientX, me.clientY))
                             )
                         ))
                     else if t == "wheel" && evTypes.contains("wheel") then
@@ -1415,8 +1456,31 @@ private[kyo] object DomBackend:
         end handler
 
         val wheelOptions = js.Dynamic.literal(capture = true, passive = false).asInstanceOf[dom.EventListenerOptions]
+        // onScrollPosition: rAF-coalesces a scroll burst to one dispatch per frame. Scroll does not bubble, but the
+        // capture-phase listener catches descendant viewport scrolls; a page-level scroll (no data-kyo-path) is ignored.
+        var scrRaf                                               = 0
+        var scrEl: dom.Element                                   = null
+        var scrPath: Seq[String]                                 = Seq.empty
+        val scrollHandler: scalajs.js.Function1[dom.Event, Unit] = (e: dom.Event) =>
+            findPathElement(e.target.asInstanceOf[dom.Element]).foreach { target =>
+                if declaredInChain(target, "scroll") then
+                    scrEl = target
+                    scrPath = parsePath(target.getAttribute("data-kyo-path"))
+                    if scrRaf == 0 then
+                        scrRaf = dom.window.requestAnimationFrame { (_: Double) =>
+                            scrRaf = 0
+                            val sid = Maybe(scrEl.id).filter(_.nonEmpty)
+                            fireFromJs(
+                                events,
+                                dispatch(scrPath, UIEvent.ScrollPosition(scrPath, scrEl.scrollTop, scrEl.scrollLeft, sid)).unit
+                            )
+                        }
+                    end if
+            }
+        val scrollOptions = js.Dynamic.literal(capture = true, passive = true).asInstanceOf[dom.EventListenerOptions]
         for
             _ <- addScopedListener("click", handler, true)
+            _ <- addScopedListener("contextmenu", handler, true)
             _ <- addScopedListener("input", handler, true)
             _ <- addScopedListener("change", handler, true)
             _ <- addScopedListener("submit", handler, true)
@@ -1427,6 +1491,7 @@ private[kyo] object DomBackend:
             _ <- addScopedListener("mouseover", handler, true)
             _ <- addScopedListener("mouseout", handler, true)
             _ <- addScopedListener("wheel", handler, wheelOptions)
+            _ <- addScopedListener("scroll", scrollHandler, scrollOptions)
         yield ()
         end for
     end setupEventDelegation
