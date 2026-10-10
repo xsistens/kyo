@@ -19,8 +19,8 @@ import scala.collection.immutable.VectorMap
 /** Colocated masked fragments (Apollo Client 4 fragment colocation + data
   * masking): a spread contributes exactly one opaque ref element, the store keys
   * the ref to the record its own generator normalized, the captured slice keeps a cache
-  * write of decoded data lossless, and — the §2.5 composition — fragments read
-  * from records accumulated across separate operations.
+  * write of decoded data lossless, and fragments read from records accumulated
+  * across separate operations.
   */
 class MaskedFragmentSpec extends kyo.test.Test[Any]:
 
@@ -255,7 +255,7 @@ class MaskedFragmentSpec extends kyo.test.Test[Any]:
         }
     }
 
-    "cross-operation composition (§2.5)" - {
+    "cross-operation composition" - {
 
         "a fragment reads from a record accumulated by two separate operations" in {
             // Query A fetches {code,name}; query B fetches {code,capital}. Neither
