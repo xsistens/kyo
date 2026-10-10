@@ -274,6 +274,44 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
             end for
         }
 
+        // --- Standby ------------------------------------------------------------
+
+        "Standby serves a cached result without the network" in {
+            val engine = CountingEngine()
+            for
+                client <- cachedClient(engine)
+                _      <- client.apolloStore.writeOperation(CountriesQuery(), sampleData)
+                r      <- call(client).fetchPolicy(FetchPolicy.Standby).execute
+            yield
+                assert(engine.calls == 0)
+                assert(r.data == Present(sampleData))
+                assert(r.cacheInfo.exists(_.isCacheHit))
+            end for
+        }
+
+        "Standby's stream on an empty store emits nothing, and asks no network" in {
+            val engine = CountingEngine()
+            cachedClient(engine).map { client =>
+                collectAll(call(client).fetchPolicy(FetchPolicy.Standby)).map { emissions =>
+                    assert(emissions.isEmpty)
+                    assert(engine.calls == 0)
+                }
+            }
+        }
+
+        "Standby's execute on an empty store answers with a failure value, not a panic" in {
+            val engine = CountingEngine()
+            cachedClient(engine).map { client =>
+                Abort.run[Throwable](call(client).fetchPolicy(FetchPolicy.Standby).execute).map {
+                    case Result.Success(r) =>
+                        assert(engine.calls == 0)
+                        assert(r.data == Absent)
+                        assert(r.error.exists(_.message.contains("no response")), s"${r.error}")
+                    case other => fail(s"expected a response value, got $other")
+                }
+            }
+        }
+
         // --- a decode-only projection -------------------------------------------
 
         "a .map query reaches the caller decoded, is not normalized, and the skip is logged at debug" in {
