@@ -106,7 +106,7 @@ class CacheInterceptorSpec extends kyo.test.Test[Any]:
             request: kyo.apollo.network.http.HttpEngine.Request
         )(using Frame): kyo.apollo.network.http.HttpEngine.Response < Async =
             calls += 1
-            kyo.apollo.network.http.HttpEngine.response(HttpStatus(status), body)
+            kyo.apollo.network.http.HttpEngine.response(HttpStatus.init(status).getOrThrow, body)
         end execute
     end CountingEngine
 

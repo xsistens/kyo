@@ -130,7 +130,7 @@ class MultiSelectTest extends UicTest:
             (_, value, open, ui) <- panelOf(2)
             trigger              <- elementWithClass(ui, "p-multiselect")
             bubbled: (Any < Async) = trigger.attrs.onKeyDown match
-                case Present(f) => f(UI.KeyboardEvent(UI.Keyboard.Space, UI.Modifiers.none, Present("ms-all")))
+                case Present(f) => handled(f(UI.KeyboardEvent(UI.Keyboard.Space, UI.Modifiers.none, Present("ms-all"))))
                 case Absent     => ()
             _      <- bubbled
             picked <- value.get

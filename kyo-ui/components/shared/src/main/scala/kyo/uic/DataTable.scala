@@ -2166,7 +2166,12 @@ final case class DataTable[A] private (
                         err,
                         id => cmds.focusId(id),
                         menus.toMap,
-                        ids => cmds.requestMeasureByIds(ids),
+                        // A grab needs every edge: one element gone mid-grab measures nothing.
+                        ids =>
+                            cmds.requestMeasureByIds(ids).map { rects =>
+                                val found = rects.flatMap(_.toChunk)
+                                if found.size == rects.size then found else Chunk.empty
+                            },
                         Present(held),
                         Present(moving),
                         if windowOn then Present(scroll) else Absent,
@@ -2202,7 +2207,7 @@ final case class DataTable[A] private (
             // Anything that must change afterwards belongs in a `Signal` — which is what `rows`,
             // `sort`, `page` and the bound refs already are.
             idV match
-                case Present(id) => mount.keyed(DataTable -> id)
+                case Present(id) => mount.keyed(id)
                 case Absent      => mount
             end match
         end if

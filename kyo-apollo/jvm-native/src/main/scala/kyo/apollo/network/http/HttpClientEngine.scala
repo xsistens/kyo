@@ -116,7 +116,7 @@ final class HttpClientEngine extends HttpEngine:
     private def drainInto(
         head: Fiber.Promise[(HttpStatus, HttpHeaders), Abort[HttpEngineFailure]],
         chunks: Channel[Maybe[String]]
-    )(resp: HttpResponse["body" ~ Stream[Span[Byte], Async]])(using Frame): Unit < (Async & Abort[HttpException]) =
+    )(resp: HttpResponse["body" ~ Stream[Span[Byte], Async & Abort[HttpException]]])(using Frame): Unit < (Async & Abort[HttpException]) =
         head.completeDiscard(Result.succeed((resp.status, resp.headers))).andThen {
             val decoder = new Utf8ChunkDecoder
             resp.fields.body
@@ -160,7 +160,7 @@ private object HttpClientEngine:
     )
 
     /** The routes of [[HttpClientEngine.executeStreaming]]: the body as a live byte stream. */
-    val streamReply: Routes["body" ~ Stream[Span[Byte], Async]] = Routes(
+    val streamReply: Routes["body" ~ Stream[Span[Byte], Async & Abort[HttpException]]] = Routes(
         HttpRoute.getRaw("").response(_.bodyStream),
         HttpRoute.postRaw("").request(_.bodyText).response(_.bodyStream),
         HttpRoute.postRaw("").request(_.bodyMultipart).response(_.bodyStream)
