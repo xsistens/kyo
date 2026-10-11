@@ -1,5 +1,6 @@
 package kyo.internal
 
+import kyo.*
 import kyo.UI
 import kyo.UI.Ast.*
 
