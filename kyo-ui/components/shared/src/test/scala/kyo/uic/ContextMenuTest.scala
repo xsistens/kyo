@@ -116,7 +116,7 @@ class ContextMenuTest extends UicTest:
         // held against each other by their rendered form rather than by ==.
         (named.render, anon.render) match
             case (n: Ast.Mounted, a: Ast.Mounted) =>
-                assert(n.key.map(_.toString).contains((uic.ContextMenu -> "m1").toString), "the id is the key")
+                assert(n.key.map(_.toString).contains("m1"), "the id is the key")
                 assert(a.key.isEmpty, "and no id means no key, as before")
             case other => fail(s"a ContextMenu renders as a mount; got: $other")
         end match
@@ -135,7 +135,7 @@ class ContextMenuTest extends UicTest:
 
     /** The state a caller's own mount would have allocated. */
     private def allocState(m: uic.ContextMenu)(using Frame): uic.ContextMenu.State < Async =
-        UI.Commands.init(_ => ()).map(c => Env.run(c)(m.state))
+        UI.Commands.init(_ => ()).map(c => kyo.internal.UICommands.commands.let(Present(c))(m.state))
 
     "the targetless form renders no target wrapper, which is the whole of what it is for" in {
         for

@@ -2202,7 +2202,7 @@ final case class DataTable[A] private (
             // Anything that must change afterwards belongs in a `Signal` — which is what `rows`,
             // `sort`, `page` and the bound refs already are.
             idV match
-                case Present(id) => mount.keyed(DataTable -> id)
+                case Present(id) => mount.keyed(id)
                 case Absent      => mount
             end match
         end if
