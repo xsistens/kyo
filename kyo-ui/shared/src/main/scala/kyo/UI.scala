@@ -1096,9 +1096,7 @@ object UI:
       * region cannot tell the two apart, because a control that navigates natively declares no handler and therefore cannot
       * consume the click with `stopPropagation` either.
       *
-      * It is always `false` on the element the click landed on, so a control's own handler still runs. It does not resolve
-      * through a [[kyo.UI.mounted]] boundary, the same limit the disabled and button-target checks have: a control inside a
-      * mounted subtree reads as `false`.
+      * It is always `false` on the element the click landed on, so a control's own handler still runs.
       */
     final case class MouseEvent(
         targetId: Maybe[String],
