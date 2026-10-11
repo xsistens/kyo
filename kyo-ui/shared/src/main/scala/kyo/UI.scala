@@ -1242,21 +1242,18 @@ object UI:
               * subsequent [[onPointerMove]] stream keeps flowing even when the pointer leaves the element, until [[onPointerUp]]
               * releases the capture. Emits the `pointerdown` token in `data-kyo-ev`; bubbles like `onClick`.
               */
-            def onPointerDown[S](f: PointerEvent => Any < (Abort[Throwable] & Async & S))(using Isolate[S, Sync, S]): Self =
-                withAttrs(attrs.copy(onPointerDown = Present(eraseHandlerFn(f))))
+            def onPointerDown(f: PointerEvent => Any < Async): Self = withAttrs(attrs.copy(onPointerDown = Present(f)))
 
             /** Runs `f` on each pointer-move during an active drag session started by a pointer-down on a declaring element,
               * receiving the [[kyo.UI.PointerEvent]] payload. Moves are rAF-coalesced (at most one per animation frame, latest
               * coordinates win), so a rapid drag delivers fewer handler calls than raw DOM move events. Emits the `pointermove` token.
               */
-            def onPointerMove[S](f: PointerEvent => Any < (Abort[Throwable] & Async & S))(using Isolate[S, Sync, S]): Self =
-                withAttrs(attrs.copy(onPointerMove = Present(eraseHandlerFn(f))))
+            def onPointerMove(f: PointerEvent => Any < Async): Self = withAttrs(attrs.copy(onPointerMove = Present(f)))
 
             /** Runs `f` on pointer-up ending a drag session, receiving the [[kyo.UI.PointerEvent]] payload. The client releases the
               * pointer capture before posting. Emits the `pointerup` token; bubbles like `onClick`.
               */
-            def onPointerUp[S](f: PointerEvent => Any < (Abort[Throwable] & Async & S))(using Isolate[S, Sync, S]): Self =
-                withAttrs(attrs.copy(onPointerUp = Present(eraseHandlerFn(f))))
+            def onPointerUp(f: PointerEvent => Any < Async): Self = withAttrs(attrs.copy(onPointerUp = Present(f)))
         end Interactive
 
         // ---- Layout traits ----
