@@ -1656,13 +1656,9 @@ private[kyo] object HtmlRenderer:
           |  }
           |  while(curFrom&&curFrom!==fromEnd){var fn=__kyoLogicalNext(curFrom);__kyoRemoveLogical(parent,curFrom);curFrom=fn;}
           |}
-          |// Declined in two shapes this pass does not maintain, both of which fall back to the wholesale replacement
-          |// that always works: a payload declaring nested ranges of its own, and a live range that still holds one.
-          |// Either would leave the range registry describing markers the morph moved or dropped.
           |// Nested ranges reconcile as logical children, so a region containing another region morphs like any other;
           |// kyoRangeReplace re-reads the live markers afterwards and hands the registry what is actually there.
-          |function kyoRangeMorph(endpoints,fragment,incoming,synthetic){
-          |  if(synthetic)return false;
+          |function kyoRangeMorph(endpoints,fragment){
           |  __kyoMorphRun(endpoints.start.parentNode,endpoints.start.nextSibling,endpoints.end,fragment.firstChild,null);
           |  return true;
           |}
@@ -1837,7 +1833,7 @@ private[kyo] object HtmlRenderer:
           |  // Morph only siblings into siblings, as DomReactiveRegions does: rows arriving in a range host move the
           |  // markers into that host below, which a morph of the live nodes into the wrapper would skip.
           |  var hostWrapped=newRoots.length===1&&newRoots[0].tagName==="TBODY"&&newRoots[0].getAttribute("data-kyo-range-host")===id;
-          |  var finalRoots,morphed=!synthetic&&!hostWrapped&&kyoRangeMorph(endpoints,fragment,incoming,synthetic);
+          |  var finalRoots,morphed=!synthetic&&!hostWrapped&&kyoRangeMorph(endpoints,fragment);
           |  if(morphed){finalRoots=kyoRangeRoots(endpoints.start,endpoints.end);
           |    for(var i=0;i<removed.length;i++)__kyoRanges.delete(removed[i]);
           |    kyoRangeRescan(id,endpoints).forEach(function(pair,key){__kyoRanges.set(key,pair);});
