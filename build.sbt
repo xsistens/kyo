@@ -518,8 +518,16 @@ lazy val kyoJVM: Project = project
         `kyo-discord`.jvm,
         `kyo-teams`.jvm,
         `kyo-ui`.jvm,
+        `kyo-ui-components`.jvm,
+        `kyo-ui-components-gen`,
+        `kyo-ui-devtools`.jvm,
+        `kyo-apollo`.jvm,
+        `kyo-apollo-testing`.jvm,
+        `kyo-apollo-ui`.jvm,
+        `kyo-apollo-codegen`.jvm,
         `kyo-markdown`.jvm,
         `kyo-i18n`.jvm,
+        `kyo-apollo-codegen-it`.jvm,
         `kyo-case-app`.jvm,
         `kyo-pod`.jvm,
         `kyo-examples`.jvm,
@@ -618,6 +626,11 @@ lazy val kyoJS = project
         `kyo-discord`.js,
         `kyo-teams`.js,
         `kyo-ui`.js,
+        `kyo-ui-components`.js,
+        `kyo-ui-devtools`.js,
+        `kyo-apollo`.js,
+        `kyo-apollo-testing`.js,
+        `kyo-apollo-ui`.js,
         `kyo-markdown`.js,
         `kyo-i18n`.js,
         `kyo-website`.js,
@@ -707,6 +720,10 @@ lazy val kyoNative = project
         `kyo-discord`.native,
         `kyo-teams`.native,
         `kyo-ui`.native,
+        `kyo-ui-components`.native,
+        `kyo-ui-devtools`.native,
+        `kyo-apollo`.native,
+        `kyo-apollo-ui`.native,
         `kyo-markdown`.native,
         `kyo-i18n`.native,
         `kyo-pod`.native,
@@ -794,6 +811,10 @@ lazy val kyoWasm = project
         `kyo-discord`.wasm,
         `kyo-teams`.wasm,
         `kyo-ui`.wasm,
+        `kyo-ui-components`.wasm,
+        `kyo-ui-devtools`.wasm,
+        `kyo-apollo`.wasm,
+        `kyo-apollo-ui`.wasm,
         `kyo-markdown`.wasm,
         `kyo-i18n`.wasm,
         `kyo-test-api`.wasm,
@@ -4070,6 +4091,162 @@ lazy val `kyo-i18n` =
         .jsSettings(`js-settings`)
         .wasmSettings(`wasm-settings`)
 
+// GraphQL client core, framework-agnostic (no kyo-ui). Each row has its own engines:
+// JVM/Native send HTTP and WebSocket traffic through kyo-http (jvm-native), JS/Wasm
+// through the browser's fetch and WebSocket via scalajs-dom (js-wasm).
+lazy val `kyo-apollo` =
+    crossProject(JSPlatform, JVMPlatform, NativePlatform, WasmPlatform)
+        .crossType(CrossType.Full)
+        .in(file("kyo-apollo"))
+        .dependsOn(`kyo-core`, `kyo-data`, `kyo-schema`, `kyo-schema-json`, `kyo-http`)
+        // Test-only, client -> server: ApolloCalibanSmokeSpec runs the JVM engines against a caliban server.
+        .jvmConfigure(_.dependsOn(`kyo-caliban`.jvm % Test))
+        .withKyoTest
+        .settings(`kyo-settings`)
+        .jvmSettings(
+            mimaCheck(false),
+            Compile / unmanagedSourceDirectories +=
+                baseDirectory.value.getParentFile / "jvm-native" / "src" / "main" / "scala",
+            Test / unmanagedSourceDirectories +=
+                baseDirectory.value.getParentFile / "jvm-native" / "src" / "test" / "scala"
+        )
+        .nativeSettings(
+            `native-settings`,
+            `openssl-native-settings`,
+            Compile / unmanagedSourceDirectories +=
+                baseDirectory.value.getParentFile / "jvm-native" / "src" / "main" / "scala",
+            Test / unmanagedSourceDirectories +=
+                baseDirectory.value.getParentFile / "jvm-native" / "src" / "test" / "scala"
+        )
+        .jsSettings(
+            `js-settings`,
+            libraryDependencies += "org.scala-js" %%% "scalajs-dom" % "2.8.1"
+        )
+        .wasmSettings(
+            `wasm-settings`,
+            libraryDependencies += "org.scala-js" %%% "scalajs-dom" % "2.8.1"
+        )
+
+// Test doubles for kyo-apollo users: scripted HTTP engine and transport, mock
+// WebSocket server, stream probes. No platform-specific code, so a row exists only
+// where something consumes the module: JVM for kyo-apollo-codegen-it's tests, JS for
+// Scala.js applications and their specs, which drive a client without a network.
+// Native and Wasm have no consumer and no rows.
+lazy val `kyo-apollo-testing` =
+    crossProject(JSPlatform, JVMPlatform)
+        .crossType(CrossType.Pure)
+        .in(file("kyo-apollo-testing"))
+        .dependsOn(`kyo-apollo`, `kyo-core`, `kyo-data`, `kyo-schema`)
+        .withKyoTest
+        .settings(`kyo-settings`)
+        .jvmSettings(mimaCheck(false))
+        .jsSettings(`js-settings`)
+
+// Build-time generator emitting kyo-apollo selectors and schema types from a GraphQL
+// schema. Plain JVM, reuses Caliban's parser. Does not depend on the apollo core: it emits
+// against that API's shape, never shares its classpath — `kyo-apollo-codegen-it` compiles
+// the emitted code against kyo-apollo, so a drift between the two fails the build.
+lazy val `kyo-apollo-codegen` =
+    crossProject(JVMPlatform)
+        .crossType(CrossType.Pure)
+        .in(file("kyo-apollo-codegen"))
+        .withKyoTest
+        .settings(`kyo-settings`)
+        .jvmSettings(
+            mimaCheck(false),
+            libraryDependencies += "com.github.ghostdogpr" %% "caliban-tools" % "3.1.2",
+            // The forked generator JVM: scala-library's LazyVals would otherwise print JDK 25's
+            // sun.misc.Unsafe deprecation warning on every apolloGenerate run.
+            Compile / run / javaOptions += "--sun-misc-unsafe-memory-access=allow",
+            // The README's examples use generated sources, which this classpath never has;
+            // kyo-apollo-codegen-it validates it instead.
+            doctestSources := Seq.empty
+        )
+
+lazy val apolloSchema = settingKey[File]("GraphQL schema SDL apolloGenerate generates kyo-apollo selectors from.")
+lazy val apolloPackage = settingKey[String]("Package the sources apolloGenerate emits declare.")
+lazy val apolloScalarMappings =
+    settingKey[Map[String, String]]("GraphQL custom scalar name -> fully-qualified Scala type, for apolloGenerate.")
+lazy val apolloClientFields =
+    settingKey[Seq[String]]("Local @client fields for apolloGenerate, each written `Type.field: ScalaType = default`.")
+lazy val apolloGenerate =
+    taskKey[Seq[File]]("Generate kyo-apollo selectors and schema types from apolloSchema into Compile / sourceManaged.")
+
+// Runs kyo.apollo.codegen.CodegenRunner through the codegen project's own runner and classpath:
+// a cold build compiles the generator first, and the generator stays out of the meta-build
+// (kyo-settings forks `run`, so each generation is a short-lived JVM, not a class loader in sbt).
+// The generator writes only changed files and deletes the sources of types that left the
+// schema, so running it on every compile triggers no recompilation. A project adds
+// `apolloCodegenSettings` and sets `apolloSchema` and `apolloPackage`.
+lazy val apolloCodegenSettings = Seq(
+    apolloScalarMappings := Map.empty,
+    apolloClientFields   := Seq.empty,
+    apolloGenerate := {
+        val classpath = (`kyo-apollo-codegen`.jvm / Compile / fullClasspath).value.map(_.data)
+        val generator = (`kyo-apollo-codegen`.jvm / Compile / run / runner).value
+        val out       = (Compile / sourceManaged).value / "kyo-apollo-codegen"
+        val options =
+            Seq("--schema", apolloSchema.value.getAbsolutePath, "--out", out.getAbsolutePath, "--package", apolloPackage.value) ++
+                apolloScalarMappings.value.toSeq.sorted.flatMap { case (name, tpe) => Seq("--scalar", s"$name=$tpe") } ++
+                apolloClientFields.value.flatMap(field => Seq("--client-field", field))
+        generator.run("kyo.apollo.codegen.CodegenRunner", classpath, options, streams.value.log).get
+        (out ** "*.scala").get
+    },
+    Compile / sourceGenerators += apolloGenerate.taskValue
+)
+
+// Compile gate for kyo-apollo-codegen: generates from the bundled example schema on every
+// compile and compiles the output against kyo-apollo; its tests drive the generated
+// selectors through the real client, and its doctest compiles kyo-apollo-codegen/README.md
+// against the generated sources. Not published.
+lazy val `kyo-apollo-codegen-it` =
+    crossProject(JVMPlatform)
+        .crossType(CrossType.Pure)
+        .in(file("kyo-apollo-codegen/it"))
+        .dependsOn(`kyo-apollo`, `kyo-apollo-testing` % Test)
+        .withKyoTest
+        .settings(`kyo-settings`, apolloCodegenSettings)
+        .jvmSettings(
+            mimaCheck(false),
+            publish / skip := true,
+            apolloSchema :=
+                (LocalRootProject / baseDirectory).value / "kyo-apollo-codegen" / "src" / "main" / "resources" /
+                    "codegenExample" / "schema.graphql",
+            apolloPackage        := "kyo.apollo.codegen.it.generated",
+            apolloScalarMappings := Map("DateTime" -> "java.time.Instant"),
+            apolloClientFields := Seq(
+                "Country.isFavorite: Boolean = false",
+                "Country.tags: Chunk[String] = Chunk.empty",
+                "Query.cartOpen: Boolean = false"
+            ),
+            doctestSources := Seq((LocalRootProject / baseDirectory).value / "kyo-apollo-codegen" / "README.md")
+        )
+
+// A standalone caliban GraphQL server (JVM-only, caliban is JVM-only) used as the shared
+// backend for the cross-platform apollo E2E suite: every client platform's ApolloE2ESpec
+// runs against this one running process. Not published; run via `kyo-apollo-itserverJVM/run`.
+lazy val `kyo-apollo-itserver` =
+    crossProject(JVMPlatform)
+        .crossType(CrossType.Pure)
+        .in(file("kyo-apollo-itserver"))
+        .dependsOn(`kyo-caliban`)
+        .settings(`kyo-settings`)
+        .jvmSettings(mimaCheck(false), publish / skip := true)
+
+// Apollo bindings for kyo-ui: reactive Signal/Var adapters over the apollo core
+// store plus query/mutation effects. JS only, depends on the apollo core and kyo-ui.
+lazy val `kyo-apollo-ui` =
+    crossProject(JSPlatform, JVMPlatform, NativePlatform, WasmPlatform)
+        .crossType(CrossType.Pure)
+        .in(file("kyo-apollo-ui"))
+        .dependsOn(`kyo-apollo` % "compile->compile;test->test", `kyo-ui`, `kyo-core`)
+        .withKyoTest
+        .settings(`kyo-settings`)
+        .jvmSettings(mimaCheck(false))
+        .nativeSettings(`native-settings`, `openssl-native-settings`)
+        .jsSettings(`js-settings`)
+        .wasmSettings(`wasm-settings`)
+
 lazy val `kyo-ui` =
     crossProject(JSPlatform, JVMPlatform, NativePlatform, WasmPlatform)
         .crossType(CrossType.Full)
@@ -4125,6 +4302,74 @@ lazy val `kyo-ui` =
             `wasm-settings`,
             libraryDependencies += "org.scala-js" %%% "scalajs-dom" % "2.8.1"
         )
+
+// The component library for kyo-ui: ready-made controls (inputs, overlays, menus, tables) built
+// from kyo-ui primitives, plus the generated design tokens, icon set, and component CSS.
+//
+// Nested under kyo-ui/ rather than sitting at the repo root: it is one member of the kyo-ui family,
+// and the directory tree says so (same shape as kyo-ffi/it, kyo-test/api, kyo-compat/test, whose
+// project ids likewise stay flat and hyphenated).
+//
+// Every platform kyo-ui has, because every component is platform-neutral shared source: no
+// `scala.scalajs` facade anywhere, no per-platform directory, the DOM is kyo-ui's concern. Scala.js
+// is the real target and gets a row per linker backend (the Wasm row is that same source linked to
+// WasmGC); the JVM and Native rows carry server-side rendering for the server-push transport, so a
+// server on either can render the same components a browser mounts.
+lazy val `kyo-ui-components` =
+    crossProject(JSPlatform, JVMPlatform, NativePlatform, WasmPlatform)
+        .crossType(CrossType.Full)
+        .in(file("kyo-ui/components"))
+        .dependsOn(`kyo-ui`)
+        .withKyoTest
+        .settings(`kyo-settings`)
+        .jvmSettings(mimaCheck(false))
+        // `openssl-native-settings` as in kyo-ui: kyo-net's bundled TLS shim compiles into THIS binary,
+        // and nativeConfig does not cross a project dependency, so without the system OpenSSL flags the
+        // test link dies on undefined SSL_* symbols.
+        .nativeSettings(`native-settings`, `openssl-native-settings`)
+        .jsSettings(
+            `js-settings`,
+            scalaJSLinkerConfig ~= { _.withModuleKind(ModuleKind.CommonJSModule) }
+        )
+        // No ModuleKind here: the Wasm backend requires ESModule, which WasmPlatform pins.
+        .wasmSettings(`wasm-settings`)
+
+// Render devtools: the aggregation and the browser overlay that make a running app's re-render
+// behaviour visible. A SEPARATE artifact on purpose. kyo-ui carries only the reporting SPI, which is
+// a `Local` read per paint and nothing when no sink is installed; the overlay is several hundred
+// lines of DOM code that a production Scala.js bundle has no business linking, and a runtime flag
+// would not let dead-code elimination decide that. So enabling devtools is a dependency plus one
+// line at the app root, and shipping without them is the default rather than a build option.
+lazy val `kyo-ui-devtools` =
+    crossProject(JSPlatform, JVMPlatform, NativePlatform, WasmPlatform)
+        .crossType(CrossType.Full)
+        .in(file("kyo-ui/devtools"))
+        .dependsOn(`kyo-ui`)
+        .withKyoTest
+        .settings(`kyo-settings`)
+        .jvmSettings(mimaCheck(false))
+        // As in kyo-ui and kyo-ui-components: kyo-net's bundled TLS shim compiles into THIS binary and
+        // nativeConfig does not cross a project dependency, so the test link needs the system OpenSSL flags.
+        .nativeSettings(`native-settings`, `openssl-native-settings`)
+        .jsSettings(
+            `js-settings`,
+            scalaJSLinkerConfig ~= { _.withModuleKind(ModuleKind.CommonJSModule) }
+        )
+        // No ModuleKind here: the Wasm backend requires ESModule, which WasmPlatform pins.
+        .wasmSettings(`wasm-settings`)
+
+// The code generator behind kyo-ui-components' `kyo.uic.generated` sources: parses pinned npm
+// inputs and emits per-icon defs (one per glyph, so Scala.js method-level DCE strips the path
+// strings of unused icons from downstream bundles), design tokens, and component CSS. Plain JVM,
+// never published, run by hand when the pinned inputs move. Lives in-tree so the committed
+// generated sources keep a reproducible provenance (same rationale as kyo-ffi-codegen).
+lazy val `kyo-ui-components-gen` = project
+    .in(file("kyo-ui/components/gen"))
+    .settings(
+        `kyo-settings`,
+        publish / skip := true,
+        libraryDependencies += "com.lihaoyi" %% "ujson" % "4.1.0"
+    )
 
 // The website: shared apps + page wrapper + content model + cross-platform kyo-parse Markdown
 // transpiler (DocsMarkdown in shared/, no third-party Markdown dependency). JVM side carries the
