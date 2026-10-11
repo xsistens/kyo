@@ -2444,16 +2444,6 @@ private[kyo] object ReactiveUI:
         /** The reactive kids of every row, the region's walk for this emission. */
         lazy val allKids: Seq[ReactiveUI] = built.toSeq.flatMap(_.kids)
 
-        /** Identities of the keyed mounts in retained rows, which those rows do not claim again. */
-        lazy val retainedMounts: Set[MountIdentity] =
-            var acc = Set.empty[MountIdentity]
-            built.foreach { b =>
-                if b.retained.nonEmpty then
-                    passMembers(b.kids).foreach(kid => kid.mounted.flatMap(_.identity).foreach(id => acc += id))
-            }
-            acc
-        end retainedMounts
-
         def fragmentChildren(using Frame): Chunk[UI] =
             val out = new Array[UI](size)
             var i   = 0
@@ -2509,8 +2499,8 @@ private[kyo] object ReactiveUI:
       * loud warning), keeping the painted output identical to the non-reusable path. Unkeyed and *Indexed
       * variants stay on the whole-region path entirely.
       *
-      * The mounts of every row, re-walked or retained, are one pass of the region's mount table: a retained row's
-      * keyed instances are kept, and count as claimed, so a fresh claim of one of their identities is a duplicate.
+      * The mounts of every row, re-walked or retained, are one pass of the region's mount table, so a retained row's keyed
+      * instances are kept. A row's key is part of every mount identity in it, so no claim in one row can collide with another's.
       */
     private def subscribeForeachRegion(
         rui: ReactiveUI,
@@ -2631,10 +2621,9 @@ private[kyo] object ReactiveUI:
                                         plan.built(i) = new RowPlan.Built(key, item, rowUI, kids, Present(hdl), Absent)
                                     }
                                 }
-                                // The pass's kids and the retained rows' mount identities are only read when the region has a mount
-                                // table, so a plain keyed list builds neither.
+                                // The pass's kids are only read when the region has a mount table, so a plain keyed list does not build them.
                                 pass = RegionKeys(plan.allKids)
-                                _ <- regionMounts.beginWalk(plan.allKids, pass, plan.retainedMounts)
+                                _ <- regionMounts.beginWalk(plan.allKids, pass)
                                 fragment = Fragment[UI](plan.fragmentChildren)
                                 previous <- Sync.Unsafe.defer(rendered.getAndSet(Present(fragment)))
                                 // A structural command addresses rows by key, so it can say nothing useful
@@ -2676,10 +2665,7 @@ private[kyo] object ReactiveUI:
                                 // mount's content among it: subscribe them again, as a whole-list repaint always did.
                                 _ <-
                                     if kept then Kyo.unit
-                                    else
-                                        rows.evictAll.andThen(
-                                            regionMounts.unclaim(plan.retainedMounts)
-                                        ).andThen(Sync.defer(plan.rebuildAll()))
+                                    else rows.evictAll.andThen(Sync.defer(plan.rebuildAll()))
                                 _ <- Kyo.foreachDiscard(plan.rebuilt) { i =>
                                     val b = plan.built(i)
                                     rowRunner(b.kids, pass).map(scope =>
@@ -2952,16 +2938,11 @@ private[kyo] object ReactiveUI:
         /** Opens a render pass of the region: tears down, and waits for, every keyed instance the new tree no longer shows, before any
           * new instance starts.
           */
-        def beginWalk(kids: => Seq[ReactiveUI], pass: RegionKeys, preClaimed: => Set[MountIdentity] = Set.empty)(using
-            Frame
-        ): Unit < Async =
+        def beginWalk(kids: => Seq[ReactiveUI], pass: RegionKeys)(using Frame): Unit < Async =
             Sync.Unsafe.defer(slot.get()).map {
                 case Absent         => Kyo.unit
-                case Present(table) => table.evictExcept(kids, pass, preClaimed)
+                case Present(table) => table.evictExcept(kids, pass)
             }
-
-        def unclaim(identities: Set[MountIdentity])(using Frame): Unit < Sync =
-            Sync.Unsafe.defer(slot.get().foreach(_.unclaim(identities)))
 
         def endWalk(using Frame): Unit < Sync =
             Sync.Unsafe.defer(slot.get().foreach(_.endWalk()))
@@ -3040,15 +3021,12 @@ private[kyo] object ReactiveUI:
         /** Opens a render pass over `kids`: releases every keyed instance and every region table the pass no longer shows, and waits
           * for all of it.
           */
-        def evictExcept(kids: Seq[ReactiveUI], pass: RegionKeys, preClaimed: Set[MountIdentity] = Set.empty)(using
-            Frame
-        ): Unit < Async =
+        def evictExcept(kids: Seq[ReactiveUI], pass: RegionKeys)(using Frame): Unit < Async =
             val keep = passMembers(kids).foldLeft(Set.empty[MountIdentity]) { (acc, kid) =>
                 kid.mounted.flatMap(_.identity).fold(acc)(acc + _)
             }
             Sync.Unsafe.defer {
-                // Identities of mounts in rows this pass does not walk again count as claimed, so a new claim of one is a duplicate.
-                claimed.set(preClaimed)
+                claimed.set(Set.empty)
                 val keepRegions     = if regions.get().isEmpty then Set.empty[RegionKey] else pass.all
                 val previousRegions = regions.getAndUpdate(_.filter((key, _) => keepRegions.contains(key)))
                 val previous        = instances.getAndUpdate(_.filter((identity, _) => keep.contains(identity)))
@@ -3064,10 +3042,6 @@ private[kyo] object ReactiveUI:
         end evictExcept
 
         def evictAll(using Frame): Unit < Async = evictExcept(Seq.empty, RegionKeys.empty)
-
-        /** Takes `identities` out of this pass's claims, so the nodes holding them can be subscribed again. */
-        def unclaim(identities: Set[MountIdentity]): Unit =
-            discard(claimed.getAndUpdate(_ -- identities))
 
         def endWalk(): Unit =
             claimed.set(Set.empty)
