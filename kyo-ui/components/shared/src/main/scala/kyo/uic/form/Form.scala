@@ -562,7 +562,7 @@ object Form:
         UI.mounted {
             for
                 // The session's imperative channel — captured once so the form's field-id
-                // minting and focus commands need no `Env[Commands]` downstream (mirrors
+                // minting and focus commands need no `UI.commands` lookup downstream (mirrors
                 // Overlay/InputOtp's self-addressing pattern).
                 cmds <- UI.commands
                 form <- create(translator, focusInvalidOnSubmit, cmds)
