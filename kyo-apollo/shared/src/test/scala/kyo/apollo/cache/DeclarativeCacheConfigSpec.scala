@@ -1,0 +1,571 @@
+package kyo.apollo.cache
+
+import kyo.Absent
+import kyo.Chunk
+import kyo.Maybe
+import kyo.Present
+import kyo.Schema
+import kyo.apollo.api.*
+import kyo.apollo.cache.TestKeys.*
+import kyo.apollo.cache.normalized.*
+import kyo.apollo.cache.normalized.api.*
+import kyo.apollo.cache.normalized.internal.Normalizer
+import kyo.apollo.json.Json
+import scala.collection.immutable.VectorMap
+
+/** Unit + end-to-end tests for declarative cache configuration:
+  * [[TypePolicy]] / [[TypePolicyCacheKeyGenerator]] (custom key fields),
+  * [[FieldKey]] `keyArgs` filtering, [[FieldPolicy]] read redirects and custom
+  * merges, and [[ConnectionFieldPolicy]] paginated-list merging through the
+  * [[ApolloStore]].
+  */
+class DeclarativeCacheConfigSpec extends kyo.test.Test[Any]:
+
+    given CanEqual[Any, Any] = CanEqual.derived
+
+    private def jstr(s: String): Json = Json.JStr(s)
+    private def jnum(n: Double): Json = Json.JNum(n)
+
+    // --- TypePolicyCacheKeyGenerator ------------------------------------------
+
+    private def ctx(path: List[String] = Nil): CacheKeyGeneratorContext =
+        CacheKeyGeneratorContext(CompiledField("f", CompiledNamedType("X")), Map.empty, path)
+
+    // --- FieldKey keyArgs filtering -------------------------------------------
+
+    private def feedField(args: Chunk[CompiledArgument]): CompiledField =
+        CompiledField("feed", CompiledNamedType("FeedConnection"), arguments = args)
+
+    // --- ConnectionFieldPolicy.unionByReference -------------------------------
+
+    private def ref(key: CacheKey): RecordValue = RecordValue.reference(key)
+
+    /** A stored `__typename` value, as the Normalizer writes it. */
+    private def tn(typename: String): RecordValue = RecordValue.Scalar(jstr(typename))
+
+    // --- TypePolicy through the Normalizer ------------------------------------
+
+    final private case class KeyedQuery(selections: Chunk[CompiledSelection]) extends Query.Normalizable[Int]:
+        def name                      = "Q"; def document = "query Q { ... }"
+        val dataCodec: JsonCodec[Int] = JsonCodec.fromSchema[Int]
+        def rootField: CompiledField  =
+            CompiledField("data", CompiledNamedType("Query"), selections = selections)
+        def variables: Json = Json.JObj(VectorMap.empty)
+    end KeyedQuery
+
+    // --- singleton TypePolicy end to end through ApolloStore ------------------
+
+    final case class Player(__typename: String, isPlaying: Boolean) derives Schema
+    final case class PlayerData(playbackState: Player) derives Schema
+    final case class PauseData(pausePlayback: Player) derives Schema
+
+    private def playerSelections: Chunk[CompiledSelection] = Chunk(
+        CompiledField("__typename", CompiledNamedType("String")),
+        CompiledField("isPlaying", CompiledNamedType("Boolean"))
+    )
+
+    final private case class PlayerQuery() extends Query.Normalizable[PlayerData]:
+        def name                             = "Player"
+        def document                         = "query Player { playbackState { __typename isPlaying } }"
+        val dataCodec: JsonCodec[PlayerData] = JsonCodec.fromSchema[PlayerData]
+        def rootField: CompiledField         =
+            CompiledField(
+                "data",
+                CompiledNamedType("Query"),
+                selections =
+                    Chunk(CompiledField("playbackState", CompiledNamedType("Player"), selections = playerSelections))
+            )
+        def variables: Json = Json.JObj(VectorMap.empty)
+    end PlayerQuery
+
+    final private case class PauseMutation() extends Mutation.Normalizable[PauseData]:
+        def name                            = "Pause"
+        def document                        = "mutation Pause { pausePlayback { __typename isPlaying } }"
+        val dataCodec: JsonCodec[PauseData] = JsonCodec.fromSchema[PauseData]
+        def rootField: CompiledField        =
+            CompiledField(
+                "data",
+                CompiledNamedType("Mutation"),
+                selections =
+                    Chunk(CompiledField("pausePlayback", CompiledNamedType("Player"), selections = playerSelections))
+            )
+        def variables: Json = Json.JObj(VectorMap.empty)
+    end PauseMutation
+
+    // --- ConnectionFieldPolicy end to end through ApolloStore -----------------
+
+    // `__typename` named verbatim so kyo-schema encodes the response key the
+    // Normalizer/CacheBatchReader match on.
+    final case class Post(__typename: String, id: String, title: String) derives Schema
+    final case class PostEdge(__typename: String, cursor: String, node: Post) derives Schema
+    final case class PageInfo(endCursor: String, hasNextPage: Boolean) derives Schema
+    final case class Feed(__typename: String, edges: List[PostEdge], pageInfo: PageInfo)
+        derives Schema
+    final case class FeedData(feed: Feed) derives Schema
+    final case class TwoPagesData(a: Feed, b: Feed) derives Schema
+
+    /** `feed(first: 2, after: $after) { __typename edges { __typename cursor
+      * node { __typename id title } } pageInfo { endCursor hasNextPage } }`, under
+      * `alias` when given. `after` rides as a literal so each page is a distinct
+      * request; the connection policy's `keyArgs` collapses every page onto one
+      * cache slot.
+      */
+    private def connectionField(alias: Maybe[String], after: Maybe[String]): CompiledField =
+        CompiledField(
+            "feed",
+            CompiledNamedType("FeedConnection"),
+            alias = alias,
+            arguments = CompiledArgument.literal("first", jnum(2)) +:
+                after.map(c => CompiledArgument.literal("after", jstr(c))).toChunk,
+            selections = Chunk(
+                CompiledField("__typename", CompiledNamedType("String")),
+                CompiledField(
+                    "edges",
+                    CompiledListType(CompiledNamedType("PostEdge")),
+                    selections = Chunk(
+                        CompiledField("__typename", CompiledNamedType("String")),
+                        CompiledField("cursor", CompiledNamedType("String")),
+                        CompiledField(
+                            "node",
+                            CompiledNamedType("Post"),
+                            selections = Chunk(
+                                CompiledField("__typename", CompiledNamedType("String")),
+                                CompiledField("id", CompiledNamedType("String")),
+                                CompiledField("title", CompiledNamedType("String"))
+                            )
+                        )
+                    )
+                ),
+                CompiledField(
+                    "pageInfo",
+                    CompiledNamedType("PageInfo"),
+                    selections = Chunk(
+                        CompiledField("endCursor", CompiledNamedType("String")),
+                        CompiledField("hasNextPage", CompiledNamedType("Boolean"))
+                    )
+                )
+            )
+        )
+
+    /** `{ feed(first: 2, after: $after) { … } }` — one page per request. */
+    final case class FeedQuery(after: Maybe[String]) extends Query.Normalizable[FeedData]:
+        def name                           = "Feed"
+        def document                       = "query Feed { feed { ... } }"
+        val dataCodec: JsonCodec[FeedData] = JsonCodec.fromSchema[FeedData]
+        def rootField: CompiledField       =
+            CompiledField("data", CompiledNamedType("Query"), selections = Chunk(connectionField(Absent, after)))
+        def variables: Json = Json.JObj(VectorMap.empty)
+    end FeedQuery
+
+    /** `feed(first: 2) { … }` as a fragment on `Query`, written at the root key. */
+    object FeedFragment extends Fragment[FeedData]:
+        val dataCodec: JsonCodec[FeedData] = JsonCodec.fromSchema[FeedData]
+        def rootField: CompiledField       =
+            CompiledField("data", CompiledNamedType("Query"), selections = Chunk(connectionField(Absent, Absent)))
+    end FeedFragment
+
+    /** `{ a: feed(first: 2) { … } b: feed(first: 2, after: "c2") { … } }` — the same
+      * connection selected twice in ONE operation. Under the connection policy both
+      * aliases store into the root's single `feed` slot, so one response carries two
+      * occurrences of the same connection record.
+      */
+    final case class TwoPagesQuery() extends Query.Normalizable[TwoPagesData]:
+        def name                               = "TwoPages"
+        def document                           = "query TwoPages { a: feed { ... } b: feed(after: \"c2\") { ... } }"
+        val dataCodec: JsonCodec[TwoPagesData] = JsonCodec.fromSchema[TwoPagesData]
+        def rootField: CompiledField           =
+            CompiledField(
+                "data",
+                CompiledNamedType("Query"),
+                selections = Chunk(connectionField(Present("a"), Absent), connectionField(Present("b"), Present("c2")))
+            )
+        def variables: Json = Json.JObj(VectorMap.empty)
+    end TwoPagesQuery
+
+    private def connectionStore(): ApolloStore =
+        new ApolloStore(
+            MemoryCache(),
+            // Edges keyed by cursor so successive pages do not collide on a positional
+            // key; nodes fall through to the default id-based key.
+            cacheKeyGenerator = TypePolicyCacheKeyGenerator.of(TypePolicy("PostEdge", List("cursor"))),
+            // The edges merge binds to the runtime `__typename` of the connection
+            // objects — the response data carries "PostConnection".
+            fieldPolicies = FieldPolicies.fromList(ConnectionFieldPolicy("Query", "feed", "PostConnection"))
+        )
+
+    private def page(cursors: List[(String, String)], endCursor: String, hasNext: Boolean): FeedData =
+        FeedData(
+            Feed(
+                "PostConnection",
+                cursors.map { case (cursor, id) =>
+                    PostEdge("PostEdge", cursor, Post("Post", id, s"Title-$id"))
+                },
+                PageInfo(endCursor, hasNext)
+            )
+        )
+
+    "TypePolicy / FieldKey keyArgs / FieldPolicy / ConnectionFieldPolicy" - {
+
+        "a TypePolicy keys objects of its type by the configured field" in {
+            val gen = TypePolicyCacheKeyGenerator.of(TypePolicy("Country", List("code")))
+            val obj = Map("__typename" -> jstr("Country"), "code" -> jstr("DE"))
+            assert(gen.cacheKeyForObject(obj, ctx()) == Present(CacheKey("Country", "DE")))
+        }
+
+        "multiple key fields are joined in declaration order with a + separator" in {
+            val gen = TypePolicyCacheKeyGenerator.of(TypePolicy("Book", List("isbn", "edition")))
+            val obj = Map("__typename" -> jstr("Book"), "isbn" -> jstr("111"), "edition" -> jnum(2))
+            assert(gen.cacheKeyForObject(obj, ctx()) == Present(CacheKey("Book", "111+2")))
+        }
+
+        "a type without a policy falls back to the default id-based key" in {
+            val gen = TypePolicyCacheKeyGenerator.of(TypePolicy("Country", List("code")))
+            val obj = Map("__typename" -> jstr("User"), "id" -> jstr("u1"))
+            assert(gen.cacheKeyForObject(obj, ctx()) == Present(CacheKey("User", "u1")))
+        }
+
+        "a policied type missing a key field falls back to its response path" in {
+            val gen = TypePolicyCacheKeyGenerator.of(TypePolicy("Country", List("code")))
+            val obj = Map("__typename" -> jstr("Country")) // no `code`
+            assert(
+                gen.cacheKeyForObject(obj, ctx(path = List("QUERY_ROOT", "country"))) ==
+                    Present(pathKey("QUERY_ROOT", "country"))
+            )
+        }
+
+        "an empty-keyFields TypePolicy keys every object of the type by the bare typename" in {
+            // Apollo Client's `keyFields: []` — the singleton-record declaration.
+            val gen = TypePolicyCacheKeyGenerator.of(TypePolicy("PlaybackState", Nil))
+            val obj = Map("__typename" -> jstr("PlaybackState"), "isPlaying" -> Json.JBool(true))
+            assert(gen.cacheKeyForObject(obj, ctx()) == Present(CacheKey("PlaybackState", "")))
+        }
+
+        "a query snapshot and a mutation response of a singleton type share one record" in {
+            // The whole point of the singleton policy: the mutation's write-back
+            // lands in the record the query watcher reads, so the watcher sees it.
+            val store = new ApolloStore(
+                MemoryCache(),
+                cacheKeyGenerator = TypePolicyCacheKeyGenerator.of(TypePolicy("Player", Nil))
+            )
+            for
+                _       <- store.writeOperation(PlayerQuery(), PlayerData(Player("Player", isPlaying = true)))
+                player  <- store.cache.loadRecord(CacheKey("Player", ""))
+                changed <- store.writeOperation(PauseMutation(), PauseData(Player("Player", isPlaying = false)))
+                read    <- store.readOperation(PlayerQuery())
+            yield
+                assert(player.isDefined)
+                assert(changed.contains(CacheKey("Player", "")))
+                assert(!read.playbackState.isPlaying)
+            end for
+        }
+
+        "keyArgs restricts a field key to the named arguments" in {
+            val field = feedField(
+                Chunk(
+                    CompiledArgument.literal("category", jstr("tech")),
+                    CompiledArgument.literal("first", jnum(10)),
+                    CompiledArgument.literal("after", jstr("cursor"))
+                )
+            )
+            assert(FieldKey(field, Map.empty, Present(Chunk("category"))).render == "feed({\"category\":\"tech\"})")
+        }
+
+        "empty keyArgs collapses a field to its bare name regardless of arguments" in {
+            val field = feedField(Chunk(CompiledArgument.literal("first", jnum(10))))
+            assert(FieldKey(field, Map.empty, Present(Chunk.empty)).render == "feed")
+        }
+
+        "without keyArgs a field key includes all of its arguments" in {
+            val field = feedField(Chunk(CompiledArgument.literal("first", jnum(10))))
+            assert(FieldKey(field, Map.empty).render == "feed({\"first\":10})")
+        }
+
+        "unionByReference appends new edge references, de-duplicating by key" in {
+            val existing = RecordValue.RList(Chunk(ref(CacheKey("E", "1")), ref(CacheKey("E", "2"))))
+            val incoming = RecordValue.RList(Chunk(ref(CacheKey("E", "2")), ref(CacheKey("E", "3"))))
+            assert(
+                ConnectionFieldPolicy.unionByReference(Present(existing), incoming) ==
+                    RecordValue.RList(Chunk(ref(CacheKey("E", "1")), ref(CacheKey("E", "2")), ref(CacheKey("E", "3"))))
+            )
+        }
+
+        "unionByReference on a first write keeps the incoming list" in {
+            val incoming = RecordValue.RList(Chunk(ref(CacheKey("E", "1"))))
+            assert(ConnectionFieldPolicy.unionByReference(Absent, incoming) == incoming)
+        }
+
+        "ConnectionFieldPolicy.of derives the string policies from typed selectors" in {
+            // Phantom types + hand-rolled selectors standing in for codegen output:
+            // the generated `field$sel` classes implement FieldSelector the same way.
+            object gen:
+                sealed trait FeedRoot
+                sealed trait FeedConn
+                sealed trait FeedEdge
+                given TypeName[FeedRoot]      = TypeName("Query")
+                given TypeName[FeedConn]      = TypeName("FeedConnection")
+                given TypeName[FeedEdge]      = TypeName("FeedEdge")
+                given CacheIdentity[FeedEdge] = CacheIdentity.by(_ =>
+                    SelectionBuilder.scalar[FeedEdge, (cursor: String), String](
+                        "cursor",
+                        CompiledNamedType("String").notNull,
+                        ScalarCodec.string
+                    )
+                )
+                val feed = new FieldSelector[FeedRoot, FeedConn]:
+                    def fieldName = "feed"
+                val edges = new FieldSelector[FeedConn, FeedEdge]:
+                    def fieldName = "edges"
+            end gen
+            import gen.given
+            assert(
+                ConnectionFieldPolicy.of(gen.feed, gen.edges) ==
+                    ConnectionFieldPolicy("Query", "feed", "FeedConnection")
+            )
+            assert(
+                ConnectionFieldPolicy.of(gen.feed, gen.edges, filterArgs = Chunk("category")) ==
+                    ConnectionFieldPolicy("Query", "feed", "FeedConnection", filterArgs = Chunk("category"))
+            )
+        }
+
+        "an empty registry is identity: full field key, no redirect, no merge" in {
+            val policies = FieldPolicies.empty
+            assert(policies.isEmpty)
+            val field = feedField(Chunk(CompiledArgument.literal("first", jnum(1))))
+            assert(policies.fieldKey("Query", field, Map.empty).render == "feed({\"first\":1})")
+            assert(policies.readRedirect("Query", field, Map.empty) == Absent)
+            assert(policies.fieldMerge("FeedConnection", "feed") == Absent)
+        }
+
+        "policies are scoped to their declared type and do not leak to same-named fields" in {
+            val policies = FieldPolicies.fromList(
+                ConnectionFieldPolicy("Playlist", "tracks", "PlaylistTrackConnection")
+            )
+            val field = CompiledField(
+                "tracks",
+                CompiledNamedType("SavedTrackConnection"),
+                arguments = Chunk(CompiledArgument.literal("first", jnum(10)))
+            )
+            // On the declared type the pagination args are dropped from the key.
+            assert(policies.fieldKey("Playlist", field, Map.empty).render == "tracks")
+            // On any other type the same field name keeps its full argument-aware key.
+            assert(policies.fieldKey("CurrentUser", field, Map.empty).render == "tracks({\"first\":10})")
+            // The edges union is bound to the connection type, not to every `edges`.
+            assert(policies.fieldMerge("PlaylistTrackConnection", "edges").isDefined)
+            assert(policies.fieldMerge("SavedTrackConnection", "edges") == Absent)
+        }
+
+        "a FieldPolicy carries Maybe/Chunk: keyArgs = Present(Chunk.empty) collapses the key" in {
+            val policies = FieldPolicies.of(FieldPolicy("Query", "feed", keyArgs = Present(Chunk.empty)))
+            val field    = feedField(Chunk(CompiledArgument.literal("first", jnum(10))))
+            assert(policies.fieldKey("Query", field, Map.empty).render == "feed")
+            // `Absent` (the default) keeps every argument in the key.
+            val plain = FieldPolicies.of(FieldPolicy("Query", "feed"))
+            assert(plain.fieldKey("Query", field, Map.empty).render == "feed({\"first\":10})")
+            assert(FieldPolicy("Query", "feed").keyArgs == Absent)
+        }
+
+        "a FieldPolicy read resolver is surfaced by the registry" in {
+            val policies = FieldPolicies.of(
+                FieldPolicy("Query", "book", read = Present(_ => Present(CacheKey("Book", "42"))))
+            )
+            val field = CompiledField("book", CompiledNamedType("Book"))
+            assert(policies.readRedirect("Query", field, Map.empty) == Present(CacheKey("Book", "42")))
+        }
+
+        "RecordMerger.fieldPolicies unions a policied field and reports it changed" in {
+            val policies = FieldPolicies.of(
+                FieldPolicy("Feed", "edges", merge = Present(ConnectionFieldPolicy.unionByReference))
+            )
+            val merger   = RecordMerger.fieldPolicies(policies)
+            val existing = Record(
+                CacheKey("Feed", "1"),
+                Map(FieldKey.Typename -> tn("Feed"), fk("edges") -> RecordValue.RList(Chunk(ref(CacheKey("E", "1")))))
+            )
+            val incoming = Record(
+                CacheKey("Feed", "1"),
+                Map(FieldKey.Typename -> tn("Feed"), fk("edges") -> RecordValue.RList(Chunk(ref(CacheKey("E", "2")))))
+            )
+            val (merged, changed) = merger.merge(Present(existing), incoming)
+            assert(merged.get(fk("edges")) == Present(RecordValue.RList(Chunk(ref(CacheKey("E", "1")), ref(CacheKey("E", "2"))))))
+            assert(changed == Set(fk("edges")))
+        }
+
+        "a merge policy does not leak onto a same-named field of another type" in {
+            // The Liked-Songs scenario: one connection type is policied (unions),
+            // a second one is not — its refetch must REPLACE, so removed edges
+            // actually disappear.
+            val policies = FieldPolicies.of(
+                FieldPolicy("Feed", "edges", merge = Present(ConnectionFieldPolicy.unionByReference))
+            )
+            val merger   = RecordMerger.fieldPolicies(policies)
+            val existing = Record(
+                CacheKey("Saved", "1"),
+                Map(
+                    FieldKey.Typename -> tn("Saved"),
+                    fk("edges")       -> RecordValue.RList(Chunk(ref(CacheKey("E", "1")), ref(CacheKey("E", "2"))))
+                )
+            )
+            val incoming = Record(
+                CacheKey("Saved", "1"),
+                Map(FieldKey.Typename -> tn("Saved"), fk("edges") -> RecordValue.RList(Chunk(ref(CacheKey("E", "2")))))
+            )
+            val (merged, _) = merger.merge(Present(existing), incoming)
+            assert(merged.get(fk("edges")) == Present(RecordValue.RList(Chunk(ref(CacheKey("E", "2"))))))
+        }
+
+        "a record without a stored __typename matches no merge policy" in {
+            val policies = FieldPolicies.of(
+                FieldPolicy("Feed", "edges", merge = Present(ConnectionFieldPolicy.unionByReference))
+            )
+            val merger            = RecordMerger.fieldPolicies(policies)
+            val existing          = Record(CacheKey("Feed", "1"), Map(fk("edges") -> RecordValue.RList(Chunk(ref(CacheKey("E", "1"))))))
+            val incoming          = Record(CacheKey("Feed", "1"), Map(fk("edges") -> RecordValue.RList(Chunk(ref(CacheKey("E", "2"))))))
+            val (merged, changed) = merger.merge(Present(existing), incoming)
+            assert(merged.get(fk("edges")) == Present(RecordValue.RList(Chunk(ref(CacheKey("E", "2"))))))
+            assert(changed == Set(fk("edges")))
+        }
+
+        "RecordMerger.fieldPolicies falls back to the default for unpolicied fields" in {
+            val merger = RecordMerger.fieldPolicies(FieldPolicies.empty)
+            assert(merger eq RecordMerger.default)
+        }
+
+        "the Normalizer keys an object by its TypePolicy fields end to end" in {
+            val selections = Chunk(
+                CompiledField(
+                    "country",
+                    CompiledNamedType("Country"),
+                    selections = Chunk(
+                        CompiledField("__typename", CompiledNamedType("String")),
+                        CompiledField("code", CompiledNamedType("String")),
+                        CompiledField("name", CompiledNamedType("String"))
+                    )
+                )
+            )
+            val data = Map(
+                "country" -> Json.JObj(
+                    Map("__typename" -> jstr("Country"), "code" -> jstr("FR"), "name" -> jstr("France"))
+                )
+            )
+            val records = Normalizer.normalize(
+                KeyedQuery(selections),
+                data,
+                cacheKeyGenerator = TypePolicyCacheKeyGenerator.of(TypePolicy("Country", List("code")))
+            )
+            assert(records.keySet == Set(CacheKey.QueryRoot, CacheKey("Country", "FR")))
+            assert(records(CacheKey("Country", "FR")).get(fk("name")) == Present(RecordValue.Scalar(jstr("France"))))
+        }
+
+        "ConnectionFieldPolicy merges paginated pages into one logical list" in {
+            val store = connectionStore()
+            for
+                _ <- store.writeOperation(
+                    FeedQuery(Absent),
+                    page(List("c1" -> "1", "c2" -> "2"), "c2", hasNext = true)
+                )
+                _ <- store.writeOperation(
+                    FeedQuery(Present("c2")),
+                    page(List("c3" -> "3", "c4" -> "4"), "c4", hasNext = false)
+                )
+                root   <- store.cache.loadRecord(CacheKey.QueryRoot)
+                merged <- store.readOperation(FeedQuery(Absent))
+            yield
+                // Both pages collapsed onto the single connection field key `feed`
+                // (next to the root's stamped `__typename`).
+                assert(root.map(_.fieldKeys) == Present(Set(FieldKey.Typename, fk("feed"))))
+                assert(merged.feed.edges.map(_.cursor) == List("c1", "c2", "c3", "c4"))
+                assert(merged.feed.edges.map(_.node.id) == List("1", "2", "3", "4"))
+                // The latest page's pageInfo wins.
+                assert(merged.feed.pageInfo == PageInfo("c4", hasNextPage = false))
+            end for
+        }
+
+        "re-fetching an overlapping page does not duplicate edges" in {
+            val store = connectionStore()
+            for
+                _ <- store.writeOperation(
+                    FeedQuery(Absent),
+                    page(List("c1" -> "1", "c2" -> "2"), "c2", hasNext = true)
+                )
+                // Page 2 overlaps c2, then adds c3.
+                _ <- store.writeOperation(
+                    FeedQuery(Present("c1")),
+                    page(List("c2" -> "2", "c3" -> "3"), "c3", hasNext = false)
+                )
+                merged <- store.readOperation(FeedQuery(Absent))
+            yield assert(merged.feed.edges.map(_.cursor) == List("c1", "c2", "c3"))
+            end for
+        }
+
+        "two occurrences of one policied connection in a single response are unioned, not overwritten" in {
+            // `a` and `b` land in the same connection record, `QUERY_ROOT.feed`. Merging
+            // two occurrences of one key inside a response is the same question as merging
+            // a write onto the store, so it must get the same answer — the edges union —
+            // before the store ever sees the records. Replacing field-wise instead keeps
+            // only `b`'s edges.
+            val store = connectionStore()
+            val data  = TwoPagesData(
+                a = page(List("c1" -> "1", "c2" -> "2"), "c2", hasNext = true).feed,
+                b = page(List("c3" -> "3"), "c3", hasNext = false).feed
+            )
+            val normalizedEdges = Maybe
+                .fromOption(store.normalize(TwoPagesQuery(), data).get(pathKey("QUERY_ROOT", "feed")))
+                .flatMap(_.get(fk("edges")))
+            for
+                _      <- store.writeOperation(TwoPagesQuery(), data)
+                merged <- store.readOperation(FeedQuery(Absent))
+            yield
+                assert(
+                    normalizedEdges == Present(RecordValue.RList(Chunk("c1", "c2", "c3").map(c => ref(CacheKey("PostEdge", c))))),
+                    s"the response's own records lost an occurrence: $normalizedEdges"
+                )
+                assert(merged.feed.edges.map(_.node.id) == List("1", "2", "3"), s"the store saw one page: ${merged.feed.edges}")
+            end for
+        }
+
+        "a batch of fragment writes merges a repeated connection record like one response" in {
+            // writeFragments stands in for one response: two entries that normalize to the
+            // same connection record meet under the same merger, not a field-wise replace.
+            val store = connectionStore()
+            for
+                _ <- store.writeFragments(
+                    FeedFragment,
+                    Seq(
+                        CacheKey.QueryRoot -> page(List("c1" -> "1", "c2" -> "2"), "c2", hasNext = true),
+                        CacheKey.QueryRoot -> page(List("c3" -> "3"), "c3", hasNext = false)
+                    )
+                )
+                merged <- store.readOperation(FeedQuery(Absent))
+            yield assert(merged.feed.edges.map(_.node.id) == List("1", "2", "3"), s"the batch kept one entry: ${merged.feed.edges}")
+            end for
+        }
+
+        "without a ConnectionFieldPolicy pages are stored under distinct keys and do not merge" in {
+            // A store keyed the same way but with no field policies: each argument set
+            // occupies its own connection slot, so pages never combine.
+            val store = new ApolloStore(
+                MemoryCache(),
+                cacheKeyGenerator = TypePolicyCacheKeyGenerator.of(TypePolicy("PostEdge", List("cursor")))
+            )
+            for
+                _ <- store.writeOperation(
+                    FeedQuery(Absent),
+                    page(List("c1" -> "1", "c2" -> "2"), "c2", hasNext = true)
+                )
+                _ <- store.writeOperation(
+                    FeedQuery(Present("c2")),
+                    page(List("c3" -> "3", "c4" -> "4"), "c4", hasNext = false)
+                )
+                root   <- store.cache.loadRecord(CacheKey.QueryRoot)
+                first  <- store.readOperation(FeedQuery(Absent))
+                second <- store.readOperation(FeedQuery(Present("c2")))
+            yield
+                // Two distinct field keys on the root (plus the stamped `__typename`) —
+                // the pages are isolated.
+                assert(root.map(_.fieldKeys.size) == Present(3))
+                assert(first.feed.edges.map(_.cursor) == List("c1", "c2"))
+                assert(second.feed.edges.map(_.cursor) == List("c3", "c4"))
+            end for
+        }
+    }
+end DeclarativeCacheConfigSpec

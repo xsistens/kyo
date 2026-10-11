@@ -1,0 +1,270 @@
+package kyo.apollo.cache.normalized
+
+import kyo.*
+import kyo.apollo.api.Mutation
+import kyo.apollo.api.Operation
+import kyo.apollo.api.Subscription
+import kyo.apollo.cache.normalized.api.CacheKey
+import kyo.apollo.exception.CacheReadFailure
+import kyo.apollo.interceptor.ApolloInterceptor
+import kyo.apollo.interceptor.ApolloInterceptorChain
+import kyo.apollo.network.ApolloRequest
+import kyo.apollo.network.ApolloResponse
+import kyo.apollo.network.CacheInfo
+import kyo.apollo.network.Uuid
+import kyo.apollo.runtime.ResponseStream
+
+/** The [[ApolloInterceptor]] that plugs the normalized cache into the operation
+  * layer. Inserted before the terminal `NetworkInterceptor`, it reads from and
+  * writes back to an [[ApolloStore]] according to the request's [[FetchPolicy]],
+  * and emits the response sequence that policy prescribes — each stamped with
+  * [[CacheInfo]] so callers can see whether a value came from cache or network.
+  *
+  * Everything is a composition of [[Stream]] and the store's effectful
+  * `readOperationStamped` / `writeOperation`: a policy that reads the cache first
+  * does so when its stream is consumed (`Stream.unwrap` over the read), and the
+  * network leg writes each response back as it flows through. `CacheAndNetwork`'s
+  * "cache then network" is the cache value followed by the network stream. Mirrors
+  * apollo-kotlin's `CacheInterceptor` / fetch-policy interceptors.
+  *
+  * Only an [[Operation.Normalizable]] operation is written back. An operation whose
+  * data decodes only — one built from a `.map` projection — runs under every policy
+  * and its responses reach the caller decoded, but they are not normalized (nor is
+  * its optimistic data overlaid); each skip is logged at debug level. Its cache reads
+  * therefore miss unless another operation wrote the same records.
+  *
+  * @param store the coordinator this interceptor reads from and writes to
+  */
+final class CacheInterceptor(private[normalized] val store: ApolloStore) extends ApolloInterceptor:
+
+    def intercept[D](
+        request: ApolloRequest[D],
+        chain: ApolloInterceptorChain
+    )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
+        // A subscription is a long-lived stream, not a cache-read candidate: it must
+        // never be short-circuited by a fetch policy's cache read (that would serve
+        // one stale value and never open the socket). It flows straight to the
+        // network leg, so every streamed event is still written back and normalizes
+        // into the store — triggering watchers — exactly like a network query.
+        request.operation match
+            case _: Subscription[?] => network(request, chain)
+            case _: Mutation[?]     =>
+                // A mutation is inherently network-bound and must NEVER be answered
+                // from the cache: its own write-back stores its result under
+                // MUTATION_ROOT, so a repeat of the same mutation (or, with a read
+                // redirect like CacheKeyResolver.byIdArgument, any id-carrying
+                // mutation whose entity is already cached) would otherwise be a
+                // cache hit under CacheFirst and silently never reach the server.
+                // With optimistic data the store is additionally overlaid before the
+                // network call and reconciled against the reply.
+                request.optimisticData match
+                    case Absent              => network(request, chain)
+                    case Present(optimistic) =>
+                        request.operation match
+                            case operation: Operation.Normalizable[D] =>
+                                optimisticMutation(request, operation, chain, optimistic)
+                            case operation =>
+                                Stream.unwrap(skipped(operation, "optimistic data not overlaid").andThen(network(request, chain)))
+            case _ =>
+                request.executionContext.get(FetchPolicy).getOrElse(FetchPolicy.Default) match
+                    case FetchPolicy.CacheFirst      => cacheFirst(request, chain)
+                    case FetchPolicy.NetworkOnly     => networkOnly(request, chain)
+                    case FetchPolicy.CacheOnly       => cacheOnly(request)
+                    case FetchPolicy.NetworkFirst    => networkFirst(request, chain)
+                    case FetchPolicy.CacheAndNetwork => cacheAndNetwork(request, chain)
+                    case FetchPolicy.NoCache         => noCache(request, chain)
+                    case FetchPolicy.Standby         => standby(request)
+
+    // --- policies -------------------------------------------------------------
+
+    /** Cache hit → serve it; miss → network, written back. */
+    private def cacheFirst[D](
+        request: ApolloRequest[D],
+        chain: ApolloInterceptorChain
+    )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
+        Stream.unwrap(readFromCache[D, ResponseStream[D]](request)(
+            hit = response => Stream.init(Seq(response)),
+            miss = _ => network(request, chain)
+        ))
+
+    /** Never read the cache; run the network and always write it back. */
+    private def networkOnly[D](
+        request: ApolloRequest[D],
+        chain: ApolloInterceptorChain
+    )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
+        network(request, chain)
+
+    /** Cache only: a hit is served, a miss becomes a [[CacheReadFailure]] value. */
+    private def cacheOnly[D](request: ApolloRequest[D])(using
+        Frame,
+        Tag[Emit[Chunk[ApolloResponse[D]]]]
+    ): ResponseStream[D] =
+        Stream.unwrap(readFromCache[D, ResponseStream[D]](request)(
+            hit = response => Stream.init(Seq(response)),
+            miss = failure => Stream.init(Seq(CacheResponses.miss(request, failure)))
+        ))
+
+    /** Network first; on a network error fall back to the cache, else re-emit the
+      * network error.
+      */
+    private def networkFirst[D](
+        request: ApolloRequest[D],
+        chain: ApolloInterceptorChain
+    )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
+        chain.proceed(request).map { response =>
+            if !response.hasTransportError then writeBack(request, response)
+            else
+                readFromCache[D, ApolloResponse[D]](request)(
+                    hit = identity,
+                    miss = _ => response.copy(cacheInfo = Present(CacheInfo.network))
+                )
+        }
+
+    /** No cache: run the network and pass the response straight through — the cache
+      * is neither read before nor written after (react `no-cache`). Only the
+      * network `cacheInfo` stamp is added, so callers still see it came from the wire.
+      */
+    private def noCache[D](
+        request: ApolloRequest[D],
+        chain: ApolloInterceptorChain
+    )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
+        chain.proceed(request).mapPure(_.copy(cacheInfo = Present(CacheInfo.network)))
+
+    /** Standby: never fetch. A cache hit is served; a miss emits nothing (an empty
+      * stream) rather than a miss error — so the operation is "parked" and, under a
+      * watcher, stays quiet until an external write populates the record, then
+      * reacts. Distinct from `CacheOnly`, whose miss is a surfaced exception value.
+      */
+    private def standby[D](request: ApolloRequest[D])(using
+        Frame,
+        Tag[Emit[Chunk[ApolloResponse[D]]]]
+    ): ResponseStream[D] =
+        Stream.unwrap(readFromCache[D, ResponseStream[D]](request)(
+            hit = response => Stream.init(Seq(response)),
+            miss = _ => Stream.init(Seq.empty[ApolloResponse[D]])
+        ))
+
+    /** A cache response (when hit) then the network response, in that order. */
+    private def cacheAndNetwork[D](
+        request: ApolloRequest[D],
+        chain: ApolloInterceptorChain
+    )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
+        Stream.unwrap(readFromCache[D, ResponseStream[D]](request)(
+            hit = response => Stream.init(Seq(response)).concat(network(request, chain)),
+            miss = _ => network(request, chain)
+        ))
+
+    /** Run a mutation carrying optimistic data: overlay it into the store before the
+      * network call (so watchers show it at once), then on the network reply drop the
+      * optimistic layer and merge the server truth (success) or revert cleanly
+      * (failure). The layer's keys and the merged result publish as one union
+      * ([[ApolloStore.rollbackAndWrite]]), so a watcher converges straight onto server
+      * truth with no intermediate flicker. Errored/empty responses roll the layer back
+      * without a merge, mirroring [[writeBack]]'s "only persist a clean success" rule.
+      *
+      * The layer is owned by the `Scope` the stream is consumed in: it is acquired
+      * when consumption starts (never when the stream is merely built) and released
+      * — rolled back — when that Scope closes, whether by interrupt, timeout, a
+      * raised exception below this interceptor, or the consumer dropping the stream.
+      * The success path drops the layer itself through `rollbackAndWrite`, so the
+      * Scope release then finds nothing and publishes nothing; the reply is the only
+      * publication a settled mutation makes. `rollbackAndWrite` drops the layer only
+      * once the reply is committed, so a commit that fails leaves it to the release.
+      *
+      * The layer's mutation id is minted in the same step, when consumption starts:
+      * the id belongs to this execution, not to the request value or the call it was
+      * built from, so two executions of one call hold two layers.
+      */
+    private def optimisticMutation[D](
+        request: ApolloRequest[D],
+        operation: Operation.Normalizable[D],
+        chain: ApolloInterceptorChain,
+        optimistic: D
+    )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
+        Stream.unwrap {
+            Uuid.random.map { id =>
+                val mutationId = id.value
+                Scope.acquireRelease(
+                    store.writeOptimisticUpdates(operation, optimistic, mutationId)
+                )(_ => store.rollbackOptimisticUpdates(mutationId).unit).andThen {
+                    chain.proceed(request).map { response =>
+                        val settle =
+                            if !response.hasTransportError then
+                                response.data match
+                                    case Present(data) => store.rollbackAndWrite(operation, data, mutationId)
+                                    case Absent        => store.rollbackOptimisticUpdates(mutationId)
+                            else store.rollbackOptimisticUpdates(mutationId)
+                        settle.andThen(response.copy(cacheInfo = Present(CacheInfo.network)))
+                    }
+                }
+            }
+        }
+    end optimisticMutation
+
+    // --- shared steps ---------------------------------------------------------
+
+    /** Run the network leg and write every successful response back to the store. */
+    private def network[D](
+        request: ApolloRequest[D],
+        chain: ApolloInterceptorChain
+    )(using Frame, Tag[Emit[Chunk[ApolloResponse[D]]]]): ResponseStream[D] =
+        chain.proceed(request).map(writeBack(request, _))
+
+    /** Read `request`'s operation from the store and continue with `hit` — given the
+      * cache-served response, stamped with the record keys the read depended on and
+      * the store generation it was current at — or, when the cache cannot satisfy
+      * the operation, with `miss`. Only a [[CacheReadFailure]] reaches `miss`: a
+      * decode defect or a reader bug is a panic that propagates out of the policy,
+      * never a miss answered with the network or reported as a miss value.
+      */
+    private def readFromCache[D, A](request: ApolloRequest[D])(
+        hit: ApolloResponse[D] => A < Sync,
+        miss: CacheReadFailure => A < Sync
+    )(using Frame): A < Sync =
+        Abort.recover[CacheReadFailure](miss)(
+            store.readOperationStamped(request.operation).map((data, keys, gen) => hit(cacheHit(request, data, keys, gen)))
+        )
+
+    /** Persist a successful network `response` (data present, no exception) and tag
+      * it as network-sourced, stamping the record keys the write-back changed onto
+      * `CacheInfo.dependentKeys` — a watcher's fallback watch set when its own
+      * post-write re-read cannot be satisfied. Errored/empty responses are passed
+      * through untouched but for the `cacheInfo` stamp, and so is the data of an
+      * operation that only decodes (logged at debug level, see [[skipped]]).
+      */
+    private def writeBack[D](
+        request: ApolloRequest[D],
+        response: ApolloResponse[D]
+    )(using Frame): ApolloResponse[D] < Sync =
+        val changed: Set[CacheKey] < Sync =
+            if !response.hasTransportError then
+                response.data match
+                    case Absent        => Set.empty[CacheKey]
+                    case Present(data) =>
+                        request.operation match
+                            case operation: Operation.Normalizable[D] => store.writeOperation(operation, data)
+                            case operation => skipped(operation, "response not normalized").andThen(Set.empty[CacheKey])
+            else Set.empty[CacheKey]
+        changed.map(keys => response.copy(cacheInfo = Present(CacheInfo.network(keys))))
+    end writeBack
+
+    /** Log at debug level that `operation`'s data only decodes — an operation built
+      * from a `.map` projection — so this interceptor leaves the store alone: `what`
+      * names the write it skipped.
+      */
+    private def skipped(operation: Operation[?], what: String)(using Frame): Unit < Sync =
+        Log.debug(s"${operation.name}: decode-only projection, $what")
+
+    /** A cache-served success response carrying `data`, the `dependentKeys` the
+      * read touched and the store `generation` it was read at (stamped onto
+      * [[CacheInfo]] for watchers) — built by the shared [[CacheResponses]] so
+      * re-reads in `watch()` stamp identical metadata.
+      */
+    private def cacheHit[D](
+        request: ApolloRequest[D],
+        data: D,
+        dependentKeys: Set[CacheKey],
+        generation: Long
+    ): ApolloResponse[D] =
+        CacheResponses.hit(request, data, dependentKeys, generation)
+end CacheInterceptor
