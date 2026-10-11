@@ -34,7 +34,17 @@ class ReactiveChannelCostTest extends kyo.test.Test[Any]:
                 previous: Maybe[UI],
                 changed: UI
             )(using Frame): Unit < Async = Sync.defer(discard(paints.incrementAndGet()))
-            private def bump(): Unit     = discard(patches.incrementAndGet())
+            // Leaves kept rows in place, as the DOM backend whose sinks this stands in for does. Answering `false` would have the region
+            // bind them again after the paint, so a write right after it could land between the two bindings.
+            override def onListPatch(
+                region: ReactiveRegion,
+                path: Seq[String],
+                contentContext: ReactiveRegion.RegionIdentity,
+                parentContext: ReactiveRegion.ParentContext,
+                previous: Maybe[UI],
+                rows: Seq[ListRow]
+            )(using Frame): Boolean < Async = Sync.defer(paints.incrementAndGet()).andThen(true)
+            private def bump(): Unit        = discard(patches.incrementAndGet())
             override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
                 Sync.defer(bump())
             override def onClassPatch(path: Seq[String], name: String, on: Boolean)(using Frame): Unit < Async =
