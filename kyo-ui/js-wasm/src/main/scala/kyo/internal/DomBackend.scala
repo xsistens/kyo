@@ -1567,18 +1567,9 @@ private[kyo] object DomBackend:
         end if
     end beginAnimationsSync
 
-    /** True when `start` or any of its ancestors below `document.body` declares event type `t` in `data-kyo-ev`.
-      *
-      * ReactiveUI.dispatchToElement bubbles an event to every ancestor that declared a handler for its type, so the
-      * SPA forwarding gate must forward when ANY ancestor declared it, not just the target (checking only the
-      * target's own data-kyo-ev would drop e.g. a keydown meant for an ancestor panel before bubble dispatch runs).
-      *
-      * The walk climbs the LOGICAL tree, which the portal makes distinct from the DOM one: see [[logicalAncestor]].
-      * Twin of `he` in HtmlRenderer.clientJs; keep the two in lockstep.
-      */
     /** The next element up the LOGICAL tree. That is the DOM parent everywhere except at a portal: a re-homed
       * element sits directly under `document.body`, so the climb hops back to its placeholder slot first and
-      * continues from there. Twin of `__kyoLogicalParent` in HtmlRenderer.clientJs.
+      * continues from there. The client does the same hop inline in `he` (HtmlRenderer.clientJs).
       */
     private def logicalAncestor(n: dom.Element): dom.Element =
         val hopped =
@@ -1594,6 +1585,15 @@ private[kyo] object DomBackend:
         end if
     end logicalAncestor
 
+    /** True when `start` or any of its ancestors below `document.body` declares event type `t` in `data-kyo-ev`.
+      *
+      * ReactiveUI.dispatchToElement bubbles an event to every ancestor that declared a handler for its type, so the
+      * SPA forwarding gate must forward when ANY ancestor declared it, not just the target (checking only the
+      * target's own data-kyo-ev would drop e.g. a keydown meant for an ancestor panel before bubble dispatch runs).
+      *
+      * The walk climbs the LOGICAL tree, which the portal makes distinct from the DOM one: see [[logicalAncestor]].
+      * Twin of `he` in HtmlRenderer.clientJs; keep the two in lockstep.
+      */
     private[kyo] def declaredInChain(start: dom.Element, t: String): Boolean =
         var n: dom.Element = start
         var found          = false
