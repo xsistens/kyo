@@ -839,8 +839,8 @@ them:
 |------|---------------|--------------------------|---------|-----|
 | Selection value | `Country.name ~ Country.capital` | the fields, inline | any code holding the result | the same fields in several operations |
 | Cache fragment | `Fragment.of[Country](...)` | not part of an operation | `ApolloStore`, at a `CacheKey` | reading or writing one record without an operation |
-| Entity fragment | `Fragment.entity[Country](...)` | an opaque `Ref` | the component that declared it | a component's fields on a type with a `CacheIdentity` |
-| Embedded fragment | `Fragment.embedded[PageInfo](...)` | an opaque `Ref` | the component that declared it | a component's fields on an object without an identity |
+| Entity fragment | `Fragment.entity[Country](...)` | an opaque `Ref` | an explicit opener, by convention only in the declaring component | a component's fields on a type with a `CacheIdentity` |
+| Embedded fragment | `Fragment.embedded[PageInfo](...)` | an opaque `Ref` | an explicit opener, by convention only in the declaring component | a component's fields on an object without an identity |
 
 To pick one, ask what the fields are for:
 
@@ -852,8 +852,7 @@ To pick one, ask what the fields are for:
   component can also read and watch the record by itself. Use `Fragment.embedded` when
   the type has no identity.
 
-GraphQL's inline fragments have their own forms, not declared on their own: a union or
-interface branch is `on<Type>` (see [What a selection can do](#what-a-selection-can-do)),
+GraphQL's inline fragments are not declared separately: a union or interface branch is `on<Type>` (see [What a selection can do](#what-a-selection-can-do)),
 and a deferred group is `defer(label, selection)`.
 
 ### Sharing fields: selection values
@@ -884,9 +883,10 @@ and a caller may read every field.
 
 ### Reading and writing one record: `Fragment.of`
 
-`Fragment.of[Country]` turns a selection on `Country` into a `Fragment[D]`. The store
-reads and writes it at a `CacheKey`, without an operation. It needs the type's
-`TypeName`, which kyo-apollo-codegen emits on every selector object.
+When code needs one record from the cache outside any operation, to look it up or to
+edit it locally, wrap a selection with `Fragment.of[Country]`. The store reads and writes
+the resulting `Fragment[D]` at a `CacheKey`. It needs the type's `TypeName`, which
+kyo-apollo-codegen emits on every selector object.
 
 ```scala
 import kyo.apollo.cache.normalized.api.*
@@ -903,11 +903,13 @@ def moveCapitalLocally(client: ApolloClient): Set[CacheKey] < Sync =
     }
 ```
 
-`readFragment` fails with a `CacheMissException` when the record, or one of the selected
-fields, is not in the cache. `updateFragment` reads the record, applies the function and
-writes the result back in one atomic step. Every query that read `Country:DE` then sees
-the new capital, whichever field led it there. `writeFragment(place, key, data)` writes
-without reading first.
+`readFragment` fails with a `CacheMissException` (a `CacheReadFailure`) when the record,
+or one of the selected fields, is not in the cache. `updateFragment` reads the record,
+applies the function and writes the result back in one atomic step. Every query that
+reached `Country:DE`, through a `country` lookup or a `countries` list, then sees the new
+capital. As with `updateOperation`, a record that is not cached is left alone and no keys
+are returned, and the function must be pure because it runs again when a concurrent
+write commits first. `writeFragment(place, key, data)` writes without reading first.
 
 A `Fragment.of` cannot be spread into an operation. To fetch the same fields, select the
 selection value it was built from (`placeFields` here), and both read the same shape.
@@ -919,8 +921,9 @@ value, the page's code can read every field a component selects. Once the page r
 one, the component can no longer drop that field without breaking the page.
 
 A masked fragment keeps the fields to the component. The query still fetches them, but
-its result holds only an opaque `Ref`, and only the component that declared the fragment
-opens it:
+its result holds only an opaque `Ref` with no field accessors. Reading the fields takes
+an explicit opener, and by convention only the component that declared the fragment
+calls one:
 
 ```scala
 object CountryPlace:
@@ -943,8 +946,8 @@ val placeIsLabelled: kyo.apollo.api.Query.Normalizable[(country: Maybe[(code: St
 -->
 
 `placeQuery` returns `(country: Maybe[(code: String, countryPlace: CountryPlace.fields.Ref)])`.
-The page hands `countryPlace` to `CountryPlace.render`. It cannot read the fields
-through the ref, so this does not compile:
+The page hands `countryPlace` to `CountryPlace.render`. The ref has no fields, so
+reading one from the result does not compile:
 
 ```scala doctest:scope=nested expect=fails-compile
 def pageReadsTheName(data: (country: Maybe[(code: String, countryPlace: CountryPlace.fields.Ref)])) =
@@ -960,26 +963,34 @@ A ref opens in three ways:
 | Opener | Entity ref | Embedded ref | Gives |
 |--------|------------|--------------|-------|
 | `ref.value` | yes | yes | the fields as the response that carried the ref delivered them |
-| `apolloStore.readFragment(ref)` | yes | no | the record as the cache holds it now, or the delivered fields when the record is gone |
+| `apolloStore.readFragment(ref)` | yes | no | the record as the cache holds it now, or the delivered fields when the record is gone or the store gives the type no key |
 | `apolloStore.watchFragment(ref)` | yes | no | that read, then again after every write that changes the record; keeps the record from garbage collection while it runs |
 
-Each one fails with an `ApolloParseException` when the data does not decode.
+Each one fails with an `ApolloParseException` when the fields the ref captured do not
+decode.
 
 #### `Fragment.entity`: fields of a record
 
-An entity fragment needs the type's `CacheIdentity` (the `given` from
-[Normalized cache](#normalized-cache) here), or it does not compile. The spread adds
-`__typename` and the identity's key fields (`code`) to the document, so every ref names
-the record it came from. That is what lets `readFragment` and `watchFragment` read the
-record without the page's query. `CountryPlace.render` above re-emits when a mutation or
-a subscription changes the capital of `Country:DE`, whether or not the page watches its
-own query.
+Use an entity fragment when the component should follow its record by itself. It needs
+the type's `CacheIdentity` (the `given` from [Normalized cache](#normalized-cache) here),
+or it does not compile. The spread adds `__typename` and the identity's key fields
+(`code`) to the document, so every ref carries what a key needs. The store keys the ref
+with the generator it was configured with, so `readFragment` and `watchFragment` read
+the record without the page's query. If that generator gives the type no identity, both
+fall back to the delivered fields, and `watchFragment` emits once and ends.
+
+The watch in `CountryPlace.render` emits again when a mutation, a subscription or a
+local write changes the capital of `Country:DE`, whether or not the page watches its own
+query. An entity fragment only reads. To write its record, use a `Fragment.of` over the
+same fields with `updateFragment` or `writeFragment`.
 
 #### `Fragment.embedded`: fields of a value
 
 An object without an identity, such as a `PageInfo`, an address or an amount of money,
-has no record of its own. The cache stores it inside its parent. An embedded fragment
-needs no `CacheIdentity`, and its ref carries the value itself:
+has no key of its own. The cache stores it as a record named after its position below
+the nearest keyed parent (here the `pageInfo` field of `countriesPage`), and a refetch can put a different
+object at that position. An embedded fragment needs no `CacheIdentity`, and its ref
+carries the value itself:
 
 ```scala
 object LoadMore:
@@ -1006,17 +1017,18 @@ val firstCountriesIsTyped: kyo.apollo.api.Query.Normalizable[
 
 `value` is the only opener. A newer `PageInfo` arrives as a new ref in the parent's next
 result, so a watch on the page query brings it. `Fragment.entity[PageInfo]` would not
-compile here, because `PageInfo` has no identity. An entity ref is never keyed by its
-position in a response (`countriesPage.pageInfo`), where a refetch could put a different
-object.
+compile here, because `PageInfo` has no identity. That is on purpose: an entity ref
+names its record, and a record named by position could hold a different object after
+the next refetch.
 
 #### The spread's field name
 
 `spread` names the result field after the object that declares the fragment, starting
 lower case: `CountryPlace.fields.spread` becomes `countryPlace`, and
-`LoadMore.fields.spread` becomes `loadMore`. A fragment held in a local `val` is named
-after the `val`. Two fragments declared in the same object would get the same name, so
-spread one of them with an explicit name: `CountryPlace.fields.spreadAs["place"]`.
+`LoadMore.fields.spread` becomes `loadMore`. A fragment held in a `val` that is not a
+member of an `object` (a local `val`, or one in a class) is named after the `val`. Two
+fragments declared in the same object get the same name, so when both are spread into
+one selection, give one an explicit name: `CountryPlace.fields.spreadAs["place"]`.
 
 ## HTTP layer
 
@@ -1399,9 +1411,10 @@ const cache = new InMemoryCache({
 // query Germany { country(code: "DE") { code ...CountryPlace } }
 ```
 
-kyo-apollo's fragments are values (a selection in a `val`, `Fragment.of`, and
-`Fragment.entity`/`Fragment.embedded` for masked fragments, see
-[Fragments](#fragments)) that an operation references like any other Scala value:
+kyo-apollo's fragments are values (a selection in a `val`, or
+`Fragment.entity`/`Fragment.embedded` for masked fragments; `Fragment.of` is for store
+access, see [Fragments](#fragments)) that an operation references like any other Scala
+value:
 
 ```scala
 val germanyWithPlace = Queries.country("DE")(Country.code ~ CountryPlace.fields.spread).toQuery()
@@ -1461,8 +1474,8 @@ shape, `{"data": {...}, "path": [...], "hasNext": false}`. There is nothing to
 configure.
 
 **Why:** which format arrives is the server's choice, and a client fixed to one format
-fails against a server that sends the other. A part tells its format apart by itself
-(an `id` instead of a `path`), so one reader covers every server.
+fails against a server that sends the other. Each part shows its own format (an `id`
+instead of a `path`), so one reader covers every server.
 
 ### `complete` tracks the delivery, not the data
 
