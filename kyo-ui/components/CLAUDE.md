@@ -199,21 +199,21 @@ or clean the test module before trusting the suite.
 
 ## Self-addressing: the Commands channel
 
-`UI.commands` (`Env.get[UI.Commands]`) is the escape hatch for the two things a
-render diff cannot express: imperative DOM commands (`focus`, `scrollIntoView`)
-and measuring an element (`requestMeasure*`). Load-bearing rules:
+`UI.commands` (read from a `Local` the runner installs per session) is the escape
+hatch for the two things a render diff cannot express: imperative DOM commands
+(`focusId`, `scrollIntoViewId`) and measuring an element (`requestMeasureById*`). Load-bearing rules:
 
 - **Commands resolve ONLY inside a `UI.mounted` effect or an event handler**,
-  never in pure build/SSR render. In pure render there is no `Env[Commands]`.
-- **A reusable component has no way to learn its own render path.** Use the
-  id-addressed twins: in a `UI.mounted` effect, `id <- cmds.freshId`, stamp it
+  never in pure build/SSR render. In pure render the `Local` is empty and
+  `UI.commands` panics.
+- **A reusable component has no way to learn its own render path.** Every command
+  is id-addressed: in a `UI.mounted` effect, `id <- cmds.freshId`, stamp it
   with `.id(id)` on your own element, then drive `focusId(id)` /
   `scrollIntoViewId(id)` / `requestMeasureById(id)`. `freshId` mints
   session-unique `kyo-uic-N` deterministically.
-- **`uic.Button.onClick` accepts only `Abort[Throwable] & Async`, NOT
-  `Env[Commands]`.** For a handler that uses `UI.commands`, drop to the raw kyo
-  `button`/element (effect-polymorphic `onClick`). Capture `cmds` once in the
-  outer mount and pass it down so inner effects need no `Env`.
+- **Handlers take `Any < Async`**, on `uic.Button` and on a raw kyo element alike.
+  `UI.commands` works inside a handler, but capturing `cmds` once in the outer
+  mount and passing it down keeps the inner code free of the lookup.
 - **A self-command MUST fire AFTER the element is inserted.** The client resolves
   `getElementById` immediately (no rAF, no retry) and the command op can reach it
   BEFORE the render/insert op. So never `focusId`/`scrollIntoViewId`/`requestMeasureById`

@@ -70,7 +70,7 @@ class StreamSpec extends kyo.test.Test[Any]:
         HttpNetworkTransport("https://x/graphql", engine)
 
     private def respond(status: Int, ct: String, body: String): HttpEngine.Request => HttpEngine.Response < Async =
-        _ => HttpEngine.response(HttpStatus(status), body, HttpHeaders.empty.add("Content-Type", ct))
+        _ => HttpEngine.response(HttpStatus.init(status).getOrThrow, body, HttpHeaders.empty.add("Content-Type", ct))
 
     "transport.executeStreaming (@stream)" - {
 

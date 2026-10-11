@@ -324,9 +324,11 @@ final case class Dialog private (
                                                 // Seed the resize origin (box top-left) + current size from a
                                                 // one-shot self-measure on grab; then follow the cursor.
                                                 .onPointerDown((_: PointerEvent) =>
-                                                    cmds.requestMeasureById(boxId).map(r =>
-                                                        origin.set(Present((r.x, r.y))).andThen(size.set(Present((r.width, r.height))))
-                                                    )
+                                                    cmds.requestMeasureById(boxId).map {
+                                                        case Present(r) =>
+                                                            origin.set(Present((r.x, r.y))).andThen(size.set(Present((r.width, r.height))))
+                                                        case Absent => ()
+                                                    }
                                                 )
                                                 .onPointerMove((e: PointerEvent) =>
                                                     origin.get.map {
