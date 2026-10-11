@@ -202,14 +202,6 @@ you:
 - **Tests without a server.** kyo-apollo-testing scripts responses at the HTTP, the
   operation and the WebSocket layer.
 
-It is not the right fit when the program does not run on kyo effects (a `Future`, ZIO or
-cats-effect code base would wrap every call), when the cache has to survive a restart
-(`MemoryCache` is the only shipped `NormalizedCache`; persistence means implementing
-one), when codegen has to run in a build other than kyo's
-own (there is no sbt plugin yet; such a build runs
-`kyo.apollo.codegen.CodegenRunner` itself), or when the server only speaks GraphQL 17's
-`pending`/`completed` incremental format.
-
 ## Getting Started
 
 Add the dependency to your `build.sbt`:
@@ -686,22 +678,9 @@ The function runs again when a concurrent write commits first, so it has to be p
 result that is not cached leaves the store unchanged and returns no keys.
 
 `updateOperation` goes through an operation's root, so it only reaches records that
-operation reads. To change one record wherever it sits, address it by its key with a
-fragment, a typed selection on one type:
-
-```scala
-import kyo.apollo.cache.normalized.api.*
-
-val place = Fragment.of[Country](_ ~ Country.name ~ Country.capital)
-
-def moveCapitalLocally(client: ApolloClient): Set[CacheKey] < Sync =
-    client.apolloStore.updateFragment(place, CacheKey("Country", "DE")) { current =>
-        (name = current.name, capital = Present("Bonn"))
-    }
-```
-
-Every query that read `Country:DE` sees the new capital, whichever field led it there.
-`readFragment` and `writeFragment` read and write the same shape without a function.
+operation reads. To change one record wherever it sits, address it by its key with
+`updateFragment` and a `Fragment.of` (see
+[Reading and writing one record](#reading-and-writing-one-record-fragmentof)).
 
 A mutation can show its result before the server answers: `optimisticUpdates(data)`
 writes `data` as a layer on top of the cache, watches see it at once, and the layer is
@@ -850,16 +829,108 @@ root instead of an entity. kyo-apollo-codegen declares client fields from the bu
 (`--client-field "Country.isFavorite: Boolean = false"`), so they appear next to the
 server fields on the generated selector.
 
-### Fragments a component owns
+## Fragments
 
-A screen built from components wants each component to declare the fields it shows,
-and the page's query to fetch them without coming to depend on them. A masked fragment
-does that. It is declared next to the component, spread into the page's query, and the
-query's result carries only an opaque reference to it:
+A fragment is a selection on one type, declared once and used in several places.
+kyo-apollo has four kinds. They differ in where the fields end up and in who may read
+them:
+
+| Kind | Declared with | In an operation's result | Read by | For |
+|------|---------------|--------------------------|---------|-----|
+| Selection value | `Country.name ~ Country.capital` | the fields, inline | any code holding the result | the same fields in several operations |
+| Cache fragment | `Fragment.of[Country](...)` | not part of an operation | `ApolloStore`, at a `CacheKey` | reading or writing one record without an operation |
+| Entity fragment | `Fragment.entity[Country](...)` | an opaque `Ref` | the component that declared it | a component's fields on a type with a `CacheIdentity` |
+| Embedded fragment | `Fragment.embedded[PageInfo](...)` | an opaque `Ref` | the component that declared it | a component's fields on an object without an identity |
+
+To pick one, ask what the fields are for:
+
+- **Several operations select the same fields, and every caller may read them:** a
+  selection value.
+- **Code needs one record from the cache, outside any operation:** `Fragment.of`.
+- **A component shows fields that the code fetching them should not depend on:** a
+  masked fragment. Use `Fragment.entity` when the type has a `CacheIdentity`, so the
+  component can also read and watch the record by itself. Use `Fragment.embedded` when
+  the type has no identity.
+
+GraphQL's inline fragments have their own forms, not declared on their own: a union or
+interface branch is `on<Type>` (see [What a selection can do](#what-a-selection-can-do)),
+and a deferred group is `defer(label, selection)`.
+
+### Sharing fields: selection values
+
+A selection is a value. Keep it in a `val`, and every operation that combines it with `~`
+selects those fields:
+
+```scala
+val placeFields = Country.name ~ Country.capital
+
+val germanyPlace = Queries.country("DE")(Country.code ~ placeFields).toQuery()
+val everyPlace   = Queries.countries(placeFields).toQuery()
+```
+
+<!-- doctest:scope=inherited
+```scala
+val germanyPlaceIsTyped: kyo.apollo.api.Query.Normalizable[(country: Maybe[(code: String, name: String, capital: Maybe[String])])] =
+    germanyPlace
+val everyPlaceIsTyped: kyo.apollo.api.Query.Normalizable[(countries: Chunk[(name: String, capital: Maybe[String])])] =
+    everyPlace
+```
+-->
+
+`germanyPlace` returns `(country: Maybe[(code: String, name: String, capital: Maybe[String])])`.
+The shared fields join the result and the printed document as if they had been written
+inline. This works like a GraphQL named fragment without the name: nothing is hidden,
+and a caller may read every field.
+
+### Reading and writing one record: `Fragment.of`
+
+`Fragment.of[Country]` turns a selection on `Country` into a `Fragment[D]`. The store
+reads and writes it at a `CacheKey`, without an operation. It needs the type's
+`TypeName`, which kyo-apollo-codegen emits on every selector object.
+
+```scala
+import kyo.apollo.cache.normalized.api.*
+import kyo.apollo.exception.CacheReadFailure
+
+val place = Fragment.of[Country](_ ~ placeFields)
+
+def capitalOf(client: ApolloClient, code: String): Maybe[String] < (Sync & Abort[CacheReadFailure]) =
+    client.apolloStore.readFragment(place, CacheKey("Country", code)).map(_.capital)
+
+def moveCapitalLocally(client: ApolloClient): Set[CacheKey] < Sync =
+    client.apolloStore.updateFragment(place, CacheKey("Country", "DE")) { current =>
+        (name = current.name, capital = Present("Bonn"))
+    }
+```
+
+`readFragment` fails with a `CacheMissException` when the record, or one of the selected
+fields, is not in the cache. `updateFragment` reads the record, applies the function and
+writes the result back in one atomic step. Every query that read `Country:DE` then sees
+the new capital, whichever field led it there. `writeFragment(place, key, data)` writes
+without reading first.
+
+A `Fragment.of` cannot be spread into an operation. To fetch the same fields, select the
+selection value it was built from (`placeFields` here), and both read the same shape.
+
+### Data a component owns: masked fragments
+
+A page often fetches the data of all its components in one query. With a selection
+value, the page's code can read every field a component selects. Once the page reads
+one, the component can no longer drop that field without breaking the page.
+
+A masked fragment keeps the fields to the component. The query still fetches them, but
+its result holds only an opaque `Ref`, and only the component that declared the fragment
+opens it:
 
 ```scala
 object CountryPlace:
     val fields = Fragment.entity[Country](_ ~ Country.name ~ Country.capital)
+
+    def render(client: ApolloClient, ref: fields.Ref): Unit < (Async & Scope & Abort[ApolloParseException]) =
+        client.apolloStore.watchFragment(ref).foreach { place =>
+            Log.info(s"${place.name}: ${place.capital.getOrElse("no capital")}")
+        }
+end CountryPlace
 
 val placeQuery = Queries.country("DE")(Country.code ~ CountryPlace.fields.spread).toQuery()
 ```
@@ -871,27 +942,81 @@ val placeIsLabelled: kyo.apollo.api.Query.Normalizable[(country: Maybe[(code: St
 ```
 -->
 
-The spread decodes to a `CountryPlace.fields.Ref` under the field `countryPlace`, so the
-page's code cannot read `name` or `capital` through it, and a field the component adds
-later cannot become something the page relies on. The component opens the ref:
-`ref.value` gives the fields as the response delivered them. For a `Fragment.entity`
-ref, which names a record, `apolloStore.readFragment(ref)` reads the record as the cache
-holds it now (or the delivered fields, if the record is gone), and
-`apolloStore.watchFragment(ref)` follows it, emitting again whenever a write changes it
-and keeping the record from garbage collection while it runs. A `Fragment.embedded` ref,
-for an object without an identity such as a `PageInfo`, opens through `value` only:
+`placeQuery` returns `(country: Maybe[(code: String, countryPlace: CountryPlace.fields.Ref)])`.
+The page hands `countryPlace` to `CountryPlace.render`. It cannot read the fields
+through the ref, so this does not compile:
 
-```scala
-def renderPlace(client: ApolloClient, ref: CountryPlace.fields.Ref): Unit < (Async & Scope & Abort[ApolloParseException]) =
-    client.apolloStore.watchFragment(ref).foreach { place =>
-        Log.info(s"${place.name}: ${place.capital.getOrElse("no capital")}")
-    }
+```scala doctest:scope=nested expect=fails-compile
+def pageReadsTheName(data: (country: Maybe[(code: String, countryPlace: CountryPlace.fields.Ref)])) =
+    data.country.map(_.countryPlace.name)
 ```
 
-`Fragment.of` is the unmasked form: a typed selection on one type that the store reads
-and writes by key (`readFragment`, `writeFragment`, `updateFragment`), with nothing to
-spread. Use it for cache access, and `Fragment.entity`/`Fragment.embedded` for the data a
-component owns.
+When the page needs a field the component also shows, it selects that field itself
+(`Country.name ~ CountryPlace.fields.spread`). The server sends it once, and the page's
+dependency on it is visible in the page's own selection.
+
+A ref opens in three ways:
+
+| Opener | Entity ref | Embedded ref | Gives |
+|--------|------------|--------------|-------|
+| `ref.value` | yes | yes | the fields as the response that carried the ref delivered them |
+| `apolloStore.readFragment(ref)` | yes | no | the record as the cache holds it now, or the delivered fields when the record is gone |
+| `apolloStore.watchFragment(ref)` | yes | no | that read, then again after every write that changes the record; keeps the record from garbage collection while it runs |
+
+Each one fails with an `ApolloParseException` when the data does not decode.
+
+#### `Fragment.entity`: fields of a record
+
+An entity fragment needs the type's `CacheIdentity` (the `given` from
+[Normalized cache](#normalized-cache) here), or it does not compile. The spread adds
+`__typename` and the identity's key fields (`code`) to the document, so every ref names
+the record it came from. That is what lets `readFragment` and `watchFragment` read the
+record without the page's query. `CountryPlace.render` above re-emits when a mutation or
+a subscription changes the capital of `Country:DE`, whether or not the page watches its
+own query.
+
+#### `Fragment.embedded`: fields of a value
+
+An object without an identity, such as a `PageInfo`, an address or an amount of money,
+has no record of its own. The cache stores it inside its parent. An embedded fragment
+needs no `CacheIdentity`, and its ref carries the value itself:
+
+```scala
+object LoadMore:
+    val fields = Fragment.embedded[PageInfo](_ ~ PageInfo.hasNextPage ~ PageInfo.endCursor)
+
+    def nextCursor(ref: fields.Ref): Maybe[String] < Abort[ApolloParseException] =
+        ref.value.map(info => if info.hasNextPage then info.endCursor else Absent)
+end LoadMore
+
+val firstCountries =
+    Queries.countriesPage(first = 20, after = Absent)(
+        CountryConnection.edges(CountryEdge.node(Country.code ~ Country.name)) ~
+            CountryConnection.pageInfo(LoadMore.fields.spread)
+    ).toQuery()
+```
+
+<!-- doctest:scope=inherited
+```scala
+val firstCountriesIsTyped: kyo.apollo.api.Query.Normalizable[
+    (countriesPage: (edges: Chunk[(node: (code: String, name: String))], pageInfo: (loadMore: LoadMore.fields.Ref)))
+] = firstCountries
+```
+-->
+
+`value` is the only opener. A newer `PageInfo` arrives as a new ref in the parent's next
+result, so a watch on the page query brings it. `Fragment.entity[PageInfo]` would not
+compile here, because `PageInfo` has no identity. An entity ref is never keyed by its
+position in a response (`countriesPage.pageInfo`), where a refetch could put a different
+object.
+
+#### The spread's field name
+
+`spread` names the result field after the object that declares the fragment, starting
+lower case: `CountryPlace.fields.spread` becomes `countryPlace`, and
+`LoadMore.fields.spread` becomes `loadMore`. A fragment held in a local `val` is named
+after the `val`. Two fragments declared in the same object would get the same name, so
+spread one of them with an explicit name: `CountryPlace.fields.spreadAs["place"]`.
 
 ## HTTP layer
 
@@ -1244,7 +1369,7 @@ cache.modify({
 ```
 
 kyo-apollo updates a typed value, either an operation's result or one record through a
-fragment (see [Normalized cache](#normalized-cache)):
+`Fragment.of` (see [Reading and writing one record](#reading-and-writing-one-record-fragmentof)):
 
 ```scala
 import kyo.apollo.cache.normalized.api.*
@@ -1274,10 +1399,9 @@ const cache = new InMemoryCache({
 // query Germany { country(code: "DE") { code ...CountryPlace } }
 ```
 
-kyo-apollo's fragments are values (`Fragment.of`, and `Fragment.entity` /
-`Fragment.embedded` for masked fragments, see
-[Fragments a component owns](#fragments-a-component-owns)) that an operation references
-like any other Scala value:
+kyo-apollo's fragments are values (a selection in a `val`, `Fragment.of`, and
+`Fragment.entity`/`Fragment.embedded` for masked fragments, see
+[Fragments](#fragments)) that an operation references like any other Scala value:
 
 ```scala
 val germanyWithPlace = Queries.country("DE")(Country.code ~ CountryPlace.fields.spread).toQuery()
@@ -1313,26 +1437,32 @@ def collectAfterLeaving(client: ApolloClient): Set[CacheKey] < (Sync & Async) =
 **Why:** a `release` that an exception or an early return skips keeps the record for the
 life of the cache. A `Scope` runs the release on every exit.
 
-### Incremental delivery reads two formats
+### Incremental delivery needs no format handler
 
-apollo-kotlin requests `multipart/mixed; deferSpec=20220824`, and Apollo Client 4 does
-when it is configured with `incrementalHandler: new Defer20220824Handler()`. That
-format's parts carry an `incremental` array:
+apollo-kotlin requests `multipart/mixed; deferSpec=20220824`. Apollo Client 4 reads one
+format per client, chosen with `incrementalHandler`: `Defer20220824Handler` for that
+format, or `GraphQL17Alpha9Handler` for GraphQL 17's `incrementalSpec=v0.2`. The two
+formats place a deferred part differently. The first puts the path in every part:
 
 ```json
 {"incremental": [{"data": {"capital": "Berlin"}, "path": ["country"]}], "hasNext": false}
 ```
 
-kyo-apollo requests the same format and also reads the older single-patch shape:
+GraphQL 17 announces the path once, under an id, and the later parts refer to that id:
 
 ```json
-{"data": {"capital": "Berlin"}, "path": ["country"], "hasNext": false}
+{"data": {"country": {"code": "DE"}}, "pending": [{"id": "0", "path": ["country"]}], "hasNext": true}
+{"incremental": [{"id": "0", "data": {"capital": "Berlin"}}], "completed": [{"id": "0"}], "hasNext": false}
 ```
 
-**Why:** servers built on the earlier draft of `@defer` still send the second shape, and
-a client that reads both works against either. The GraphQL 17 `pending`/`completed`
-format, which Apollo Client 4.1+ reads through `GraphQL17Alpha9Handler`, is not read: a
-server that sends only that format does not work with kyo-apollo.
+kyo-apollo advertises both in the `Accept` header of a deferred operation, `deferSpec`
+first, and reads whichever the server sends. It also reads the older single-patch
+shape, `{"data": {...}, "path": [...], "hasNext": false}`. There is nothing to
+configure.
+
+**Why:** which format arrives is the server's choice, and a client fixed to one format
+fails against a server that sends the other. A part tells its format apart by itself
+(an `id` instead of a `path`), so one reader covers every server.
 
 ### `complete` tracks the delivery, not the data
 
