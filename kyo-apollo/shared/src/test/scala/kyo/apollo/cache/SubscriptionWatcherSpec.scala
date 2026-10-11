@@ -1,0 +1,408 @@
+package kyo.apollo.cache
+
+import kyo.*
+import kyo.apollo.ApolloClient
+import kyo.apollo.StreamProbe
+import kyo.apollo.api.*
+import kyo.apollo.cache.TestKeys.*
+import kyo.apollo.cache.normalized.*
+import kyo.apollo.cache.normalized.api.CacheKey
+import kyo.apollo.cache.normalized.api.Fragment
+import kyo.apollo.cache.normalized.api.IdCacheKeyGenerator
+import kyo.apollo.network.ApolloResponse
+
+/** A game-lobby shape: a query watcher over an entity (`LobbyView`)
+  * whose selection nests an entity LIST (`players`), plus a subscription whose
+  * events normalize into the SAME entity — all three operations built the way
+  * generated code builds them (`SelectionBuilder.obj`/`scalar` + `.mapInto`).
+  *
+  * Reference behavior (Apollo Client JS): a subscription result is written at
+  * `ROOT_SUBSCRIPTION`, every entity inside normalizes into the SAME
+  * `__typename:id` record a query uses, and `broadcastWatches()` re-emits every
+  * watcher whose read depended on a touched record. In particular the nested
+  * players merge into `LobbyPlayer:<id>` records — they are never re-keyed under
+  * the writing operation's root path.
+  */
+class SubscriptionWatcherSpec extends kyo.test.Test[Any]:
+
+    given CanEqual[Any, Any] = CanEqual.derived
+
+    // --- generated-style schema selectors (mirrors apollo-codegen output) -------
+
+    // Codegen puts the type-name given in the phantom's companion so it auto-summons;
+    // these hand-written markers mirror that.
+    sealed trait LobbyPlayerT
+    object LobbyPlayerT:
+        given TypeName[LobbyPlayerT] = TypeName("LobbyPlayer")
+
+    sealed trait LobbyViewT
+    object LobbyViewT:
+        given TypeName[LobbyViewT] = TypeName("LobbyView")
+
+    object GPlayer:
+        def id: SelectionBuilder.Deferrable[LobbyPlayerT, (id: String)] =
+            SelectionBuilder.scalar("id", CompiledNamedType("PlayerId").notNull, ScalarCodec.string)
+        def color: SelectionBuilder.Deferrable[LobbyPlayerT, (color: String)] =
+            SelectionBuilder.scalar("color", CompiledNamedType("String").notNull, ScalarCodec.string)
+    end GPlayer
+
+    object GLobby:
+        def id: SelectionBuilder.Deferrable[LobbyViewT, (id: String)] =
+            SelectionBuilder.scalar("id", CompiledNamedType("LobbyId").notNull, ScalarCodec.string)
+        def name: SelectionBuilder.Deferrable[LobbyViewT, (name: String)] =
+            SelectionBuilder.scalar("name", CompiledNamedType("String").notNull, ScalarCodec.string)
+        def players[A](
+            sel: SelectionBuilder.Bidirectional[LobbyPlayerT, A]
+        ): SelectionBuilder.Deferrable[LobbyViewT, (players: Chunk[A])] =
+            SelectionBuilder.obj(
+                "players",
+                CompiledNamedType("LobbyPlayer").notNull.list.notNull,
+                Chunk.empty,
+                sel,
+                SelectionBuilder.Nesting.Listed(SelectionBuilder.Nesting.Leaf)
+            )
+        def startedGameId: SelectionBuilder.Deferrable[LobbyViewT, (startedGameId: Maybe[String])] =
+            SelectionBuilder.scalar(
+                "startedGameId",
+                CompiledNamedType("GameId"),
+                ScalarCodec.maybe(ScalarCodec.string)
+            )
+    end GLobby
+
+    // --- the page's view model (mirrors LobbyDetailPage.Model) ------------------
+
+    final case class Player(id: String, color: String) derives Schema
+    final case class Lobby(
+        id: String,
+        name: String,
+        players: Chunk[Player],
+        startedGameId: Maybe[String]
+    ) derives Schema
+
+    /** The shared selection: query, mutation and subscription all use it, so every
+      * reply/event must update the same records. The
+      * nullable `startedGameId` guards the `Maybe = Absent` write → read round-trip
+      * (kyo-schema encodes `Absent` as an ABSENT field; the cache must repair it to
+      * an explicit `null` or every later read misses).
+      */
+    private def playerSel: SelectionBuilder.Bidirectional[LobbyPlayerT, Player] = (GPlayer.id ~ GPlayer.color).mapInto[Player]
+
+    private def lobbySel: SelectionBuilder.Bidirectional[LobbyViewT, Lobby] =
+        (GLobby.id ~ GLobby.name ~ GLobby.players(playerSel) ~ GLobby.startedGameId).mapInto[Lobby]
+
+    private def lobbyArg(id: String): Chunk[SelectionBuilder.Arg] =
+        Chunk(
+            SelectionBuilder.Arg(
+                "id",
+                CompiledNamedType("LobbyId").notNull,
+                ScalarCodec.string.encode(id)
+            )
+        )
+
+    private def lobbyQuerySel(id: String): SelectionBuilder.Deferrable[RootQuery, (lobby: Lobby)] =
+        SelectionBuilder.obj(
+            "lobby",
+            CompiledNamedType("LobbyView").notNull,
+            lobbyArg(id),
+            lobbySel,
+            SelectionBuilder.Nesting.Leaf
+        )
+
+    private def lobbyQuery(id: String): Query.Normalizable[(lobby: Lobby)] =
+        lobbyQuerySel(id).toQuery()
+
+    private def lobbySubscription(id: String): Subscription.Normalizable[(lobbyUpdates: Maybe[Lobby])] =
+        val sel: SelectionBuilder.Deferrable[RootSubscription, (lobbyUpdates: Maybe[Lobby])] =
+            SelectionBuilder.obj(
+                "lobbyUpdates",
+                CompiledNamedType("LobbyView"),
+                lobbyArg(id),
+                lobbySel,
+                SelectionBuilder.Nesting.Nullable(SelectionBuilder.Nesting.Leaf)
+            )
+        sel.toSubscription()
+    end lobbySubscription
+
+    // --- an ID-LESS child list under the same entity (GAPS.md F-18) -------------
+    //
+    // `badges` carries no id, so its elements are keyed by position under their parent.
+    // The query selects two of their fields and the subscription one, which is the whole
+    // of the bug: while the position was counted from the WRITING OPERATION's root, the
+    // subscription's narrower write repointed `LobbyView:L1.badges` at records that had
+    // never carried `tone`, and the query watcher's next re-read missed on it.
+
+    sealed trait LobbyBadgeT
+    object LobbyBadgeT:
+        given TypeName[LobbyBadgeT] = TypeName("LobbyBadge")
+
+    object GBadge:
+        def label: SelectionBuilder.Deferrable[LobbyBadgeT, (label: String)] =
+            SelectionBuilder.scalar("label", CompiledNamedType("String").notNull, ScalarCodec.string)
+        def tone: SelectionBuilder.Deferrable[LobbyBadgeT, (tone: String)] =
+            SelectionBuilder.scalar("tone", CompiledNamedType("String").notNull, ScalarCodec.string)
+    end GBadge
+
+    private def badgesSel[A](
+        sel: SelectionBuilder.Bidirectional[LobbyBadgeT, A]
+    ): SelectionBuilder.Deferrable[LobbyViewT, (badges: Chunk[A])] =
+        SelectionBuilder.obj(
+            "badges",
+            CompiledNamedType("LobbyBadge").notNull.list.notNull,
+            Chunk.empty,
+            sel,
+            SelectionBuilder.Nesting.Listed(SelectionBuilder.Nesting.Leaf)
+        )
+
+    final case class BadgeWide(label: String, tone: String) derives Schema
+    final case class BadgeNarrow(label: String) derives Schema
+    final case class LobbyWide(id: String, badges: Chunk[BadgeWide]) derives Schema
+    final case class LobbyNarrow(id: String, badges: Chunk[BadgeNarrow]) derives Schema
+
+    private def wideBadgeQuery(id: String): Query.Normalizable[(lobby: LobbyWide)] =
+        SelectionBuilder.obj(
+            "lobby",
+            CompiledNamedType("LobbyView").notNull,
+            lobbyArg(id),
+            (GLobby.id ~ badgesSel((GBadge.label ~ GBadge.tone).mapInto[BadgeWide])).mapInto[LobbyWide],
+            SelectionBuilder.Nesting.Leaf
+        ).toQuery()
+
+    private def narrowBadgeSubscription(id: String): Subscription.Normalizable[(lobbyUpdates: Maybe[LobbyNarrow])] =
+        SelectionBuilder.obj(
+            "lobbyUpdates",
+            CompiledNamedType("LobbyView"),
+            lobbyArg(id),
+            (GLobby.id ~ badgesSel(GBadge.label.mapInto[BadgeNarrow])).mapInto[LobbyNarrow],
+            SelectionBuilder.Nesting.Nullable(SelectionBuilder.Nesting.Leaf)
+        ).toSubscription()
+
+    private val wideLobby = LobbyWide("L1", Chunk(BadgeWide("Host", "gold")))
+    // A different label, so the write genuinely changes a watched record: writing the same
+    // value back changes no field, publishes no key, and a watcher would rightly stay silent.
+    private val narrowLobby = LobbyNarrow("L1", Chunk(BadgeNarrow("Co-host")))
+    private val mergedLobby = LobbyWide("L1", Chunk(BadgeWide("Co-host", "gold")))
+
+    private val p1                      = Player("p1", "Red")
+    private val p2                      = Player("p2", "Blue")
+    private def lobby(players: Player*) = Lobby("L1", "Alpha", Chunk.from(players), Absent)
+
+    // --- fixture ----------------------------------------------------------------
+
+    private val onePlayerBody =
+        """{"data":{"lobby":{"__typename":"LobbyView","id":"L1","name":"Alpha",""" +
+            """"players":[{"__typename":"LobbyPlayer","id":"p1","color":"Red"}],"startedGameId":null}}}"""
+
+    /** Answers the one-player lobby and counts its calls; a watch's fetching fiber
+      * calls it while the leaf reads the count, hence the atomic.
+      */
+    final private class LobbyEngine extends kyo.apollo.network.http.HttpEngine:
+        private val counter = AtomicInt.Unsafe.init(0)(using AllowUnsafe.embrace.danger)
+        def calls: Int      = counter.get()(using AllowUnsafe.embrace.danger)
+        def execute(
+            request: kyo.apollo.network.http.HttpEngine.Request
+        )(using Frame): kyo.apollo.network.http.HttpEngine.Response < Async =
+            counter.safe.incrementAndGet.andThen(kyo.apollo.network.http.HttpEngine.response(HttpStatus.OK, onePlayerBody))
+        end execute
+    end LobbyEngine
+
+    private def cachedClient(engine: LobbyEngine = LobbyEngine())(using Frame): ApolloClient < (Sync & Scope) =
+        ApolloClient.init(
+            ApolloClient.Config("https://example.com/graphql")
+                .httpEngine(engine)
+                .normalizedCache(MemoryCache(), IdCacheKeyGenerator(List("id")))
+        )
+
+    /** Fetch the query once over the (fake) network, then run `body` with the
+      * client and a pull over a `CacheOnly` watch whose initial read is established
+      * — the WatcherSpec harness, on the lobby selection shape.
+      */
+    private def watching(
+        body: (ApolloClient, StreamProbe.Pull[ApolloResponse[(lobby: Lobby)]]) => Unit <
+            (Async & Scope)
+    )(using Frame): Unit < (Async & Scope) =
+        for
+            client <- cachedClient()
+            _      <- client.query(lobbyQuery("L1")).fetchPolicy(FetchPolicy.NetworkOnly).execute
+            watch  <- ObservedWatch.open(client.query(lobbyQuery("L1")).fetchPolicy(FetchPolicy.CacheOnly))
+            _      <- watch.awaitEstablished
+            _      <- body(client, watch.pull)
+        yield ()
+        end for
+    end watching
+
+    // --- tests ------------------------------------------------------------------
+
+    "subscription write-back (store level)" - {
+
+        "nested entities keep their entity keys — never re-keyed under the writer's root" in {
+            for
+                store   <- cachedClient().map(_.apolloStore)
+                _       <- store.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1)))
+                changed <- store.writeOperation(lobbySubscription("L1"), (lobbyUpdates = Present(lobby(p1, p2))))
+                all     <- store.cache.allRecords
+            yield
+                // Reference (Apollo JS): players normalize into `LobbyPlayer:<id>` on every
+                // write path; the lobby's `players` field always references those records.
+                assert(all.contains(CacheKey("LobbyPlayer", "p1")), s"expected LobbyPlayer:p1 in ${all.keySet}")
+                assert(all.contains(CacheKey("LobbyPlayer", "p2")), s"expected LobbyPlayer:p2 in ${all.keySet}")
+                assert(changed.contains(CacheKey("LobbyView", "L1")))
+            end for
+        }
+
+        "a query re-read after the subscription write sees the pushed players" in {
+            for
+                store   <- cachedClient().map(_.apolloStore)
+                _       <- store.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1)))
+                before  <- store.readOperationWithKeys(lobbyQuery("L1"))
+                changed <- store.writeOperation(lobbySubscription("L1"), (lobbyUpdates = Present(lobby(p1, p2))))
+                after   <- store.readOperation(lobbyQuery("L1"))
+            yield
+                // The watcher predicate: the subscription's changed keys must intersect the
+                // query read's dependent keys, and the re-read must yield the new list.
+                val deps = before._2
+                assert(changed.intersect(deps).nonEmpty, s"changed=$changed deps=$deps")
+                assert(after.lobby == lobby(p1, p2))
+            end for
+        }
+
+        "a fragment write that CREATES an entity record still satisfies a later query read" in {
+            // The nested-object stamp (Normalizer.compositeValue) does not cover a
+            // fragment's ROOT object — writeFragment stamps it itself. Scenario: the
+            // entity record exists ONLY from an imperative fragment write (cache
+            // repair / client-authored entity), and a query read reaches it by
+            // reference — its players node compiles the implicit `__typename`
+            // selection, so the record must carry the field.
+            val playerFragment: Fragment[(id: String, color: String)] = (GPlayer.id ~ GPlayer.color).toFragment
+
+            for
+                store   <- cachedClient().map(_.apolloStore)
+                _       <- store.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1)))
+                _       <- store.remove(CacheKey("LobbyPlayer", "p1"))
+                changed <- store.writeFragment(playerFragment, CacheKey("LobbyPlayer", "p1"), (id = "p1", color = "Red"))
+                record  <- store.cache.loadRecord(CacheKey("LobbyPlayer", "p1"))
+                read    <- store.readOperation(lobbyQuery("L1"))
+            yield
+                assert(changed.contains(CacheKey("LobbyPlayer", "p1")))
+                assert(record.exists(_.get(fk("__typename")).isDefined))
+                assert(read.lobby == lobby(p1))
+            end for
+        }
+
+        "a Maybe = Absent field round-trips as an explicit null, and a push can flip it" in {
+            cachedClient().map(_.apolloStore).map { store =>
+                // The start-game push: the subscription event carries the id;
+                // a query re-read (the redirect observer's input) must see it.
+                val started = lobby(p1).copy(startedGameId = Present("G9"))
+                for
+                    // kyo-schema encodes `Absent` as an ABSENT field; without the mapInto
+                    // null-repair every later read of the record misses on `startedGameId`.
+                    _      <- store.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1)))
+                    before <- store.readOperation(lobbyQuery("L1"))
+                    _      <- store.writeOperation(lobbySubscription("L1"), (lobbyUpdates = Present(started)))
+                    after  <- store.readOperation(lobbyQuery("L1"))
+                yield
+                    assert(before.lobby.startedGameId == Absent)
+                    assert(after.lobby.startedGameId == Present("G9"))
+                end for
+            }
+        }
+    }
+
+    "subscription write-back (watcher level)" - {
+
+        "a subscription event re-emits a query watcher on the same entity" in {
+            watching { (client, pull) =>
+                for
+                    first <- pull.next
+                    _ = assert(first.data.map(_.lobby) == Present(lobby(p1)))
+                    // What CacheInterceptor.writeBack does for every streamed subscription
+                    // event: normalize + merge + publish, on the subscription operation.
+                    _ <- Sync.defer(
+                        client.apolloStore
+                            .writeOperation(lobbySubscription("L1"), (lobbyUpdates = Present(lobby(p1, p2))))
+                    )
+                    second <- pull.next
+                yield assert(second.data.map(_.lobby) == Present(lobby(p1, p2)))
+            }
+        }
+
+        "a subscription narrowing an entity's id-less children does not blank a wider query watcher" in {
+            // The end of the F-18 chain, in one test: narrower write → watcher re-read →
+            // what the reader sees. Deliberately on the DEFAULT refetch policy (CacheOnly),
+            // so a later `RefetchPolicy.CacheFirst` cannot satisfy this by going to the
+            // network instead of reading what is there.
+            cachedClient().map { client =>
+                val store = client.apolloStore
+                for
+                    _     <- store.writeOperation(wideBadgeQuery("L1"), (lobby = wideLobby))
+                    watch <- ObservedWatch.open(client.query(wideBadgeQuery("L1")).fetchPolicy(FetchPolicy.CacheOnly))
+                    pull = watch.pull
+                    first <- pull.next
+                    _     <- watch.awaitEstablished
+                    _ = assert(first.data == Present((lobby = wideLobby)))
+                    _ <- Sync.defer(
+                        store.writeOperation(narrowBadgeSubscription("L1"), (lobbyUpdates = Present(narrowLobby)))
+                    )
+                    second <- pull.next
+                yield
+                    assert(second.error.isEmpty, s"the re-read must not miss: ${second.error}")
+                    // The new label, and the tone the narrower writer never mentioned.
+                    assert(second.data == Present((lobby = mergedLobby)))
+                end for
+            }
+        }
+
+        "constructing a call effect fires no request — effects are inert until run" in {
+            val engine = LobbyEngine()
+            cachedClient(engine).map { client =>
+                // A held effect (e.g. a handle's `refetch`) must not touch the network at
+                // construction: the interceptor chain walks only on consumption.
+                val _ = client.query(lobbyQuery("L1")).fetchPolicy(FetchPolicy.NetworkOnly).stream
+                assert(engine.calls == 0, s"expected no network call at construction, got ${engine.calls}")
+                succeed
+            }
+        }
+
+        "a CacheAndNetwork watch on an empty cache fetches exactly once (no refetch churn)" in {
+            val engine = LobbyEngine()
+            for
+                client <- cachedClient(engine)
+                watch  <- ObservedWatch.open(client.query(lobbyQuery("L1")).fetchPolicy(FetchPolicy.CacheAndNetwork))
+                first  <- watch.pull.next
+                _ = assert(first.data.map(_.lobby) == Present(lobby(p1)))
+                // Once the networked response is established the watch has done everything
+                // its own write-back could cause. A write it must answer is answered on this
+                // fiber; a re-emission or refetch churn from the write-back would come first.
+                _ <- watch.awaitEstablished
+                calls = engine.calls
+                _    <- client.apolloStore.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1, p2)))
+                next <- watch.pull.next
+                more <- watch.pull.tryNext
+            yield
+                assert(next.data.map(_.lobby) == Present(lobby(p1, p2)), s"the write-back re-emitted: $next")
+                assert(more == Absent)
+                assert(calls == 1, s"expected one network call, got $calls")
+                assert(engine.calls == 1, s"the write refetched: ${engine.calls} call(s)")
+            end for
+        }
+
+        "a watcher survives a transient miss — a later write revives it (Apollo JS keeps watching)" in {
+            watching { (client, pull) =>
+                for
+                    _ <- pull.next
+                    // Evict the entity: the watcher re-emits a miss (already covered by
+                    // WatcherSpec) …
+                    _    <- Sync.defer(client.apolloStore.remove(CacheKey("LobbyView", "L1")))
+                    miss <- pull.next
+                    _ = assert(miss.data.isEmpty)
+                    // … and once data lands again, the watcher must come back — Apollo JS
+                    // watchers stay registered across incomplete diffs.
+                    _ <- Sync.defer(
+                        client.apolloStore.writeOperation(lobbyQuery("L1"), (lobby = lobby(p1, p2)))
+                    )
+                    revived <- pull.next
+                yield assert(revived.data.map(_.lobby) == Present(lobby(p1, p2)))
+            }
+        }
+    }
+end SubscriptionWatcherSpec
