@@ -1384,8 +1384,12 @@ object Signal:
                     if !subs.compareAndSet(cur, cur.append(sub)) then add()
                 discard(liveSubs.incrementAndGet())
                 add()
+                // The version is read before the value: a write landing between this delivery and the arm (from another
+                // thread, or from the sink itself) completes a promise nobody may be registered on, so the version is all
+                // that records it, and a changed one makes the pump dispatch first.
+                val v0 = versionRef.get()
                 deliverTo(sub, currentRef.get())
-                pump(dispatchFirst = false)
+                pump(dispatchFirst = versionRef.get() != v0)
             end subscribe
 
             /** Drops `sub`; when the last one leaves, releases the shared registration. The next-change promise is masked and outlives its

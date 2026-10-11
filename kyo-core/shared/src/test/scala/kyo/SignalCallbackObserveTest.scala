@@ -207,6 +207,21 @@ class SignalCallbackObserveTest extends kyo.test.Test[Any]:
             assert(seen.toList == List(0, 1, 2))
         }
 
+        "a write that lands during the first delivery is not stranded" in {
+            // The deterministic form of a write racing the registration: no waiter is armed yet when it completes the
+            // promise, so only the version the subscription read before delivering can tell that it happened.
+            val r    = ref(0)
+            val seen = scala.collection.mutable.ListBuffer.empty[Int]
+            discard(r.unsafeObserveProjected[Int](
+                identity,
+                Absent,
+                v =>
+                    discard(seen += v)
+                    if v == 0 then r.unsafe.set(1)
+            ))
+            assert(seen.toList == List(0, 1))
+        }
+
         "a subscriber added while another is being notified still sees later writes" in {
             val r    = ref(0)
             var late = Maybe.empty[scala.collection.mutable.ListBuffer[Int]]
