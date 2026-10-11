@@ -1277,6 +1277,22 @@ class UIEventWiringTest extends kyo.test.Test[Any]:
             assert(hovered)
     }
 
+    "a click on an element rendered by a reactive label inside a button runs the button's handler" in {
+        for
+            label  <- Signal.initRef("Leave")
+            clicks <- AtomicRef.init(0)
+            ui = UI.div(
+                UI.div(UI.span("cards")),
+                UI.div(UI.button(label.render(s => UI.span(s))).onClick(clicks.getAndUpdate(_ + 1).unit))
+            )
+            dispatch <- makeDispatch(ui)
+            // The span the label region renders carries the region's path: second div, its button, the button's first child.
+            target = Seq("1", "0", "0")
+            _     <- dispatch(target, UIEvent.Click(target, MouseEventData(UI.Modifiers.none, Absent)))
+            count <- clicks.get
+        yield assert(count == 1)
+    }
+
     // ---- WheelEvent ctrl modifier ----
 
     "onScroll(f) observes the ctrl modifier (ctrl-wheel zoom)" in {
