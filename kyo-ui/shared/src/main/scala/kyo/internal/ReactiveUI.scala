@@ -296,6 +296,11 @@ private[kyo] object ReactiveUI:
             // multiple levels deep; their last segment may collide with a sibling's index at the
             // current level. Using prefix-match correctly routes only when the target lies inside.
             val reactiveChild = reactiveChildren.find(rc => targetPath.startsWith(rc.path))
+            // `reactiveChildren` also holds reactive descendants of static children. A target inside a static child goes
+            // through that child's handler chain, so an element between this one and the region (a button around a
+            // reactive label) still sees the event; only a reactive DIRECT child, which has no static handler, is entered
+            // directly.
+            val staticChild = Maybe.fromOption(childIdx).flatMap(i => Maybe.fromOption(staticHandlers.find(_._1 == i)).map(_._2))
 
             for
                 // Disabled-target (Form submit suppression), Button-target (only Button clicks submit
@@ -318,14 +323,13 @@ private[kyo] object ReactiveUI:
                     submitOrigin = targetIsButton,
                     selectTarget = targetIsSelect
                 )
-                result <- Maybe.fromOption(reactiveChild) match
-                    case Present(child) =>
-                        safeDispatch(child.handle, targetPath, event).map(keep => if keep then bubble else false)
+                result <- staticChild match
+                    case Present(childHandle) =>
+                        safeDispatch(childHandle, targetPath, event).map(keep => if keep then bubble else false)
                     case Absent =>
-                        Maybe.fromOption(childIdx).flatMap(i => Maybe.fromOption(staticHandlers.find(_._1 == i)).map(_._2))
-                            .fold(bubble)(childHandle =>
-                                safeDispatch(childHandle, targetPath, event).map(keep => if keep then bubble else false)
-                            )
+                        Maybe.fromOption(reactiveChild).fold(bubble)(child =>
+                            safeDispatch(child.handle, targetPath, event).map(keep => if keep then bubble else false)
+                        )
             yield result
             end for
         else
