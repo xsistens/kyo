@@ -208,7 +208,7 @@ class CacheSpec extends kyo.test.Test[Any]:
             Frame
         ): kyo.apollo.network.http.HttpEngine.Response < Async =
             calls += 1
-            kyo.apollo.network.http.HttpEngine.response(HttpStatus(status), libraryBody)
+            kyo.apollo.network.http.HttpEngine.response(HttpStatus.init(status).getOrThrow, libraryBody)
         end execute
     end CountingEngine
 
