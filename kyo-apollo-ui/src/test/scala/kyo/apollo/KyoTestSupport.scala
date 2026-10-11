@@ -83,7 +83,7 @@ object CountryFixture:
         def calls(using Frame): Int < Sync = received.get
 
         def execute(request: HttpEngine.Request)(using Frame): HttpEngine.Response < Async =
-            received.incrementAndGet.andThen(HttpEngine.response(HttpStatus(status), responseBody))
+            received.incrementAndGet.andThen(HttpEngine.response(HttpStatus.init(status).getOrThrow, responseBody))
     end StaticEngine
 
     /** Parks every reply on a gate until [[release]] is called, so a watcher's

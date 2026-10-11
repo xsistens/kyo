@@ -15,6 +15,13 @@ import kyo.*
   */
 abstract class UicTest extends kyo.test.Test[Any]:
 
+    /** Runs a handler's effect. None of the handlers under test is meant to fail, so a failure fails the test. */
+    private[uic] def handled(action: UI.Action)(using Frame): Any < Async =
+        Abort.run[Any](action).map {
+            case Result.Success(a) => a
+            case other             => throw new AssertionError(s"the handler failed: $other")
+        }
+
     /** Every element of a rendered tree, with the reactive nodes resolved to their current content.
       *
       * Reactive is a subscription boundary, not a node the client sees, so a walk that stopped there would miss
@@ -40,7 +47,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
     /** Every reactive node in the tree, in walk order, WITHOUT resolving it away.
       *
       * `elements` deliberately looks through a `Reactive`, because a reader never sees the boundary. A suite that
-      * pins a slot as a text CHANNEL has to see it: `UI.Ast.Reactive.text` is the single field
+      * pins a slot as a text CHANNEL has to see it: a `Source.Lifted` in `UI.Ast.Reactive.source` is what
       * `kyo.internal.ReactiveUI.bindTextRegion` keys on, and a region that carries it is bound straight to the
       * backend's text write instead of running a fiber, a Scope and a re-walk to change one string. The rendered
       * HTML is the same either way, so the golden render cannot tell the two apart and this is the only place the
@@ -152,7 +159,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
         using Frame
     ): Any < Async =
         el.attrs.onKeyDown match
-            case Present(f) => f(UI.KeyboardEvent(key, mods, el.attrs.identifier))
+            case Present(f) => handled(f(UI.KeyboardEvent(key, mods, el.attrs.identifier)))
             case Absent     => throw new AssertionError("the element declares no key handler")
 
     /** Runs `el`'s click handler, as the dispatcher would.
@@ -162,10 +169,10 @@ abstract class UicTest extends kyo.test.Test[Any]:
       */
     private[uic] def click(el: UI.Ast.Element)(using Frame): Any < Async =
         el.attrs.onClick match
-            case Present(eff) => eff
+            case Present(eff) => handled(eff)
             case Absent       =>
                 el.attrs.onClickEvt match
-                    case Present(f) => f(UI.MouseEvent(el.attrs.identifier, UI.Modifiers.none))
+                    case Present(f) => handled(f(UI.MouseEvent(el.attrs.identifier, UI.Modifiers.none)))
                     case Absent     => throw new AssertionError("the element declares no click handler")
 
     /** The same, for a click that reached `el` THROUGH a control of the reader's own — an anchor in
@@ -175,7 +182,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
     private[uic] def clickViaControl(el: UI.Ast.Element)(using Frame): Any < Async =
         el.attrs.onClickEvt match
             case Present(f) =>
-                f(UI.MouseEvent(el.attrs.identifier, UI.Modifiers.none, Absent, onControl = true))
+                handled(f(UI.MouseEvent(el.attrs.identifier, UI.Modifiers.none, Absent, onControl = true)))
             case Absent => throw new AssertionError("the element declares no typed click handler")
 
 end UicTest
