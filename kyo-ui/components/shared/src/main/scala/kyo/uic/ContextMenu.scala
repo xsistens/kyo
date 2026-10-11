@@ -84,7 +84,7 @@ final case class ContextMenu private (
       * refs are allocated per submenu path, and a state built from a different item tree would
       * leave the tree's open/closed slots unaddressed.
       */
-    def state(using Frame): ContextMenu.State < (Sync & Env[UI.Commands]) =
+    def state(using Frame): ContextMenu.State < Sync =
         for
             open  <- Signal.initRef(false)
             focus <- Signal.initRef(List.empty[Int])
@@ -155,9 +155,8 @@ final case class ContextMenu private (
         //
         // Keyless was wrong for a menu that sits in a region something else re-renders: the
         // effect re-runs per enclosing emission, `openRef` — the mount's OWN state — resets,
-        // and the whole subtree under the target is rebuilt each time. kyo-ui says so out
-        // loud after ten of them ("keyless UI.mounted at …: give it a stable identity"), and
-        // the wreckage is worse than a reset flag: a subscription of the departing content
+        // and the whole subtree under the target is rebuilt each time. The wreckage is worse
+        // than a reset flag: a subscription of the departing content
         // that emits into a range the rebuild already took away dies on `Unknown reactive
         // range`, and a dead subscription never paints again. Measured on a page whose store
         // writes re-render around the menu: the menu opened once and then never again.
@@ -167,7 +166,7 @@ final case class ContextMenu private (
         // which is what `MenuItem`'s reactive label and `disabled` are for, and what
         // `Overlay` already assumes by keying its own panel on the same id.
         idV match
-            case Present(id) => mount.keyed(ContextMenu -> id)
+            case Present(id) => mount.keyed(id)
             case Absent      => mount
         end match
     end wrapping

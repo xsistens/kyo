@@ -58,7 +58,7 @@ final class FetchHttpEngine extends HttpEngine:
                         for
                             response <- dom.fetch(request.url.full, requestInit(request, controller.signal)): Future[dom.Response]
                             text     <- response.text(): Future[String]
-                        yield HttpEngine.response(HttpStatus(response.status), text, readHeaders(response.headers))
+                        yield HttpEngine.response(HttpStatus.init(response.status).getOrThrow, text, readHeaders(response.headers))
                     }
                     .map(fiber => fetched(fiber.get))
             }
@@ -75,7 +75,7 @@ final class FetchHttpEngine extends HttpEngine:
                 Fiber
                     .fromFuture {
                         dom.fetch(request.url.full, requestInit(request, controller.signal)).flatMap { response =>
-                            val status  = HttpStatus(response.status)
+                            val status  = HttpStatus.init(response.status).getOrThrow
                             val headers = readHeaders(response.headers)
                             if isMultipart(Option(response.headers.get("Content-Type"))) then
                                 Future.successful(

@@ -40,7 +40,7 @@ abstract class UicTest extends kyo.test.Test[Any]:
     /** Every reactive node in the tree, in walk order, WITHOUT resolving it away.
       *
       * `elements` deliberately looks through a `Reactive`, because a reader never sees the boundary. A suite that
-      * pins a slot as a text CHANNEL has to see it: `UI.Ast.Reactive.text` is the single field
+      * pins a slot as a text CHANNEL has to see it: a `Source.Lifted` in `UI.Ast.Reactive.source` is what
       * `kyo.internal.ReactiveUI.bindTextRegion` keys on, and a region that carries it is bound straight to the
       * backend's text write instead of running a fiber, a Scope and a re-walk to change one string. The rendered
       * HTML is the same either way, so the golden render cannot tell the two apart and this is the only place the
