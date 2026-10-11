@@ -2739,7 +2739,7 @@ class DataTableTest extends UicTest:
         // held against each other by their rendered form rather than by ==.
         (stateful(Present("t1")), stateful(Absent)) match
             case (n: Ast.Mounted, a: Ast.Mounted) =>
-                assert(n.key.map(_.toString).contains((uic.DataTable -> "t1").toString), "the id is the key")
+                assert(n.key.map(_.toString).contains("t1"), "the id is the key")
                 assert(a.key.isEmpty, "and no id means no key, as before")
             case other => fail(s"a stateful DataTable renders as a mount; got: $other")
         end match

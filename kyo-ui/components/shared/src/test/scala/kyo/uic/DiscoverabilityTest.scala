@@ -303,11 +303,9 @@ class DiscoverabilityTest extends UicTest:
         typeCheckFailure(
             preamble + """def x(using Frame): uic.Button = uic.Button("Go").onClick(Env.get[uic.ToastService].map(_.add(uic.Severity.Info, "a", "b")))"""
         )
-        // A RAW kyo element's onClick[S] does accept it, through its Isolate. That is a
-        // kyo-ui capability, not something this module can revoke — recorded here so the
-        // remaining hole is a known shape rather than a surprise, and so a future kyo-ui
-        // change to it shows up as a failing expectation.
-        typeCheck(
+        // A raw kyo element's onClick is `Any < Async` too, so the same deferral does not
+        // compile there either.
+        typeCheckFailure(
             preamble + """def x(using Frame): UI = button.onClick(Env.get[uic.ToastService].map(_.add(uic.Severity.Info, "a", "b")))("Go")"""
         )
     }
@@ -344,15 +342,14 @@ class DiscoverabilityTest extends UicTest:
         )
     }
 
-    "Button renders as an SPA anchor via .href, and onClick accepts Abort[Throwable] & Async" in {
+    "Button renders as an SPA anchor via .href, and onClick takes the native handler type" in {
         typeCheck(preamble + """def x: uic.Button = uic.Button("Open").severity(uic.Severity.Secondary).href("/lobbies/1")""")
-        // onClick mirrors kyo-ui's native event effect: an aborting handler is accepted...
-        typeCheck(preamble + """def x(eff: Any < (Abort[Throwable] & Async))(using Frame): uic.Button = uic.Button("Go").onClick(eff)""")
-        typeCheck(
-            preamble + """def x(eff: Any < (Async & Abort[java.io.IOException]))(using Frame): uic.Button = uic.Button("Go").onClick(eff)"""
-        )
-        // ...and a pure Async handler still fits
+        // onClick mirrors kyo-ui's native event effect, `Any < Async`...
         typeCheck(preamble + """def x(eff: Any < Async)(using Frame): uic.Button = uic.Button("Go").onClick(eff)""")
+        // ...so a handler that can fail handles its failure before it gets here.
+        typeCheckFailure(
+            preamble + """def x(eff: Any < (Abort[Throwable] & Async))(using Frame): uic.Button = uic.Button("Go").onClick(eff)"""
+        )
     }
 
     "Button has severity and variant, not the retired design" in {

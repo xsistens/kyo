@@ -137,8 +137,9 @@ final class DevtoolsStore(
             repaints += 1
             if event.cause == UI.RenderCause.Created then created += 1
             if event.wasted then wasted += 1
-            if event.durationNanos > 0L then
-                durations(durationNext) = event.durationNanos
+            val nanos = event.duration.toNanos
+            if nanos > 0L then
+                durations(durationNext) = nanos
                 durationNext = (durationNext + 1) % durations.length
                 if durationCount < durations.length then durationCount += 1
             end if

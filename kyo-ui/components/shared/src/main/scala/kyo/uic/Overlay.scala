@@ -339,7 +339,7 @@ final case class Overlay private (
       * measured), and binds THAT onto the panel in place. No intermediate SignalRef
       * + callback bridge: the measured stream IS the source. Both primitives detach
       * when the mount's Scope closes on overlay close. Captures `cmds` so the inner
-      * effect needs no `Env[Commands]`.
+      * effect does not look the channel up again.
       */
 
     /** An invisible inset-0 child of the anchor element: the overlay cannot address its host anchor
