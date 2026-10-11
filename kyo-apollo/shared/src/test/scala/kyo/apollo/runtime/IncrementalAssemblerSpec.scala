@@ -253,5 +253,115 @@ class IncrementalAssemblerSpec extends kyo.test.Test[Any]:
                 assert(responses.last.error.exists(_.message.contains("items.2")), s"${responses.last.error}")
             }
         }
+
+        "GraphQL 17 format (pending/completed)" - {
+
+            "places a deferred payload at the path its pending entry announced" in {
+                val parts = Stream.init(
+                    Seq(
+                        part("""{"data":{"country":{"code":"DE"}},"pending":[{"id":"0","path":["country"]}],"hasNext":true}"""),
+                        part("""{"incremental":[{"id":"0","data":{"capital":"Berlin"}}],"completed":[{"id":"0"}],"hasNext":false}""")
+                    )
+                )
+                StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q(), TestIds.requestUuid), parts)).map { responses =>
+                    assert(responses.size == 2, s"got $responses")
+                    assert(responses(0).data == Present(Data(Some(Loc("DE", None)))))
+                    assert(responses(0).complete == false)
+                    assert(responses(1).data == Present(Data(Some(Loc("DE", Some("Berlin"))))))
+                    assert(responses(1).complete == true)
+                }
+            }
+
+            "appends subPath to the pending path" in {
+                val parts = Stream.init(
+                    Seq(
+                        part("""{"data":{"country":{"code":"DE"}},"pending":[{"id":"0","path":[]}],"hasNext":true}"""),
+                        part(
+                            """{"incremental":[{"id":"0","subPath":["country"],"data":{"capital":"Berlin"}}],"completed":[{"id":"0"}],"hasNext":false}"""
+                        )
+                    )
+                )
+                StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q(), TestIds.requestUuid), parts)).map { responses =>
+                    assert(responses.size == 2, s"got $responses")
+                    assert(responses(1).data == Present(Data(Some(Loc("DE", Some("Berlin"))))))
+                }
+            }
+
+            "appends streamed items to the list the pending path names" in {
+                val parts = Stream.init(
+                    Seq(
+                        part("""{"data":{"items":[{"id":"a"}]},"pending":[{"id":"0","path":["items"]}],"hasNext":true}"""),
+                        part("""{"incremental":[{"id":"0","items":[{"id":"b"}]}],"hasNext":true}"""),
+                        part("""{"incremental":[{"id":"0","items":[{"id":"c"},{"id":"d"}]}],"hasNext":true}"""),
+                        part("""{"completed":[{"id":"0"}],"hasNext":false}""")
+                    )
+                )
+                StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(ListQ(), TestIds.requestUuid), parts)).map {
+                    responses =>
+                        assert(responses.size == 4, s"got $responses")
+                        assert(responses(1).data == Present(ListData(List(Item("a"), Item("b")))))
+                        assert(responses(2).data == Present(ListData(List(Item("a"), Item("b"), Item("c"), Item("d")))))
+                        assert(responses(3).data == responses(2).data)
+                        assert(responses(3).complete == true)
+                }
+            }
+
+            "a pending entry announced by a later part is placed too" in {
+                val parts = Stream.init(
+                    Seq(
+                        part("""{"data":{},"pending":[{"id":"0","path":[]}],"hasNext":true}"""),
+                        part(
+                            """{"incremental":[{"id":"0","data":{"country":{"code":"DE"}}}],"pending":[{"id":"1","path":["country"]}],"completed":[{"id":"0"}],"hasNext":true}"""
+                        ),
+                        part("""{"incremental":[{"id":"1","data":{"capital":"Berlin"}}],"completed":[{"id":"1"}],"hasNext":false}""")
+                    )
+                )
+                StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q(), TestIds.requestUuid), parts)).map { responses =>
+                    assert(responses.size == 3, s"got $responses")
+                    assert(responses(2).data == Present(Data(Some(Loc("DE", Some("Berlin"))))))
+                }
+            }
+
+            "the errors of a completed entry surface" in {
+                val parts = Stream.init(
+                    Seq(
+                        part("""{"data":{"country":{"code":"DE"}},"pending":[{"id":"0","path":["country"]}],"hasNext":true}"""),
+                        part("""{"completed":[{"id":"0","errors":[{"message":"boom"}]}],"hasNext":false}""")
+                    )
+                )
+                StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q(), TestIds.requestUuid), parts)).map { responses =>
+                    assert(responses.size == 2, s"got $responses")
+                    assert(responses(1).errors.exists(_.message == "boom"), s"${responses(1).errors}")
+                    assert(responses(1).complete == true)
+                }
+            }
+
+            "an id no pending entry announced is a parse failure" in {
+                val parts = Stream.init(
+                    Seq(
+                        part("""{"data":{"country":{"code":"DE"}},"pending":[{"id":"0","path":["country"]}],"hasNext":true}"""),
+                        part("""{"incremental":[{"id":"7","data":{"capital":"Berlin"}}],"hasNext":false}""")
+                    )
+                )
+                StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q(), TestIds.requestUuid), parts)).map { responses =>
+                    assert(responses.size == 2, s"got $responses")
+                    assert(isParseFailure(responses.last))
+                    assert(responses.last.error.exists(_.message.contains("7")), s"${responses.last.error}")
+                }
+            }
+
+            "a completed id no pending entry announced is a parse failure" in {
+                val parts = Stream.init(
+                    Seq(
+                        part("""{"data":{"country":{"code":"DE"}},"pending":[{"id":"0","path":["country"]}],"hasNext":true}"""),
+                        part("""{"completed":[{"id":"3"}],"hasNext":false}""")
+                    )
+                )
+                StreamProbe.collect(IncrementalAssembler.stream(ApolloRequest(Q(), TestIds.requestUuid), parts)).map { responses =>
+                    assert(responses.size == 2, s"got $responses")
+                    assert(isParseFailure(responses.last))
+                }
+            }
+        }
     }
 end IncrementalAssemblerSpec

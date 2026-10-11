@@ -32,6 +32,17 @@ object JsonPath:
         case Json.JStr(name) => Present(name)
         case other           => Json.integral(other).filter(i => i >= 0 && i.isValidInt).map(_.toInt)
 
+    /** The value at `path` in `target`; `Absent` when a segment does not fit the tree. */
+    def get(target: Json, path: Chunk[String | Int]): Maybe[Json] =
+        path.foldLeft(Maybe(target)) { (at, segment) =>
+            at.flatMap { json =>
+                (json, segment) match
+                    case (Json.JObj(fields), field: String)                   => Maybe.fromOption(fields.get(field))
+                    case (Json.JArr(items), index: Int) if index < items.size => Present(items(index))
+                    case _                                                    => Absent
+            }
+        }
+
     /** Splice `patch` into `target` at `path`. An empty path merges at the root. A
       * field segment into a non-object, or an index segment outside the list (or into
       * a non-list), is `Absent`.
