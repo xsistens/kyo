@@ -268,26 +268,6 @@ final private[kyo] class DomReactiveRegions private (
         }
     end adoptLive
 
-    /** The first element inside the range that owns `path`, `Absent` when no range owns it or the range has no
-      * element in it. A range is delimited by comments, so a region path addresses no element of its own; a
-      * path-addressed command or measure resolves through here when the path carries no element. The client
-      * twin is `__kyoResolveEl` in `HtmlRenderer.clientJs`; keep the two in lockstep.
-      */
-    private[kyo] def firstElementAt(path: Seq[String]): Maybe[dom.Element] =
-        var found = Maybe.empty[dom.Element]
-        // Nested ranges that share the path hold the same content, so the outermost answers for all of them.
-        ranges.atPath(path, innermost = false).foreach { endpoints =>
-            var current = DomReactiveRegions.next(endpoints.start)
-            while found.isEmpty && current.nonEmpty && (current.get ne endpoints.end) do
-                current.get match
-                    case element: dom.Element => found = Present(element)
-                    case _                    => ()
-                current = DomReactiveRegions.next(current.get)
-            end while
-        }
-        found
-    end firstElementAt
-
     /** Write `value` as the whole content of the range that owns `path`; `false` when no range owns it.
       *
       * A text node holds literal characters, so the string is written as-is: no escaping, no parser, and no
@@ -298,7 +278,7 @@ final private[kyo] class DomReactiveRegions private (
     private[kyo] def setTextAt(path: Seq[String], value: String): Boolean =
         // The innermost range of the path: only a leaf region binds its text, and writing through an outer range
         // would take the inner one's markers for content and delete them.
-        ranges.atPath(path, innermost = true) match
+        ranges.innermostAt(path) match
             case Absent             => false
             case Present(endpoints) =>
                 val first = DomReactiveRegions.next(endpoints.start)
@@ -575,8 +555,8 @@ private[kyo] object DomReactiveRegions:
             byId.clear()
             byBase.clear()
 
-        /** The range that owns `path`: the most deeply nested one when `innermost`, the outermost otherwise. */
-        def atPath(path: Seq[String], innermost: Boolean): Maybe[Endpoints] =
+        /** The most deeply nested range that owns `path`. */
+        def innermostAt(path: Seq[String]): Maybe[Endpoints] =
             byBase.get(ReactiveRegion.htmlId(path)) match
                 case None      => Absent
                 case Some(ids) =>
@@ -586,11 +566,11 @@ private[kyo] object DomReactiveRegions:
                         // Depth suffixes are fixed-width hex, and the bare id is a prefix of every suffixed one,
                         // so string order IS depth order.
                         val id = ids(i)
-                        if (id > best) == innermost then best = id
+                        if id > best then best = id
                         i += 1
                     end while
                     Present(byId(best))
-        end atPath
+        end innermostAt
     end RangeTable
 
     private object RangeTable:

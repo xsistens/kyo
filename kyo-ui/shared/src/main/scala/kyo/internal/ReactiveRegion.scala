@@ -193,46 +193,6 @@ private[kyo] object ReactiveRegion:
         out.toString
     end htmlId
 
-    /** The path an [[htmlId]] encodes, `Absent` for anything that is not a well-formed id. The nesting suffix
-      * is ignored: a transparent nesting level does not change the path.
-      */
-    private[kyo] def pathOf(id: String): Maybe[Seq[String]] =
-        if !isValidHtmlId(id) then Absent
-        else
-            val pathEnd  = nestingStart(id)
-            val segments = Chunk.newBuilder[String]
-            var i        = 1
-            while i < pathEnd do
-                // `i` is at the dot that opens a segment.
-                val start = i + 1
-                var end   = start
-                var plain = true
-                while end < pathEnd && id.charAt(end) != '.' do
-                    if id.charAt(end) == '$' then plain = false
-                    end += 1
-                end while
-                if plain then segments.addOne(id.substring(start, end))
-                else
-                    val segment = new StringBuilder(end - start)
-                    var j       = start
-                    while j < end do
-                        val c = id.charAt(j)
-                        if c == '$' then
-                            discard(segment.append(Integer.parseInt(id.substring(j + 1, j + 5), 16).toChar))
-                            j += 5
-                        else
-                            discard(segment.append(c))
-                            j += 1
-                        end if
-                    end while
-                    segments.addOne(segment.toString)
-                end if
-                i = end
-            end while
-            Present(segments.result())
-        end if
-    end pathOf
-
     private[kyo] def isValidHtmlId(id: String): Boolean =
         if id.isEmpty || id.charAt(0) != 'r' then false
         else
@@ -277,10 +237,6 @@ private[kyo] object ReactiveRegion:
             valid
         end if
     end isValidHtmlId
-
-    private def nestingStart(id: String): Int =
-        val at = id.indexOf('~')
-        if at < 0 then id.length else at
 
     private def isVerbatim(c: Char): Boolean =
         (c >= '0' && c <= '9') ||

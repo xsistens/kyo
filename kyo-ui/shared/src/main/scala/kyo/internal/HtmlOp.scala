@@ -40,10 +40,8 @@ private[kyo] object HtmlOp:
     case class DevtoolsStats(payload: String) extends HtmlOp derives Schema
     case class ScrollIntoView(id: String)     extends HtmlOp derives Schema
 
-    // Contracts for these imperative ops live on UI.Commands (requestMeasure / command / *ById).
-    case class RequestMeasure(path: Seq[String])        extends HtmlOp derives Schema
-    case class Command(path: Seq[String], verb: String) extends HtmlOp derives Schema
-    // Id-addressed twins: the client resolves the target by getElementById(id) instead of the data-kyo-path querySelector.
+    // Contracts for these imperative ops live on UI.Commands (commandById / requestMeasureById); the client resolves the
+    // target by getElementById(id).
     case class CommandById(id: String, verb: String) extends HtmlOp derives Schema
     case class RequestMeasureById(id: String)        extends HtmlOp derives Schema
 

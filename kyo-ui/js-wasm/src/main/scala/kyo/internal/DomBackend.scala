@@ -758,7 +758,7 @@ private[kyo] object DomBackend:
             // Portal adopt for the initial paint: a portal element present at load re-homes immediately.
             _        <- Sync.defer(portalSweep(container))
             _        <- Sync.defer(beginAnimationsSync(container))
-            commands <- UI.Commands.init(op => applyOpLocal(op, regions, () => sessionCommands))
+            commands <- UI.Commands.init(op => applyOpLocal(op, () => sessionCommands))
             _ = sessionCommands = commands
             // Installed so component handlers and mounted effects reach `UI.commands`: the region fibers subscribe
             // forks and the event drain all start inside it.
@@ -856,7 +856,7 @@ private[kyo] object DomBackend:
 
     final private case class RangeFocus(path: Maybe[String], rootIndex: Int, childIndexes: Seq[Int])
 
-    // ---- local op application for the SPA transport (Command / RequestMeasure) ----
+    // ---- local op application for the SPA transport (CommandById / RequestMeasureById) ----
 
     /** `[data-kyo-path="..."]` for a dot-joined render path, with the two characters a quoted CSS attribute
       * selector cannot carry raw escaped. Twin of `__kyoPathSel` in `HtmlRenderer.clientJs`.
@@ -867,15 +867,6 @@ private[kyo] object DomBackend:
 
     private def queryByPath(path: Seq[String]): dom.Element =
         document.querySelector(pathSelector(path.mkString(".")))
-
-    /** Resolve a path-addressed command/measure target: the element carrying the path, else (a region
-      * path: a comment-delimited range has no element of its own) the range's first element, else null.
-      */
-    private def resolveElementByPath(regions: DomReactiveRegions, path: Seq[String]): dom.Element =
-        val el = queryByPath(path)
-        if el != null then el
-        else regions.firstElementAt(path).getOrElse(null)
-    end resolveElementByPath
 
     /** A conservative "focusable" CSS selector: what a focus command may land on. Mirrors
       * the reactive-focus-restore query used elsewhere in this backend / HtmlRenderer.
@@ -896,7 +887,7 @@ private[kyo] object DomBackend:
                 val tdyn = target.asInstanceOf[scalajs.js.Dynamic]
                 if scalajs.js.typeOf(tdyn.focus) == "function" then discard(tdyn.focus())
 
-    /** Apply a whitelisted `verb` to `el` (shared by path- and id-addressed commands). Unknown verbs are ignored. */
+    /** Apply a whitelisted `verb` to `el`. Unknown verbs are ignored. */
     private def applyVerbDom(el: dom.Element, verb: String): Unit =
         if el != null then
             val dyn = el.asInstanceOf[scalajs.js.Dynamic]
@@ -910,10 +901,7 @@ private[kyo] object DomBackend:
         end if
     end applyVerbDom
 
-    private def applyCommandDom(regions: DomReactiveRegions, path: Seq[String], verb: String): Unit =
-        applyVerbDom(resolveElementByPath(regions, path), verb)
-
-    /** Self-addressing: resolve the command target by DOM id (getElementById) instead of the render path. */
+    /** Resolve the command target by DOM id (getElementById). */
     private def applyCommandDomById(id: String, verb: String): Unit =
         applyVerbDom(document.getElementById(id), verb)
 
@@ -923,26 +911,17 @@ private[kyo] object DomBackend:
             val r = el.getBoundingClientRect()
             Present(UI.Rect(r.left, r.top, r.width, r.height, dom.window.innerWidth, dom.window.innerHeight))
 
-    private def measureDom(regions: DomReactiveRegions, path: Seq[String]): Maybe[UI.Rect] =
-        measureRect(resolveElementByPath(regions, path))
-
-    /** Self-addressing: measure the element with DOM id `id` (getElementById). */
+    /** Measure the element with DOM id `id` (getElementById). */
     private def measureDomById(id: String): Maybe[UI.Rect] =
         measureRect(document.getElementById(id))
 
-    private def applyOpLocal(op: HtmlOp, regions: DomReactiveRegions, commands: () => UI.Commands)(using Frame): Unit < Async =
+    private def applyOpLocal(op: HtmlOp, commands: () => UI.Commands)(using Frame): Unit < Async =
         op match
-            case HtmlOp.Command(path, verb)  => Sync.defer(applyCommandDom(regions, path, verb))
-            case HtmlOp.RequestMeasure(path) =>
-                Sync.defer(measureDom(regions, path)).map {
-                    case Present(rect) => commands().deliverMeasure(path, rect)
-                    case Absent        => Kyo.unit
-                }
             case HtmlOp.CommandById(id, verb)  => Sync.defer(applyCommandDomById(id, verb))
             case HtmlOp.RequestMeasureById(id) =>
                 Sync.defer(measureDomById(id)).map {
                     case Present(rect) => commands().deliverMeasureById(id, rect)
-                    case Absent        => Kyo.unit
+                    case Absent        => commands().deliverMeasureMissing(id)
                 }
             case HtmlOp.SetClassById(id, className, on) =>
                 Sync.defer {

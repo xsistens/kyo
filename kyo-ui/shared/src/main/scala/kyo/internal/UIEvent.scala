@@ -66,18 +66,7 @@ private[kyo] enum UIEvent derives CanEqual, Schema:
     case PointerDown(path: Seq[String], pointer: UI.PointerEvent)
     case PointerMove(path: Seq[String], pointer: UI.PointerEvent)
     case PointerUp(path: Seq[String], pointer: UI.PointerEvent)
-    // Client's reply to HtmlOp.RequestMeasure; the transport routes it to UI.Commands (resolving a pending
-    // requestMeasure), not the element handler tree.
-    case Measure(
-        path: Seq[String],
-        rectX: Double,
-        rectY: Double,
-        rectW: Double,
-        rectH: Double,
-        viewportW: Double,
-        viewportH: Double
-    )
-    // Self-addressing reply to HtmlOp.RequestMeasureById; routed by `id` to deliverMeasureById. `path` exists only to
+    // Reply to HtmlOp.RequestMeasureById; routed by `id` to deliverMeasureById. `path` exists only to
     // satisfy the enum's abstract member (never read; the client sends it empty).
     case MeasureById(
         path: Seq[String],
@@ -89,4 +78,6 @@ private[kyo] enum UIEvent derives CanEqual, Schema:
         viewportW: Double,
         viewportH: Double
     )
+    // Reply to HtmlOp.RequestMeasureById when no element carries the id; `path` as in MeasureById.
+    case MeasureMissing(path: Seq[String], id: String)
 end UIEvent

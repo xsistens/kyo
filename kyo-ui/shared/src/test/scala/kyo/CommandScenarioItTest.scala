@@ -11,8 +11,8 @@ class CommandScenarioItTest extends UITest:
         for focused <- Signal.initRef("none")
         yield UI.div(
             UI.input.id("target").tabIndex(0).onFocus(focused.set("target")),
-            UI.button("focus").id("btn").onClick(UI.commands.flatMap(_.focus(Seq("0")))),
-            UI.button("bogus").id("btn2").onClick(UI.commands.flatMap(_.command(Seq("0"), "totallyUnknownVerb"))),
+            UI.button("focus").id("btn").onClick(UI.commands.flatMap(_.focusId("target"))),
+            UI.button("bogus").id("btn2").onClick(UI.commands.flatMap(_.commandById("target", "totallyUnknownVerb"))),
             focused.map(v => UI.span(v).id("out"))
         )
 

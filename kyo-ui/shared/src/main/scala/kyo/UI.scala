@@ -554,8 +554,8 @@ object UI:
     def scrollIntoView(id: String)(using Frame): Unit < Async =
         UICommands.scrollIntoView(id)
 
-    /** An element geometry rectangle plus the current viewport size: the reply to a [[kyo.UI.Commands.requestMeasure]]
-      * . `x`/`y`/`width`/`height` are the element's `getBoundingClientRect` (viewport coordinates);
+    /** An element geometry rectangle plus the current viewport size: the reply to a [[kyo.UI.Commands.requestMeasureById]].
+      * `x`/`y`/`width`/`height` are the element's `getBoundingClientRect` (viewport coordinates);
       * `viewportWidth`/`viewportHeight` are `window.innerWidth`/`innerHeight`. All in CSS pixels.
       */
     final case class Rect(
@@ -571,24 +571,23 @@ object UI:
       *
       * The normal way a kyo-ui app changes the page is declarative: edit a [[kyo.Signal]], the reactive region re-renders.
       * `Commands` is the escape hatch for the two things a render diff cannot express: sending a whitelisted imperative DOM
-      * command to an element ([[command]]: `focus`, `scrollIntoView`) and asking the client for an element's live
-      * geometry ([[requestMeasure]]). Obtain it inside any event handler or `UI.mounted` effect via [[kyo.UI.commands]];
-      * the runner installs it per session.
+      * command to an element ([[commandById]]: `focus`, `scrollIntoView`) and asking the client for an element's live
+      * geometry ([[requestMeasureById]]). A component addresses its own elements by an id it mints with [[freshId]] and
+      * stamps with `.id(...)`. Obtain it inside any event handler or `UI.mounted` effect via [[kyo.UI.commands]]; the
+      * runner installs it per session.
       *
       * Both ride the same transport that carries render ops: the server emits an op, the client applies it (server-push:
-      * over the WebSocket; SPA: straight to the local DOM). A measure additionally flows back as an inbound `Measure` event
-      * the runner routes here, completing the `requestMeasure` reply, so the honest pattern is "await a measure, derive a
-      * Signal, re-render with correct geometry". Example: an overlay that flips above its anchor when it would overflow the
-      * viewport: on open, `requestMeasure` the panel and bind the returned `rect`, so that if `rect.y + rect.height >
-      * rect.viewportHeight`, it sets a `flip` Signal the panel reads and re-renders from.
+      * over the WebSocket; SPA: straight to the local DOM). A measure additionally flows back as an inbound reply the
+      * runner routes here, so the honest pattern is "await a measure, derive a Signal, re-render with correct geometry".
+      * Example: an overlay that flips above its anchor when it would overflow the viewport: on open, measure the panel and
+      * bind the returned `rect`, so that if `rect.y + rect.height > rect.viewportHeight`, it sets a `flip` Signal the panel
+      * reads and re-renders from.
       */
     final class Commands private[kyo] (
         private[kyo] val emit: internal.HtmlOp => Unit < Async,
-        // Pending one-shot measure round-trips, keyed by target. `requestMeasure` suspends on the Promise; the transport's
-        // `deliverMeasure` completes it with the reply Rect: the kyo-native request/reply shape where the effect RETURNS
-        // the value (monadic bind) instead of registering a callback.
-        private[kyo] val pending: AtomicRef[Map[Seq[String], Promise[Rect, Any]]],
-        private[kyo] val pendingById: AtomicRef[Map[String, Promise[Rect, Any]]],
+        // Pending one-shot measure round-trips, keyed by id. `requestMeasureById` suspends on the Promise; the transport
+        // completes it with the reply: the kyo-native request/reply shape where the effect RETURNS the value.
+        private[kyo] val pendingById: AtomicRef[Map[String, Promise[Maybe[Rect], Any]]],
         // PERSISTENT viewport-observer signals, keyed by id. Unlike `pendingById` (one-shot: the Promise is consumed on
         // the first MeasureById reply), an entry here is KEPT across replies: each reply pushes the new Rect into the
         // SignalRef so a scroll/resize stream keeps updating it. Removed only by observeViewportById's scope finalizer.
@@ -596,62 +595,17 @@ object UI:
         private[kyo] val observers: AtomicRef[Map[String, Signal.SignalRef[Maybe[Rect]]]],
         private[kyo] val idCounter: AtomicInt
     ):
-        // ---- imperative command ----
-
-        /** Send a whitelisted imperative `verb` to the element at `path`. v1 verbs: `"focus"`, `"scrollIntoView"`. Unknown
-          * verbs are silently ignored by the client (forward-compatible).
-          *
-          * The client finds the element by its `data-kyo-path`, which only an addressable element renders (a control,
-          * an element with a handler, a reactive binding or an `id`, a keyed row root, an SVG node), so a plain layout
-          * element is not reachable this way: give it an `id`, or use the id-addressed twins ([[commandById]],
-          * [[requestMeasureById]]).
-          */
-        def command(path: Seq[String], verb: String)(using Frame): Unit < Async =
-            emit(internal.HtmlOp.Command(path, verb))
-
-        /** `command(path, "focus")`: move DOM focus to the element at `path` (e.g. OTP auto-advance: focus the next cell). */
-        def focus(path: Seq[String])(using Frame): Unit < Async = command(path, "focus")
-
-        /** `command(path, "scrollIntoView")`: scroll the element at `path` into view (`{block:"nearest"}`), e.g. a
-          * terminal/carousel scrolling its newest line into view.
-          */
-        def scrollIntoView(path: Seq[String])(using Frame): Unit < Async = command(path, "scrollIntoView")
-
-        // ---- measure round-trip ----
-
-        /** Measure the element at `path` and RETURN its [[kyo.UI.Rect]] (element rect + viewport). Suspends until the client
-          * replies: emits the request op, then awaits the inbound `Measure` event the transport routes here. The kyo-native
-          * request/reply shape, so the result binds directly (`requestMeasure(path).map(rect => ...)`) with no callback. A
-          * second request for the same path before the first reply supersedes it (the earlier suspension is abandoned; last
-          * wins).
-          */
-        def requestMeasure(path: Seq[String])(using Frame): Rect < Async =
-            Promise.init[Rect, Any].map { p =>
-                pending.getAndUpdate(_.updated(path, p))
-                    .andThen(emit(internal.HtmlOp.RequestMeasure(path)))
-                    .andThen(p.get)
-            }
-
-        /** Transport hook: resolve the pending [[requestMeasure]] for `path` with `rect` (complete + drop its Promise). */
-        private[kyo] def deliverMeasure(path: Seq[String], rect: Rect)(using Frame): Unit < Async =
-            pending.getAndUpdate(_.removed(path)).map { m =>
-                m.get(path) match
-                    case Some(p) => p.completeDiscard(Result.succeed(rect))
-                    case None    => ()
-            }
-
         // ---- Self-addressing: id minting + id-addressed command/measure ----
 
         /** Mint a session-unique element id (`"kyo-uic-N"`, N monotonically increasing from 1). Deterministic within a
           * session and unique across the page (no clock/random). The self-addressing pattern: a reusable component mints
           * an id here, stamps it on one of its own elements (`.id(theId)`: id is a settable prop), and then drives
-          * [[focusId]] / [[scrollIntoViewId]] / [[requestMeasureById]] at that id, so it can self-focus/scroll/measure
-          * without ever learning its structural render path (which a component has no API to discover).
+          * [[focusId]] / [[scrollIntoViewId]] / [[requestMeasureById]] at that id.
           */
         def freshId(using Frame): String < Sync = idCounter.incrementAndGet.map(n => s"kyo-uic-$n")
 
-        /** Id-addressed twin of [[command]]: send a whitelisted `verb` to the element with DOM id `id` (resolved client-side
-          * via `document.getElementById`). Same verb whitelist as [[command]]; unknown verbs are ignored (forward-compat).
+        /** Send a whitelisted imperative `verb` (`"focus"`, `"scrollIntoView"`) to the element with DOM id `id` (resolved
+          * client-side via `document.getElementById`). Unknown verbs are ignored by the client (forward-compatible).
           */
         def commandById(id: String, verb: String)(using Frame): Unit < Async =
             emit(internal.HtmlOp.CommandById(id, verb))
@@ -662,13 +616,12 @@ object UI:
         /** `commandById(id, "scrollIntoView")`: scroll the element with id `id` into view (`{block:"nearest"}`). */
         def scrollIntoViewId(id: String)(using Frame): Unit < Async = commandById(id, "scrollIntoView")
 
-        /** Id-addressed twin of [[requestMeasure]]: measure the element with DOM id `id` and RETURN its [[kyo.UI.Rect]].
-          * Suspends until the reply (`UIEvent.MeasureById`) carrying the `id` is routed here, matched against a SEPARATE
-          * id-keyed pending map (kept side by side with the path-keyed [[pending]] map for clarity). A second request for the
+        /** Measure the element with DOM id `id` and RETURN its [[kyo.UI.Rect]] (element rect + viewport), `Absent` when no
+          * element on the page carries that id. Suspends until the client's reply is routed here. A second request for the
           * same id before the first reply supersedes it (last wins).
           */
-        def requestMeasureById(id: String)(using Frame): Rect < Async =
-            Promise.init[Rect, Any].map { p =>
+        def requestMeasureById(id: String)(using Frame): Maybe[Rect] < Async =
+            Promise.init[Maybe[Rect], Any].map { p =>
                 pendingById.getAndUpdate(_.updated(id, p))
                     .andThen(emit(internal.HtmlOp.RequestMeasureById(id)))
                     .andThen(p.get)
@@ -684,9 +637,9 @@ object UI:
           *
           * A repeated id is requested once and answered once, with every position in the result holding that same rect.
           */
-        def requestMeasureByIds(ids: Seq[String])(using Frame): Chunk[Rect] < Async =
+        def requestMeasureByIds(ids: Seq[String])(using Frame): Chunk[Maybe[Rect]] < Async =
             val wanted = ids.distinct
-            Kyo.foreach(wanted)(_ => Promise.init[Rect, Any]).map { promises =>
+            Kyo.foreach(wanted)(_ => Promise.init[Maybe[Rect], Any]).map { promises =>
                 pendingById.getAndUpdate(_ ++ wanted.zip(promises))
                     .andThen(Kyo.foreachDiscard(wanted)(id => emit(internal.HtmlOp.RequestMeasureById(id))))
                     .andThen(Kyo.foreach(promises)(_.get))
@@ -711,10 +664,18 @@ object UI:
                 observed.andThen(
                     pendingById.getAndUpdate(_.removed(id)).map { m =>
                         m.get(id) match
-                            case Some(p) => p.completeDiscard(Result.succeed(rect))
+                            case Some(p) => p.completeDiscard(Result.succeed(Present(rect)))
                             case None    => ()
                     }
                 )
+            }
+
+        /** Transport hook: no element carries `id`, so a pending [[requestMeasureById]] for it answers `Absent`. */
+        private[kyo] def deliverMeasureMissing(id: String)(using Frame): Unit < Sync =
+            pendingById.getAndUpdate(_.removed(id)).map { m =>
+                m.get(id) match
+                    case Some(p) => p.completeDiscard(Result.succeed(Absent))
+                    case None    => ()
             }
 
         // ---- in-place reactive attribute patching + viewport observation ----
@@ -769,11 +730,10 @@ object UI:
         /** Create a session channel over `emit` (the per-transport op sink: `ws.put` server-side, direct DOM apply in the SPA). */
         def init(emit: internal.HtmlOp => Unit < Async)(using Frame): Commands < Sync =
             for
-                pending     <- AtomicRef.init(Map.empty[Seq[String], Promise[Rect, Any]])
-                pendingById <- AtomicRef.init(Map.empty[String, Promise[Rect, Any]])
+                pendingById <- AtomicRef.init(Map.empty[String, Promise[Maybe[Rect], Any]])
                 observers   <- AtomicRef.init(Map.empty[String, Signal.SignalRef[Maybe[Rect]]])
                 idCounter   <- AtomicInt.init(0)
-            yield new Commands(emit, pending, pendingById, observers, idCounter)
+            yield new Commands(emit, pendingById, observers, idCounter)
     end Commands
 
     /** The session's [[kyo.UI.Commands]] channel (imperative commands + measure requests). Available inside any event handler
@@ -1396,7 +1356,7 @@ object UI:
               * `document.body`, leaving an inert placeholder (`data-kyo-portal-slot="<path>"`, hidden) at the logical
               * position. The element keeps its `data-kyo-path`, so it stays the document's only carrier of that path:
               * server-side dispatch (which bubbles over the logical tree), every path- and id-addressed op (`bind*`,
-              * `requestMeasure*`, `Command`) and focus restore keep working unchanged. On the next re-render of an
+              * `requestMeasureById`, `commandById`) and focus restore keep working unchanged. On the next re-render of an
               * enclosing region the morph matches the incoming element against the placeholder and reconciles the body
               * twin in place, so content updates flow and no inline duplicate is materialized. When the element
               * disappears from the server render, the placeholder is removed by the normal keyed reconciliation and the

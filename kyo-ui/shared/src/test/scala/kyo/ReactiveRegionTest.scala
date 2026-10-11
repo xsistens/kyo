@@ -11,7 +11,7 @@ class ReactiveRegionTest extends kyo.test.Test[Any]:
         assert(ReactiveRegion.htmlId(Seq.empty) == "r")
     }
 
-    "the path reads back out of the id, whatever the segments hold" in {
+    "every path gets its own valid id, whatever the segments hold" in {
         val paths = Seq(
             Seq.empty[String],
             Seq(""),
@@ -21,24 +21,22 @@ class ReactiveRegionTest extends kyo.test.Test[Any]:
             Seq("😀", " ", "--", "<!-->", "\u0000", "ÄÖÜ"),
             Seq("a-b", "user-42")
         )
+        assert(paths.map(ReactiveRegion.htmlId).distinct.size == paths.size)
         paths.foreach { path =>
             val id = ReactiveRegion.htmlId(path)
             assert(ReactiveRegion.isValidHtmlId(id), id)
-            assert(ReactiveRegion.pathOf(id) == Present(path), id)
             assert(!id.exists(c => c == ' ' || c == '>' || c == '<' || c == '"' || c == '\''), id)
             assert(!id.contains("--"), id)
         }
         val nested = ReactiveRegion.RegionIdentity.root(Seq("a.b", "2")).transparent.transparent
         assert(ReactiveRegion.htmlId(nested) == "r.a$002eb.2~2")
-        assert(ReactiveRegion.pathOf(ReactiveRegion.htmlId(nested)) == Present(Seq("a.b", "2")))
         assert(ReactiveRegion.baseIdOf(ReactiveRegion.htmlId(nested)) == "r.a$002eb.2")
     }
 
-    "code units on both sides of 256 escape alike and decode back" in {
+    "code units on both sides of 256 escape alike" in {
         val path = Seq("a" * 300, "\u00ff\u0100\uffff")
         val id   = ReactiveRegion.htmlId(path)
         assert(id == "r." + "a" * 300 + ".$00ff$0100$ffff")
-        assert(ReactiveRegion.pathOf(id) == Present(path))
     }
 
     "path segment boundaries remain distinct" in {

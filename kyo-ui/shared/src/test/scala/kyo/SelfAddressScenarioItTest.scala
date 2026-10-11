@@ -22,26 +22,31 @@ class SelfAddressScenarioItTest extends UITest:
                     focused <- Signal.initRef("none")
                     info    <- Signal.initRef("pending")
                     batch   <- Signal.initRef("pending")
+                    missing <- Signal.initRef("pending")
                 yield UI.div(
                     UI.input.id(inputId).tabIndex(0).onFocus(focused.set("target")),
                     UI.div.id(boxId).style(Style.width(120.px) ++ Style.height(40.px))("content"),
                     UI.div.id(tallId).style(Style.width(60.px) ++ Style.height(90.px))("tall"),
                     UI.button("focus").id("btn-focus").onClick(cmds.focusId(inputId)),
                     UI.button("measure").id("btn-measure").onClick(
-                        cmds.requestMeasureById(boxId).map(r =>
+                        cmds.requestMeasureById(boxId).map(_.fold(info.set("absent"))(r =>
                             info.set(f"${r.width}%.0f x ${r.height}%.0f vp ${r.viewportWidth > 0 && r.viewportHeight > 0}")
-                        )
+                        ))
                     ),
                     UI.button("measure all").id("btn-batch").onClick(
                         // The same id twice: one request, one reply, and both positions hold it.
                         cmds.requestMeasureByIds(Seq(boxId, tallId, boxId)).map(rs =>
-                            batch.set(rs.map(r => f"${r.width}%.0fx${r.height}%.0f").mkString(" "))
+                            batch.set(rs.map(_.fold("absent")(r => f"${r.width}%.0fx${r.height}%.0f")).mkString(" "))
                         )
+                    ),
+                    UI.button("measure missing").id("btn-missing").onClick(
+                        cmds.requestMeasureById("no-such-element").map(r => missing.set(if r.isEmpty then "absent" else "present"))
                     ),
                     UI.span(if inputId != boxId then "distinct" else "same").id("distinct"),
                     focused.map(v => UI.span(v).id("out")),
                     info.map(v => UI.span(v).id("minfo")),
-                    batch.map(v => UI.span(v).id("binfo"))
+                    batch.map(v => UI.span(v).id("binfo")),
+                    missing.map(v => UI.span(v).id("missing"))
                 )
             ).placeholder(UI.span("loading...").id("ph"))
         ))
@@ -69,6 +74,18 @@ class SelfAddressScenarioItTest extends UITest:
             for
                 _ <- Browser.click(Selector.id("btn-batch"))
                 _ <- Browser.assertText(Selector.id("binfo"), "120x40 60x90 120x40")
+            yield ()
+        }
+    }
+
+    "a measure of an id no element carries answers Absent, and the session keeps handling events" in {
+        withUI(app) {
+            for
+                _ <- Browser.click(Selector.id("btn-missing"))
+                _ <- Browser.assertText(Selector.id("missing"), "absent")
+                // Handlers run on one drain per session: a reply that never came would leave this click unhandled.
+                _ <- Browser.click(Selector.id("btn-focus"))
+                _ <- Browser.assertText(Selector.id("out"), "target")
             yield ()
         }
     }

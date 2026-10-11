@@ -38,8 +38,29 @@ class UICommandsTest extends UITest:
         yield
             val (both, rects, seen) = result
             assert(both, "the element is in both maps when the reply arrives, which is the case at issue")
-            assert(rects == Chunk(rect), "the one-shot request is answered")
+            assert(rects == Chunk(Present(rect)), "the one-shot request is answered")
             assert(seen == Present(rect), "and the observation carries the same measurement")
+    }
+
+    "a measure of an id no element carries answers Absent, and a batch keeps the positions it could measure" in {
+        for
+            asked <- Promise.init[Unit, Any]
+            cmds  <- UI.Commands.init {
+                case HtmlOp.RequestMeasureById("gone") => asked.completeUnitDiscard
+                case _                                 => ()
+            }
+            single <- Fiber.init(cmds.requestMeasureById("gone"))
+            _      <- asked.get
+            _      <- cmds.deliverMeasureMissing("gone")
+            alone  <- single.get
+            batch  <- Fiber.init(cmds.requestMeasureByIds(Seq("box", "gone")))
+            _      <- assertEventually(cmds.pendingById.get.map(_.size == 2))
+            _      <- cmds.deliverMeasureById("box", rect)
+            _      <- cmds.deliverMeasureMissing("gone")
+            both   <- batch.get
+        yield
+            assert(alone == Absent)
+            assert(both == Chunk(Present(rect), Absent))
     }
 
 end UICommandsTest

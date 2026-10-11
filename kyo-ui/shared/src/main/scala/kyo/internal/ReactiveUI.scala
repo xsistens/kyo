@@ -1582,10 +1582,10 @@ private[kyo] object ReactiveUI:
                 case event: DragProtocol.ValidatedEvent.PointerUp      => safeDispatch(handle, path, event.wire)
                 case event: DragProtocol.ValidatedEvent.Hover          => safeDispatch(handle, path, event.wire)
                 case event: DragProtocol.ValidatedEvent.Unhover        => safeDispatch(handle, path, event.wire)
-                // A measure reply is the client's answer to a `requestMeasure`, not an element event: the session
+                // A measure reply is the client's answer to a `requestMeasureById`, not an element event: the session
                 // completes the pending reply on UI.Commands before dispatch, so one never reaches the handler
                 // tree. Bubbling is the right answer for an event no element declared.
-                case _: DragProtocol.ValidatedEvent.Measure | _: DragProtocol.ValidatedEvent.MeasureById => true
+                case _: DragProtocol.ValidatedEvent.MeasureById | _: DragProtocol.ValidatedEvent.MeasureMissing => true
                 case _: DragProtocol.ValidatedEvent.Start | _: DragProtocol.ValidatedEvent.End |
                     _: DragProtocol.ValidatedEvent.Enter | _: DragProtocol.ValidatedEvent.Leave |
                     _: DragProtocol.ValidatedEvent.Over | _: DragProtocol.ValidatedEvent.Drop |
@@ -1694,7 +1694,7 @@ private[kyo] object ReactiveUI:
                     case _ => true
                 }
             // Never reaches here: the session completes a measure reply on UI.Commands before dispatch.
-            case _: DragProtocol.ValidatedEvent.Measure | _: DragProtocol.ValidatedEvent.MeasureById => true
+            case _: DragProtocol.ValidatedEvent.MeasureById | _: DragProtocol.ValidatedEvent.MeasureMissing => true
             case _: DragProtocol.ValidatedEvent.Click | _: DragProtocol.ValidatedEvent.ClickSelf |
                 _: DragProtocol.ValidatedEvent.ContextMenu |
                 _: DragProtocol.ValidatedEvent.Input | _: DragProtocol.ValidatedEvent.Change |

@@ -449,17 +449,6 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
         }
     }
 
-    "the first element of a path resolves through either nesting level" in {
-        val inner = One + "~1"
-        val root  = host(s"<!--kyo-rs:$One--><!--kyo-rs:$inner-->t<b id='hit'></b><!--kyo-re:$inner--><!--kyo-re:$One-->")
-        Scope.run {
-            DomReactiveRegions.init(root).map { regions =>
-                assert(regions.firstElementAt(Seq("1")).map(_.id) == Present("hit"))
-                assert(regions.firstElementAt(Seq("2")).isEmpty)
-            }
-        }
-    }
-
     "path lookups follow the registry through a replacement" in {
         val root = host(
             s"<!--kyo-rs:$Outer--><div><!--kyo-rs:$Old-->old<!--kyo-re:$Old--></div><!--kyo-re:$Outer-->"
@@ -485,24 +474,6 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
             assert(!regions.setTextAt(Seq("1"), "late"))
             assert(root.textContent == "x")
         end for
-    }
-
-    "the client encodes a path to the id the server encodes it to" in {
-        // `__kyoResolveEl` reads the client registry by the id `__kyoRangeIdOf` builds, so the two encoders agreeing
-        // is what that lookup rests on.
-        val js     = kyo.internal.HtmlRenderer.clientJs("/")
-        val from   = js.indexOf("function __kyoRangeIdOf(p){")
-        val until  = js.indexOf("function __kyoFirstElIn", from)
-        val encode = scala.scalajs.js.eval(s"(${js.substring(from, until)})").asInstanceOf[scala.scalajs.js.Function1[String, String]]
-        val paths  = Seq(
-            Seq.empty[String],
-            Seq("0"),
-            Seq("2", "0", "17", "1"),
-            Seq("row-42", "k"),
-            Seq("ü", "\u4e2d", "a b")
-        )
-        assert(from >= 0 && until > from)
-        assert(paths.forall(path => encode(path.mkString(".")) == idOf(path*)))
     }
 
     "the path index shrinks with the ranges it indexes" in {

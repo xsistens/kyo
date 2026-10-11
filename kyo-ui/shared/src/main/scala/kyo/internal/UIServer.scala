@@ -361,21 +361,17 @@ private[kyo] object UIServer:
     ): Unit < Async =
         def dispatch(event: UIEvent): Unit < Async =
             DragProtocol.validateEventAndDomain(event, DragProtocol.Limits.default) match
-                // Measure replies are not element events: they complete the pending `requestMeasure` on the
+                // Measure replies are not element events: they complete the pending `requestMeasureById` on the
                 // session's UI.Commands rather than entering the ReactiveUI handler tree. They stay INLINE on
                 // the reader: they only complete a Promise, never suspend, and are what unparks a handler
                 // waiting on the drain below.
-                case Result.Success(DragProtocol.ValidatedEvent.Measure(m)) =>
-                    commands.deliverMeasure(
-                        m.path,
-                        UI.Rect(m.rectX, m.rectY, m.rectW, m.rectH, m.viewportW, m.viewportH)
-                    )
-                // Self-addressing: the id-addressed measure reply routes by `id` to the id-keyed pending map.
                 case Result.Success(DragProtocol.ValidatedEvent.MeasureById(m)) =>
                     commands.deliverMeasureById(
                         m.id,
                         UI.Rect(m.rectX, m.rectY, m.rectW, m.rectH, m.viewportW, m.viewportH)
                     )
+                case Result.Success(DragProtocol.ValidatedEvent.MeasureMissing(m)) =>
+                    commands.deliverMeasureMissing(m.id)
                 // Drop and sort dispatch forks: their handlers may await lazy file reads served by later
                 // frames on this same socket loop, so running them inline would deadlock the session. The
                 // client models concurrent decisions (AwaitingDecisionAfterEnd), and session close unblocks
@@ -383,7 +379,7 @@ private[kyo] object UIServer:
                 case Result.Success(validated: (DragProtocol.ValidatedEvent.Drop | DragProtocol.ValidatedEvent.SortMove)) =>
                     Fiber.initUnscoped(handle(event.path, validated).unit).unit
                 // Every other element event goes to the session's single-consumer drain, not inline on this
-                // loop: a handler that SUSPENDS, e.g. awaiting a value-returning `requestMeasure` whose reply
+                // loop: a handler that SUSPENDS, e.g. awaiting a value-returning `requestMeasureById` whose reply
                 // arrives as a LATER inbound frame, must not block this loop from reading that reply. Handing
                 // them to ONE consumer instead of forking a fiber each is what keeps their arrival order,
                 // which a blur followed by the focus that replaced it depends on. `offer` rather than `put`

@@ -150,8 +150,8 @@ private[kyo] object DragProtocol:
         final case class PointerDown private[DragProtocol] (wire: UIEvent.PointerDown)                  extends ValidatedEvent
         final case class PointerMove private[DragProtocol] (wire: UIEvent.PointerMove)                  extends ValidatedEvent
         final case class PointerUp private[DragProtocol] (wire: UIEvent.PointerUp)                      extends ValidatedEvent
-        final case class Measure private[DragProtocol] (wire: UIEvent.Measure)                          extends ValidatedEvent
         final case class MeasureById private[DragProtocol] (wire: UIEvent.MeasureById)                  extends ValidatedEvent
+        final case class MeasureMissing private[DragProtocol] (wire: UIEvent.MeasureMissing)            extends ValidatedEvent
     end ValidatedEvent
 
     /** Browser-bound drag source configuration with safe file byte quantities. */
@@ -642,15 +642,14 @@ private[kyo] object DragProtocol:
                         validatePointer(event.pointer, limits).map(_ => ValidatedEvent.PointerMove(event))
                     case event: UIEvent.PointerUp =>
                         validatePointer(event.pointer, limits).map(_ => ValidatedEvent.PointerUp(event))
-                    case event: UIEvent.Measure =>
-                        validateRect(event.rectX, event.rectY, event.rectW, event.rectH, event.viewportW, event.viewportH)
-                            .map(_ => ValidatedEvent.Measure(event))
                     case event: UIEvent.MeasureById =>
                         validateIdentifier(event.id, "id", limits)
                             .flatMap(_ =>
                                 validateRect(event.rectX, event.rectY, event.rectW, event.rectH, event.viewportW, event.viewportH)
                             )
                             .map(_ => ValidatedEvent.MeasureById(event))
+                    case event: UIEvent.MeasureMissing =>
+                        validateIdentifier(event.id, "id", limits).map(_ => ValidatedEvent.MeasureMissing(event))
                     case event: UIEvent.DragStart =>
                         validateStartAndDomain(event.event, limits).map(ValidatedEvent.Start(event, _))
                     case event: UIEvent.DragEnd   => validateEnd(event.event, limits).map(_ => ValidatedEvent.End(event))

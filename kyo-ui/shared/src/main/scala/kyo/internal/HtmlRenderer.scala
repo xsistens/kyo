@@ -2012,24 +2012,15 @@ private[kyo] object HtmlRenderer:
            |      var el=document.getElementById(op.ScrollIntoView.id);
            |      if(el)el.scrollIntoView({behavior:"smooth",block:"start"});
            |    });
-           |  }else if(op.Command){
-           |    kyoApplyVerb(__kyoResolveEl(op.Command.path.join(".")),op.Command.verb);
            |  }else if(op.CommandById){
            |    kyoApplyVerb(document.getElementById(op.CommandById.id),op.CommandById.verb);
-           |  }else if(op.RequestMeasure){
-           |    var rmp=op.RequestMeasure.path.join(".");
-           |    var rmel=__kyoResolveEl(rmp);
-           |    if(rmel){
-           |      var rmr=rmel.getBoundingClientRect();
-           |      post({Measure:{path:op.RequestMeasure.path,rectX:rmr.left,rectY:rmr.top,rectW:rmr.width,rectH:rmr.height,viewportW:window.innerWidth,viewportH:window.innerHeight}});
-           |    }
            |  }else if(op.RequestMeasureById){
            |    // MeasureById carries `id` back; `path` is vestigial for id-routing, sent empty.
            |    var rmiel=document.getElementById(op.RequestMeasureById.id);
            |    if(rmiel){
            |      var rmir=rmiel.getBoundingClientRect();
            |      post({MeasureById:{path:[],id:op.RequestMeasureById.id,rectX:rmir.left,rectY:rmir.top,rectW:rmir.width,rectH:rmir.height,viewportW:window.innerWidth,viewportH:window.innerHeight}});
-           |    }
+           |    }else post({MeasureMissing:{path:[],id:op.RequestMeasureById.id}});
            |  }else if(op.SetClassById){
            |    var scel=document.getElementById(op.SetClassById.id);if(scel){__kyoMark(scel,"class");scel.classList.toggle(op.SetClassById.className,op.SetClassById.on);}
            |  }else if(op.SetStyleById){
@@ -2066,7 +2057,7 @@ private[kyo] object HtmlRenderer:
            |    }
            |  }
            |};
-           |// Shared verb whitelist for Command/CommandById; unknown verbs ignored (forward-compat).
+           |// Verb whitelist for CommandById; unknown verbs ignored (forward-compat).
            |function kyoApplyVerb(el,verb){
            |  if(!el)return;
            |  if(verb==="focus"){var fs='input,textarea,select,button,a[href],[tabindex],[contenteditable]';var ft=(el.matches&&el.matches(fs))?el:(el.querySelector?el.querySelector(fs):null);if(ft&&typeof ft.focus==="function")ft.focus();}
@@ -2090,41 +2081,6 @@ private[kyo] object HtmlRenderer:
            |  return segs.join(".");
            |}
            |function __kyoPathSel(p){var bs=String.fromCharCode(92),q=String.fromCharCode(34);var s=String(p).split(bs).join(bs+bs).split(q).join(bs+q);return '[data-kyo-path='+q+s+q+']';}
-           |// The id a path encodes to at nesting depth zero (ReactiveRegion.htmlId), so the common lookup is one
-           |// table read instead of a decode of every id the registry holds.
-           |function __kyoRangeIdOf(p){
-           |  var segs=p===""?[]:String(p).split("."),id="r";
-           |  for(var i=0;i<segs.length;i++){
-           |    id+=".";var s=segs[i];
-           |    for(var k=0;k<s.length;k++){
-           |      var c=s.charAt(k);
-           |      if(/[0-9A-Za-z_]/.test(c))id+=c;
-           |      else{var h=s.charCodeAt(k).toString(16);while(h.length<4)h="0"+h;id+="$$"+h;}
-           |    }
-           |  }
-           |  return id;
-           |}
-           |function __kyoFirstElIn(pair){
-           |  var n=pair.start.nextSibling;
-           |  while(n&&n!==pair.end){if(n.nodeType===1)return n;n=n.nextSibling;}
-           |  return null;
-           |}
-           |// Path-addressed command/measure target: the element carrying the path, else the first element inside
-           |// the reactive range that owns the path (a range is delimited by comments, so it has no element of its own).
-           |function __kyoResolveEl(p){
-           |  var el=document.querySelector(__kyoPathSel(p));
-           |  if(el)return el;
-           |  if(!__kyoRanges)return null;
-           |  var direct=__kyoRanges.get(__kyoRangeIdOf(p));
-           |  if(direct)return __kyoFirstElIn(direct);
-           |  // Only a range nested transparently (depth suffix) or a segment that itself holds a dot gets here.
-           |  var found=null;
-           |  __kyoRanges.forEach(function(pair,id){
-           |    if(found||__kyoRangeIdPath(id)!==p)return;
-           |    found=__kyoFirstElIn(pair);
-           |  });
-           |  return found;
-           |}
            |""".stripMargin
 
     private[kyo] def clientJs(basePath: String): String =
