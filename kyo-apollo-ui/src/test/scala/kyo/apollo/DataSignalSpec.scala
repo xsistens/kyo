@@ -5,6 +5,8 @@ import kyo.*
 import kyo.apollo.cache.LogProbe
 import kyo.apollo.exception.ApolloException
 import kyo.apollo.exception.DefaultApolloException
+import kyo.internal.FailureFrame
+import kyo.internal.Failures
 
 /** Effectful tests for the suspense-shape [[dataSignal]]: first-settled seeding
   * (immediate and after a pending phase), first-failure abort, update following,
@@ -83,7 +85,9 @@ class DataSignalSpec extends kyo.test.Test[Any]:
             for
                 seen <- Promise.init[String, Any]
                 src  <- Signal.initRef[QueryState[Int]](QueryState.Success(1, fromCache = false))
-                res  <- UI.notices(ex => seen.completeDiscard(Result.succeed(messageOf(ex)))) {
+                res  <- Failures.within(FailureFrame.Boundary(UI.boundary.onNotice(ex =>
+                    seen.completeDiscard(Result.succeed(messageOf(ex)))
+                ))) {
                     for
                         sig      <- src.dataSignal(UpdateFailure.Notify)
                         _        <- src.set(QueryState.Failure(DefaultApolloException("update failure")))
