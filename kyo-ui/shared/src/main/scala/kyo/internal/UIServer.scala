@@ -11,25 +11,27 @@ private[kyo] object UIServer:
         val base = normalizePath(basePath)
         sessionServing.map { serve =>
             Seq(
-                getPage(base, basePath, Sync.defer(ui)),
+                getPage(base, basePath, serve.pageScript, Sync.defer(ui)),
                 HttpHandler.webSocket(s"$base/_kyo/ws")((_, ws) => serve(ws, Sync.defer(ui)))
             )
         }
     end handlers
 
-    /** Serves a session under the devtools sink in effect where this is called.
+    /** Serves a session under the devtools installation in effect where this is called.
       *
       * kyo-http runs a handler on a fiber of its own, which inherits nothing from whoever built the handlers, so a sink the
       * caller installed with [[kyo.UI.devtools]] would not reach the session's regions. The handlers read it here, at build
       * time, and put it back on every session they serve.
       */
     private[kyo] def sessionServing(using Frame): SessionServer < Sync =
-        Devtools.sink.use(new SessionServer(_))
+        Devtools.sink.use(sink => Devtools.server.use(hooks => new SessionServer(sink, hooks)))
 
-    /** Serves sessions under the devtools sink captured by [[sessionServing]]. */
-    final private[kyo] class SessionServer(devtoolsSink: Maybe[UI.RenderEvent => Unit]):
+    /** Serves sessions under the devtools installation captured by [[sessionServing]]. */
+    final private[kyo] class SessionServer(devtoolsSink: Maybe[UI.RenderEvent => Unit], hooks: Maybe[Devtools.ServerHooks]):
+        def pageScript: Maybe[String]                                                                = hooks.map(_.pageScript)
         def apply(ws: HttpWebSocket, ui: => UI < Async)(using Frame): Unit < (Async & Abort[Closed]) =
-            Devtools.sink.let(devtoolsSink)(serveSession(ws, ui))
+            Devtools.sink.let(devtoolsSink)(Devtools.server.let(hooks)(serveSession(ws, ui)))
+    end SessionServer
 
     /** The query parameter the client puts the page's path and query in when it opens the session socket. */
     val pageParam: String = "kyo-page"
@@ -77,7 +79,9 @@ private[kyo] object UIServer:
         UI.Request(path, query)
     end requestOf
 
-    private def getPage(base: String, pagePath: String, ui: => UI < Async)(using Frame): HttpHandler[?, ?, ?] =
+    private def getPage(base: String, pagePath: String, devtoolsScript: Maybe[String], ui: => UI < Async)(using
+        Frame
+    ): HttpHandler[?, ?, ?] =
         HttpRoute.getText(pagePath).handler { _ =>
             for
                 uiTree        <- ui
@@ -87,7 +91,7 @@ private[kyo] object UIServer:
                 // here in a real stylesheet instead, after the base reset (renderPage already orders
                 // baseCss before css).
                 css  = rules.map(_._2).mkString
-                page = HtmlRenderer.renderPage("kyo-ui", html, css, base)
+                page = HtmlRenderer.renderPage("kyo-ui", html, css, base, devtoolsScript)
             yield HttpResponse.ok(page)
                 .addHeader("Content-Type", "text/html; charset=utf-8")
         }
@@ -169,20 +173,20 @@ private[kyo] object UIServer:
             yield ()
         }
 
-    /** Ship devtools statistics over this session's socket until it closes; a no-op with no overlay
-      * registered.
+    /** Ship devtools statistics over this session's socket until it closes; a no-op unless the handlers serving it were
+      * built under a devtools installation.
       *
       * A poll rather than a push from the store: the store is written by every region fiber of every session
       * and reading it on a timer is what keeps those writes free of any knowledge that a devtool exists. A
       * frame lost to a closed socket is dropped, since the numbers describe a moment that has passed.
       */
     private def devtoolsPump(ws: HttpWebSocket)(using Frame): Unit < (Async & Scope) =
-        Devtools.statsProvider match
-            case Absent            => Kyo.unit
-            case Present(provider) =>
+        Devtools.server.use {
+            case Absent         => Kyo.unit
+            case Present(hooks) =>
                 Fiber.init(
                     Loop.forever {
-                        Sync.defer(provider())
+                        Sync.defer(hooks.stats())
                             .map(payload =>
                                 Abort.runPartial[Closed](
                                     ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](HtmlOp.DevtoolsStats(payload))))
@@ -191,6 +195,7 @@ private[kyo] object UIServer:
                             .andThen(Async.sleep(Devtools.statsInterval))
                     }
                 ).unit
+        }
     end devtoolsPump
 
     private def wsExchange(ws: HttpWebSocket, seenClasses: Set[String])(using Frame): UIExchange =

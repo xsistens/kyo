@@ -25,20 +25,19 @@ private[kyo] object Devtools:
       */
     val sink: Local[Maybe[UI.RenderEvent => Unit]] = Local.init(Maybe.empty[UI.RenderEvent => Unit])
 
-    /** The overlay script to inline into a server-rendered page, `Absent` for every build that does not depend
-      * on kyo-ui-devtools, which is every production build.
+    /** What a devtools installation adds to a server-push app beyond the sink: the overlay script to inline into the
+      * page, and the statistics payload each session ships to it.
       *
-      * Registered rather than imported: kyo-ui must not depend on the devtools artifact, or the overlay would
-      * be linked into every app that uses the framework and the separation would have bought nothing. Global
-      * because the page handler runs on a kyo-http fiber that inherits nothing from whoever installed the
-      * devtools.
+      * Handed in rather than imported: kyo-ui must not depend on the devtools artifact, or the overlay would be linked
+      * into every app that uses the framework and the separation would have bought nothing.
       */
-    @volatile private[kyo] var pageScript: Maybe[String] = Maybe.empty
+    final case class ServerHooks(pageScript: String, stats: () => String)
 
-    /** Produces the current statistics payload for a server-push session to send, `Absent` when devtools is
-      * off. One provider for the process; each session polls it on a fiber of its own.
+    /** The server hooks of the devtools installation in effect, `Absent` for every app without one. Like [[sink]], it is
+      * captured where the handlers are built (see [[UIServer.sessionServing]]), so two apps in one process never see each
+      * other's overlay.
       */
-    @volatile private[kyo] var statsProvider: Maybe[() => String] = Maybe.empty
+    val server: Local[Maybe[ServerHooks]] = Local.init(Maybe.empty[ServerHooks])
 
     /** How often a server-push session ships statistics. Matches the browser mount's push interval: below it
       * the badges visibly lag the page, above it nothing is gained and the frames are pure overhead.

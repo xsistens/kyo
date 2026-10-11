@@ -316,8 +316,8 @@ private[kyo] object HtmlRenderer:
       * time the socket opens. Nothing is emitted when no overlay is registered, which is every page in a build
       * that does not depend on kyo-ui-devtools.
       */
-    def renderPage(title: String, body: String, css: String, basePath: String): String =
-        val devtools = Devtools.pageScript match
+    def renderPage(title: String, body: String, css: String, basePath: String, devtoolsScript: Maybe[String] = Absent): String =
+        val devtools = devtoolsScript match
             case Present(script) => s"\n<script>$script</script>"
             case Absent          => ""
         s"""<!DOCTYPE html>
