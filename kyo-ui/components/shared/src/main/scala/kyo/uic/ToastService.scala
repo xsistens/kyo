@@ -30,16 +30,13 @@ final case class ToastMessage(
   * once constructed — it owns its queue and its id counter — so an instance in
   * hand works under every transport.
   *
-  * The resolution POINT is what matters. kyo-ui event handlers erase their
-  * effect and run on the event-drain fiber: in the browser transport a root
-  * `Env.runAll` reaches them as fiber context, but server-push dispatch runs on
-  * kyo-http session fibers WITHOUT it. An `Env.get[ToastService]` deferred INTO
-  * a handler therefore works locally and fails under server push — the worst
-  * shape a bug can take. `uic.Button.onClick` already refuses such a handler at
-  * compile time, because its parameter is `Any < Async` and an `Env` effect
-  * cannot ride along; a raw kyo element's `onClick[S]` accepts it through its
-  * `Isolate`, which is a kyo-ui capability this module does not get to revoke.
-  * `use` is the way not to need it.
+  * The resolution POINT is what matters. kyo-ui event handlers run on the
+  * event-drain fiber: in the browser transport a root `Env.runAll` would reach
+  * them as fiber context, but server-push dispatch runs on kyo-http session
+  * fibers WITHOUT it. So a handler cannot ask for the service: `uic.Button.onClick`
+  * and a raw kyo element's `onClick` both take `Any < Async`, and an
+  * `Env.get[ToastService]` inside one does not compile. `use` resolves it where
+  * the tree is built.
   *
   * `add` assigns a monotonically increasing id (a counter inside the service —
   * the render stays pure: no clock, no randomness) and, when `life` is set,

@@ -37,7 +37,7 @@ class TreeTableTest extends UicTest:
     "with metaKeySelection a plain click replaces and Ctrl or Cmd toggles" in {
         def clickWith(el: UI.Ast.Element, mods: UI.Modifiers)(using Frame): Any < Async =
             el.attrs.onClickEvt match
-                case Present(f) => f(UI.MouseEvent(el.attrs.identifier, mods))
+                case Present(f) => handled(f(UI.MouseEvent(el.attrs.identifier, mods)))
                 case Absent     => throw new AssertionError("the row declares no typed click handler")
         for
             sel <- Signal.initRef(Set.empty[String])

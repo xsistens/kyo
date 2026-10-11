@@ -25,10 +25,10 @@ class DevtoolsStoreTest extends kyo.test.Test[Any]:
         path: Seq[String] = Seq("0"),
         cause: UI.RenderCause = UI.RenderCause.Signal,
         wasted: Boolean = false,
-        durationNanos: Long = 0L,
+        duration: Duration = Duration.Zero,
         bytes: Int = 0
     )(using Frame): UI.RenderEvent =
-        UI.RenderEvent(path, Present("r0"), summon[Frame], UI.RenderKind.Repaint, cause, wasted, durationNanos, bytes)
+        UI.RenderEvent(path, Present("r0"), summon[Frame], UI.RenderKind.Repaint, cause, wasted, duration, bytes)
 
     private def channel(name: String, path: Seq[String] = Seq("0"))(using Frame): UI.RenderEvent =
         UI.RenderEvent(
@@ -38,7 +38,7 @@ class DevtoolsStoreTest extends kyo.test.Test[Any]:
             UI.RenderKind.Channel(name),
             UI.RenderCause.Signal,
             wasted = false,
-            durationNanos = 0L,
+            duration = Duration.Zero,
             bytes = 0
         )
 
@@ -50,7 +50,7 @@ class DevtoolsStoreTest extends kyo.test.Test[Any]:
             UI.RenderKind.ListPatch(changed, total),
             UI.RenderCause.Signal,
             wasted = changed == 0,
-            durationNanos = 0L,
+            duration = Duration.Zero,
             bytes = 0
         )
 
@@ -118,7 +118,7 @@ class DevtoolsStoreTest extends kyo.test.Test[Any]:
     "the duration percentile is the nearest rank over the window" in {
         val clock = new TestClock
         val s     = store(clock, DevtoolsConfig.default.copy(durationSamples = 100))
-        (1 to 100).foreach(n => s.record(repaint(durationNanos = n.toLong)))
+        (1 to 100).foreach(n => s.record(repaint(duration = n.nanos)))
         val region = s.snapshot().regions.head
         assert(region.p95Nanos == 95L, s"p95: ${region.p95Nanos}")
         assert(region.avgNanos == 50L, s"avg: ${region.avgNanos}")
@@ -129,7 +129,7 @@ class DevtoolsStoreTest extends kyo.test.Test[Any]:
         val s     = store(clock, DevtoolsConfig.default.copy(durationSamples = 4))
         // The first four are enormous and must be gone by the end; a window that kept them would make a
         // region that USED to be slow look slow forever, which is the opposite of a live tool.
-        Seq(1000L, 1000L, 1000L, 1000L, 10L, 20L, 30L, 40L).foreach(d => s.record(repaint(durationNanos = d)))
+        Seq(1000L, 1000L, 1000L, 1000L, 10L, 20L, 30L, 40L).foreach(d => s.record(repaint(duration = d.nanos)))
         assert(s.snapshot().regions.head.avgNanos == 25L, s"avg: ${s.snapshot().regions.head.avgNanos}")
     }
 

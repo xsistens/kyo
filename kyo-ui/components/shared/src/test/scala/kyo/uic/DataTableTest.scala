@@ -60,7 +60,7 @@ class DataTableTest extends UicTest:
                 case t: UI.Ast.TextInput if t.onInput.isDefined         => t.onInput.get
                 case t: UI.Ast.TextInput if refBound(t.value).isDefined => refBound(t.value).get.set
             }.getOrElse(throw new AssertionError("the open editor writes nothing as it is typed into"))
-        }.map(_(text))
+        }.map(f => handled(f(text)))
 
     private def refBound(v: Maybe[UI.Bound[String]]): Maybe[SignalRef[String]] =
         v match
@@ -301,7 +301,7 @@ class DataTableTest extends UicTest:
 
     private def type_(i: UI.Ast.TextInput, text: String)(using Frame): Any < Async =
         i.onInput match
-            case Present(f) => f(text)
+            case Present(f) => handled(f(text))
             case Absent     => throw new AssertionError("the input declares no handler")
 
     /** A table filtered by two columns, one text and one that compares. */
@@ -536,7 +536,7 @@ class DataTableTest extends UicTest:
 
     private def drag(handle: UI.Ast.Element, from: Double, to: Double)(using Frame): Any < Async =
         (handle.attrs.onPointerDown, handle.attrs.onPointerMove) match
-            case (Present(down), Present(move)) => down(pointerAt(from)).andThen(move(pointerAt(to)))
+            case (Present(down), Present(move)) => handled(down(pointerAt(from)).andThen(move(pointerAt(to))))
             case _                              => throw new AssertionError("the handle declares no drag")
 
     // The whole point of moving a boundary rather than sizing a column: the pair trades
@@ -851,9 +851,9 @@ class DataTableTest extends UicTest:
             down = cell.attrs.onPointerDown.getOrElse(throw new AssertionError("the header declares no grab"))
             move = cell.attrs.onPointerMove.getOrElse(throw new AssertionError("the header declares no drag"))
             up   = cell.attrs.onPointerUp.getOrElse(throw new AssertionError("the header declares no release"))
-            _ <- down(pointerAt(from))
-            _ <- move(pointerAt(to))
-            r <- up(pointerAt(to))
+            _ <- handled(down(pointerAt(from)))
+            _ <- handled(move(pointerAt(to)))
+            r <- handled(up(pointerAt(to)))
         yield r
 
     "dragging a header past another writes the new order" in {
@@ -1765,7 +1765,7 @@ class DataTableTest extends UicTest:
 
     private def clickWith(el: UI.Ast.Element, mods: UI.Modifiers)(using Frame): Any < Async =
         el.attrs.onClickEvt match
-            case Present(f) => f(UI.MouseEvent(el.attrs.identifier, mods))
+            case Present(f) => handled(f(UI.MouseEvent(el.attrs.identifier, mods)))
             case Absent     => throw new AssertionError("the row declares no typed click handler")
 
     "with metaKeySelection a plain click replaces the selection instead of adding to it" in {
@@ -2122,7 +2122,7 @@ class DataTableTest extends UicTest:
     private def dragRow(grip: UI.Ast.Element, from: Double, to: Double)(using Frame): Any < Async =
         (grip.attrs.onPointerDown, grip.attrs.onPointerMove, grip.attrs.onPointerUp) match
             case (Present(down), Present(move), Present(up)) =>
-                down(pointerAtY(from)).andThen(move(pointerAtY(to))).andThen(up(pointerAtY(to)))
+                handled(down(pointerAtY(from)).andThen(move(pointerAtY(to))).andThen(up(pointerAtY(to))))
             case _ => throw new AssertionError("the grip declares no drag")
 
     "a completed row drag writes the list and hands it over, indexed in the list" in {
@@ -2739,7 +2739,7 @@ class DataTableTest extends UicTest:
         // held against each other by their rendered form rather than by ==.
         (stateful(Present("t1")), stateful(Absent)) match
             case (n: Ast.Mounted, a: Ast.Mounted) =>
-                assert(n.key.map(_.toString).contains((uic.DataTable -> "t1").toString), "the id is the key")
+                assert(n.key.map(_.toString).contains("t1"), "the id is the key")
                 assert(a.key.isEmpty, "and no id means no key, as before")
             case other => fail(s"a stateful DataTable renders as a mount; got: $other")
         end match

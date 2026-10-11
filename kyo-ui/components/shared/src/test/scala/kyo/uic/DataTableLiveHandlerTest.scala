@@ -28,12 +28,12 @@ class DataTableLiveHandlerTest extends UicTest:
 
     private def shiftClick(row: UI.Ast.Element)(using Frame): Any < Async =
         row.attrs.onClickEvt match
-            case Present(f) => f(MouseEvent(row.attrs.identifier, Modifiers(shift = true)))
+            case Present(f) => handled(f(MouseEvent(row.attrs.identifier, Modifiers(shift = true))))
             case Absent     => throw new AssertionError("the row declares no typed click handler")
 
     private def plainClick(row: UI.Ast.Element)(using Frame): Any < Async =
         row.attrs.onClickEvt match
-            case Present(f) => f(MouseEvent(row.attrs.identifier, Modifiers.none))
+            case Present(f) => handled(f(MouseEvent(row.attrs.identifier, Modifiers.none)))
             case Absent     => throw new AssertionError("the row declares no typed click handler")
 
     "a range spans the list as it is now, not as it was painted" in {
