@@ -468,7 +468,7 @@ object UI:
       * `Commands` is the escape hatch for the two things a render diff cannot express: sending a whitelisted imperative DOM
       * command to an element ([[command]]: `focus`, `scrollIntoView`) and asking the client for an element's live
       * geometry ([[requestMeasure]]). Obtain it inside any event handler or `UI.mounted` effect via [[kyo.UI.commands]];
-      * the runner injects it per session as `Env[Commands]`.
+      * the runner installs it per session.
       *
       * Both ride the same transport that carries render ops: the server emits an op, the client applies it (server-push:
       * over the WebSocket; SPA: straight to the local DOM). A measure additionally flows back as an inbound `Measure` event
@@ -599,9 +599,14 @@ object UI:
     end Commands
 
     /** The session's [[kyo.UI.Commands]] channel (imperative commands + measure requests). Available inside any event handler
-      * or `UI.mounted` effect: the runner provides `Env[Commands]` per session.
+      * or `UI.mounted` effect, which the runner starts with the session's channel installed; called anywhere else it panics.
       */
-    def commands(using Frame): Commands < Env[Commands] = Env.get[Commands]
+    def commands(using Frame): Commands < Sync =
+        UICommands.commands.use {
+            case Present(commands) => commands
+            case Absent =>
+                Abort.panic(UIException("UI.commands is only available inside an event handler or a UI.mounted effect of a running UI"))
+        }
 
     /** Read-only stream of the full rendered HTML. Emits whenever any signal changes. First emission is the initial render. Useful for
       * testing, SSR, export, or custom transports.

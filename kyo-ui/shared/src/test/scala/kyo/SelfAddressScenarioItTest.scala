@@ -3,7 +3,7 @@ package kyo
 import kyo.Browser.*
 
 /** Self-addressing: a reusable component learns its own DOM identity without ever knowing its structural render path.
-  * It mounts (where `Env[Commands]` resolves at run time), mints session-unique ids via [[kyo.UI.Commands.freshId]],
+  * It mounts (where the runner has installed the session's commands), mints session-unique ids via [[kyo.UI.Commands.freshId]],
   * stamps them on its OWN elements (`.id(theId)`), and drives id-addressed commands at itself (focusId, requestMeasureById).
   *
   * Server-push transport in real Chrome. The focus target's `onFocus` writes a Signal (focus observable in page text);

@@ -104,12 +104,11 @@ private[kyo] object UIServer:
                 // Peer close (or any session end) fails every pending file read with Disconnected.
                 _ <- Scope.ensure(files.close())
                 // The session's imperative op channel; `emit` serializes an HtmlOp over the socket (a Closed mid-send
-                // drops the op). Env.run must wrap subscribe + dispatch so the forked region/mount fibers inherit
-                // Env[Commands] and resolve `UI.commands` at run time.
+                // drops the op). Installed around subscribe + dispatch, so the forked region and mount fibers inherit it.
                 commands <- UI.Commands.init(op =>
                     Abort.runPartial[Closed](ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](op)))).unit
                 )
-                _ <- Env.run(commands) {
+                _ <- UICommands.commands.let(Present(commands)) {
                     UICommands.scrollSink.let(Present(scrollSink)) {
                         DragCommands.resolveSink.let(Present(resolveSink)) {
                             DragFiles.local.let(Present(files)) {

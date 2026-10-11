@@ -449,9 +449,9 @@ private[kyo] object DomBackend:
             _        <- Sync.defer(beginAnimationsSync(container))
             commands <- UI.Commands.init(op => applyOpLocal(op, regions, () => sessionCommands))
             _ = sessionCommands = commands
-            // Env.run so component handlers and mounted effects resolve `UI.commands` at run time: the region
-            // fibers subscribe forks and the event drain all start inside this scope.
-            _ <- Env.run(commands) {
+            // Installed so component handlers and mounted effects reach `UI.commands`: the region fibers subscribe
+            // forks and the event drain all start inside it.
+            _ <- UICommands.commands.let(Present(commands)) {
                 for
                     exchange <- Kyo.lift(LocalExchange(regions, diagnostics))
                     dispatch <- ReactiveUI.subscribe(root, exchange)
