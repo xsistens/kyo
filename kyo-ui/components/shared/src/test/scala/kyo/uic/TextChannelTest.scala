@@ -12,8 +12,8 @@ import scala.language.implicitConversions
   * A `Signal[String]` label can be placed two ways, and both render the same markup. As a region
   * (`sig.render(t => span(t))`) every emission rebuilds the span: a fiber, a per-value Scope with its
   * finalizer queue, a re-walk and an HTML render, to arrive at one `Text.data` write. Placed as the
-  * span's CHILD the signal lifts to a `UI.Ast.Reactive` carrying the string signal in `text`, which is
-  * the one field `kyo.internal.ReactiveUI.bindTextRegion` keys on: it binds the signal straight to the
+  * span's CHILD the signal lifts to a `UI.Ast.Reactive` whose `source` is `Source.Lifted`, carrying the
+  * string signal, which is what `kyo.internal.ReactiveUI.bindTextRegion` keys on: it binds the signal straight to the
   * backend's text write and skips the region apparatus entirely.
   *
   * Because the two forms are indistinguishable in the rendered HTML, the golden suite cannot hold this
@@ -26,6 +26,12 @@ class TextChannelTest extends UicTest:
 
     private def renderHtml(ui: UI)(using Frame): String < Async =
         UI.runRender(ui).take(1).run.map(_.mkString)
+
+    /** The string signal a lifted node carries, `Absent` for any other reactive node. */
+    private def lifted(node: UI.Ast.Reactive[?]): Maybe[Signal[String]] =
+        node.source match
+            case Present(UI.Ast.Reactive.Source.Lifted(signal)) => Present(signal)
+            case _                                              => Absent
 
     /** The channel contract for one slot: the element carrying `cls` is built once and holds exactly one
       * reactive node, and that node carries a string signal.
@@ -41,7 +47,7 @@ class TextChannelTest extends UicTest:
             nodes <- reactiveNodes(el)
         yield
             assert(nodes.size == 1, s"$cls must hold exactly one reactive node, found ${nodes.size}")
-            assert(nodes.head.text.isDefined, s"$cls's reactive node must carry its string signal (text channel)")
+            assert(lifted(nodes.head).isDefined, s"$cls's reactive node must carry its string signal (text channel)")
         end for
     end assertChannel
 
@@ -59,7 +65,7 @@ class TextChannelTest extends UicTest:
             assert(label.children.size == 1, "the label span holds exactly the one reactive text node")
             // The region carries the caller's own signal, unmapped — that identity is what lets the
             // binder dedupe on the emitted string instead of on a fresh UI value per emission.
-            val carriesCallerSignal = nodes.head.text match
+            val carriesCallerSignal = lifted(nodes.head) match
                 case Present(s) => s eq ref
                 case Absent     => false
             assert(carriesCallerSignal, "the reactive node carries the caller's string signal itself")

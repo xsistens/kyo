@@ -49,8 +49,8 @@ final case class Button private (
     accessibleDescriptionV: Maybe[TextValue] = Absent,
     tooltipV: Maybe[TextValue] = Absent,
     formV: Maybe[String] = Absent,
-    onClickEff: Maybe[Any < (Abort[Throwable] & Async)] = Absent,
-    onKeyDownF: Maybe[KeyboardEvent => Any < (Abort[Throwable] & Async)] = Absent,
+    onClickEff: Maybe[Any < Async] = Absent,
+    onKeyDownF: Maybe[KeyboardEvent => Any < Async] = Absent,
     extraChildren: List[UI] = Nil,
     extraClassesV: List[String] = Nil,
     extraAriasV: List[(String, String)] = Nil,
@@ -83,7 +83,7 @@ final case class Button private (
     private[uic] def tabIndexRaw(v: Int): Button      = copy(tabIndexV = Present(v))
     private[uic] def focusSeedRaw(v: Boolean): Button = copy(focusSeedV = v)
 
-    private[uic] def onKeyDownRaw(f: KeyboardEvent => Any < (Abort[Throwable] & Async)): Button =
+    private[uic] def onKeyDownRaw(f: KeyboardEvent => Any < Async): Button =
         copy(onKeyDownF = Present(f))
 
     /** Semantic accent (`.p-button-<severity>`); `Primary` is the unsuffixed default. A
@@ -179,10 +179,10 @@ final case class Button private (
     def form(v: String): Button = copy(formV = Present(v))
 
     /** Runs `action` when the button is pressed. Mirrors kyo-ui's native event effect
-      * (`Abort[Throwable] & Async`), so a handler may fail with a domain error that
-      * bubbles to the enclosing mount's error policy; pure `Async` handlers still fit.
+      * (`Async`): a handler that can fail handles its own failure, the way a native
+      * `onClick` does.
       */
-    def onClick(action: => Any < (Abort[Throwable] & Async))(using Frame): Button =
+    def onClick(action: => Any < Async)(using Frame): Button =
         copy(onClickEff = Present(Sync.defer(action)))
 
     /** Adds arbitrary extra children (e.g. a custom badge) after the label/icon. */

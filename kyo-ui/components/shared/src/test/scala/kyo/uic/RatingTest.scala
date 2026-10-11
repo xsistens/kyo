@@ -36,7 +36,7 @@ class RatingTest extends UicTest:
         for
             rs <- radios(ui)
             change: (Any < Async) = rs(star - 1).onChange match
-                case Present(f) => f(true)
+                case Present(f) => handled(f(true))
                 case Absent     => ()
             _  <- change
             os <- options(ui)

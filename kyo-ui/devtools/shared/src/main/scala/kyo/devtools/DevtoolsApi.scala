@@ -36,19 +36,17 @@ trait DevtoolsApi:
 
     /** Server-push handlers with devtools attached, in place of `UI.runHandlers`.
       *
-      * The overlay script is registered for the page, and each session gets a fiber that ships snapshots over
-      * its own socket. Registration is a process-wide handshake rather than a `Local` because kyo-http builds
-      * these handlers at setup and runs them on fibers that inherit nothing from here — the context gap
-      * `UI.notices` documents. `UI.devtools` installs the sink the same way, for the same reason.
+      * The overlay script is inlined into the page, and each session gets a fiber that ships snapshots over
+      * its own socket. Both ride `Spi.server`, a `Local` that `UI.runHandlers` reads where it builds the
+      * handlers, together with the sink `UI.devtools` installs: kyo-http runs the sessions on fibers that
+      * inherit nothing from here, so the handlers carry what they captured. Handlers built outside this call serve neither.
       */
     def runHandlers(basePath: String, config: DevtoolsConfig = DevtoolsConfig.default)(ui: => UI < Async)(using
         Frame
     ): Seq[HttpHandler[?, ?, ?]] < Sync =
         val store = new DevtoolsStore(config)
-        Sync.defer {
-            Spi.pageScript = Present(DevtoolsJs.script + "\nwindow.__kyoDev.install({});\n")
-            Spi.statsProvider = Present(() => payload(store))
-        }.andThen(UI.devtools(store.record)(UI.runHandlers(basePath)(ui)))
+        val hooks = Spi.ServerHooks(DevtoolsJs.script + "\nwindow.__kyoDev.install({});\n", () => payload(store))
+        Spi.server.let(Present(hooks))(UI.devtools(store.record)(UI.runHandlers(basePath)(ui)))
     end runHandlers
 
     private[devtools] def payload(store: DevtoolsStore): String =
