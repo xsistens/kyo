@@ -244,6 +244,15 @@ final class ApolloCall[D] private[apollo] (
     def fetchPolicy(policy: FetchPolicy): ApolloCall[D] =
         withRequest(_.addExecutionContext(ExecutionContext.Empty + policy))
 
+    /** Pin the [[ErrorPolicy]] for this call (react-apollo `errorPolicy`). Rides the
+      * request's [[ExecutionContext]] like [[fetchPolicy]], for a layer that reduces a
+      * response to its data to read back. This module's own `stream`, `execute` and
+      * `watch()` do not consult it: they always yield the full response, with `data`
+      * and `errors` as values.
+      */
+    def errorPolicy(policy: ErrorPolicy): ApolloCall[D] =
+        withRequest(_.addExecutionContext(ExecutionContext.Empty + policy))
+
     /** Build a sibling call over an updated builder. Package-private so the cache
       * layer's `refetchPolicy(...)` / `optimisticUpdates(...)` extensions can extend
       * the request the same way `fetchPolicy` does.
