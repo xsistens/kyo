@@ -1369,10 +1369,10 @@ object Signal:
 
             private val subs =
                 new java.util.concurrent.atomic.AtomicReference[Chunk[Sub[A, ?]]](Chunk.empty)
-            // The promise `fire` is registered on, or null. Every registration is the same `fire`, so `remove(fire)` drops one of
-            // them by reference, and its `true` means that registration will never run.
+            // The one registration on the next-change promise, or null. It enters this slot before it registers and leaves it only by its
+            // own CAS, so a registration that already ran can never be mistaken for the live one.
             private val armed =
-                new java.util.concurrent.atomic.AtomicReference[IOPromise[Any, Any]](null)
+                new java.util.concurrent.atomic.AtomicReference[Arm](null)
             // Live subscribers, tracked separately from `subs.size` because retired ones linger in the list
             // until a sweep. Reaching zero is what releases the shared registration.
             private val liveSubs = new java.util.concurrent.atomic.AtomicInteger(0)
@@ -1413,8 +1413,8 @@ object Signal:
                 val cur = subs.get()
                 if liveSubs.get() == 0 then
                     if subs.compareAndSet(cur, Chunk.empty) then
-                        val p = armed.getAndSet(null)
-                        if p ne null then discard(p.remove(fire))
+                        val a = armed.getAndSet(null)
+                        if a ne null then discard(a.promise.remove(a))
                         // Dispatching first: a write may have completed the promise after its waiter was removed here.
                         if liveSubs.get() > 0 then pump(dispatchFirst = true)
                     else releaseIfIdle()
@@ -1455,24 +1455,33 @@ object Signal:
                         val p = nextPromise.get().asInstanceOf[IOPromise[Any, Any]]
                         if versionRef.get() != v0 then deliver = true
                         else
-                            p.onComplete(fire)
-                            // The CAS loses when `p` had already completed, so `onComplete` ran `fire` inline and `fire` pumped
-                            // (nothing is left on `p` to remove), or when a concurrent pump armed first, so this registration
-                            // is a duplicate.
-                            if !armed.compareAndSet(null, p) then discard(p.remove(fire))
+                            // Claiming the slot first makes the arm that wins it the only one that registers. A lost CAS means
+                            // another pump armed, on this promise or an older one whose completion pumps again.
+                            val a = new Arm(p)
+                            if armed.compareAndSet(null, a) then
+                                p.onComplete(a)
+                                // The last subscriber may have released the slot before the registration existed to remove.
+                                if armed.get() ne a then discard(p.remove(a))
+                            end if
                             done = true
                         end if
                     end if
                 end while
             end pump
 
-            // An error completion must not re-arm: the promise is only swapped on a value update (see onUpdate), so
-            // re-arming would capture the same completed promise, whose registration fires inline, and recurse without bound.
-            private val fire: Result[Any, Any] => Any = r =>
-                import AllowUnsafe.embrace.danger
-                armed.set(null)
-                if r.isSuccess then pump(dispatchFirst = true)
-            end fire
+            /** One registration on the next-change promise. A promise that completed before `onComplete` runs it inline, which is fine: it
+              * has already left the slot by the time the nested pump arms the next one.
+              *
+              * An error completion must not re-arm: the promise is only swapped on a value update (see onUpdate), so re-arming would
+              * capture the same completed promise, whose registration fires inline, and recurse without bound.
+              */
+            final private class Arm(val promise: IOPromise[Any, Any]) extends (Result[Any, Any] => Any):
+                def apply(r: Result[Any, Any]): Any =
+                    import AllowUnsafe.embrace.danger
+                    // A failed CAS means the last subscriber released this registration while it was firing.
+                    if armed.compareAndSet(this, null) && r.isSuccess then pump(dispatchFirst = true)
+                end apply
+            end Arm
 
             def safe: SignalRef[A] = SignalRef(this)
 
