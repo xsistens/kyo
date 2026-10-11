@@ -1,0 +1,440 @@
+package kyo.apollo.cache
+
+import kyo.*
+import kyo.apollo.ApolloClient
+import kyo.apollo.StreamProbe
+import kyo.apollo.api.*
+import kyo.apollo.cache.normalized.*
+import kyo.apollo.cache.normalized.api.IdCacheKeyGenerator
+import kyo.apollo.exception.ApolloParseException
+import kyo.apollo.exception.CacheMissException
+import kyo.apollo.exception.CacheReadFailure
+import kyo.apollo.json.Json
+import kyo.apollo.network.ApolloResponse
+import scala.collection.immutable.VectorMap
+
+/** End-to-end tests for the fetch-policy wiring: a real [[ApolloClient]]
+  * with a [[MemoryCache]] installed via `normalizedCache`, driven through a fake
+  * [[kyo.apollo.network.http.HttpEngine]] so each [[FetchPolicy]]'s emission sequence,
+  * write-back behaviour, and `cacheInfo` stamping can be observed without a
+  * network.
+  */
+class CacheInterceptorSpec extends kyo.test.Test[Any]:
+
+    given CanEqual[Any, Any] = CanEqual.derived
+
+    // --- fixtures: the CountriesQuery, keyed by `code` ------------------------
+
+    // `__typename` field named verbatim to match the GraphQL wire form (kyo-schema
+    // encodes field names as-is).
+    final case class Country(__typename: String, code: String, name: String) derives Schema
+    final case class CountriesData(countries: List[Country]) derives Schema
+
+    final case class CountriesQuery() extends Query.Normalizable[CountriesData]:
+        def name                                = "Countries"
+        def document                            = "query Countries { countries { __typename code name } }"
+        val dataCodec: JsonCodec[CountriesData] = JsonCodec.fromSchema[CountriesData]
+        def rootField: CompiledField            =
+            CompiledField(
+                "data",
+                CompiledNamedType("Query"),
+                selections = Chunk(
+                    CompiledField(
+                        "countries",
+                        CompiledListType(CompiledNamedType("Country")),
+                        selections = Chunk(
+                            CompiledField("__typename", CompiledNamedType("String")),
+                            CompiledField("code", CompiledNamedType("String")),
+                            CompiledField("name", CompiledNamedType("String"))
+                        )
+                    )
+                )
+            )
+        def variables: Json = Json.JObj(VectorMap.empty)
+    end CountriesQuery
+
+    /** [[CountriesQuery]]'s shape (it reads the records a `CountriesQuery` write
+      * left) with a codec whose decode is defective.
+      */
+    final case class DefectiveCountriesQuery() extends Query.Normalizable[CountriesData]:
+        def name                                = "Countries"
+        def document                            = CountriesQuery().document
+        def rootField: CompiledField            = CountriesQuery().rootField
+        def variables: Json                     = Json.JObj(VectorMap.empty)
+        def dataCodec: JsonCodec[CountriesData] = new JsonCodec[CountriesData]:
+            def decode(json: Json)(using Frame): Result[ApolloParseException, CountriesData] =
+                throw IllegalStateException("defective codec")
+            def encode(value: CountriesData): Json = CountriesQuery().dataCodec.encode(value)
+    end DefectiveCountriesQuery
+
+    /** The same `countries { __typename code name }` selection, written with the DSL and
+      * projected by `.map` to the list of codes: a decode-only query.
+      */
+    sealed trait CountryT
+    private def countryCode: SelectionBuilder.Deferrable[CountryT, (code: String)] =
+        SelectionBuilder.scalar("code", CompiledNamedType("String"), ScalarCodec.string)
+    private def countryName: SelectionBuilder.Deferrable[CountryT, (name: String)] =
+        SelectionBuilder.scalar("name", CompiledNamedType("String"), ScalarCodec.string)
+    private val countryCodesQuery: Query[Chunk[String]] =
+        SelectionBuilder
+            .obj[RootQuery, (countries: Chunk[(code: String, name: String)]), (code: String, name: String)](
+                "countries",
+                CompiledListType(CompiledNamedType("Country")),
+                Chunk.empty,
+                countryCode ~ countryName,
+                SelectionBuilder.Nesting.Listed(SelectionBuilder.Nesting.Leaf)
+            )
+            .map(_.countries.map(_.code))
+            .toQuery("Countries")
+
+    private val body =
+        """{"data":{"countries":[""" +
+            """{"__typename":"Country","code":"DE","name":"Germany"},""" +
+            """{"__typename":"Country","code":"FR","name":"France"}]}}"""
+
+    private val sampleData = CountriesData(
+        List(Country("Country", "DE", "Germany"), Country("Country", "FR", "France"))
+    )
+
+    /** A fake engine that counts calls and returns a canned body/status; both are
+      * mutable so a test can flip to an error mid-run.
+      */
+    final private class CountingEngine(var status: Int = 200)
+        extends kyo.apollo.network.http.HttpEngine:
+        var calls = 0
+        def execute(
+            request: kyo.apollo.network.http.HttpEngine.Request
+        )(using Frame): kyo.apollo.network.http.HttpEngine.Response < Async =
+            calls += 1
+            kyo.apollo.network.http.HttpEngine.response(HttpStatus.init(status).getOrThrow, body)
+        end execute
+    end CountingEngine
+
+    private def cachedClient(engine: CountingEngine)(using Frame): ApolloClient < (Sync & Scope) =
+        ApolloClient.init(
+            ApolloClient.Config("https://example.com/graphql")
+                .httpEngine(engine)
+                .normalizedCache(MemoryCache(), IdCacheKeyGenerator(List("code")))
+        )
+
+    private def call(client: ApolloClient) = client.query(CountriesQuery())
+
+    /** Collect every emission of a call into a list. */
+    private def collectAll(
+        c: kyo.apollo.runtime.ApolloCall[CountriesData]
+    ): List[ApolloResponse[CountriesData]] < (Async & Scope) =
+        StreamProbe.collect(c.stream)
+
+    "fetch policies" - {
+
+        // --- CacheFirst ---------------------------------------------------------
+
+        "CacheFirst serves the network first, then the cache on the second call" in {
+            val engine = CountingEngine()
+            for
+                client <- cachedClient(engine)
+                r1     <- call(client).fetchPolicy(FetchPolicy.CacheFirst).execute
+                r2     <- call(client).fetchPolicy(FetchPolicy.CacheFirst).execute
+            yield
+                assert(r1.data == Present(sampleData))
+                assert(r1.cacheInfo.map(_.fromCache) == Present(false))
+                assert(r2.data == Present(sampleData))
+                assert(r2.cacheInfo.map(_.isCacheHit) == Present(true))
+                assert(engine.calls == 1) // second call served from cache, no new fetch
+            end for
+        }
+
+        "the default policy (no .fetchPolicy) is CacheFirst" in {
+            val engine = CountingEngine()
+            for
+                client <- cachedClient(engine)
+                _      <- call(client).execute
+                r2     <- call(client).execute
+            yield
+                assert(engine.calls == 1)
+                assert(r2.cacheInfo.exists(_.isCacheHit))
+            end for
+        }
+
+        // --- NetworkOnly --------------------------------------------------------
+
+        "NetworkOnly always hits the network and writes back to the cache" in {
+            val engine = CountingEngine()
+            for
+                client <- cachedClient(engine)
+                r1     <- call(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                r2     <- call(client).fetchPolicy(FetchPolicy.CacheOnly).execute
+            yield
+                assert(r1.cacheInfo.map(_.fromCache) == Present(false))
+                assert(engine.calls == 1)
+                assert(r2.data == Present(sampleData)) // proves NetworkOnly wrote back
+                assert(r2.cacheInfo.map(_.isCacheHit) == Present(true))
+            end for
+        }
+
+        // --- CacheOnly ----------------------------------------------------------
+
+        "CacheOnly on an empty store emits a CacheMissException value, no network" in {
+            val engine = CountingEngine()
+            cachedClient(engine).map { client =>
+                call(client).fetchPolicy(FetchPolicy.CacheOnly).execute.map { r =>
+                    assert(engine.calls == 0)
+                    assert(r.data == Absent)
+                    assert(r.error.exists(_.isInstanceOf[CacheMissException]))
+                    assert(r.cacheInfo.exists(_.cacheReadFailure.isDefined))
+                }
+            }
+        }
+
+        // --- a defective read is not a miss ------------------------------------
+
+        "CacheFirst with a defective codec panics without a network call" in {
+            val engine = CountingEngine()
+            for
+                client <- cachedClient(engine)
+                _      <- client.apolloStore.writeOperation(CountriesQuery(), sampleData)
+                r      <- Abort.run[Throwable](client.query(DefectiveCountriesQuery()).fetchPolicy(FetchPolicy.CacheFirst).execute)
+            yield
+                assert(engine.calls == 0) // the defect was not answered with the network
+                r match
+                    case Result.Panic(_: IllegalStateException) => succeed
+                    case other                                  => fail(s"expected the read's panic, got $other")
+            end for
+        }
+
+        "CacheOnly with a defective codec panics instead of emitting a miss value" in {
+            val engine = CountingEngine()
+            for
+                client <- cachedClient(engine)
+                _      <- client.apolloStore.writeOperation(CountriesQuery(), sampleData)
+                r      <- Abort.run[Throwable](client.query(DefectiveCountriesQuery()).fetchPolicy(FetchPolicy.CacheOnly).execute)
+            yield
+                assert(engine.calls == 0)
+                r match
+                    case Result.Panic(_: IllegalStateException) => succeed
+                    case other                                  => fail(s"expected the read's panic, got $other")
+            end for
+        }
+
+        // --- CacheAndNetwork ----------------------------------------------------
+
+        "CacheAndNetwork emits the cache response then the network response" in {
+            val engine = CountingEngine()
+            for
+                client    <- cachedClient(engine)
+                _         <- call(client).fetchPolicy(FetchPolicy.NetworkOnly).execute // populate
+                emissions <- collectAll(call(client).fetchPolicy(FetchPolicy.CacheAndNetwork))
+            yield
+                assert(emissions.length == 2)
+                assert(emissions(0).cacheInfo.map(_.fromCache) == Present(true))
+                assert(emissions(0).cacheInfo.map(_.isCacheHit) == Present(true))
+                assert(emissions(1).cacheInfo.map(_.fromCache) == Present(false))
+                assert(emissions.map(_.data) == List(Present(sampleData), Present(sampleData)))
+                assert(engine.calls == 2) // one populate + one network in cache-and-network
+            end for
+        }
+
+        "CacheAndNetwork on an empty store emits the network response only" in {
+            val engine = CountingEngine()
+            cachedClient(engine).map { client =>
+                collectAll(call(client).fetchPolicy(FetchPolicy.CacheAndNetwork)).map { emissions =>
+                    assert(emissions.length == 1)
+                    assert(emissions.head.cacheInfo.map(_.fromCache) == Present(false))
+                    assert(engine.calls == 1)
+                }
+            }
+        }
+
+        // --- NetworkFirst -------------------------------------------------------
+
+        "NetworkFirst serves the network on success and writes back" in {
+            val engine = CountingEngine()
+            for
+                client <- cachedClient(engine)
+                r1     <- call(client).fetchPolicy(FetchPolicy.NetworkFirst).execute
+                r2     <- call(client).fetchPolicy(FetchPolicy.CacheOnly).execute
+            yield
+                assert(r1.cacheInfo.map(_.fromCache) == Present(false))
+                assert(engine.calls == 1)
+                assert(r2.data == Present(sampleData)) // written back
+            end for
+        }
+
+        "NetworkFirst falls back to the cache when the network errors" in {
+            val engine = CountingEngine()
+            for
+                client <- cachedClient(engine)
+                _      <- call(client).fetchPolicy(FetchPolicy.NetworkOnly).execute // populate at 200
+                _      <- Sync.defer { engine.status = 500 }
+                r      <- call(client).fetchPolicy(FetchPolicy.NetworkFirst).execute
+            yield
+                assert(r.data == Present(sampleData)) // served from cache after network error
+                assert(r.cacheInfo.exists(_.isCacheHit))
+                assert(engine.calls == 2)
+            end for
+        }
+
+        // --- Standby ------------------------------------------------------------
+
+        "Standby serves a cached result without the network" in {
+            val engine = CountingEngine()
+            for
+                client <- cachedClient(engine)
+                _      <- client.apolloStore.writeOperation(CountriesQuery(), sampleData)
+                r      <- call(client).fetchPolicy(FetchPolicy.Standby).execute
+            yield
+                assert(engine.calls == 0)
+                assert(r.data == Present(sampleData))
+                assert(r.cacheInfo.exists(_.isCacheHit))
+            end for
+        }
+
+        "Standby's stream on an empty store emits nothing, and asks no network" in {
+            val engine = CountingEngine()
+            cachedClient(engine).map { client =>
+                collectAll(call(client).fetchPolicy(FetchPolicy.Standby)).map { emissions =>
+                    assert(emissions.isEmpty)
+                    assert(engine.calls == 0)
+                }
+            }
+        }
+
+        "Standby's execute on an empty store answers with a failure value, not a panic" in {
+            val engine = CountingEngine()
+            cachedClient(engine).map { client =>
+                Abort.run[Throwable](call(client).fetchPolicy(FetchPolicy.Standby).execute).map {
+                    case Result.Success(r) =>
+                        assert(engine.calls == 0)
+                        assert(r.data == Absent)
+                        assert(r.error.exists(_.message.contains("no response")), s"${r.error}")
+                    case other => fail(s"expected a response value, got $other")
+                }
+            }
+        }
+
+        // --- a decode-only projection -------------------------------------------
+
+        "a .map query reaches the caller decoded, is not normalized, and the skip is logged at debug" in {
+            val engine = CountingEngine()
+            for
+                probe  <- LogProbe.init
+                client <- cachedClient(engine)
+                first  <- probe.run(client.query(countryCodesQuery).fetchPolicy(FetchPolicy.CacheFirst).execute)
+                cached <- Abort.run[CacheReadFailure](client.apolloStore.readOperation(countryCodesQuery))
+                second <- probe.run(client.query(countryCodesQuery).fetchPolicy(FetchPolicy.CacheFirst).execute)
+                lines  <- probe.lines
+            yield
+                assert(first.data == Present(Chunk("DE", "FR")), first.toString)
+                assert(first.error == Absent, first.toString)
+                assert(first.cacheInfo.map(_.dependentKeys) == Present(Set.empty[kyo.apollo.cache.normalized.api.CacheKey]))
+                assert(cached.failure.exists(_.isInstanceOf[CacheMissException]), cached.toString)
+                // Nothing was written, so the second CacheFirst call misses and goes to the network again.
+                assert(second.data == Present(Chunk("DE", "FR")))
+                assert(engine.calls == 2)
+                val skips = lines.filter(line =>
+                    line.level == Log.Level.debug && line.message.contains("Countries: decode-only projection, response not normalized")
+                )
+                assert(skips.size == 2, lines.toString)
+            end for
+        }
+    }
+
+    // --- mutations bypass the cache read entirely -----------------------------
+
+    // A mutation whose root field carries an `id` argument and returns a Country,
+    // the shape `CacheKeyResolver.byIdArgument` redirects on.
+    final case class DeleteCountryData(deleteCountry: Country) derives Schema
+
+    final case class DeleteCountryMutation(code: String) extends Mutation.Normalizable[DeleteCountryData]:
+        def name     = "DeleteCountry"
+        def document =
+            s"""mutation DeleteCountry { deleteCountry(id: "$code") { __typename code name } }"""
+        val dataCodec: JsonCodec[DeleteCountryData] = JsonCodec.fromSchema[DeleteCountryData]
+        def rootField: CompiledField                =
+            CompiledField(
+                "data",
+                CompiledNamedType("Mutation"),
+                selections = Chunk(
+                    CompiledField(
+                        "deleteCountry",
+                        CompiledNamedType("Country"),
+                        arguments = Chunk(
+                            CompiledArgument("id", CompiledArgumentValue.Literal(Json.JStr(code)))
+                        ),
+                        selections = Chunk(
+                            CompiledField("__typename", CompiledNamedType("String")),
+                            CompiledField("code", CompiledNamedType("String")),
+                            CompiledField("name", CompiledNamedType("String"))
+                        )
+                    )
+                )
+            )
+        def variables: Json = Json.JObj(VectorMap.empty)
+    end DeleteCountryMutation
+
+    /** Routes by operation: the mutation returns its Country, anything else the
+      * canned countries body. Counts every call like [[CountingEngine]].
+      */
+    final private class MutationRoutingEngine extends kyo.apollo.network.http.HttpEngine:
+        var calls = 0
+        def execute(
+            request: kyo.apollo.network.http.HttpEngine.Request
+        )(using Frame): kyo.apollo.network.http.HttpEngine.Response < Async =
+            calls += 1
+            val payload =
+                if request.fields.body.text.exists(_.contains("DeleteCountry")) then
+                    """{"data":{"deleteCountry":{"__typename":"Country","code":"DE","name":"Germany"}}}"""
+                else body
+            kyo.apollo.network.http.HttpEngine.response(HttpStatus.OK, payload)
+        end execute
+    end MutationRoutingEngine
+
+    /** [[cachedClient]] plus the `byIdArgument` read redirect, so an id-carrying
+      * field can be answered straight from the entity record.
+      */
+    private def redirectingClient(engine: MutationRoutingEngine)(using Frame): ApolloClient < (Sync & Scope) =
+        ApolloClient.init(
+            ApolloClient.Config("https://example.com/graphql")
+                .httpEngine(engine)
+                .normalizedCache(
+                    MemoryCache(),
+                    IdCacheKeyGenerator(List("code")),
+                    keyResolver = kyo.apollo.cache.normalized.api.CacheKeyResolver.byIdArgument()
+                )
+        )
+
+    "mutations" - {
+
+        "a repeated mutation always hits the network (its own write-back is never read)" in {
+            val engine = MutationRoutingEngine()
+            for
+                client <- redirectingClient(engine)
+                // First run writes its result under MUTATION_ROOT; without the
+                // mutation bypass the second, identical run would be a CacheFirst hit.
+                r1 <- client.mutation(DeleteCountryMutation("DE")).execute
+                r2 <- client.mutation(DeleteCountryMutation("DE")).execute
+            yield
+                assert(r1.cacheInfo.map(_.fromCache) == Present(false))
+                assert(r2.cacheInfo.map(_.fromCache) == Present(false))
+                assert(engine.calls == 2)
+            end for
+        }
+
+        "an id-carrying mutation is not answered by a cache redirect" in {
+            val engine = MutationRoutingEngine()
+            for
+                client <- redirectingClient(engine)
+                // Cache the Country:DE entity and create MUTATION_ROOT via a first
+                // mutation; the second mutation's root field then resolves fully
+                // from the cache through byIdArgument, so only the bypass keeps it
+                // on the network.
+                _ <- call(client).fetchPolicy(FetchPolicy.NetworkOnly).execute
+                _ <- client.mutation(DeleteCountryMutation("FR")).execute
+                r <- client.mutation(DeleteCountryMutation("DE")).execute
+            yield
+                assert(r.cacheInfo.map(_.fromCache) == Present(false))
+                assert(engine.calls == 3)
+            end for
+        }
+    }
+end CacheInterceptorSpec

@@ -1,0 +1,148 @@
+# Reference schema for the codegen fixtures and its compile gate.
+#
+# A small "countries" domain (inspired by the public countries.trevorblades.com
+# API) extended with a Mutation and a Subscription so the generator's fixtures
+# cover ALL three GraphQL operation kinds. It also intentionally exercises every
+# kind of type the generator emits: a custom scalar (`DateTime`), the file scalar
+# (`Upload`), enums
+# (`Continent`, `Color`), input object types (`CountryFilter`, `UpdateCountryInput`),
+# an interface (`Node`), a union (`SearchResult`), list/non-null wrappers, and
+# nullable fields.
+#
+# The `kyo-apollo-codegen-it` project generates from this file on every compile
+# (the `apolloGenerate` task in build.sbt) and compiles the output against
+# kyo-apollo.
+
+"An ISO-8601 timestamp — a custom scalar, mapped to a Scala type via scalarMapping."
+scalar DateTime
+
+"A file, per the GraphQL multipart request spec; generated as `kyo.apollo.Upload` when unmapped."
+scalar Upload
+
+"The seven continents; generated as a Scala 3 `enum` with a string-transform `Schema`."
+enum Continent {
+  AFRICA
+  ANTARCTICA
+  ASIA
+  EUROPE
+  NORTH_AMERICA
+  OCEANIA
+  SOUTH_AMERICA
+}
+
+"A single country record."
+type Country {
+  "ISO 3166-1 alpha-2 code, e.g. `DE` — used as the cache key."
+  code: ID!
+  name: String!
+  native: String!
+  capital: String
+  emoji: String!
+  continent: Continent!
+  currencies: [String!]!
+  "When this record last changed; a nullable custom-scalar field."
+  updatedAt: DateTime
+}
+
+"Filter passed to the `countries` query as an input object."
+input CountryFilter {
+  continent: Continent
+  search: String
+}
+
+"Payload for the `updateCountry` mutation."
+input UpdateCountryInput {
+  code: ID!
+  capital: String
+  emoji: String
+}
+
+"Relay-style page metadata for a connection."
+type PageInfo {
+  "Opaque cursor of the last edge on this page, or null when the page is empty."
+  endCursor: String
+  "Whether a further page exists after this one."
+  hasNextPage: Boolean!
+}
+
+"One edge of a `CountryConnection` — a country node plus its pagination cursor."
+type CountryEdge {
+  node: Country!
+  "Opaque cursor identifying this edge's position; the edge's cache key."
+  cursor: String!
+}
+
+"A Relay-style paginated connection over countries."
+type CountryConnection {
+  edges: [CountryEdge!]!
+  pageInfo: PageInfo!
+}
+
+"A favorite color. Servers may add values later; a client decodes a name it does not know to `Unknown__`."
+enum Color {
+  RED
+  GREEN
+  BLUE
+}
+
+"Anything with a global id (Relay's `Node`): a field of this type selects through `on<Type>` branches."
+interface Node {
+  id: ID!
+}
+
+"A traveller."
+type User implements Node {
+  id: ID!
+  name: String!
+  "A nullable enum field."
+  favoriteColor: Color
+  "The countries this user visited."
+  visited: [Country!]!
+  "Nicknames, if any; a nullable list of nullable strings."
+  nicknames: [String]
+}
+
+"A travel report about one country."
+type Report implements Node {
+  id: ID!
+  title: String!
+  country: Country!
+}
+
+"A search hit."
+union SearchResult = Country | Report
+
+type Query {
+  "All countries, optionally filtered."
+  countries(filter: CountryFilter): [Country!]!
+  "One country by ISO code, or null if unknown."
+  country(code: ID!): Country
+  "Countries as a Relay-style connection, paginated by `first`/`after`."
+  countriesConnection(first: Int, after: String): CountryConnection!
+  "A second countries connection (same shape) — lets one query hold two independently-paginated connections, exercising unique variable naming."
+  moreCountries(first: Int, after: String): CountryConnection!
+  "Any node by global id, or null if unknown."
+  node(id: ID!): Node
+  "Countries and reports matching `text`."
+  search(text: String!): [SearchResult!]!
+  "The users whose favorite color is `color`."
+  usersByColor(color: Color!): [User!]!
+}
+
+type Mutation {
+  "Mutate a country and return the updated record."
+  updateCountry(input: UpdateCountryInput!): Country!
+  "Attach a flag image to a country; the file travels as a multipart part."
+  uploadFlag(code: ID!, file: Upload!): Country!
+}
+
+type Subscription {
+  "Emits whenever a country changes, optionally scoped to a continent."
+  countryUpdated(continent: Continent): Country!
+}
+
+schema {
+  query: Query
+  mutation: Mutation
+  subscription: Subscription
+}
