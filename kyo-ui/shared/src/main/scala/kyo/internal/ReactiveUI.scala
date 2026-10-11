@@ -1824,21 +1824,7 @@ private[kyo] object ReactiveUI:
                             deepRows = Nil,
                             discoverRootBound = rui.discoverContentRootBound
                         )
-                        // walkStatic only forks observers for reactive-attr CHILD elements; the region's painted ROOT
-                        // element carries its own reactive channels at `path` and is absent from newKids, so start its
-                        // observers here, scoped to this per-value fiber like the child subscriptions.
-                        _ <- current match
-                            case el: Element
-                                if el.attrs.reactiveAttrs.nonEmpty || el.attrs.reactiveBoolAttrs.nonEmpty ||
-                                    el.attrs.reactiveClasses.nonEmpty =>
-                                forkChannelObservers(
-                                    rui.path,
-                                    el.attrs.reactiveAttrs,
-                                    el.attrs.reactiveBoolAttrs,
-                                    el.attrs.reactiveClasses,
-                                    exchange
-                                )
-                            case _ => Kyo.unit
+                        _ <- forkRootChannels(rui.path, current, exchange)
                         _ <- subscribeKids(newKids)
                     yield ()
 
@@ -1853,7 +1839,9 @@ private[kyo] object ReactiveUI:
                                 // re-walk, but still subscribe the already-walked children, exactly as renderValue
                                 // would have. The value is recorded as this region's last render, so the NEXT emission
                                 // diffs against it rather than re-sending the whole region.
-                                Sync.Unsafe.defer(rendered.set(Present(current))).andThen(subscribeKids(rui.children))
+                                Sync.Unsafe.defer(rendered.set(Present(current)))
+                                    .andThen(forkRootChannels(rui.path, current, exchange))
+                                    .andThen(subscribeKids(rui.children))
                             else renderValue(current)
                             end if
                         }
@@ -1875,6 +1863,16 @@ private[kyo] object ReactiveUI:
       * `path`. Shared by subscribeScoped (walked nodes) and by a region's renderValue (the painted ROOT
       * element, which is absent from the walk's kids), so the two sites cannot drift apart.
       */
+    /** Starts the channel observers of the element a region paints as its root. A walk only gives the root's children nodes of their
+      * own, so the root's channels at `path` are started here, in the current scope like the children's subscriptions.
+      */
+    private def forkRootChannels(path: Seq[String], content: UI, exchange: UIExchange)(using Frame): Unit < (Async & Scope) =
+        content match
+            case el: Element
+                if el.attrs.reactiveAttrs.nonEmpty || el.attrs.reactiveBoolAttrs.nonEmpty || el.attrs.reactiveClasses.nonEmpty =>
+                forkChannelObservers(path, el.attrs.reactiveAttrs, el.attrs.reactiveBoolAttrs, el.attrs.reactiveClasses, exchange)
+            case _ => Kyo.unit
+
     private def forkChannelObservers(
         path: Seq[String],
         attrs: Map[String, Signal[String]],
@@ -2635,6 +2633,7 @@ private[kyo] object ReactiveUI:
                                 )
                                 keys = RegionKeys(kids)
                                 _ <- instance.children.beginWalk(kids, keys)
+                                _ <- forkRootChannels(rui.path, content, exchange)
                                 _ <- Kyo.foreachDiscard(kids)(
                                     subscribeScoped(_, exchange, signalChangeTime, instance.children, dispatch, keys)
                                 )

@@ -125,4 +125,52 @@ class ReactiveChannelBindingTest extends kyo.test.Test[Any]:
         }
     }
 
+    /** Records the last value each attribute channel patched, by path and name. */
+    final private class LastValues:
+        val values   = new java.util.concurrent.ConcurrentHashMap[(Seq[String], String), String]()
+        val exchange = new UIExchange:
+            def onChange(
+                region: ReactiveRegion,
+                path: Seq[String],
+                contentContext: ReactiveRegion.RegionIdentity,
+                parentContext: ReactiveRegion.ParentContext,
+                previous: Maybe[UI],
+                changed: UI
+            )(using Frame): Unit < Async                                                                        = Kyo.unit
+            override def onAttrPatch(path: Seq[String], name: String, value: String)(using Frame): Unit < Async =
+                Sync.defer(discard(values.put((path, name), value)))
+        def at(path: Seq[String], name: String): Maybe[String] = Maybe(values.get((path, name)))
+    end LastValues
+
+    "a channel on the root a region painted first still patches" in {
+        // The region's first value is the one already on the page, so the region subscribes it without
+        // repainting; the root's own channel has to start there too.
+        Scope.run {
+            val rec = new LastValues
+            for
+                gate  <- Signal.initRef(true)
+                label <- Signal.initRef("a")
+                root  <- ReactiveUI.normalize(UI.div(gate.map(_ => UI.span("x").title(label: Signal[String]))), Seq.empty)
+                _     <- ReactiveUI.subscribe(root, rec.exchange)
+                _     <- label.set("b")
+                _     <- assertEventually(Sync.defer(rec.at(Seq("0"), "title") == Present("b")))
+            yield ()
+            end for
+        }
+    }
+
+    "a channel on the root of a mounted node's content patches" in {
+        Scope.run {
+            val rec = new LastValues
+            for
+                label <- Signal.initRef("a")
+                root  <- ReactiveUI.normalize(UI.div(UI.mounted(UI.span("x").title(label: Signal[String]))), Seq.empty)
+                _     <- ReactiveUI.subscribe(root, rec.exchange)
+                _     <- label.set("b")
+                _     <- assertEventually(Sync.defer(rec.at(Seq("0"), "title") == Present("b")))
+            yield ()
+            end for
+        }
+    }
+
 end ReactiveChannelBindingTest
