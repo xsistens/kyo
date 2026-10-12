@@ -592,6 +592,40 @@ class DomBackendReactiveRangesTest extends kyo.test.Test[Any]:
         end for
     }
 
+    "a list patch adopts a portal in a new row, keeps it while other rows change, and retires it with its row" in {
+        def portalState: (Boolean, Int, Int) =
+            val el = dom.document.getElementById("lppanel")
+            val p  = if el == null then "" else el.getAttribute("data-kyo-path")
+            (
+                el != null && (el.parentNode eq dom.document.body),
+                dom.document.querySelectorAll("[data-kyo-portal-slot]").length,
+                if el == null then 0 else dom.document.querySelectorAll(s"""[data-kyo-path="$p"]""").length
+            )
+        end portalState
+        for
+            rows <- Signal.initRef(Chunk(1, 2))
+            ui = UI.div(UI.ul(rows.foreachKeyed(_.toString)(i =>
+                if i == 3 then UI.li.id("lprow")(UI.div.id("lppanel").portal(true)(UI.span("panel")))
+                else UI.li(s"row $i").id(s"lprow-$i")
+            )))
+            ready = new DomTestEnv.MountReady
+            fiber <- Fiber.initUnscoped(Scope.run(DomBackend.mount(ui, ready)))
+            _     <- assertEventually(Sync.defer(ready.installed && dom.document.getElementById("lprow-2") != null))
+            _     <- rows.set(Chunk(1, 2, 3))
+            _     <- assertEventually(Sync.defer(portalState == (true, 1, 1)))
+            _     <- rows.set(Chunk(0, 1, 2, 3))
+            _     <- assertEventually(Sync.defer(dom.document.getElementById("lprow-0") != null))
+            kept  <- Sync.defer(portalState)
+            _     <- rows.set(Chunk(0, 1, 2))
+            // A patch that only removes rows inserts nothing to sweep; the twin must still leave with its placeholder.
+            _       <- assertEventually(Sync.defer(dom.document.getElementById("lppanel") == null), 10.seconds)
+            retired <- Sync.defer(portalState)
+            _       <- fiber.interrupt
+            _       <- fiber.getResult
+        yield assert(kept == (true, 1, 1) && retired == (false, 0, 0), s"kept=$kept retired=$retired")
+        end for
+    }
+
     private def text(id: String): String =
         val el = dom.document.getElementById(id)
         if el == null then "" else el.textContent

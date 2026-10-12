@@ -432,7 +432,7 @@ final private[kyo] class DomReactiveRegions private (
         top
     end treeRoot
 
-    /** Does this live marker sit inside a portal twin, an element `portalSweep` re-homed to `<body>`?
+    /** Does this live marker sit inside a portal twin, an element `adoptPortals` re-homed to `<body>`?
       *
       * Twin of `__kyoInPortalTwin` in HtmlRenderer.clientJs; keep the two in lockstep.
       */

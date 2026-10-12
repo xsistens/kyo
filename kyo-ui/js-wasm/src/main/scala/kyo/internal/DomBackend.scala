@@ -558,7 +558,8 @@ private[kyo] object DomBackend:
             }
             seedEnter(touched.toSeq, oldEnter)
             seedFocusAuto(touched.toSeq, oldFocusAuto)
-            touched.foreach(portalSweep)
+            touched.foreach(adoptPortals)
+            retireOrphanTwins()
             spawnGhosts(ghosts)
             sweepFocusAuto()
             sweepScrollAuto()
@@ -756,7 +757,7 @@ private[kyo] object DomBackend:
             // movement to follow.
             _ <- Sync.defer(sweepScrollAuto(scroll = false))
             // Portal adopt for the initial paint: a portal element present at load re-homes immediately.
-            _        <- Sync.defer(portalSweep(container))
+            _        <- Sync.defer { adoptPortals(container); retireOrphanTwins() }
             _        <- Sync.defer(beginAnimationsSync(container))
             commands <- UI.Commands.init(op => applyOpLocal(op, () => sessionCommands))
             _ = sessionCommands = commands
@@ -1244,7 +1245,8 @@ private[kyo] object DomBackend:
             seedFocusAuto(newElements, state.oldFocusAuto)
             // Portal upkeep: re-home portal elements this patch inserted, and retire the placeholder of one it
             // removed. Runs over the patched roots, so an untouched part of the page is not swept.
-            newElements.foreach(portalSweep)
+            newElements.foreach(adoptPortals)
+            retireOrphanTwins()
             spawnGhosts(state.ghosts)
             sweepFocusAuto()
             // A patch that left the flag on a different element scrolls that element into view; one that left it
@@ -1919,7 +1921,8 @@ private[kyo] object DomBackend:
         inline val ScrollAuto = 8
         inline val JsProp     = 16
         inline val SvgAnim    = 32
-        inline val All        = 63
+        inline val Portal     = 64
+        inline val All        = 127
     end Marker
 
     /** The markers `html` carries, among those not already in `known`. */
@@ -1932,6 +1935,7 @@ private[kyo] object DomBackend:
         if (known & Marker.JsProp) == 0 && html.contains("data-kyo-prop-") then found |= Marker.JsProp
         // Covers <animate, <animateTransform and <animateMotion in one search.
         if (known & Marker.SvgAnim) == 0 && html.contains("<animate") then found |= Marker.SvgAnim
+        if (known & Marker.Portal) == 0 && html.contains("data-kyo-portal") then found |= Marker.Portal
         found
     end markersIn
 
@@ -2282,7 +2286,7 @@ private[kyo] object DomBackend:
         node.nodeType == 1 && node.asInstanceOf[dom.Element].hasAttribute("data-kyo-portal-slot")
 
     /** An element that declared `portal(true)` (`data-kyo-portal`): rendered inline by the server, re-homed to
-      * document.body by [[portalSweep]]. Twin of `__kyoIsPortal` in clientJs.
+      * document.body by [[adoptPortals]]. Twin of `__kyoIsPortal` in clientJs.
       */
     private def isPortalEl(node: dom.Node): Boolean =
         node.nodeType == 1 && node.asInstanceOf[dom.Element].hasAttribute("data-kyo-portal")
@@ -2291,22 +2295,17 @@ private[kyo] object DomBackend:
     private def portalTwin(path: String): dom.Element =
         document.querySelector("body > " + pathSelector(path) + "[data-kyo-portal]")
 
-    /** Portal upkeep after a patch (twin of `__kyoPortalSweep` in HtmlRenderer.clientJs; keep them in lockstep).
+    /** Re-homes every `data-kyo-portal` element still sitting inline under `root` (root included, so a freshly inserted one is
+      * caught) to document.body, behind an inert placeholder stamped `data-kyo-portal-slot="<path>"` at its logical position. Twin
+      * of `__kyoAdoptPortals` in HtmlRenderer.clientJs; keep them in lockstep.
       *
-      * Adopt: every `data-kyo-portal` element still sitting inline under `root` (root included, so a freshly inserted
-      * one is caught) is re-homed to document.body behind an inert placeholder stamped `data-kyo-portal-slot="<path>"`
-      * at its logical position. Must run after focus and enter seeding, both of which are subtree-scoped and need the
-      * element inline. Reparenting drops DOM focus, so focus and caret held inside the moved subtree are captured and
-      * re-applied after the move; the enter transition is unaffected, since its from-state classes release on the next
-      * frame.
-      *
-      * Orphans: a body twin whose placeholder is gone (its logical slot was removed or replaced by this patch) left
-      * with its region, so its leave ghost is prepared, the twin removed, and the ghost spawned, in that order, since
-      * [[spawnGhosts]] drops ghosts whose source is still connected. Document-wide by necessity: the twin sits outside
-      * every region subtree, so the regular leave sweep cannot see it.
+      * Must run after focus and enter seeding, both of which are subtree-scoped and need the element inline. Reparenting drops DOM
+      * focus, so focus and caret held inside the moved subtree are captured and re-applied after the move; the enter transition is
+      * unaffected, since its from-state classes release on the next frame. A document that never received portal markup skips the
+      * scan (see [[seenMarkers]]).
       */
-    private def portalSweep(root: dom.Element): Unit =
-        if root != null then
+    private def adoptPortals(root: dom.Element): Unit =
+        if root != null && saw(Marker.Portal) then
             val els  = root.querySelectorAll("[data-kyo-portal]")
             val cand =
                 (if root.hasAttribute("data-kyo-portal") then Seq(root) else Seq.empty) ++
@@ -2338,17 +2337,28 @@ private[kyo] object DomBackend:
                 end if
             }
         end if
-        val twins = document.querySelectorAll("body > [data-kyo-portal][data-kyo-path]")
-        (0 until twins.length).foreach { i =>
-            val twin = twins(i).asInstanceOf[dom.Element]
-            val p    = twin.getAttribute("data-kyo-path")
-            if document.querySelector(s"""[data-kyo-portal-slot="$p"]""") == null then
-                val ghosts = prepareLeaveGhosts(twin, Set.empty)
-                discard(document.body.removeChild(twin))
-                spawnGhosts(ghosts)
-            end if
-        }
-    end portalSweep
+    end adoptPortals
+
+    /** Retires every body twin whose placeholder is gone: its logical slot was removed or replaced, so it left with its region.
+      * Its leave ghost is prepared, the twin removed, and the ghost spawned, in that order, since [[spawnGhosts]] drops ghosts whose
+      * source is still connected. Twin of `__kyoRetireOrphanTwins` in HtmlRenderer.clientJs.
+      *
+      * Document-wide by necessity, since a twin sits outside every region subtree, so it runs once per patch, after the patch's roots
+      * were adopted. A patch that only removes still runs it: it inserts nothing to adopt, but may have removed a placeholder.
+      */
+    private def retireOrphanTwins(): Unit =
+        if saw(Marker.Portal) then
+            val twins = document.querySelectorAll("body > [data-kyo-portal][data-kyo-path]")
+            (0 until twins.length).foreach { i =>
+                val twin = twins(i).asInstanceOf[dom.Element]
+                val p    = twin.getAttribute("data-kyo-path")
+                if document.querySelector(s"""[data-kyo-portal-slot="$p"]""") == null then
+                    val ghosts = prepareLeaveGhosts(twin, Set.empty)
+                    discard(document.body.removeChild(twin))
+                    spawnGhosts(ghosts)
+                end if
+            }
+    end retireOrphanTwins
 
     // ---- pointer/drag delegation (SPA transport) ----
 
