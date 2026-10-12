@@ -1818,10 +1818,10 @@ private[kyo] object ReactiveUI:
         mounts: MountTableRef,
         dispatch: MountDispatch,
         pass: RegionKeys,
-        // Where a keyed row collects its channel releases (see ReleaseSink); Absent everywhere else, where a release registers
+        // Where a keyed row collects its channel releases (see RowScope); Absent everywhere else, where a release registers
         // on the Scope. Forwarded only along the row's own static children: a region or mount below the row owns its bindings
         // in its own scope.
-        releases: Maybe[ReleaseSink] = Absent
+        releases: Maybe[RowScope] = Absent
     )(using Frame): Unit < (Async & Scope) =
         // Start the scoped in-place-patch observers for this node's reactive channels. Runs unconditionally: a
         // no-op for attribute-less nodes, but an element carrying only reactive attrs is `isConst = true` and
@@ -1871,10 +1871,10 @@ private[kyo] object ReactiveUI:
       *
       * The baseline is the render-time string, so an unchanged first emission is dropped before the write, and a
       * change that landed between render and subscribe still fires (`Signal.Unsafe.subscribe` delivers the
-      * current value on registration). Release goes to the row's sink or the current Scope (see registerRelease),
+      * current value on registration). Release goes to the row's scope or the current Scope (see registerRelease),
       * the scope that would have owned the fiber, because the next-promise is masked and nothing interrupts it.
       */
-    private def bindTextRegion(rui: ReactiveUI, exchange: UIExchange, releases: Maybe[ReleaseSink])(using
+    private def bindTextRegion(rui: ReactiveUI, exchange: UIExchange, releases: Maybe[RowScope])(using
         Frame
     ): Boolean < (Sync & Scope) =
         (rui.textSignal, exchange.textPatcherNow) match
@@ -1941,7 +1941,7 @@ private[kyo] object ReactiveUI:
         renderedAttrs: Map[String, String] = Map.empty,
         renderedBools: Map[String, Boolean] = Map.empty,
         renderedClasses: Map[String, Boolean] = Map.empty,
-        releases: Maybe[ReleaseSink] = Absent
+        releases: Maybe[RowScope] = Absent
     )(using Frame): Unit < (Async & Scope) =
         // Most nodes bind no channel at all; they leave before the sink is read or a loop is set up.
         if attrs.isEmpty && boolAttrs.isEmpty && classes.isEmpty then Kyo.unit
@@ -1969,7 +1969,7 @@ private[kyo] object ReactiveUI:
         renderedAttrs: Map[String, String],
         renderedBools: Map[String, Boolean],
         renderedClasses: Map[String, Boolean],
-        releases: Maybe[ReleaseSink]
+        releases: Maybe[RowScope]
     )(using Frame): Unit < (Async & Scope) =
         // The first emission is skipped when it still equals the render-time snapshot: normalize
         // happens-before the HTML render on every paint path, so the DOM already shows that value and the
@@ -2061,33 +2061,26 @@ private[kyo] object ReactiveUI:
         }
     end forkChannelObserversOf
 
-    /** Bind one channel to its synchronous sink through `Signal.onChange`. A keyed row that collects its releases
-      * (see ReleaseSink) takes the callback path directly instead, so the release lands in the row's sink rather
-      * than on a Scope finalizer; a signal without a callback path goes through `onChange` there too, which runs
-      * it on a fiber of the current Scope.
+    /** Bind one channel to its synchronous sink. A signal with a callback path runs the write inside the writer's own `set` and
+      * registers its release (see registerRelease); one without goes through `Signal.onChange`, which runs it on a fiber of the
+      * current Scope.
       */
-    private def bindChannel[A](sig: Signal[A], rendered: Maybe[A], write: A => Unit, releases: Maybe[ReleaseSink])(
+    private def bindChannel[A](sig: Signal[A], rendered: Maybe[A], write: A => Unit, releases: Maybe[RowScope])(
         using
         CanEqual[A, A],
         Frame
     ): Unit < (Sync & Scope) =
-        def scoped = sig.onChange(rendered)(v => Sync.defer(write(v)))
-        releases match
-            case Absent        => scoped
-            case Present(sink) =>
-                Sync.Unsafe.defer {
-                    sig.unsafeObserveProjected[A](identity, rendered, write) match
-                        case Present(release) => Kyo.lift(sink.add(release))
-                        case Absent           => scoped
-                }
-        end match
-    end bindChannel
+        Sync.Unsafe.defer {
+            sig.unsafeObserveProjected[A](identity, rendered, write) match
+                case Present(release) => registerRelease(release, releases)
+                case Absent           => sig.onChange(rendered)(v => Sync.defer(write(v)))
+        }
 
-    /** Where a callback binding's release goes: into the row's sink when one is collecting, else onto the Scope. */
-    private def registerRelease(release: () => Unit, releases: Maybe[ReleaseSink])(using Frame): Unit < (Sync & Scope) =
+    /** Where a callback binding's release goes: into the row's scope when one is collecting, else onto the Scope. */
+    private def registerRelease(release: () => Unit, releases: Maybe[RowScope])(using Frame): Unit < (Sync & Scope) =
         releases match
-            case Present(sink) => Sync.Unsafe.defer(sink.add(release))
-            case Absent        => Scope.ensure(Sync.defer(release()))
+            case Present(row) => Sync.Unsafe.defer(row.add(release))
+            case Absent       => Scope.ensure(Sync.defer(release()))
 
     /** Starts the fiber of a region over a `Signal[UI]`, with a fresh Scope per value: each value is painted, walked, and its
       * reactive children subscribed in that Scope, so the next value or an interrupt tears them down by cascade. `regionMounts` is the
@@ -2268,35 +2261,29 @@ private[kyo] object ReactiveUI:
         val scope: RowScope
     )
 
-    /** The release callbacks of one row's channel bindings, released together by the registry.
+    /** What keeps one keyed row's subscriptions open, closed by the registry when the row is evicted.
       *
-      * A plain keyed row binds a class channel and a text: two callbacks on their signals' promises, each
-      * released by one call. On the row's Scope finalizer each would be an effect of its own, an `Abort`
-      * handler around a deferred call, run by the finalizer's close and await. The sink is a list the eviction
-      * runs in one pass; the Scope finalizer keeps only what is not a bare release (a nested region's fiber, a
-      * mount), which for a plain row is nothing.
+      * A plain keyed row binds a class channel and a text: two callbacks on their signals' promises, each released by one call. On a
+      * Scope finalizer each would be an effect of its own, an `Abort` handler around a deferred call, run by the finalizer's close and
+      * await. So bare releases collect here and run in one pass; the finalizer keeps only what is not a bare release (a nested
+      * region's fiber, a mount), which for a plain row is nothing.
       */
-    final private[kyo] class ReleaseSink:
-        private val releases = scala.collection.mutable.ArrayBuffer.empty[() => Unit]
+    final private[kyo] class RowScope(val finalizer: Scope.Finalizer):
+        private var releases: List[() => Unit] = Nil
 
-        def add(release: () => Unit)(using AllowUnsafe): Unit = discard(releases += release)
+        def add(release: () => Unit)(using AllowUnsafe): Unit = releases = release :: releases
 
         /** Runs every release, newest first, and reports the first failure instead of stopping at it. */
         def releaseAll()(using AllowUnsafe): Maybe[Throwable] =
             var failed: Maybe[Throwable] = Absent
-            var i                        = releases.length - 1
-            while i >= 0 do
-                try releases(i)()
+            releases.foreach { release =>
+                try release()
                 catch case t if scala.util.control.NonFatal(t) => if failed.isEmpty then failed = Present(t)
-                i -= 1
-            end while
-            releases.clear()
+            }
+            releases = Nil
             failed
         end releaseAll
-    end ReleaseSink
-
-    /** What keeps one row's subscriptions open: its channel releases and its Scope finalizer. */
-    final private[kyo] class RowScope(val releases: ReleaseSink, val finalizer: Scope.Finalizer)
+    end RowScope
 
     /** Per-region ownership of reusable Foreach rows, in list order, plus the same rows by key. Mutation
       * happens only from the owning region's sequential observe loop, so plain get/set on the refs suffices.
@@ -2339,7 +2326,7 @@ private[kyo] object ReactiveUI:
                     else index.getAndUpdate(_ -- gone.map(_.key)).unit
                 // The channel releases of every evicted row in one pass, then the finalizers, which for a plain row hold
                 // nothing and complete without suspending (initInline).
-                failures <- Sync.Unsafe.defer(gone.flatMap(_.scope.releases.releaseAll()))
+                failures <- Sync.Unsafe.defer(gone.flatMap(_.scope.releaseAll()))
                 _        <- Kyo.foreachDiscard(failures)(t => Log.error("kyo-ui: a row's release failed", t))
                 _        <- Kyo.foreachDiscard(gone)(r => r.scope.finalizer.close(Absent).andThen(r.scope.finalizer.await))
             yield ()
@@ -2529,13 +2516,12 @@ private[kyo] object ReactiveUI:
                         // registered on it. Subscribing inline rather than on a forked fiber makes a row that
                         // suspends finish before the emission does; the paint is already out by then.
                         // The registry always closes and awaits a row, so its finalizers run on the evicting
-                        // fiber (initInline) instead of a fiber per row, and its channel releases collect in a
-                        // sink the eviction runs in one pass.
+                        // fiber (initInline) instead of a fiber per row, and its channel releases collect in the
+                        // row's scope, which the eviction runs in one pass.
                         def rowRunner(kids: Seq[ReactiveUI], pass: RegionKeys): RowScope < Async =
                             Sync.Unsafe.defer {
                                 val fin   = Scope.Finalizer.Unsafe.initInline()
-                                val sink  = new ReleaseSink
-                                val scope = new RowScope(sink, fin)
+                                val scope = new RowScope(fin)
                                 // A root, as `Scope.runUnowned`'s is: the registry owns the row, not the enclosing scope.
                                 ContextEffect.handle[Scope.Finalizer, Scope, Unit, Async](
                                     Tag[Scope],
@@ -2544,7 +2530,7 @@ private[kyo] object ReactiveUI:
                                     join = (parent: Scope.Finalizer, _: Scope.Finalizer, _: Scope.Finalizer) => parent
                                 ) {
                                     Kyo.foreachDiscard(kids)(
-                                        subscribeScoped(_, exchange, signalChangeTime, regionMounts, dispatch, pass, Present(sink))
+                                        subscribeScoped(_, exchange, signalChangeTime, regionMounts, dispatch, pass, Present(scope))
                                     )
                                 }.andThen(scope)
                             }
