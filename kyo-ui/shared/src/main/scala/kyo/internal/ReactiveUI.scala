@@ -2276,10 +2276,12 @@ private[kyo] object ReactiveUI:
         /** Runs every release, newest first, and reports the first failure instead of stopping at it. */
         def releaseAll()(using AllowUnsafe): Maybe[Throwable] =
             var failed: Maybe[Throwable] = Absent
-            releases.foreach { release =>
-                try release()
+            var rest                     = releases
+            while rest.nonEmpty do
+                try rest.head()
                 catch case t if scala.util.control.NonFatal(t) => if failed.isEmpty then failed = Present(t)
-            }
+                rest = rest.tail
+            end while
             releases = Nil
             failed
         end releaseAll
