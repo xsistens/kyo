@@ -338,12 +338,12 @@ def profile(selected: Signal[Int]): UI =
 
 | Modifier | Effect |
 | --- | --- |
-| `.keyed(k)` | Keeps the instance (its `Scope`, resources and content) across re-renders of the regions around it, as long as each re-render shows the node from the same call site, in the same row of any keyed list around it, with an equal key. Otherwise the old instance is released before the new one starts. |
+| `.keyed(k)` | Keeps the instance (its `Scope`, resources and content) across re-renders of the regions around it, as long as each re-render shows the node from the same `.keyed` call, in the same row of any keyed list around it, with an equal key. Otherwise the old instance is released before the new one starts. |
 | `.placeholder(ui)` | Shown until the effect publishes. Defaults to an empty node. |
 | `.onError(f)` | Renders a failure from a `UI.MountError`: the error, a ready `message`, and a `source` saying whether the effect failed (`Effect`, `Panic`) or a feed it forked died later (`Fork`). Defaults to an inline error node. |
 | `.whilePending(p)` | What a node shows while a new instance is pending: `KeepLatest` (the default) keeps an inert snapshot of the previous content, with no live regions and no handlers; `Placeholder` shows the placeholder, the better choice for a form. |
 
-A node without a key gets a fresh instance every time its enclosing region re-renders. Siblings that appear or disappear around a keyed node do not affect it, and two call sites never share an instance, even with equal keys. Inputs that should update a live instance belong in `Signal` parameters; a plain value the effect captures belongs in the key. A helper that builds mounted nodes should take a `(using Frame)`, so that each of its callers counts as a call site of its own.
+A node without a key gets a fresh instance every time its enclosing region re-renders. Siblings that appear or disappear around a keyed node do not affect it, and two `.keyed` calls never share an instance, even with equal keys. When one render shows the same call with the same key in several places, each place gets an instance of its own. Inputs that should update a live instance belong in `Signal` parameters; a plain value the effect captures belongs in the key. A helper that applies `.keyed` itself to effects its callers pass in can take a `(using UI.MountSite)`, so that each of its callers counts as a call of its own.
 
 A mount effect returns once it has set things up, so a feed it starts keeps running after the content is on screen. Start it with `UI.fork` instead of `Fiber.init`, and a failure of the feed switches the node to its error rendering:
 

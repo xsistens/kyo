@@ -319,13 +319,21 @@ object UI:
       *
       * Identity decides when the effect runs again. A node without a key gets a fresh instance whenever its enclosing reactive region
       * re-renders. A node with [[kyo.UI.MountedOps.keyed]] keeps its instance across re-renders of every region around it, as long as
-      * the same call site renders it with an equal key in the same list row.
+      * each re-render shows it from the same `.keyed` call with an equal key in the same list row.
       *
       * The effect must return promptly: allocate and fork, never park. Anything long-lived belongs on a forked fiber, which the
       * instance's `Scope` owns; fork it with [[kyo.UI.fork]] so its failure reaches the node.
       */
     def mounted(effect: UI < (Abort[Throwable] & Async & Scope))(using Frame): Mounted =
         Mounted(effect, key = Absent, placeholderUI = Absent, errorRender = Absent, pendingPolicy = PendingPolicy.KeepLatest)
+
+    /** Where a [[kyo.UI.MountedOps.keyed]] call is written, which is part of a keyed instance's identity.
+      *
+      * It is fixed at compile time from the source position of the `.keyed` call, so a `Frame` passed down through the methods that
+      * build the tree does not merge two calls. A helper that applies `.keyed` itself to effects its callers supply can take a
+      * `(using UI.MountSite)`, which makes each of its callers a place of its own.
+      */
+    type MountSite = kyo.internal.MountSites.MountSite
 
     /** Forks a fiber whose failure the enclosing [[kyo.UI.mounted]] node reports: the `Fiber.init` to use inside a mount effect.
       *
@@ -478,18 +486,18 @@ object UI:
         extension (m: Mounted)
             /** Keeps the node's instance (its `Scope`, resources and content) across re-renders of the reactive regions around it.
               *
-              * The instance lives as long as each re-render shows this node from the same call site, in the same row of any enclosing
-              * keyed list, with an equal key; otherwise it is torn down before the new instance starts. Siblings that appear or
-              * disappear around the node, or around the regions it sits in, do not affect it. Regions repeated from one call site
-              * outside a keyed list are told apart by their order. A helper that builds mounted nodes should take a `(using Frame)`,
-              * so each of its callers is a call site of its own.
+              * The instance lives as long as each re-render shows this node from the same `.keyed` call, in the same row of any
+              * enclosing keyed list, with an equal key; otherwise it is torn down before the new instance starts. Siblings that appear
+              * or disappear around the node, or around the regions it sits in, do not affect it. When one render shows several nodes
+              * with the same call, key and rows, each gets an instance of its own, and their positions tell them apart from one render
+              * to the next.
               *
               * Inputs that should update a live instance belong in `Signal` parameters. A plain value the effect captures belongs in the
               * key, or the instance keeps the value it was created with.
               */
-            def keyed[K](key: K)(using CanEqual[K, K]): Mounted =
+            def keyed[K](key: K)(using CanEqual[K, K], MountSite): Mounted =
                 given Frame = m.frame
-                m.copy(key = Present(key))
+                m.copy(key = Present(key), site = summon[MountSite])
 
             /** Shown while the effect is pending on the first mount, and on every later re-mount under `PendingPolicy.Placeholder`.
               * Defaults to an empty node.
@@ -2032,14 +2040,16 @@ object UI:
         private[kyo] case class KeyedChild[C <: UI](key: String, child: UI)(using val frame: Frame) extends UI
 
         /** A component that runs an effect to produce its content, built by [[kyo.UI.mounted]]. Its static rendering is its
-          * placeholder; the live content belongs to the instance the renderer runs.
+          * placeholder; the live content belongs to the instance the renderer runs. `site` is where [[kyo.UI.MountedOps.keyed]] was
+          * called, and means nothing without a key.
           */
         case class Mounted(
             effect: UI < (Abort[Throwable] & Async & Scope),
             key: Maybe[Any],
             placeholderUI: Maybe[UI],
             errorRender: Maybe[UI.MountError => UI],
-            pendingPolicy: UI.PendingPolicy
+            pendingPolicy: UI.PendingPolicy,
+            site: UI.MountSite = kyo.internal.MountSites.MountSite.none
         )(using val frame: Frame) extends UI with HtmlContent
 
         // ====== Block containers ======

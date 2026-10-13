@@ -104,7 +104,7 @@ final private[kyo] case class MountedSpec(node: UI.Ast.Mounted, path: Seq[String
 
     /** The instance identity of a keyed node; a keyless node has none, since every re-render replaces its instance. */
     def identity: Maybe[ReactiveUI.MountIdentity] =
-        node.key.map(ReactiveUI.MountIdentity(rows, node.frame, _))
+        node.key.map(ReactiveUI.MountIdentity(rows, node.site, _))
 end MountedSpec
 
 private[kyo] object ReactiveUI:
@@ -2608,12 +2608,12 @@ private[kyo] object ReactiveUI:
         h
     end siteHash
 
-    /** The identity a keyed mount instance keeps across re-renders: the keys of the list rows it sits in, its call site and its key.
-      * Positions among siblings are deliberately not part of it, so siblings that come and go leave it alone. The hash is computed
-      * once.
+    /** The identity a keyed mount instance keeps across re-renders: the keys of the list rows it sits in, where its `.keyed` call is
+      * written and its key. Positions among siblings are deliberately not part of it, so siblings that come and go leave it alone; they
+      * only tell apart nodes of one render pass that share an identity (see [[MountTable]]). The hash is computed once.
       */
-    final private[kyo] case class MountIdentity(rows: List[String], frame: Frame, key: Any) derives CanEqual:
-        override val hashCode: Int = (rows.hashCode * 31 + siteHash(frame)) * 31 + key.hashCode
+    final private[kyo] case class MountIdentity(rows: List[String], site: UI.MountSite, key: Any) derives CanEqual:
+        override val hashCode: Int = (rows.hashCode * 31 + site.hashCode) * 31 + key.hashCode
 
     /** Where a region's mount table sits in the table of the enclosing region: the keys of the list rows the region sits in, the call
       * site of the node it comes from, and its rank among the regions of one render pass that share those two. Like a mount's identity
@@ -2838,20 +2838,29 @@ private[kyo] object ReactiveUI:
             )
     end MountTableRef
 
+    /** One keyed instance of a [[MountTable]] and the path it was last shown at. A slot a pass reserves for a node that had no instance
+      * is filled by that node's claim.
+      */
+    final private class MountSlot(@volatile var path: Seq[String]):
+        @volatile var instance: Maybe[MountInstance] = Absent
+
     /** Keyed instances by identity, the tables of the regions directly inside this one by [[RegionKey]], and the state of the current render
-      * pass: the identities claimed so far (a second claim is a duplicate) and the snapshots left by instances that ended, keyed by
-      * the path they were shown at, for a `KeepLatest` successor at the same place. The pass state is cleared when a pass starts and
-      * when it ends, so nothing accumulates and a pass cut short by an interrupt leaves nothing behind.
+      * pass: which slot each keyed node of the pass takes, and the snapshots left by instances that ended, keyed by the path they were
+      * shown at, for a `KeepLatest` successor at the same place.
       *
-      * Written from the region's own observe loop, from the loops of the regions inside it, and from the finalizer of a keyless
-      * instance, which runs as a loop moves on.
+      * An identity usually belongs to one node. When a pass shows it several times (one helper, one key, several places), each node
+      * gets a slot of its own: a node takes the slot last shown at its path, and the rest are handed out in order, so nodes that keep
+      * their places keep their instances and one that goes away takes only its own.
+      *
+      * The instances and the pass state are written only from the region's own observe loop; the region tables also from the loops of
+      * the regions inside it, and the snapshots from the finalizer of a keyless instance, which runs as a loop moves on.
       */
     final private[kyo] class MountTable:
         import AllowUnsafe.embrace.danger
 
-        private val instances = AtomicRef.Unsafe.init(Dict.empty[MountIdentity, (MountInstance, Seq[String])])
+        private val instances = AtomicRef.Unsafe.init(Dict.empty[MountIdentity, Chunk[MountSlot]])
         private val regions   = AtomicRef.Unsafe.init(Dict.empty[RegionKey, MountTable])
-        private val claimed   = AtomicRef.Unsafe.init(Set.empty[MountIdentity])
+        private val assigned  = AtomicRef.Unsafe.init(Maybe.empty[java.util.IdentityHashMap[ReactiveUI, MountSlot]])
         private val handoff   = AtomicRef.Unsafe.init(Dict.empty[Seq[String], UI])
 
         def region(key: RegionKey): Maybe[MountTable] = regions.get().get(key)
@@ -2860,20 +2869,23 @@ private[kyo] object ReactiveUI:
         def adoptRegion(key: RegionKey, fresh: MountTable): MountTable =
             regions.getAndUpdate(m => if m.contains(key) then m else m.update(key, fresh)).get(key).getOrElse(fresh)
 
-        /** The live instance for `identity`, or a new one. `Absent` when the identity was already claimed in this pass. */
-        def claim(identity: MountIdentity, spec: MountedSpec)(using Frame): Maybe[MountInstance] < Sync =
-            Sync.Unsafe.defer(claimed.getAndUpdate(_ + identity).contains(identity)).map { duplicate =>
-                if duplicate then Absent
-                else
-                    Sync.Unsafe.defer(instances.get().get(identity)).map {
-                        case Present((instance, _)) =>
-                            Sync.Unsafe.defer(discard(instances.getAndUpdate(_.update(identity, (instance, spec.path)))))
-                                .andThen(Present(instance))
-                        case Absent =>
-                            for
-                                instance <- start(spec)
-                                _        <- Sync.Unsafe.defer(discard(instances.getAndUpdate(_.update(identity, (instance, spec.path)))))
-                            yield Present(instance)
+        /** The instance of the slot this pass gave `rui`, started if the slot is empty. A node no pass has seen belongs to a table the
+          * pass created, which holds nothing yet, so it starts a new instance.
+          */
+        def claim(rui: ReactiveUI, identity: MountIdentity, spec: MountedSpec)(using Frame): MountInstance < Sync =
+            Sync.Unsafe.defer(assigned.get().flatMap(slots => Maybe(slots.get(rui)))).map {
+                case Present(slot) =>
+                    slot.instance match
+                        case Present(instance) => Kyo.lift(instance)
+                        case Absent => start(spec).map(instance => Sync.Unsafe.defer { slot.instance = Present(instance); instance })
+                case Absent =>
+                    start(spec).map { instance =>
+                        Sync.Unsafe.defer {
+                            val slot = new MountSlot(spec.path)
+                            slot.instance = Present(instance)
+                            discard(instances.getAndUpdate(m => m.update(identity, m.get(identity).getOrElse(Chunk.empty).append(slot))))
+                            instance
+                        }
                     }
             }
 
@@ -2895,29 +2907,74 @@ private[kyo] object ReactiveUI:
           * for all of it.
           */
         def evictExcept(kids: Seq[ReactiveUI], pass: RegionKeys)(using Frame): Unit < Async =
-            val keep = passMembers(kids).foldLeft(Set.empty[MountIdentity]) { (acc, kid) =>
-                kid.mounted.flatMap(_.identity).fold(acc)(acc + _)
-            }
             Sync.Unsafe.defer {
-                claimed.set(Set.empty)
+                // The pass's keyed nodes by identity, each group in walk order.
+                val groups = new java.util.HashMap[MountIdentity, java.util.ArrayList[ReactiveUI]]()
+                passMembers(kids).foreach { kid =>
+                    kid.mounted.flatMap(_.identity).foreach { identity =>
+                        discard(groups.computeIfAbsent(identity, _ => new java.util.ArrayList[ReactiveUI](1)).add(kid))
+                    }
+                }
+                val previous  = instances.get()
+                val slots     = new java.util.IdentityHashMap[ReactiveUI, MountSlot]()
+                var kept      = Dict.empty[MountIdentity, Chunk[MountSlot]]
+                var goneSlots = Chunk.empty[MountSlot]
+                groups.forEach { (identity, nodes) =>
+                    val old           = previous.get(identity).getOrElse(Chunk.empty)
+                    val (taken, left) =
+                        if nodes.size == 1 && old.size <= 1 then
+                            (if old.isEmpty then Chunk(new MountSlot(nodes.get(0).path)) else old, Chunk.empty)
+                        else pair(nodes, old)
+                    var i = 0
+                    while i < nodes.size do
+                        val slot = taken(i)
+                        slot.path = nodes.get(i).path
+                        discard(slots.put(nodes.get(i), slot))
+                        i += 1
+                    end while
+                    kept = kept.update(identity, taken)
+                    goneSlots = goneSlots.concat(left)
+                }
+                previous.foreach { (identity, old) =>
+                    if !groups.containsKey(identity) then goneSlots = goneSlots.concat(old)
+                }
+                instances.set(kept)
+                assigned.set(Present(slots))
                 val keepRegions     = if regions.get().isEmpty then Set.empty[RegionKey] else pass.all
                 val previousRegions = regions.getAndUpdate(_.filter((key, _) => keepRegions.contains(key)))
-                val previous        = instances.getAndUpdate(_.filter((identity, _) => keep.contains(identity)))
                 val goneRegions     = previousRegions.foldLeft(Chunk.empty[MountTable]) { (acc, key, table) =>
                     if keepRegions.contains(key) then acc else acc.append(table)
                 }
-                val goneInstances = previous.foldLeft(Chunk.empty[(MountInstance, Seq[String])]) { (acc, identity, entry) =>
-                    if keep.contains(identity) then acc else acc.append(entry)
-                }
                 Kyo.foreachDiscard(goneRegions)(_.evictAll)
-                    .andThen(Kyo.foreachDiscard(goneInstances)((instance, path) => retire(instance, path)))
+                    .andThen(Kyo.foreachDiscard(goneSlots)(slot => slot.instance.fold(Kyo.unit)(retire(_, slot.path))))
             }
         end evictExcept
 
+        /** The slots of `old` for the nodes of one identity, in the nodes' order: a slot last shown at a node's path goes to that node,
+          * the others in order, and nodes left over get new slots. Also answers the slots no node took.
+          */
+        private def pair(nodes: java.util.ArrayList[ReactiveUI], old: Chunk[MountSlot]): (Chunk[MountSlot], Chunk[MountSlot]) =
+            val free   = scala.collection.mutable.ArrayBuffer.from(old)
+            val result = new Array[MountSlot](nodes.size)
+            var i      = 0
+            while i < nodes.size do
+                val at = free.indexWhere(_.path == nodes.get(i).path)
+                if at >= 0 then result(i) = free.remove(at)
+                i += 1
+            end while
+            i = 0
+            while i < nodes.size do
+                if result(i) == null then
+                    result(i) = if free.nonEmpty then free.remove(0) else new MountSlot(nodes.get(i).path)
+                i += 1
+            end while
+            (Chunk.from(result), Chunk.from(free))
+        end pair
+
         def evictAll(using Frame): Unit < Async = evictExcept(Seq.empty, RegionKeys.empty)
 
+        /** Ends a pass. The slots stay assigned until the next pass, so a node that subscribes late still finds its own. */
         def endWalk(): Unit =
-            claimed.set(Set.empty)
             handoff.set(Dict.empty)
     end MountTable
 
@@ -2934,30 +2991,14 @@ private[kyo] object ReactiveUI:
         dispatch: MountDispatch
     )(using Frame): Unit < (Async & Scope) =
         mounts.force.map { table =>
-            val instance: Maybe[MountInstance] < (Async & Scope) = spec.identity match
-                case Present(identity) => table.claim(identity, spec)
+            val instance: MountInstance < (Async & Scope) = spec.identity match
+                case Present(identity) => table.claim(rui, identity, spec)
                 case Absent            =>
                     for
                         instance <- table.start(spec)
                         _        <- Scope.ensure(table.retire(instance, spec.path))
-                    yield Present(instance)
-            instance.map {
-                case Present(instance) => subscribeMountContent(rui, spec, instance, exchange, signalChangeTime, dispatch)
-                case Absent            =>
-                    given Frame = spec.node.frame
-                    val key     = spec.node.key.map(_.toString).getOrElse("")
-                    Log.warn(
-                        s"kyo-ui: mounted key '$key' is shown twice by the same call site in one render pass, at " +
-                            s"${spec.path.mkString(".")}; give each a distinct key"
-                    ).andThen(exchange.onChange(
-                        rui.region,
-                        rui.path,
-                        rui.contentContext,
-                        rui.parentContext,
-                        Absent,
-                        UI.span(UI.Ast.Text(s"kyo-ui: duplicate mounted key '$key'")).cssClass("kyo-mount-error")
-                    ))
-            }
+                    yield instance
+            instance.map(subscribeMountContent(rui, spec, _, exchange, signalChangeTime, dispatch))
         }
     end subscribeMounted
 

@@ -292,6 +292,122 @@ class MountedTest extends kyo.test.Test[Any]:
         yield succeed
     }
 
+    // The helpers below take a `(using Frame)` the way application code does, so every mount they build gets the same frame.
+
+    private def counted(runs: AtomicRef[Map[String, Int]], name: String)(using Frame): UI < Sync =
+        runs.updateAndGet(m => m.updated(name, m.getOrElse(name, 0) + 1)).map(m => span(s"$name:${m(name)}"))
+
+    private def panels(id: String, runs: AtomicRef[Map[String, Int]])(using Frame): UI =
+        div(
+            UI.mounted(counted(runs, "cover")).keyed(id),
+            UI.mounted(counted(runs, "save")).keyed(id),
+            UI.mounted(counted(runs, "tracks")).keyed(id)
+        )
+
+    "mounts built under one passed-down Frame are told apart by where .keyed is written" in {
+        for
+            runs <- AtomicRef.init(Map.empty[String, Int])
+            tick <- Signal.initRef(0)
+            ui = div(tick.render(_ => panels("album-1", runs)))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _     <- showsEventually(recorder, Seq("0", "0"), "cover:1")
+                    _     <- showsEventually(recorder, Seq("0", "1"), "save:1")
+                    _     <- showsEventually(recorder, Seq("0", "2"), "tracks:1")
+                    shown <- afterRepaint(recorder, Seq("0"))(tick.set(1))
+                    _     <- showsEventually(recorder, Seq("0", "2"), "tracks:1")
+                yield assert(!shown.contains("duplicate"), shown)
+            }
+            counts <- runs.get
+        yield assert(counts == Map("cover" -> 1, "save" -> 1, "tracks" -> 1), counts.toString)
+    }
+
+    private def tile(ref: String, runs: AtomicInt, released: AtomicInt)(using Frame): UI =
+        UI.mounted(Scope.ensure(released.incrementAndGet.unit).andThen(runs.incrementAndGet.map(n => span(s"$ref:$n")))).keyed(ref)
+
+    "the same keyed tile shown twice in one region gives each slot its own instance" in {
+        for
+            runs     <- AtomicInt.init(0)
+            released <- AtomicInt.init(0)
+            tick     <- Signal.initRef(0)
+            ui = div(tick.render(_ => UI.Ast.Div(children = Chunk("x", "y", "x").map(tile(_, runs, released)))))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _     <- showsEventually(recorder, Seq("0", "2"), "x:")
+                    shown <- afterRepaint(recorder, Seq("0"))(tick.set(1))
+                    _     <- showsEventually(recorder, Seq("0", "2"), "x:")
+                yield assert(!shown.contains("duplicate"), shown)
+            }
+            total <- runs.get
+        yield assert(total == 3, s"runs: $total")
+    }
+
+    "a duplicate that goes away leaves the other instances where they are" in {
+        for
+            runs     <- AtomicInt.init(0)
+            released <- AtomicInt.init(0)
+            show     <- Signal.initRef(true)
+            ui = div(show.render { s =>
+                UI.Ast.Div(children = Chunk("x", "y", "x").zipWithIndex.map { (ref, i) =>
+                    if i == 0 && !s then UI.empty else tile(ref, runs, released)
+                })
+            })
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _      <- assertEventually(runs.get.map(_ == 3))
+                    _      <- showsEventually(recorder, Seq("0", "2"), "x:")
+                    before <- recorder.shown(Seq("0", "2"))
+                    _      <- afterRepaint(recorder, Seq("0"))(show.set(false))
+                    _      <- assertEventually(released.get.map(_ == 1))
+                    _      <- showsEventually(recorder, Seq("0", "2"), "x:")
+                    after  <- recorder.shown(Seq("0", "2"))
+                    total  <- runs.get
+                yield assert(after == before && total == 3, s"before: $before, after: $after, runs: $total")
+            }
+        yield succeed
+    }
+
+    private def editorOrViewer(editing: Boolean, id: String, runs: AtomicRef[Map[String, Int]])(using Frame): UI =
+        if editing then UI.mounted(counted(runs, "editor")).keyed(id)
+        else UI.mounted(counted(runs, "viewer")).keyed(id)
+
+    "two .keyed sites in one helper at one position are separate instances" in {
+        for
+            runs    <- AtomicRef.init(Map.empty[String, Int])
+            editing <- Signal.initRef(false)
+            ui = div(editing.render(e => div(editorOrViewer(e, "doc-1", runs))))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "0"), "viewer:1")
+                    _ <- editing.set(true)
+                    _ <- showsEventually(recorder, Seq("0", "0"), "editor:1")
+                    _ <- editing.set(false)
+                    _ <- showsEventually(recorder, Seq("0", "0"), "viewer:2")
+                yield ()
+            }
+        yield succeed
+    }
+
+    private def card(name: String, runs: AtomicRef[Map[String, Int]])(using Frame, UI.MountSite): UI =
+        UI.mounted(counted(runs, name)).keyed("card")
+
+    "a helper that takes the MountSite makes each of its callers a place of its own" in {
+        for
+            runs   <- AtomicRef.init(Map.empty[String, Int])
+            choice <- Signal.initRef(true)
+            ui = div(choice.render(a => div(if a then card("a", runs) else card("b", runs))))
+            _ <- mount(ui) { (recorder, _) =>
+                for
+                    _ <- showsEventually(recorder, Seq("0", "0"), "a:1")
+                    _ <- choice.set(false)
+                    _ <- showsEventually(recorder, Seq("0", "0"), "b:1")
+                    _ <- choice.set(true)
+                    _ <- showsEventually(recorder, Seq("0", "0"), "a:2")
+                yield ()
+            }
+        yield succeed
+    }
+
     private def rowsKeepTheirInstances(keepsRows: Boolean)(using Frame, kyo.test.AssertScope) =
         for
             runs  <- AtomicRef.init(Map.empty[String, Int])
@@ -321,7 +437,7 @@ class MountedTest extends kyo.test.Test[Any]:
         rowsKeepTheirInstances(keepsRows = true)
     }
 
-    "the same call site shown twice with one key inside a list row renders an error in the second slot" in {
+    "the same call site shown twice with one key inside a list row gives each slot its own instance" in {
         for
             runs  <- AtomicInt.init(0)
             items <- Signal.initRef(Chunk("a"))
@@ -332,17 +448,17 @@ class MountedTest extends kyo.test.Test[Any]:
             ui = div(items.foreachKeyed(identity)(row))
             _ <- mount(ui, keepsRows = true) { (recorder, _) =>
                 for
-                    _ <- showsEventually(recorder, Seq("0", "a", "0"), "runs:1")
-                    _ <- showsEventually(recorder, Seq("0", "a", "1"), "duplicate mounted key")
-                    _ <- items.set(Chunk("b", "a"))
-                    _ <- showsEventually(recorder, Seq("0", "b", "1"), "duplicate mounted key")
-                yield ()
+                    _     <- showsEventually(recorder, Seq("0", "a", "1"), "runs:")
+                    _     <- items.set(Chunk("b", "a"))
+                    _     <- showsEventually(recorder, Seq("0", "b", "1"), "runs:")
+                    shown <- recorder.shown(Seq("0", "b"))
+                yield assert(!shown.contains("duplicate"), shown)
             }
             total <- runs.get
-        yield assert(total == 2)
+        yield assert(total == 4, s"runs: $total")
     }
 
-    "the same call site shown twice with one key renders an error in the second slot" in {
+    "the same call site shown twice with one key gives each slot its own instance" in {
         for
             runs <- AtomicInt.init(0)
             ui = UI.Ast.Div(children =
@@ -350,12 +466,13 @@ class MountedTest extends kyo.test.Test[Any]:
             )
             _ <- mount(ui) { (recorder, _) =>
                 for
-                    _ <- showsEventually(recorder, Seq("0"), "runs:1")
-                    _ <- showsEventually(recorder, Seq("1"), "duplicate mounted key")
-                yield ()
+                    _     <- showsEventually(recorder, Seq("0"), "runs:")
+                    _     <- showsEventually(recorder, Seq("1"), "runs:")
+                    shown <- recorder.shown(Seq("1"))
+                yield assert(!shown.contains("duplicate"), shown)
             }
             total <- runs.get
-        yield assert(total == 1)
+        yield assert(total == 2)
     }
 
     "a key change releases the old instance completely before the new effect starts" in {
