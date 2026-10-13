@@ -337,10 +337,15 @@ The vertical an application developer assembles: HTTP services and clients, SQL 
 | [kyo-flow](kyo-flow/README.md)               | ✅  | ✅  | ✅     | ✅   | Durable workflow engine (Temporal/Cadence/ZIO-Flow space); value-replay execution, auto-generated REST     |
 | [kyo-flow-conformance](kyo-flow/README.md#the-conformance-suite) | ✅ | ✅ | ✅ | ✅ | `FlowStoreConformanceTest`: the suite every `FlowStore` must pass, for a third-party store to run in its test scope |
 | [kyo-ui](kyo-ui/README.md)                   | ✅  | ✅  | ✅     | ✅   | Web UIs as pure values: Scala.js DOM app, server HTML-over-SSE or SSR stream with first-class reactivity   |
+| [kyo-ui-components](kyo-ui/components/README.md) | ✅  | ✅  | ✅     | ✅   | Ready-made controls on kyo-ui in PrimeOne markup: typed builders, form binding, generated tokens and icons |
 | [kyo-markdown](kyo-markdown/README.md)       | ✅  | ✅  | ✅     | ✅   | Markdown to a kyo-ui article tree plus a heading outline; pure, total, no third-party Markdown dependency  |
 | [kyo-i18n](kyo-i18n/README.md)               | ✅  | ✅  | ✅     | ✅   | Translate from `.ftl` bundles; active locale as a `Signal` drives reactive `t` leaves; pure Fluent subset  |
 | [kyo-ai](kyo-ai/README.md)                   | ✅  | ✅  | ✅     | ✅   | Typed LLM programs: prompts, tools, thoughts, agents, streaming, provider backends                         |
 | [kyo-caliban](kyo-caliban/README.md)         | ✅  |     |        |      | Caliban GraphQL mounted on kyo-http: typed Kyo effects in resolvers, WebSocket subscriptions               |
+| [kyo-apollo](kyo-apollo/README.md)           | ✅  | ✅  | ✅     | ✅   | GraphQL client: `ApolloClient`, typed `SelectionBuilder` results, `ApolloStore` cache with `watch`, `@defer`/`@stream` |
+| [kyo-apollo-codegen](kyo-apollo-codegen/README.md) | ✅  |     |        |      | Generates kyo-apollo selector objects, enums and input types from a GraphQL schema via `apolloGenerate`   |
+| [kyo-apollo-testing](kyo-apollo-testing/README.md) | ✅  | ✅  |        |      | kyo-apollo test doubles: `TestHttpEngine`, `MockServer`, `MockWebSocketServer`, `StreamProbe` barriers    |
+| [kyo-apollo-itserver](kyo-apollo-itserver/README.md) | ✅  |     |        |      | Unpublished caliban GraphQL server the kyo-apollo end-to-end suite runs against from every platform       |
 
 ### Writing style
 
