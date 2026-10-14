@@ -392,7 +392,7 @@ object UI:
     final case class MountDefaults(errorView: Maybe[PartialFunction[MountError, UI]], placeholderView: Maybe[UI]):
         def onError(pf: PartialFunction[MountError, UI]): MountDefaults = copy(errorView = Present(pf))
         def placeholder(ui: UI): MountDefaults                          = copy(placeholderView = Present(ui))
-        def apply(ui: UI)(using Frame): UI                              = ui
+        def apply(ui: UI)(using Frame): UI                              = Reactive[UI](Signal.initConst(ui), Present(this))
     end MountDefaults
 
     /** Server-push: returns HTTP handlers (SSR page GET and a WebSocket route) for this UI at the given path. Compose with other handlers
@@ -1357,7 +1357,8 @@ object UI:
         /** A subtree driven by a `Signal[UI]`: re-renders the bound region whenever the signal emits a new value. The type parameter `C`
           * is a phantom bound that records the content type at the construction site; it erases to `UI` at runtime.
           */
-        case class Reactive[C <: UI](signal: Signal[UI])(using val frame: Frame) extends UI
+        case class Reactive[C <: UI](signal: Signal[UI], mountDefaults: Maybe[UI.MountDefaults] = Absent)(using val frame: Frame)
+            extends UI
 
         /** A keyed list driven by a `Signal[Chunk[A]]`: renders one child per element, reconciling by `key` when present. The type
           * parameter `C` is a phantom bound that records the content type at the construction site; it erases to `UI` at runtime.

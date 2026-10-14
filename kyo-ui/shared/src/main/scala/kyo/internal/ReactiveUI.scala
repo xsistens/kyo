@@ -22,7 +22,8 @@ private[kyo] case class ReactiveUI(
     // what places a region's mount table, independently of the region's position among its siblings.
     origin: Maybe[Frame] = Absent,
     rows: Long = 0L,
-    deepRows: List[Int] = Nil
+    deepRows: List[Int] = Nil,
+    mountDefaults: Maybe[UI.MountDefaults] = Absent
 )
 
 /** Where event dispatch finds a mounted node's live content.
@@ -63,12 +64,15 @@ private[kyo] object MountDispatch:
 final private[kyo] case class MountedSpec(node: UI.Ast.Mounted, path: Seq[String], rows: List[String]):
     def placeholder: UI = node.placeholderUI.getOrElse(UI.empty(using node.frame))
 
-    def errorUI(error: UI.MountError): UI =
+    def errorUI(error: UI.MountError, defaults: List[UI.MountDefaults] = Nil): UI =
         node.errorRender match
             case Present(render) => render(error)
             case Absent          =>
-                given Frame = node.frame
-                UI.span(UI.Ast.Text(error.message)).cssClass("kyo-mount-error")
+                defaults.iterator.flatMap(_.errorView.toOption).find(_.isDefinedAt(error)) match
+                    case Some(view) => view(error)
+                    case None       =>
+                        given Frame = node.frame
+                        UI.span(UI.Ast.Text(error.message)).cssClass("kyo-mount-error")
 
     def mountError(t: Throwable, source: UI.MountErrorSource): UI.MountError =
         UI.MountError(t, source, Maybe(t.getMessage).getOrElse(t.toString), node.frame, path, node.key)
@@ -185,7 +189,7 @@ private[kyo] object ReactiveUI:
                                 walkStatic(currentUI, path, svg, contentContext, contentParentContext, cells, rows = 0L, deepRows = Nil)
                             result <- freshHdl(targetPath, event)
                         yield result
-                }
+                }.copy(mountDefaults = ui.mountDefaults)
                 end for
 
             case ui: Foreach[?, ?] @unchecked =>
@@ -1538,16 +1542,18 @@ private[kyo] object ReactiveUI:
     end MountInstance
 
     private[kyo] object MountInstance:
-        def start(spec: MountedSpec, seed: Maybe[UI])(using Frame): MountInstance < Sync =
+        def start(spec: MountedSpec, seed: Maybe[UI], defaults: List[UI.MountDefaults])(using Frame): MountInstance < Sync =
             for
                 cell   <- Signal.initRef[MountState](MountState.Pending(seed))
                 scope  <- Scope.Finalizer.init(1)
-                runner <- Fiber.initUnscoped(runEffect(spec, cell, scope))
-            yield new MountInstance(cell, MountTableRef.init(), runner, scope)
+                runner <- Fiber.initUnscoped(runEffect(spec, cell, scope, defaults))
+            yield new MountInstance(cell, MountTableRef.init(defaults), runner, scope)
 
         /** Runs the effect with `scope` as its `Scope`, so what it acquires outlives this fiber, and publishes the outcome. */
-        private def runEffect(spec: MountedSpec, cell: SignalRef[MountState], scope: Scope.Finalizer)(using Frame): Unit < Async =
-            val supervision = MountSupervision(spec, cell)
+        private def runEffect(spec: MountedSpec, cell: SignalRef[MountState], scope: Scope.Finalizer, defaults: List[UI.MountDefaults])(
+            using Frame
+        ): Unit < Async =
+            val supervision = MountSupervision(spec, cell, defaults)
             val effect      = MountSupervision.local.let(Present(supervision))(spec.node.effect)
             Abort.run[Throwable](ContextEffect.handleInheritable(Tag[Scope], scope)(effect)).map {
                 case Result.Success(ui) => cell.getAndUpdate(MountSupervision.publish(ui)).unit
@@ -1570,7 +1576,7 @@ private[kyo] object ReactiveUI:
     /** Routes the failures of one mount instance into its content cell. The first failure wins, and a publish that arrives after a
       * failure does not overwrite it.
       */
-    final private[kyo] class MountSupervision(spec: MountedSpec, cell: SignalRef[MountState]):
+    final private[kyo] class MountSupervision(spec: MountedSpec, cell: SignalRef[MountState], defaults: List[UI.MountDefaults]):
 
         /** Completion callback of a [[kyo.UI.fork]] fiber: a terminal failure that is not an interrupt fails the node. */
         def report[E, A](result: Result[E, A])(using Frame): Unit < Sync =
@@ -1587,7 +1593,7 @@ private[kyo] object ReactiveUI:
                 .andThen(fail(t, UI.MountErrorSource.Fork))
 
         def fail(t: Throwable, source: UI.MountErrorSource)(using Frame): Unit < Sync =
-            val failed = MountState.Failed(spec.errorUI(spec.mountError(t, source)))
+            val failed = MountState.Failed(spec.errorUI(spec.mountError(t, source), defaults))
             cell.getAndUpdate {
                 case done: MountState.Failed => done
                 case _                       => failed
@@ -1623,7 +1629,8 @@ private[kyo] object ReactiveUI:
         slot: AtomicRef.Unsafe[Maybe[MountTable]],
         parent: Maybe[MountTableRef],
         keys: RegionKeys,
-        kid: Maybe[ReactiveUI]
+        kid: Maybe[ReactiveUI],
+        val defaults: List[UI.MountDefaults]
     ):
         import AllowUnsafe.embrace.danger
 
@@ -1635,7 +1642,8 @@ private[kyo] object ReactiveUI:
           */
         def child(pass: RegionKeys, region: ReactiveUI): MountTableRef =
             val existing = slot.get().flatMap(table => table.region(pass.of(region)))
-            val ref      = new MountTableRef(AtomicRef.Unsafe.init(existing), Present(this), pass, Present(region))
+            val inherited = region.mountDefaults.fold(defaults)(_ :: defaults)
+            val ref       = new MountTableRef(AtomicRef.Unsafe.init(existing), Present(this), pass, Present(region), inherited)
             existing.foreach(_.bind(ref))
             ref
         end child
@@ -1683,17 +1691,17 @@ private[kyo] object ReactiveUI:
           */
         def claim(rui: ReactiveUI, identity: MountIdentity, spec: MountedSpec)(using Frame): MountInstance < (Async & Scope) =
             force.map { table =>
-                if table.ownedBy(this) then table.claim(rui, identity, spec)
+                if table.ownedBy(this) then table.claim(rui, identity, spec, defaults)
                 else
                     table.live(identity, spec.path) match
                         case Present(instance) => Kyo.lift(instance)
-                        case Absent            => MountInstance.start(spec, Absent).map(i => Scope.ensure(i.teardown).andThen(i))
+                        case Absent => MountInstance.start(spec, Absent, defaults).map(i => Scope.ensure(i.teardown).andThen(i))
             }
 
         /** A keyless instance for `spec`, released with the caller's scope; only the reference the table follows leaves its snapshot. */
         def startKeyless(spec: MountedSpec)(using Frame): MountInstance < (Async & Scope) =
             force.map { table =>
-                table.start(spec).map { instance =>
+                table.start(spec, defaults).map { instance =>
                     Scope.ensure(if table.ownedBy(this) then table.retire(instance, spec.path) else instance.teardown).andThen(instance)
                 }
             }
@@ -1703,12 +1711,13 @@ private[kyo] object ReactiveUI:
         private val serials = new java.util.concurrent.atomic.AtomicLong()
 
         /** A reference no enclosing table owns: the root of a session, or the content of a mount instance. */
-        def init(): MountTableRef =
+        def init(defaults: List[UI.MountDefaults] = Nil): MountTableRef =
             new MountTableRef(
                 AtomicRef.Unsafe.init(Maybe.empty[MountTable])(using AllowUnsafe.embrace.danger),
                 Absent,
                 RegionKeys.empty,
-                Absent
+                Absent,
+                defaults
             )
     end MountTableRef
 
@@ -1760,14 +1769,17 @@ private[kyo] object ReactiveUI:
         /** The instance of the slot this pass gave `rui`, started if the slot is empty. A node no pass has seen belongs to a table the
           * pass created, which holds nothing yet, so it starts a new instance.
           */
-        def claim(rui: ReactiveUI, identity: MountIdentity, spec: MountedSpec)(using Frame): MountInstance < Sync =
+        def claim(rui: ReactiveUI, identity: MountIdentity, spec: MountedSpec, defaults: List[UI.MountDefaults])(using
+            Frame
+        ): MountInstance < Sync =
             Sync.Unsafe.defer(assigned.get().flatMap(slots => Maybe(slots.get(rui)))).map {
                 case Present(slot) =>
                     slot.instance match
                         case Present(instance) => Kyo.lift(instance)
-                        case Absent => start(spec).map(instance => Sync.Unsafe.defer { slot.instance = Present(instance); instance })
+                        case Absent =>
+                            start(spec, defaults).map(instance => Sync.Unsafe.defer { slot.instance = Present(instance); instance })
                 case Absent =>
-                    start(spec).map { instance =>
+                    start(spec, defaults).map { instance =>
                         Sync.Unsafe.defer {
                             val slot = new MountSlot(spec.path)
                             slot.instance = Present(instance)
@@ -1778,11 +1790,11 @@ private[kyo] object ReactiveUI:
             }
 
         /** A new instance, seeded with the snapshot the slot's previous instance left when the node keeps the latest content. */
-        def start(spec: MountedSpec)(using Frame): MountInstance < Sync =
+        def start(spec: MountedSpec, defaults: List[UI.MountDefaults])(using Frame): MountInstance < Sync =
             val seed = spec.node.pendingPolicy match
                 case UI.PendingPolicy.Placeholder => Absent
                 case UI.PendingPolicy.KeepLatest  => handoff.get().get(spec.path)
-            MountInstance.start(spec, seed)
+            MountInstance.start(spec, seed, defaults)
         end start
 
         /** Tears down `instance` and leaves its snapshot at `path` for this pass's successor. */
@@ -1887,7 +1899,12 @@ private[kyo] object ReactiveUI:
         val instance = spec.identity match
             case Present(identity) => mounts.claim(rui, identity, spec)
             case Absent            => mounts.startKeyless(spec)
-        instance.map(subscribeMountContent(rui, spec, _, exchange, signalChangeTime, dispatch))
+        val default = mounts.defaults.iterator.flatMap(_.placeholderView.toOption).nextOption()
+        val withDefault = default match
+            case Some(ph) if spec.node.placeholderUI.isEmpty =>
+                spec.copy(node = spec.node.copy(placeholderUI = Present(ph))(using spec.node.frame))
+            case _ => spec
+        instance.map(subscribeMountContent(rui, withDefault, _, exchange, signalChangeTime, dispatch))
     end subscribeMounted
 
     /** Shows an instance's content cell in the node's range. The content as it is now is painted at once, so a kept instance replaces
@@ -1910,8 +1927,8 @@ private[kyo] object ReactiveUI:
             _     <- Scope.ensure(dispatch.unregister(rui.path, instance.cell))
             first <- instance.cell.current
             _     <- first match
-                case MountState.Pending(Absent) => Kyo.unit
-                case state                      =>
+                case MountState.Pending(Absent) if spec.node.placeholderUI.isEmpty || rui.mounted.get.node.placeholderUI.nonEmpty => Kyo.unit
+                case state =>
                     exchange.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, Absent, state.content(spec))
             // Unsafe: single-writer state of this region's own loop, as in subscribeScoped.
             painted     = AtomicRef.Unsafe.init[MountState](first)(using AllowUnsafe.embrace.danger)
