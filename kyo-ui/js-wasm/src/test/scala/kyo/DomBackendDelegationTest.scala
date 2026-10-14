@@ -107,8 +107,13 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
             call.options.asInstanceOf[scalajs.Dynamic].capture.asInstanceOf[Boolean] &&
             !call.options.asInstanceOf[scalajs.Dynamic].passive.asInstanceOf[Boolean]
 
-    /** The listener registered with an options object rather than a bare `capture` boolean. */
-    private val optionObjectTypes = Set("wheel")
+    private def scrollOptions(call: ListenerCall): Boolean =
+        scalajs.typeOf(call.options) == "object" &&
+            call.options.asInstanceOf[scalajs.Dynamic].capture.asInstanceOf[Boolean] &&
+            call.options.asInstanceOf[scalajs.Dynamic].passive.asInstanceOf[Boolean]
+
+    /** The two listeners registered with an options object rather than a bare `capture` boolean. */
+    private val optionObjectTypes = Set("wheel", "scroll")
 
     /** [[DomTestEnv.MountReady]]'s installation barrier plus a transcript of the teardown hooks.
       *
@@ -191,6 +196,7 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
                 val expected = Seq(
                     // setupEventDelegation
                     "click",
+                    "contextmenu",
                     "input",
                     "change",
                     "submit",
@@ -201,6 +207,7 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
                     "mouseover",
                     "mouseout",
                     "wheel",
+                    "scroll",
                     // setupPointerDelegation
                     "pointerdown",
                     "pointermove",
@@ -232,9 +239,13 @@ class DomBackendDelegationTest extends kyo.test.Test[Any]:
                 val wheel = tracker.added.filter(_.eventType == "wheel")
                 assert(wheel.size == 1)
                 assert(wheel.forall(wheelOptions))
+                val scroll = tracker.added.filter(_.eventType == "scroll")
+                assert(scroll.size == 1)
+                assert(scroll.forall(scrollOptions))
                 assert(tracker.removed.size == tracker.added.size)
                 assert(tracker.removed.filterNot(call => optionObjectTypes.contains(call.eventType)).forall(captureTrue))
                 assert(tracker.removed.filter(_.eventType == "wheel").forall(wheelOptions))
+                assert(tracker.removed.filter(_.eventType == "scroll").forall(scrollOptions))
                 assert(tracker.removed.zip(tracker.added.reverse).forall((removal, addition) => sameCall(removal, addition)))
                 tracker.added.foreach { addition =>
                     assert(tracker.removed.count(removal => sameCall(addition, removal)) == 1)
