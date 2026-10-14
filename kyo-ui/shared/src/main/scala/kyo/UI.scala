@@ -384,6 +384,17 @@ object UI:
     end MountedOps
     export MountedOps.*
 
+    /** Prototype: defaults for the [[kyo.UI.mounted]] nodes inside a subtree that do not set their own. An inner default wins; an
+      * error view that does not match a failure leaves it to the next default around it.
+      */
+    def defaults: MountDefaults = MountDefaults(Absent, Absent)
+
+    final case class MountDefaults(errorView: Maybe[PartialFunction[MountError, UI]], placeholderView: Maybe[UI]):
+        def onError(pf: PartialFunction[MountError, UI]): MountDefaults = copy(errorView = Present(pf))
+        def placeholder(ui: UI): MountDefaults                          = copy(placeholderView = Present(ui))
+        def apply(ui: UI)(using Frame): UI                              = ui
+    end MountDefaults
+
     /** Server-push: returns HTTP handlers (SSR page GET and a WebSocket route) for this UI at the given path. Compose with other handlers
       * via HttpServer.init.
       *
