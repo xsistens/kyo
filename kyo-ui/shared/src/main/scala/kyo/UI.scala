@@ -392,7 +392,44 @@ object UI:
     final case class MountDefaults(errorView: Maybe[PartialFunction[MountError, UI]], placeholderView: Maybe[UI]):
         def onError(pf: PartialFunction[MountError, UI]): MountDefaults = copy(errorView = Present(pf))
         def placeholder(ui: UI): MountDefaults                          = copy(placeholderView = Present(ui))
-        def apply(ui: UI)(using Frame): UI                              = ui
+        def apply(ui: UI)(using Frame): UI                              = MountDefaults.fill(this, ui)
+    end MountDefaults
+
+    private[kyo] object MountDefaults:
+        /** An error view a default filled in, which an outer default extends with the failures it leaves unmatched. */
+        final class Inherited(val view: PartialFunction[MountError, UI]) extends (MountError => UI):
+            def apply(e: MountError): UI =
+                view.applyOrElse(
+                    e,
+                    e =>
+                        given Frame = e.frame
+                        UI.span(Ast.Text(e.message)).cssClass("kyo-mount-error")
+                )
+
+        /** `ui` with `d` filled into every mount that does not set its own, now and in whatever its signals, rows and mount effects
+          * produce later.
+          */
+        def fill(d: MountDefaults, ui: UI): UI =
+            ui match
+                case m: Mounted =>
+                    val errorRender = (m.errorRender, d.errorView) match
+                        case (Present(i: Inherited), Present(pf)) => Present(new Inherited(i.view.orElse(pf)))
+                        case (Absent, Present(pf))                => Present(new Inherited(pf))
+                        case (own, _)                             => own
+                    m.copy(
+                        effect = m.effect.map(fill(d, _))(using m.frame),
+                        placeholderUI = m.placeholderUI.orElse(d.placeholderView),
+                        errorRender = errorRender
+                    )(using m.frame)
+                case r: Reactive[?] =>
+                    given Frame = r.frame
+                    Reactive[UI](r.signal.map(fill(d, _)))
+                case f: Foreach[?, ?] @unchecked =>
+                    f.applyTyped([T] => (signal, key, render) => Foreach[T, UI](signal, key, (i, a) => fill(d, render(i, a)))(using f.frame))
+                case e: Element         => kyo.internal.ReactiveUI.rebuildElement(e, e.children.map(fill(d, _)))
+                case fr: Fragment[?]    => Fragment[UI](fr.children.map(fill(d, _)))(using fr.frame)
+                case k: KeyedChild[?]   => KeyedChild[UI](k.key, fill(d, k.child))(using k.frame)
+                case other              => other
     end MountDefaults
 
     /** Server-push: returns HTTP handlers (SSR page GET and a WebSocket route) for this UI at the given path. Compose with other handlers
