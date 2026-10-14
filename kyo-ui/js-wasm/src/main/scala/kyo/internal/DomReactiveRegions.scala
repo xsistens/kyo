@@ -245,6 +245,45 @@ final private[kyo] class DomReactiveRegions private (
         }
     end adoptLive
 
+    /** Write `value` as the whole content of the range that owns `path`; `false` when no range owns it.
+      *
+      * A text node holds literal characters, so the string is written as-is: no escaping, no parser, and no
+      * repaint of the surrounding region. The common shape (the range holds exactly one text node) assigns
+      * that node's data, which keeps its identity and every DOM-local thing hanging off it; any other shape
+      * is replaced by a single fresh text node.
+      */
+    private[kyo] def setTextAt(path: Seq[String], value: String): Boolean =
+        // The ids the path spells: its own, and the same followed by a transparent-nesting suffix (`n` is not a hex digit,
+        // so no longer path's id starts this way). Under transparent nesting several ranges share the path, and only the
+        // innermost, a leaf, binds its text: writing through an outer one would take the inner one's markers for content
+        // and delete them. A deeper suffix is a longer id, or an equally long one that compares greater.
+        val base                     = ReactiveRegion.htmlId(path)
+        var innermost: Maybe[String] = Absent
+        ranges.foreachEntry { (id, _) =>
+            if id.startsWith(base) && (id.length == base.length || id.charAt(base.length) == 'n') &&
+                innermost.forall(best => id.length > best.length || (id.length == best.length && id > best))
+            then innermost = Present(id)
+        }
+        innermost.foreach { id =>
+            val endpoints = ranges(id)
+            DomReactiveRegions.next(endpoints.start) match
+                case Present(node: dom.Text) if DomReactiveRegions.next(node).exists(_ eq endpoints.end) =>
+                    if node.data != value then node.data = value
+                case _ =>
+                    DomReactiveRegions.parent(endpoints.start).foreach { parent =>
+                        var current = DomReactiveRegions.next(endpoints.start)
+                        while current.nonEmpty && (current.get ne endpoints.end) do
+                            val next = DomReactiveRegions.next(current.get)
+                            discard(parent.removeChild(current.get))
+                            current = next
+                        end while
+                        discard(parent.insertBefore(document.createTextNode(value), endpoints.end))
+                    }
+            end match
+        }
+        innermost.nonEmpty
+    end setTextAt
+
     private[kyo] def size(using Frame): Int < Sync =
         Sync.defer(ranges.size)
 
