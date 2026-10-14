@@ -384,6 +384,25 @@ object UI:
     end MountedOps
     export MountedOps.*
 
+    /** Prototype, not implemented: how the [[kyo.UI.mounted]] nodes inside a subtree load and fail. While the mounts it catches load
+      * for the first time, including the mounts in their content, the boundary shows its placeholder once, in its own place, and then
+      * reveals its content at once. A failed mount counts as loaded and shows the error view in its own place. The innermost boundary
+      * catches a mount; an error view that does not match a failure leaves it to the next boundary around it. A mount's own
+      * `.placeholder`, `.onError` and `.whilePending` are a boundary around that mount alone.
+      */
+    def boundary: Boundary = Boundary(Absent, Absent, Absent)
+
+    final case class Boundary(
+        placeholderView: Maybe[UI],
+        errorView: Maybe[PartialFunction[MountError, UI]],
+        pending: Maybe[PendingPolicy]
+    ):
+        def placeholder(ui: UI): Boundary                          = copy(placeholderView = Present(ui))
+        def onError(pf: PartialFunction[MountError, UI]): Boundary = copy(errorView = Present(pf))
+        def whilePending(p: PendingPolicy): Boundary               = copy(pending = Present(p))
+        def apply(ui: UI)(using Frame): UI                         = ui
+    end Boundary
+
     /** Server-push: returns HTTP handlers (SSR page GET and a WebSocket route) for this UI at the given path. Compose with other handlers
       * via HttpServer.init.
       *
