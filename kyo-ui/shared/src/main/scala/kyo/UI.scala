@@ -400,7 +400,10 @@ object UI:
         def placeholder(ui: UI): Boundary                          = copy(placeholderView = Present(ui))
         def onError(pf: PartialFunction[MountError, UI]): Boundary = copy(errorView = Present(pf))
         def whilePending(p: PendingPolicy): Boundary               = copy(pending = Present(p))
-        def apply(ui: UI)(using Frame): UI                         = ui
+        def apply(ui: UI)(using Frame): UI                         = Ast.Bounded(this, ui, Absent)
+
+        /** Whether the boundary holds its content back while the mounts it catches load. */
+        private[kyo] def waits: Boolean = placeholderView.nonEmpty
     end Boundary
 
     /** Server-push: returns HTTP handlers (SSR page GET and a WebSocket route) for this UI at the given path. Compose with other handlers
@@ -1387,6 +1390,12 @@ object UI:
         case class Fragment[C <: UI](children: Chunk[UI])(using val frame: Frame) extends UI
 
         private[kyo] case class KeyedChild[C <: UI](key: String, child: UI)(using val frame: Frame) extends UI
+
+        /** A subtree under a [[kyo.UI.boundary]]. `display`, when present, is what a static rendering shows in place of the boundary's
+          * own choice between its placeholder and `child`: the live state the engine resolved for a reveal or a snapshot.
+          */
+        private[kyo] case class Bounded(settings: UI.Boundary, child: UI, display: Maybe[UI])(using val frame: Frame) extends UI
+            with HtmlContent
 
         /** A component that runs an effect to produce its content, built by [[kyo.UI.mounted]]. Its static rendering is its
           * placeholder; the live content belongs to the instance the renderer runs. `site` is where [[kyo.UI.MountedOps.keyed]] was

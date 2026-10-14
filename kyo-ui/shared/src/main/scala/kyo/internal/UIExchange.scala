@@ -21,4 +21,12 @@ private[kyo] trait UIExchange:
         previous: Maybe[UI],
         ui: UI
     )(using Frame): Unit < Async
+
+    /** `region` keeps showing old content while its new content loads (`held`), or no longer. A backend that can mark it makes it inert;
+      * one that cannot ignores this, which loses no update, only the marking.
+      */
+    def onHold(region: ReactiveRegion, held: Boolean)(using Frame): Unit < Async = Kyo.unit
+
+    /** The waiting boundary this exchange belongs to, which counts the passes and mounts inside it; none for the page itself. */
+    private[kyo] def gate: Maybe[BoundaryHold] = Absent
 end UIExchange

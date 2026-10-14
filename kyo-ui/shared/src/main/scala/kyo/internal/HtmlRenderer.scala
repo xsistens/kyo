@@ -374,6 +374,33 @@ private[kyo] object HtmlRenderer:
                         end for
                 }
 
+            case m: Mounted if Boundaries.implicitOf(m).nonEmpty =>
+                renderTo(sb, Boundaries.implicitOf(m).get, path, context, namespace, cssRules, parentContext, boundaryMode)
+
+            case b: Bounded =>
+                // A range of its own, so the boundary can later replace what it shows: its placeholder while it holds a mount that loads,
+                // else its content, or the live state the engine resolved.
+                val region           = ReactiveRegion.from(context, namespace)
+                val shown: UI < Sync = b.display match
+                    case Present(d) => d
+                    case Absent     =>
+                        if !b.settings.waits then b.child
+                        else Boundaries.catches(b.child).map(holds => if holds then b.settings.placeholderView.get else b.child)
+                shown.map { content =>
+                    val host = ReactiveRegion.renderHost(region, parentContext, ReactiveRegion.tableContent(content))
+                    openInitialHost(sb, host)
+                    renderTo(
+                        sb,
+                        content,
+                        path,
+                        context.transparent,
+                        ReactiveRegion.namespace(host),
+                        cssRules,
+                        ReactiveRegion.contentParent(host),
+                        ReactiveRegion.BoundaryMode.Emit
+                    ).andThen(closeInitialHost(sb, host))
+                }
+
             case m: Mounted =>
                 // A mount's live content belongs to the instance the renderer runs, so a static render shows its placeholder,
                 // inside a range of its own that the instance's updates then replace.
@@ -1152,6 +1179,16 @@ private[kyo] object HtmlRenderer:
           |  var value=active.tagName==="TEXTAREA"?fresh.textContent:(fresh.getAttribute("value")||"");if(value!==active.value)active.value=value;
           |  applyJsProps(active);return true;
           |}
+          |// A range that keeps showing old content while its new content loads: its elements turn inert and busy and focus leaves them,
+          |// since the server drops what they would send. Only the marks this function set are removed again.
+          |function kyoRangeHold(id,held){
+          |  var endpoints=__kyoRanges&&__kyoRanges.get(id);if(!endpoints)return;
+          |  var roots=kyoRangeRoots(endpoints.start,endpoints.end),ae=document.activeElement;
+          |  for(var i=0;i<roots.length;i++){var r=roots[i];if(r.nodeType!==1)continue;
+          |    if(held){if(r.hasAttribute("inert"))continue;r.setAttribute("inert","");r.setAttribute("aria-busy","true");r.setAttribute("data-kyo-held","");
+          |      if(ae&&ae!==document.body&&r.contains(ae))ae.blur();}
+          |    else if(r.hasAttribute("data-kyo-held")){r.removeAttribute("inert");r.removeAttribute("aria-busy");r.removeAttribute("data-kyo-held");}}
+          |}
           |function kyoRangeReplace(id,html){
           |  if(!kyoRangeId(id))kyoRangeFail("malformed replacement id: "+id);
           |  if(!__kyoRanges)kyoRangeFail("registry is closed");var endpoints=__kyoRanges.get(id);
@@ -1287,6 +1324,8 @@ private[kyo] object HtmlRenderer:
            |    try{__dragRt.serveDropRead(op);}catch(error){kyoClientError(error);}
            |  }else if(op.ReplaceRange){
            |    try{kyoRangeReplace(op.ReplaceRange.regionId,op.ReplaceRange.html);}catch(error){kyoClientError(error);}
+           |  }else if(op.HoldRange){
+           |    try{kyoRangeHold(op.HoldRange.regionId,op.HoldRange.held);}catch(error){kyoClientError(error);}
            |  }else if(op.Replace){
            |    var p=op.Replace.path.join(".");
            |    var el=document.querySelector('[data-kyo-path="'+p+'"]');

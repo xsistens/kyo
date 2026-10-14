@@ -51,6 +51,7 @@ private[kyo] object ReactiveRegion:
             // placeholder is a `tr` is a list of rows, and its anchors belong inside one tbody.
             case mounted: Mounted =>
                 if mounted.placeholderUI.isEmpty then TableContent.Transparent else tableContent(mounted.placeholderUI.get)
+            case b: Bounded                             => tableContent(b.display.getOrElse(b.settings.placeholderView.getOrElse(b.child)))
             case KeyedChild(_, child)                   => tableContent(child)
             case Fragment(children) if children.isEmpty => TableContent.Other
             case Fragment(children)                     => tableContent(children)

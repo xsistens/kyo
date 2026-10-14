@@ -179,7 +179,17 @@ private[kyo] object DomBackend:
 
         private var open = true
 
-        private[kyo] def close(using Frame): Unit < Sync = Sync.defer { open = false }
+        // A range that waits when the mount ends gets no release from its boundary any more, so the marks go here.
+        private[kyo] def close(using Frame): Unit < Sync = regions.releaseHolds.andThen(Sync.defer { open = false })
+
+        override def onHold(region: ReactiveRegion, held: Boolean)(using Frame): Unit < Async =
+            Sync.defer(open).flatMap { isOpen =>
+                if !isOpen then Kyo.unit
+                else
+                    region match
+                        case ReactiveRegion.HtmlRange(regionId) => regions.hold(regionId, held)
+                        case _: ReactiveRegion.SvgElement       => Kyo.unit
+            }
 
         // In-process: the update is a DOM write, not bytes on a wire, so this replaces the region whole
         // (morphing where it can) rather than diffing it. `previous` is what the server-side exchange

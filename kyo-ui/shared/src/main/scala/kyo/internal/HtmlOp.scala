@@ -26,6 +26,11 @@ private[kyo] object HtmlOp:
     case class InjectCss(css: String)                       extends HtmlOp derives Schema
     case class ScrollIntoView(id: String)                   extends HtmlOp derives Schema
 
+    /** Marks the range `regionId` as one that keeps showing old content while its new content loads (`held`), or no longer: while held
+      * it is inert and busy, so it takes no focus and no input that the server would drop.
+      */
+    case class HoldRange(regionId: String, held: Boolean) extends HtmlOp derives Schema
+
     // --- Drag operations ---
 
     /** Requests a bounded byte range from a dropped browser file. */
