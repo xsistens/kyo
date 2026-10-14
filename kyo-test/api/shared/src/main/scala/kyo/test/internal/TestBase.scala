@@ -452,22 +452,34 @@ abstract class TestBase[S] extends KyoTestReflect with TypeCheck:
       * The retries pace on the live clock while `cond` runs under the caller's clock. A leaf that holds the clock
       * (`Clock.withTimeControl`) would otherwise sleep the first retry on held time that nothing advances, and never evaluate `cond`
       * again.
+      *
+      * `within` bounds the retry to its own budget instead of letting it run to the per-test timeout. Pass it whenever the condition is a
+      * value the code under test is EXPECTED to reach quickly, so a condition that will never hold reports in that budget rather than
+      * costing the full timeout: a suite whose leaves each burn two minutes to say "still false" is one nobody runs. The default,
+      * `Duration.Infinity`, leaves the schedule unbounded.
       */
-    protected def assertEventually[S1](cond: => Boolean < S1)(using f: Frame, as: kyo.test.AssertScope): Unit < (Async & S1) =
+    protected def assertEventually[S1](cond: => Boolean < S1, within: Duration = Duration.Infinity)(using
+        f: Frame,
+        as: kyo.test.AssertScope
+    ): Unit < (Async & S1) =
         as.recordEvaluated()
-        Clock.get.map(scoped => Clock.let(Clock.live)(assertEventually(Clock.let(scoped)(cond), as)))
+        Clock.get.map(scoped => Clock.let(Clock.live)(assertEventually(Clock.let(scoped)(cond), within, as)))
     end assertEventually
 
-    private def assertEventually[S1](cond: => Boolean < S1, as: kyo.test.AssertScope)(using f: Frame): Unit < (Async & S1) =
+    private def assertEventually[S1](cond: => Boolean < S1, within: Duration, as: kyo.test.AssertScope)(using
+        f: Frame
+    ): Unit < (Async & S1) =
         Abort.run[AssertionError] {
-            Retry[AssertionError](Schedule.fixed(10.millis)) {
+            Retry[AssertionError](Schedule.fixed(10.millis).maxDuration(within)) {
                 // Run only the AssertionError channel here so the thrown assertion outcomes are observable for the un-record/retry
                 // handling below, while any OTHER failure (an Abort[Closed] from `cond`, an arbitrary Abort[Throwable] value)
                 // flows straight through unhandled and propagates out of assertEventually with its original effect/semantics.
                 Abort.run[AssertionError] {
                     cond.map {
-                        case false => throw new AssertionError("assertEventually: condition not met")
-                        case true  =>
+                        case false =>
+                            val budget = if within.isFinite then s" within ${within.show}" else ""
+                            throw new AssertionError(s"assertEventually: condition not met$budget")
+                        case true =>
                     }
                 }.map {
                     case kyo.Result.Success(_) => ()
