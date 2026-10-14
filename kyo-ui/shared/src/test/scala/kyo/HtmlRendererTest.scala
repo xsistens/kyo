@@ -931,4 +931,11 @@ class HtmlRendererTest extends UITest:
         }
     }
 
+    "the client script a page ships carries no comment lines, and its own base path" in {
+        val js = kyo.internal.HtmlRenderer.clientJs("/app\\u002fx")
+        assert(!js.linesIterator.exists(_.trim.startsWith("//")))
+        assert(js.contains("var base=\"/app\\u002fx\";"))
+        assert(kyo.internal.HtmlRenderer.clientJs("/other").contains("var base=\"/other\";"))
+    }
+
 end HtmlRendererTest
