@@ -40,7 +40,9 @@ private[kyo] case class ReactiveUI(
     // Present on a region whose node kept the signal before its projection to UI (UI.Ast.Reactive.source). Subscribe observes
     // that, so an emission whose value is unchanged never re-renders a subtree that can only be compared as UI; a source lifted
     // from a Signal[String] is bound straight to the backend's text write instead (see bindTextRegion).
-    source: Maybe[UI.Ast.Reactive.Source[?]] = Absent
+    source: Maybe[UI.Ast.Reactive.Source[?]] = Absent,
+    // The AST node's own `Frame`, so [[Devtools]] can name a region by its user call site rather than its path.
+    frame: Frame = Frame.internal
 )
 
 /** Normalization-time companion of a [[kyo.UI.Ast.Foreach]] node: keeps the typed machinery (item signal, key
@@ -141,7 +143,7 @@ private[kyo] object ReactiveUI:
         deepRows: List[Int] = Nil
     )(
         handle: (Seq[String], UIEvent) => Boolean < Async
-    ): ReactiveUI =
+    )(using frame: Frame): ReactiveUI =
         ReactiveUI(
             path,
             signal,
@@ -154,7 +156,8 @@ private[kyo] object ReactiveUI:
             discoverContentRootBound = true,
             origin = origin,
             rows = rows,
-            deepRows = deepRows
+            deepRows = deepRows,
+            frame = frame
         )
 
     /** The root of a mount session: creates the session's [[MountDispatch]] and records it on the returned node for `subscribe`. */
@@ -371,7 +374,8 @@ private[kyo] object ReactiveUI:
                     reactiveClasses = ui.attrs.reactiveClasses,
                     renderedAttrValues = attrSnap,
                     renderedBoolAttrValues = boolSnap,
-                    renderedClassValues = classSnap
+                    renderedClassValues = classSnap,
+                    frame = ui.frame
                 )
 
             case ui: Mounted =>
@@ -411,7 +415,8 @@ private[kyo] object ReactiveUI:
                     contentContext = contentContext,
                     parentContext = parentContext,
                     discoverContentRootBound = true,
-                    mounted = Present(spec)
+                    mounted = Present(spec),
+                    frame = ui.frame
                 )
 
             case ui =>
@@ -429,7 +434,8 @@ private[kyo] object ReactiveUI:
                     ReactiveRegion.from(regionIdentity, svg),
                     regionIdentity,
                     parentContext,
-                    discoverContentRootBound = false
+                    discoverContentRootBound = false,
+                    frame = ui.frame
                 )
         end match
     end normalizeAt
@@ -1825,6 +1831,7 @@ private[kyo] object ReactiveUI:
             rui.reactiveBoolAttrs,
             rui.reactiveClasses,
             exchange,
+            rui.frame,
             rui.renderedAttrValues,
             rui.renderedBoolAttrValues,
             rui.renderedClassValues,
@@ -1874,13 +1881,35 @@ private[kyo] object ReactiveUI:
                 val rendered = rui.renderedValue match
                     case Present(t: Text) => Present(t.value)
                     case _                => Absent
-                Sync.Unsafe.defer {
-                    sig.unsafeObserveProjected[String](identity, rendered, v => patch(rui.path, v)) match
-                        case Absent           => Kyo.lift(false)
-                        case Present(release) => registerRelease(release, releases).andThen(true)
+                // The sink is read here and not inside the callback: the write fires inside the writer's own
+                // `set`, where no effect context exists to read a `Local` from. With none installed the
+                // original patcher is used unwrapped, so the off path writes exactly what an unobserved one does.
+                Devtools.currentSink.map { devSink =>
+                    val write: String => Unit = devSink match
+                        case Absent          => v => patch(rui.path, v)
+                        case Present(report) =>
+                            v =>
+                                patch(rui.path, v)
+                                report(cheapEvent(rui.path, ReactiveRegion.htmlIdOf(rui.region), rui.frame, UI.RenderKind.Text))
+                    Sync.Unsafe.defer {
+                        sig.unsafeObserveProjected[String](identity, rendered, write) match
+                            case Absent           => Kyo.lift(false)
+                            case Present(release) => registerRelease(release, releases).andThen(true)
+                    }
                 }
             case _ => false
     end bindTextRegion
+
+    /** The report for a write that re-renders nothing: one attribute, one class, or one text node. It carries no duration
+      * and no bytes, since a single DOM assignment is not measured on a repaint's axis.
+      */
+    private def cheapEvent(
+        path: Seq[String],
+        regionId: Maybe[String],
+        frame: Frame,
+        kind: UI.RenderKind
+    ): UI.RenderEvent =
+        UI.RenderEvent(path, regionId, frame, kind, UI.RenderCause.Signal, wasted = false, duration = Duration.Zero, bytes = 0)
 
     /** Starts the channel observers of the element a region paints as its root. A walk only gives the root's children nodes of their
       * own, so the root's channels at `path` are started here, in the current scope like the children's subscriptions.
@@ -1889,7 +1918,7 @@ private[kyo] object ReactiveUI:
         content match
             case el: Element
                 if el.attrs.reactiveAttrs.nonEmpty || el.attrs.reactiveBoolAttrs.nonEmpty || el.attrs.reactiveClasses.nonEmpty =>
-                forkChannelObservers(path, el.attrs.reactiveAttrs, el.attrs.reactiveBoolAttrs, el.attrs.reactiveClasses, exchange)
+                forkChannelObservers(path, el.attrs.reactiveAttrs, el.attrs.reactiveBoolAttrs, el.attrs.reactiveClasses, exchange, el.frame)
             case _ => Kyo.unit
 
     /** Fork the scoped in-place-patch observers for one node's reactive attr/bool-attr/class channels at
@@ -1902,36 +1931,63 @@ private[kyo] object ReactiveUI:
         boolAttrs: Map[String, Signal[Boolean]],
         classes: Map[String, Signal[Boolean]],
         exchange: UIExchange,
+        // The node these channels belong to, for the devtools report.
+        nodeFrame: Frame,
         renderedAttrs: Map[String, String] = Map.empty,
         renderedBools: Map[String, Boolean] = Map.empty,
         renderedClasses: Map[String, Boolean] = Map.empty,
         releases: Maybe[RowScope] = Absent
     )(using Frame): Unit < (Async & Scope) =
-        // A channel's handler is one attribute write, so where the exchange offers a synchronous sink the
-        // channel binds through `Signal.onChange`: for a signal rooted in a SignalRef the patch runs inside the
-        // writer's own `set`, and the comparison with the previous value happens before any scheduler hop.
-        // An exchange without a sink (the server transport) runs the channel on its own fiber. Both are seeded
-        // with the render-time value: normalize happens-before the HTML render on every paint path, so the DOM
-        // already shows it, while a change landing between render and subscribe differs from it and still fires.
-        def bindAll[A](
-            signals: Map[String, Signal[A]],
-            rendered: Map[String, A],
-            patcher: Maybe[(Seq[String], String, A) => Unit],
-            slow: (String, A) => Unit < Async
-        )(using CanEqual[A, A]): Unit < (Async & Scope) =
-            if signals.isEmpty then Kyo.unit
-            else
-                Kyo.foreachDiscard(signals.toSeq) { (name, sig) =>
-                    val baseline = Maybe.fromOption(rendered.get(name))
-                    patcher match
-                        case Present(patch) => bindChannel(sig, baseline, v => patch(path, name, v), releases)
-                        case Absent         => Fiber.init(sig.observe(baseline, Signal.defaultRepairInterval)(slow(name, _))).unit
-                }
-        end bindAll
+        // Most nodes bind no channel at all; they leave before the sink is read or a loop is set up.
+        if attrs.isEmpty && boolAttrs.isEmpty && classes.isEmpty then Kyo.unit
+        else
+            // Read once, at bind time, for the same reason bindTextRegion does: the fast path's write runs inside
+            // the writer's `set`, with no effect context to read a `Local` from. With no sink installed both the
+            // patcher and the fallback are passed through untouched.
+            Devtools.currentSink.map { devSink =>
+                // A channel's handler is one attribute write, so where the exchange offers a synchronous sink the
+                // channel binds through `Signal.onChange`: for a signal rooted in a SignalRef the patch runs inside the
+                // writer's own `set`, and the comparison with the previous value happens before any scheduler hop.
+                // An exchange without a sink (the server transport) runs the channel on its own fiber. Both are seeded
+                // with the render-time value: normalize happens-before the HTML render on every paint path, so the DOM
+                // already shows it, while a change landing between render and subscribe differs from it and still fires.
+                def bindAll[A](
+                    signals: Map[String, Signal[A]],
+                    rendered: Map[String, A],
+                    patcher: Maybe[(Seq[String], String, A) => Unit],
+                    slow: (String, A) => Unit < Async
+                )(using CanEqual[A, A]): Unit < (Async & Scope) =
+                    if signals.isEmpty then Kyo.unit
+                    else
+                        val now: Maybe[(Seq[String], String, A) => Unit] = devSink match
+                            case Absent          => patcher
+                            case Present(report) =>
+                                patcher.map(patch =>
+                                    (target, name, value) =>
+                                        patch(target, name, value)
+                                        report(cheapEvent(target, Absent, nodeFrame, UI.RenderKind.Channel(name)))
+                                )
+                        Kyo.foreachDiscard(signals.toSeq) { (name, sig) =>
+                            val baseline = Maybe.fromOption(rendered.get(name))
+                            now match
+                                case Present(patch) => bindChannel(sig, baseline, v => patch(path, name, v), releases)
+                                case Absent         =>
+                                    val write: A => Unit < Async = devSink match
+                                        case Absent          => v => slow(name, v)
+                                        case Present(report) =>
+                                            v =>
+                                                slow(name, v).andThen(
+                                                    Sync.defer(report(cheapEvent(path, Absent, nodeFrame, UI.RenderKind.Channel(name))))
+                                                )
+                                    Fiber.init(sig.observe(baseline, Signal.defaultRepairInterval)(write)).unit
+                            end match
+                        }
+                end bindAll
 
-        bindAll(attrs, renderedAttrs, exchange.attrPatcherNow, exchange.onAttrPatch(path, _, _))
-            .andThen(bindAll(boolAttrs, renderedBools, exchange.boolAttrPatcherNow, exchange.onBoolAttrPatch(path, _, _)))
-            .andThen(bindAll(classes, renderedClasses, exchange.classPatcherNow, exchange.onClassPatch(path, _, _)))
+                bindAll(attrs, renderedAttrs, exchange.attrPatcherNow, exchange.onAttrPatch(path, _, _))
+                    .andThen(bindAll(boolAttrs, renderedBools, exchange.boolAttrPatcherNow, exchange.onBoolAttrPatch(path, _, _)))
+                    .andThen(bindAll(classes, renderedClasses, exchange.classPatcherNow, exchange.onClassPatch(path, _, _)))
+            }
     end forkChannelObservers
 
     /** Bind one channel to its synchronous sink. A signal with a callback path runs the write inside the writer's own `set` and
@@ -1976,12 +2032,14 @@ private[kyo] object ReactiveUI:
                 .andThen(Kyo.foreachDiscard(kids)(subscribeScoped(_, exchange, signalChangeTime, regionMounts, dispatch, keys)))
                 .andThen(regionMounts.endWalk)
         end subscribeKids
-        def renderValue(current: UI): Unit < (Async & Scope) =
+        def renderValue(current: UI, cause: UI.RenderCause): Unit < (Async & Scope) =
             for
                 now      <- Clock.now
                 _        <- signalChangeTime.set(now)
                 previous <- Sync.Unsafe.defer(rendered.getAndSet(Present(current)))
-                _        <- exchange.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, previous, current)
+                _        <- measuredPaint(rui, UI.RenderKind.Repaint, cause)(
+                    exchange.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, previous, current)
+                )
                 svgContext = rui.region match
                     case _: ReactiveRegion.HtmlRange  => false
                     case _: ReactiveRegion.SvgElement => true
@@ -2019,10 +2077,13 @@ private[kyo] object ReactiveUI:
                         // The enclosing render already painted exactly this value: skip the repaint and the re-walk, but
                         // still subscribe what renderValue would have. The value is recorded as this region's last render,
                         // so the NEXT emission diffs against it rather than re-sending the whole region.
+                        //
+                        // Devtools still hears about it, as the "rebuilt by my parent" half of the story (see reportUnpainted).
                         Sync.Unsafe.defer(rendered.set(Present(current)))
+                            .andThen(reportUnpainted(rui, UI.RenderKind.Repaint))
                             .andThen(forkRootChannels(rui.path, current, exchange))
                             .andThen(subscribeKids(rui.children))
-                    else renderValue(current)
+                    else renderValue(current, if isFirst then UI.RenderCause.Created else UI.RenderCause.Signal)
                     end if
                 }
             }.map { result =>
@@ -2036,6 +2097,52 @@ private[kyo] object ReactiveUI:
             }
         }
     end subscribeRegion
+
+    /** Runs `paint` under a fresh devtools probe, which the backend writes the paint's cost into, and reports it as `kind`.
+      * With no sink installed the probe is `Absent`, and nothing is allocated or clocked.
+      *
+      * `alsoWasted` is for a keyed-list emission, where `wasted` is stricter than "the backend changed nothing": a pure reorder
+      * repaints no row and still moves the DOM, and calling that wasted would send a reader looking for a bug that is not there.
+      * It is by name because answering it can cost a pass over the rows, and only a measured paint ever asks.
+      */
+    private def measuredPaint[A, S](rui: ReactiveUI, kind: UI.RenderKind, cause: UI.RenderCause, alsoWasted: => Boolean = false)(
+        paint: => A < S
+    )(using Frame): A < (S & Sync) =
+        for
+            probe   <- Devtools.newProbe
+            started <- if probe.isEmpty then Kyo.lift(Duration.Zero) else Clock.nowMonotonic
+            result  <- Devtools.probe.let(probe)(paint)
+            _       <- report(rui, kind, cause, probe, started, alsoWasted)
+        yield result
+    end measuredPaint
+
+    /** Reports content the enclosing render already painted. Zero duration and zero bytes are not a rounding-off: the cost sits
+      * in the enclosing region's own event, and charging it twice would make every parent look cheap and every child expensive.
+      */
+    private def reportUnpainted(rui: ReactiveUI, kind: UI.RenderKind)(using Frame): Unit < Sync =
+        report(rui, kind, UI.RenderCause.Created, Absent, Duration.Zero, alsoWasted = false)
+
+    /** One render event to the devtools sink; a no-op with none installed. `probe` is `Absent` both when devtools is off and
+      * when nothing was painted, which is why the two collapse into the same zero-cost event.
+      */
+    private def report(
+        rui: ReactiveUI,
+        kind: UI.RenderKind,
+        cause: UI.RenderCause,
+        probe: Maybe[Devtools.Probe],
+        started: Duration,
+        alsoWasted: => Boolean
+    )(using Frame): Unit < Sync =
+        def event(wasted: Boolean, duration: Duration, bytes: Int) =
+            UI.RenderEvent(rui.path, ReactiveRegion.htmlIdOf(rui.region), rui.frame, kind, cause, wasted, duration, bytes)
+        probe match
+            case Absent     => Devtools.emit(event(wasted = false, duration = Duration.Zero, bytes = 0))
+            case Present(p) =>
+                Clock.nowMonotonic.map(ended =>
+                    Devtools.emit(event(p.wasted || alsoWasted, ended.minusOrZero(started), p.bytes))
+                )
+        end match
+    end report
 
     /** One live row of a reusable keyed Foreach region (see subscribeForeachRegion): the cached render
       * output (reused for paints while the item is unchanged), the walked reactive descendants, the row's
@@ -2212,6 +2319,9 @@ private[kyo] object ReactiveUI:
                                     rendered.set(Present(Fragment[UI](Chunk.from(built.toSeq.map(r => KeyedChild[UI](r.key, r.rowUI))))))
                                 )
                                 _ <- rows.replaceAll(built.toSeq)
+                                // No paint happened, so no cost is charged, but the rows did come into existence, in the
+                                // enclosing region's paint. Same accounting as the region skip branch in subscribeRegion.
+                                _ <- reportUnpainted(rui, UI.RenderKind.ListPatch(0, built.size))
                             yield ()
                             end for
                         end seed
@@ -2273,7 +2383,13 @@ private[kyo] object ReactiveUI:
                                 // the duplicate-key gate it restates, and without rendering anything.
                                 // So does the emission after one with duplicate keys: its page still shows two rows under one key.
                                 addressable = built.forall((_, _, rowUI, _, _, _) => HtmlRenderer.paintsAsKeyedRoot(rowUI))
-                                kept <-
+                                changedRows = built.count((_, _, _, _, _, retained) => retained.isEmpty)
+                                kept <- measuredPaint(
+                                    rui,
+                                    UI.RenderKind.ListPatch(changedRows, built.size),
+                                    UI.RenderCause.Signal,
+                                    alsoWasted = changedRows == 0 && built.toSeq.corresponds(prev)((b, p) => b._1 == p.key)
+                                ) {
                                     if duplicates || prevByKey.size != prev.size || !addressable then
                                         exchange.onChange(rui.region, path, rui.contentContext, rui.parentContext, previous, fragment)
                                             .andThen(false)
@@ -2286,6 +2402,7 @@ private[kyo] object ReactiveUI:
                                             previous,
                                             built.toSeq.map((key, _, rowUI, _, _, retained) => ListRow(key, rowUI, retained.isEmpty))
                                         )
+                                }
                                 // A repaint of the kept rows replaced what their subscriptions had painted into them, a
                                 // mount's content among it: subscribe them again, as a whole-list repaint always did.
                                 _         <- if kept then Kyo.unit else rows.evictAll
@@ -2821,10 +2938,17 @@ private[kyo] object ReactiveUI:
             _     <- dispatch.register(rui.path, instance.cell)
             _     <- Scope.ensure(dispatch.unregister(rui.path, instance.cell))
             first <- instance.cell.current
-            _     <- first match
+            // Instrumented like any other paint: every `onChange` the engine issues is reported, or the wasted-render figure
+            // quietly excludes a whole class of paint and a page full of mounts reads as cleaner than it is.
+            paint = (cause: UI.RenderCause, previous: Maybe[UI], content: UI) =>
+                for
+                    _ <- measuredPaint(rui, UI.RenderKind.Repaint, cause)(
+                        exchange.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, previous, content)
+                    )
+                yield ()
+            _ <- first match
                 case MountState.Pending(Absent) => Kyo.unit
-                case state                      =>
-                    exchange.onChange(rui.region, rui.path, rui.contentContext, rui.parentContext, Absent, state.content(spec))
+                case state                      => paint(UI.RenderCause.Created, Absent, state.content(spec))
             // Unsafe: single-writer state of this region's own loop, as in subscribeScoped.
             painted     = AtomicRef.Unsafe.init[MountState](first)(using AllowUnsafe.embrace.danger)
             renderState = (state: MountState) =>
@@ -2835,14 +2959,7 @@ private[kyo] object ReactiveUI:
                         if previous eq state then Kyo.unit
                         else
                             Clock.now.map(signalChangeTime.set).andThen(
-                                exchange.onChange(
-                                    rui.region,
-                                    rui.path,
-                                    rui.contentContext,
-                                    rui.parentContext,
-                                    Present(previous.content(spec)),
-                                    content
-                                )
+                                paint(UI.RenderCause.Signal, Present(previous.content(spec)), content)
                             )
                     _ <- state match
                         case MountState.Pending(Present(_)) => Kyo.unit
