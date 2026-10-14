@@ -788,6 +788,30 @@ class DomBackendTest extends UITest:
         }
     }
 
+    "a portal in a row whose key holds a quote and a backslash is adopted and retired with its row" in {
+        val key             = "a\"b\\c"
+        val app: UI < Async =
+            for rows <- Signal.initRef(Chunk("plain"))
+            yield UI.div(
+                UI.button("add").id("qpadd").onClick(rows.set(Chunk("plain", key))),
+                UI.button("drop").id("qpdrop").onClick(rows.set(Chunk("plain"))),
+                UI.ul(rows.foreachKeyed(identity)(k =>
+                    if k == key then UI.li(UI.div.id("qppanel").portal(true)(UI.span("panel")))
+                    else UI.li(k).id("qprow")
+                ))
+            )
+        withUI(app) {
+            for
+                _       <- Browser.click(Selector.id("qpadd"))
+                _       <- Browser.assertText(Selector.id("qppanel"), "panel")
+                adopted <- Browser.evalBoolean("document.getElementById('qppanel').parentElement===document.body")
+                _       <- Browser.click(Selector.id("qpdrop"))
+                _       <- Browser.assertNotExists(Selector.id("qppanel"))
+                slots   <- Browser.eval("String(document.querySelectorAll('[data-kyo-portal-slot]').length)")
+            yield assert(adopted && slots == "0", s"adopted=$adopted slots=$slots")
+        }
+    }
+
     "keydown inside a portaled panel reaches a handler on a logical ancestor (forwarding hop)" in {
         // The client-side forwarding gate walks ancestors for the data-kyo-ev token; the portal hop continues the
         // walk at the placeholder's parent. Without it this keydown dies in the browser, since the panel itself
