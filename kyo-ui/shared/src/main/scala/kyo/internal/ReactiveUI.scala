@@ -11,7 +11,7 @@ private[kyo] case class ReactiveUI(
     signal: Signal[UI],
     isConst: Boolean,
     children: Seq[ReactiveUI],
-    handle: (Seq[String], UIEvent) => Boolean < Async,
+    handle: (Seq[String], UIEvent) => Boolean < (Async & Abort[Any]),
     region: ReactiveRegion,
     contentContext: ReactiveRegion.RegionIdentity,
     parentContext: ReactiveRegion.ParentContext,
@@ -112,8 +112,12 @@ final private[kyo] case class MountedSpec(node: UI.Ast.Mounted, path: Seq[String
                         given Frame = node.frame
                         UI.span(UI.Ast.Text(error.message)).cssClass("kyo-mount-error")
 
-    def mountError(t: Throwable, source: UI.MountErrorSource): UI.MountError =
-        UI.MountError(t, source, Maybe(t.getMessage).getOrElse(t.toString), node.frame, path, node.key)
+    def mountError(failure: Any, source: UI.MountErrorSource): UI.MountError =
+        val t = failure match
+            case t: Throwable => t
+            case other        => UI.FailureException(other)(using node.frame)
+        UI.MountError(t, source, Maybe(t.getMessage).getOrElse(t.toString), node.frame, path, node.key, failure)
+    end mountError
 
     /** The instance identity of a keyed node; a keyless node has none, since every re-render replaces its instance. */
     def identity: Maybe[ReactiveUI.MountIdentity] =
@@ -123,14 +127,6 @@ end MountedSpec
 private[kyo] object ReactiveUI:
 
     import UI.Ast.*
-
-    /** The app's sink for non-fatal failures, read by [[kyo.UI.notify]] and installed by
-      * [[kyo.UI.notices]]. Inheritable, so it reaches mount effects, the fibers they fork and the
-      * event handlers of the tree below the installation point, all of which descend from the runner's
-      * caller.
-      */
-    private[kyo] val noticeSink: Local[Maybe[Throwable => Unit < Async]] =
-        Local.init(Maybe.empty[Throwable => Unit < Async])
 
     def init(
         path: Seq[String],
@@ -145,7 +141,7 @@ private[kyo] object ReactiveUI:
         rows: Long = 0L,
         deepRows: List[Int] = Nil
     )(
-        handle: (Seq[String], UIEvent) => Boolean < Async
+        handle: (Seq[String], UIEvent) => Boolean < (Async & Abort[Any])
     ): ReactiveUI =
         ReactiveUI(
             path,
@@ -450,7 +446,7 @@ private[kyo] object ReactiveUI:
             case (ReactiveRegion.ParentContext.HtmlTable, ReactiveRegion.TableContent.Rows) => ReactiveRegion.ParentContext.Other
             case _                                                                          => parentContext
 
-    private type Handler = (Seq[String], UIEvent) => Boolean < Async
+    private type Handler = (Seq[String], UIEvent) => Boolean < (Async & Abort[Any])
 
     private type ValidatedHandler = (Seq[String], DragProtocol.ValidatedEvent) => Boolean < Async
 
@@ -581,7 +577,7 @@ private[kyo] object ReactiveUI:
         reactiveChildren: Seq[ReactiveUI],
         staticHandlers: Seq[(Int, Handler)],
         mounts: MountDispatch
-    )(using Frame): Boolean < Async =
+    )(using Frame): Boolean < (Async & Abort[Any]) =
         if targetPath == myPath then
             dispatchToElement(elem, event, isTarget = true)
         else if targetPath.startsWith(myPath) && targetPath.size > myPath.size then
@@ -628,23 +624,23 @@ private[kyo] object ReactiveUI:
         else
             true
 
-    /** Invoke a Maybe[Any < Async] handler, discarding the result. */
-    private def invoke(handler: Maybe[Any < Async])(using Frame): Unit < Async =
+    /** Invoke a Maybe[UI.Action] handler, discarding the result. */
+    private def invoke(handler: Maybe[UI.Action])(using Frame): Unit < (Async & Abort[Any]) =
         if handler.isEmpty then () else handler.get.unit
 
-    /** Invoke a Maybe[A => Any < Async] handler with a value, discarding the result. */
-    private def invokeWith[A](handler: Maybe[A => Any < Async], value: A)(using Frame): Unit < Async =
+    /** Invoke a Maybe[A => UI.Action] handler with a value, discarding the result. */
+    private def invokeWith[A](handler: Maybe[A => UI.Action], value: A)(using Frame): Unit < (Async & Abort[Any]) =
         if handler.isEmpty then () else handler.get(value).unit
 
     /** Dispatch an event safely, logging and recovering from handler errors without stopping the bubble chain. */
-    private def safeDispatch(handle: (Seq[String], UIEvent) => Boolean < Async, path: Seq[String], event: UIEvent)(using
+    private def safeDispatch(handle: Handler, path: Seq[String], event: UIEvent)(using
         Frame
     ): Boolean < Async =
         DragCommands.current.use { context =>
             val decisions = context.flatMap(_.decisions)
-            Abort.recover[Throwable](
+            Abort.recover[Any](
                 onFail = err =>
-                    Log.error(s"Handler error during ${event.getClass.getSimpleName} at ${path.mkString(".")}: ${err.getMessage}")
+                    Log.error(s"Handler error during ${event.getClass.getSimpleName} at ${path.mkString(".")}: $err")
                         .andThen(markDecisionFailure(event, decisions))
                         .andThen(true), // continue bubbling
                 onPanic = thr =>
@@ -678,7 +674,7 @@ private[kyo] object ReactiveUI:
             case _                       => true
 
     /** Cycle a Select to the next or previous option. Updates SignalRef and fires onChange. */
-    private def cycleSelectOption(sel: Select, forward: Boolean)(using Frame): Unit < Async =
+    private def cycleSelectOption(sel: Select, forward: Boolean)(using Frame): Unit < (Async & Abort[Any]) =
         val options = sel.children.toSeq.collect { case opt: Opt => opt }
         val values  = options.flatMap(_.value.toList)
         if values.isEmpty then Kyo.lift(())
@@ -836,7 +832,7 @@ private[kyo] object ReactiveUI:
         selectTarget: Boolean = false
     )(
         using Frame
-    ): Boolean < Async =
+    ): Boolean < (Async & Abort[Any]) =
         val attrs = elem.attrs
         event match
             case ev: UIEvent.Click =>
@@ -1049,11 +1045,11 @@ private[kyo] object ReactiveUI:
         end match
     end dispatchToElement
 
-    private def invokeDrag(action: Maybe[Any < Async], typed: Maybe[Any < Async], label: String)(using Frame): Unit < Async =
-        def safe(handler: Maybe[Any < Async]): Unit < Async =
+    private def invokeDrag(action: Maybe[UI.Action], typed: Maybe[UI.Action], label: String)(using Frame): Unit < Async =
+        def safe(handler: Maybe[UI.Action]): Unit < Async =
             handler.fold((): Unit < Async) { effect =>
-                Abort.recover[Throwable](
-                    err => Log.error(s"Handler error during $label: ${err.getMessage}"),
+                Abort.recover[Any](
+                    err => Log.error(s"Handler error during $label: $err"),
                     panic => Log.error(s"Handler panic during $label: ${panic.getMessage}")
                 )(effect.unit)
             }
@@ -1062,8 +1058,8 @@ private[kyo] object ReactiveUI:
 
     private def dispatchDragEvent(
         elem: Element,
-        action: Maybe[Any < Async],
-        typed: Maybe[Drag.Event => Any < Async],
+        action: Maybe[UI.Action],
+        typed: Maybe[Drag.Event => UI.Action],
         label: String
     )(using Frame): Boolean < Async =
         DragCommands.current.use {
@@ -1074,7 +1070,7 @@ private[kyo] object ReactiveUI:
         }
 
     private def invokeDecision(
-        handler: Maybe[Drag.Decision < Async],
+        handler: Maybe[Drag.Decision < (Async & Abort[Any])],
         decisions: Maybe[AtomicRef[DragCommands.DecisionState]],
         failure: String
     )(using Frame): Unit < Async =
@@ -1114,7 +1110,7 @@ private[kyo] object ReactiveUI:
       * so closing the root scope cascade-tears-down the tree.
       */
     case class Subscription(
-        handle: Handler,
+        handle: (Seq[String], UIEvent) => Boolean < Async,
         private[kyo] val handleValidated: ValidatedHandler,
         lastSignalChangeTime: AtomicRef[Instant],
         private val dragSessionCountFn: () => Int < Sync = () => 0,
@@ -1739,11 +1735,11 @@ private[kyo] object ReactiveUI:
         )(using Frame): Unit < Async =
             val supervision = MountSupervision(spec, cell, views)
             val effect      = MountSupervision.local.let(Present(supervision))(spec.node.effect)
-            Abort.run[Throwable](ContextEffect.handleInheritable(Tag[Scope], scope)(effect)).map {
-                case Result.Success(ui) => cell.getAndUpdate(MountSupervision.publish(ui)).unit
-                case Result.Failure(t)  =>
-                    Log.error(s"Mounted effect failed (frame=${spec.node.frame.position.show})", t)
-                        .andThen(supervision.fail(t, UI.MountErrorSource.Effect))
+            Abort.run[Any](ContextEffect.handleInheritable(Tag[Scope], scope)(effect)).map {
+                case Result.Success(ui)      => cell.getAndUpdate(MountSupervision.publish(ui)).unit
+                case Result.Failure(failure) =>
+                    Log.error(s"Mounted effect failed (frame=${spec.node.frame.position.show}): $failure")
+                        .andThen(supervision.fail(failure, UI.MountErrorSource.Effect))
                 case Result.Panic(t) =>
                     if t.isInstanceOf[Interrupted] then Kyo.unit
                     else
@@ -1752,10 +1748,6 @@ private[kyo] object ReactiveUI:
             }
         end runEffect
     end MountInstance
-
-    /** A fiber forked with [[kyo.UI.fork]] failed with an `Abort` value that is not a `Throwable`. */
-    final private[kyo] case class MountFiberFailure(value: Any)(using Frame)
-        extends KyoException(s"Mounted background fiber failed: $value")
 
     /** Routes the failures of one mount instance into its content cell. The first failure wins, and a publish that arrives after a
       * failure does not overwrite it.
@@ -1772,16 +1764,15 @@ private[kyo] object ReactiveUI:
                 case Result.Panic(_: Interrupted)   => Kyo.unit
                 case Result.Failure(_: Interrupted) => Kyo.unit
                 case Result.Panic(t)                => forked(t)
-                case Result.Failure(t: Throwable)   => forked(t)
-                case Result.Failure(other)          => forked(MountFiberFailure(other))
+                case Result.Failure(failure)        => forked(failure)
                 case _                              => Kyo.unit
 
-        private def forked(t: Throwable)(using Frame): Unit < Sync =
-            Log.error(s"Mounted background fiber failed (frame=${spec.node.frame.position.show})", t)
-                .andThen(fail(t, UI.MountErrorSource.Fork))
+        private def forked(failure: Any)(using Frame): Unit < Sync =
+            Log.error(s"Mounted background fiber failed (frame=${spec.node.frame.position.show}): $failure")
+                .andThen(fail(failure, UI.MountErrorSource.Fork))
 
-        def fail(t: Throwable, source: UI.MountErrorSource)(using Frame): Unit < Sync =
-            val failed = MountState.Failed(spec.errorUI(spec.mountError(t, source), views))
+        def fail(failure: Any, source: UI.MountErrorSource)(using Frame): Unit < Sync =
+            val failed = MountState.Failed(spec.errorUI(spec.mountError(failure, source), views))
             cell.getAndUpdate {
                 case done: MountState.Failed => done
                 case _                       => failed

@@ -266,9 +266,41 @@ object UI:
       *     makes sense.
       *   - `Fork`: the node had published content, and a fiber the effect started with [[kyo.UI.fork]] died afterwards. What was on
       *     screen came from a feed that no longer runs.
+      *   - `Handler`: an event handler in the node's content failed, and an `onFailure` rule escalated it.
       */
     enum MountErrorSource derives CanEqual:
-        case Effect, Panic, Fork
+        case Effect, Panic, Fork, Handler
+
+    /** The effect row of every event handler: it may suspend, and it may fail. A failure it leaves unhandled goes to the
+      * [[kyo.UI.Reaction]] the nearest `onFailure` rule picks for it.
+      */
+    type Action = Any < (Async & Abort[Any])
+
+    /** What an unhandled failure does, as an `onFailure` rule picks it.
+      *
+      *   - `Notify`: the content stays, and the failure goes to the nearest boundary's [[kyo.UI.Boundary.onNotice]] sink, or to the log
+      *     when there is none.
+      *   - `Escalate`: the enclosing [[kyo.UI.mounted]] node fails and shows its error view. Outside any mount it is `Notify`.
+      *   - `Run`: runs `action`, a redirect say. When the action fails in turn, that failure is notified.
+      */
+    enum Reaction:
+        case Notify
+        case Escalate
+        case Run(action: Unit < (Async & Abort[Any]))
+    end Reaction
+
+    /** A failure that is not a `Throwable`, wrapped where a `Throwable` is expected: a [[kyo.UI.MountError.error]], an
+      * [[kyo.UI.Boundary.onNotice]] sink. [[kyo.UI.Failed]] takes the value back out.
+      */
+    final case class FailureException(failure: Any)(using Frame) extends KyoException("Unhandled failure", String.valueOf(failure))
+
+    /** The failure a `Throwable` stands for: the value a [[kyo.UI.FailureException]] wraps, otherwise the `Throwable` itself. */
+    object Failed:
+        def unapply(t: Throwable): Some[Any] =
+            t match
+                case FailureException(failure) => Some(failure)
+                case other                     => Some(other)
+    end Failed
 
     /** A mounted node's failure, with the context the `Throwable` alone does not carry.
       *
@@ -284,6 +316,8 @@ object UI:
       *   the node's render path, the identity the wire protocol addresses it by
       * @param key
       *   the node's [[kyo.UI.MountedOps.keyed]] key, if it has one
+      * @param failure
+      *   the failure as it was raised: the `Abort` value, or the `Throwable` of a panic. [[kyo.UI.MountError.Failed]] matches on it.
       */
     final case class MountError(
         error: Throwable,
@@ -291,8 +325,15 @@ object UI:
         message: String,
         frame: Frame,
         path: Seq[String],
-        key: Maybe[Any]
+        key: Maybe[Any],
+        failure: Any
     )
+
+    object MountError:
+        /** Matches a [[kyo.UI.MountError]] on the failure as it was raised: `case MountError.Failed(ApiError.NotFound) => ...`. */
+        object Failed:
+            def unapply(e: MountError): Some[Any] = Some(e.failure)
+    end MountError
 
     /** Embeds a component that runs an effect to produce its UI: loading data, opening a subscription, starting a feed.
       *
@@ -307,7 +348,7 @@ object UI:
       * The effect must return promptly: allocate and fork, never park. Anything long-lived belongs on a forked fiber, which the
       * instance's `Scope` owns; fork it with [[kyo.UI.fork]] so its failure reaches the node.
       */
-    def mounted(effect: UI < (Abort[Throwable] & Async & Scope))(using Frame): Mounted =
+    def mounted(effect: UI < (Abort[Any] & Async & Scope))(using Frame): Mounted =
         Mounted(effect, key = Absent, placeholderUI = Absent, errorRender = Absent, pendingPolicy = PendingPolicy.KeepLatest)
 
     /** Where a [[kyo.UI.MountedOps.keyed]] call is written, which is part of a keyed instance's identity.
@@ -344,36 +385,20 @@ object UI:
                 Fiber.init[E, A, S, S2](v).map(fiber => fiber.onComplete(supervision.report(_)).andThen(fiber))
         }
 
-    /** Installs the app's sink for non-fatal failures: where every [[kyo.UI.notify]] below it lands.
-      *
-      * The mount error routing (`.onError`, then the default error node) REPLACES a node's content. A failure that should
-      * be surfaced while the content stays on screen needs the other half, one that annotates instead. Wrap the runner once:
-      *
-      * {{{
-      * val banner: SignalRef[Maybe[String]] = ...
-      * UI.notices(err => banner.set(Present(err.getMessage)))(UI.runMount(shell, "#app"))
-      * }}}
-      *
-      * The sink rides an inheritable `Local`, so it reaches mount effects, the fibers they fork with [[kyo.UI.fork]] and
-      * the tree's event handlers. With no sink installed, a notice is logged rather than dropped. Under the server-push
-      * transport the kyo-http session fibers do not inherit the context of the `runHandlers` caller, so a sink installed
-      * around `runHandlers` does not reach them, the same limit that applies to any context a mounted effect reads there.
-      */
-    def notices[A, S](sink: Throwable => Unit < Async)(v: A < S)(using Frame): A < S =
-        ReactiveUI.noticeSink.let(Present(sink))(v)
-
     /** Reports a failure that should be surfaced without replacing any content: a background feed that died while its last
       * data is still worth showing, a refetch that failed over data already on screen.
       *
-      * Routes to the nearest enclosing [[kyo.UI.notices]] sink, and is logged when there is none. A failure that invalidates
-      * what a node shows belongs to the mount error routing instead: fail the mount effect, or fork the feed with
-      * [[kyo.UI.fork]] so supervision flips the node.
+      * Goes to the nearest enclosing boundary's [[kyo.UI.Boundary.onNotice]] sink, and is logged when there is none. A failure that
+      * is not a `Throwable` reaches the sink as a [[kyo.UI.FailureException]].
       */
-    def notify(t: Throwable)(using Frame): Unit < Async =
-        ReactiveUI.noticeSink.use {
-            case Present(sink) => sink(t)
-            case Absent        => Log.warn("kyo-ui: notice with no UI.notices sink installed", t)
-        }
+    def notify(failure: Any)(using Frame): Unit < Async =
+        Log.warn(s"kyo-ui: notice with no onNotice sink installed: $failure")
+
+    /** Applies the `onFailure` rules around the caller to `failure`, without failing the caller: the way a feed or a poll that keeps
+      * running reports a failed step. A failure the rules do not match takes `otherwise`.
+      */
+    def report(failure: Any, otherwise: Reaction)(using Frame): Unit < Async =
+        notify(failure)
 
     /** Builder modifiers for [[kyo.UI.Ast.Mounted]]. */
     object MountedOps:
@@ -426,11 +451,21 @@ object UI:
     final case class Boundary(
         placeholderView: Maybe[UI],
         errorView: Maybe[PartialFunction[MountError, UI]],
-        pending: Maybe[PendingPolicy]
+        pending: Maybe[PendingPolicy],
+        failureRules: Maybe[PartialFunction[Any, Reaction]] = Absent,
+        noticeSink: Maybe[Throwable => Unit < Async] = Absent
     ):
         def placeholder(ui: UI): Boundary                          = copy(placeholderView = Present(ui))
         def onError(pf: PartialFunction[MountError, UI]): Boundary = copy(errorView = Present(pf))
         def whilePending(p: PendingPolicy): Boundary               = copy(pending = Present(p))
+
+        /** Picks the [[kyo.UI.Reaction]] for a failure inside the boundary that nothing closer handles: an event handler's, a
+          * [[kyo.UI.fork]] fiber's, a [[kyo.UI.report]]. A failure the rules do not match goes to the boundary around this one.
+          */
+        def onFailure(rules: PartialFunction[Any, Reaction]): Boundary = copy(failureRules = Present(rules))
+
+        /** Where a `Notify` inside the boundary goes, a toast or a banner say. The innermost boundary with a sink takes it. */
+        def onNotice(sink: Throwable => Unit < Async): Boundary = copy(noticeSink = Present(sink))
         def apply(ui: UI)(using Frame): UI                         = Ast.Bounded(this, ui, Absent)
 
         /** Whether the boundary holds its content back while the mounts it catches load. */
@@ -963,43 +998,49 @@ object UI:
               */
             def stopPropagation(v: Boolean): Self = withAttrs(attrs.copy(stopPropagation = Present(v)))
 
+            /** Picks the [[kyo.UI.Reaction]] for a failure the handlers of this element, or of any element inside it, leave
+              * unhandled. A failure the rules do not match goes on outward: to the elements around this one, then to the enclosing
+              * boundaries' rules, and finally to `Notify`.
+              */
+            def onFailure(rules: PartialFunction[Any, Reaction]): Self = withAttrs(attrs.copy(onFailure = Present(rules)))
+
             /** Runs `action` on click, ignoring the event payload. */
-            def onClick(action: => Any < Async): Self = withAttrs(attrs.copy(onClick = Present(Sync.defer(action)(using frame))))
+            def onClick(action: => Action): Self = withAttrs(attrs.copy(onClick = Present(Sync.defer(action)(using frame))))
 
             /** Runs `f` on click, receiving the [[kyo.UI.MouseEvent]] payload (target id, modifier chord). */
-            def onClick(f: MouseEvent => Any < Async): Self = withAttrs(attrs.copy(onClickEvt = Present(f)))
+            def onClick(f: MouseEvent => Action): Self = withAttrs(attrs.copy(onClickEvt = Present(f)))
 
             /** Runs `action` only when the click lands on this element itself, not on a descendant; ignores the event payload. */
-            def onClickSelf(action: => Any < Async): Self = withAttrs(attrs.copy(onClickSelf = Present(Sync.defer(action)(using frame))))
+            def onClickSelf(action: => Action): Self = withAttrs(attrs.copy(onClickSelf = Present(Sync.defer(action)(using frame))))
 
             /** Runs `f` only when the click lands on this element itself, not on a descendant; receives the [[kyo.UI.MouseEvent]] payload. */
-            def onClickSelf(f: MouseEvent => Any < Async): Self = withAttrs(attrs.copy(onClickSelfEvt = Present(f)))
+            def onClickSelf(f: MouseEvent => Action): Self = withAttrs(attrs.copy(onClickSelfEvt = Present(f)))
 
             /** Runs `f` on key-down, receiving the [[kyo.UI.KeyboardEvent]] payload (typed key, modifier chord, target id). */
-            def onKeyDown(f: KeyboardEvent => Any < Async): Self = withAttrs(attrs.copy(onKeyDown = Present(f)))
-            def onKeyUp(f: KeyboardEvent => Any < Async): Self   = withAttrs(attrs.copy(onKeyUp = Present(f)))
-            def onFocus(action: => Any < Async): Self            = withAttrs(attrs.copy(onFocus = Present(Sync.defer(action)(using frame))))
-            def onFocus(f: MouseEvent => Any < Async): Self      = withAttrs(attrs.copy(onFocusEvt = Present(f)))
-            def onBlur(action: => Any < Async): Self             = withAttrs(attrs.copy(onBlur = Present(Sync.defer(action)(using frame))))
-            def onBlur(f: MouseEvent => Any < Async): Self       = withAttrs(attrs.copy(onBlurEvt = Present(f)))
+            def onKeyDown(f: KeyboardEvent => Action): Self = withAttrs(attrs.copy(onKeyDown = Present(f)))
+            def onKeyUp(f: KeyboardEvent => Action): Self   = withAttrs(attrs.copy(onKeyUp = Present(f)))
+            def onFocus(action: => Action): Self            = withAttrs(attrs.copy(onFocus = Present(Sync.defer(action)(using frame))))
+            def onFocus(f: MouseEvent => Action): Self      = withAttrs(attrs.copy(onFocusEvt = Present(f)))
+            def onBlur(action: => Action): Self             = withAttrs(attrs.copy(onBlur = Present(Sync.defer(action)(using frame))))
+            def onBlur(f: MouseEvent => Action): Self       = withAttrs(attrs.copy(onBlurEvt = Present(f)))
 
             /** Runs `action` when the pointer enters this element. */
-            def onHover(action: => Any < Async): Self = withAttrs(attrs.copy(onHover = Present(Sync.defer(action)(using frame))))
+            def onHover(action: => Action): Self = withAttrs(attrs.copy(onHover = Present(Sync.defer(action)(using frame))))
 
             /** Runs `f` when the pointer enters this element, receiving the [[kyo.UI.MouseEvent]] payload. */
-            def onHover(f: MouseEvent => Any < Async): Self = withAttrs(attrs.copy(onHoverEvt = Present(f)))
+            def onHover(f: MouseEvent => Action): Self = withAttrs(attrs.copy(onHoverEvt = Present(f)))
 
             /** Runs `action` when the pointer leaves this element. */
-            def onUnhover(action: => Any < Async): Self = withAttrs(attrs.copy(onUnhover = Present(Sync.defer(action)(using frame))))
+            def onUnhover(action: => Action): Self = withAttrs(attrs.copy(onUnhover = Present(Sync.defer(action)(using frame))))
 
             /** Runs `f` when the pointer leaves this element, receiving the [[kyo.UI.MouseEvent]] payload. */
-            def onUnhover(f: MouseEvent => Any < Async): Self = withAttrs(attrs.copy(onUnhoverEvt = Present(f)))
+            def onUnhover(f: MouseEvent => Action): Self = withAttrs(attrs.copy(onUnhoverEvt = Present(f)))
 
             /** Runs `action` when the mouse wheel is used over this element. */
-            def onScroll(action: => Any < Async): Self = withAttrs(attrs.copy(onScroll = Present(Sync.defer(action)(using frame))))
+            def onScroll(action: => Action): Self = withAttrs(attrs.copy(onScroll = Present(Sync.defer(action)(using frame))))
 
             /** Runs `f` when the mouse wheel is used over this element, receiving the [[kyo.UI.WheelEvent]] payload. */
-            def onScroll(f: WheelEvent => Any < Async): Self = withAttrs(attrs.copy(onScrollEvt = Present(f)))
+            def onScroll(f: WheelEvent => Action): Self = withAttrs(attrs.copy(onScrollEvt = Present(f)))
 
             /** Declares this element as a drag source with stable transfer metadata. */
             def dragSource(source: Drag.Source): Self = withAttrs(attrs.copy(dragSource = Present(source)))
@@ -1015,55 +1056,55 @@ object UI:
             def dragHandle: Self = withAttrs(attrs.copy(dataAttrs = attrs.dataAttrs.updated("kyo-drag-handle", "true")))
 
             /** Runs `action` when a drag session starts, ignoring the event payload. */
-            def onDragStart(action: => Any < Async): Self =
+            def onDragStart(action: => Action): Self =
                 withAttrs(attrs.copy(onDragStart = Present(Sync.defer(action)(using frame))))
 
             /** Runs `f` when a drag session starts, receiving the normalized drag event. */
-            def onDragStart(f: Drag.Event => Any < Async): Self = withAttrs(attrs.copy(onDragStartEvt = Present(f)))
+            def onDragStart(f: Drag.Event => Action): Self = withAttrs(attrs.copy(onDragStartEvt = Present(f)))
 
             /** Runs `action` when a drag session ends, ignoring the event payload. */
-            def onDragEnd(action: => Any < Async): Self =
+            def onDragEnd(action: => Action): Self =
                 withAttrs(attrs.copy(onDragEnd = Present(Sync.defer(action)(using frame))))
 
             /** Runs `f` when a drag session ends, receiving its final state and cancellation flag. */
-            def onDragEnd(f: Drag.End => Any < Async): Self = withAttrs(attrs.copy(onDragEndEvt = Present(f)))
+            def onDragEnd(f: Drag.End => Action): Self = withAttrs(attrs.copy(onDragEndEvt = Present(f)))
 
             /** Runs `action` when a drag enters this target, ignoring the event payload. */
-            def onDragEnter(action: => Any < Async): Self =
+            def onDragEnter(action: => Action): Self =
                 withAttrs(attrs.copy(onDragEnter = Present(Sync.defer(action)(using frame))))
 
             /** Runs `f` when a drag enters this target, receiving the normalized drag event. */
-            def onDragEnter(f: Drag.Event => Any < Async): Self = withAttrs(attrs.copy(onDragEnterEvt = Present(f)))
+            def onDragEnter(f: Drag.Event => Action): Self = withAttrs(attrs.copy(onDragEnterEvt = Present(f)))
 
             /** Runs `action` when a drag leaves this target, ignoring the event payload. */
-            def onDragLeave(action: => Any < Async): Self =
+            def onDragLeave(action: => Action): Self =
                 withAttrs(attrs.copy(onDragLeave = Present(Sync.defer(action)(using frame))))
 
             /** Runs `f` when a drag leaves this target, receiving the normalized drag event. */
-            def onDragLeave(f: Drag.Event => Any < Async): Self = withAttrs(attrs.copy(onDragLeaveEvt = Present(f)))
+            def onDragLeave(f: Drag.Event => Action): Self = withAttrs(attrs.copy(onDragLeaveEvt = Present(f)))
 
             /** Runs `action` while a drag moves over this target, ignoring the event payload. */
-            def onDragOver(action: => Any < Async): Self =
+            def onDragOver(action: => Action): Self =
                 withAttrs(attrs.copy(onDragOver = Present(Sync.defer(action)(using frame))))
 
             /** Runs `f` while a drag moves over this target, receiving the normalized drag event. */
-            def onDragOver(f: Drag.Event => Any < Async): Self = withAttrs(attrs.copy(onDragOverEvt = Present(f)))
+            def onDragOver(f: Drag.Event => Action): Self = withAttrs(attrs.copy(onDragOverEvt = Present(f)))
 
             /** Runs `action` for a drop and accepts it after the action completes successfully. */
-            def onDrop(action: => Any < Async): Self =
+            def onDrop(action: => Action): Self =
                 given Frame = frame
                 withAttrs(attrs.copy(onDrop = Present(Sync.defer(action)(using frame).andThen(Drag.Decision.Accept))))
 
             /** Runs `f` for a drop and uses its decision as the drop result. */
-            def onDrop(f: Drag.Event => Drag.Decision < Async): Self = withAttrs(attrs.copy(onDropEvt = Present(f)))
+            def onDrop(f: Drag.Event => Drag.Decision < (Async & Abort[Any])): Self = withAttrs(attrs.copy(onDropEvt = Present(f)))
 
             /** Runs `action` for a sortable move and accepts it after the action completes successfully. */
-            def onSortMove(action: => Any < Async): Self =
+            def onSortMove(action: => Action): Self =
                 given Frame = frame
                 withAttrs(attrs.copy(onSortMove = Present(Sync.defer(action)(using frame).andThen(Drag.Decision.Accept))))
 
             /** Runs `f` for a sortable move and uses its decision as the move result. */
-            def onSortMove(f: Drag.Move => Drag.Decision < Async): Self = withAttrs(attrs.copy(onSortMoveEvt = Present(f)))
+            def onSortMove(f: Drag.Move => Drag.Decision < (Async & Abort[Any])): Self = withAttrs(attrs.copy(onSortMoveEvt = Present(f)))
 
             /** Marks this element (and its subtree) as a keyboard-navigation region whose page-scrolling keys are
               * suppressed. While focus is on this element or a descendant, the client calls `preventDefault()`
@@ -1241,8 +1282,8 @@ object UI:
             def value: Maybe[Bound[String]]
             def placeholder: Maybe[String]
             def readOnly: Maybe[Boolean]
-            def onInput: Maybe[String => Any < Async]
-            def onChange: Maybe[String => Any < Async]
+            def onInput: Maybe[String => Action]
+            def onChange: Maybe[String => Action]
             def value(v: String): Self
 
             /** Binds the input to a `SignalRef` two-way: edits write the new text back into the ref, and ref changes update the input. */
@@ -1300,7 +1341,7 @@ object UI:
         /** Capability trait for picker inputs that carry a `String` `value` and an `onChange` but no free-text typing (`select`, date/time/color, ...). */
         sealed trait PickerInput extends Focusable with HasDisabled:
             def value: Maybe[Bound[String]]
-            def onChange: Maybe[String => Any < Async]
+            def onChange: Maybe[String => Action]
             def value(v: String): Self
 
             /** Binds the picker to a `SignalRef` two-way: a selection writes back into the ref, and ref changes update the selection. */
@@ -1310,7 +1351,7 @@ object UI:
         /** Capability trait for boolean inputs that carry a `checked` flag (constant or `SignalRef`) and a `Boolean` `onChange` (`checkbox`, `radio`). */
         sealed trait BooleanInput extends Focusable with HasDisabled:
             def checked: Maybe[Bound[Boolean]]
-            def onChange: Maybe[Boolean => Any < Async]
+            def onChange: Maybe[Boolean => Action]
             def checked(v: Boolean): Self
 
             /** Binds the checked state to a `SignalRef` two-way: toggling writes back into the ref, and ref changes update the control. */
@@ -1340,38 +1381,39 @@ object UI:
             enterTransition: Maybe[String] = Absent,
             leaveTransition: Maybe[String] = Absent,
             uiStyle: Style = Style.empty,
-            onClick: Maybe[Any < Async] = Absent,
-            onClickEvt: Maybe[MouseEvent => Any < Async] = Absent,
-            onClickSelf: Maybe[Any < Async] = Absent,
-            onClickSelfEvt: Maybe[MouseEvent => Any < Async] = Absent,
-            onKeyDown: Maybe[KeyboardEvent => Any < Async] = Absent,
-            onKeyUp: Maybe[KeyboardEvent => Any < Async] = Absent,
-            onFocus: Maybe[Any < Async] = Absent,
-            onFocusEvt: Maybe[MouseEvent => Any < Async] = Absent,
-            onBlur: Maybe[Any < Async] = Absent,
-            onBlurEvt: Maybe[MouseEvent => Any < Async] = Absent,
-            onHover: Maybe[Any < Async] = Absent,
-            onHoverEvt: Maybe[MouseEvent => Any < Async] = Absent,
-            onUnhover: Maybe[Any < Async] = Absent,
-            onUnhoverEvt: Maybe[MouseEvent => Any < Async] = Absent,
-            onScroll: Maybe[Any < Async] = Absent,
-            onScrollEvt: Maybe[WheelEvent => Any < Async] = Absent,
+            onClick: Maybe[Action] = Absent,
+            onClickEvt: Maybe[MouseEvent => Action] = Absent,
+            onClickSelf: Maybe[Action] = Absent,
+            onClickSelfEvt: Maybe[MouseEvent => Action] = Absent,
+            onKeyDown: Maybe[KeyboardEvent => Action] = Absent,
+            onKeyUp: Maybe[KeyboardEvent => Action] = Absent,
+            onFocus: Maybe[Action] = Absent,
+            onFocusEvt: Maybe[MouseEvent => Action] = Absent,
+            onBlur: Maybe[Action] = Absent,
+            onBlurEvt: Maybe[MouseEvent => Action] = Absent,
+            onHover: Maybe[Action] = Absent,
+            onHoverEvt: Maybe[MouseEvent => Action] = Absent,
+            onUnhover: Maybe[Action] = Absent,
+            onUnhoverEvt: Maybe[MouseEvent => Action] = Absent,
+            onScroll: Maybe[Action] = Absent,
+            onScrollEvt: Maybe[WheelEvent => Action] = Absent,
             dragSource: Maybe[Drag.Source] = Absent,
             dropTarget: Maybe[Drag.Target] = Absent,
-            onDragStart: Maybe[Any < Async] = Absent,
-            onDragStartEvt: Maybe[Drag.Event => Any < Async] = Absent,
-            onDragEnd: Maybe[Any < Async] = Absent,
-            onDragEndEvt: Maybe[Drag.End => Any < Async] = Absent,
-            onDragEnter: Maybe[Any < Async] = Absent,
-            onDragEnterEvt: Maybe[Drag.Event => Any < Async] = Absent,
-            onDragLeave: Maybe[Any < Async] = Absent,
-            onDragLeaveEvt: Maybe[Drag.Event => Any < Async] = Absent,
-            onDragOver: Maybe[Any < Async] = Absent,
-            onDragOverEvt: Maybe[Drag.Event => Any < Async] = Absent,
-            onDrop: Maybe[Drag.Decision < Async] = Absent,
-            onDropEvt: Maybe[Drag.Event => Drag.Decision < Async] = Absent,
-            onSortMove: Maybe[Drag.Decision < Async] = Absent,
-            onSortMoveEvt: Maybe[Drag.Move => Drag.Decision < Async] = Absent,
+            onDragStart: Maybe[Action] = Absent,
+            onDragStartEvt: Maybe[Drag.Event => Action] = Absent,
+            onDragEnd: Maybe[Action] = Absent,
+            onDragEndEvt: Maybe[Drag.End => Action] = Absent,
+            onDragEnter: Maybe[Action] = Absent,
+            onDragEnterEvt: Maybe[Drag.Event => Action] = Absent,
+            onDragLeave: Maybe[Action] = Absent,
+            onDragLeaveEvt: Maybe[Drag.Event => Action] = Absent,
+            onDragOver: Maybe[Action] = Absent,
+            onDragOverEvt: Maybe[Drag.Event => Action] = Absent,
+            onDrop: Maybe[Drag.Decision < (Async & Abort[Any])] = Absent,
+            onDropEvt: Maybe[Drag.Event => Drag.Decision < (Async & Abort[Any])] = Absent,
+            onSortMove: Maybe[Drag.Decision < (Async & Abort[Any])] = Absent,
+            onSortMoveEvt: Maybe[Drag.Move => Drag.Decision < (Async & Abort[Any])] = Absent,
+            onFailure: Maybe[PartialFunction[Any, Reaction]] = Absent,
             ariaAttrs: Map[String, String] = Map.empty,
             dataAttrs: Map[String, String] = Map.empty,
             jsProps: Map[String, String] = Map.empty,
@@ -1433,7 +1475,7 @@ object UI:
           * called, and means nothing without a key.
           */
         case class Mounted(
-            effect: UI < (Abort[Throwable] & Async & Scope),
+            effect: UI < (Abort[Any] & Async & Scope),
             key: Maybe[Any],
             placeholderUI: Maybe[UI],
             errorRender: Maybe[UI.MountError => UI],
@@ -1657,18 +1699,18 @@ object UI:
         final case class Form(
             attrs: Attrs = Attrs(),
             children: Chunk[UI] = Chunk.empty,
-            onSubmit: Maybe[Any < Async] = Absent,
-            onSubmitEvt: Maybe[MouseEvent => Any < Async] = Absent
+            onSubmit: Maybe[Action] = Absent,
+            onSubmitEvt: Maybe[MouseEvent => Action] = Absent
         )(using val frame: Frame) extends Block with Interactive:
             type Self = Form
             def withAttrs(a: Attrs): Form      = copy(attrs = a)
             def apply(cs: HtmlChildVal*): Form = copy(children = children ++ Chunk.from(cs.map(_.value)))
 
             /** Runs `action` on form submit, ignoring the event payload. */
-            def onSubmit(action: => Any < Async): Form = copy(onSubmit = Present(Sync.defer(action)(using frame)))
+            def onSubmit(action: => Action): Form = copy(onSubmit = Present(Sync.defer(action)(using frame)))
 
             /** Runs `f` on form submit, receiving the [[kyo.UI.MouseEvent]] payload. */
-            def onSubmit(f: MouseEvent => Any < Async): Form = copy(onSubmitEvt = Present(f))
+            def onSubmit(f: MouseEvent => Action): Form = copy(onSubmitEvt = Present(f))
         end Form
 
         /** `<fieldset>`: a named group of controls.
@@ -1711,8 +1753,8 @@ object UI:
             def placeholder: Maybe[String]             = textInputAttrs.placeholder
             def readOnly: Maybe[Boolean]               = textInputAttrs.readOnly
             def disabled: Maybe[Boolean]               = textInputAttrs.disabled
-            def onInput: Maybe[String => Any < Async]  = textInputAttrs.onInput
-            def onChange: Maybe[String => Any < Async] = textInputAttrs.onChange
+            def onInput: Maybe[String => Action]  = textInputAttrs.onInput
+            def onChange: Maybe[String => Action] = textInputAttrs.onChange
             def inputFilter: Maybe[InputFilter]        = textInputAttrs.inputFilter
             def inputMask: Maybe[String]               = textInputAttrs.inputMask
 
@@ -1721,8 +1763,8 @@ object UI:
             def placeholder(v: String): Textarea             = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
             def readOnly(v: Boolean): Textarea               = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
             def disabled(v: Boolean): Textarea               = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
-            def onInput(f: String => Any < Async): Textarea  = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
-            def onChange(f: String => Any < Async): Textarea = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
+            def onInput(f: String => Action): Textarea  = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
+            def onChange(f: String => Action): Textarea = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def inputFilter(v: InputFilter): Textarea        = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
             def inputMask(v: String): Textarea               = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
         end Textarea
@@ -1732,7 +1774,7 @@ object UI:
             children: Chunk[UI] = Chunk.empty,
             value: Maybe[Bound[String]] = Absent,
             disabled: Maybe[Boolean] = Absent,
-            onChange: Maybe[String => Any < Async] = Absent
+            onChange: Maybe[String => Action] = Absent
         )(using val frame: Frame) extends Block with Interactive with PickerInput:
             type Self = Select
             def withAttrs(a: Attrs): Select = copy(attrs = a)
@@ -1741,7 +1783,7 @@ object UI:
             def value(v: String): Select                   = copy(value = Present(Bound.Const(v)))
             def value(v: SignalRef[String]): Select        = copy(value = Present(Bound.Ref(v)))
             def disabled(v: Boolean): Select               = copy(disabled = Present(v))
-            def onChange(f: String => Any < Async): Select = copy(onChange = Present(f))
+            def onChange(f: String => Action): Select = copy(onChange = Present(f))
         end Select
 
         final case class Hr(attrs: Attrs = Attrs())(using val frame: Frame) extends Block with Void:
@@ -1826,7 +1868,7 @@ object UI:
             attrs: Attrs = Attrs(),
             checked: Maybe[Bound[Boolean]] = Absent,
             disabled: Maybe[Boolean] = Absent,
-            onChange: Maybe[Boolean => Any < Async] = Absent
+            onChange: Maybe[Boolean => Action] = Absent
         )(using val frame: Frame) extends Inline with Interactive with BooleanInput with Void:
             type Self = Checkbox
             def withAttrs(a: Attrs): Checkbox = copy(attrs = a)
@@ -1834,7 +1876,7 @@ object UI:
             def checked(v: Boolean): Checkbox                 = copy(checked = Present(Bound.Const(v)))
             def checked(v: SignalRef[Boolean]): Checkbox      = copy(checked = Present(Bound.Ref(v)))
             def disabled(v: Boolean): Checkbox                = copy(disabled = Present(v))
-            def onChange(f: Boolean => Any < Async): Checkbox = copy(onChange = Present(f))
+            def onChange(f: Boolean => Action): Checkbox = copy(onChange = Present(f))
 
             /** Sets the DOM `indeterminate` property, a visual tri-state distinct from `checked` (the checkbox shows a dash, not a tick). */
             def indeterminate(v: Boolean): Checkbox =
@@ -1851,7 +1893,7 @@ object UI:
             attrs: Attrs = Attrs(),
             checked: Maybe[Bound[Boolean]] = Absent,
             disabled: Maybe[Boolean] = Absent,
-            onChange: Maybe[Boolean => Any < Async] = Absent,
+            onChange: Maybe[Boolean => Action] = Absent,
             name: Maybe[String] = Absent
         )(using val frame: Frame) extends Inline with Interactive with BooleanInput with Void:
             type Self = Radio
@@ -1860,7 +1902,7 @@ object UI:
             def checked(v: Boolean): Radio                 = copy(checked = Present(Bound.Const(v)))
             def checked(v: SignalRef[Boolean]): Radio      = copy(checked = Present(Bound.Ref(v)))
             def disabled(v: Boolean): Radio                = copy(disabled = Present(v))
-            def onChange(f: Boolean => Any < Async): Radio = copy(onChange = Present(f))
+            def onChange(f: Boolean => Action): Radio = copy(onChange = Present(f))
             def name(v: String): Radio                     = copy(name = Present(v))
         end Radio
 
@@ -1871,8 +1913,8 @@ object UI:
             placeholder: Maybe[String] = Absent,
             readOnly: Maybe[Boolean] = Absent,
             disabled: Maybe[Boolean] = Absent,
-            onInput: Maybe[String => Any < Async] = Absent,
-            onChange: Maybe[String => Any < Async] = Absent,
+            onInput: Maybe[String => Action] = Absent,
+            onChange: Maybe[String => Action] = Absent,
             inputFilter: Maybe[InputFilter] = Absent,
             inputMask: Maybe[String] = Absent
         )
@@ -1888,8 +1930,8 @@ object UI:
             def placeholder: Maybe[String]             = textInputAttrs.placeholder
             def readOnly: Maybe[Boolean]               = textInputAttrs.readOnly
             def disabled: Maybe[Boolean]               = textInputAttrs.disabled
-            def onInput: Maybe[String => Any < Async]  = textInputAttrs.onInput
-            def onChange: Maybe[String => Any < Async] = textInputAttrs.onChange
+            def onInput: Maybe[String => Action]  = textInputAttrs.onInput
+            def onChange: Maybe[String => Action] = textInputAttrs.onChange
             def inputFilter: Maybe[InputFilter]        = textInputAttrs.inputFilter
             def inputMask: Maybe[String]               = textInputAttrs.inputMask
 
@@ -1898,8 +1940,8 @@ object UI:
             def placeholder(v: String): Input             = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
             def readOnly(v: Boolean): Input               = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
             def disabled(v: Boolean): Input               = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
-            def onInput(f: String => Any < Async): Input  = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
-            def onChange(f: String => Any < Async): Input = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
+            def onInput(f: String => Action): Input  = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
+            def onChange(f: String => Action): Input = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def inputFilter(v: InputFilter): Input        = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
             def inputMask(v: String): Input               = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
         end Input
@@ -1915,8 +1957,8 @@ object UI:
             def placeholder: Maybe[String]             = textInputAttrs.placeholder
             def readOnly: Maybe[Boolean]               = textInputAttrs.readOnly
             def disabled: Maybe[Boolean]               = textInputAttrs.disabled
-            def onInput: Maybe[String => Any < Async]  = textInputAttrs.onInput
-            def onChange: Maybe[String => Any < Async] = textInputAttrs.onChange
+            def onInput: Maybe[String => Action]  = textInputAttrs.onInput
+            def onChange: Maybe[String => Action] = textInputAttrs.onChange
             def inputFilter: Maybe[InputFilter]        = textInputAttrs.inputFilter
             def inputMask: Maybe[String]               = textInputAttrs.inputMask
 
@@ -1925,8 +1967,8 @@ object UI:
             def placeholder(v: String): PasswordInput      = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
             def readOnly(v: Boolean): PasswordInput        = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
             def disabled(v: Boolean): PasswordInput        = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
-            def onInput(f: String => Any < Async): PasswordInput  = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
-            def onChange(f: String => Any < Async): PasswordInput = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
+            def onInput(f: String => Action): PasswordInput  = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
+            def onChange(f: String => Action): PasswordInput = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def inputFilter(v: InputFilter): PasswordInput        = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
             def inputMask(v: String): PasswordInput               = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
         end PasswordInput
@@ -1942,8 +1984,8 @@ object UI:
             def placeholder: Maybe[String]             = textInputAttrs.placeholder
             def readOnly: Maybe[Boolean]               = textInputAttrs.readOnly
             def disabled: Maybe[Boolean]               = textInputAttrs.disabled
-            def onInput: Maybe[String => Any < Async]  = textInputAttrs.onInput
-            def onChange: Maybe[String => Any < Async] = textInputAttrs.onChange
+            def onInput: Maybe[String => Action]  = textInputAttrs.onInput
+            def onChange: Maybe[String => Action] = textInputAttrs.onChange
             def inputFilter: Maybe[InputFilter]        = textInputAttrs.inputFilter
             def inputMask: Maybe[String]               = textInputAttrs.inputMask
 
@@ -1952,8 +1994,8 @@ object UI:
             def placeholder(v: String): EmailInput             = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
             def readOnly(v: Boolean): EmailInput               = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
             def disabled(v: Boolean): EmailInput               = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
-            def onInput(f: String => Any < Async): EmailInput  = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
-            def onChange(f: String => Any < Async): EmailInput = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
+            def onInput(f: String => Action): EmailInput  = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
+            def onChange(f: String => Action): EmailInput = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def inputFilter(v: InputFilter): EmailInput        = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
             def inputMask(v: String): EmailInput               = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
         end EmailInput
@@ -1969,8 +2011,8 @@ object UI:
             def placeholder: Maybe[String]             = textInputAttrs.placeholder
             def readOnly: Maybe[Boolean]               = textInputAttrs.readOnly
             def disabled: Maybe[Boolean]               = textInputAttrs.disabled
-            def onInput: Maybe[String => Any < Async]  = textInputAttrs.onInput
-            def onChange: Maybe[String => Any < Async] = textInputAttrs.onChange
+            def onInput: Maybe[String => Action]  = textInputAttrs.onInput
+            def onChange: Maybe[String => Action] = textInputAttrs.onChange
             def inputFilter: Maybe[InputFilter]        = textInputAttrs.inputFilter
             def inputMask: Maybe[String]               = textInputAttrs.inputMask
 
@@ -1979,8 +2021,8 @@ object UI:
             def placeholder(v: String): TelInput             = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
             def readOnly(v: Boolean): TelInput               = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
             def disabled(v: Boolean): TelInput               = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
-            def onInput(f: String => Any < Async): TelInput  = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
-            def onChange(f: String => Any < Async): TelInput = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
+            def onInput(f: String => Action): TelInput  = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
+            def onChange(f: String => Action): TelInput = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def inputFilter(v: InputFilter): TelInput        = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
             def inputMask(v: String): TelInput               = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
         end TelInput
@@ -1996,8 +2038,8 @@ object UI:
             def placeholder: Maybe[String]             = textInputAttrs.placeholder
             def readOnly: Maybe[Boolean]               = textInputAttrs.readOnly
             def disabled: Maybe[Boolean]               = textInputAttrs.disabled
-            def onInput: Maybe[String => Any < Async]  = textInputAttrs.onInput
-            def onChange: Maybe[String => Any < Async] = textInputAttrs.onChange
+            def onInput: Maybe[String => Action]  = textInputAttrs.onInput
+            def onChange: Maybe[String => Action] = textInputAttrs.onChange
             def inputFilter: Maybe[InputFilter]        = textInputAttrs.inputFilter
             def inputMask: Maybe[String]               = textInputAttrs.inputMask
 
@@ -2006,8 +2048,8 @@ object UI:
             def placeholder(v: String): UrlInput             = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
             def readOnly(v: Boolean): UrlInput               = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
             def disabled(v: Boolean): UrlInput               = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
-            def onInput(f: String => Any < Async): UrlInput  = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
-            def onChange(f: String => Any < Async): UrlInput = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
+            def onInput(f: String => Action): UrlInput  = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
+            def onChange(f: String => Action): UrlInput = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def inputFilter(v: InputFilter): UrlInput        = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
             def inputMask(v: String): UrlInput               = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
         end UrlInput
@@ -2023,8 +2065,8 @@ object UI:
             def placeholder: Maybe[String]             = textInputAttrs.placeholder
             def readOnly: Maybe[Boolean]               = textInputAttrs.readOnly
             def disabled: Maybe[Boolean]               = textInputAttrs.disabled
-            def onInput: Maybe[String => Any < Async]  = textInputAttrs.onInput
-            def onChange: Maybe[String => Any < Async] = textInputAttrs.onChange
+            def onInput: Maybe[String => Action]  = textInputAttrs.onInput
+            def onChange: Maybe[String => Action] = textInputAttrs.onChange
             def inputFilter: Maybe[InputFilter]        = textInputAttrs.inputFilter
             def inputMask: Maybe[String]               = textInputAttrs.inputMask
 
@@ -2033,8 +2075,8 @@ object UI:
             def placeholder(v: String): SearchInput            = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
             def readOnly(v: Boolean): SearchInput              = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
             def disabled(v: Boolean): SearchInput              = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
-            def onInput(f: String => Any < Async): SearchInput = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
-            def onChange(f: String => Any < Async): SearchInput = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
+            def onInput(f: String => Action): SearchInput = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
+            def onChange(f: String => Action): SearchInput = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def inputFilter(v: InputFilter): SearchInput        = copy(textInputAttrs = textInputAttrs.copy(inputFilter = Present(v)))
             def inputMask(v: String): SearchInput               = copy(textInputAttrs = textInputAttrs.copy(inputMask = Present(v)))
         end SearchInput
@@ -2045,7 +2087,7 @@ object UI:
             min: Maybe[Double] = Absent,
             max: Maybe[Double] = Absent,
             step: Maybe[Double] = Absent,
-            onChangeNumeric: Maybe[Double => Any < Async] = Absent
+            onChangeNumeric: Maybe[Double => Action] = Absent
         )(using val frame: Frame) extends Inline with Interactive with TextInput with Void:
             type Self = NumberInput
             def withAttrs(a: Attrs): NumberInput = copy(attrs = a)
@@ -2054,20 +2096,20 @@ object UI:
             def placeholder: Maybe[String]             = textInputAttrs.placeholder
             def readOnly: Maybe[Boolean]               = textInputAttrs.readOnly
             def disabled: Maybe[Boolean]               = textInputAttrs.disabled
-            def onInput: Maybe[String => Any < Async]  = textInputAttrs.onInput
-            def onChange: Maybe[String => Any < Async] = textInputAttrs.onChange
+            def onInput: Maybe[String => Action]  = textInputAttrs.onInput
+            def onChange: Maybe[String => Action] = textInputAttrs.onChange
 
             def value(v: String): NumberInput                  = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound.Const(v))))
             def value(v: SignalRef[String]): NumberInput       = copy(textInputAttrs = textInputAttrs.copy(value = Present(Bound.Ref(v))))
             def placeholder(v: String): NumberInput            = copy(textInputAttrs = textInputAttrs.copy(placeholder = Present(v)))
             def readOnly(v: Boolean): NumberInput              = copy(textInputAttrs = textInputAttrs.copy(readOnly = Present(v)))
             def disabled(v: Boolean): NumberInput              = copy(textInputAttrs = textInputAttrs.copy(disabled = Present(v)))
-            def onInput(f: String => Any < Async): NumberInput = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
-            def onChange(f: String => Any < Async): NumberInput        = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
+            def onInput(f: String => Action): NumberInput = copy(textInputAttrs = textInputAttrs.copy(onInput = Present(f)))
+            def onChange(f: String => Action): NumberInput        = copy(textInputAttrs = textInputAttrs.copy(onChange = Present(f)))
             def min(v: Double): NumberInput                            = copy(min = Present(v))
             def max(v: Double): NumberInput                            = copy(max = Present(v))
             def step(v: Double): NumberInput                           = copy(step = Present(if v <= 0 then 1.0 else v))
-            def onChangeNumeric(f: Double => Any < Async): NumberInput = copy(onChangeNumeric = Present(f))
+            def onChangeNumeric(f: Double => Action): NumberInput = copy(onChangeNumeric = Present(f))
         end NumberInput
 
         // ---- Picker inputs (value + onChange: String, no placeholder/onInput) ----
@@ -2076,42 +2118,42 @@ object UI:
             attrs: Attrs = Attrs(),
             value: Maybe[Bound[String]] = Absent,
             disabled: Maybe[Boolean] = Absent,
-            onChange: Maybe[String => Any < Async] = Absent
+            onChange: Maybe[String => Action] = Absent
         )(using val frame: Frame) extends Inline with Interactive with PickerInput with Void:
             type Self = DateInput
             def withAttrs(a: Attrs): DateInput                = copy(attrs = a)
             def value(v: String): DateInput                   = copy(value = Present(Bound.Const(v)))
             def value(v: SignalRef[String]): DateInput        = copy(value = Present(Bound.Ref(v)))
             def disabled(v: Boolean): DateInput               = copy(disabled = Present(v))
-            def onChange(f: String => Any < Async): DateInput = copy(onChange = Present(f))
+            def onChange(f: String => Action): DateInput = copy(onChange = Present(f))
         end DateInput
 
         final case class TimeInput(
             attrs: Attrs = Attrs(),
             value: Maybe[Bound[String]] = Absent,
             disabled: Maybe[Boolean] = Absent,
-            onChange: Maybe[String => Any < Async] = Absent
+            onChange: Maybe[String => Action] = Absent
         )(using val frame: Frame) extends Inline with Interactive with PickerInput with Void:
             type Self = TimeInput
             def withAttrs(a: Attrs): TimeInput                = copy(attrs = a)
             def value(v: String): TimeInput                   = copy(value = Present(Bound.Const(v)))
             def value(v: SignalRef[String]): TimeInput        = copy(value = Present(Bound.Ref(v)))
             def disabled(v: Boolean): TimeInput               = copy(disabled = Present(v))
-            def onChange(f: String => Any < Async): TimeInput = copy(onChange = Present(f))
+            def onChange(f: String => Action): TimeInput = copy(onChange = Present(f))
         end TimeInput
 
         final case class ColorInput(
             attrs: Attrs = Attrs(),
             value: Maybe[Bound[String]] = Absent,
             disabled: Maybe[Boolean] = Absent,
-            onChange: Maybe[String => Any < Async] = Absent
+            onChange: Maybe[String => Action] = Absent
         )(using val frame: Frame) extends Inline with Interactive with PickerInput with Void:
             type Self = ColorInput
             def withAttrs(a: Attrs): ColorInput                = copy(attrs = a)
             def value(v: String): ColorInput                   = copy(value = Present(Bound.Const(v)))
             def value(v: SignalRef[String]): ColorInput        = copy(value = Present(Bound.Ref(v)))
             def disabled(v: Boolean): ColorInput               = copy(disabled = Present(v))
-            def onChange(f: String => Any < Async): ColorInput = copy(onChange = Present(f))
+            def onChange(f: String => Action): ColorInput = copy(onChange = Present(f))
         end ColorInput
 
         // ---- Special inputs ----
@@ -2123,7 +2165,7 @@ object UI:
             max: Maybe[Double] = Absent,
             step: Maybe[Double] = Absent,
             disabled: Maybe[Boolean] = Absent,
-            onChange: Maybe[Double => Any < Async] = Absent
+            onChange: Maybe[Double => Action] = Absent
         )(using val frame: Frame) extends Inline with Interactive with Focusable with HasDisabled with Void:
             type Self = RangeInput
             def withAttrs(a: Attrs): RangeInput                = copy(attrs = a)
@@ -2133,20 +2175,20 @@ object UI:
             def max(v: Double): RangeInput                     = copy(max = Present(v))
             def step(v: Double): RangeInput                    = copy(step = Present(if v <= 0 then 1.0 else v))
             def disabled(v: Boolean): RangeInput               = copy(disabled = Present(v))
-            def onChange(f: Double => Any < Async): RangeInput = copy(onChange = Present(f))
+            def onChange(f: Double => Action): RangeInput = copy(onChange = Present(f))
         end RangeInput
 
         final case class FileInput(
             attrs: Attrs = Attrs(),
             accept: Maybe[Chunk[FileAccept]] = Absent,
             disabled: Maybe[Boolean] = Absent,
-            onChange: Maybe[String => Any < Async] = Absent
+            onChange: Maybe[String => Action] = Absent
         )(using val frame: Frame) extends Inline with Interactive with Focusable with HasDisabled with Void:
             type Self = FileInput
             def withAttrs(a: Attrs): FileInput                = copy(attrs = a)
             def accept(vs: FileAccept*): FileInput            = copy(accept = Present(Chunk.from(vs)))
             def disabled(v: Boolean): FileInput               = copy(disabled = Present(v))
-            def onChange(f: String => Any < Async): FileInput = copy(onChange = Present(f))
+            def onChange(f: String => Action): FileInput = copy(onChange = Present(f))
         end FileInput
 
         final case class HiddenInput(
@@ -2222,7 +2264,7 @@ object UI:
             options: Chunk[(String, String)] = Chunk.empty,
             value: Maybe[Bound[String]] = Absent,
             disabled: Maybe[Boolean] = Absent,
-            onChange: Maybe[String => Any < Async] = Absent
+            onChange: Maybe[String => Action] = Absent
         )(using val frame: Frame) extends Block with Interactive with PickerInput:
             type Self = Dropdown
             def children: Chunk[UI]                          = Chunk.empty
@@ -2230,7 +2272,7 @@ object UI:
             def value(v: String): Dropdown                   = copy(value = Present(Bound.Const(v)))
             def value(v: SignalRef[String]): Dropdown        = copy(value = Present(Bound.Ref(v)))
             def disabled(v: Boolean): Dropdown               = copy(disabled = Present(v))
-            def onChange(f: String => Any < Async): Dropdown = copy(onChange = Present(f))
+            def onChange(f: String => Action): Dropdown = copy(onChange = Present(f))
         end Dropdown
 
     end Ast
