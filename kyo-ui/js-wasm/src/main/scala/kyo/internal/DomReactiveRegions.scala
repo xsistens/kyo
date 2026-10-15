@@ -19,6 +19,42 @@ final private[kyo] class DomReactiveRegions private (
       */
     private val fingerprints = mutable.HashMap.empty[String, Long]
 
+    /** Marks the elements of the range inert and busy while it keeps showing old content as its new content loads, taking focus out of
+      * them, since nothing they would send reaches the engine; or takes the marks back. Only the marks this set are taken back, so an
+      * `inert` the page set stays. The same marking as the server-push client's.
+      */
+    def hold(regionId: String, held: Boolean)(using Frame): Unit < Sync =
+        Sync.defer {
+            if open then
+                ranges.get(regionId).foreach { endpoints =>
+                    val page   = document.asInstanceOf[dom.html.Document]
+                    val active = page.activeElement
+                    elementsBetween(endpoints).foreach { element =>
+                        if held then
+                            if !element.hasAttribute("inert") then
+                                element.setAttribute("inert", "")
+                                element.setAttribute("aria-busy", "true")
+                                element.setAttribute("data-kyo-held", "")
+                                if active != null && (active ne page.body) && element.contains(active) then
+                                    active.asInstanceOf[dom.html.Element].blur()
+                            end if
+                        else unmark(element)
+                    }
+                }
+        }
+
+    /** Takes back the marks of every held range, for a mount that ends while a range waits and leaves its markup on the page. */
+    def releaseHolds(using Frame): Unit < Sync =
+        Sync.defer {
+            if open then ranges.iterator.foreach((_, endpoints) => elementsBetween(endpoints).foreach(unmark))
+        }
+
+    private def unmark(element: dom.Element): Unit =
+        if element.hasAttribute("data-kyo-held") then
+            element.removeAttribute("inert")
+            element.removeAttribute("aria-busy")
+            element.removeAttribute("data-kyo-held")
+
     /** The fingerprint of range `regionId`'s latest observed paint, if one is recorded. */
     private[kyo] def fingerprint(regionId: String): Maybe[Long] = Maybe.fromOption(fingerprints.get(regionId))
 

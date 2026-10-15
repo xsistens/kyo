@@ -635,4 +635,35 @@ class DomReactiveRegionsTest extends kyo.test.Test[Any]:
         }
     }
 
+    "a held range marks its elements inert and busy, takes focus out of them, and gives back only its own marks" in {
+        val root = host(
+            s"""<!--kyo-rs:$One--><div id="held-a"><input id="held-field"></div><div id="held-b" inert></div>text<!--kyo-re:$One-->""" +
+                """<input id="held-outside">"""
+        )
+        def el(id: String) = dom.document.getElementById(id)
+        Scope.run {
+            for
+                _       <- Sync.defer(dom.document.body.appendChild(root))
+                _       <- Scope.ensure(Sync.defer(dom.document.body.removeChild(root)))
+                regions <- DomReactiveRegions.init(root)
+                _       <- Sync.defer(el("held-field").asInstanceOf[dom.html.Input].focus())
+                _       <- regions.hold(One, held = true)
+                heldA   <- Sync.defer((el("held-a").hasAttribute("inert"), el("held-a").getAttribute("aria-busy")))
+                heldB   <- Sync.defer((el("held-b").hasAttribute("inert"), el("held-b").hasAttribute("aria-busy")))
+                focused <- Sync.defer(dom.document.activeElement.id)
+                outside <- Sync.defer(el("held-outside").hasAttribute("inert"))
+                _       <- regions.hold(One, held = false)
+                freeA   <- Sync.defer((el("held-a").hasAttribute("inert"), el("held-a").hasAttribute("aria-busy")))
+                freeB   <- Sync.defer(el("held-b").hasAttribute("inert"))
+            yield
+                assert(heldA == (true, "true"), s"the element in the range while held: $heldA")
+                assert(heldB == (true, false), s"the element that was inert already: $heldB")
+                assert(focused != "held-field", "the focused field kept focus")
+                assert(!outside, "an element outside the range was marked")
+                assert(freeA == (false, false), s"the element after the release: $freeA")
+                assert(freeB, "the release took away an inert the page had set")
+            end for
+        }
+    }
+
 end DomReactiveRegionsTest
