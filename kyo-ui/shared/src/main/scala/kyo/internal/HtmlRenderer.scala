@@ -82,6 +82,8 @@ private[kyo] object HtmlRenderer:
             case Fragment(children)   => children.exists(bindsSignal)
             case KeyedChild(_, child) => bindsSignal(child)
             case m: Mounted           => m.placeholderUI.exists(bindsSignal)
+            // A waiting boundary reads its content's signals to learn whether it holds a mount that loads.
+            case _: Bounded           => true
             case _: Text | _: RawHtml => false
 
     private[kyo] def renderRegion(ui: UI, path: Seq[String])(using Frame): String < Sync =
@@ -120,6 +122,7 @@ private[kyo] object HtmlRenderer:
             case _: Reactive[?]       => false
             case _: Foreach[?, ?]     => false
             case _: Mounted           => false
+            case _: Bounded           => false
     end paintsAsKeyedRoot
 
     /** Render ONE keyed row of a list region, exactly as the region's own render would have placed it, plus
@@ -547,6 +550,36 @@ private[kyo] object HtmlRenderer:
                         }
                         closeInitialHost(sb, host)
                 }
+
+            case m: Mounted if Boundaries.implicitOf(m).nonEmpty =>
+                renderTo(sb, Boundaries.implicitOf(m).get, path, context, namespace, cssRules, parentContext, boundaryMode)
+
+            case b: Bounded =>
+                // A range of its own, so the boundary can later replace what it shows: its placeholder while it holds a mount that loads,
+                // else its content, or the live state the engine resolved.
+                val region  = ReactiveRegion.from(context, namespace)
+                val content = b.display match
+                    case Present(d) => d
+                    case Absent     =>
+                        if b.settings.waits && Boundaries.catchesNow(b.child) then b.settings.placeholderView.get else b.child
+                val host = ReactiveRegion.renderHost(region, parentContext, ReactiveRegion.tableContent(content))
+                // A boundary around one mount, which a mount's own `.placeholder` is, is that mount's slot: an enclosing repaint
+                // leaves the instance's live content alone, as it does for a mount without one.
+                val flags = b.child match
+                    case m: Mounted => ReactiveRegion.mountSlotFlags(m.key, m.frame)
+                    case _          => ""
+                openInitialHost(sb, host, flags)
+                renderTo(
+                    sb,
+                    content,
+                    path,
+                    context.transparent,
+                    ReactiveRegion.namespace(host),
+                    cssRules,
+                    ReactiveRegion.contentParent(host),
+                    ReactiveRegion.BoundaryMode.Emit
+                )
+                closeInitialHost(sb, host)
 
             case m: Mounted =>
                 // A mount's live content belongs to the instance the renderer runs, so a static render shows its placeholder,
@@ -1809,6 +1842,16 @@ private[kyo] object HtmlRenderer:
           |    el=el.parentNode;}
           |  return false;
           |}
+          |// A range that keeps showing old content while its new content loads: its elements turn inert and busy and focus leaves them,
+          |// since the server drops what they would send. Only the marks this function set are removed again.
+          |function kyoRangeHold(id,held){
+          |  var endpoints=__kyoRanges&&__kyoRanges.get(id);if(!endpoints)return;
+          |  var roots=kyoRangeRoots(endpoints.start,endpoints.end),ae=document.activeElement;
+          |  for(var i=0;i<roots.length;i++){var r=roots[i];if(r.nodeType!==1)continue;
+          |    if(held){if(r.hasAttribute("inert"))continue;r.setAttribute("inert","");r.setAttribute("aria-busy","true");r.setAttribute("data-kyo-held","");
+          |      if(ae&&ae!==document.body&&r.contains(ae))ae.blur();}
+          |    else if(r.hasAttribute("data-kyo-held")){r.removeAttribute("inert");r.removeAttribute("aria-busy");r.removeAttribute("data-kyo-held");}}
+          |}
           |// A select chooses among the options it holds when its value is assigned, so a value assigned before its
           |// options arrived selects nothing: assign it again once options inside it were painted. applyJsProps calls
           |// it after each paint. Twin of reassertEnclosingSelect in DomBackend.
@@ -1992,6 +2035,8 @@ private[kyo] object HtmlRenderer:
            |    catch(error){kyoClientError(error);}
            |  }else if(op.ReplaceRange){
            |    try{kyoRangeReplace(op.ReplaceRange.regionId,op.ReplaceRange.html);}catch(error){kyoClientError(error);}
+           |  }else if(op.HoldRange){
+           |    try{kyoRangeHold(op.HoldRange.regionId,op.HoldRange.held);}catch(error){kyoClientError(error);}
            |  }else if(op.Replace){
            |    var p=op.Replace.path.join(".");
            |    var el=document.querySelector(__kyoPathSel(p));

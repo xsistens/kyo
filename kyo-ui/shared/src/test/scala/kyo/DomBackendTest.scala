@@ -294,6 +294,53 @@ class DomBackendTest extends UITest:
         }
     }
 
+    "a keyless mount whose placeholder holds a region shows its new content after its region re-renders" in {
+        // The shape of uic.SelectButton: its placeholder is itself a reactive region. The region around the mount
+        // re-renders, the new instance publishes, and the page must show that content, not keep what the first instance showed.
+        val app: UI < Async =
+            for
+                tick  <- Signal.initRef(0)
+                other <- Signal.initRef("a")
+            yield UI.div(
+                UI.button("bump").id("pbump").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map(t =>
+                    UI.mounted(Kyo.lift[UI, Async](UI.span(s"body-$t").id("pbody")))
+                        .placeholder(other.map(o => UI.span(s"waiting-$o").id("pwait")))
+                )
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("pbody"), "body-0")
+                _ <- Browser.click(Selector.id("pbump"))
+                _ <- Browser.assertText(Selector.id("pbody"), "body-1")
+                _ <- Browser.click(Selector.id("pbump"))
+                _ <- Browser.assertText(Selector.id("pbody"), "body-2")
+            yield succeed
+        }
+    }
+
+    "a keyless mount with a placeholder keeps showing its new content over several re-renders of its region" in {
+        // The second repaint used to stick: the first one had the client adopt the mount's own range, inside the slot of
+        // its implicit boundary, as a second slot, which every later repaint of that boundary then left alone.
+        val app: UI < Async =
+            for tick <- Signal.initRef(0)
+            yield UI.div(
+                UI.button("bump").id("sbump").onClick(tick.getAndUpdate(_ + 1).unit),
+                tick.map(t => UI.mounted(Kyo.lift[UI, Async](UI.span(s"body-$t").id("sbody"))).placeholder(UI.span("wait")))
+            )
+        withUI(app) {
+            for
+                _ <- Browser.assertText(Selector.id("sbody"), "body-0")
+                _ <- Browser.click(Selector.id("sbump"))
+                _ <- Browser.assertText(Selector.id("sbody"), "body-1")
+                _ <- Browser.click(Selector.id("sbump"))
+                _ <- Browser.assertText(Selector.id("sbody"), "body-2")
+                _ <- Browser.click(Selector.id("sbump"))
+                _ <- Browser.assertText(Selector.id("sbody"), "body-3")
+            yield succeed
+        }
+    }
+
     "a mount from another call site under the same key still resets its slot" in {
         // A mount is identified by its call site as well as its key, so the mount below replaces the one above even
         // though both name the slot "same". The slot must not stay opaque for the new instance: node identity must

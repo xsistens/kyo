@@ -1056,7 +1056,17 @@ private[kyo] object DomBackend:
 
         private var open = true
 
-        private[kyo] def close(using Frame): Unit < Sync = Sync.defer { open = false }
+        // A range that waits when the mount ends gets no release from its boundary any more, so the marks go here.
+        private[kyo] def close(using Frame): Unit < Sync = regions.releaseHolds.andThen(Sync.defer { open = false })
+
+        override def onHold(region: ReactiveRegion, held: Boolean)(using Frame): Unit < Async =
+            Sync.defer(open).flatMap { isOpen =>
+                if !isOpen then Kyo.unit
+                else
+                    region match
+                        case ReactiveRegion.HtmlRange(regionId) => regions.hold(regionId, held)
+                        case _: ReactiveRegion.SvgElement       => Kyo.unit
+            }
 
         /** Fingerprint of the HTML each region painted last, kept only while a devtools sink is observing.
           *
