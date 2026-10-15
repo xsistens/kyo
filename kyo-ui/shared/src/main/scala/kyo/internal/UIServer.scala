@@ -310,6 +310,11 @@ private[kyo] object UIServer:
                 val op = HtmlOp.SetClassByPath(path, name, on)
                 Abort.runPartial[Closed](ws.put(HttpWebSocket.Payload.Text(Json.encode[HtmlOp](op)))).unit
 
+            override def onHold(region: ReactiveRegion, held: Boolean)(using Frame): Unit < Async =
+                region match
+                    case ReactiveRegion.HtmlRange(id) => send(HtmlOp.HoldRange(id, held), Seq.empty)
+                    case _: ReactiveRegion.SvgElement => Kyo.unit
+
             /** Render and send the whole region. The region kind picks the op: an HTML region replaces the
               * content between its comment anchors (`ReplaceRange`), so the replacement parses in its actual
               * parent context; an SVG region replaces its own `<g>` boundary at its path. A descendant sent by
