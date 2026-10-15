@@ -322,11 +322,36 @@ class MountedTest extends kyo.test.Test[Any]:
             dispatch <- MountDispatch.init
             cell     <- Signal.initRef[ReactiveUI.MountState](ReactiveUI.MountState.Pending(Absent))
             path = Seq("0", "1")
-            _     <- dispatch.register(path, cell)
-            _     <- dispatch.register(path, cell)
-            _     <- dispatch.unregister(path, cell)
-            found <- dispatch.lookup(path)
+            at   = ReactiveRegion.RegionIdentity(path, 1)
+            node = UI.mounted(Kyo.lift(UI.empty))
+            _     <- dispatch.register(at, cell)
+            _     <- dispatch.register(at, cell)
+            _     <- dispatch.unregister(at, cell)
+            found <- dispatch.lookup(at)
         yield assert(found.exists(_ eq cell))
+    }
+
+    "two mounts at one path, one the content of the other, made under one frame, are each found by their own content" in {
+        // A helper taking a `Frame` makes both under its caller's, so only how deep each one's content sits at the path tells them apart.
+        def nested(using Frame)    = (UI.mounted(Kyo.lift(UI.empty)), UI.mounted(Kyo.lift(UI.empty)))
+        val (outerNode, innerNode) = nested
+        val path                   = Seq("0")
+        val outerAt                = ReactiveRegion.RegionIdentity(path, 1)
+        val innerAt                = ReactiveRegion.RegionIdentity(path, 3)
+        for
+            dispatch <- MountDispatch.init
+            outer    <- Signal.initRef[ReactiveUI.MountState](ReactiveUI.MountState.Pending(Absent))
+            inner    <- Signal.initRef[ReactiveUI.MountState](ReactiveUI.MountState.Pending(Absent))
+            _        <- dispatch.register(outerAt, outer)
+            before   <- dispatch.lookup(innerAt)
+            _        <- dispatch.register(innerAt, inner)
+            o        <- dispatch.lookup(outerAt)
+            i        <- dispatch.lookup(innerAt)
+        yield
+            assert(outerNode.frame == innerNode.frame)
+            assert(before.isEmpty, "the inner mount found the outer one's cell before its own registered")
+            assert(o.exists(_ eq outer) && i.exists(_ eq inner))
+        end for
     }
 
     "siblings appearing before a keyed node do not change its identity" in {
