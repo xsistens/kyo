@@ -10,7 +10,7 @@ kyo-ui describes web UIs as pure values that run unchanged in three places: a Sc
 
 **Updates are fine-grained.** No virtual DOM, no component re-execution. The `UI` value is built once; the framework registers a subscription at every point where a signal appears. When a signal emits, only the subtree bound to that signal re-renders, and only the DOM nodes inside that subtree get patched. Granularity is determined at the call site: `div(name: Signal[String])` updates one text node; `when(loggedIn)(bigSubtree)` rebuilds a whole subtree. You pick the boundary.
 
-Event handlers are typed `Any < Async` and can call anything in the kyo ecosystem. The element tree under `UI.Ast.*` is plain case classes; pattern-match on it for tests, transforms, or custom backends. Build a UI with `import kyo.UI.*` and factory functions like `div`, `button`, `input`; chain attribute and event setters; attach children via `.apply(...)`.
+Event handlers are typed `UI.Action`, that is `Any < (Async & Abort[Any])`, and can call anything in the kyo ecosystem, including effects that fail. The element tree under `UI.Ast.*` is plain case classes; pattern-match on it for tests, transforms, or custom backends. Build a UI with `import kyo.UI.*` and factory functions like `div`, `button`, `input`; chain attribute and event setters; attach children via `.apply(...)`.
 
 <!-- doctest:setup
 ```scala
@@ -77,7 +77,7 @@ val labeled: UI =
 
 ### Event handlers
 
-Every element that mixes in `Interactive` (which is every non-`Void` factory plus the input elements) exposes `.onClick`, `.onClickSelf`, `.onKeyDown`, `.onKeyUp`, `.onFocus`, `.onBlur`. Handler bodies are typed `Any < Async`: the framework discards the return value, so you can pass any effectful expression directly without an explicit `.unit` or `Unit` ascription. Handlers can suspend, perform `Sync`, raise via `Abort`, sleep, call kyo-http, anything. The return value is not a way to communicate with the rest of the app; reach it via a `SignalRef` (a writable, observable cell, introduced in [Reactivity](#reactivity) below) or other shared state.
+Every element that mixes in `Interactive` (which is every non-`Void` factory plus the input elements) exposes `.onClick`, `.onClickSelf`, `.onKeyDown`, `.onKeyUp`, `.onFocus`, `.onBlur`. Handler bodies are typed `UI.Action` (`Any < (Async & Abort[Any])`): the framework discards the return value, so you can pass any effectful expression directly without an explicit `.unit` or `Unit` ascription. Handlers can suspend, perform `Sync`, fail with any `Abort`, sleep, call kyo-http, anything. A failure the handler leaves unhandled goes to the `onFailure` rules around it, see [Failures](#failures). The return value is not a way to communicate with the rest of the app; reach it via a `SignalRef` (a writable, observable cell, introduced in [Reactivity](#reactivity) below) or other shared state.
 
 ```scala
 import UI.*
@@ -107,7 +107,7 @@ By default an event bubbles through the tree: every ancestor that declared a han
 
 `onContextMenu` fires on right-click (the `contextmenu` event). When the right-click lands on an element (or a descendant) that declared a handler, the client suppresses the browser's native context menu (`preventDefault`); a right-click with no context-menu handler anywhere in its ancestor chain keeps the native menu. Like `onClick`, it is available as a by-name action or a `MouseEvent`-typed handler.
 
-> **Note:** `onClick`, `onClickSelf`, `onContextMenu`, `onFocus`, `onBlur`, and `Form.onSubmit` each available as a by-name `=> Any < Async` action or as a typed handler receiving `MouseEvent` or `KeyboardEvent`. `onKeyDown` and `onKeyUp` take a `KeyboardEvent => Any < Async`; the function shape is required because the handler receives the key. Per-input change handlers take `String => Any < Async`, `Boolean => Any < Async`, or `Double => Any < Async`.
+> **Note:** `onClick`, `onClickSelf`, `onContextMenu`, `onFocus`, `onBlur`, and `Form.onSubmit` each available as a by-name `=> UI.Action` or as a typed handler receiving `MouseEvent` or `KeyboardEvent`. `onKeyDown` and `onKeyUp` take a `KeyboardEvent => UI.Action`; the function shape is required because the handler receives the key. Per-input change handlers take `String => UI.Action`, `Boolean => UI.Action`, or `Double => UI.Action`.
 
 ### Invalid states do not compile
 
@@ -351,7 +351,7 @@ A mount effect returns once it has set things up, so a feed it starts keeps runn
 import UI.*
 import kyo.*
 
-def liveTicker(quotes: Stream[String, Async]): UI < (Abort[Throwable] & Async & Scope) =
+def liveTicker(quotes: Stream[String, Async]): UI < (Abort[Any] & Async & Scope) =
     for
         price <- Signal.initRef("...")
         _     <- UI.fork(quotes.foreach(price.set(_)))
@@ -359,6 +359,34 @@ def liveTicker(quotes: Stream[String, Async]): UI < (Abort[Throwable] & Async & 
 ```
 
 A plain `Fiber.init` still runs on the node's `Scope`, but its failure does not reach the node, which is what a feed whose failure the component handles itself wants.
+
+### Failures
+
+A handler, a mount effect and a feed can all fail with any `Abort`, and none of them has to handle it. What a failure nothing handled does is picked by `onFailure` rules, a `PartialFunction` from the failure, as raised, to a `UI.Reaction`:
+
+| Reaction | Effect |
+| --- | --- |
+| `Notify` | The content stays, and the failure goes to the nearest boundary's `onNotice` sink, a toast or a banner say. With no sink it is logged. |
+| `Escalate` | The enclosing `UI.mounted` node fails and shows its error view, with `source` set to `Handler` for a handler. Outside any mount it is `Notify`. |
+| `Run(action)` | Runs `action`, a redirect say. If the action fails in turn, that failure is notified. |
+
+```scala
+val root = UI.boundary
+    .onFailure {
+        case ApiError.Unauthorized => UI.Reaction.Run(router.go(Login))
+        case _: ApiError.Conflict  => UI.Reaction.Escalate
+    }
+    .onNotice(err => toasts.error(err.getMessage))
+    (app)
+
+UI.form(UI.textarea.value(draft), UI.button("Send"))
+    .onSubmit(api.addComment(id, draft.get))                         // fails with Abort[ApiError]
+    .onFailure { case ApiError.TooLong => UI.Reaction.Run(hint.set("Too long")) }
+```
+
+The rules closest to the failure come first: those of the element whose handler failed and of the elements around it, then those of the boundaries around it, innermost first. A failure no rule matches is `Notify` for a handler and `Escalate` for a `UI.fork` feed. The rules and the sink are part of the `UI` value, so the same app code behaves the same under `UI.runMount` and `UI.runHandlers`.
+
+`UI.notify(failure)` hands a failure to the sink directly, and `UI.report(failure, otherwise)` applies the rules without failing the caller, the way a poll that keeps running reports a failed tick. A sink receives a `Throwable`: a failure that is not one arrives as a `UI.FailureException`, and `UI.Failed(x)` takes the value back out. A `MountError` carries both, the `Throwable` as `error` and the value as raised as `failure`, which `MountError.Failed(x)` matches on.
 
 ### Signal-typed setters return `UI`, not `Self`
 
@@ -398,11 +426,11 @@ When you pass either a constant `String` or a `SignalRef[String]` to `.value`, t
 
 Input elements share three capability traits.
 
-`TextInput`: text-shaped fields with a string value, placeholder, and Input + Change handlers. Setters common to all `TextInput` variants: `.value(v: String)`, `.value(ref: SignalRef[String])`, `.placeholder(v: String)`, `.readOnly(v: Boolean)`, `.disabled(v: Boolean)`, `.onInput(f: String => Unit < Async)`, `.onChange(f: String => Unit < Async)`. Implementations: `UI.input`, `UI.passwordInput`, `UI.emailInput`, `UI.telInput`, `UI.urlInput`, `UI.searchInput`, `UI.numberInput`, `UI.textarea`.
+`TextInput`: text-shaped fields with a string value, placeholder, and Input + Change handlers. Setters common to all `TextInput` variants: `.value(v: String)`, `.value(ref: SignalRef[String])`, `.placeholder(v: String)`, `.readOnly(v: Boolean)`, `.disabled(v: Boolean)`, `.onInput(f: String => UI.Action)`, `.onChange(f: String => UI.Action)`. Implementations: `UI.input`, `UI.passwordInput`, `UI.emailInput`, `UI.telInput`, `UI.urlInput`, `UI.searchInput`, `UI.numberInput`, `UI.textarea`.
 
 `PickerInput`: picker-shaped fields with a string value, disabled, and a Change handler (no placeholder, no onInput). Implementations: `UI.dateInput`, `UI.timeInput`, `UI.colorInput`, `UI.select`, `UI.dropdown(options*)`.
 
-`BooleanInput`: boolean-shaped fields with `.checked`, disabled, and a `Boolean => Unit < Async` Change handler. Implementations: `UI.checkbox`, `UI.radio`.
+`BooleanInput`: boolean-shaped fields with `.checked`, disabled, and a `Boolean => UI.Action` Change handler. Implementations: `UI.checkbox`, `UI.radio`.
 
 `ConstrainedInput`: the `TextInput` variants that accept typing constraints, adding `.inputFilter(v: InputFilter)` and `.inputMask(v: String)`. Implementations: every `TextInput` except `UI.numberInput`, which constrains its content through `type="number"` plus `.min` / `.max` / `.step` instead. See [Typing constraints](#typing-constraints).
 
@@ -484,11 +512,11 @@ A few things to notice in this block:
 - `.disabled(valid.map(!_))` uses the `Signal[Boolean]` overload, so the button is wrapped in a `Reactive`. That is the right behavior here: when validity flips, the button's disabled attribute flips.
 - `Form.onSubmit(action)` fires on Enter inside a child input AND on a button click inside the form (no event-type discrimination needed). The action runs with `Async` available.
 
-> **Note:** `Form.onSubmit` is a `Form`-specific extra, not an `Interactive` event. The handler is `=> Unit < Async`, same shape as `onClick`. Buttons inside a `Form` submit it; a `Button` outside a `Form` does not.
+> **Note:** `Form.onSubmit` is a `Form`-specific extra, not an `Interactive` event. The handler is `=> UI.Action`, same shape as `onClick`. Buttons inside a `Form` submit it; a `Button` outside a `Form` does not.
 
 ### Number, range, file, hidden inputs
 
-`NumberInput` is a `TextInput` plus `.min(v: Double)`, `.max(v: Double)`, `.step(v: Double)` (clamped: any `step <= 0` becomes `1.0`), and `.onChangeNumeric(f: Double => Unit < Async)` for a typed-as-`Double` change handler.
+`NumberInput` is a `TextInput` plus `.min(v: Double)`, `.max(v: Double)`, `.step(v: Double)` (clamped: any `step <= 0` becomes `1.0`), and `.onChangeNumeric(f: Double => UI.Action)` for a typed-as-`Double` change handler.
 
 ```scala
 import UI.*
