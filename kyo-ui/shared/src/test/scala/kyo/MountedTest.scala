@@ -2,6 +2,7 @@ package kyo
 
 import kyo.internal.HtmlRenderer
 import kyo.internal.MountDispatch
+import kyo.internal.MountedSpec
 import kyo.internal.MouseEventData
 import kyo.internal.ReactiveRegion
 import kyo.internal.ReactiveUI
@@ -320,14 +321,15 @@ class MountedTest extends kyo.test.Test[Any]:
     "an event registration that ends leaves a later one at the same path in place" in {
         for
             dispatch <- MountDispatch.init
-            cell     <- Signal.initRef[ReactiveUI.MountState](ReactiveUI.MountState.Pending(Absent))
             path = Seq("0", "1")
             node = UI.mounted(Kyo.lift(UI.empty))
-            _     <- dispatch.register(path, node.frame, cell)
-            _     <- dispatch.register(path, node.frame, cell)
-            _     <- dispatch.unregister(path, cell)
-            found <- dispatch.lookup(path, node.frame)
-        yield assert(found.exists(_ eq cell))
+            instance <- ReactiveUI.MountInstance.start(MountedSpec(node, path, Nil), Absent, Nil)
+            _        <- dispatch.register(path, node.frame, instance)
+            _        <- dispatch.register(path, node.frame, instance)
+            _        <- dispatch.unregister(path, instance)
+            found    <- dispatch.instance(path, node.frame)
+            _        <- instance.teardown
+        yield assert(found.exists(_ eq instance))
     }
 
     "two mounts at one path, one the content of the other, are each found by their own call site" in {
@@ -336,15 +338,17 @@ class MountedTest extends kyo.test.Test[Any]:
             path      = Seq("0")
             outerNode = UI.mounted(Kyo.lift(UI.empty))
             innerNode = UI.mounted(Kyo.lift(UI.empty))
-            outer  <- Signal.initRef[ReactiveUI.MountState](ReactiveUI.MountState.Pending(Absent))
-            inner  <- Signal.initRef[ReactiveUI.MountState](ReactiveUI.MountState.Pending(Absent))
+            outer  <- ReactiveUI.MountInstance.start(MountedSpec(outerNode, path, Nil), Absent, Nil)
+            inner  <- ReactiveUI.MountInstance.start(MountedSpec(innerNode, path, Nil), Absent, Nil)
             _      <- dispatch.register(path, outerNode.frame, outer)
-            before <- dispatch.lookup(path, innerNode.frame)
+            before <- dispatch.instance(path, innerNode.frame)
             _      <- dispatch.register(path, innerNode.frame, inner)
-            o      <- dispatch.lookup(path, outerNode.frame)
-            i      <- dispatch.lookup(path, innerNode.frame)
+            o      <- dispatch.instance(path, outerNode.frame)
+            i      <- dispatch.instance(path, innerNode.frame)
+            _      <- inner.teardown
+            _      <- outer.teardown
         yield
-            assert(before.isEmpty, "the inner mount found the outer one's cell before its own registered")
+            assert(before.isEmpty, "the inner mount found the outer one's instance before its own registered")
             assert(o.exists(_ eq outer) && i.exists(_ eq inner))
     }
 

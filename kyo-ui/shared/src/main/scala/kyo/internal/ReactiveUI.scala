@@ -11,7 +11,7 @@ private[kyo] case class ReactiveUI(
     signal: Signal[UI],
     isConst: Boolean,
     children: Seq[ReactiveUI],
-    handle: (Seq[String], UIEvent) => Boolean < Async,
+    handle: (Seq[String], UIEvent) => Boolean < (Async & Abort[Any]),
     region: ReactiveRegion,
     contentContext: ReactiveRegion.RegionIdentity,
     parentContext: ReactiveRegion.ParentContext,
@@ -73,7 +73,7 @@ end ForeachSpec
   * had registered, the outer showed its content, which held the inner boundary again, and resolution recursed without end.
   */
 final private[kyo] class MountDispatch(
-    cells: AtomicRef[Dict[Seq[String], Chunk[(Frame, Signal[ReactiveUI.MountState])]]],
+    cells: AtomicRef[Dict[Seq[String], Chunk[(Frame, ReactiveUI.MountInstance)]]],
     gates: AtomicRef[Dict[Seq[String], Chunk[BoundaryGate]]],
     holds: AtomicRef[Chunk[Seq[String]]]
 ):
@@ -105,25 +105,29 @@ final private[kyo] class MountDispatch(
     def boundary(path: Seq[String], site: Frame)(using Frame): Maybe[BoundaryGate] < Sync =
         gates.get.map(_.get(path).flatMap(held => Maybe.fromOption(held.reverseIterator.find(_.site == site))))
 
-    /** Registers `cell` of the mount written at `site` at `path`. */
-    def register(path: Seq[String], site: Frame, cell: Signal[ReactiveUI.MountState])(using Frame): Unit < Sync =
-        cells.getAndUpdate(m => m.update(path, m.get(path).getOrElse(Chunk.empty).append((site, cell)))).unit
+    /** Registers `instance` of the mount written at `site` at `path`. */
+    def register(path: Seq[String], site: Frame, instance: ReactiveUI.MountInstance)(using Frame): Unit < Sync =
+        cells.getAndUpdate(m => m.update(path, m.get(path).getOrElse(Chunk.empty).append((site, instance)))).unit
 
     /** Removes this registration only. Two subscriptions can hold one path for a moment, an old one still ending and its successor,
       * in either order; the other keeps its entry.
       */
-    def unregister(path: Seq[String], cell: Signal[ReactiveUI.MountState])(using Frame): Unit < Sync =
+    def unregister(path: Seq[String], instance: ReactiveUI.MountInstance)(using Frame): Unit < Sync =
         cells.getAndUpdate { m =>
             m.get(path) match
                 case Absent        => m
                 case Present(held) =>
-                    val at   = held.lastIndexWhere(_._2 eq cell)
+                    val at   = held.lastIndexWhere(_._2 eq instance)
                     val left = if at < 0 then held else held.take(at).concat(held.drop(at + 1))
                     if left.isEmpty then m.remove(path) else m.update(path, left)
         }.unit
 
-    /** The cell of the mount written at `site` registered last at `path`. */
+    /** The cell of the instance of the mount written at `site` registered last at `path`. */
     def lookup(path: Seq[String], site: Frame)(using Frame): Maybe[Signal[ReactiveUI.MountState]] < Sync =
+        instance(path, site).map(_.map(_.cell))
+
+    /** The instance of the mount written at `site` registered last at `path`. */
+    def instance(path: Seq[String], site: Frame)(using Frame): Maybe[ReactiveUI.MountInstance] < Sync =
         cells.get.map(_.get(path).flatMap(held => Maybe.fromOption(held.reverseIterator.find(_._1 == site).map(_._2))))
 end MountDispatch
 
@@ -133,7 +137,7 @@ private[kyo] object MountDispatch:
     /** The table for a pass that already holds the thread (see [[SignalNow]]). */
     def initNow()(using AllowUnsafe): MountDispatch =
         new MountDispatch(
-            AtomicRef.Unsafe.init(Dict.empty[Seq[String], Chunk[(Frame, Signal[ReactiveUI.MountState])]]).safe,
+            AtomicRef.Unsafe.init(Dict.empty[Seq[String], Chunk[(Frame, ReactiveUI.MountInstance)]]).safe,
             AtomicRef.Unsafe.init(Dict.empty[Seq[String], Chunk[BoundaryGate]]).safe,
             AtomicRef.Unsafe.init(Chunk.empty[Seq[String]]).safe
         )
@@ -156,8 +160,12 @@ final private[kyo] case class MountedSpec(node: UI.Ast.Mounted, path: Seq[String
                         given Frame = node.frame
                         UI.span(UI.Ast.Text(error.message)).cssClass("kyo-mount-error")
 
-    def mountError(t: Throwable, source: UI.MountErrorSource): UI.MountError =
+    def mountError(failure: Any, source: UI.MountErrorSource): UI.MountError =
+        val t = failure match
+            case t: Throwable => t
+            case other        => UI.FailureException(other)(using node.frame)
         UI.MountError(t, source, Maybe(t.getMessage).getOrElse(t.toString), node.frame, path, node.key)
+    end mountError
 
     /** The instance identity of a keyed node; a keyless node has none, since every re-render replaces its instance. */
     def identity: Maybe[ReactiveUI.MountIdentity] =
@@ -167,14 +175,6 @@ end MountedSpec
 private[kyo] object ReactiveUI:
 
     import UI.Ast.*
-
-    /** The app's sink for non-fatal failures, read by [[kyo.UI.notify]] and installed by
-      * [[kyo.UI.notices]]. Inheritable, so it reaches mount effects, the fibers they fork and the
-      * event handlers of the tree below the installation point, all of which descend from the runner's
-      * caller.
-      */
-    private[kyo] val noticeSink: Local[Maybe[Throwable => Unit < Async]] =
-        Local.init(Maybe.empty[Throwable => Unit < Async])
 
     def init(
         path: Seq[String],
@@ -189,7 +189,7 @@ private[kyo] object ReactiveUI:
         rows: Long = 0L,
         deepRows: List[Int] = Nil
     )(
-        handle: (Seq[String], UIEvent) => Boolean < Async
+        handle: (Seq[String], UIEvent) => Boolean < (Async & Abort[Any])
     )(using frame: Frame): ReactiveUI =
         ReactiveUI(
             path,
@@ -437,7 +437,7 @@ private[kyo] object ReactiveUI:
                 // and a range that keeps showing old content while its new content loads takes no event, which would otherwise land
                 // in the new content.
                 val handle: Handler = (targetPath, event) =>
-                    cells.boundary(path, b.frame).map {
+                    Failures.within(FailureFrame.Boundary(b.settings))(cells.boundary(path, b.frame).map {
                         case Present(gate) if !gate.isRevealed =>
                             gate.livePlaceholder match
                                 case Present(ph) =>
@@ -456,7 +456,7 @@ private[kyo] object ReactiveUI:
                                     }
                                 case Absent => true
                         case _ => cells.held(targetPath).map(held => if held then true else childHandle(targetPath, event))
-                    }
+                    })
                 ReactiveUI(
                     path = path,
                     signal = Signal.initConst(b.child),
@@ -479,14 +479,14 @@ private[kyo] object ReactiveUI:
                 val contentContext = regionIdentity.transparent
                 // The node value is fresh on every dispatch, so the handler finds the live instance through the dispatch table.
                 val handle: Handler = (targetPath, event) =>
-                    cells.lookup(path, ui.frame).map {
-                        case Absent        => true
-                        case Present(cell) =>
-                            cell.current.map {
+                    cells.instance(path, ui.frame).map {
+                        case Absent           => true
+                        case Present(running) =>
+                            running.cell.current.map {
                                 case MountState.Pending(Present(_)) => true
                                 case state                          =>
                                     val content = state.content(spec)
-                                    Sync.Unsafe.defer {
+                                    Failures.within(FailureFrame.Mount(running.supervision))(Sync.Unsafe.defer {
                                         val (_, freshHdl) = walkStatic(
                                             content,
                                             path,
@@ -498,7 +498,7 @@ private[kyo] object ReactiveUI:
                                             deepRows = Nil
                                         )
                                         freshHdl(targetPath, event)
-                                    }
+                                    })
                             }
                     }
                 ReactiveUI(
@@ -604,7 +604,7 @@ private[kyo] object ReactiveUI:
         end if
     end walkRow
 
-    private type Handler = (Seq[String], UIEvent) => Boolean < Async
+    private type Handler = (Seq[String], UIEvent) => Boolean < (Async & Abort[Any])
 
     private type ValidatedHandler = (Seq[String], DragProtocol.ValidatedEvent) => Boolean < Async
 
@@ -742,7 +742,7 @@ private[kyo] object ReactiveUI:
                             val segment = targetPath(basePath.size)
                             val idx     = Maybe.fromOption(keyMap.get(segment)).orElse(Maybe.fromOption(segment.toIntOption))
                             idx.filter(i => i >= 0 && i < allHandles.length).map(allHandles(_))
-                                .fold(true: Boolean < Async)(h => h(targetPath, event))
+                                .fold(true: Boolean < (Async & Abort[Any]))(h => h(targetPath, event))
                         else true
                     (allKids, handle)
                 }
@@ -768,9 +768,31 @@ private[kyo] object ReactiveUI:
         reactiveChildren: Seq[ReactiveUI],
         staticHandlers: Seq[(Int, Handler)],
         mounts: MountDispatch
-    )(using Frame): Boolean < Async =
+    )(using Frame): Boolean < (Async & Abort[Any]) =
+        elem.attrs.onFailure match
+            case Present(rules) => Failures.within(FailureFrame.Rules(rules))(dispatchThrough(
+                    elem,
+                    myPath,
+                    targetPath,
+                    event,
+                    reactiveChildren,
+                    staticHandlers,
+                    mounts
+                ))
+            case Absent => dispatchThrough(elem, myPath, targetPath, event, reactiveChildren, staticHandlers, mounts)
+
+    /** [[dispatch]] with the element's `onFailure` rules in effect. A handler's failure goes to the rules and the dispatch goes on. */
+    private def dispatchThrough(
+        elem: Element,
+        myPath: Seq[String],
+        targetPath: Seq[String],
+        event: UIEvent,
+        reactiveChildren: Seq[ReactiveUI],
+        staticHandlers: Seq[(Int, Handler)],
+        mounts: MountDispatch
+    )(using Frame): Boolean < (Async & Abort[Any]) =
         if targetPath == myPath then
-            dispatchToElement(elem, event, isTarget = true, selfPath = myPath)
+            Failures.recover(true)(dispatchToElement(elem, event, isTarget = true, selfPath = myPath))
         else if targetPath.startsWith(myPath) && targetPath.size > myPath.size then
             val childSegment = targetPath(myPath.size)
             val childIdx     = childSegment.toIntOption
@@ -818,7 +840,7 @@ private[kyo] object ReactiveUI:
                 // reported to the handler rather than acted on here: only the handler knows whether
                 // its click means something the control already means (see UI.MouseEvent.onControl).
                 targetOnControl = isClick && facts.controlBelow
-                bubble          = dispatchToElement(
+                bubble          = Failures.recover(true)(dispatchToElement(
                     elem,
                     event,
                     isTarget = false,
@@ -827,7 +849,7 @@ private[kyo] object ReactiveUI:
                     submitOrigin = isClick && targetButtonSubmits.getOrElse(false),
                     enterSubmits = targetEnterSubmits,
                     controlTarget = targetOnControl
-                )
+                ))
                 result <- staticChild match
                     case Present(childHandle) =>
                         safeDispatch(childHandle, targetPath, event).map(keep => if keep then bubble else false)
@@ -889,29 +911,29 @@ private[kyo] object ReactiveUI:
       * Skipped when the keydown already recorded an activation: that click reaches this form on its own
       * and submitting here as well would be the double all over again.
       */
-    private def submitDirectly(f: Form)(using Frame): Unit < Async =
+    private def submitDirectly(f: Form)(using Frame): Unit < (Async & Abort[Any]) =
         activationTarget.use {
             case Present(ref) => ref.get.map(recorded => if recorded.isDefined then Kyo.lift(()) else invoke(f.onSubmit))
             case Absent       => invoke(f.onSubmit)
         }
 
-    /** Invoke a Maybe[Any < Async] handler, discarding the result. */
-    private def invoke(handler: Maybe[Any < Async])(using Frame): Unit < Async =
+    /** Invoke a Maybe[UI.Action] handler, discarding the result. */
+    private def invoke(handler: Maybe[UI.Action])(using Frame): Unit < (Async & Abort[Any]) =
         if handler.isEmpty then () else handler.get.unit
 
-    /** Invoke a Maybe[A => Any < Async] handler with a value, discarding the result. */
-    private def invokeWith[A](handler: Maybe[A => Any < Async], value: A)(using Frame): Unit < Async =
+    /** Invoke a Maybe[A => UI.Action] handler with a value, discarding the result. */
+    private def invokeWith[A](handler: Maybe[A => UI.Action], value: A)(using Frame): Unit < (Async & Abort[Any]) =
         if handler.isEmpty then () else handler.get(value).unit
 
     /** Dispatch an event safely, logging and recovering from handler errors without stopping the bubble chain. */
-    private def safeDispatch(handle: (Seq[String], UIEvent) => Boolean < Async, path: Seq[String], event: UIEvent)(using
+    private def safeDispatch(handle: Handler, path: Seq[String], event: UIEvent)(using
         Frame
     ): Boolean < Async =
         DragCommands.current.use { context =>
             val decisions = context.flatMap(_.decisions)
-            Abort.recover[Throwable](
+            Abort.recover[Any](
                 onFail = err =>
-                    Log.error(s"Handler error during ${event.getClass.getSimpleName} at ${path.mkString(".")}: ${err.getMessage}")
+                    Log.error(s"Handler error during ${event.getClass.getSimpleName} at ${path.mkString(".")}: $err")
                         .andThen(markDecisionFailure(event, decisions))
                         .andThen(true), // continue bubbling
                 onPanic = thr =>
@@ -945,7 +967,7 @@ private[kyo] object ReactiveUI:
             case _                       => true
 
     /** Cycle a Select to the next or previous option. Updates SignalRef and fires onChange. */
-    private def cycleSelectOption(sel: Select, forward: Boolean)(using Frame): Unit < Async =
+    private def cycleSelectOption(sel: Select, forward: Boolean)(using Frame): Unit < (Async & Abort[Any]) =
         val options = sel.children.toSeq.collect { case opt: Opt => opt }
         val values  = options.flatMap(_.value.toList)
         if values.isEmpty then Kyo.lift(())
@@ -1012,9 +1034,9 @@ private[kyo] object ReactiveUI:
       * bubble, so this yields `true` (keep bubbling) without running `body`. Only the target is guarded: an
       * ancestor on the bubble path is not inert just because the target was.
       */
-    private def unlessInert(isTarget: Boolean, inert: => Boolean < Sync)(body: => Boolean < Async)(using
+    private def unlessInert(isTarget: Boolean, inert: => Boolean < Sync)(body: => Boolean < (Async & Abort[Any]))(using
         Frame
-    ): Boolean < Async =
+    ): Boolean < (Async & Abort[Any]) =
         if !isTarget then body
         else inert.map(i => if i then true else body)
 
@@ -1190,7 +1212,7 @@ private[kyo] object ReactiveUI:
         controlTarget: Boolean = false
     )(
         using Frame
-    ): Boolean < Async =
+    ): Boolean < (Async & Abort[Any]) =
         val attrs = elem.attrs
         event match
             case ev: UIEvent.Click =>
@@ -1405,7 +1427,7 @@ private[kyo] object ReactiveUI:
                 else
                     DragCommands.current.use {
                         case Present(DragCommands.Dispatch(DragCommands.Payload.Event(value), _)) =>
-                            invokeDrag(attrs.onDragStart, attrs.onDragStartEvt.map(_(value)), "drag start")
+                            invokeDrag(attrs.onDragStart, attrs.onDragStartEvt.map(_(value)))
                                 .andThen(keepBubbling(elem, attrs.onDragStart.nonEmpty || attrs.onDragStartEvt.nonEmpty))
                         case _ => true
                     }
@@ -1414,13 +1436,13 @@ private[kyo] object ReactiveUI:
                 else
                     DragCommands.current.use {
                         case Present(DragCommands.Dispatch(DragCommands.Payload.End(value), _)) =>
-                            invokeDrag(attrs.onDragEnd, attrs.onDragEndEvt.map(_(value)), "drag end")
+                            invokeDrag(attrs.onDragEnd, attrs.onDragEndEvt.map(_(value)))
                                 .andThen(keepBubbling(elem, attrs.onDragEnd.nonEmpty || attrs.onDragEndEvt.nonEmpty))
                         case _ => true
                     }
-            case _: UIEvent.DragEnter => dispatchDragEvent(elem, attrs.onDragEnter, attrs.onDragEnterEvt, "drag enter")
-            case _: UIEvent.DragLeave => dispatchDragEvent(elem, attrs.onDragLeave, attrs.onDragLeaveEvt, "drag leave")
-            case _: UIEvent.DragOver  => dispatchDragEvent(elem, attrs.onDragOver, attrs.onDragOverEvt, "drag over")
+            case _: UIEvent.DragEnter => dispatchDragEvent(elem, attrs.onDragEnter, attrs.onDragEnterEvt)
+            case _: UIEvent.DragLeave => dispatchDragEvent(elem, attrs.onDragLeave, attrs.onDragLeaveEvt)
+            case _: UIEvent.DragOver  => dispatchDragEvent(elem, attrs.onDragOver, attrs.onDragOverEvt)
             case _: UIEvent.Drop      =>
                 DragCommands.current.use {
                     case Present(DragCommands.Dispatch(DragCommands.Payload.Event(value), decisions)) =>
@@ -1452,32 +1474,26 @@ private[kyo] object ReactiveUI:
         end match
     end dispatchToElement
 
-    private def invokeDrag(action: Maybe[Any < Async], typed: Maybe[Any < Async], label: String)(using Frame): Unit < Async =
-        def safe(handler: Maybe[Any < Async]): Unit < Async =
-            handler.fold((): Unit < Async) { effect =>
-                Abort.recover[Throwable](
-                    err => Log.error(s"Handler error during $label: ${err.getMessage}"),
-                    panic => Log.error(s"Handler panic during $label: ${panic.getMessage}")
-                )(effect.unit)
-            }
+    private def invokeDrag(action: Maybe[UI.Action], typed: Maybe[UI.Action])(using Frame): Unit < Async =
+        def safe(handler: Maybe[UI.Action]): Unit < Async =
+            handler.fold((): Unit < Async)(effect => Failures.recover(())(effect.unit))
         safe(action).andThen(safe(typed))
     end invokeDrag
 
     private def dispatchDragEvent(
         elem: Element,
-        action: Maybe[Any < Async],
-        typed: Maybe[Drag.Event => Any < Async],
-        label: String
+        action: Maybe[UI.Action],
+        typed: Maybe[Drag.Event => UI.Action]
     )(using Frame): Boolean < Async =
         DragCommands.current.use {
             case Present(DragCommands.Dispatch(DragCommands.Payload.Event(value), _)) =>
-                invokeDrag(action, typed.map(_(value)), label)
+                invokeDrag(action, typed.map(_(value)))
                     .andThen(keepBubbling(elem, action.nonEmpty || typed.nonEmpty))
             case _ => true
         }
 
     private def invokeDecision(
-        handler: Maybe[Drag.Decision < Async],
+        handler: Maybe[Drag.Decision < (Async & Abort[Any])],
         decisions: Maybe[AtomicRef[DragCommands.DecisionState]],
         failure: String
     )(using Frame): Unit < Async =
@@ -1485,11 +1501,10 @@ private[kyo] object ReactiveUI:
             for
                 result <- Abort.run[Any](effect)
                 _      <- result match
-                    case Result.Success(decision) => recordDecision(decisions, decision)
-                    case Result.Failure(err)      =>
-                        Log.error(s"Drag decision handler error: $err").andThen(failDecision(decisions, failure))
-                    case Result.Panic(panic) =>
-                        Log.error(s"Drag decision handler panic: ${panic.getMessage}").andThen(failDecision(decisions, failure))
+                    case Result.Success(decision)     => recordDecision(decisions, decision)
+                    case Result.Panic(_: Interrupted) => failDecision(decisions, failure)
+                    case Result.Failure(err)          => failDecision(decisions, failure).andThen(Failures.recover(())(Abort.fail(err)))
+                    case Result.Panic(panic)          => failDecision(decisions, failure).andThen(Failures.recover(())(Abort.panic(panic)))
             yield ()
         }
 
@@ -1517,7 +1532,7 @@ private[kyo] object ReactiveUI:
       * so closing the root scope cascade-tears-down the tree.
       */
     case class Subscription(
-        handle: Handler,
+        handle: (Seq[String], UIEvent) => Boolean < Async,
         private[kyo] val handleValidated: ValidatedHandler,
         lastSignalChangeTime: AtomicRef[Instant],
         private val dragSessionCountFn: () => Int < Sync = () => 0,
@@ -2886,6 +2901,7 @@ private[kyo] object ReactiveUI:
       */
     final private[kyo] class MountInstance(
         val cell: SignalRef[MountState],
+        val supervision: MountSupervision,
         val children: MountTableRef,
         runner: Fiber[Unit, Any],
         scope: Scope.Finalizer
@@ -2910,30 +2926,32 @@ private[kyo] object ReactiveUI:
     end MountInstance
 
     private[kyo] object MountInstance:
-        /** `views` are the error views of the boundaries around the node, innermost first; the content's mounts inherit them. */
-        def start(spec: MountedSpec, seed: Maybe[UI], views: List[PartialFunction[UI.MountError, UI]])(using
+        /** `frames` are the boundaries and mounts around the node, innermost first; the content's mounts inherit them with this one. */
+        def start(spec: MountedSpec, seed: Maybe[UI], frames: Failures.Scope)(using
             Frame
         ): MountInstance < Sync =
             for
-                cell   <- Signal.initRef[MountState](MountState.Pending(seed))
+                cell <- Signal.initRef[MountState](MountState.Pending(seed))
+                supervision = MountSupervision(spec, cell, frames)
+                inner       = FailureFrame.Mount(supervision) :: frames
                 scope  <- Scope.Finalizer.init(1)
-                runner <- Fiber.initUnscoped(runEffect(spec, cell, scope, views))
-            yield new MountInstance(cell, MountTableRef.init(views), runner, scope)
+                runner <- Fiber.initUnscoped(runEffect(spec, cell, scope, supervision, inner))
+            yield new MountInstance(cell, supervision, MountTableRef.init(inner), runner, scope)
 
         /** Runs the effect with `scope` as its `Scope`, so what it acquires outlives this fiber, and publishes the outcome. */
         private def runEffect(
             spec: MountedSpec,
             cell: SignalRef[MountState],
             scope: Scope.Finalizer,
-            views: List[PartialFunction[UI.MountError, UI]]
+            supervision: MountSupervision,
+            frames: Failures.Scope
         )(using Frame): Unit < Async =
-            val supervision = MountSupervision(spec, cell, views)
-            val effect      = MountSupervision.local.let(Present(supervision))(spec.node.effect)
-            Abort.run[Throwable](ContextEffect.handleInheritable(Tag[Scope], scope)(effect)).map {
-                case Result.Success(ui) => cell.getAndUpdate(MountSupervision.publish(ui)).unit
-                case Result.Failure(t)  =>
-                    Log.error(s"Mounted effect failed (frame=${spec.node.frame.position.show})", t)
-                        .andThen(supervision.fail(t, UI.MountErrorSource.Effect))
+            val effect = Failures.local.let(frames)(MountSupervision.local.let(Present(supervision))(spec.node.effect))
+            Abort.run[Any](ContextEffect.handleInheritable(Tag[Scope], scope)(effect)).map {
+                case Result.Success(ui)      => cell.getAndUpdate(MountSupervision.publish(ui)).unit
+                case Result.Failure(failure) =>
+                    Log.error(s"Mounted effect failed (frame=${spec.node.frame.position.show}): $failure")
+                        .andThen(supervision.fail(failure, UI.MountErrorSource.Effect))
                 case Result.Panic(t) =>
                     if t.isInstanceOf[Interrupted] then Kyo.unit
                     else
@@ -2943,35 +2961,36 @@ private[kyo] object ReactiveUI:
         end runEffect
     end MountInstance
 
-    /** A fiber forked with [[kyo.UI.fork]] failed with an `Abort` value that is not a `Throwable`. */
-    final private[kyo] case class MountFiberFailure(value: Any)(using Frame)
-        extends KyoException(s"Mounted background fiber failed: $value")
-
     /** Routes the failures of one mount instance into its content cell. The first failure wins, and a publish that arrives after a
       * failure does not overwrite it.
       */
     final private[kyo] class MountSupervision(
         spec: MountedSpec,
         cell: SignalRef[MountState],
-        views: List[PartialFunction[UI.MountError, UI]]
+        frames: Failures.Scope
     ):
 
-        /** Completion callback of a [[kyo.UI.fork]] fiber: a terminal failure that is not an interrupt fails the node. */
+        /** Completion callback of a [[kyo.UI.fork]] fiber: a terminal failure that is not an interrupt goes to the `onFailure` rules
+          * around the node, and fails the node when none matches.
+          */
         def report[E, A](result: Result[E, A])(using Frame): Unit < Sync =
             result match
                 case Result.Panic(_: Interrupted)   => Kyo.unit
                 case Result.Failure(_: Interrupted) => Kyo.unit
                 case Result.Panic(t)                => forked(t)
-                case Result.Failure(t: Throwable)   => forked(t)
-                case Result.Failure(other)          => forked(MountFiberFailure(other))
+                case Result.Failure(failure)        => forked(failure)
                 case _                              => Kyo.unit
 
-        private def forked(t: Throwable)(using Frame): Unit < Sync =
-            Log.error(s"Mounted background fiber failed (frame=${spec.node.frame.position.show})", t)
-                .andThen(fail(t, UI.MountErrorSource.Fork))
+        /** The rules may notify or run an action, which suspends, so they run on a fiber of their own. */
+        private def forked(failure: Any)(using Frame): Unit < Sync =
+            Log.error(s"Mounted background fiber failed (frame=${spec.node.frame.position.show}): $failure")
+                .andThen(Fiber.initUnscoped(Failures.handle(own, failure, UI.Reaction.Escalate, UI.MountErrorSource.Fork)).unit)
 
-        def fail(t: Throwable, source: UI.MountErrorSource)(using Frame): Unit < Sync =
-            val failed = MountState.Failed(spec.errorUI(spec.mountError(t, source), views))
+        /** The frames this node's own failures meet: the node, then what is around it. */
+        private def own: Failures.Scope = FailureFrame.Mount(this) :: frames
+
+        def fail(failure: Any, source: UI.MountErrorSource)(using Frame): Unit < Sync =
+            val failed = MountState.Failed(spec.errorUI(spec.mountError(failure, source), Failures.views(frames)))
             cell.getAndUpdate {
                 case done: MountState.Failed => done
                 case _                       => failed
@@ -3008,7 +3027,7 @@ private[kyo] object ReactiveUI:
         parent: Maybe[MountTableRef],
         keys: RegionKeys,
         kid: Maybe[ReactiveUI],
-        val views: List[PartialFunction[UI.MountError, UI]]
+        val frames: Failures.Scope
     ):
         import AllowUnsafe.embrace.danger
 
@@ -3017,11 +3036,11 @@ private[kyo] object ReactiveUI:
 
         /** The reference for the region `region` of the render pass `pass` inside this one, holding the table an earlier subscription
           * of that region created. The region's key is only computed when this table exists, or once the region forces its own. A
-          * boundary's error view comes first for the mounts below it.
+          * boundary comes first for the mounts below it.
           */
         def child(pass: RegionKeys, region: ReactiveUI): MountTableRef =
             val existing = slot.get().flatMap(table => table.region(pass.of(region)))
-            val inner    = region.bounded.flatMap(_.settings.errorView).fold(views)(_ :: views)
+            val inner    = region.bounded.fold(frames)(b => FailureFrame.Boundary(b.settings) :: frames)
             val ref      = new MountTableRef(AtomicRef.Unsafe.init(existing), Present(this), pass, Present(region), inner)
             existing.foreach(_.bind(ref))
             ref
@@ -3078,17 +3097,17 @@ private[kyo] object ReactiveUI:
           */
         def claim(rui: ReactiveUI, identity: MountIdentity, spec: MountedSpec)(using Frame): MountInstance < (Async & Scope) =
             force.map { table =>
-                if table.ownedBy(this) then table.claim(rui, identity, spec, views)
+                if table.ownedBy(this) then table.claim(rui, identity, spec, frames)
                 else
                     table.live(identity, spec.path) match
                         case Present(instance) => Kyo.lift(instance)
-                        case Absent            => MountInstance.start(spec, Absent, views).map(i => Scope.ensure(i.teardown).andThen(i))
+                        case Absent            => MountInstance.start(spec, Absent, frames).map(i => Scope.ensure(i.teardown).andThen(i))
             }
 
         /** A keyless instance for `spec`, released with the caller's scope; only the reference the table follows leaves its snapshot. */
         def startKeyless(spec: MountedSpec)(using Frame): MountInstance < (Async & Scope) =
             force.map { table =>
-                table.start(spec, views).map { instance =>
+                table.start(spec, frames).map { instance =>
                     Scope.ensure(if table.ownedBy(this) then table.retire(instance, spec.path) else instance.teardown).andThen(instance)
                 }
             }
@@ -3098,13 +3117,13 @@ private[kyo] object ReactiveUI:
         private val serials = new java.util.concurrent.atomic.AtomicLong()
 
         /** A reference no enclosing table owns: the root of a session, or the content of a mount instance. */
-        def init(views: List[PartialFunction[UI.MountError, UI]] = Nil): MountTableRef =
+        def init(frames: Failures.Scope = Nil): MountTableRef =
             new MountTableRef(
                 AtomicRef.Unsafe.init(Maybe.empty[MountTable])(using AllowUnsafe.embrace.danger),
                 Absent,
                 RegionKeys.empty,
                 Absent,
-                views
+                frames
             )
     end MountTableRef
 
@@ -3156,7 +3175,7 @@ private[kyo] object ReactiveUI:
         /** The instance of the slot this pass gave `rui`, started if the slot is empty. A node no pass has seen belongs to a table the
           * pass created, which holds nothing yet, so it starts a new instance.
           */
-        def claim(rui: ReactiveUI, identity: MountIdentity, spec: MountedSpec, views: List[PartialFunction[UI.MountError, UI]])(using
+        def claim(rui: ReactiveUI, identity: MountIdentity, spec: MountedSpec, frames: Failures.Scope)(using
             Frame
         ): MountInstance < Sync =
             Sync.Unsafe.defer(assigned.get().flatMap(slots => Maybe(slots.get(rui)))).map {
@@ -3164,9 +3183,9 @@ private[kyo] object ReactiveUI:
                     slot.instance match
                         case Present(instance) => Kyo.lift(instance)
                         case Absent            =>
-                            start(spec, views).map(instance => Sync.Unsafe.defer { slot.instance = Present(instance); instance })
+                            start(spec, frames).map(instance => Sync.Unsafe.defer { slot.instance = Present(instance); instance })
                 case Absent =>
-                    start(spec, views).map { instance =>
+                    start(spec, frames).map { instance =>
                         Sync.Unsafe.defer {
                             val slot = new MountSlot(spec.path)
                             slot.instance = Present(instance)
@@ -3177,11 +3196,11 @@ private[kyo] object ReactiveUI:
             }
 
         /** A new instance, seeded with the snapshot the slot's previous instance left when the node keeps the latest content. */
-        def start(spec: MountedSpec, views: List[PartialFunction[UI.MountError, UI]])(using Frame): MountInstance < Sync =
+        def start(spec: MountedSpec, frames: Failures.Scope)(using Frame): MountInstance < Sync =
             val seed = spec.node.pendingPolicy match
                 case UI.PendingPolicy.Placeholder => Absent
                 case UI.PendingPolicy.KeepLatest  => handoff.get().get(spec.path)
-            MountInstance.start(spec, seed, views)
+            MountInstance.start(spec, seed, frames)
         end start
 
         def leave(path: Seq[String], ui: UI): Unit = discard(handoff.getAndUpdate(_.update(path, ui)))
@@ -3309,8 +3328,8 @@ private[kyo] object ReactiveUI:
             case _: ReactiveRegion.HtmlRange  => false
             case _: ReactiveRegion.SvgElement => true
         for
-            _     <- dispatch.register(rui.path, spec.node.frame, instance.cell)
-            _     <- Scope.ensure(dispatch.unregister(rui.path, instance.cell))
+            _     <- dispatch.register(rui.path, spec.node.frame, instance)
+            _     <- Scope.ensure(dispatch.unregister(rui.path, instance))
             first <- instance.cell.current
             // Instrumented like any other paint: every `onChange` the engine issues is reported, or the wasted-render figure
             // quietly excludes a whole class of paint and a page full of mounts reads as cleaner than it is.
