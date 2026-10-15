@@ -322,11 +322,30 @@ class MountedTest extends kyo.test.Test[Any]:
             dispatch <- MountDispatch.init
             cell     <- Signal.initRef[ReactiveUI.MountState](ReactiveUI.MountState.Pending(Absent))
             path = Seq("0", "1")
-            _     <- dispatch.register(path, cell)
-            _     <- dispatch.register(path, cell)
+            node = UI.mounted(Kyo.lift(UI.empty))
+            _     <- dispatch.register(path, node.frame, cell)
+            _     <- dispatch.register(path, node.frame, cell)
             _     <- dispatch.unregister(path, cell)
-            found <- dispatch.lookup(path)
+            found <- dispatch.lookup(path, node.frame)
         yield assert(found.exists(_ eq cell))
+    }
+
+    "two mounts at one path, one the content of the other, are each found by their own call site" in {
+        for
+            dispatch <- MountDispatch.init
+            path      = Seq("0")
+            outerNode = UI.mounted(Kyo.lift(UI.empty))
+            innerNode = UI.mounted(Kyo.lift(UI.empty))
+            outer  <- Signal.initRef[ReactiveUI.MountState](ReactiveUI.MountState.Pending(Absent))
+            inner  <- Signal.initRef[ReactiveUI.MountState](ReactiveUI.MountState.Pending(Absent))
+            _      <- dispatch.register(path, outerNode.frame, outer)
+            before <- dispatch.lookup(path, innerNode.frame)
+            _      <- dispatch.register(path, innerNode.frame, inner)
+            o      <- dispatch.lookup(path, outerNode.frame)
+            i      <- dispatch.lookup(path, innerNode.frame)
+        yield
+            assert(before.isEmpty, "the inner mount found the outer one's cell before its own registered")
+            assert(o.exists(_ eq outer) && i.exists(_ eq inner))
     }
 
     "siblings appearing before a keyed node do not change its identity" in {
