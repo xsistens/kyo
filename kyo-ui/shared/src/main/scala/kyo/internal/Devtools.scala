@@ -15,7 +15,7 @@ private[kyo] object Devtools:
 
     /** The app's render-event sink, installed by [[kyo.UI.devtools]]. Inheritable, so it reaches the region
       * fibers, the mount effects and the channel callbacks below the installation point, all of which descend
-      * from the runner's caller, the same reach [[ReactiveUI.noticeSink]] has. `Absent` means off: a region no
+      * from the runner's caller. `Absent` means off: a region no
       * [[kyo.UI.devtools]] call encloses reports nowhere. The server-push runner, whose sessions do not descend
       * from its caller, carries the caller's sink to them itself (see [[UIServer.sessionServing]]).
       *
