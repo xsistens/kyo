@@ -21,7 +21,7 @@ class HandlerNoticeReachTest extends kyo.test.Test[Any]:
                 for
                     handlers <- UI.runHandlers("/")(app)
                     server   <- HttpServer.init(0, "127.0.0.1")(handlers*)
-                    got <- HttpClient.webSocket(s"ws://127.0.0.1:${server.port}/_kyo/ws") { ws =>
+                    got      <- HttpClient.webSocket(s"ws://127.0.0.1:${server.port}/_kyo/ws") { ws =>
                         for
                             // The session announces itself; a page with no reactive region sends no render after that.
                             _   <- ws.take()

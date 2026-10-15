@@ -24,7 +24,7 @@ class HandlerFailureTest extends UIScreen:
     private class Notices(seen: AtomicRef[Chunk[Any]], first: Promise[Any, Any]):
         def sink(using Frame): Throwable => Unit < Async =
             case UI.Failed(failure) => seen.getAndUpdate(_.append(failure)).andThen(first.completeDiscard(Result.succeed(failure)))
-        def all(using Frame): Chunk[Any] < Sync = seen.get
+        def all(using Frame): Chunk[Any] < Sync                  = seen.get
         def next(using Frame, kyo.test.AssertScope): Any < Async = within("a notice")(first.get)
     end Notices
 
@@ -115,12 +115,12 @@ class HandlerFailureTest extends UIScreen:
             )))
             _ <- mountWith(ui) { (screen, handle) =>
                 for
-                    _         <- screen.await("the form")(_.contains("conflict"))
-                    _         <- click(handle, Seq("0", "0", "0"))
-                    notified  <- n.next
+                    _          <- screen.await("the form")(_.contains("conflict"))
+                    _          <- click(handle, Seq("0", "0", "0"))
+                    notified   <- n.next
                     afterFirst <- screen.now
-                    _         <- click(handle, Seq("0", "0", "1"))
-                    _         <- screen.await("the mount's error view")(_.contains("error:Handler:500"))
+                    _          <- click(handle, Seq("0", "0", "1"))
+                    _          <- screen.await("the mount's error view")(_.contains("error:Handler:500"))
                 yield
                     assert(notified == ApiError(409), s"the sink received: $notified")
                     assert(afterFirst.contains("conflict"), s"the form after the notified failure: $afterFirst")
@@ -159,8 +159,10 @@ class HandlerFailureTest extends UIScreen:
             ui = div(UI.boundary.onNotice(outer.sink)(div(UI.boundary.onNotice(inner.sink)(div(
                 button("save").onClick(Abort.fail(ApiError(409)))
             )))))
-            got <- mountWith(ui)((screen, handle) => screen.await("save")(_.contains("save")).andThen(click(handle, Seq("0", "0", "0"))).andThen(inner.next))
-            o   <- outer.all
+            got <- mountWith(ui)((screen, handle) =>
+                screen.await("save")(_.contains("save")).andThen(click(handle, Seq("0", "0", "0"))).andThen(inner.next)
+            )
+            o <- outer.all
         yield
             assert(got == ApiError(409), s"the inner sink received: $got")
             assert(o.isEmpty, s"the outer sink received: $o")
@@ -172,7 +174,9 @@ class HandlerFailureTest extends UIScreen:
             ui = div(UI.boundary.onFailure { case _ => Reaction.Escalate }.onNotice(n.sink)(div(
                 button("save").onClick(Abort.fail(ApiError(409)))
             )))
-            got <- mountWith(ui)((screen, handle) => screen.await("save")(_.contains("save")).andThen(click(handle, Seq("0", "0"))).andThen(n.next))
+            got <- mountWith(ui)((screen, handle) =>
+                screen.await("save")(_.contains("save")).andThen(click(handle, Seq("0", "0"))).andThen(n.next)
+            )
         yield assert(got == ApiError(409), s"the sink received: $got")
     }
 
@@ -182,14 +186,18 @@ class HandlerFailureTest extends UIScreen:
             ui = div(UI.boundary.onFailure { case ApiError(401) => Reaction.Run(Abort.fail(ApiError(503))) }.onNotice(n.sink)(div(
                 button("save").onClick(Abort.fail(ApiError(401)))
             )))
-            got <- mountWith(ui)((screen, handle) => screen.await("save")(_.contains("save")).andThen(click(handle, Seq("0", "0"))).andThen(n.next))
+            got <- mountWith(ui)((screen, handle) =>
+                screen.await("save")(_.contains("save")).andThen(click(handle, Seq("0", "0"))).andThen(n.next)
+            )
         yield assert(got == ApiError(503), s"the sink received: $got")
     }
 
     "a panic in a handler goes through the same rules" in {
         for
             hit <- Promise.init[String, Any]
-            ui = div(UI.boundary.onFailure { case e: IllegalStateException => Reaction.Run(hit.completeDiscard(Result.succeed(e.getMessage))) }(
+            ui = div(UI.boundary.onFailure { case e: IllegalStateException =>
+                Reaction.Run(hit.completeDiscard(Result.succeed(e.getMessage)))
+            }(
                 div(button("save").onClick(Sync.defer(throw new IllegalStateException("broken"))))
             ))
             got <- mountWith(ui)((screen, handle) =>
@@ -202,7 +210,9 @@ class HandlerFailureTest extends UIScreen:
         for
             n      <- notices
             parent <- AtomicInt.init(0)
-            ui = div(UI.boundary.onNotice(n.sink)(div(button("save").onClick(Abort.fail(ApiError(409)))).onClick(parent.incrementAndGet.unit)))
+            ui = div(
+                UI.boundary.onNotice(n.sink)(div(button("save").onClick(Abort.fail(ApiError(409)))).onClick(parent.incrementAndGet.unit))
+            )
             got <- mountWith(ui) { (screen, handle) =>
                 for
                     _ <- screen.await("save")(_.contains("save"))
@@ -221,6 +231,15 @@ class HandlerFailureTest extends UIScreen:
         mountWith(ui) { (screen, _) =>
             screen.await("the error view")(_.contains("failure:ApiError(7)|wrapped:true|Effect")).andThen(succeed)
         }
+    }
+
+    "a MountError is still built and matched with its six fields, and then stands for its error" in {
+        val boom = new RuntimeException("boom")
+        val e    = MountError(boom, MountErrorSource.Effect, "boom", summon[Frame], Seq("0"), Absent)
+        e match
+            case MountError(error, MountErrorSource.Effect, _, _, _, _) => assert(error eq boom)
+            case other                                                  => fail(s"matched: $other")
+        assert(e.failure == boom)
     }
 
     "a failed UI.fork fails its mount when no rule matches, and is notified with the content kept under a Notify rule" in {
@@ -255,11 +274,14 @@ class HandlerFailureTest extends UIScreen:
             n    <- notices
             done <- Promise.init[Unit, Any]
             poll = UI.mounted(
-                UI.fork(UI.report(ApiError(1), Reaction.Notify).andThen(UI.report(ApiError(2), Reaction.Notify)).andThen(done.completeUnitDiscard))
+                UI.fork(UI.report(
+                    ApiError(1),
+                    Reaction.Notify
+                ).andThen(UI.report(ApiError(2), Reaction.Notify)).andThen(done.completeUnitDiscard))
                     .andThen(span("polling"))
             )
             escalated = UI.mounted(UI.fork(UI.report(ApiError(9), Reaction.Notify)).andThen(span("escalating")))
-            ui = div(
+            ui        = div(
                 UI.boundary.onNotice(n.sink)(div(poll)),
                 UI.boundary.onFailure { case ApiError(9) => Reaction.Escalate }.onError(errorView)(div(escalated))
             )
