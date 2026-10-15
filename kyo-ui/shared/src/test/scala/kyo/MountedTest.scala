@@ -2,6 +2,7 @@ package kyo
 
 import kyo.internal.HtmlRenderer
 import kyo.internal.MountDispatch
+import kyo.internal.MountedSpec
 import kyo.internal.MouseEventData
 import kyo.internal.ReactiveRegion
 import kyo.internal.ReactiveUI
@@ -320,13 +321,14 @@ class MountedTest extends kyo.test.Test[Any]:
     "an event registration that ends leaves a later one at the same path in place" in {
         for
             dispatch <- MountDispatch.init
-            cell     <- Signal.initRef[ReactiveUI.MountState](ReactiveUI.MountState.Pending(Absent))
             path = Seq("0", "1")
-            _     <- dispatch.register(path, cell)
-            _     <- dispatch.register(path, cell)
-            _     <- dispatch.unregister(path, cell)
-            found <- dispatch.lookup(path)
-        yield assert(found.exists(_ eq cell))
+            instance <- ReactiveUI.MountInstance.start(MountedSpec(UI.mounted(Kyo.lift(UI.empty)), path, Nil), Absent, Nil)
+            _        <- dispatch.register(path, instance)
+            _        <- dispatch.register(path, instance)
+            _        <- dispatch.unregister(path, instance)
+            found    <- dispatch.instance(path)
+            _        <- instance.teardown
+        yield assert(found.exists(_ eq instance))
     }
 
     "siblings appearing before a keyed node do not change its identity" in {
