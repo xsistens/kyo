@@ -65,8 +65,8 @@ final case class ColorPicker private (
     invalidMsgV: Maybe[String] = Absent,
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
-    onChangeF: Maybe[String => Any < Async] = Absent,
-    onBlurF: Maybe[String => Any < Async] = Absent,
+    onChangeF: Maybe[String => UI.Action] = Absent,
+    onBlurF: Maybe[String => UI.Action] = Absent,
     idV: Maybe[String] = Absent
 ) extends Node, TextFormControl, HasAccessibleName:
     type Self = ColorPicker
@@ -103,12 +103,12 @@ final case class ColorPicker private (
     private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): ColorPicker = copy(invalidMsgDynV = v)
 
     /** Fired with the NEW hex after the ref write-back. */
-    def onChange(f: String => Any < Async): ColorPicker = copy(onChangeF = Present(f))
+    def onChange(f: String => UI.Action)(using Frame): ColorPicker = copy(onChangeF = Present(Callback.of(f)))
 
     /** Fires on focus loss with the current hex — unlike onChange it fires even when the
       * color was not changed. The validation layer's Blur trigger.
       */
-    def onBlur(f: String => Any < Async): ColorPicker = copy(onBlurF = Present(f))
+    def onBlur(f: String => UI.Action)(using Frame): ColorPicker = copy(onBlurF = Present(Callback.of(f)))
 
     private def interactive: Boolean = !disabledFlag.constTrue
 
@@ -132,11 +132,11 @@ final case class ColorPicker private (
             case Present(Input.Value.Const(v)) => body(Absent, v)
             case Absent                        => body(Absent, ColorPicker.DefaultHex)
 
-    private def commit(hex: String, ref: Maybe[SignalRef[String]])(using Frame): Any < Async =
-        val write: Any < Async = ref match
+    private def commit(hex: String, ref: Maybe[SignalRef[String]])(using Frame): UI.Action =
+        val write: UI.Action = ref match
             case Present(r) => r.set(hex)
             case Absent     => ()
-        val fire: Any < Async = onChangeF match
+        val fire: UI.Action = onChangeF match
             case Present(f) => f(hex)
             case Absent     => ()
         for
@@ -200,12 +200,12 @@ final case class ColorPicker private (
             .preventScrollKeys
         if seed then el = el.focusAuto(true).focusRestore(true)
         el = el.onKeyDown { e =>
-            val eff: Any < Async = e.key match
+            val eff: UI.Action = e.key match
                 case Keyboard.Enter | Keyboard.Space => dismiss(panel, restore = false, ref)
                 case Keyboard.Escape                 => dismiss(panel, restore = true, ref)
                 case k                               =>
                     r.get.map { cur =>
-                        val moved: Any < Async = onKey(k, ColorPicker.hsvOf(cur)) match
+                        val moved: UI.Action = onKey(k, ColorPicker.hsvOf(cur)) match
                             case Present(hex) => commit(hex, ref)
                             case Absent       => ()
                         moved
@@ -224,10 +224,10 @@ final case class ColorPicker private (
       */
     private def dismiss(panel: Maybe[ColorPicker.Panel], restore: Boolean, ref: Maybe[SignalRef[String]])(using
         Frame
-    ): Any < Async =
+    ): UI.Action =
         panel match
             case Present(p) =>
-                val undo: Any < Async =
+                val undo: UI.Action =
                     if !restore then ()
                     else p.opened.get.map(hex => commit(hex, ref))
                 undo.andThen(p.open.set(false))
@@ -392,7 +392,7 @@ final case class ColorPicker private (
             case Present(r) => r.render(swatch)
             case Absent     => swatch(fallbackHex)
 
-    private def previewSwatch(hex: String, onClickEff: Any < Async)(using Frame): UI =
+    private def previewSwatch(hex: String, onClickEff: UI.Action)(using Frame): UI =
         var preview = button
             .cssClass("p-colorpicker-preview")
             .jsProp("type", "button")
@@ -440,13 +440,13 @@ final case class ColorPicker private (
         // close from, and it is the one control of the component that is reachable when the panel
         // is shut. Opening also records the colour the panel opens with, which is what Escape
         // puts back.
-        val toggle: Any < Async =
+        val toggle: UI.Action =
             if !interactive then ()
             else
                 panel.open.get.map { wasOpen =>
                     if wasOpen then panel.open.set(false)
                     else
-                        val remember: Any < Async = ref match
+                        val remember: UI.Action = ref match
                             case Present(r) => r.get.map(panel.opened.set)
                             case Absent     => ()
                         remember.andThen(panel.open.set(true))

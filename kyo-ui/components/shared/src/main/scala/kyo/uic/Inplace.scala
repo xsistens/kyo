@@ -26,8 +26,8 @@ final case class Inplace private (
     activeRef: Maybe[SignalRef[Boolean]] = Absent,
     closableFlag: Boolean = false,
     disabledFlag: Boolean = false,
-    onOpenEff: Maybe[Any < Async] = Absent,
-    onCloseEff: Maybe[Any < Async] = Absent
+    onOpenEff: Maybe[UI.Action] = Absent,
+    onCloseEff: Maybe[UI.Action] = Absent
 ) extends Node:
     type Self = Inplace
 
@@ -51,19 +51,19 @@ final case class Inplace private (
     def disabled(v: Boolean): Inplace = copy(disabledFlag = v)
 
     /** Runs `action` after the display side is activated (ref already true). */
-    def onOpen(action: => Any < Async)(using Frame): Inplace =
-        copy(onOpenEff = Present(Sync.defer(action)))
+    def onOpen(action: => UI.Action)(using Frame): Inplace =
+        copy(onOpenEff = Present(Callback(action)))
 
     /** Runs `action` after the close button deactivates (ref already false). */
-    def onClose(action: => Any < Async)(using Frame): Inplace =
-        copy(onCloseEff = Present(Sync.defer(action)))
+    def onClose(action: => UI.Action)(using Frame): Inplace =
+        copy(onCloseEff = Present(Callback(action)))
 
     private def displaySide(ref: Maybe[SignalRef[Boolean]])(using Frame): UI =
         var d = div.cssClass("p-inplace-display").role("button").tabIndex(0)
         if disabledFlag then d = d.cssClass("p-disabled")
         else
             ref.foreach { r =>
-                val open: Any < Async =
+                val open: UI.Action =
                     onOpenEff match
                         case Present(e) =>
                             for
@@ -87,7 +87,7 @@ final case class Inplace private (
         val closeBtn: List[UI] =
             if !closableFlag then Nil
             else
-                val close: Any < Async =
+                val close: UI.Action =
                     onCloseEff match
                         case Present(e) =>
                             for

@@ -33,7 +33,7 @@ final case class SplitButton private (
     dropdownIconV: Maybe[IconGlyph] = Absent,
     itemsV: List[MenuItem] = Nil,
     openRefV: Maybe[SignalRef[Boolean]] = Absent,
-    onClickEff: Maybe[Any < Async] = Absent
+    onClickEff: Maybe[UI.Action] = Absent
 ) extends Node:
     type Self = SplitButton
 
@@ -75,8 +75,8 @@ final case class SplitButton private (
     def open(ref: SignalRef[Boolean]): SplitButton = copy(openRefV = Present(ref))
 
     /** Runs `action` when the PRIMARY segment is pressed. */
-    def onClick(action: => Any < Async)(using Frame): SplitButton =
-        copy(onClickEff = Present(Sync.defer(action)))
+    def onClick(action: => UI.Action)(using Frame): SplitButton =
+        copy(onClickEff = Present(Callback(action)))
 
     private[uic] def render(using Frame): UI =
         // The panel visibility + keyboard highlight live in signals allocated by
@@ -122,7 +122,7 @@ final case class SplitButton private (
 
         // Explicitly typed effect: an untyped match would infer `Any` and land the
         // effect inert in the by-name handler.
-        val toggle: Any < Async =
+        val toggle: UI.Action =
             open match
                 case Present(r) => r.getAndUpdate(!_)
                 case Absent     => ()

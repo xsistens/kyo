@@ -148,7 +148,7 @@ Constant, `Signal`, and `SignalRef` are three different intents behind one sette
 
 The distinction is drawn on what you actually hand over, not on how it is typed at the call site. A `SignalRef` is a `Signal`, so ascribing one as `Signal[A]` still binds two way; `ref.readOnly` is how you hand a control the values of a ref while keeping the writes to yourself.
 
-Event handlers are typed `Any < Async`, the same shape kyo-ui uses. The return value is discarded, so any effectful expression goes in directly, and a handler can suspend, call kyo-http, or write another ref.
+Event handlers are typed `UI.Action`, `Any < (Async & Abort[Any])`, the same shape kyo-ui uses. The return value is discarded, so any effectful expression goes in directly, and a handler can suspend, call kyo-http, write another ref, or fail. A failure the handler leaves unhandled goes to the `onFailure` rules around it, which pick a toast, the enclosing mount's error view, or an action of your own (see kyo-ui's README, "Failures").
 
 ```scala
 val saveRow: UI < Async =
@@ -869,7 +869,7 @@ val toasted: UI < (Async & Env[uic.ToastService]) =
 val toastLayer: Layer[uic.ToastService, Sync] = uic.ToastService.layer
 ```
 
-`use` resolves the service once, here, and hands the instance to the block, so everything the block builds — handlers included — closes over that instance. That matters because *where* you resolve it decides whether it works: kyo-ui event handlers erase their effect row and run on the event-drain fiber, which carries the root `Env` context in the browser transport but not under server-push dispatch, so an `Env.get` deferred *into* a handler passes local development and fails in the deployment that matters. `uic.Button.onClick` refuses such a handler outright — its parameter is `Any < Async`, so an `Env` effect cannot ride along — but a raw kyo element's `onClick` accepts it, so `use` is the habit to keep.
+`use` resolves the service once, here, and hands the instance to the block, so everything the block builds — handlers included — closes over that instance. That matters because *where* you resolve it decides whether it works: a handler runs on the event-drain fiber, which carries the root `Env` context in the browser transport but not under server-push dispatch. A handler's type is `UI.Action`, so an `Env` effect cannot ride along into it, on `uic.Button.onClick` and on a raw kyo element's `onClick` alike; `use` is how the service gets there.
 
 ## Menus and navigation
 

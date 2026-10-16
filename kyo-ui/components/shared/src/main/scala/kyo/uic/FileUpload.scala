@@ -41,8 +41,8 @@ final case class FileUpload private (
     invalidV: Maybe[BoolValue] = Absent,
     invalidMsgV: Maybe[String] = Absent,
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
-    onSelectF: Maybe[Seq[UI.FilePayload] => Any < Async] = Absent,
-    onBlurF: Maybe[Seq[UI.FilePayload] => Any < Async] = Absent
+    onSelectF: Maybe[Seq[UI.FilePayload] => UI.Action] = Absent,
+    onBlurF: Maybe[Seq[UI.FilePayload] => UI.Action] = Absent
 ) extends Node, FileFormControl:
     type Self = FileUpload
 
@@ -109,12 +109,12 @@ final case class FileUpload private (
     /** Fired with the picked files' [[kyo.UI.FilePayload]] metadata (name, size,
       * mimeType, content) once a file is chosen — after the [[value]] write-back.
       */
-    def onSelect(f: Seq[UI.FilePayload] => Any < Async): FileUpload = copy(onSelectF = Present(f))
+    def onSelect(f: Seq[UI.FilePayload] => UI.Action)(using Frame): FileUpload = copy(onSelectF = Present(Callback.of(f)))
 
     /** Fires on focus loss with the currently picked files — the validation layer's Blur
       * trigger. Reports an empty Seq when nothing is bound or picked.
       */
-    def onBlur(f: Seq[UI.FilePayload] => Any < Async): FileUpload = copy(onBlurF = Present(f))
+    def onBlur(f: Seq[UI.FilePayload] => UI.Action)(using Frame): FileUpload = copy(onBlurF = Present(Callback.of(f)))
 
     private[uic] def render(using Frame): UI =
         // The chosen-name label is reactive: a pick writes the picked name(s) into the
@@ -183,12 +183,12 @@ final case class FileUpload private (
         // the form's value and must track the picker on its own.
         if onSelectF.isDefined || filesRef.isDefined then
             file = file.onFileSelect { payloads =>
-                val setLabel: Any < Async = (filesRef, shown) match
+                val setLabel: UI.Action = (filesRef, shown) match
                     case (Present(ref), _)      => ref.set(payloads)
                     case (Absent, Present(ref)) =>
                         ref.set(FileUpload.joinedNames(payloads))
                     case _ => ()
-                val fire: Any < Async = onSelectF match
+                val fire: UI.Action = onSelectF match
                     case Present(handler) => handler(payloads)
                     case Absent           => ()
                 setLabel.andThen(fire)

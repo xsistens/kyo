@@ -52,7 +52,7 @@ final case class Paginator private (
     jtpInputFlag: Boolean = false,
     templateV: Maybe[List[PaginatorElement]] = Absent,
     hostClassesV: List[String] = Nil,
-    onPageF: Maybe[Int => Any < Async] = Absent
+    onPageF: Maybe[Int => UI.Action] = Absent
 ) extends Node:
     type Self = Paginator
 
@@ -116,7 +116,7 @@ final case class Paginator private (
     def template(elements: PaginatorElement*): Paginator = copy(templateV = Present(elements.toList))
 
     /** Fired with the target page index after the ref write-back. */
-    def onPage(f: Int => Any < Async): Paginator = copy(onPageF = Present(f))
+    def onPage(f: Int => UI.Action)(using Frame): Paginator = copy(onPageF = Present(Callback.of(f)))
 
     /** Package-internal: host components (DataTable/DataView) stamp their
       * positional class (`p-datatable-paginator-bottom`, ...) on the root.
@@ -289,12 +289,12 @@ final case class Paginator private (
       * by construction: nav/page clicks aim at rendered pages, the jump input
       * clamps against the render-time page count.
       */
-    private def activate(target: Int)(using Frame): Any < Async =
-        val t                  = math.max(0, target)
-        val write: Any < Async = pageRef match
+    private def activate(target: Int)(using Frame): UI.Action =
+        val t                = math.max(0, target)
+        val write: UI.Action = pageRef match
             case Present(ref) => ref.set(t)
             case Absent       => ()
-        val fire: Any < Async = onPageF match
+        val fire: UI.Action = onPageF match
             case Present(f) => f(t)
             case Absent     => ()
         for
@@ -307,15 +307,15 @@ final case class Paginator private (
     /** RPP pick: write the rows ref, then reposition to the page that keeps the
       * first visible record visible (clamped into the new range).
       */
-    private def changeRows(selected: String, cur: Int, oldRows: Int)(using Frame): Any < Async =
+    private def changeRows(selected: String, cur: Int, oldRows: Int)(using Frame): UI.Action =
         selected.trim.toIntOption match
             case Some(newRows) if newRows >= 1 =>
-                val newPages               = totalPages(newRows)
-                val target                 = math.min(cur * oldRows / newRows, newPages - 1)
-                val writeRows: Any < Async = rowsRef match
+                val newPages             = totalPages(newRows)
+                val target               = math.min(cur * oldRows / newRows, newPages - 1)
+                val writeRows: UI.Action = rowsRef match
                     case Present(ref) => ref.set(newRows)
                     case Absent       => ()
-                val writePage: Any < Async = pageRef match
+                val writePage: UI.Action = pageRef match
                     case Present(ref) => ref.set(math.max(0, target))
                     case Absent       => ()
                 for

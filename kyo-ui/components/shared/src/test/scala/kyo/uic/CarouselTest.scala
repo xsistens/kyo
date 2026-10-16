@@ -73,4 +73,47 @@ class CarouselTest extends UicTest:
             assert(round == Present("car-d0"), "unless the carousel is circular")
     }
 
+    /** Runs an autoplaying carousel whose `onPageChange` is `change`, under a boundary sink, and yields the first two notices. */
+    private def autoplayNotices(change: Int => UI.Action)(using Frame): (String, String) < (Async & Abort[Closed]) =
+        Scope.run {
+            for
+                notices <- Channel.initUnscoped[String](16)
+                page    <- Signal.initRef(0)
+                cmds    <- UI.Commands.init(_ => ())
+                car = strip.page(page).autoplay(1).onPageChange(change)
+                ui  = UI.boundary.onNotice { case UI.Failed(raw) => Abort.run[Closed](notices.put(String.valueOf(raw))).unit }(car.render)
+                _ <- kyo.internal.UICommands.commands.let(Present(cmds)) {
+                    kyo.internal.ReactiveUI.normalize(ui, Seq.empty).map { root =>
+                        kyo.internal.ReactiveUI.subscribe(
+                            root,
+                            new kyo.internal.UIExchange:
+                                def onChange(
+                                    region: kyo.internal.ReactiveRegion,
+                                    path: Seq[String],
+                                    contentContext: kyo.internal.ReactiveRegion.RegionIdentity,
+                                    parentContext: kyo.internal.ReactiveRegion.ParentContext,
+                                    previous: Maybe[UI],
+                                    changed: UI
+                                )(using Frame): Unit < Async = Kyo.unit
+                        ).unit
+                    }
+                }
+                first  <- notices.take
+                second <- notices.take
+            yield (first, second)
+        }
+
+    "an autoplay step whose onPageChange fails is reported to the rules, and autoplay goes on" in {
+        Abort.run[Closed](autoplayNotices(n => Abort.fail(s"page $n"))).map { r =>
+            assert(r.getOrThrow == ("page 1", "page 2"), "the failed step was reported, and the next one still ran")
+        }
+    }
+
+    "an autoplay step whose onPageChange throws is reported the same way" in {
+        Abort.run[Closed](autoplayNotices(n => throw new IllegalStateException(s"thrown $n"))).map { r =>
+            val (first, second) = r.getOrThrow
+            assert(first.contains("thrown 1") && second.contains("thrown 2"), s"a panic is a notice too; got $first, $second")
+        }
+    }
+
 end CarouselTest

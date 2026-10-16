@@ -34,8 +34,8 @@ final case class ConfirmDialog private (
     acceptLabelV: TextValue = TextValue.Const("Yes"),
     rejectLabelV: TextValue = TextValue.Const("No"),
     acceptSeverityV: Maybe[Severity] = Absent,
-    onAcceptEff: Maybe[Any < Async] = Absent,
-    onRejectEff: Maybe[Any < Async] = Absent
+    onAcceptEff: Maybe[UI.Action] = Absent,
+    onRejectEff: Maybe[UI.Action] = Absent
 ) extends Node:
     type Self = ConfirmDialog
 
@@ -71,20 +71,20 @@ final case class ConfirmDialog private (
     def acceptSeverity(v: Severity): ConfirmDialog = copy(acceptSeverityV = Present(v))
 
     /** Runs `action` when the accept button is pressed (after the ref write). */
-    def onAccept(action: => Any < Async)(using Frame): ConfirmDialog =
-        copy(onAcceptEff = Present(Sync.defer(action)))
+    def onAccept(action: => UI.Action)(using Frame): ConfirmDialog =
+        copy(onAcceptEff = Present(Callback(action)))
 
     /** Runs `action` on the reject button AND on every dismissal — Escape, the
       * header close button, a backdrop click (after the ref write).
       */
-    def onReject(action: => Any < Async)(using Frame): ConfirmDialog =
-        copy(onRejectEff = Present(Sync.defer(action)))
+    def onReject(action: => UI.Action)(using Frame): ConfirmDialog =
+        copy(onRejectEff = Present(Callback(action)))
 
     private[uic] def render(using Frame): UI =
         openRef match
             case Absent       => UI.empty
             case Present(ref) =>
-                def run(eff: Maybe[Any < Async]): Any < Async =
+                def run(eff: Maybe[UI.Action]): UI.Action =
                     eff match
                         case Present(e) => ref.set(false).map(_ => e)
                         case Absent     => ref.set(false)

@@ -14,7 +14,7 @@ final case class MegaMenuItem private (
     iconV: Maybe[IconGlyph] = Absent,
     disabledFlag: Boolean = false,
     urlV: Maybe[String] = Absent,
-    actionV: Maybe[Any < Async] = Absent,
+    actionV: Maybe[UI.Action] = Absent,
     columnsV: List[List[MenuGroup]] = Nil
 ):
     /** Leading icon (`.p-megamenu-item-icon`). */
@@ -27,8 +27,8 @@ final case class MegaMenuItem private (
     def url(v: String): MegaMenuItem = copy(urlV = Present(v))
 
     /** Runs `action` when a column-less root row is selected. */
-    def onSelect(action: => Any < Async)(using Frame): MegaMenuItem =
-        copy(actionV = Present(Sync.defer(action)))
+    def onSelect(action: => UI.Action)(using Frame): MegaMenuItem =
+        copy(actionV = Present(Callback(action)))
 
     /** Appends one panel column holding the given groups. */
     def column(groups: MenuGroup*): MegaMenuItem = copy(columnsV = columnsV :+ groups.toList)
@@ -167,30 +167,30 @@ final case class MegaMenu private (
         // mint. Kept apart from `idV`, which is only ever the caller's — see Menu.wired.
         partBase: Maybe[String]
     )(using Frame): UI =
-        def closeAll: Any < Async =
+        def closeAll: UI.Action =
             refs match
                 case Present(rs) => MenuRender.openExactly(rs, Absent)
                 case Absent      => ()
 
-        def resetFocus: Any < Async =
+        def resetFocus: UI.Action =
             focusRef match
                 case Present(fr) => fr.set(Nil)
                 case Absent      => ()
 
         // Mouse activation (a leaf click) closes the panel tree and clears the highlight.
-        def onActivated: Any < Async = for _ <- closeAll; _ <- resetFocus yield ()
+        def onActivated: UI.Action = for _ <- closeAll; _ <- resetFocus yield ()
 
         // Keyboard: MegaNav computes the next grid position; here we thread it onto
         // the open + focus signals, running the focused item's action on activation.
-        def applyStep(step: MenuNav.Step): Any < Async =
+        def applyStep(step: MenuNav.Step): UI.Action =
             focusRef match
                 case Present(fr) =>
-                    val finish                                   = step.activate || step.dismiss
-                    def openTo(t: Maybe[List[Int]]): Any < Async =
+                    val finish                                 = step.activate || step.dismiss
+                    def openTo(t: Maybe[List[Int]]): UI.Action =
                         refs match
                             case Present(rs) => MenuRender.openExactly(rs, t)
                             case Absent      => ()
-                    val action: Maybe[Any < Async] =
+                    val action: Maybe[UI.Action] =
                         if !step.activate then Absent
                         else
                             step.focus match
@@ -202,19 +202,19 @@ final case class MegaMenu private (
                                 case _ => Absent
                     for
                         _ <- step.open match
-                            case MenuNav.OpenOp.Keep      => (): Any < Async
+                            case MenuNav.OpenOp.Keep      => (): UI.Action
                             case MenuNav.OpenOp.Close     => openTo(Absent)
                             case MenuNav.OpenOp.OpenTo(p) => openTo(Present(p))
                         _ <- action match
                             case Present(eff) => eff
-                            case Absent       => (): Any < Async
-                        _ <- if finish then openTo(Absent) else (): Any < Async
+                            case Absent       => (): UI.Action
+                        _ <- if finish then openTo(Absent) else (): UI.Action
                         _ <- fr.set(if finish then Nil else step.focus)
                     yield ()
                     end for
                 case Absent => ()
 
-        val keyHandler: KeyboardEvent => Any < Async = e =>
+        val keyHandler: KeyboardEvent => UI.Action = e =>
             focusRef match
                 case Present(_) =>
                     MegaNav.onKey(itemsV, orientationV == Orientation.Horizontal, focus, e.key) match
@@ -242,14 +242,14 @@ final case class MegaMenu private (
                             row = row.cssClass("p-focus").scrollAuto(true)
                             partBase.foreach(b => row = row.id(s"$b-active"))
                         end if
-                        def activate: Any < Async =
+                        def activate: UI.Action =
                             for
                                 _ <- it.actionV match
                                     case Present(eff) => eff
-                                    case Absent       => (): Any < Async
+                                    case Absent       => (): UI.Action
                                 _ <- onActivated
                             yield ()
-                        val act: Maybe[Any < Async] =
+                        val act: Maybe[UI.Action] =
                             if refs.isDefined && !it.disabledFlag.constTrue then Present(activate) else Absent
                         row(toChild(MenuRender.itemContent("megamenu", it, act, Absent, roving = true)))
                 }
@@ -260,8 +260,8 @@ final case class MegaMenu private (
         val rowUIs: List[UI] = itemsV.zipWithIndex.map { (it, i) =>
             val p = List(i)
             if it.columnsV.nonEmpty then
-                val isOpen              = open(p)
-                def toggle: Any < Async =
+                val isOpen            = open(p)
+                def toggle: UI.Action =
                     refs match
                         case Present(rs) =>
                             MenuRender.openExactly(rs, if isOpen then Absent else Present(p))
@@ -276,7 +276,7 @@ final case class MegaMenu private (
                     row = row.cssClass("p-focus").scrollAuto(true)
                     partBase.foreach(b => row = row.id(s"$b-active"))
                 if it.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
-                val act: Maybe[Any < Async] =
+                val act: Maybe[UI.Action] =
                     if refs.isDefined && !it.disabledFlag then Present(toggle) else Absent
                 val subIcon = if orientationV == Orientation.Vertical then Icons.angleRight else Icons.angleDown
                 val content =
@@ -313,15 +313,15 @@ final case class MegaMenu private (
                     row = row.cssClass("p-focus").scrollAuto(true)
                     partBase.foreach(b => row = row.id(s"$b-active"))
                 if it.disabledFlag then row = row.cssClass("p-disabled").aria("disabled", "true")
-                val plain                 = it.asMenuItem
-                def activate: Any < Async =
+                val plain               = it.asMenuItem
+                def activate: UI.Action =
                     for
                         _ <- plain.actionV match
                             case Present(eff) => eff
-                            case Absent       => (): Any < Async
+                            case Absent       => (): UI.Action
                         _ <- onActivated
                     yield ()
-                val act: Maybe[Any < Async] =
+                val act: Maybe[UI.Action] =
                     if refs.isDefined && !it.disabledFlag then Present(activate) else Absent
                 row(toChild(MenuRender.itemContent("megamenu", plain, act, Absent, roving = true)))
             end if

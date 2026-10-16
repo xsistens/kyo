@@ -240,7 +240,7 @@ final case class ContextMenu private (
       * rebuilding them would take with them every keyed list, open editor and scroll position the
       * caller put under the menu, invisibly, since the same markup comes back out.
       */
-    private def targetShell(onOpen: Maybe[MouseEvent => Any < Async])(content: List[UI])(using Frame): UI =
+    private def targetShell(onOpen: Maybe[MouseEvent => UI.Action])(content: List[UI])(using Frame): UI =
         var target = div
             .cssClass("p-uic-contextmenu-target")
             .cssClass("p-uic-overlay-anchor")
@@ -258,11 +258,11 @@ final case class ContextMenu private (
         focusRef: Maybe[SignalRef[List[Int]]],
         refs: Maybe[List[(List[Int], SignalRef[Boolean])]],
         at: Maybe[SignalRef[Maybe[UI.Point]]]
-    )(using Frame): MouseEvent => Any < Async =
-        val resetTree: Any < Async = refs match
+    )(using Frame): MouseEvent => UI.Action =
+        val resetTree: UI.Action = refs match
             case Present(rs) => MenuRender.openExactly(rs, Absent)
             case Absent      => ()
-        val resetFocus: Any < Async = focusRef match
+        val resetFocus: UI.Action = focusRef match
             case Present(fr) => fr.set(Nil)
             case Absent      => ()
         e =>
@@ -296,24 +296,24 @@ final case class ContextMenu private (
         refs: Maybe[List[(List[Int], SignalRef[Boolean])]],
         at: Maybe[SignalRef[Maybe[UI.Point]]]
     )(using Frame): List[UI] =
-        def resetTree: Any < Async =
+        def resetTree: UI.Action =
             refs match
                 case Present(rs) => MenuRender.openExactly(rs, Absent)
                 case Absent      => ()
 
-        def resetFocus: Any < Async =
+        def resetFocus: UI.Action =
             focusRef match
                 case Present(fr) => fr.set(Nil)
                 case Absent      => ()
 
         // The mouse close path (a leaf click) and each right-click re-open funnel
         // through these so the next open starts clean.
-        def closeMenu: Any < Async =
+        def closeMenu: UI.Action =
             openRef match
                 case Present(r) => for _ <- r.set(false); _ <- resetTree; _ <- resetFocus yield ()
                 case Absent     => ()
 
-        val keyHandler: KeyboardEvent => Any < Async = e =>
+        val keyHandler: KeyboardEvent => UI.Action = e =>
             focusRef match
                 case Present(fr) =>
                     MenuNav.onKey(itemsV, MenuNav.Orientation.Vertical, focus, e.key) match
@@ -415,7 +415,7 @@ object ContextMenu:
           * Bind it to the TYPED `onContextMenu` overload — the payload-free one registers the
           * event and drops the position, which still opens a menu, just not at the pointer.
           */
-        def openAt(using Frame): MouseEvent => Any < Async =
+        def openAt(using Frame): MouseEvent => UI.Action =
             e =>
                 for
                     _ <- MenuRender.openExactly(submenus, Absent)
@@ -428,7 +428,7 @@ object ContextMenu:
           * row it was opened on going away, a navigation, a caller's own Escape. Escape on the
           * panel, an outside click and a leaf activation already close it themselves.
           */
-        def close(using Frame): Any < Async =
+        def close(using Frame): UI.Action =
             for
                 _ <- open.set(false)
                 _ <- MenuRender.openExactly(submenus, Absent)

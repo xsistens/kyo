@@ -64,9 +64,9 @@ final case class TreeSelect private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
-    onChangeF: Maybe[Set[String] => Any < Async] = Absent,
+    onChangeF: Maybe[Set[String] => UI.Action] = Absent,
     idV: Maybe[String] = Absent,
-    onBlurF: Maybe[Set[String] => Any < Async] = Absent
+    onBlurF: Maybe[Set[String] => UI.Action] = Absent
 ) extends Node, MultiSelectFormControl, HasEmptyContent, HasTooltip, HasPlaceholder, HasAccessibleNameRef:
     type Self = TreeSelect
 
@@ -153,14 +153,14 @@ final case class TreeSelect private (
     private[uic] def withAccessibleNameRef(v: Maybe[String]): TreeSelect = copy(accNameRefV = v)
 
     /** Fired with the FULL updated node id set after every selection change. */
-    def onChange(f: Set[String] => Any < Async): TreeSelect = copy(onChangeF = Present(f))
+    def onChange(f: Set[String] => UI.Action)(using Frame): TreeSelect = copy(onChangeF = Present(Callback.of(f)))
 
     /** Fires on focus loss (native `blur`) with the current selection — unlike
       * `onChange` it fires even when nothing was changed. The form-validation layer
       * wires its `Blur` trigger here.
       */
     @targetName("onBlurKeys")
-    def onBlur(f: Set[String] => Any < Async): TreeSelect = copy(onBlurF = Present(f))
+    def onBlur(f: Set[String] => UI.Action)(using Frame): TreeSelect = copy(onBlurF = Present(Callback.of(f)))
 
     /** (id, label) pairs of every node in tree order — the trigger-label lookup. */
     private def flatNodes: List[(String, String)] =
@@ -263,19 +263,19 @@ final case class TreeSelect private (
             if sel >= 0 then sel else if rows.isEmpty then -1 else 0
         end openHighlight
 
-        def openPanel: Any < Async =
+        def openPanel: UI.Action =
             st match
                 case Present(s) => s.hi.set(openHighlight).andThen(s.open.set(true))
                 case Absent     => ()
 
-        def toggle: Any < Async =
+        def toggle: UI.Action =
             st match
                 case Present(s) => s.open.set(!isOpen)
                 case Absent     => ()
 
         // Fired by the hosted Tree AFTER its selection write: report the new set
         // via onChange; Single mode also closes the panel (Prime).
-        def afterPick: Any < Async =
+        def afterPick: UI.Action =
             st match
                 case Present(s) =>
                     for
@@ -283,11 +283,11 @@ final case class TreeSelect private (
                             case Present(g) =>
                                 valueRef match
                                     case Present(r) => r.get.map(g)
-                                    case Absent     => (): Any < Async
-                            case Absent => (): Any < Async
+                                    case Absent     => (): UI.Action
+                            case Absent => (): UI.Action
                         _ <- selectionModeV match
                             case SelectionMode.Single | SelectionMode.Radio => s.open.set(false)
-                            case _                                          => (): Any < Async
+                            case _                                          => (): UI.Action
                     yield ()
                 case Absent => ()
 
