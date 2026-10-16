@@ -289,7 +289,8 @@ class InputMaskingTest extends kyo.test.Test[Any]:
         }
         "a textarea formats its content, which is not an attribute" in {
             render(UI.textarea.value("123456").inputMask("999-999")).map { s =>
-                assert(s.contains(">123-456<"))
+                // The line break after the opening tag is the one the HTML parser drops, not part of the value.
+                assert(s.contains(">\n123-456<"))
             }
         }
     }
