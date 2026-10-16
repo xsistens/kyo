@@ -33,8 +33,8 @@ final case class ToggleButton private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
-    onChangeF: Maybe[Boolean => Any < Async] = Absent,
-    onBlurF: Maybe[Boolean => Any < Async] = Absent,
+    onChangeF: Maybe[Boolean => UI.Action] = Absent,
+    onBlurF: Maybe[Boolean => UI.Action] = Absent,
     idV: Maybe[String] = Absent,
     contentV: Maybe[UI] = Absent,
     radioV: Maybe[ToggleButton.RadioOption] = Absent
@@ -49,7 +49,7 @@ final case class ToggleButton private (
       * to move within it. Package-internal, because a toggle button standing on its own is a
       * toggle button and has none of this.
       */
-    private[uic] def asRadioOption(tabbable: Boolean, onKey: KeyboardEvent => Any < Async): ToggleButton =
+    private[uic] def asRadioOption(tabbable: Boolean, onKey: KeyboardEvent => UI.Action): ToggleButton =
         copy(radioV = Present(ToggleButton.RadioOption(tabbable, onKey)))
 
     /** Stores the element id. */
@@ -111,12 +111,12 @@ final case class ToggleButton private (
     private[uic] def withAccessibleNameRef(v: Maybe[String]): ToggleButton = copy(accNameRefV = v)
 
     /** Fired with the NEW checked value after a toggle (and after the ref write-back). */
-    def onChange(f: Boolean => Any < Async): ToggleButton = copy(onChangeF = Present(f))
+    def onChange(f: Boolean => UI.Action)(using Frame): ToggleButton = copy(onChangeF = Present(Callback.of(f)))
 
     /** Fires on focus loss with the button's current checked state — unlike onChange it
       * fires even when the value was not toggled. The validation layer's Blur trigger.
       */
-    def onBlur(f: Boolean => Any < Async): ToggleButton = copy(onBlurF = Present(f))
+    def onBlur(f: Boolean => UI.Action)(using Frame): ToggleButton = copy(onBlurF = Present(Callback.of(f)))
 
     private[uic] def render(using Frame): UI =
         (invalidV.dynSig, invalidMsgDynV) match
@@ -132,7 +132,7 @@ final case class ToggleButton private (
             case Absent                                 => body(false, onChangeF)
 
     /** Two-way handler: write the toggled value into `ref`, then run the user callback. */
-    private def handlerFor(ref: SignalRef[Boolean])(using Frame): Boolean => Any < Async =
+    private def handlerFor(ref: SignalRef[Boolean])(using Frame): Boolean => UI.Action =
         nb =>
             onChangeF match
                 case Present(f) =>
@@ -142,7 +142,7 @@ final case class ToggleButton private (
                     yield r
                 case Absent => ref.set(nb)
 
-    private def body(isChecked: Boolean, onChg: Maybe[Boolean => Any < Async])(using Frame): UI =
+    private def body(isChecked: Boolean, onChg: Maybe[Boolean => UI.Action])(using Frame): UI =
         var el = button.cssClass("p-togglebutton").cssClass("p-component")
         idV.foreach(v => el = el.id(v))
         if isChecked then el = el.cssClass("p-togglebutton-checked")
@@ -211,7 +211,7 @@ object ToggleButton:
     /** What a single-select [[SelectButton]] option is, beyond a toggle button: whether it holds
       * the group's one tab stop, and the group's key handler for moving within it.
       */
-    final private[uic] case class RadioOption(tabbable: Boolean, onKey: UI.KeyboardEvent => Any < Async)
+    final private[uic] case class RadioOption(tabbable: Boolean, onKey: UI.KeyboardEvent => UI.Action)
 
     /** Const-or-ref carrier for the pending `checked` state (the CheckBox pattern). */
     private[uic] enum Checked:

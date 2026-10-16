@@ -32,7 +32,7 @@ final case class Message private (
     iconV: Maybe[IconGlyph] = Absent,
     hideIconFlag: Boolean = false,
     closableFlag: Boolean = false,
-    onDismissedEff: Maybe[Any < Async] = Absent,
+    onDismissedEff: Maybe[UI.Action] = Absent,
     idV: Maybe[String] = Absent,
     kids: List[UI] = Nil
 ) extends Node, HasElementId:
@@ -73,8 +73,8 @@ final case class Message private (
       * it from your own state if you want it gone. Contrast [[Dialog.onClose]],
       * which fires after the component has already written its own visibility ref.
       */
-    def onDismissed(action: => Any < Async)(using Frame): Message =
-        copy(onDismissedEff = Present(Sync.defer(action)))
+    def onDismissed(action: => UI.Action)(using Frame): Message =
+        copy(onDismissedEff = Present(Callback(action)))
 
     /** Adds default-slot children (the message text). */
     def apply(cs: UI*): Message = copy(kids = kids ++ cs)

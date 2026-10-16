@@ -122,10 +122,10 @@ final case class Overlay private (
     portalV: Boolean = false,
     scrollV: Overlay.Scroll = Overlay.Scroll.Close,
     panelClassesV: List[String] = Nil,
-    keyHandlerV: Maybe[KeyboardEvent => Any < Async] = Absent,
+    keyHandlerV: Maybe[KeyboardEvent => UI.Action] = Absent,
     pointerAnchorV: Maybe[Signal[Maybe[UI.Point]]] = Absent,
     panelIdV: Maybe[String] = Absent,
-    backdropCtxV: Maybe[MouseEvent => Any < Async] = Absent,
+    backdropCtxV: Maybe[MouseEvent => UI.Action] = Absent,
     triggerV: Maybe[UI] = Absent,
     kids: List[UI] = Nil
 ) extends Node:
@@ -201,7 +201,7 @@ final case class Overlay private (
       * (kyo suppresses the native menu only where a handler was declared), which is why a
       * pointer-anchored host wires this.
       */
-    private[uic] def onBackdropContextMenu(f: MouseEvent => Any < Async): Overlay =
+    private[uic] def onBackdropContextMenu(f: MouseEvent => UI.Action): Overlay =
         copy(backdropCtxV = Present(f))
 
     /** How the open overlay responds to scroll input outside its panel (default
@@ -249,7 +249,7 @@ final case class Overlay private (
       * keyboard navigation here). Runs for every key; the overlay's own Escape
       * dismissal runs first.
       */
-    private[uic] def onPanelKeyDown(f: KeyboardEvent => Any < Async): Overlay =
+    private[uic] def onPanelKeyDown(f: KeyboardEvent => UI.Action): Overlay =
         copy(keyHandlerV = Present(f))
 
     /** Adds panel children. */
@@ -435,7 +435,7 @@ final case class Overlay private (
       * is rendered exactly once.
       */
     private def renderOpenAt(anchor: OverlayAnchor, panelId: Maybe[String], portal: Boolean = false)(using Frame): UI =
-        val close: Any < Async = openRef.set(false)
+        val close: UI.Action = openRef.set(false)
 
         val backdrop: List[UI] =
             if dismissOnOutsideClickV then

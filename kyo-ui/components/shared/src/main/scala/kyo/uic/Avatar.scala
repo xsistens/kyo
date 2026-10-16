@@ -28,7 +28,7 @@ final case class Avatar private (
     interactiveFlag: Boolean = false,
     accessibleNameV: Maybe[String] = Absent,
     badgeV: Maybe[UI] = Absent,
-    onClickEff: Maybe[Any < Async] = Absent
+    onClickEff: Maybe[UI.Action] = Absent
 ) extends Node:
     type Self = Avatar
 
@@ -64,8 +64,8 @@ final case class Avatar private (
     def badge(v: UI): Avatar = copy(badgeV = Present(v))
 
     /** Runs `action` when the avatar is activated. Implies [[interactive]]. */
-    def onClick(action: => Any < Async)(using Frame): Avatar =
-        copy(onClickEff = Present(Sync.defer(action)), interactiveFlag = true)
+    def onClick(action: => UI.Action)(using Frame): Avatar =
+        copy(onClickEff = Present(Callback(action)), interactiveFlag = true)
 
     private[uic] def render(using Frame): UI =
         val accName = accessibleNameV.getOrElse(initialsV.getOrElse("Avatar"))

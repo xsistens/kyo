@@ -32,7 +32,7 @@ final case class Toast private (
     summaryV: Maybe[TextValue] = Absent,
     detailV: Maybe[TextValue] = Absent,
     closableFlag: Boolean = false,
-    onCloseEff: Maybe[Any < Async] = Absent,
+    onCloseEff: Maybe[UI.Action] = Absent,
     kids: List[UI] = Nil
 ) extends Node:
     type Self = Toast
@@ -68,8 +68,8 @@ final case class Toast private (
     def closable(v: Boolean): Toast = copy(closableFlag = v)
 
     /** Runs `action` after the close button writes the ref to `false`. */
-    def onClose(action: => Any < Async)(using Frame): Toast =
-        copy(onCloseEff = Present(Sync.defer(action)))
+    def onClose(action: => UI.Action)(using Frame): Toast =
+        copy(onCloseEff = Present(Callback(action)))
 
     /** Adds custom body children, rendered after summary/detail inside the text slot. */
     def apply(cs: UI*): Toast = copy(kids = kids ++ cs)
@@ -84,7 +84,7 @@ final case class Toast private (
         openRef match
             case Absent       => UI.empty
             case Present(ref) =>
-                val close: Any < Async =
+                val close: UI.Action =
                     onCloseEff match
                         case Present(e) => ref.set(false).map(_ => e)
                         case Absent     => ref.set(false)

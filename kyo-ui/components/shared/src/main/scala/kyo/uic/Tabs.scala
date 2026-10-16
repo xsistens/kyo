@@ -98,7 +98,7 @@ end Tab
 final case class Tabs private (
     tabList: List[Tab] = Nil,
     selectedBinding: Maybe[ReactiveValue[String]] = Absent,
-    onTabSelectF: Maybe[String => Any < Async] = Absent,
+    onTabSelectF: Maybe[String => UI.Action] = Absent,
     idV: Maybe[String] = Absent
 ) extends Node, HasElementId:
     type Self = Tabs
@@ -127,7 +127,7 @@ final case class Tabs private (
       */
     def selected(v: String | Signal[String]): Tabs = copy(selectedBinding = Present(ReactiveValue(v)))
 
-    def onTabSelect(f: String => Any < Async): Tabs = copy(onTabSelectF = Present(f))
+    def onTabSelect(f: String => UI.Action)(using Frame): Tabs = copy(onTabSelectF = Present(Callback.of(f)))
 
     /** Stores the element id. */
     private[uic] def withElementId(v: Maybe[String]): Tabs = copy(idV = v)
@@ -167,11 +167,11 @@ final case class Tabs private (
       * placeholder shows for an un-based strip: a usable tab strip whose inactive headers
       * are reachable by clicking, with the arrow wiring arriving with the mount.
       */
-    private def renderTabs(ids: List[String], focus: String => Any < Async)(using Frame): UI =
+    private def renderTabs(ids: List[String], focus: String => UI.Action)(using Frame): UI =
         withActive(active => bodyWith(active, ids, focus))
 
     /** The seam the golden tests render, since a mount shows only its placeholder there. */
-    private[uic] def wired(ids: List[String], focus: String => Any < Async)(using Frame): UI =
+    private[uic] def wired(ids: List[String], focus: String => UI.Action)(using Frame): UI =
         withActive(active => bodyWith(active, ids, focus))
 
     /** Builds `f` against the active tab id, however the selection is bound.
@@ -197,9 +197,9 @@ final case class Tabs private (
       * browser and the dispatcher already agree on one activation per Enter or Space, and a third
       * from this handler would be one too many. Accordion declines it for the same reason.
       */
-    private def headerMove(ids: List[String], focus: String => Any < Async, navigable: List[Int], self: Int)(using
+    private def headerMove(ids: List[String], focus: String => UI.Action, navigable: List[Int], self: Int)(using
         Frame
-    ): KeyboardEvent => Any < Async = e =>
+    ): KeyboardEvent => UI.Action = e =>
         ListNav.onKey(navigable, self, e.key, wrap = true, ListNav.Orientation.Horizontal) match
             case Present(step) if step.focus != self && ids.isDefinedAt(step.focus) => focus(ids(step.focus))
             case _                                                                  => ()
@@ -216,7 +216,7 @@ final case class Tabs private (
         isActive: Boolean,
         i: Int,
         ids: List[String],
-        focus: String => Any < Async,
+        focus: String => UI.Action,
         navigable: List[Int]
     )(using Frame): E =
         var out = el.role("tab").aria("selected", isActive.toString)
@@ -245,7 +245,7 @@ final case class Tabs private (
         out
     end interactive
 
-    private def bodyWith(active: String, ids: List[String], focus: String => Any < Async)(using Frame): UI =
+    private def bodyWith(active: String, ids: List[String], focus: String => UI.Action)(using Frame): UI =
         // The positions the keyboard may land on: a disabled tab is out of the tab order, so an
         // arrow steps over it.
         val navigable         = tabList.zipWithIndex.collect { case (t, i) if !t.disabled => i }
@@ -317,11 +317,11 @@ final case class Tabs private (
       * write would race it — the ref would hold the new id while the location, and
       * so anything derived from it, still held the old one.
       */
-    private def select(id: String, write: Boolean)(using Frame): Any < Async =
-        val setActive: Any < Async = selectedRef match
+    private def select(id: String, write: Boolean)(using Frame): UI.Action =
+        val setActive: UI.Action = selectedRef match
             case Present(ref) if write => ref.set(id)
             case _                     => ()
-        val fireSelect: Any < Async = onTabSelectF match
+        val fireSelect: UI.Action = onTabSelectF match
             case Present(f) => f(id)
             case Absent     => ()
         for

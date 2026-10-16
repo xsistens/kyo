@@ -49,8 +49,8 @@ final case class Button private (
     accessibleDescriptionV: Maybe[TextValue] = Absent,
     tooltipV: Maybe[TextValue] = Absent,
     formV: Maybe[String] = Absent,
-    onClickEff: Maybe[Any < Async] = Absent,
-    onKeyDownF: Maybe[KeyboardEvent => Any < Async] = Absent,
+    onClickEff: Maybe[UI.Action] = Absent,
+    onKeyDownF: Maybe[KeyboardEvent => UI.Action] = Absent,
     extraChildren: List[UI] = Nil,
     extraClassesV: List[String] = Nil,
     extraAriasV: List[(String, String)] = Nil,
@@ -83,7 +83,7 @@ final case class Button private (
     private[uic] def tabIndexRaw(v: Int): Button      = copy(tabIndexV = Present(v))
     private[uic] def focusSeedRaw(v: Boolean): Button = copy(focusSeedV = v)
 
-    private[uic] def onKeyDownRaw(f: KeyboardEvent => Any < Async): Button =
+    private[uic] def onKeyDownRaw(f: KeyboardEvent => UI.Action): Button =
         copy(onKeyDownF = Present(f))
 
     /** Semantic accent (`.p-button-<severity>`); `Primary` is the unsuffixed default. A
@@ -182,8 +182,8 @@ final case class Button private (
       * (`Async`): a handler that can fail handles its own failure, the way a native
       * `onClick` does.
       */
-    def onClick(action: => Any < Async)(using Frame): Button =
-        copy(onClickEff = Present(Sync.defer(action)))
+    def onClick(action: => UI.Action)(using Frame): Button =
+        copy(onClickEff = Present(Callback(action)))
 
     /** Adds arbitrary extra children (e.g. a custom badge) after the label/icon. */
     def apply(cs: UI*): Button = copy(extraChildren = extraChildren ++ cs)

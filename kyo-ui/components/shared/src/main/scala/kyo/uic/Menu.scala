@@ -128,21 +128,21 @@ final case class Menu private (
         // went disabled under a live update simply stops being the highlighted one.
         val hiRow: Int = if navigable.contains(h) then h else -1
 
-        def activate(it: MenuItem): Any < Async =
+        def activate(it: MenuItem): UI.Action =
             hiRef match
                 case Present(hi) =>
                     for
                         _ <- it.actionV match
                             case Present(eff) => eff
-                            case Absent       => (): Any < Async
+                            case Absent       => (): UI.Action
                         _ <- popupRefV match
                             case Present(r) => r.set(false)
-                            case Absent     => (): Any < Async
+                            case Absent     => (): UI.Action
                         _ <- hi.set(-1)
                     yield ()
                 case Absent => ()
 
-        val keyHandler: KeyboardEvent => Any < Async = e =>
+        val keyHandler: KeyboardEvent => UI.Action = e =>
             hiRef match
                 case Present(hi) =>
                     // The menu family cycles (the ARIA menu pattern, and what the nested menus
@@ -150,7 +150,7 @@ final case class Menu private (
                     // the first and ArrowUp from nothing lands on the last.
                     ListNav.onKey(navigable, hiRow, e.key, wrap = true) match
                         case Present(step) =>
-                            val chosen: Any < Async =
+                            val chosen: UI.Action =
                                 if step.activate then
                                     rows(step.focus) match
                                         case MenuRow.Item(it) => activate(it)
@@ -179,7 +179,7 @@ final case class Menu private (
                 if i == hiRow then
                     row = row.cssClass("p-focus").scrollAuto(true)
                     partBase.foreach(base => row = row.id(s"$base-active"))
-                val act: Maybe[Any < Async] =
+                val act: Maybe[UI.Action] =
                     if hiRef.isDefined && !it.disabledFlag.constTrue then Present(activate(it)) else Absent
                 row(toChild(MenuRender.itemContent("menu", it, act, Absent, roving = true)))
         }
@@ -200,14 +200,14 @@ final case class Menu private (
                 // to the Overlay, which is the one place that decides what closing means.
                 // Tab carries the reader out of the menu, so the menu goes with them: the keys live
                 // on this list, and a panel left standing behind them answers none of them.
-                val leave: Any < Async =
+                val leave: UI.Action =
                     for
                         _ <- popupRefV match
                             case Present(r) => r.set(false)
-                            case Absent     => (): Any < Async
+                            case Absent     => (): UI.Action
                         _ <- hiRef match
                             case Present(hi) => hi.set(-1)
-                            case Absent      => (): Any < Async
+                            case Absent      => (): UI.Action
                     yield ()
                 list = list
                     .tabIndex(-1)
@@ -232,7 +232,7 @@ final case class Menu private (
                 // highlight again. Prime's sheet clears the list's outline and puts the only
                 // focus mark on the row, so an inline menu with focus and no highlighted row
                 // looks exactly like one nobody has touched.
-                val seedFocus: Any < Async = hiRef match
+                val seedFocus: UI.Action = hiRef match
                     case Present(hi) if hiRow < 0 && navigable.nonEmpty => hi.set(navigable.head)
                     case _                                              => ()
                 if hiRef.isDefined then

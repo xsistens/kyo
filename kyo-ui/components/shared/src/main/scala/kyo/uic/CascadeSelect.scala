@@ -93,9 +93,9 @@ final case class CascadeSelect[A] private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
-    onChangeF: Maybe[String => Any < Async] = Absent,
+    onChangeF: Maybe[String => UI.Action] = Absent,
     idV: Maybe[String] = Absent,
-    onBlurF: Maybe[String => Any < Async] = Absent
+    onBlurF: Maybe[String => UI.Action] = Absent
 ) extends Node, TextFormControl, HasTooltip, HasPlaceholder, HasAccessibleNameRef:
     type Self = CascadeSelect[A]
 
@@ -152,13 +152,13 @@ final case class CascadeSelect[A] private (
     private[uic] def withAccessibleNameRef(v: Maybe[String]): CascadeSelect[A] = copy(accNameRefV = v)
 
     /** Fired with the newly picked leaf key. */
-    def onChange(f: String => Any < Async): CascadeSelect[A] = copy(onChangeF = Present(f))
+    def onChange(f: String => UI.Action)(using Frame): CascadeSelect[A] = copy(onChangeF = Present(Callback.of(f)))
 
     /** Fires on focus loss (native `blur`) with the current selection key — unlike
       * `onChange` it fires even when nothing was changed. The form-validation layer
       * wires its `Blur` trigger here.
       */
-    def onBlur(f: String => Any < Async): CascadeSelect[A] = copy(onBlurF = Present(f))
+    def onBlur(f: String => UI.Action)(using Frame): CascadeSelect[A] = copy(onBlurF = Present(Callback.of(f)))
 
     /** The stable leaf key: [[optionKey]] if set, else the label projection. */
     private def key(a: A): String = keyF.getOrElse(labelF)(a)
@@ -254,7 +254,7 @@ final case class CascadeSelect[A] private (
         placeholder: Maybe[String]
     )(using Frame): UI =
 
-        def closeAll: Any < Async =
+        def closeAll: UI.Action =
             st match
                 case Present(state) =>
                     for
@@ -267,7 +267,7 @@ final case class CascadeSelect[A] private (
         // Opens with every group closed and the highlight on the first root option. Not on the
         // selected one: the chain opens closed, so a leaf chosen three levels down has no row on
         // the screen to land on.
-        def openPanel: Any < Async =
+        def openPanel: UI.Action =
             st match
                 case Present(state) =>
                     for
@@ -277,19 +277,19 @@ final case class CascadeSelect[A] private (
                     yield ()
                 case Absent => ()
 
-        def toggleRoot: Any < Async =
+        def toggleRoot: UI.Action =
             if isOpen then closeAll else openPanel
 
         // Writes the picked leaf key, fires onChange, closes the whole chain.
-        def pick(a: A): Any < Async =
+        def pick(a: A): UI.Action =
             val k = key(a)
             for
                 _ <- valueRef match
                     case Present(r) => r.set(k)
-                    case Absent     => (): Any < Async
+                    case Absent     => (): UI.Action
                 _ <- onChangeF match
                     case Present(g) => g(k)
-                    case Absent     => (): Any < Async
+                    case Absent     => (): UI.Action
                 _ <- closeAll
             yield ()
             end for
@@ -321,24 +321,24 @@ final case class CascadeSelect[A] private (
           * group, and Escape leaves one level or closes the field. So the menu family's state
           * machine runs it, over [[CascadeItem]] through its own [[MenuNav.Nodes]].
           */
-        def panelKey(state: CascadeSelect.State): KeyboardEvent => Any < Async = e =>
+        def panelKey(state: CascadeSelect.State): KeyboardEvent => UI.Action = e =>
             // Tab carries the reader away from the element the whole chain's keyboard lives on, so
             // the chain goes with them rather than floating over the page unanswered.
             if e.key == Keyboard.Tab then closeAll
             else
                 MenuNav.onKey(items, MenuNav.Orientation.Vertical, state.focus, e.key) match
                     case Present(step) =>
-                        val reopen: Any < Async = step.open match
+                        val reopen: UI.Action = step.open match
                             case MenuNav.OpenOp.Keep      => ()
                             case MenuNav.OpenOp.Close     => MenuRender.openExactly(state.refs, Absent)
                             case MenuNav.OpenOp.OpenTo(p) => MenuRender.openExactly(state.refs, Present(p))
-                        val chosen: Any < Async =
+                        val chosen: UI.Action =
                             if step.activate then
                                 MenuNav.itemAt(items, step.focus) match
                                     case Present(CascadeItem.Leaf(a)) => pick(a)
                                     case _                            => ()
                             else ()
-                        val shut: Any < Async = if step.dismiss then state.open.set(false) else ()
+                        val shut: UI.Action = if step.dismiss then state.open.set(false) else ()
                         state.focusRef.set(step.focus).andThen(reopen).andThen(chosen).andThen(shut)
                     case Absent => ()
 
@@ -439,7 +439,7 @@ final case class CascadeSelect[A] private (
         current: String,
         openMap: Map[List[Int], Boolean],
         st: Maybe[CascadeSelect.State],
-        pick: A => Any < Async
+        pick: A => UI.Action
     )(using Frame): UI =
         val rows: List[UI] = its.zipWithIndex.map {
             case (CascadeItem.Leaf(a), i) =>
@@ -454,9 +454,9 @@ final case class CascadeSelect[A] private (
                 row(toChild(content(toChild(span.cssClass("p-cascadeselect-option-text")(labelF(a))))))
 
             case (CascadeItem.Group(label, children), i) =>
-                val p                        = path :+ i
-                val groupOpen                = openMap(p)
-                def toggleGroup: Any < Async =
+                val p                      = path :+ i
+                val groupOpen              = openMap(p)
+                def toggleGroup: UI.Action =
                     st match
                         case Present(state) =>
                             val refs                     = state.refs

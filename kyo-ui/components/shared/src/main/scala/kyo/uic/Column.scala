@@ -307,7 +307,7 @@ final private[uic] case class CellEdit[A](
     commit: (A, String) => Frame ?=> (Result[FieldError, A] < Async),
     editor: CellEditor,
     when: A => Boolean = (_: A) => true,
-    changed: Maybe[(A, A) => Any < Async] = Absent
+    changed: Maybe[(A, A) => UI.Action] = Absent
 )
 
 /** The filter pipeline of one column, with the cell type closed over, as [[CellEdit]]
@@ -446,8 +446,8 @@ final case class Column[A, +K <: FlatOnly] private (
       * write. The table-wide `onCellValueChanged` fires for every column; this one is for
       * a rule that belongs to a single field.
       */
-    def onValueChanged(f: (A, A) => Any < Async)(using IsEditable[K]): Column[A, K] =
-        copy(editV = editV.map(_.copy(changed = Present(f))))
+    def onValueChanged(f: (A, A) => UI.Action)(using IsEditable[K], Frame): Column[A, K] =
+        copy(editV = editV.map(_.copy(changed = Present(Callback.of2(f)))))
 
     /** Gives this column its own filter, over the value `read` projects out of the row.
       * The [[CellType]] in scope decides how it reads: a type that compares (every

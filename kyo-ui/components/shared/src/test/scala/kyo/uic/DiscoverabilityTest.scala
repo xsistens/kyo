@@ -344,12 +344,17 @@ class DiscoverabilityTest extends UicTest:
 
     "Button renders as an SPA anchor via .href, and onClick takes the native handler type" in {
         typeCheck(preamble + """def x: uic.Button = uic.Button("Open").severity(uic.Severity.Secondary).href("/lobbies/1")""")
-        // onClick mirrors kyo-ui's native event effect, `Any < Async`...
+        // onClick takes kyo-ui's native handler type, `UI.Action`: a handler may fail, and the
+        // `onFailure` rules around it decide what the failure does...
         typeCheck(preamble + """def x(eff: Any < Async)(using Frame): uic.Button = uic.Button("Go").onClick(eff)""")
-        // ...so a handler that can fail handles its failure before it gets here.
-        typeCheckFailure(
+        typeCheck(
             preamble + """def x(eff: Any < (Abort[Throwable] & Async))(using Frame): uic.Button = uic.Button("Go").onClick(eff)"""
         )
+        // ...but it carries no `Env`: a service is resolved where the handler is built.
+        typeCheckFailure(
+            preamble + """def x(eff: Any < (Env[Int] & Async))(using Frame): uic.Button = uic.Button("Go").onClick(eff)"""
+        )
+        typeCheckFailure(preamble + """def x(eff: Any < (Env[Int] & Async))(using Frame): UI = button("Go").onClick(eff)""")
     }
 
     "Button has severity and variant, not the retired design" in {

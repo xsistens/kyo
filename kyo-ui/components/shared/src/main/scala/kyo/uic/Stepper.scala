@@ -34,7 +34,7 @@ final case class Stepper private (
     valueRef: Maybe[SignalRef[String]] = Absent,
     linearFlag: Boolean = false,
     verticalFlag: Boolean = false,
-    onActivateF: Maybe[Int => Any < Async] = Absent
+    onActivateF: Maybe[Int => UI.Action] = Absent
 ) extends Node:
     type Self = Stepper
 
@@ -72,7 +72,7 @@ final case class Stepper private (
     def vertical(v: Boolean): Stepper = copy(verticalFlag = v)
 
     /** Fired with the target step index after a header click's ref write-back. */
-    def onActivate(f: Int => Any < Async): Stepper = copy(onActivateF = Present(f))
+    def onActivate(f: Int => UI.Action)(using Frame): Stepper = copy(onActivateF = Present(Callback.of(f)))
 
     /** The step's stable value: explicit, else the 1-based position (Prime). */
     private def stepValue(i: Int): String = steps(i).value.getOrElse((i + 1).toString)
@@ -88,7 +88,7 @@ final case class Stepper private (
       * no mount has run, so there is nothing to move focus with and every enabled header stays its
       * own tab stop, which is what the component did before the arrows.
       */
-    private def shown(ids: List[String], focus: String => Any < Async)(using Frame): UI =
+    private def shown(ids: List[String], focus: String => UI.Action)(using Frame): UI =
         valueRef match
             case Present(ref) =>
                 ref.render(v => body(steps.indices.find(stepValue(_) == v).getOrElse(0), ids, focus))
@@ -98,7 +98,7 @@ final case class Stepper private (
                     case Absent       => body(0, ids, focus)
 
     /** The seam the golden tests render, since a mount shows only its placeholder there. */
-    private[uic] def wired(ids: List[String], focus: String => Any < Async)(using Frame): UI = shown(ids, focus)
+    private[uic] def wired(ids: List[String], focus: String => UI.Action)(using Frame): UI = shown(ids, focus)
 
     /** The positions a header arrow may land on: a blocked step is not focusable, so it is stepped
       * over. Linear mode blocks everything past the current step.
@@ -109,14 +109,14 @@ final case class Stepper private (
     /** Moves focus between headers, and does nothing else: a header IS a `<button>`, so Enter and
       * Space already reach it once, and a third activation from here would be one too many.
       */
-    private def headerMove(ids: List[String], navigable: List[Int], self: Int, axis: ListNav.Orientation, focus: String => Any < Async)(
+    private def headerMove(ids: List[String], navigable: List[Int], self: Int, axis: ListNav.Orientation, focus: String => UI.Action)(
         using Frame
-    ): KeyboardEvent => Any < Async = e =>
+    ): KeyboardEvent => UI.Action = e =>
         ListNav.onKey(navigable, self, e.key, wrap = true, axis) match
             case Present(step) if step.focus != self && ids.isDefinedAt(step.focus) => focus(ids(step.focus))
             case _                                                                  => ()
 
-    private def body(active: Int, ids: List[String], focus: String => Any < Async)(using Frame): UI =
+    private def body(active: Int, ids: List[String], focus: String => UI.Action)(using Frame): UI =
         val cur = math.min(math.max(active, 0), math.max(steps.length - 1, 0))
         if verticalFlag then verticalBody(cur, ids, focus) else horizontalBody(cur, ids, focus)
 
@@ -136,7 +136,7 @@ final case class Stepper private (
         cur: Int,
         tablist: Boolean,
         ids: List[String],
-        focus: String => Any < Async
+        focus: String => UI.Action
     )(using Frame): UI =
         val isActive = i == cur
         // Linear: only backward (and re-clicking the current step) is reachable
@@ -175,7 +175,7 @@ final case class Stepper private (
         stepEl((headerEl :: separatorSlot).map(toChild)*)
     end stepHeader
 
-    private def horizontalBody(cur: Int, ids: List[String], focus: String => Any < Async)(using Frame): UI =
+    private def horizontalBody(cur: Int, ids: List[String], focus: String => UI.Action)(using Frame): UI =
         val stepEls: List[UI] = steps.zipWithIndex.map((st, i) => stepHeader(st, i, cur, tablist = true, ids, focus))
 
         val panel: List[UI] = steps.lift(cur).toList.map { st =>
@@ -224,7 +224,7 @@ final case class Stepper private (
         p(toChild(div.cssClass("p-steppanel-content-wrapper")(wrapperChildren.map(toChild)*)))
     end verticalPanel
 
-    private def verticalBody(cur: Int, ids: List[String], focus: String => Any < Async)(using Frame): UI =
+    private def verticalBody(cur: Int, ids: List[String], focus: String => UI.Action)(using Frame): UI =
         val items: List[UI] = steps.zipWithIndex.map { (st, i) =>
             val isActive = i == cur
 
@@ -257,14 +257,14 @@ final case class Stepper private (
     /** Header click: write the bound ref (value wins, matching render), then fire
       * `onActivate` with the index.
       */
-    private def activate(i: Int)(using Frame): Any < Async =
-        val write: Any < Async = valueRef match
+    private def activate(i: Int)(using Frame): UI.Action =
+        val write: UI.Action = valueRef match
             case Present(ref) => ref.set(stepValue(i))
             case Absent       =>
                 activeRef match
                     case Present(ref) => ref.set(i)
                     case Absent       => ()
-        val fire: Any < Async = onActivateF match
+        val fire: UI.Action = onActivateF match
             case Present(f) => f(i)
             case Absent     => ()
         for

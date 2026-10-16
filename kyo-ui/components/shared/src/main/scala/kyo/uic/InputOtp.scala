@@ -37,8 +37,8 @@ final case class InputOtp private (
     invalidMsgV: Maybe[String] = Absent,
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
-    onChangeF: Maybe[String => Any < Async] = Absent,
-    onBlurF: Maybe[String => Any < Async] = Absent,
+    onChangeF: Maybe[String => UI.Action] = Absent,
+    onBlurF: Maybe[String => UI.Action] = Absent,
     idV: Maybe[String] = Absent
 ) extends Node, TextFormControl, HasAccessibleName:
     type Self = InputOtp
@@ -92,13 +92,13 @@ final case class InputOtp private (
     private[uic] def withAccessibleName(v: Maybe[TextValue]): InputOtp = copy(accNameV = v)
 
     /** Fired with the FULL code after a cell write-back. */
-    def onChange(f: String => Any < Async): InputOtp = copy(onChangeF = Present(f))
+    def onChange(f: String => UI.Action)(using Frame): InputOtp = copy(onChangeF = Present(Callback.of(f)))
 
     /** Fires on focus loss (native `blur`) with the field's current value — unlike
       * `onChange` it fires even when the value was not edited. The form-validation
       * layer wires its `Blur` trigger here.
       */
-    def onBlur(f: String => Any < Async): InputOtp = copy(onBlurF = Present(f))
+    def onBlur(f: String => UI.Action)(using Frame): InputOtp = copy(onBlurF = Present(Callback.of(f)))
 
     private def interactive: Boolean = !disabledFlag.constTrue && !readonlyFlag
 
@@ -126,21 +126,21 @@ final case class InputOtp private (
     /** The advancing subscription the mount publishes — the golden seam. `focus`
       * moves DOM focus to the given cell id (production: `Commands.focusId`).
       */
-    private[uic] def wired(ref: SignalRef[String], cellIds: List[String], focus: String => Any < Async)(using Frame): UI =
+    private[uic] def wired(ref: SignalRef[String], cellIds: List[String], focus: String => UI.Action)(using Frame): UI =
         ref.render(v => body(v, Present(ref), Present(cellIds), focus))
 
     /** Writes cell i's new content into the bound code: the LAST accepted
       * character wins (a second keystroke in a full cell replaces it), an empty
       * edit clears the position; gaps stay as spaces, trailing gaps trimmed.
       */
-    private def writeCell(i: Int, raw: String, current: String, ref: Maybe[SignalRef[String]])(using Frame): Any < Async =
+    private def writeCell(i: Int, raw: String, current: String, ref: Maybe[SignalRef[String]])(using Frame): UI.Action =
         val accepted = (if integerOnlyFlag then raw.filter(_.isDigit) else raw).takeRight(1)
         val padded   = current.padTo(lengthV, ' ').take(lengthV)
         val next     = padded.updated(i, if accepted.isEmpty then ' ' else accepted.head).mkString.reverse.dropWhile(_ == ' ').reverse
-        val write: Any < Async = ref match
+        val write: UI.Action = ref match
             case Present(r) => r.set(next)
             case Absent     => ()
-        val fire: Any < Async = onChangeF match
+        val fire: UI.Action = onChangeF match
             case Present(f) => f(next)
             case Absent     => ()
         for
@@ -154,7 +154,7 @@ final case class InputOtp private (
         current: String,
         ref: Maybe[SignalRef[String]],
         cellIds: Maybe[List[String]],
-        focus: String => Any < Async
+        focus: String => UI.Action
     )(using Frame): UI =
         // Reactive-invalid gate (INSIDE the mount subscription — never around the
         // UI.mounted node): with a reactive slot set, re-render the cells + message
@@ -170,7 +170,7 @@ final case class InputOtp private (
         current: String,
         ref: Maybe[SignalRef[String]],
         cellIds: Maybe[List[String]],
-        focus: String => Any < Async
+        focus: String => UI.Action
     )(using Frame): UI =
         val cells: List[UI] = (0 until lengthV).toList.map { i =>
             val ch   = current.lift(i).filterNot(_ == ' ').map(_.toString).getOrElse("")
@@ -192,8 +192,8 @@ final case class InputOtp private (
                 cell = cell.onInput { s =>
                     // A digit landed → advance to the next cell via focusId; the
                     // last cell and an empty edit stay put.
-                    val accepted             = (if integerOnlyFlag then s.filter(_.isDigit) else s).takeRight(1)
-                    val advance: Any < Async = cellIds match
+                    val accepted           = (if integerOnlyFlag then s.filter(_.isDigit) else s).takeRight(1)
+                    val advance: UI.Action = cellIds match
                         case Present(ids) if accepted.nonEmpty && i + 1 < lengthV => focus(ids(i + 1))
                         case _                                                    => ()
                     writeCell(i, s, current, ref).andThen(advance)
