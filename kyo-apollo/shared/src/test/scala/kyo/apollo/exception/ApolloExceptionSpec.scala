@@ -7,6 +7,7 @@ import kyo.KyoException
 import kyo.Present
 import kyo.apollo.api.CompiledField
 import kyo.apollo.api.CompiledNamedType
+import kyo.apollo.api.GraphQLError
 import kyo.apollo.cache.normalized.api.CacheKey
 import kyo.apollo.cache.normalized.api.FieldKey
 import kyo.apollo.json.Json
@@ -193,6 +194,37 @@ class ApolloExceptionSpec extends kyo.test.Test[Any]:
                 assert(response.hasErrors)
             }
         }
+    }
+
+    "ApolloException.Unauthenticated" - {
+
+        def unauthenticated(failure: Any): Boolean =
+            failure match
+                case ApolloException.Unauthenticated(_) => true
+                case _                                  => false
+
+        "matches an HTTP 401" in {
+            assert(unauthenticated(ApolloHttpException(401, HttpHeaders.empty, "unauthorized")))
+            assert(!unauthenticated(ApolloHttpException(403, HttpHeaders.empty, "forbidden")))
+        }
+
+        "matches a GraphQL error whose extensions code is UNAUTHENTICATED" in {
+            val denied = GraphQLError("not signed in", extensions = Map("code" -> Json.JStr("UNAUTHENTICATED")))
+            val other  = GraphQLError("no such user", extensions = Map("code" -> Json.JStr("NOT_FOUND")))
+            assert(unauthenticated(ApolloGraphQLException(Chunk(other, denied))))
+            assert(!unauthenticated(ApolloGraphQLException(Chunk(other))))
+        }
+
+        "matches nothing else, a value that is no Apollo failure included" in {
+            assert(!unauthenticated(ApolloNetworkException()))
+            assert(!unauthenticated("UNAUTHENTICATED"))
+        }
+    }
+
+    "GraphQLError.code reads extensions.code when it is a string" in {
+        assert(GraphQLError("x", extensions = Map("code" -> Json.JStr("FORBIDDEN"))).code == Present("FORBIDDEN"))
+        assert(GraphQLError("x", extensions = Map("code" -> Json.JInt(7L))).code == Absent)
+        assert(GraphQLError("x").code == Absent)
     }
 end ApolloExceptionSpec
 

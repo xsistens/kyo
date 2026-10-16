@@ -34,17 +34,18 @@ import kyo.apollo.exception.ApolloException
   */
 final class PreloadedQuery[D] private[apollo] (val state: Signal[QueryState[D]])(using CanEqual[D, D]):
 
-    /** Suspend until the first settled data, then follow (`useReadQuery`). `onUpdateFailure` picks what a
-      * failure AFTER that first data does: escalate through node-scope supervision (the default) or report
-      * it to the app's notice sink while the last data stays on screen. See [[kyo.apollo.UpdateFailure]].
+    /** Suspend until the first settled data, then follow (`useReadQuery`). A failure AFTER that first data
+      * goes to the `onFailure` rules around the call, and `otherwise` is what it does when none matches:
+      * escalate into the enclosing mount's error view, or notify while the last data stays on screen. See
+      * [[dataSignal]].
       */
-    def read(onUpdateFailure: UpdateFailure)(using
+    def read(otherwise: UI.Reaction)(using
         Frame
     ): Signal[D] < (Async & Abort[ApolloException] & Scope) =
-        state.dataSignal(onUpdateFailure)
+        state.dataSignal(otherwise)
 
-    /** [[read]] with the default policy, [[UpdateFailure.Escalate]]: kept as its own overload so the
-      * common point-free form stays `preloaded.read`.
+    /** [[read]] that escalates a failed update no rule matches: kept as its own overload so the common
+      * point-free form stays `preloaded.read`.
       */
     def read(using Frame): Signal[D] < (Async & Abort[ApolloException] & Scope) =
         state.dataSignal
