@@ -78,7 +78,7 @@ final case class Drawer private (
     preventFocusRestoreFlag: Boolean = false,
     accessibleNameV: Maybe[TextValue] = Absent,
     accessibleNameRefV: Maybe[String] = Absent,
-    onCloseEff: Maybe[Any < Async] = Absent,
+    onCloseEff: Maybe[UI.Action] = Absent,
     kids: List[UI] = Nil
 ) extends Node, HasAccessibleNameRef:
     type Self = Drawer
@@ -127,8 +127,8 @@ final case class Drawer private (
       * mask click) — after the `open` ref is written to `false`. External ref
       * writes do NOT fire it.
       */
-    def onClose(action: => Any < Async)(using Frame): Drawer =
-        copy(onCloseEff = Present(Sync.defer(action)))
+    def onClose(action: => UI.Action)(using Frame): Drawer =
+        copy(onCloseEff = Present(Callback(action)))
 
     /** Adds content children. */
     def apply(cs: UI*): Drawer = copy(kids = kids ++ cs)
@@ -138,7 +138,7 @@ final case class Drawer private (
             case Absent       => UI.empty
             case Present(ref) =>
                 // Every internal close path funnels through here: ref write, then callback.
-                val close: Any < Async =
+                val close: UI.Action =
                     onCloseEff match
                         case Present(e) => ref.set(false).map(_ => e)
                         case Absent     => ref.set(false)

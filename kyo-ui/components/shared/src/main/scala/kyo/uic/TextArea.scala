@@ -28,9 +28,9 @@ final case class TextArea private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
-    onInputF: Maybe[String => Any < Async] = Absent,
-    onChangeF: Maybe[String => Any < Async] = Absent,
-    onBlurF: Maybe[String => Any < Async] = Absent,
+    onInputF: Maybe[String => UI.Action] = Absent,
+    onChangeF: Maybe[String => UI.Action] = Absent,
+    onBlurF: Maybe[String => UI.Action] = Absent,
     extraClassesV: List[String] = Nil,
     idV: Maybe[String] = Absent
 ) extends Node, TextFormControl, HasPlaceholder, HasAccessibleNameRef:
@@ -99,13 +99,13 @@ final case class TextArea private (
     private[uic] def withAccessibleName(v: Maybe[TextValue]): TextArea = copy(accNameV = v)
     private[uic] def withAccessibleNameRef(v: Maybe[String]): TextArea = copy(accNameRefV = v)
 
-    def onInput(f: String => Any < Async): TextArea  = copy(onInputF = Present(f))
-    def onChange(f: String => Any < Async): TextArea = copy(onChangeF = Present(f))
+    def onInput(f: String => UI.Action)(using Frame): TextArea  = copy(onInputF = Present(Callback.of(f)))
+    def onChange(f: String => UI.Action)(using Frame): TextArea = copy(onChangeF = Present(Callback.of(f)))
 
     /** Fires on focus loss with the field's current value — unlike onChange it
       * fires even when the value was not edited. The validation layer's Blur trigger.
       */
-    def onBlur(f: String => Any < Async): TextArea = copy(onBlurF = Present(f))
+    def onBlur(f: String => UI.Action)(using Frame): TextArea = copy(onBlurF = Present(Callback.of(f)))
 
     private[uic] def render(using Frame): UI =
         (invalidV.dynSig, invalidMsgDynV) match

@@ -77,9 +77,9 @@ final case class MultiSelect[A] private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
-    onChangeF: Maybe[Set[String] => Any < Async] = Absent,
+    onChangeF: Maybe[Set[String] => UI.Action] = Absent,
     idV: Maybe[String] = Absent,
-    onBlurF: Maybe[Set[String] => Any < Async] = Absent
+    onBlurF: Maybe[Set[String] => UI.Action] = Absent
 ) extends Node, MultiSelectFormControl, HasEmptyContent, HasTooltip, HasPlaceholder, HasAccessibleNameRef:
     type Self = MultiSelect[A]
 
@@ -208,14 +208,14 @@ final case class MultiSelect[A] private (
     /** Fired with the FULL updated key set after every selection change (toggle,
       * select-all, chip remove, clear).
       */
-    def onChange(f: Set[String] => Any < Async): MultiSelect[A] = copy(onChangeF = Present(f))
+    def onChange(f: Set[String] => UI.Action)(using Frame): MultiSelect[A] = copy(onChangeF = Present(Callback.of(f)))
 
     /** Fires on focus loss (native `blur`) with the current selection — unlike
       * `onChange` it fires even when nothing was changed. The form-validation layer
       * wires its `Blur` trigger here.
       */
     @targetName("onBlurKeys")
-    def onBlur(f: Set[String] => Any < Async): MultiSelect[A] = copy(onBlurF = Present(f))
+    def onBlur(f: Set[String] => UI.Action)(using Frame): MultiSelect[A] = copy(onBlurF = Present(Callback.of(f)))
 
     /** Every selectable option in render order, groups flattened away. The value
       * binding, the key-collision check, select-all and the keyboard all work on
@@ -287,14 +287,14 @@ final case class MultiSelect[A] private (
             case Absent       => f(Set.empty)
 
     /** Writes `next` into the bound set and fires `onChange` with it. */
-    private def write(next: Set[String])(using Frame): Any < Async =
+    private def write(next: Set[String])(using Frame): UI.Action =
         for
             _ <- valueRef match
                 case Present(r) => r.set(next)
-                case Absent     => (): Any < Async
+                case Absent     => (): UI.Action
             _ <- onChangeF match
                 case Present(g) => g(next)
-                case Absent     => (): Any < Async
+                case Absent     => (): UI.Action
         yield ()
 
     private def body(current: Set[String], st: Maybe[State])(using Frame): UI =
@@ -319,7 +319,7 @@ final case class MultiSelect[A] private (
         val selected = items.filter(a => current.contains(key(a)))
 
         // Toggles one option key — the panel STAYS OPEN (Prime's multiselect pick).
-        def toggleOption(a: A): Any < Async =
+        def toggleOption(a: A): UI.Action =
             val k = key(a)
             write(if current.contains(k) then current - k else current + k)
 
@@ -333,14 +333,14 @@ final case class MultiSelect[A] private (
             if sel >= 0 then sel else items.indexWhere(a => !isOptionDisabled(a))
 
         // Opens with a fresh query and the highlight on the first selected option.
-        def openPanel(s: State): Any < Async =
+        def openPanel(s: State): UI.Action =
             for
                 _ <- s.q.set("")
                 _ <- s.hi.set(openHighlight)
                 _ <- s.open.set(true)
             yield ()
 
-        def toggle(s: State): Any < Async =
+        def toggle(s: State): UI.Action =
             if s.isOpen then s.open.set(false) else openPanel(s)
 
         // === closed trigger ======================================================
@@ -397,7 +397,7 @@ final case class MultiSelect[A] private (
         val labelContainerUI: UI = lblContainer(toChild(labelUI))
 
         // Explicitly typed effect (the untyped-match Any-inference trap).
-        val clearEffect: Any < Async =
+        val clearEffect: UI.Action =
             st match
                 case Present(_) => write(Set.empty)
                 case Absent     => ()
@@ -527,7 +527,7 @@ final case class MultiSelect[A] private (
       * unchecking clears the selection entirely. Read by the header checkbox and by the chord that
       * reaches it from the keyboard, which is why it is a method rather than a local.
       */
-    private def toggleAllOf(current: Set[String], shown: Seq[A])(using Frame): Any < Async =
+    private def toggleAllOf(current: Set[String], shown: Seq[A])(using Frame): UI.Action =
         if isAllSelected(current, shown) then write(Set.empty)
         else write(shown.filterNot(isOptionDisabled).map(key).toSet)
 
@@ -536,7 +536,7 @@ final case class MultiSelect[A] private (
       */
     private def toggleAllId(base: String): String = s"$base-all"
 
-    private def overlayPanel(current: Set[String], s: State, toggleOption: A => Any < Async)(using Frame): UI =
+    private def overlayPanel(current: Set[String], s: State, toggleOption: A => UI.Action)(using Frame): UI =
         val (shownGroups, shown, navigable, hiEff) = shownState(s)
 
         val allSelected = isAllSelected(current, shown)
@@ -680,11 +680,11 @@ final case class MultiSelect[A] private (
         navigable: List[Int],
         hiEff: Int,
         s: State,
-        toggleOption: A => Any < Async,
-        toggleAll: Any < Async
+        toggleOption: A => UI.Action,
+        toggleAll: UI.Action
     )(
         e: KeyboardEvent
-    )(using Frame): Any < Async =
+    )(using Frame): UI.Action =
         val caretOwns     = filtering && (e.key == Keyboard.Space || e.key.charValue.isDefined)
         val fromToggleAll = s.idBase.exists(b => e.targetId.contains(toggleAllId(b)))
         val selectsAll    = showToggleAllFlag && (e.modifiers.ctrl || e.modifiers.meta) &&
@@ -699,7 +699,7 @@ final case class MultiSelect[A] private (
             ListNav.onKey(navigable, hiEff, e.key, wrap = false) match
                 case Present(step) if step.dismiss => s.open.set(false)
                 case Present(step)                 =>
-                    val toggled: Any < Async =
+                    val toggled: UI.Action =
                         if step.activate && shown.isDefinedAt(step.focus) then toggleOption(shown(step.focus)) else ()
                     s.hi.set(step.focus).andThen(toggled)
                 case Absent =>

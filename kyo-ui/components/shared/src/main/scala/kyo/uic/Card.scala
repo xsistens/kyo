@@ -22,7 +22,7 @@ final case class Card private (
     headerAvatarV: Maybe[UI] = Absent,
     headerActionV: Maybe[UI] = Absent,
     headerInteractiveFlag: Boolean = false,
-    onHeaderClickEff: Maybe[Any < Async] = Absent,
+    onHeaderClickEff: Maybe[UI.Action] = Absent,
     customHeaderV: Maybe[UI] = Absent,
     footerV: Maybe[UI] = Absent,
     accessibleNameV: Maybe[TextValue] = Absent,
@@ -55,8 +55,8 @@ final case class Card private (
     def interactive(v: Boolean): Card = copy(headerInteractiveFlag = v)
 
     /** Runs `action` when the interactive caption row is activated. Implies [[interactive]]. */
-    def onHeaderClick(action: => Any < Async)(using Frame): Card =
-        copy(onHeaderClickEff = Present(Sync.defer(action)), headerInteractiveFlag = true)
+    def onHeaderClick(action: => UI.Action)(using Frame): Card =
+        copy(onHeaderClickEff = Present(Callback(action)), headerInteractiveFlag = true)
 
     /** Custom header slot rendered as `div.p-card-header` above the body (Prime's
       * header slot — typically an image or free-form UI).

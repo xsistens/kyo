@@ -66,14 +66,14 @@ end FormControl
 /** A `String`-valued text field: two-way value binding plus a focus-loss trigger. */
 trait TextFormControl extends FormControl:
     def value(ref: SignalRef[String]): Self
-    def onBlur(f: String => Any < Async): Self
+    def onBlur(f: String => UI.Action)(using Frame): Self
 
 /** A `Boolean`-valued field (checkbox / switch / radio): checked binding plus
   * focus-loss. `onBlur` reports the field's current checked state.
   */
 trait BooleanFormControl extends FormControl:
     def checked(ref: SignalRef[Boolean]): Self
-    def onBlur(f: Boolean => Any < Async): Self
+    def onBlur(f: Boolean => UI.Action)(using Frame): Self
 
 /** A `Double`-valued numeric control (InputNumber, Slider, Knob, Rating): two-way value
   * binding, a focus-loss trigger reporting the current number, and a whole-number
@@ -94,7 +94,7 @@ trait BooleanFormControl extends FormControl:
 trait NumberFormControl extends FormControl:
     @targetName("valueNumber")
     def value(v: Double | Signal[Double]): Self
-    def onBlur(f: Double => Any < Async): Self
+    def onBlur(f: Double => UI.Action)(using Frame): Self
     def integer(v: Boolean): Self
 end NumberFormControl
 
@@ -113,7 +113,7 @@ trait MultiSelectFormControl extends FormControl:
     @targetName("valueKeys")
     def value(ref: SignalRef[Set[String]]): Self
     @targetName("onBlurKeys")
-    def onBlur(f: Set[String] => Any < Async): Self
+    def onBlur(f: Set[String] => UI.Action)(using Frame): Self
 end MultiSelectFormControl
 
 /** A file-picking control ([[FileUpload]]) bound to the picked files' metadata. The
@@ -123,4 +123,4 @@ end MultiSelectFormControl
   */
 trait FileFormControl extends FormControl:
     def value(ref: SignalRef[Seq[UI.FilePayload]]): Self
-    def onBlur(f: Seq[UI.FilePayload] => Any < Async): Self
+    def onBlur(f: Seq[UI.FilePayload] => UI.Action)(using Frame): Self

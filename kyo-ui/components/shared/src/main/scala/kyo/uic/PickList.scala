@@ -164,7 +164,7 @@ final case class PickList[A] private (
       * instead of by the attribute. The whole control being `disabled` is different: nothing about
       * that changes under the reader, so it stays native.
       */
-    private def moveButton(glyph: IconGlyph, name: String, off: Boolean, act: => Any < Async)(using Frame): UI =
+    private def moveButton(glyph: IconGlyph, name: String, off: Boolean, act: => UI.Action)(using Frame): UI =
         var b = Button()
             .icon(glyph)
             .severity(Severity.Secondary)
@@ -200,7 +200,7 @@ final case class PickList[A] private (
             hi: Int
         ): UI.KeyboardEvent => Maybe[Listbox.HostKey] = e =>
             ListReorder.onKey(e.key, e.modifiers, Present(toward)).map { move =>
-                val eff: Any < Async = move match
+                val eff: UI.Action = move match
                     case ListReorder.Move.Step(down) =>
                         reorder(ref, selRef, if down then ListReorder.moveDown else ListReorder.moveUp)
                     case ListReorder.Move.Edge(down) =>
@@ -313,8 +313,8 @@ final case class PickList[A] private (
         ref: Maybe[SignalRef[Seq[A]]],
         xs: Seq[A],
         hi: Int,
-        eff: Any < Async
-    )(using Frame): Any < Async =
+        eff: UI.Action
+    )(using Frame): UI.Action =
         (cursor, ref) match
             case (Present(c), Present(r)) if xs.isDefinedAt(hi) =>
                 val id = keyOf(xs(hi))
@@ -334,7 +334,7 @@ final case class PickList[A] private (
         ref: Maybe[SignalRef[Seq[A]]],
         selRef: Maybe[SignalRef[Set[String]]],
         move: (List[A], A => Boolean) => List[A]
-    )(using Frame): Any < Async =
+    )(using Frame): UI.Action =
         (ref, selRef) match
             case (Present(r), Present(sr)) =>
                 for
@@ -350,7 +350,7 @@ final case class PickList[A] private (
         from: Maybe[SignalRef[Seq[A]]],
         to: Maybe[SignalRef[Seq[A]]],
         selRef: Maybe[SignalRef[Set[String]]]
-    )(using Frame): Any < Async =
+    )(using Frame): UI.Action =
         (from, to, selRef) match
             case (Present(f), Present(t), Present(sr)) =>
                 for
@@ -368,7 +368,7 @@ final case class PickList[A] private (
         from: Maybe[SignalRef[Seq[A]]],
         to: Maybe[SignalRef[Seq[A]]],
         selRef: Maybe[SignalRef[Set[String]]]
-    )(using Frame): Any < Async =
+    )(using Frame): UI.Action =
         (from, to, selRef) match
             case (Present(f), Present(t), Present(sr)) =>
                 for

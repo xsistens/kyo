@@ -70,7 +70,7 @@ final private[uic] case class NavState[A](
     idPrefix: String = "",
     rows: Vector[A] = Vector.empty[A],
     page: Int = 1,
-    focus: String => Any < Async = (_: String) => ()
+    focus: String => UI.Action = (_: String) => ()
 ):
     private[uic] def indexOf(key: String, keyOf: A => String): Maybe[Int] =
         val i = rows.indexWhere(r => keyOf(r) == key)
@@ -564,11 +564,11 @@ final case class DataTable[A] private (
     selectionModeV: SelectionMode = SelectionMode.None,
     selectedBinding: Maybe[ReactiveValue[Set[String]]] = Absent,
     metaKeyFlag: Boolean = false,
-    onSelectionF: Maybe[Set[String] => Any < Async] = Absent,
+    onSelectionF: Maybe[Set[String] => UI.Action] = Absent,
     selectableF: Maybe[A => Boolean] = Absent,
     selectedCellsRef: Maybe[SignalRef[Set[CellPath]]] = Absent,
     contextRowRef: Maybe[SignalRef[Maybe[String]]] = Absent,
-    onRowContextF: Maybe[RowContext[A] => Any < Async] = Absent,
+    onRowContextF: Maybe[RowContext[A] => UI.Action] = Absent,
     csvSeparatorV: String = ",",
     rowClassF: Maybe[A => Seq[String]] = Absent,
     expandedRef: Maybe[SignalRef[Set[String]]] = Absent,
@@ -580,7 +580,7 @@ final case class DataTable[A] private (
     gridlinesFlag: Boolean = false,
     sizeV: Size = Size.Normal,
     emptyContentV: Maybe[EmptyContent] = Absent,
-    onRowClickF: Maybe[String => Any < Async] = Absent,
+    onRowClickF: Maybe[String => UI.Action] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
     headerV: Maybe[UI] = Absent,
@@ -598,8 +598,8 @@ final case class DataTable[A] private (
     editingCellRef: Maybe[SignalRef[Maybe[CellPath]]] = Absent,
     rowsRefV: Maybe[SignalRef[Seq[A]]] = Absent,
     cellNavV: Maybe[Boolean] = Absent,
-    onCellChangedF: Maybe[CellChange[A] => Any < Async] = Absent,
-    onRowChangedF: Maybe[RowChange[A] => Any < Async] = Absent,
+    onCellChangedF: Maybe[CellChange[A] => UI.Action] = Absent,
+    onRowChangedF: Maybe[RowChange[A] => UI.Action] = Absent,
     translatorV: ErrorTranslator = ErrorTranslator.default,
     hiddenPaths: List[(List[String], Column[A, FlatOnly])] = Nil,
     columnFiltersRef: Maybe[SignalRef[Map[List[String], ColumnFilter]]] = Absent,
@@ -608,7 +608,7 @@ final case class DataTable[A] private (
     resizeModeV: ColumnResizeMode = ColumnResizeMode.Fit,
     columnOrderRef: Maybe[SignalRef[List[List[String]]]] = Absent,
     reorderRowsFlag: Boolean = false,
-    onRowReorderF: Maybe[RowMove[A] => Any < Async] = Absent,
+    onRowReorderF: Maybe[RowMove[A] => UI.Action] = Absent,
     orderedPaths: List[List[String]] = Nil,
     idV: Maybe[String] = Absent,
     anchorRef: Maybe[SignalRef[Maybe[String]]] = Absent
@@ -974,7 +974,7 @@ final case class DataTable[A] private (
       * The menu is [[kyo.uic.ContextMenu]], which wraps the table and opens where the click was;
       * a menu item that runs later reads what this handler put in a ref of yours.
       */
-    def onRowContextMenu(f: RowContext[A] => Any < Async): DataTable[A] = copy(onRowContextF = Present(f))
+    def onRowContextMenu(f: RowContext[A] => UI.Action)(using Frame): DataTable[A] = copy(onRowContextF = Present(Callback.of(f)))
 
     /** The field separator [[csv]] writes (Prime's `csvSeparator`, and a comma by default). */
     def csvSeparator(v: String): DataTable[A] = copy(csvSeparatorV = v)
@@ -1195,13 +1195,13 @@ final case class DataTable[A] private (
       * It does not fire when the value did not change, when the text will not parse, or
       * when a rule refuses it. A column-scoped variant is [[Column.onValueChanged]].
       */
-    def onCellValueChanged(f: CellChange[A] => Any < Async): DataTable[A] = copy(onCellChangedF = Present(f))
+    def onCellValueChanged(f: CellChange[A] => UI.Action)(using Frame): DataTable[A] = copy(onCellChangedF = Present(Callback.of(f)))
 
     /** Runs after a committed row edit, once, with the row before and after every editable
       * column's write. The per-cell [[onCellValueChanged]] fires for each column that
       * actually changed, before this.
       */
-    def onRowValueChanged(f: RowChange[A] => Any < Async): DataTable[A] = copy(onRowChangedF = Present(f))
+    def onRowValueChanged(f: RowChange[A] => UI.Action)(using Frame): DataTable[A] = copy(onRowChangedF = Present(Callback.of(f)))
 
     /** Lets the reader drag a row to another place, Prime's `reorderableRows`.
       *
@@ -1225,7 +1225,7 @@ final case class DataTable[A] private (
       * With [[rows(ref:SignalRef[Seq[A]])*]] bound this is a notification, the table has
       * already stored the list; without it, it is the only exit.
       */
-    def onRowReorder(f: RowMove[A] => Any < Async): DataTable[A] = copy(onRowReorderF = Present(f))
+    def onRowReorder(f: RowMove[A] => UI.Action)(using Frame): DataTable[A] = copy(onRowReorderF = Present(Callback.of(f)))
 
     /** Turns a refused commit's [[kyo.uic.form.FieldError]] into the message shown under
       * the open editor. Defaults to `ErrorTranslator.default`, which shows the error's own
@@ -1276,7 +1276,7 @@ final case class DataTable[A] private (
     private[uic] def withEmptyContent(v: Maybe[EmptyContent]): DataTable[A] = copy(emptyContentV = v)
 
     /** Fired with the row key after any selection write from a row click. */
-    def onRowClick(f: String => Any < Async): DataTable[A] = copy(onRowClickF = Present(f))
+    def onRowClick(f: String => UI.Action)(using Frame): DataTable[A] = copy(onRowClickF = Present(Callback.of(f)))
 
     /** Runs with the selection the table WORKED OUT, whenever a click changes it.
       *
@@ -1291,7 +1291,7 @@ final case class DataTable[A] private (
       * select-all header. With a two-way binding the ref is written first and this fires after,
       * so both forms see the same value and a caller may bind either or both.
       */
-    def onSelectionChange(f: Set[String] => Any < Async): DataTable[A] = copy(onSelectionF = Present(f))
+    def onSelectionChange(f: Set[String] => UI.Action)(using Frame): DataTable[A] = copy(onSelectionF = Present(Callback.of(f)))
 
     private[uic] def withAccessibleName(v: Maybe[TextValue]): DataTable[A] = copy(accNameV = v)
     private[uic] def withAccessibleNameRef(v: Maybe[String]): DataTable[A] = copy(accNameRefV = v)
@@ -1891,7 +1891,7 @@ final case class DataTable[A] private (
       */
     private def beginReorder(from: Int, until: Int, stops: List[Int], e: PointerEvent, size: SizeState, order: OrderState)(
         using Frame
-    ): Any < Async =
+    ): UI.Action =
         order.drag match
             case Present(ref) =>
                 for
@@ -1907,7 +1907,7 @@ final case class DataTable[A] private (
       * from re-rendering the table on every animation frame the way a resize has to: what
       * the reader sees is one line, and it moves when it moves to another boundary.
       */
-    private def dragReorder(e: PointerEvent, order: OrderState)(using Frame): Any < Async =
+    private def dragReorder(e: PointerEvent, order: OrderState)(using Frame): UI.Action =
         order.drag match
             case Present(ref) =>
                 ref.get.map {
@@ -1935,13 +1935,13 @@ final case class DataTable[A] private (
       * browser still owes this cell the click that ends the press, and a header that
       * sorts would take it.
       */
-    private def endReorder(order: OrderState)(using Frame): Any < Async =
+    private def endReorder(order: OrderState)(using Frame): UI.Action =
         (order.drag, columnOrderRef) match
             case (Present(ref), Present(target)) =>
                 ref.get.map {
                     case Present(d) if d.moved =>
-                        val next               = reorderedPaths(d)
-                        val write: Any < Async = if next == effectiveOrder then () else target.set(next)
+                        val next             = reorderedPaths(d)
+                        val write: UI.Action = if next == effectiveOrder then () else target.set(next)
                         write.andThen(ref.set(Present(ColumnDrag(d.from, d.until, d.target, d.startX, done = true))))
                     case _ => ref.set(Absent)
                 }
@@ -1981,7 +1981,7 @@ final case class DataTable[A] private (
       * go over. It is one round trip for the whole page rather than one per row, which is
       * what makes geometry over a list affordable at all.
       */
-    private def beginRowMove(at: Int, e: PointerEvent, move: MoveState[A])(using Frame): Any < Async =
+    private def beginRowMove(at: Int, e: PointerEvent, move: MoveState[A])(using Frame): UI.Action =
         move.drag match
             case Present(ref) =>
                 val ids = (move.base until move.base + move.count).toList.map(DataTable.rowId(move.idPrefix, _))
@@ -1998,7 +1998,7 @@ final case class DataTable[A] private (
       * As with a column, the state is written only when the answer CHANGES, so a drag
       * re-renders the table once per row crossed rather than once per animation frame.
       */
-    private def dragRowMove(e: PointerEvent, move: MoveState[A])(using Frame): Any < Async =
+    private def dragRowMove(e: PointerEvent, move: MoveState[A])(using Frame): UI.Action =
         move.drag match
             case Present(ref) =>
                 ref.get.map {
@@ -2016,7 +2016,7 @@ final case class DataTable[A] private (
       * travelled. A completed drag is left parked rather than cleared, because the browser
       * still owes a click, and a row that selects would take it.
       */
-    private def endRowMove(move: MoveState[A])(using Frame): Any < Async =
+    private def endRowMove(move: MoveState[A])(using Frame): UI.Action =
         move.drag match
             case Present(ref) =>
                 ref.get.map {
@@ -2030,19 +2030,19 @@ final case class DataTable[A] private (
       * either way. A drop back where the row came from, or on the boundary just below it,
       * moves nothing and is not a change.
       */
-    private def writeRowMove(d: RowDrag, move: MoveState[A])(using Frame): Any < Async =
+    private def writeRowMove(d: RowDrag, move: MoveState[A])(using Frame): UI.Action =
         if d.target == d.from || d.target == d.from + 1 then ()
         else
             // The list is read at DROP time. This one writes its result back into the caller's ref,
             // so a stale copy does not merely display wrongly: it would store a list missing
             // whatever arrived while the row was being dragged.
             bodyViewNow.map { v =>
-                val next               = DataTable.moveBlock(v.moveAll.toList, d.from, d.from + 1, d.target)
-                val to                 = if d.target > d.from then d.target - 1 else d.target
-                val store: Any < Async = rowsRefV match
+                val next             = DataTable.moveBlock(v.moveAll.toList, d.from, d.from + 1, d.target)
+                val to               = if d.target > d.from then d.target - 1 else d.target
+                val store: UI.Action = rowsRefV match
                     case Present(ref) => ref.set(next)
                     case Absent       => ()
-                val notify: Any < Async = onRowReorderF match
+                val notify: UI.Action = onRowReorderF match
                     case Present(f) => f(RowMove(d.from, to, next))
                     case Absent     => ()
                 store.andThen(notify)
@@ -2053,7 +2053,7 @@ final case class DataTable[A] private (
     /** Takes the click a finished drag still owes and drops it, so the row the pointer
       * ended over is not also selected.
       */
-    private def clearRowMove(move: MoveState[A])(using Frame): Any < Async =
+    private def clearRowMove(move: MoveState[A])(using Frame): UI.Action =
         move.drag match
             case Present(ref) => ref.set(Absent)
             case Absent       => ()
@@ -2071,13 +2071,13 @@ final case class DataTable[A] private (
 
     private def headerClick(path: List[String], e: MouseEvent, interactive: Set[List[String]], order: OrderState)(using
         Frame
-    ): Any < Async =
+    ): UI.Action =
         (order.drag, order.held) match
             case (Present(ref), Present(d)) if d.done => ref.set(Absent)
             case _                                    => toggleSort(path, e, interactive)
 
     /** Swallows the click a finished drag left behind, and nothing else. */
-    private def clearDrag(order: OrderState)(using Frame): Any < Async =
+    private def clearDrag(order: OrderState)(using Frame): UI.Action =
         (order.drag, order.held) match
             case (Present(ref), Present(d)) if d.done => ref.set(Absent)
             case _                                    => ()
@@ -2240,7 +2240,7 @@ final case class DataTable[A] private (
         idPrefix: String,
         drafts: Map[List[String], SignalRef[String]],
         errRef: SignalRef[Maybe[(CellPath, FieldError)]],
-        focus: String => Any < Async,
+        focus: String => UI.Action,
         menus: Map[List[String], SignalRef[Boolean]] = Map.empty,
         measure: Seq[String] => Chunk[Rect] < Async = (_: Seq[String]) => Chunk.empty,
         held: Maybe[SignalRef[Maybe[ColumnGrab]]] = Absent,
@@ -3780,9 +3780,9 @@ final case class DataTable[A] private (
       * drop what was selected before.
       */
     private def selectAllCell(inFilter: List[A], sel: Set[String], rows: Int)(using Frame): Ast.Element =
-        val keys                = inFilter.filter(selectableAt).map(keyOf)
-        val allSelected         = keys.nonEmpty && keys.forall(sel.contains)
-        val toggle: Any < Async =
+        val keys              = inFilter.filter(selectableAt).map(keyOf)
+        val allSelected       = keys.nonEmpty && keys.forall(sel.contains)
+        val toggle: UI.Action =
             currentValue(selectedBinding, Set.empty[String])
                 .map(cur => applySelection(if allSelected then cur -- keys else cur ++ keys))
         var cell = th.cssClass("p-datatable-header-cell")
@@ -3917,7 +3917,7 @@ final case class DataTable[A] private (
             cf.modes.map { m =>
                 var item = li.cssClass("p-datatable-filter-constraint").tabIndex(0)
                 if m == cur.mode then item = item.cssClass("p-datatable-filter-constraint-selected")
-                val pick: Any < Async = pickMode(path, cur, m, openRef)
+                val pick: UI.Action = pickMode(path, cur, m, openRef)
                 // An `li` is not a control either: the constraint list is a row of tab stops, and
                 // without this a reader could reach every one of them and pick none.
                 item.onClick(pick).onKeyDown(e => if activationOf(e).isDefined then pick else ())(m.label)
@@ -4080,7 +4080,7 @@ final case class DataTable[A] private (
       */
     private def openFilterMenu(cur: ColumnFilter, draft: SignalRef[ColumnFilter], openRef: SignalRef[Boolean])(using
         Frame
-    ): Any < Async =
+    ): UI.Action =
         openRef.get.map(was =>
             if was then openRef.set(false)
             else
@@ -4097,8 +4097,8 @@ final case class DataTable[A] private (
         d: ColumnFilter,
         draft: SignalRef[ColumnFilter],
         openRef: SignalRef[Boolean]
-    )(using Frame): Any < Async =
-        val write: Any < Async = columnFiltersRef match
+    )(using Frame): UI.Action =
+        val write: UI.Action = columnFiltersRef match
             case Present(ref) => ref.getAndUpdate(m => if d.active.isEmpty then m - path else m + (path -> d))
             case Absent       => ()
         write.andThen(openRef.set(false))
@@ -4112,8 +4112,8 @@ final case class DataTable[A] private (
         cf: CellFilter[A],
         draft: SignalRef[ColumnFilter],
         openRef: SignalRef[Boolean]
-    )(using Frame): Any < Async =
-        val write: Any < Async = columnFiltersRef match
+    )(using Frame): UI.Action =
+        val write: UI.Action = columnFiltersRef match
             case Present(ref) => ref.getAndUpdate(_ - path)
             case Absent       => ()
         write.andThen(draft.set(ColumnFilter.empty(cf.default))).andThen(openRef.set(false))
@@ -4123,7 +4123,7 @@ final case class DataTable[A] private (
       * filter, but it is still the column's own mode, so clearing the text and typing
       * again does not silently go back to "contains".
       */
-    private def writeFilter(path: List[String], mode: MatchMode, query: String)(using Frame): Any < Async =
+    private def writeFilter(path: List[String], mode: MatchMode, query: String)(using Frame): UI.Action =
         columnFiltersRef match
             case Present(ref) => ref.getAndUpdate(_ + (path -> ColumnFilter(query, mode)))
             case Absent       => ()
@@ -4133,8 +4133,8 @@ final case class DataTable[A] private (
         cur: ColumnFilter,
         mode: MatchMode,
         openRef: SignalRef[Boolean]
-    )(using Frame): Any < Async =
-        val write: Any < Async = columnFiltersRef match
+    )(using Frame): UI.Action =
+        val write: UI.Action = columnFiltersRef match
             case Present(ref) => ref.getAndUpdate(_ + (path -> ColumnFilter(cur.query, mode)))
             case Absent       => ()
         write.andThen(openRef.set(false))
@@ -4202,7 +4202,7 @@ final case class DataTable[A] private (
       * caller never gave one is as draggable as any other; what the reader grabs is what
       * the browser is currently showing.
       */
-    private def beginResize(i: Int, e: PointerEvent, size: SizeState)(using Frame): Any < Async =
+    private def beginResize(i: Int, e: PointerEvent, size: SizeState)(using Frame): UI.Action =
         size.grab match
             case Present(ref) =>
                 // Under `Expand` the drag moves one column, so there is no neighbour to
@@ -4226,7 +4226,7 @@ final case class DataTable[A] private (
       */
     private def dragResize(path: List[String], next: Maybe[List[String]], e: PointerEvent, size: SizeState)(using
         Frame
-    ): Any < Async =
+    ): UI.Action =
         (size.grab, columnWidthsRef) match
             case (Present(g), Present(ref)) =>
                 g.get.map {
@@ -4330,7 +4330,7 @@ final case class DataTable[A] private (
       */
     private def toggleSort(path: List[String], e: MouseEvent, interactive: Set[List[String]])(using
         Frame
-    ): Any < Async =
+    ): UI.Action =
         sortRef match
             case Present(ref) =>
                 val multi = e.modifiers.ctrl || e.modifiers.meta
@@ -4514,7 +4514,7 @@ final case class DataTable[A] private (
         )
     end groupHeaderRow
 
-    private def toggleGroup(path: GroupPath)(using Frame): Any < Async =
+    private def toggleGroup(path: GroupPath)(using Frame): UI.Action =
         expandedGroupsRef match
             case Present(ref) => ref.getAndUpdate(cur => if cur.contains(path) then cur - path else cur + path)
             case Absent       => ()
@@ -4651,7 +4651,7 @@ final case class DataTable[A] private (
                 // Prime renders these as Buttons, and the extracted sheet carries no rules of
                 // its own for them, so the component is what gives them their look; the Prime
                 // class rides along as the hook a consumer's own CSS would reach for.
-                def btn(cls: String, glyph: IconGlyph, label: String, action: Any < Async): UI =
+                def btn(cls: String, glyph: IconGlyph, label: String, action: UI.Action): UI =
                     var b = Button()
                         .icon(glyph)
                         .variant(ButtonVariant.Text)
@@ -4671,7 +4671,7 @@ final case class DataTable[A] private (
                 // resolves `getElementById` the moment it lands, which can be before the
                 // insert. The row's first editable cell is a `td` that was already there,
                 // and it is where the keyboard would want to continue anyway.
-                val backToRow: Any < Async =
+                val backToRow: UI.Action =
                     editableLeaves.headOption match
                         case Some((path, _)) => focusCell(nav, CellPath(id, path))
                         case None            => ()
@@ -4709,7 +4709,7 @@ final case class DataTable[A] private (
         // press started on: the rows moved under the pointer. A row that would select takes
         // it and drops it, so the press cannot reach the next row the reader clicks.
         if rowInteractive then
-            def act(e: MouseEvent): Any < Async =
+            def act(e: MouseEvent): UI.Action =
                 // The drag's own ref, not the paint's copy of it: after a drop the browser still
                 // owes a click, and whether it is owed is a fact about now.
                 heldNow(move).map(h =>
@@ -4717,14 +4717,14 @@ final case class DataTable[A] private (
                 )
             // Enter and Space are a click with no pointer behind them, so they carry no
             // modifiers: a keyboard activation is always the plain kind.
-            val actPlain: Any < Async = act(MouseEvent(Absent, Modifiers.none))
+            val actPlain: UI.Action = act(MouseEvent(Absent, Modifiers.none))
             // A click that passed through a control of the reader's own is that control's, not the
             // row's: following a link in a cell, pressing the expander, starting a row edit. Without
             // this the row selects as well, and the control cannot decline the click for it — one
             // that navigates natively declares no kyo handler, so it has no `stopPropagation` to set
             // (and giving an anchor one costs it the middle click). The keyboard path below is
             // deliberately untouched: Enter on the ROW is the row's, whatever it contains.
-            val clicked: MouseEvent => Any < Async = e => if e.onControl then () else act(e)
+            val clicked: MouseEvent => UI.Action = e => if e.onControl then () else act(e)
             // The row's tab stop is this table's, not a control's, so Enter and Space are too.
             // A row being edited overwrites this handler below, which is the order that belongs:
             // while an editor is open Enter commits the row rather than re-selecting it.
@@ -4849,13 +4849,13 @@ final case class DataTable[A] private (
         end match
     end renderTr
 
-    private def toggleExpand(id: String)(using Frame): Any < Async =
+    private def toggleExpand(id: String)(using Frame): UI.Action =
         expandedRef match
             case Present(ref) => ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
             case Absent       => ()
 
     /** A click on a cell: replace the set with it, or toggle it in, by the mode. */
-    private def toggleCell(cell: CellPath)(using Frame): Any < Async =
+    private def toggleCell(cell: CellPath)(using Frame): UI.Action =
         selectedCellsRef match
             case Present(ref) if selectionModeV == SelectionMode.Single =>
                 ref.getAndUpdate(cur => if cur == Set(cell) then Set.empty else Set(cell))
@@ -4870,11 +4870,11 @@ final case class DataTable[A] private (
       * selected row the reader has since filtered off the screen is still part of what the menu
       * is being asked about.
       */
-    private def openRowContext(a: A, id: String)(using Frame): Any < Async =
-        val write: Any < Async = contextRowRef match
+    private def openRowContext(a: A, id: String)(using Frame): UI.Action =
+        val write: UI.Action = contextRowRef match
             case Present(ref) => ref.set(Present(id))
             case Absent       => ()
-        val fire: Any < Async = onRowContextF match
+        val fire: UI.Action = onRowContextF match
             case Present(f) =>
                 for
                     // Through the BINDING, not the ref: a menu over a one-way selection is asked
@@ -4894,17 +4894,17 @@ final case class DataTable[A] private (
       * the change, and a caller with a one-way binding has nothing BUT the callback. The ref is
       * written first so the two see the same value in the same order.
       */
-    private def applySelection(next: Set[String])(using Frame): Any < Async =
-        val write: Any < Async = selectedRef match
+    private def applySelection(next: Set[String])(using Frame): UI.Action =
+        val write: UI.Action = selectedRef match
             case Present(ref) => ref.set(next)
             case Absent       => ()
-        val tell: Any < Async = onSelectionF match
+        val tell: UI.Action = onSelectionF match
             case Present(f) => f(next)
             case Absent     => ()
         write.andThen(tell)
     end applySelection
 
-    private def toggleSelect(id: String)(using Frame): Any < Async =
+    private def toggleSelect(id: String)(using Frame): UI.Action =
         currentValue(selectedBinding, Set.empty[String]).map(cur =>
             applySelection(if cur.contains(id) then cur - id else cur + id)
         )
@@ -4979,8 +4979,8 @@ final case class DataTable[A] private (
       */
     private def openCell(cell: CellPath, row: A, c: Column[A, FlatOnly], seed: Maybe[String], edit: EditState)(
         using Frame
-    ): Any < Async =
-        val fill: Any < Async = (seed, edit.draftOf(cell.column)) match
+    ): UI.Action =
+        val fill: UI.Action = (seed, edit.draftOf(cell.column)) match
             case (Present(text), Present(ref)) => ref.set(text)
             case _                             => seedDraft(row, cell.column, c, edit)
         for
@@ -4992,7 +4992,7 @@ final case class DataTable[A] private (
     end openCell
 
     /** Carries an open edit into the cell Tab is taking focus to. */
-    private def openAt(pos: GridNav.Pos, nav: NavState[A], edit: EditState)(using Frame): Any < Async =
+    private def openAt(pos: GridNav.Pos, nav: NavState[A], edit: EditState)(using Frame): UI.Action =
         (rowAt(nav, pos), colAt(pos)) match
             case (Present(r), Present((path, c))) => openCell(CellPath(keyOf(r), path), r, c, Absent, edit)
             case _                                => ()
@@ -5019,12 +5019,12 @@ final case class DataTable[A] private (
     end editorId
 
     /** Puts focus back INTO an open editor, which is where a refused commit leaves it. */
-    private def focusEditor(nav: NavState[A], cell: CellPath)(using Frame): Any < Async =
+    private def focusEditor(nav: NavState[A], cell: CellPath)(using Frame): UI.Action =
         editorId(nav, cell) match
             case Present(id) => nav.focus(id)
             case Absent      => ()
 
-    private def focusCell(nav: NavState[A], cell: CellPath)(using Frame): Any < Async =
+    private def focusCell(nav: NavState[A], cell: CellPath)(using Frame): UI.Action =
         if !nav.on then ()
         else
             val col = leafPaths.indexWhere(_._1 == cell.column)
@@ -5046,7 +5046,7 @@ final case class DataTable[A] private (
         rowEdit: Boolean,
         nav: NavState[A],
         edit: EditState
-    )(e: KeyboardEvent)(using Frame): Any < Async =
+    )(e: KeyboardEvent)(using Frame): UI.Action =
         // The grid is read against the rows on the screen NOW: PageDown steps by a page height and
         // Down stops at the last row, and both are answers about a list this cell no longer owns.
         navNow(nav).map(live => onCellKeyAt(pos, cell, row, c, cellEdit, rowEdit, live, edit)(e))
@@ -5060,7 +5060,7 @@ final case class DataTable[A] private (
         rowEdit: Boolean,
         nav: NavState[A],
         edit: EditState
-    )(e: KeyboardEvent)(using Frame): Any < Async =
+    )(e: KeyboardEvent)(using Frame): UI.Action =
         GridNav.onKey(gridFor(nav), pos, cellEdit || rowEdit, e.key, e.modifiers) match
             case Absent        => ()
             case Present(step) =>
@@ -5078,15 +5078,15 @@ final case class DataTable[A] private (
                 // reader was and where the value they have to fix is. The cell would not
                 // do: it is the editor's container, so landing there is landing outside
                 // the field. Under Enter focus never left the editor at all.
-                def closing(closed: Boolean < Async): Boolean < Async =
+                def closing(closed: Boolean < (Async & Abort[Any])): Boolean < (Async & Abort[Any]) =
                     closed.map { ok =>
-                        val focus: Any < Async =
+                        val focus: UI.Action =
                             if ok && !isTab then focusCell(nav, cell)
                             else if !ok && isTab then focusEditor(nav, cell)
                             else ()
                         focus.andThen(ok)
                     }
-                val editStep: Boolean < Async = step.edit match
+                val editStep: Boolean < (Async & Abort[Any]) = step.edit match
                     case GridNav.EditOp.Keep       => true
                     case GridNav.EditOp.Open(seed) => openCell(cell, row, c, seed, edit).andThen(true)
                     case GridNav.EditOp.Commit     =>
@@ -5095,11 +5095,11 @@ final case class DataTable[A] private (
                     case GridNav.EditOp.Cancel =>
                         if rowEdit then closing(cancelRow(cell.row, edit).andThen(true))
                         else closing(cancelCell(edit).andThen(true))
-                val focusStep: Any < Async = step.focus match
+                val focusStep: UI.Action = step.focus match
                     case Present(to) if step.moveFocus => nav.focus(cellId(nav, to))
                     case Present(to)                   => if rowEdit then () else openAt(to, nav, edit)
                     case Absent                        => ()
-                val selectStep: Any < Async =
+                val selectStep: UI.Action =
                     // The grid's own key step, which is a selection with no pointer and no
                     // anchor behind it: the plain kind, whatever the modifier setting is.
                     if step.selectRow && rowInteractive then
@@ -5110,20 +5110,20 @@ final case class DataTable[A] private (
                     // cell clears the error, so moving anyway left the refusal invisible
                     // and the edit gone.
                     ok <- editStep
-                    _  <- (if ok then focusStep else ()): Any < Async
+                    _  <- (if ok then focusStep else ()): UI.Action
                     r  <- selectStep
                 yield r
                 end for
     end onCellKeyAt
 
     /** Puts a row into the editing set, or takes it out. */
-    private def setRowEditing(id: String, on: Boolean)(using Frame): Any < Async =
+    private def setRowEditing(id: String, on: Boolean)(using Frame): UI.Action =
         editingRowsRef match
             case Present(ref) => ref.getAndUpdate(cur => if on then cur + id else cur - id)
             case Absent       => ()
 
     /** Moves the cell editor, or clears it. */
-    private def setEditingCell(cell: Maybe[CellPath])(using Frame): Any < Async =
+    private def setEditingCell(cell: Maybe[CellPath])(using Frame): UI.Action =
         editingCellRef match
             case Present(ref) => ref.set(cell)
             case Absent       => ()
@@ -5132,21 +5132,21 @@ final case class DataTable[A] private (
       * editor opens on. The seed is the table's job precisely because the editor renders
       * in a pure position and cannot write into anything.
       */
-    private def seedDraft(row: A, path: List[String], c: Column[A, FlatOnly], edit: EditState)(using Frame): Any < Async =
+    private def seedDraft(row: A, path: List[String], c: Column[A, FlatOnly], edit: EditState)(using Frame): UI.Action =
         (c.editV, edit.draftOf(path)) match
             case (Present(ed), Present(ref)) => ref.set(ed.show(row))
             case _                           => ()
 
     /** Seeds every editable column of one row: row editing opens them all at once. */
-    private def seedRowDrafts(row: A, edit: EditState)(using Frame): Any < Async =
+    private def seedRowDrafts(row: A, edit: EditState)(using Frame): UI.Action =
         Kyo.foreachDiscard(editableLeaves)((path, c) => seedDraft(row, path, c, edit))
 
-    private def clearError(edit: EditState)(using Frame): Any < Async =
+    private def clearError(edit: EditState)(using Frame): UI.Action =
         edit.errorRef match
             case Present(ref) => ref.set(Absent)
             case Absent       => ()
 
-    private def setError(cell: CellPath, e: FieldError, edit: EditState)(using Frame): Any < Async =
+    private def setError(cell: CellPath, e: FieldError, edit: EditState)(using Frame): UI.Action =
         edit.errorRef match
             case Present(ref) => ref.set(Present((cell, e)))
             case Absent       => ()
@@ -5160,8 +5160,8 @@ final case class DataTable[A] private (
         c: Column[A, FlatOnly],
         nav: NavState[A],
         edit: EditState
-    )(using Frame): Any < Async =
-        val move: Any < Async =
+    )(using Frame): UI.Action =
+        val move: UI.Action =
             for
                 _ <- seedDraft(row, cell.column, c, edit)
                 _ <- clearError(edit)
@@ -5174,7 +5174,7 @@ final case class DataTable[A] private (
         openCellNow(edit).map {
             case Present(open) if open != cell =>
                 commitOpen(open, nav, edit).map { ok =>
-                    val next: Any < Async = if ok then move else ()
+                    val next: UI.Action = if ok then move else ()
                     next
                 }
             case _ => move
@@ -5187,7 +5187,7 @@ final case class DataTable[A] private (
       * column among the leaves. A path naming neither is a table that has changed under an
       * open editor, and there is nothing left to commit.
       */
-    private def commitOpen(open: CellPath, nav: NavState[A], edit: EditState)(using Frame): Boolean < Async =
+    private def commitOpen(open: CellPath, nav: NavState[A], edit: EditState)(using Frame): Boolean < (Async & Abort[Any]) =
         // Read live, because failing to find the row here does not report anything — it answers
         // "committed" and DROPS what the reader typed. A handler holding the rows as they were
         // would do that to any row that moved under an open editor.
@@ -5198,7 +5198,7 @@ final case class DataTable[A] private (
         }
 
     /** Opens a row: every editable column's draft is seeded before the row joins the set. */
-    private def beginRowEditing(id: String, row: A, edit: EditState)(using Frame): Any < Async =
+    private def beginRowEditing(id: String, row: A, edit: EditState)(using Frame): UI.Action =
         for
             _ <- seedRowDrafts(row, edit)
             _ <- clearError(edit)
@@ -5211,14 +5211,14 @@ final case class DataTable[A] private (
       * leaves through the callbacks and storing it is the caller's. Both run, so a bound
       * table can still observe.
       */
-    private def applyCell(cell: CellPath, before: A, after: A, ed: CellEdit[A])(using Frame): Any < Async =
-        val store: Any < Async = rowsRefV match
+    private def applyCell(cell: CellPath, before: A, after: A, ed: CellEdit[A])(using Frame): UI.Action =
+        val store: UI.Action = rowsRefV match
             case Present(ref) => ref.getAndUpdate(_.map(r => if keyOf(r) == cell.row then after else r))
             case Absent       => ()
-        val column: Any < Async = ed.changed match
+        val column: UI.Action = ed.changed match
             case Present(f) => f(before, after)
             case Absent     => ()
-        val table: Any < Async = onCellChangedF match
+        val table: UI.Action = onCellChangedF match
             case Present(f) => f(CellChange(cell.row, cell.column, before, after))
             case Absent     => ()
         for
@@ -5243,7 +5243,7 @@ final case class DataTable[A] private (
       */
     private def commitCell(cell: CellPath, row: A, c: Column[A, FlatOnly], edit: EditState)(using
         Frame
-    ): Boolean < Async =
+    ): Boolean < (Async & Abort[Any]) =
         (c.editV, edit.draftOf(cell.column)) match
             case (Present(ed), Present(ref)) =>
                 for
@@ -5251,7 +5251,7 @@ final case class DataTable[A] private (
                     res  <- ed.commit(row, text)
                     out  <- res match
                         case Result.Success(after) =>
-                            val moved: Any < Async = if ed.show(row) == text then () else applyCell(cell, row, after, ed)
+                            val moved: UI.Action = if ed.show(row) == text then () else applyCell(cell, row, after, ed)
                             for
                                 _ <- moved
                                 _ <- clearError(edit)
@@ -5265,7 +5265,7 @@ final case class DataTable[A] private (
             case _ => setEditingCell(Absent).andThen(true)
 
     /** Cancels a cell: the draft is dropped by the next seed, so there is nothing to undo. */
-    private def cancelCell(edit: EditState)(using Frame): Any < Async =
+    private def cancelCell(edit: EditState)(using Frame): UI.Action =
         for
             _ <- clearError(edit)
             r <- setEditingCell(Absent)
@@ -5278,8 +5278,8 @@ final case class DataTable[A] private (
       * through [[applyCell]] before the row's own [[onRowValueChanged]] does, which is the
       * order AG Grid's `cellValueChanged` and `rowValueChanged` run in.
       */
-    private def commitRow(id: String, row: A, edit: EditState)(using Frame): Boolean < Async =
-        def loop(rest: List[(List[String], Column[A, FlatOnly])], acc: A): Result[(CellPath, FieldError), A] < Async =
+    private def commitRow(id: String, row: A, edit: EditState)(using Frame): Boolean < (Async & Abort[Any]) =
+        def loop(rest: List[(List[String], Column[A, FlatOnly])], acc: A): Result[(CellPath, FieldError), A] < (Async & Abort[Any]) =
             rest match
                 case Nil               => Kyo.lift(Result.succeed(acc))
                 case (path, c) :: tail =>
@@ -5291,7 +5291,7 @@ final case class DataTable[A] private (
                                 res  <- ed.commit(acc, text)
                                 out  <- res match
                                     case Result.Success(next) =>
-                                        val moved: Any < Async =
+                                        val moved: UI.Action =
                                             if ed.show(acc) == text then () else applyCell(cell, acc, next, ed)
                                         moved.andThen(loop(tail, next))
                                     case Result.Failure(e) => Kyo.lift(Result.fail((cell, e)))
@@ -5304,7 +5304,7 @@ final case class DataTable[A] private (
             res <- loop(editableLeaves.filter((_, c) => c.editV.exists(_.when(row))), row)
             out <- res match
                 case Result.Success(after) =>
-                    val fire: Any < Async = onRowChangedF match
+                    val fire: UI.Action = onRowChangedF match
                         case Present(f) => f(RowChange(id, row, after))
                         case Absent     => ()
                     for
@@ -5320,7 +5320,7 @@ final case class DataTable[A] private (
     end commitRow
 
     /** Cancels a row edit: the drafts are re-seeded the next time it opens. */
-    private def cancelRow(id: String, edit: EditState)(using Frame): Any < Async =
+    private def cancelRow(id: String, edit: EditState)(using Frame): UI.Action =
         for
             _ <- clearError(edit)
             r <- setRowEditing(id, false)
@@ -5340,13 +5340,13 @@ final case class DataTable[A] private (
       */
     private def activate(id: String, canSelect: Boolean, e: MouseEvent, select: SelectState)(using
         Frame
-    ): Any < Async =
+    ): UI.Action =
         // Ctrl OR Cmd. Prime tests `metaKey || ctrlKey` and so does every desktop convention;
         // pinning this to `meta` alone locks out everyone not on a Mac.
         val meta = e.modifiers.meta || e.modifiers.ctrl
 
-        def pick: Any < Async =
-            def anchorTo(v: Set[String]): Any < Async =
+        def pick: UI.Action =
+            def anchorTo(v: Set[String]): UI.Action =
                 select.anchor match
                     case Present(a) => a.set(Present(id)).andThen(applySelection(v))
                     case Absent     => applySelection(v)
@@ -5368,9 +5368,9 @@ final case class DataTable[A] private (
             end match
         end pick
 
-        val setSelection: Any < Async =
+        val setSelection: UI.Action =
             if !canSelect || !rowClickSelects || selectedBinding.isEmpty then () else pick
-        val fireClick: Any < Async = onRowClickF match
+        val fireClick: UI.Action = onRowClickF match
             case Present(f) => f(id)
             case Absent     => ()
         for

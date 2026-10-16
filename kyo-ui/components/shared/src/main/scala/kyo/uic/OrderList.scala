@@ -125,7 +125,7 @@ final case class OrderList[A] private (
         // no second column here, so no chord transfers anything.
         val hostKeys: UI.KeyboardEvent => Maybe[Listbox.HostKey] = e =>
             ListReorder.onKey(e.key, e.modifiers, Absent).map { move =>
-                val eff: Any < Async = move match
+                val eff: UI.Action = move match
                     case ListReorder.Move.Step(down) =>
                         reorder(if down then ListReorder.moveDown else ListReorder.moveUp)
                     case ListReorder.Move.Edge(down) =>
@@ -191,9 +191,9 @@ final case class OrderList[A] private (
       * names the same row is a highlight that jumps. [[PickList]] carries the same helper, where
       * the row can also leave the column entirely.
       */
-    private def keepingCursor(cursor: Maybe[ListReorder.Cursor], xs: Seq[A], hi: Int, eff: Any < Async)(using
+    private def keepingCursor(cursor: Maybe[ListReorder.Cursor], xs: Seq[A], hi: Int, eff: UI.Action)(using
         Frame
-    ): Any < Async =
+    ): UI.Action =
         (cursor, itemsRef) match
             case (Present(c), Present(r)) if xs.isDefinedAt(hi) =>
                 val id = keyOf(xs(hi))
@@ -209,7 +209,7 @@ final case class OrderList[A] private (
     /** A move button writes the reordered Seq through the bound items ref, keyed on
       * the current selection.
       */
-    private def reorder(move: (List[A], A => Boolean) => List[A])(using Frame): Any < Async =
+    private def reorder(move: (List[A], A => Boolean) => List[A])(using Frame): UI.Action =
         (itemsRef, selectedRef) match
             case (Present(ir), Present(sr)) =>
                 for

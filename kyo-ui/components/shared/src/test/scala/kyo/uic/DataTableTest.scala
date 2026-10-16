@@ -2764,4 +2764,25 @@ class DataTableTest extends UicTest:
         end match
     }
 
+    "a commit whose onCellValueChanged fails still writes the row and closes the editor" in {
+        for
+            rows    <- Signal.initRef[Seq[Item]](items)
+            editing <- Signal.initRef(Absent: Maybe[CellPath])
+            name    <- Signal.initRef("")
+            err     <- Signal.initRef(Absent: Maybe[(CellPath, FieldError)])
+            ui = uic.DataTable[Item]().rows(rows).rowKey(_.id).columns(
+                uic.column("Name")(_.name).editable(_.name)((i, v) => i.copy(name = v))
+            ).editingCell(editing).onCellValueChanged(_ => Abort.fail("rejected"))
+                .wired("t", Map(List("Name") -> name), err, _ => ())
+            cell  <- elementWithId(ui, "t-c0-0")
+            _     <- press(cell, UI.Keyboard.Enter)
+            open  <- elementWithId(ui, "t-c0-0")
+            _     <- typeInto(open, "Ada")
+            again <- elementWithId(ui, "t-c0-0")
+            _     <- press(again, UI.Keyboard.Enter)
+            after <- rows.get
+            still <- editing.get
+        yield assert(after.head.name == "Ada" && still.isEmpty, s"the table finished its own work; editing=$still")
+    }
+
 end DataTableTest
