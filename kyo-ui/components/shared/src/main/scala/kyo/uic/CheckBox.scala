@@ -33,8 +33,8 @@ final case class CheckBox private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
-    onChangeF: Maybe[Boolean => Any < Async] = Absent,
-    onBlurF: Maybe[Boolean => Any < Async] = Absent,
+    onChangeF: Maybe[Boolean => UI.Action] = Absent,
+    onBlurF: Maybe[Boolean => UI.Action] = Absent,
     idV: Maybe[String] = Absent,
     tabbableFlag: Boolean = true
 ) extends Node, BooleanFormControl, HasAccessibleNameRef:
@@ -106,12 +106,12 @@ final case class CheckBox private (
     private[uic] def withAccessibleName(v: Maybe[TextValue]): CheckBox = copy(accNameV = v)
     private[uic] def withAccessibleNameRef(v: Maybe[String]): CheckBox = copy(accNameRefV = v)
 
-    def onChange(f: Boolean => Any < Async): CheckBox = copy(onChangeF = Present(f))
+    def onChange(f: Boolean => UI.Action)(using Frame): CheckBox = copy(onChangeF = Present(Callback.of(f)))
 
     /** Fires on focus loss with the box's current checked state — unlike onChange it
       * fires even when the value was not toggled. The validation layer's Blur trigger.
       */
-    def onBlur(f: Boolean => Any < Async): CheckBox = copy(onBlurF = Present(f))
+    def onBlur(f: Boolean => UI.Action)(using Frame): CheckBox = copy(onBlurF = Present(Callback.of(f)))
 
     private[uic] def render(using Frame): UI =
         (invalidV.dynSig, invalidMsgDynV) match
@@ -127,7 +127,7 @@ final case class CheckBox private (
             case Absent                             => body(false, onChangeF)
 
     /** Two-way handler: write the new value into `ref`, then run the user callback. */
-    private def handlerFor(ref: SignalRef[Boolean])(using Frame): Boolean => Any < Async =
+    private def handlerFor(ref: SignalRef[Boolean])(using Frame): Boolean => UI.Action =
         nb =>
             onChangeF match
                 case Present(f) =>
@@ -137,7 +137,7 @@ final case class CheckBox private (
                     yield r
                 case Absent => ref.set(nb)
 
-    private def body(isChecked: Boolean, onChg: Maybe[Boolean => Any < Async])(using Frame): UI =
+    private def body(isChecked: Boolean, onChg: Maybe[Boolean => UI.Action])(using Frame): UI =
         val isReadonly    = readonlyFlag.getOrElse(false)
         val isDisplayOnly = displayOnlyFlag.getOrElse(false)
         val isMixed       = indeterminateFlag.getOrElse(false)

@@ -111,7 +111,7 @@ final case class Menubar private (
         // mint. Kept apart from `idV`, which is only ever the caller's — see Menu.wired.
         partBase: Maybe[String]
     )(using Frame): UI =
-        val keyHandler: KeyboardEvent => Any < Async = e =>
+        val keyHandler: KeyboardEvent => UI.Action = e =>
             focusRef match
                 case Present(fr) =>
                     MenuNav.onKey(itemsV, MenuNav.Orientation.Horizontal, focus, e.key) match
@@ -172,13 +172,13 @@ private[uic] object MenuTree:
         rootSubmenuIcon: IconGlyph,
         rootAnchor: OverlayAnchor,
         focused: Maybe[List[Int]] = Absent,
-        onLeafActivate: Maybe[Any < Async] = Absent,
+        onLeafActivate: Maybe[UI.Action] = Absent,
         roving: Boolean = false,
         idBase: Maybe[String] = Absent
     )(using Frame): List[UI] =
         val nested = path.nonEmpty
 
-        def closeAll: Any < Async =
+        def closeAll: UI.Action =
             refs match
                 case Present(rs) => MenuRender.openExactly(rs, Absent)
                 case Absent      => ()
@@ -189,8 +189,8 @@ private[uic] object MenuTree:
             else
                 val p = path :+ i
                 if it.itemsV.nonEmpty then
-                    val isOpen              = open(p)
-                    def toggle: Any < Async =
+                    val isOpen            = open(p)
+                    def toggle: UI.Action =
                         refs match
                             case Present(rs) =>
                                 val target: Maybe[List[Int]] =
@@ -218,7 +218,7 @@ private[uic] object MenuTree:
                         row = row.cssClass("p-focus").scrollAuto(true)
                         idBase.foreach(b => row = row.id(s"$b-active"))
                     if it.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
-                    val act: Maybe[Any < Async] =
+                    val act: Maybe[UI.Action] =
                         if refs.isDefined && !it.disabledFlag.constTrue then Present(toggle) else Absent
                     val content = MenuRender.itemContent(prefix, it, act, Present(subIcon), roving)
                     // The enclosing wired render already subscribes to every submenu ref
@@ -273,17 +273,17 @@ private[uic] object MenuTree:
                         row = row.cssClass("p-focus").scrollAuto(true)
                         idBase.foreach(b => row = row.id(s"$b-active"))
                     if it.disabledFlag.constTrue then row = row.cssClass("p-disabled").aria("disabled", "true")
-                    def activate: Any < Async =
+                    def activate: UI.Action =
                         for
                             _ <- it.actionV match
                                 case Present(eff) => eff
-                                case Absent       => (): Any < Async
+                                case Absent       => (): UI.Action
                             _ <- closeAll
                             _ <- onLeafActivate match
                                 case Present(eff) => eff
-                                case Absent       => (): Any < Async
+                                case Absent       => (): UI.Action
                         yield ()
-                    val act: Maybe[Any < Async] =
+                    val act: Maybe[UI.Action] =
                         if refs.isDefined && !it.disabledFlag.constTrue then Present(activate) else Absent
                     row(toChild(MenuRender.itemContent(prefix, it, act, Absent, roving)))
                 end if

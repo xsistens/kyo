@@ -832,4 +832,26 @@ class FormValidationTest extends UicTest:
         end for
     }
 
+    "a submit whose handler fails still ends submitting, and the failure reaches the rules" in {
+        for
+            seen             <- Promise.init[Any, Any]
+            (outcome, still) <-
+                kyo.internal.Failures.within(
+                    kyo.internal.FailureFrame.Boundary(UI.boundary.onNotice { case UI.Failed(raw) =>
+                        seen.completeDiscard(Result.succeed(raw))
+                    })
+                ) {
+                    for
+                        form    <- mkForm
+                        outcome <- Abort.run[Any](form.submit(Abort.fail("server said no")))
+                        still   <- form.submitting.current
+                    yield (outcome, still)
+                }
+            noticed <- seen.get
+        yield
+            assert(outcome.isSuccess, "the form reported the failure itself, so its own handler completes")
+            assert(!still, "a failed handler leaves the form open for the next submit")
+            assert(String.valueOf(noticed) == "server said no", "the failure reached the onNotice sink")
+    }
+
 end FormValidationTest

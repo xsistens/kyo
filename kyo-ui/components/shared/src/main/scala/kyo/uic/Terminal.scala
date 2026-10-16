@@ -90,10 +90,10 @@ final case class Terminal private (
       * `scrollTo` scrolls the row with the given id into view (production: the Local
       * fire-and-forget `UI.scrollIntoView`; tests inject a fake to observe the seam).
       */
-    private[uic] def wired(ref: SignalRef[Seq[TerminalCommand]], lastId: String, scrollTo: String => Any < Async)(using Frame): UI =
+    private[uic] def wired(ref: SignalRef[Seq[TerminalCommand]], lastId: String, scrollTo: String => UI.Action)(using Frame): UI =
         ref.render(h => body(h, Present(lastId), Present(scrollTo)))
 
-    private def body(history: Seq[TerminalCommand], lastId: Maybe[String], scrollTo: Maybe[String => Any < Async])(using Frame): UI =
+    private def body(history: Seq[TerminalCommand], lastId: Maybe[String], scrollTo: Maybe[String => UI.Action])(using Frame): UI =
         val welcome: List[UI] =
             welcomeMessageV.toList.map {
                 case TextValue.Const(t) => div.cssClass("p-terminal-welcome-message")(t): UI
@@ -151,7 +151,7 @@ final case class Terminal private (
       * its own on-mount effect (see [[body]]) — reliable because it fires AFTER
       * the row is inserted, unlike scrolling from here (which races the render).
       */
-    private def execute(line: String)(using Frame): Any < Async =
+    private def execute(line: String)(using Frame): UI.Action =
         val cmd = line.trim
         if cmd.isEmpty then ()
         else

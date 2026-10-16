@@ -50,8 +50,8 @@ final case class Knob private (
     invalidMsgV: Maybe[String] = Absent,
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
-    onChangeF: Maybe[Double => Any < Async] = Absent,
-    onBlurF: Maybe[Double => Any < Async] = Absent,
+    onChangeF: Maybe[Double => UI.Action] = Absent,
+    onBlurF: Maybe[Double => UI.Action] = Absent,
     idV: Maybe[String] = Absent
 ) extends Node, NumberFormControl, HasAccessibleName:
     type Self = Knob
@@ -125,12 +125,12 @@ final case class Knob private (
     private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Knob = copy(invalidMsgDynV = v)
 
     /** Fired with the NEW (clamped) value after the ref write-back. */
-    def onChange(f: Double => Any < Async): Knob = copy(onChangeF = Present(f))
+    def onChange(f: Double => UI.Action)(using Frame): Knob = copy(onChangeF = Present(Callback.of(f)))
 
     /** Fires on focus loss with the knob's current value — unlike onChange it fires even
       * when the dial was not moved. The validation layer's Blur trigger.
       */
-    def onBlur(f: Double => Any < Async): Knob = copy(onBlurF = Present(f))
+    def onBlur(f: Double => UI.Action)(using Frame): Knob = copy(onBlurF = Present(Callback.of(f)))
 
     private def interactive: Boolean = !readonlyFlag && !disabledFlag.constTrue
 
@@ -185,11 +185,11 @@ final case class Knob private (
     private def staticRoot(value: Double)(using Frame): UI =
         withInvalidMessage(shellRoot(toChild(dialSvg(value, Absent))))
 
-    private def commit(next: Double, ref: Maybe[SignalRef[Double]])(using Frame): Any < Async =
-        val write: Any < Async = ref match
+    private def commit(next: Double, ref: Maybe[SignalRef[Double]])(using Frame): UI.Action =
+        val write: UI.Action = ref match
             case Present(r) => r.set(next)
             case Absent     => ()
-        val fire: Any < Async = onChangeF match
+        val fire: UI.Action = onChangeF match
             case Present(f) => f(next)
             case Absent     => ()
         for

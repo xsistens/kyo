@@ -60,8 +60,8 @@ final case class InputNumber private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     idV: Maybe[String] = Absent,
-    onChangeF: Maybe[Double => Any < Async] = Absent,
-    onBlurF: Maybe[Double => Any < Async] = Absent,
+    onChangeF: Maybe[Double => UI.Action] = Absent,
+    onBlurF: Maybe[Double => UI.Action] = Absent,
     integerFlag: Boolean = false,
     focusAutoFlag: Boolean = false
 ) extends Node, NumberFormControl, HasPlaceholder, HasAccessibleName:
@@ -164,13 +164,13 @@ final case class InputNumber private (
     def focusAuto(v: Boolean): InputNumber = copy(focusAutoFlag = v)
 
     /** Fired with the NEW (clamped) value after the ref write-back. */
-    def onChange(f: Double => Any < Async): InputNumber = copy(onChangeF = Present(f))
+    def onChange(f: Double => UI.Action)(using Frame): InputNumber = copy(onChangeF = Present(Callback.of(f)))
 
     /** Fires on focus loss (native `blur`) with the field's current number — unlike
       * `onChange` it fires even when the value was not edited. The form-validation
       * layer wires its `Blur` trigger here.
       */
-    def onBlur(f: Double => Any < Async): InputNumber = copy(onBlurF = Present(f))
+    def onBlur(f: Double => UI.Action)(using Frame): InputNumber = copy(onBlurF = Present(Callback.of(f)))
 
     private def interactive: Boolean = !disabledFlag.constTrue && !readonlyFlag
 
@@ -202,11 +202,11 @@ final case class InputNumber private (
             case Present(InputNumber.Value.Text(ref)) => body(Absent, Absent, Present(ref))
             case Absent                               => body(Absent, Absent)
 
-    private def commit(next: Double, ref: Maybe[SignalRef[Double]])(using Frame): Any < Async =
-        val write: Any < Async = ref match
+    private def commit(next: Double, ref: Maybe[SignalRef[Double]])(using Frame): UI.Action =
+        val write: UI.Action = ref match
             case Present(r) => r.set(next)
             case Absent     => ()
-        val fire: Any < Async = onChangeF match
+        val fire: UI.Action = onChangeF match
             case Present(f) => f(next)
             case Absent     => ()
         for
@@ -276,7 +276,7 @@ final case class InputNumber private (
         end if
 
         // === spin buttons =======================================================
-        def spin(dir: Int): Any < Async =
+        def spin(dir: Int): UI.Action =
             text match
                 // A text-bound field holds the current value only as text, so the step is
                 // taken from what is in it, and the result is written back as text.

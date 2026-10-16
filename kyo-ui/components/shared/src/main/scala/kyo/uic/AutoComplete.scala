@@ -72,12 +72,12 @@ final case class AutoComplete[A] private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
-    onInputF: Maybe[String => Any < Async] = Absent,
-    onChangeF: Maybe[String => Any < Async] = Absent,
-    onSelectF: Maybe[A => Any < Async] = Absent,
+    onInputF: Maybe[String => UI.Action] = Absent,
+    onChangeF: Maybe[String => UI.Action] = Absent,
+    onSelectF: Maybe[A => UI.Action] = Absent,
     fieldExtraClassesV: List[String] = Nil,
     idV: Maybe[String] = Absent,
-    onBlurF: Maybe[String => Any < Async] = Absent
+    onBlurF: Maybe[String => UI.Action] = Absent
 ) extends Node, TextFormControl, HasEmptyContent, HasPlaceholder, HasAccessibleNameRef:
     type Self = AutoComplete[A]
 
@@ -192,21 +192,21 @@ final case class AutoComplete[A] private (
     private[uic] def withAccessibleNameRef(v: Maybe[String]): AutoComplete[A] = copy(accNameRefV = v)
 
     /** Fired on every keystroke with the current text. */
-    def onInput(f: String => Any < Async): AutoComplete[A] = copy(onInputF = Present(f))
+    def onInput(f: String => UI.Action)(using Frame): AutoComplete[A] = copy(onInputF = Present(Callback.of(f)))
 
     /** Fired when the field commits (blur/Enter) or an option is picked — with the
       * committed text (a pick commits the option's label).
       */
-    def onChange(f: String => Any < Async): AutoComplete[A] = copy(onChangeF = Present(f))
+    def onChange(f: String => UI.Action)(using Frame): AutoComplete[A] = copy(onChangeF = Present(Callback.of(f)))
 
     /** Fired with the picked option after its label is written into the ref. */
-    def onSelect(f: A => Any < Async): AutoComplete[A] = copy(onSelectF = Present(f))
+    def onSelect(f: A => UI.Action)(using Frame): AutoComplete[A] = copy(onSelectF = Present(Callback.of(f)))
 
     /** Fires on focus loss (native `blur`) with the field's current text — unlike
       * `onChange` it fires even when the value was not edited. The form-validation
       * layer wires its `Blur` trigger here.
       */
-    def onBlur(f: String => Any < Async): AutoComplete[A] = copy(onBlurF = Present(f))
+    def onBlur(f: String => UI.Action)(using Frame): AutoComplete[A] = copy(onBlurF = Present(Callback.of(f)))
 
     private def interactive: Boolean = !disabledFlag && !readonlyFlag
 
@@ -228,7 +228,7 @@ final case class AutoComplete[A] private (
         /** Moves DOM focus to an id. The dropdown trigger is the only caller: it is its own tab
           * stop, and every key this component answers is answered by the field.
           */
-        focus: String => Any < Async
+        focus: String => UI.Action
     )
 
     private def optionId(base: String, index: Int): String = s"$base-option-$index"
@@ -257,9 +257,9 @@ final case class AutoComplete[A] private (
       * ArrowDown on a closed panel opens it and lands on an option, which is the combobox pattern
       * and the one case ListNav cannot express, since a closed panel has no highlight to move.
       */
-    private def fieldKey(visible: List[A], text: String, panelShown: Boolean, s: State, pick: A => State => Any < Async)(
+    private def fieldKey(visible: List[A], text: String, panelShown: Boolean, s: State, pick: A => State => UI.Action)(
         e: KeyboardEvent
-    )(using Frame): Any < Async =
+    )(using Frame): UI.Action =
         val navigable = visible.indices.toList
         val hiEff     = if visible.isEmpty then -1 else math.min(s.hiV, visible.size - 1)
         e.key match
@@ -309,7 +309,7 @@ final case class AutoComplete[A] private (
         hi: SignalRef[Int],
         all: SignalRef[Boolean],
         base: Maybe[String] = Absent,
-        focus: String => Any < Async = _ => ()
+        focus: String => UI.Action = _ => ()
     )(
         using Frame
     ): UI =
@@ -367,15 +367,15 @@ final case class AutoComplete[A] private (
         }
 
         // Writes the picked label, fires onSelect/onChange, closes the panel.
-        def pick(a: A)(s: State): Any < Async =
-            val text                  = labelF(a)
-            val setValue: Any < Async = valueBinding match
+        def pick(a: A)(s: State): UI.Action =
+            val text                = labelF(a)
+            val setValue: UI.Action = valueBinding match
                 case Present(Input.Value.Ref(r)) => r.set(text)
                 case _                           => ()
-            val fireSelect: Any < Async = onSelectF match
+            val fireSelect: UI.Action = onSelectF match
                 case Present(f) => f(a)
                 case Absent     => ()
-            val fireChange: Any < Async = onChangeF match
+            val fireChange: UI.Action = onChangeF match
                 case Present(f) => f(text)
                 case Absent     => ()
             for
@@ -437,7 +437,7 @@ final case class AutoComplete[A] private (
         st.foreach { s =>
             // Typing opens the panel on the filtered list and resets the highlight.
             f = f.onInput { v =>
-                val user: Any < Async = onInputF match
+                val user: UI.Action = onInputF match
                     case Present(g) => g(v)
                     case Absent     => ()
                 for
@@ -505,7 +505,7 @@ final case class AutoComplete[A] private (
                             for
                                 _ <- s.idBase match
                                     case Present(b) => s.focus(b)
-                                    case Absent     => (): Any < Async
+                                    case Absent     => (): UI.Action
                                 _ <- s.all.set(true)
                                 _ <- s.hi.set(openHighlight(OptionItem.flatten(optionsV), query))
                                 r <- s.open.set(true)
@@ -534,7 +534,7 @@ final case class AutoComplete[A] private (
       * the [[Overlay]] primitive — `seedFocus(false)`, focus stays in the input;
       * Escape is handled by the field, outside clicks by the backdrop.
       */
-    private def overlayPanel(visibleGroups: List[OptionItem[A]], s: State, pick: A => State => Any < Async)(using Frame): UI =
+    private def overlayPanel(visibleGroups: List[OptionItem[A]], s: State, pick: A => State => UI.Action)(using Frame): UI =
         val visible        = OptionItem.flatten(visibleGroups)
         val hiEff          = if visible.isEmpty then -1 else math.min(s.hiV, visible.size - 1)
         val rows: List[UI] = OptionItem.rows(visibleGroups, "p-autocomplete-option-group") { (a, i) =>

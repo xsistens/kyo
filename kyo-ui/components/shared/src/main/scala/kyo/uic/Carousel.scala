@@ -70,7 +70,7 @@ final case class Carousel[A] private (
     showItemNavigatorsFlag: Boolean = true,
     showIndicatorsFlag: Boolean = true,
     autoplayMsV: Int = 0,
-    onPageChangeF: Maybe[Int => Any < Async] = Absent
+    onPageChangeF: Maybe[Int => UI.Action] = Absent
 ) extends Node:
     type Self = Carousel[A]
 
@@ -121,7 +121,7 @@ final case class Carousel[A] private (
     def autoplay(intervalMs: Int): Carousel[A] = copy(autoplayMsV = math.max(0, intervalMs))
 
     /** Fired with the new page after a nav/indicator/swipe/autoplay write. */
-    def onPageChange(f: Int => Any < Async): Carousel[A] = copy(onPageChangeF = Present(f))
+    def onPageChange(f: Int => UI.Action)(using Frame): Carousel[A] = copy(onPageChangeF = Present(Callback.of(f)))
 
     /** Prime's page count: one page per `numScroll` step over the overhang. */
     private def totalPages: Int = Carousel.pageCount(numScrollV, numVisibleV, itemList.size)
@@ -150,6 +150,9 @@ final case class Carousel[A] private (
     /** The autoplay fiber: scope-bound to the enclosing mount (the scope
       * cancels it on unmount, so it never leaks and never busy-blocks — it sleeps
       * between steps). No-op when autoplay is off or there is nothing to cycle.
+      * `onPageChange` is a [[Callback]], so a step whose callback fails or throws is
+      * reported to the `onFailure` rules around the carousel, as a click's would be,
+      * and autoplay goes on.
       */
     private def autoplayLoop(r: SignalRef[Int])(using Frame): Unit < (Async & Scope) =
         val pages = totalPages
@@ -207,7 +210,7 @@ final case class Carousel[A] private (
         ref: SignalRef[Int],
         stripId: String,
         startPos: SignalRef[Double],
-        focus: String => Any < Async = _ => ()
+        focus: String => UI.Action = _ => ()
     )(using Frame): UI =
         interactive(ref, stripId, itemList.indices.map(i => s"$stripId-i$i"), startPos, focus)
 
@@ -220,7 +223,7 @@ final case class Carousel[A] private (
         stripId: String,
         itemIds: Seq[String],
         startPos: SignalRef[Double],
-        focus: String => Any < Async
+        focus: String => UI.Action
     )(using Frame): UI =
         val pages     = totalPages
         val prevGlyph = if verticalFlag then Icons.chevronUp else Icons.chevronLeft
@@ -379,7 +382,7 @@ final case class Carousel[A] private (
       * are the only way to reach it. `dotIds` empty is the placeholder render, which has no mount
       * to move focus from and so keeps the dots as they were.
       */
-    private def indicatorList(page: Int, pages: Int, ids: Seq[String], focus: String => Any < Async)(using Frame): UI =
+    private def indicatorList(page: Int, pages: Int, ids: Seq[String], focus: String => UI.Action)(using Frame): UI =
         val navigable = (0 until pages).toList
         val axis      = if verticalFlag then ListNav.Orientation.Vertical else ListNav.Orientation.Horizontal
         ul.cssClass("p-carousel-indicator-list")(
@@ -419,7 +422,7 @@ final case class Carousel[A] private (
       * `onPageChange`. The translating strip keeps the active window in view, so
       * there is no scroll-into-view step.
       */
-    private def setPage(target: Int, pages: Int)(using Frame): Any < Async =
+    private def setPage(target: Int, pages: Int)(using Frame): UI.Action =
         val next =
             if pages <= 0 then 0
             else if circularFlag then ((target % pages) + pages) % pages
@@ -428,11 +431,11 @@ final case class Carousel[A] private (
     end setPage
 
     /** Writes the page ref and fires `onPageChange` (the shared write). */
-    private def advance(next: Int)(using Frame): Any < Async =
-        val write: Any < Async = pageRef match
+    private def advance(next: Int)(using Frame): UI.Action =
+        val write: UI.Action = pageRef match
             case Present(ref) => ref.set(next)
             case Absent       => ()
-        val fire: Any < Async = onPageChangeF match
+        val fire: UI.Action = onPageChangeF match
             case Present(f) => f(next)
             case Absent     => ()
         write.andThen(fire)

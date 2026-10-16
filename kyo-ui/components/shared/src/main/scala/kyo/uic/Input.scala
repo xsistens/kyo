@@ -40,9 +40,9 @@ final case class Input private (
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
     accDescV: Maybe[TextValue] = Absent,
-    onInputF: Maybe[String => Any < Async] = Absent,
-    onChangeF: Maybe[String => Any < Async] = Absent,
-    onBlurF: Maybe[String => Any < Async] = Absent,
+    onInputF: Maybe[String => UI.Action] = Absent,
+    onChangeF: Maybe[String => UI.Action] = Absent,
+    onBlurF: Maybe[String => UI.Action] = Absent,
     inputFilterV: Maybe[String] = Absent,
     inputMaskV: Maybe[String] = Absent,
     extraClassesV: List[String] = Nil,
@@ -123,14 +123,14 @@ final case class Input private (
 
     private[uic] def withAccessibleDescription(v: Maybe[TextValue]): Input = copy(accDescV = v)
 
-    def onInput(f: String => Any < Async): Input  = copy(onInputF = Present(f))
-    def onChange(f: String => Any < Async): Input = copy(onChangeF = Present(f))
+    def onInput(f: String => UI.Action)(using Frame): Input  = copy(onInputF = Present(Callback.of(f)))
+    def onChange(f: String => UI.Action)(using Frame): Input = copy(onChangeF = Present(Callback.of(f)))
 
     /** Fires on focus loss (native `blur`) with the field's current value — unlike
       * `onChange` it fires even when the value was not edited. The form-validation
       * layer wires its `Blur` trigger here.
       */
-    def onBlur(f: String => Any < Async): Input = copy(onBlurF = Present(f))
+    def onBlur(f: String => UI.Action)(using Frame): Input = copy(onBlurF = Present(Callback.of(f)))
 
     /** Client-local keystroke filter: `"int"` keeps only digits, `"decimal"` also
       * allows one separator, any other string is a whitelist charset. The client
@@ -185,9 +185,9 @@ final case class Input private (
     private def buildField[T <: (UI.Ast.TextInput & UI.Ast.Interactive) { type Self <: T }](
         base: T,
         setPlaceholder: (T, String) => T,
-        setOnInput: (T, String => Any < Async) => T,
-        setOnChange: (T, String => Any < Async) => T,
-        setOnBlur: (T, Any < (Async & Sync)) => T
+        setOnInput: (T, String => UI.Action) => T,
+        setOnChange: (T, String => UI.Action) => T,
+        setOnBlur: (T, UI.Action) => T
     )(using Frame): UI =
         var b: T = base.cssClass("p-inputtext").cssClass("p-component")
         extraClassesV.foreach(c => b = b.cssClass(c))

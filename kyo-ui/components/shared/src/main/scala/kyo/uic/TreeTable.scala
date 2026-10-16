@@ -56,8 +56,8 @@ final case class TreeTable[A] private (
     gridlinesFlag: Boolean = false,
     sizeV: Size = Size.Normal,
     emptyContentV: Maybe[EmptyContent] = Absent,
-    onNodeToggleF: Maybe[String => Any < Async] = Absent,
-    onRowClickF: Maybe[String => Any < Async] = Absent,
+    onNodeToggleF: Maybe[String => UI.Action] = Absent,
+    onRowClickF: Maybe[String => UI.Action] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     hiddenCols: List[Column[A, AnyTable]] = Nil
 ) extends Node, HasEmptyContent, HasAccessibleName:
@@ -130,10 +130,10 @@ final case class TreeTable[A] private (
     private[uic] def withEmptyContent(v: Maybe[EmptyContent]): TreeTable[A] = copy(emptyContentV = v)
 
     /** Fired with the row key after a toggler press (after the expansion write). */
-    def onNodeToggle(f: String => Any < Async): TreeTable[A] = copy(onNodeToggleF = Present(f))
+    def onNodeToggle(f: String => UI.Action)(using Frame): TreeTable[A] = copy(onNodeToggleF = Present(Callback.of(f)))
 
     /** Fired with the row key after a row click (after the selection write). */
-    def onRowClick(f: String => Any < Async): TreeTable[A] = copy(onRowClickF = Present(f))
+    def onRowClick(f: String => UI.Action)(using Frame): TreeTable[A] = copy(onRowClickF = Present(Callback.of(f)))
 
     private[uic] def withAccessibleName(v: Maybe[TextValue]): TreeTable[A] = copy(accNameV = v)
 
@@ -167,18 +167,18 @@ final case class TreeTable[A] private (
       * caller that hands `Absent` gets the table a placeholder shows, which is the shape the
       * golden renders assert.
       */
-    private[uic] def wired(base: String, cursor: Maybe[SignalRef[Maybe[String]]], focus: String => Any < Async)(
+    private[uic] def wired(base: String, cursor: Maybe[SignalRef[Maybe[String]]], focus: String => UI.Action)(
         using Frame
     ): UI =
         withVisibleColumns(_.buildAll(base, cursor, focus))
 
-    private def buildAll(base: String, cursorRef: Maybe[SignalRef[Maybe[String]]], focus: String => Any < Async)(
+    private def buildAll(base: String, cursorRef: Maybe[SignalRef[Maybe[String]]], focus: String => UI.Action)(
         using Frame
     ): UI =
         // Where the reader last stood, which is what the tab stop follows. A key that moves the
         // cursor writes it and so does a click, so the pointer and the keyboard leave the table in
         // the same state.
-        val seed: String => Any < Async = cursorRef match
+        val seed: String => UI.Action = cursorRef match
             case Present(r) => (k: String) => r.set(Present(k))
             case Absent     => (_: String) => ()
         withSortableFlags { flags =>
@@ -234,10 +234,10 @@ final case class TreeTable[A] private (
         sel: Set[String],
         sort: List[SortKey],
         cursor: Maybe[String],
-        seed: String => Any < Async,
+        seed: String => UI.Action,
         flags: Map[String, Boolean],
         base: String,
-        focus: String => Any < Async
+        focus: String => UI.Action
     )(using
         Frame
     ): UI =
@@ -404,7 +404,7 @@ final case class TreeTable[A] private (
 
     private def toggleSort(path: List[String], e: MouseEvent, interactive: Set[List[String]])(using
         Frame
-    ): Any < Async =
+    ): UI.Action =
         sortRef match
             case Present(ref) =>
                 val multi = e.modifiers.ctrl || e.modifiers.meta
@@ -465,9 +465,9 @@ final case class TreeTable[A] private (
         tabStop: Int,
         exp: Set[String],
         sel: Set[String],
-        seed: String => Any < Async,
+        seed: String => UI.Action,
         base: String,
-        focus: String => Any < Async
+        focus: String => UI.Action
     )(using Frame): UI =
         val id          = keyOf(node.data, path)
         val hasChildren = node.children.nonEmpty
@@ -529,7 +529,7 @@ final case class TreeTable[A] private (
             // role has been claiming all along. Navigation does not wait for selection to be
             // bound: a tree that cannot be selected can still be read, and a click still leaves
             // the cursor where the pointer put it.
-            val clicked: MouseEvent => Any < Async = e =>
+            val clicked: MouseEvent => UI.Action = e =>
                 if rowInteractive then seed(id).andThen(activate(id, e.modifiers.meta || e.modifiers.ctrl))
                 else seed(id)
             row = row
@@ -563,23 +563,23 @@ final case class TreeTable[A] private (
         base: String,
         navRows: List[TreeNav.Row],
         index: Int,
-        seed: String => Any < Async,
-        focus: String => Any < Async
+        seed: String => UI.Action,
+        focus: String => UI.Action
     )(using
         Frame
-    ): KeyboardEvent => Any < Async = e =>
+    ): KeyboardEvent => UI.Action = e =>
         TreeNav.onKey(navRows, index, e.key) match
             case Absent        => ()
             case Present(step) =>
-                val opEff: Any < Async = step.op match
+                val opEff: UI.Action = step.op match
                     case TreeNav.Op.Keep        => ()
                     case TreeNav.Op.Expand(k)   => setExpanded(k, open = true)
                     case TreeNav.Op.Collapse(k) => setExpanded(k, open = false)
-                val moveEff: Any < Async =
+                val moveEff: UI.Action =
                     if step.focus != index && navRows.isDefinedAt(step.focus) then
                         focus(rowId(base, step.focus)).andThen(seed(navRows(step.focus).key))
                     else ()
-                val actEff: Any < Async =
+                val actEff: UI.Action =
                     if step.activate && rowInteractive && navRows.isDefinedAt(index) then activate(navRows(index).key)
                     else ()
                 opEff.andThen(moveEff).andThen(actEff)
@@ -589,11 +589,11 @@ final case class TreeTable[A] private (
       * [[TreeNav]] names the row it means rather than asking for a flip, so a key that says
       * "open" cannot close a row that a re-render opened underneath it.
       */
-    private def setExpanded(id: String, open: Boolean)(using Frame): Any < Async =
-        val write: Any < Async = expandedRef match
+    private def setExpanded(id: String, open: Boolean)(using Frame): UI.Action =
+        val write: UI.Action = expandedRef match
             case Present(ref) => ref.getAndUpdate(cur => if open then cur + id else cur - id)
             case Absent       => ()
-        val fire: Any < Async = onNodeToggleF match
+        val fire: UI.Action = onNodeToggleF match
             case Present(f) => f(id)
             case Absent     => ()
         write.andThen(fire)
@@ -602,11 +602,11 @@ final case class TreeTable[A] private (
     /** A toggler press flips the row in the bound `expanded` set, then fires
       * `onNodeToggle`.
       */
-    private def toggleNode(id: String)(using Frame): Any < Async =
-        val write: Any < Async = expandedRef match
+    private def toggleNode(id: String)(using Frame): UI.Action =
+        val write: UI.Action = expandedRef match
             case Present(ref) => ref.getAndUpdate(cur => if cur.contains(id) then cur - id else cur + id)
             case Absent       => ()
-        val fire: Any < Async = onNodeToggleF match
+        val fire: UI.Action = onNodeToggleF match
             case Present(f) => f(id)
             case Absent     => ()
         for
@@ -617,12 +617,12 @@ final case class TreeTable[A] private (
     end toggleNode
 
     /** A row click updates the bound selection per the mode, then fires `onRowClick`. */
-    private def activate(id: String, meta: Boolean = false)(using Frame): Any < Async =
-        val write: Any < Async = (selectedRef, selectionModeV) match
+    private def activate(id: String, meta: Boolean = false)(using Frame): UI.Action =
+        val write: UI.Action = (selectedRef, selectionModeV) match
             case (Present(ref), m) if m != SelectionMode.None =>
                 ref.getAndUpdate(cur => SelectionPick.next(m, metaKeyFlag, meta, id, cur))
             case _ => ()
-        val fire: Any < Async = onRowClickF match
+        val fire: UI.Action = onRowClickF match
             case Present(f) => f(id)
             case Absent     => ()
         for
