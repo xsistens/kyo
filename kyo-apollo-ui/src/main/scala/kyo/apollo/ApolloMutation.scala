@@ -27,7 +27,8 @@ import kyo.apollo.network.ApolloResponse
   *
   * useMutation(saveCall).map: m =>
   *   render(m.state)          // Signal[MutationState[D]] — Idle→Loading→Success/Failure
-  *   onClick(m.run(()))       // fires; optimisticUpdates / errorPolicy on the call still apply
+  *   onClick(m.run(()))       // fires; a failure goes to the handler's onFailure rules
+  *   onClick(m.submit(()))    // fires; a failure only lands in m.state, shown inline
   *   onClick(m.reset)         // back to Idle (e.g. clear a form)
   * }}}
   *
@@ -74,12 +75,20 @@ end MutationState
   *              `.optimisticUpdates` / `.fetchPolicy` pinned on the call still
   *              apply, since `run` executes that prepared call.
   * @param reset returns [[state]] to [[MutationState.Idle]] (react's `reset()`).
+  *
+  * A handler that fires [[run]] raises a failure to the `onFailure` rules around it, a toast for example, on top
+  * of [[state]]. A form that shows the failure inline from [[state]] fires [[submit]] instead.
   */
 final case class MutationHandle[I, D](
     state: Signal[MutationState[D]],
     run: I => D < (Async & Abort[ApolloException]),
     reset: Unit < Sync
 ):
+
+    /** Fires the mutation like [[run]] and drives [[state]], without raising a failure: for a failure the UI shows
+      * inline from [[state]], so the `onFailure` rules around the handler do not report it a second time.
+      */
+    def submit(input: I)(using Frame): Unit < Async = Abort.run[ApolloException](run(input)).unit
 
 end MutationHandle
 

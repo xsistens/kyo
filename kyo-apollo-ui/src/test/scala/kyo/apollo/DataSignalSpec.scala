@@ -2,7 +2,6 @@ package kyo.apollo
 
 import CountryFixture.awaitSignal
 import kyo.*
-import kyo.apollo.cache.LogProbe
 import kyo.apollo.exception.ApolloException
 import kyo.apollo.exception.DefaultApolloException
 import kyo.internal.FailureFrame
@@ -10,12 +9,12 @@ import kyo.internal.Failures
 
 /** Effectful tests for the suspense-shape [[dataSignal]]: first-settled seeding
   * (immediate and after a pending phase), first-failure abort, update following,
-  * and the mandatory failed-update surface (keep last data + invoke the handler).
+  * and the failed-update surface (keep the last data, hand the failure to the `onFailure` rules).
   * Driven off a plain `Signal.initRef[QueryState[Int]]` source.
   *
   * Synchronization is on barriers, not on time: a value is awaited on the signal
   * that carries it ([[CountryFixture.awaitSignal]]), a notice on the promise the
-  * sink completes. The two absence proofs wait until an observer that is still
+  * sink completes. The absence proof waits until an observer that is still
   * open has seen the later value, so the one under test had its chance to follow.
   */
 class DataSignalSpec extends kyo.test.Test[Any]:
@@ -33,7 +32,7 @@ class DataSignalSpec extends kyo.test.Test[Any]:
         "an already-settled Success seeds immediately" in {
             for
                 src    <- Signal.initRef[QueryState[Int]](QueryState.Success(1, fromCache = false))
-                sig    <- src.dataSignal(UpdateFailure.Notify)
+                sig    <- src.dataSignal(UI.Reaction.Notify)
                 seeded <- sig.current
             yield assert(seeded == 1)
         }
@@ -41,7 +40,7 @@ class DataSignalSpec extends kyo.test.Test[Any]:
         "suspends through Loading and seeds on the first Success" in {
             for
                 src   <- Signal.initRef[QueryState[Int]](QueryState.Loading)
-                fiber <- Fiber.init(Scope.run(src.dataSignal(UpdateFailure.Notify).map(_.current)))
+                fiber <- Fiber.init(Scope.run(src.dataSignal(UI.Reaction.Notify).map(_.current)))
                 // No wait needed before the set: the first-settle observer re-reads
                 // the current state on attach, so it seeds whether it attached
                 // before or after this lands.
@@ -53,7 +52,7 @@ class DataSignalSpec extends kyo.test.Test[Any]:
         "PartialData seeds like Success" in {
             for
                 src    <- Signal.initRef[QueryState[Int]](QueryState.PartialData(7, Chunk.empty))
-                sig    <- src.dataSignal(UpdateFailure.Notify)
+                sig    <- src.dataSignal(UI.Reaction.Notify)
                 seeded <- sig.current
             yield assert(seeded == 7)
         }
@@ -63,7 +62,7 @@ class DataSignalSpec extends kyo.test.Test[Any]:
                 src <- Signal.initRef[QueryState[Int]](
                     QueryState.Failure(DefaultApolloException("first failure"))
                 )
-                result <- Abort.run[ApolloException](src.dataSignal(UpdateFailure.Notify))
+                result <- Abort.run[ApolloException](src.dataSignal(UI.Reaction.Notify))
             yield result match
                 case Result.Failure(ex) => assert(ex.message == "first failure")
                 case other              => fail(s"expected Failure, got $other")
@@ -72,7 +71,7 @@ class DataSignalSpec extends kyo.test.Test[Any]:
         "follows later data emissions" in {
             for
                 src    <- Signal.initRef[QueryState[Int]](QueryState.Success(1, fromCache = false))
-                sig    <- src.dataSignal(UpdateFailure.Notify)
+                sig    <- src.dataSignal(UI.Reaction.Notify)
                 first  <- sig.current
                 _      <- src.set(QueryState.Success(2, fromCache = false))
                 second <- awaitSignal(sig)(_ == 2)
@@ -89,7 +88,7 @@ class DataSignalSpec extends kyo.test.Test[Any]:
                     seen.completeDiscard(Result.succeed(messageOf(ex)))
                 ))) {
                     for
-                        sig      <- src.dataSignal(UpdateFailure.Notify)
+                        sig      <- src.dataSignal(UI.Reaction.Notify)
                         _        <- src.set(QueryState.Failure(DefaultApolloException("update failure")))
                         surfaced <- seen.get
                         kept     <- sig.current
@@ -103,8 +102,8 @@ class DataSignalSpec extends kyo.test.Test[Any]:
         "the follow observer stops when the caller's Scope is released" in {
             for
                 src     <- Signal.initRef[QueryState[Int]](QueryState.Success(1, fromCache = false))
-                escaped <- Scope.run(src.dataSignal(UpdateFailure.Notify))
-                live    <- src.dataSignal(UpdateFailure.Notify)
+                escaped <- Scope.run(src.dataSignal(UI.Reaction.Notify))
+                live    <- src.dataSignal(UI.Reaction.Notify)
                 // The Scope is closed; a later source emission must no longer follow.
                 _ <- src.set(QueryState.Success(99, fromCache = false))
                 // An observer that is still open follows it: the emission was delivered.
@@ -114,7 +113,7 @@ class DataSignalSpec extends kyo.test.Test[Any]:
         }
     }
 
-    "dataSignal (escalating, no handler)" - {
+    "dataSignal (escalating by default)" - {
 
         "seeds from the first settled data and follows later emissions" in {
             for
@@ -139,26 +138,23 @@ class DataSignalSpec extends kyo.test.Test[Any]:
                 case other              => fail(s"expected Failure, got $other")
         }
 
-        "a failed update keeps the last data and stops the follow (the fiber escalates)" in {
+        "with no mount around it, a failed update is a notice and the follow goes on" in {
             for
-                probe <- LogProbe.init
-                src   <- Signal.initRef[QueryState[Int]](QueryState.Success(1, fromCache = false))
-                sig   <- probe.run(src.dataSignal)
-                // An observer that stays open (it only notifies on a failure).
-                live <- src.dataSignal(UpdateFailure.Notify)
-                _    <- src.set(QueryState.Failure(DefaultApolloException("update failure")))
-                // A signal delivers the LATEST value, not every intermediate one, so the
-                // follow observer must have taken the failure before 99 lands: it logs the
-                // failure right before its fiber fails with it.
-                _ <- assertEventually(probe.errors.map(_.exists(_.error.exists(messageOf(_) == "update failure"))))
-                // The follow fiber died with the escalated failure: a later data emission
-                // must no longer be followed (on a supervising engine the enclosing mount
-                // node would have flipped at this point). An open observer shows it was
-                // delivered.
-                _     <- src.set(QueryState.Success(99, fromCache = false))
-                _     <- awaitSignal(live)(_ == 99)
-                after <- sig.current
-            yield assert(after == 1)
+                seen <- Promise.init[String, Any]
+                src  <- Signal.initRef[QueryState[Int]](QueryState.Success(1, fromCache = false))
+                res  <- Failures.within(FailureFrame.Boundary(UI.boundary.onNotice(ex =>
+                    seen.completeDiscard(Result.succeed(messageOf(ex)))
+                ))) {
+                    for
+                        sig      <- src.dataSignal
+                        _        <- src.set(QueryState.Failure(DefaultApolloException("update failure")))
+                        surfaced <- seen.get
+                        // An `Escalate` that finds no mount to fail is a notice: the follow is still alive.
+                        _     <- src.set(QueryState.Success(99, fromCache = false))
+                        after <- awaitSignal(sig)(_ == 99)
+                    yield (surfaced, after)
+                }
+            yield assert(res == ("update failure", 99))
         }
     }
 end DataSignalSpec
