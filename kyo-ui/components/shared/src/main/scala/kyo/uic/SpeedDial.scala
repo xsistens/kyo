@@ -102,7 +102,7 @@ final case class SpeedDial private (
     end render
 
     /** The subscription tree the mount publishes (golden-test seam). */
-    private[uic] def wired(open: SignalRef[Boolean], base: String, focus: String => Any < Async)(using Frame): UI =
+    private[uic] def wired(open: SignalRef[Boolean], base: String, focus: String => UI.Action)(using Frame): UI =
         // See Menu.wired for why the resolution sits inside the mount's content.
         MenuRender.resolveDisabled(itemsV) { items =>
             open.render(o => copy(itemsV = items).body(o, Present(open), base, focus))
@@ -114,16 +114,16 @@ final case class SpeedDial private (
       */
     private def actions: List[MenuItem] = itemsV.filterNot(_.separatorFlag)
 
-    private def body(isOpen: Boolean, open: Maybe[SignalRef[Boolean]], base: String, focus: String => Any < Async)(using
+    private def body(isOpen: Boolean, open: Maybe[SignalRef[Boolean]], base: String, focus: String => UI.Action)(using
         Frame
     ): UI =
         // Explicitly typed effect: an untyped match would infer `Any` and land the
         // effect inert in the by-name handler.
-        val toggle: Any < Async =
+        val toggle: UI.Action =
             open match
                 case Present(r) => r.getAndUpdate(!_)
                 case Absent     => ()
-        def close: Any < Async =
+        def close: UI.Action =
             open match
                 case Present(r) => r.set(false)
                 case Absent     => ()
@@ -154,7 +154,7 @@ final case class SpeedDial private (
                 // already toggles. The arrow that points into the fan opens it, and the seed
                 // carries focus in from there; on an already-open fan there is nothing to open,
                 // so it moves focus instead of doing nothing.
-                val eff: Any < Async =
+                val eff: UI.Action =
                     if e.key == directionV.opening && navigable.nonEmpty then
                         if isOpen then focus(itemId(first))
                         else
@@ -174,13 +174,13 @@ final case class SpeedDial private (
             if !isOpen then Nil
             else
                 acts.zipWithIndex.map { (it, i) =>
-                    def activate: Any < Async =
+                    def activate: UI.Action =
                         open match
                             case Present(r) =>
                                 for
                                     _ <- it.actionV match
                                         case Present(eff) => eff
-                                        case Absent       => (): Any < Async
+                                        case Absent       => (): UI.Action
                                     _ <- r.set(false)
                                 yield ()
                             case Absent => ()
@@ -238,9 +238,9 @@ final case class SpeedDial private (
         self: Int,
         navigable: List[Int],
         itemId: Int => String,
-        focus: String => Any < Async,
-        close: Any < Async
-    )(using Frame): KeyboardEvent => Any < Async = e =>
+        focus: String => UI.Action,
+        close: UI.Action
+    )(using Frame): KeyboardEvent => UI.Action = e =>
         if e.key == Keyboard.Tab then close
         else
             ListNav.onKey(navigable, self, e.key, wrap = true, directionV.axis) match

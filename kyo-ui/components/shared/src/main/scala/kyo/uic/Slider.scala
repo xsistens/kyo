@@ -41,8 +41,8 @@ final case class Slider private (
     invalidMsgV: Maybe[String] = Absent,
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
-    onChangeF: Maybe[Double => Any < Async] = Absent,
-    onBlurF: Maybe[Double => Any < Async] = Absent,
+    onChangeF: Maybe[Double => UI.Action] = Absent,
+    onBlurF: Maybe[Double => UI.Action] = Absent,
     idV: Maybe[String] = Absent
 ) extends Node, NumberFormControl, HasAccessibleName:
     type Self = Slider
@@ -96,12 +96,12 @@ final case class Slider private (
     private[uic] def withInvalidMessageDyn(v: Maybe[Signal[Maybe[String]]]): Slider = copy(invalidMsgDynV = v)
 
     /** Fired with the NEW (clamped) value after the ref write-back. */
-    def onChange(f: Double => Any < Async): Slider = copy(onChangeF = Present(f))
+    def onChange(f: Double => UI.Action)(using Frame): Slider = copy(onChangeF = Present(Callback.of(f)))
 
     /** Fires on focus loss with the slider's current value — unlike onChange it fires even
       * when the handle was not moved. The validation layer's Blur trigger.
       */
-    def onBlur(f: Double => Any < Async): Slider = copy(onBlurF = Present(f))
+    def onBlur(f: Double => UI.Action)(using Frame): Slider = copy(onBlurF = Present(Callback.of(f)))
 
     /** Clamps into range, and rounds to a whole number under [[integer]]. */
     private def clamp(v: Double): Double =
@@ -157,11 +157,11 @@ final case class Slider private (
         if disabledFlag.constTrue then in = in.disabled(true)
         else
             in = in.onChange { d =>
-                val next               = clamp(d)
-                val write: Any < Async = ref match
+                val next             = clamp(d)
+                val write: UI.Action = ref match
                     case Present(r) => r.set(next)
                     case Absent     => ()
-                val fire: Any < Async = onChangeF match
+                val fire: UI.Action = onChangeF match
                     case Present(f) => f(next)
                     case Absent     => ()
                 for

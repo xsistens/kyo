@@ -357,9 +357,10 @@ final class Form private[form] (
     /** Validate this subtree and, only if everything is valid, run `onValid` (which
       * may itself write server-side errors via `field.setError` / `raise`). Opens the
       * display gate for ALL fields first (submit-reveal), then validates every field
-      * including untouched ones, in parallel.
+      * including untouched ones, in parallel. A failing `onValid` goes to the
+      * `onFailure` rules around the handler, and `submitting` still ends.
       */
-    def submit(onValid: => Any < Async)(using Frame): Any < Async =
+    def submit(onValid: => UI.Action)(using Frame): UI.Action =
         for
             _             <- submitCountRef.updateAndGet(_ + 1)
             _             <- submittingRef.set(true)
@@ -372,7 +373,7 @@ final class Form private[form] (
             // `submitting` stays true THROUGH onValid so it also covers the server
             // round-trip (where the handler may write back per-field / form errors).
             // On failure, move focus to the first invalid field (focus-first-invalid).
-            r <- if ok then onValid else focusFirstInvalid(results).andThen(Kyo.unit)
+            r <- if ok then kyo.uic.Callback(onValid) else focusFirstInvalid(results).andThen(Kyo.unit)
             _ <- submittingRef.set(false)
         yield r
 

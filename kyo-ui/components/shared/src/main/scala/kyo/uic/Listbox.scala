@@ -81,7 +81,7 @@ final case class Listbox private (
     selectedRef: Maybe[SignalRef[Set[String]]] = Absent,
     filterQueryRef: Maybe[SignalRef[String]] = Absent,
     filterableFlag: Boolean = false,
-    onItemClickF: Maybe[String => Any < Async] = Absent,
+    onItemClickF: Maybe[String => UI.Action] = Absent,
     templateF: Maybe[ListItem => UI] = Absent,
     checkmarkFlag: Boolean = false,
     disabledFlag: Boolean = false,
@@ -91,7 +91,7 @@ final case class Listbox private (
     emptyContentV: Maybe[EmptyContent] = Absent,
     accessibleNameV: Maybe[TextValue] = Absent,
     accessibleNameRefV: Maybe[String] = Absent,
-    onBlurF: Maybe[Set[String] => Any < Async] = Absent,
+    onBlurF: Maybe[Set[String] => UI.Action] = Absent,
     idV: Maybe[String] = Absent,
     hostKeyF: Maybe[UI.KeyboardEvent => Maybe[Listbox.HostKey]] = Absent
 ) extends Node, MultiSelectFormControl, HasEmptyContent, HasAccessibleNameRef:
@@ -170,7 +170,7 @@ final case class Listbox private (
       */
     def filterQuery(ref: SignalRef[String]): Listbox = copy(filterQueryRef = Present(ref))
 
-    def onItemClick(f: String => Any < Async): Listbox = copy(onItemClickF = Present(f))
+    def onItemClick(f: String => UI.Action)(using Frame): Listbox = copy(onItemClickF = Present(Callback.of(f)))
 
     /** Custom option content (Prime's `#option` slot): renders instead of the plain
       * text label; the checkmark column and leading icon keep their places.
@@ -195,7 +195,7 @@ final case class Listbox private (
       * trigger.
       */
     @targetName("onBlurKeys")
-    def onBlur(f: Set[String] => Any < Async): Listbox = copy(onBlurF = Present(f))
+    def onBlur(f: Set[String] => UI.Action)(using Frame): Listbox = copy(onBlurF = Present(Callback.of(f)))
 
     private[uic] def withEmptyContent(v: Maybe[EmptyContent]): Listbox = copy(emptyContentV = v)
 
@@ -291,14 +291,14 @@ final case class Listbox private (
         val navigable: List[Int] = shown.indices.toList
         val focused: Int         = if navigable.contains(hi) then hi else -1
 
-        val navigate: KeyboardEvent => Any < Async = e =>
+        val navigate: KeyboardEvent => UI.Action = e =>
             hiRef match
                 case Present(ref) =>
                     // Prime's listbox stops at the ends rather than cycling, unlike the menu
                     // family: a reader holding ArrowDown expects to arrive at the last option.
                     ListNav.onKey(navigable, focused, e.key, wrap = false) match
                         case Present(step) =>
-                            val pick: Any < Async =
+                            val pick: UI.Action =
                                 if step.activate && shown.isDefinedAt(step.focus) then activate(shown(step.focus).id)
                                 else ()
                             ref.set(step.focus).andThen(pick)
@@ -307,7 +307,7 @@ final case class Listbox private (
 
         // The host is asked first, because the chords it claims (a carried arrow, a transfer) are
         // ones the list's own machine would otherwise read as plain navigation.
-        val keyHandler: KeyboardEvent => Any < Async = e =>
+        val keyHandler: KeyboardEvent => UI.Action = e =>
             val claimed: Maybe[Listbox.HostKey] = hostKeyF match
                 case Present(f) => f(e)
                 case Absent     => Absent
@@ -318,7 +318,7 @@ final case class Listbox private (
         // Arriving on the list highlights a row, rather than leaving the reader to guess where
         // the first arrow will land. The selected row wins, since that is where a reader
         // expects to continue; with nothing selected the highlight starts at the top.
-        val seedFocus: Any < Async = hiRef match
+        val seedFocus: UI.Action = hiRef match
             case Present(ref) if focused < 0 && navigable.nonEmpty =>
                 val selectedRow = shown.indexWhere(o => sel.contains(o.id))
                 ref.set(if selectedRow >= 0 then selectedRow else navigable.head)
@@ -326,7 +326,7 @@ final case class Listbox private (
 
         // Blur fires even without a pick — the validation layer's Blur trigger. Reads the
         // bound ref LIVE, so it reports the selection at blur time.
-        val fireBlur: Any < Async = onBlurF match
+        val fireBlur: UI.Action = onBlurF match
             case Present(f) => selectedRef match
                     case Present(r) => r.use(f)
                     case Absent     => f(sel)
@@ -334,7 +334,7 @@ final case class Listbox private (
 
         // Leaving drops the highlight: a row left highlighted on a list that no longer holds
         // the keyboard claims a position the next arrow key would not honour anyway.
-        val leaveList: Any < Async = hiRef match
+        val leaveList: UI.Action = hiRef match
             case Present(ref) => ref.set(-1).andThen(fireBlur)
             case Absent       => fireBlur
 
@@ -465,12 +465,12 @@ final case class Listbox private (
     end renderOption
 
     /** Clicking a row updates the bound selection set (per the mode), then fires `onItemClick`. */
-    private def activate(id: String, meta: Boolean = false)(using Frame): Any < Async =
-        val setSelection: Any < Async = selectedRef match
+    private def activate(id: String, meta: Boolean = false)(using Frame): UI.Action =
+        val setSelection: UI.Action = selectedRef match
             case Present(ref) if selectionModeV != SelectionMode.None =>
                 ref.getAndUpdate(cur => SelectionPick.next(selectionModeV, metaKeyFlag, meta, id, cur))
             case _ => ()
-        val fireClick: Any < Async = onItemClickF match
+        val fireClick: UI.Action = onItemClickF match
             case Present(f) => f(id)
             case Absent     => ()
         for
@@ -487,8 +487,8 @@ object Listbox:
 
     /** One chord a host claims, carrying the effect it answers with.
       *
-      * A bare `Maybe[Any < Async]` cannot say this: the value type is `Any`, so the compiler has to
+      * A bare `Maybe[UI.Action]` cannot say this: the value type is `Any`, so the compiler has to
       * assume the effect could itself be an `Absent` and the match over it is not exhaustive.
       */
-    final private[uic] case class HostKey(effect: Any < Async)
+    final private[uic] case class HostKey(effect: UI.Action)
 end Listbox

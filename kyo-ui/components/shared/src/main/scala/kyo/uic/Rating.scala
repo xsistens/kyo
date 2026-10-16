@@ -44,8 +44,8 @@ final case class Rating private (
     invalidMsgV: Maybe[String] = Absent,
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
-    onChangeF: Maybe[Int => Any < Async] = Absent,
-    onBlurDoubleF: Maybe[Double => Any < Async] = Absent,
+    onChangeF: Maybe[Int => UI.Action] = Absent,
+    onBlurDoubleF: Maybe[Double => UI.Action] = Absent,
     idV: Maybe[String] = Absent
 ) extends Node, NumberFormControl, HasAccessibleName:
     type Self = Rating
@@ -119,12 +119,12 @@ final case class Rating private (
     def integer(v: Boolean): Rating = this
 
     /** Fired with the NEW value (0 on cancel) after the ref write-back. */
-    def onChange(f: Int => Any < Async): Rating = copy(onChangeF = Present(f))
+    def onChange(f: Int => UI.Action)(using Frame): Rating = copy(onChangeF = Present(Callback.of(f)))
 
     /** Fires on focus loss with the current star count — the validation layer's Blur
       * trigger, in the `Double` shape the number family speaks.
       */
-    def onBlur(f: Double => Any < Async): Rating = copy(onBlurDoubleF = Present(f))
+    def onBlur(f: Double => UI.Action)(using Frame): Rating = copy(onBlurDoubleF = Present(Callback.of(f)))
 
     private def interactive: Boolean = !readonlyFlag && !disabledFlag.constTrue
 
@@ -210,7 +210,7 @@ final case class Rating private (
             // that star alone, which is exactly the star no click can come from.
             if interactive && i == value then
                 hidden = hidden.onKeyDown { e =>
-                    val eff: Any < Async = if e.key == Keyboard.Space then activate(i, value, ref) else ()
+                    val eff: UI.Action = if e.key == Keyboard.Space then activate(i, value, ref) else ()
                     eff
                 }
             end if
@@ -243,13 +243,13 @@ final case class Rating private (
     end body
 
     /** Prime's select semantics: picking the current value clears to 0. */
-    private def activate(i: Int, current: Int, ref: Maybe[SignalRef[Int]])(using Frame): Any < Async =
-        val next               = if i == current then 0 else i
-        val write: Any < Async = (ref, doubleWriteRef) match
+    private def activate(i: Int, current: Int, ref: Maybe[SignalRef[Int]])(using Frame): UI.Action =
+        val next             = if i == current then 0 else i
+        val write: UI.Action = (ref, doubleWriteRef) match
             case (Present(r), _)       => r.set(next)
             case (Absent, Present(dr)) => dr.set(next.toDouble)
             case _                     => ()
-        val fire: Any < Async = onChangeF match
+        val fire: UI.Action = onChangeF match
             case Present(f) => f(next)
             case Absent     => ()
         for

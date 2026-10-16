@@ -36,9 +36,9 @@ final case class InputMask private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     idV: Maybe[String] = Absent,
-    onChangeF: Maybe[String => Any < Async] = Absent,
-    onBlurF: Maybe[String => Any < Async] = Absent,
-    onCompleteF: Maybe[String => Any < Async] = Absent
+    onChangeF: Maybe[String => UI.Action] = Absent,
+    onBlurF: Maybe[String => UI.Action] = Absent,
+    onCompleteF: Maybe[String => UI.Action] = Absent
 ) extends Node, TextFormControl, HasPlaceholder, HasAccessibleName:
     type Self = InputMask
 
@@ -85,15 +85,15 @@ final case class InputMask private (
     private[uic] def withAccessibleName(v: Maybe[TextValue]): InputMask = copy(accNameV = v)
 
     /** Fired with the MASKED value on every change (native change commit). */
-    def onChange(f: String => Any < Async): InputMask = copy(onChangeF = Present(f))
+    def onChange(f: String => UI.Action)(using Frame): InputMask = copy(onChangeF = Present(Callback.of(f)))
 
     /** Fires on focus loss with the field's current value — unlike onChange it
       * fires even when the value was not edited. The validation layer's Blur trigger.
       */
-    def onBlur(f: String => Any < Async): InputMask = copy(onBlurF = Present(f))
+    def onBlur(f: String => UI.Action)(using Frame): InputMask = copy(onBlurF = Present(Callback.of(f)))
 
     /** Fired with the MASKED value when it fills every mask slot (complete). */
-    def onComplete(f: String => Any < Async): InputMask = copy(onCompleteF = Present(f))
+    def onComplete(f: String => UI.Action)(using Frame): InputMask = copy(onCompleteF = Present(Callback.of(f)))
 
     /** The number of literal-template characters when every slot is filled — a
       * masked value of this length is complete.
@@ -136,10 +136,10 @@ final case class InputMask private (
         invalidMsgV.foreach(m => in = in.invalidMessage(m))
         if onChangeF.isDefined || onCompleteF.isDefined then
             in = in.onChange { masked =>
-                val fireChange: Any < Async = onChangeF match
+                val fireChange: UI.Action = onChangeF match
                     case Present(f) => f(masked)
                     case Absent     => ()
-                val fireComplete: Any < Async = onCompleteF match
+                val fireComplete: UI.Action = onCompleteF match
                     case Present(f) if masked.length >= fullLength => f(masked)
                     case _                                         => ()
                 for

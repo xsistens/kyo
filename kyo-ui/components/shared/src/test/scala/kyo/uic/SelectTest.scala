@@ -237,4 +237,18 @@ class SelectTest extends UicTest:
             assert(overlay.attrs.onKeyDown.isEmpty)
     }
 
+    "a pick whose onChange fails still takes the value and closes the panel" in {
+        for
+            open  <- Signal.initRef(true)
+            hi    <- Signal.initRef(0)
+            query <- Signal.initRef("")
+            value <- Signal.initRef("")
+            ui = select.value(value).onChange(_ => Abort.fail("rejected")).wired(open, hi, query, Present("sel"))
+            host   <- keyboardHost(ui, filter = false)
+            _      <- press(host, UI.Keyboard.Enter)
+            picked <- value.get
+            still  <- open.get
+        yield assert(picked == "a" && !still, s"the select finished its own work; value=$picked open=$still")
+    }
+
 end SelectTest

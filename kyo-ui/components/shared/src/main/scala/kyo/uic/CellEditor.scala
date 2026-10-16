@@ -27,8 +27,8 @@ import kyo.UI.*
 final case class EditorParams(
     draft: SignalRef[String],
     id: String,
-    commit: Any < Async,
-    cancel: Any < Async
+    commit: UI.Action,
+    cancel: UI.Action
 )
 
 /** The UI one open cell shows. A plain function, so any UI over [[EditorParams]] is an

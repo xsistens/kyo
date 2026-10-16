@@ -20,7 +20,7 @@ final case class Tag private (
     severityV: Maybe[SeverityValue] = Absent,
     roundedFlag: Boolean = false,
     iconV: Maybe[IconGlyph] = Absent,
-    onClickEff: Maybe[Any < Async] = Absent,
+    onClickEff: Maybe[UI.Action] = Absent,
     idV: Maybe[String] = Absent,
     kids: List[UI] = Nil
 ) extends Node, HasElementId:
@@ -44,7 +44,7 @@ final case class Tag private (
     def icon(glyph: IconGlyph): Tag = copy(iconV = Present(glyph))
 
     /** Runs `action` when the tag is clicked (kyo extension; adds the pointer cursor). */
-    def onClick(action: => Any < Async)(using Frame): Tag = copy(onClickEff = Present(Sync.defer(action)))
+    def onClick(action: => UI.Action)(using Frame): Tag = copy(onClickEff = Present(Callback(action)))
 
     /** Adds default-slot children after the label. */
     def apply(cs: UI*): Tag = copy(kids = kids ++ cs)

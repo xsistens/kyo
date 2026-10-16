@@ -104,7 +104,7 @@ final case class TieredMenu private (
         // mint. Kept apart from `idV`, which is only ever the caller's — see Menu.wired.
         partBase: Maybe[String]
     )(using Frame): UI =
-        val keyHandler: KeyboardEvent => Any < Async = e =>
+        val keyHandler: KeyboardEvent => UI.Action = e =>
             focusRef match
                 case Present(fr) =>
                     MenuNav.onKey(itemsV, MenuNav.Orientation.Vertical, focus, e.key) match

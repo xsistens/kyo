@@ -39,9 +39,9 @@ final case class SelectButton[A] private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
-    onChangeF: Maybe[String => Any < Async] = Absent,
-    onBlurF: Maybe[String => Any < Async] = Absent,
-    onBlurSetF: Maybe[Set[String] => Any < Async] = Absent,
+    onChangeF: Maybe[String => UI.Action] = Absent,
+    onBlurF: Maybe[String => UI.Action] = Absent,
+    onBlurSetF: Maybe[Set[String] => UI.Action] = Absent,
     idV: Maybe[String] = Absent
 ) extends Node, TextFormControl, MultiSelectFormControl, HasAccessibleNameRef:
     type Self = SelectButton[A]
@@ -106,18 +106,18 @@ final case class SelectButton[A] private (
     private[uic] def withAccessibleNameRef(v: Maybe[String]): SelectButton[A] = copy(accNameRefV = v)
 
     /** Fired with the clicked option's key after the selection write. */
-    def onChange(f: String => Any < Async): SelectButton[A] = copy(onChangeF = Present(f))
+    def onChange(f: String => UI.Action)(using Frame): SelectButton[A] = copy(onChangeF = Present(Callback.of(f)))
 
     /** Fires on focus loss with the SINGLE selection (empty string = none) — the
       * validation layer's Blur trigger for a `String`-valued field.
       */
-    def onBlur(f: String => Any < Async): SelectButton[A] = copy(onBlurF = Present(f))
+    def onBlur(f: String => UI.Action)(using Frame): SelectButton[A] = copy(onBlurF = Present(Callback.of(f)))
 
     /** Fires on focus loss with the MULTI selection — the Blur trigger for a
       * `Set[String]`-valued field. `@targetName` because both erase to `onBlur(Function1)`.
       */
     @targetName("onBlurKeys")
-    def onBlur(f: Set[String] => Any < Async): SelectButton[A] = copy(onBlurSetF = Present(f))
+    def onBlur(f: Set[String] => UI.Action)(using Frame): SelectButton[A] = copy(onBlurSetF = Present(Callback.of(f)))
 
     /** The stable option key: [[optionKey]] if set, else the label projection. */
     private def key(a: A): String = keyF.getOrElse(labelF)(a)
@@ -127,7 +127,7 @@ final case class SelectButton[A] private (
       * Only a single-select group has them: it is a radio group, so it holds ONE tab stop and the
       * arrows move within it, and moving focus needs an id to move it to.
       */
-    private type Nav = Maybe[(List[String], String => Any < Async)]
+    private type Nav = Maybe[(List[String], String => UI.Action)]
 
     private[uic] def render(using Frame): UI =
         // Multiple select is a group of independent toggles, each its own tab stop, so it needs no
@@ -143,7 +143,7 @@ final case class SelectButton[A] private (
             }.placeholder(invalidGate(Absent))
 
     /** The seam the golden tests render, since a mount shows only its placeholder there. */
-    private[uic] def wired(ids: List[String], focus: String => Any < Async)(using Frame): UI =
+    private[uic] def wired(ids: List[String], focus: String => UI.Action)(using Frame): UI =
         invalidGate(Present((ids, focus)))
 
     private def invalidGate(nav: Nav)(using Frame): UI =
@@ -169,11 +169,11 @@ final case class SelectButton[A] private (
       * An arrow moves and selects in one gesture (the radio pattern), so it must never land on an
       * option and clear it: Home pressed on the option already chosen would empty the group.
       */
-    private def selectOnly(k: String)(using Frame): Any < Async =
-        val write: Any < Async = valueRef match
+    private def selectOnly(k: String)(using Frame): UI.Action =
+        val write: UI.Action = valueRef match
             case Present(ref) => ref.set(k)
             case Absent       => ()
-        val fire: Any < Async = onChangeF match
+        val fire: UI.Action = onChangeF match
             case Present(f) => f(k)
             case Absent     => ()
         write.andThen(fire)
@@ -184,9 +184,9 @@ final case class SelectButton[A] private (
       * ARIA radio pattern does. Enter and Space are left alone: the option is a `<button>`, so the
       * browser and the dispatcher already agree on one activation between them.
       */
-    private def optionKey(ids: List[String], navigable: List[Int], self: Int, focus: String => Any < Async)(
+    private def optionKey(ids: List[String], navigable: List[Int], self: Int, focus: String => UI.Action)(
         e: KeyboardEvent
-    )(using Frame): Any < Async =
+    )(using Frame): UI.Action =
         ListNav.onKey(navigable, self, e.key, wrap = true, ListNav.Orientation.Both) match
             case Present(step) if step.focus != self && ids.isDefinedAt(step.focus) && items.isDefinedAt(step.focus) =>
                 focus(ids(step.focus)).andThen(selectOnly(key(items(step.focus))))
@@ -203,7 +203,7 @@ final case class SelectButton[A] private (
         // bound ref LIVE, so it reports the selection at blur time. The element carries ONE
         // blur handler, so the arity in force decides which of the two is wired; a control
         // that declared both would otherwise silently keep whichever was applied last.
-        val blurHandler: Maybe[Any < Async] =
+        val blurHandler: Maybe[UI.Action] =
             if multipleFlag then
                 onBlurSetF.map(f =>
                     valuesRef match
@@ -283,8 +283,8 @@ final case class SelectButton[A] private (
     /** Clicking an option updates the bound selection (single replaces, multiple
       * toggles; `allowEmpty` gates clearing the last pick), then fires `onChange`.
       */
-    private def activate(k: String)(using Frame): Any < Async =
-        val write: Any < Async =
+    private def activate(k: String)(using Frame): UI.Action =
+        val write: UI.Action =
             if multipleFlag then
                 valuesRef match
                     case Present(ref) =>
@@ -298,7 +298,7 @@ final case class SelectButton[A] private (
                     case Present(ref) =>
                         ref.getAndUpdate(cur => if cur == k then (if allowEmptyFlag then "" else cur) else k)
                     case Absent => ()
-        val fire: Any < Async = onChangeF match
+        val fire: UI.Action = onChangeF match
             case Present(f) => f(k)
             case Absent     => ()
         for

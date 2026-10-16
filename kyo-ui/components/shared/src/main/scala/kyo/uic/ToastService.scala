@@ -34,7 +34,7 @@ final case class ToastMessage(
   * event-drain fiber: in the browser transport a root `Env.runAll` would reach
   * them as fiber context, but server-push dispatch runs on kyo-http session
   * fibers WITHOUT it. So a handler cannot ask for the service: `uic.Button.onClick`
-  * and a raw kyo element's `onClick` both take `Any < Async`, and an
+  * and a raw kyo element's `onClick` both take `UI.Action`, and an
   * `Env.get[ToastService]` inside one does not compile. `use` resolves it where
   * the tree is built.
   *
@@ -161,7 +161,7 @@ object ToastService:
     private[uic] def body(
         queued: Seq[Queued],
         position: OverlayPosition,
-        remove: Int => Any < Async
+        remove: Int => UI.Action
     )(using Frame): UI =
         if queued.isEmpty then UI.empty
         else
@@ -174,7 +174,7 @@ object ToastService:
                     queued.map(q => toChild(messageUI(q, position, remove)))*
                 )
 
-    private def messageUI(q: Queued, position: OverlayPosition, remove: Int => Any < Async)(using Frame): UI =
+    private def messageUI(q: Queued, position: OverlayPosition, remove: Int => UI.Action)(using Frame): UI =
         val msg                 = q.message
         val token               = Toast.severityToken(msg.severity)
         val icon: UI            = GlyphSvg(Toast.severityIcon(msg.severity), "p-toast-message-icon")

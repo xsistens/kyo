@@ -70,8 +70,8 @@ final case class Select[A] private (
     invalidMsgDynV: Maybe[Signal[Maybe[String]]] = Absent,
     accNameV: Maybe[TextValue] = Absent,
     accNameRefV: Maybe[String] = Absent,
-    onChangeF: Maybe[String => Any < Async] = Absent,
-    onBlurF: Maybe[String => Any < Async] = Absent,
+    onChangeF: Maybe[String => UI.Action] = Absent,
+    onBlurF: Maybe[String => UI.Action] = Absent,
     currentV: Maybe[String] = Absent,
     extraClassesV: List[String] = Nil,
     idV: Maybe[String] = Absent,
@@ -228,12 +228,12 @@ final case class Select[A] private (
     private[uic] def withAccessibleNameRef(v: Maybe[String]): Select[A] = copy(accNameRefV = v)
 
     /** Fired with the newly selected option key (also with `""` on clear). */
-    def onChange(f: String => Any < Async): Select[A] = copy(onChangeF = Present(f))
+    def onChange(f: String => UI.Action)(using Frame): Select[A] = copy(onChangeF = Present(Callback.of(f)))
 
     /** Fires when the trigger loses focus, with the currently selected key — the
       * form-validation layer's Blur trigger.
       */
-    def onBlur(f: String => Any < Async): Select[A] = copy(onBlurF = Present(f))
+    def onBlur(f: String => UI.Action)(using Frame): Select[A] = copy(onBlurF = Present(Callback.of(f)))
 
     /** Every pickable option in render order, groups flattened away. The value
       * binding, the key-collision check and the keyboard all work on this.
@@ -345,29 +345,29 @@ final case class Select[A] private (
             if selIdx >= 0 then selIdx else all.indexWhere(a => !isOptionDisabled(a))
 
         // Writes the picked key, fires onChange, closes the panel.
-        def pick(a: A)(s: State): Any < Async =
+        def pick(a: A)(s: State): UI.Action =
             val k = key(a)
             for
                 _ <- valueRef match
                     case Present(r) => r.set(k)
-                    case Absent     => (): Any < Async
+                    case Absent     => (): UI.Action
                 _ <- onChangeF match
                     case Present(g) => g(k)
-                    case Absent     => (): Any < Async
+                    case Absent     => (): UI.Action
                 _ <- s.open.set(false)
             yield ()
             end for
         end pick
 
         // Opens with the highlight seeded on the selected option and a fresh query.
-        def openPanel(s: State): Any < Async =
+        def openPanel(s: State): UI.Action =
             for
                 _ <- s.q.set("")
                 _ <- s.hi.set(openHighlight)
                 _ <- s.open.set(true)
             yield ()
 
-        def toggle(s: State): Any < Async =
+        def toggle(s: State): UI.Action =
             if s.isOpen then s.open.set(false) else openPanel(s)
 
         // === closed trigger ======================================================
@@ -384,16 +384,16 @@ final case class Select[A] private (
 
         // Explicitly typed effect: an untyped match would infer `Any`, passing the
         // effect as an inert VALUE into the by-name handler (never executed).
-        val clearEffect: Any < Async =
+        val clearEffect: UI.Action =
             st match
                 case Present(_) =>
                     for
                         _ <- valueRef match
                             case Present(r) => r.set("")
-                            case Absent     => (): Any < Async
+                            case Absent     => (): UI.Action
                         _ <- onChangeF match
                             case Present(g) => g("")
-                            case Absent     => (): Any < Async
+                            case Absent     => (): UI.Action
                     yield ()
                 case Absent => ()
 
@@ -533,8 +533,8 @@ final case class Select[A] private (
         navigable: List[Int],
         hiEff: Int,
         s: State,
-        pick: A => State => Any < Async
-    )(e: KeyboardEvent)(using Frame): Any < Async =
+        pick: A => State => UI.Action
+    )(e: KeyboardEvent)(using Frame): UI.Action =
         val caretOwns = filtering && (e.key == Keyboard.Space || e.key.charValue.isDefined)
         if e.key == Keyboard.Tab then s.open.set(false)
         else if caretOwns then ()
@@ -542,7 +542,7 @@ final case class Select[A] private (
             ListNav.onKey(navigable, hiEff, e.key, wrap = false) match
                 case Present(step) if step.dismiss => s.open.set(false)
                 case Present(step)                 =>
-                    val picked: Any < Async =
+                    val picked: UI.Action =
                         if step.activate && shown.isDefinedAt(step.focus) then pick(shown(step.focus))(s) else ()
                     s.hi.set(step.focus).andThen(picked)
                 case Absent =>
@@ -576,7 +576,7 @@ final case class Select[A] private (
         (shownGroups, shown, shown.indices.toList.filterNot(i => isOptionDisabled(shown(i))), hiEff)
     end shownState
 
-    private def overlayPanel(current: String, s: State, pick: A => State => Any < Async)(using Frame): UI =
+    private def overlayPanel(current: String, s: State, pick: A => State => UI.Action)(using Frame): UI =
         val (shownGroups, shown, navigable, hiEff) = shownState(s)
 
         val rows: List[UI] = OptionItem.rows(shownGroups, "p-select-option-group") { (a, i) =>

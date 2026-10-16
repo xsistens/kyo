@@ -69,7 +69,7 @@ final case class Dialog private (
     accessibleDescriptionV: Maybe[TextValue] = Absent,
     accessibleDescriptionRefV: Maybe[String] = Absent,
     accessibleRoleV: PopupAccessibleRole = PopupAccessibleRole.Dialog,
-    onCloseEff: Maybe[Any < Async] = Absent,
+    onCloseEff: Maybe[UI.Action] = Absent,
     boxClassesV: List[String] = Nil,
     kids: List[UI] = Nil
 ) extends Node, HasAccessibleNameRef, HasAccessibleDescription:
@@ -149,8 +149,8 @@ final case class Dialog private (
       * backdrop click) — after the `open` ref is written to `false`. External ref
       * writes do NOT fire it.
       */
-    def onClose(action: => Any < Async)(using Frame): Dialog =
-        copy(onCloseEff = Present(Sync.defer(action)))
+    def onClose(action: => UI.Action)(using Frame): Dialog =
+        copy(onCloseEff = Present(Callback(action)))
 
     /** Package-internal class hook: hosts (ConfirmDialog) stamp Prime's skin
       * class (`p-confirmdialog`) onto the dialog box element.
@@ -174,7 +174,7 @@ final case class Dialog private (
             case Absent       => UI.empty
             case Present(ref) =>
                 // Every internal close path funnels through here: ref write, then callback.
-                val close: Any < Async =
+                val close: UI.Action =
                     onCloseEff match
                         case Present(e) => ref.set(false).map(_ => e)
                         case Absent     => ref.set(false)
@@ -192,7 +192,7 @@ final case class Dialog private (
                 // child of the box (built once), so pointer capture survives the per-frame
                 // translate re-render; the handlers read the position ref
                 // LIVE, never a closed-over render value.
-                def headerBlock(drag: Maybe[(PointerEvent => Any < Async, PointerEvent => Any < Async)]): List[UI] =
+                def headerBlock(drag: Maybe[(PointerEvent => UI.Action, PointerEvent => UI.Action)]): List[UI] =
                     if titleChildren.isEmpty then Nil
                     else
                         val severityIcon: List[UI] = severityV.toList.map { s =>
@@ -304,7 +304,7 @@ final case class Dialog private (
                                 size   <- Signal.initRef[Maybe[(Double, Double)]](Absent)
                                 origin <- Signal.initRef[Maybe[(Double, Double)]](Absent)
                             yield
-                                val drag: Maybe[(PointerEvent => Any < Async, PointerEvent => Any < Async)] =
+                                val drag: Maybe[(PointerEvent => UI.Action, PointerEvent => UI.Action)] =
                                     if draggableFlag then
                                         Present(
                                             (

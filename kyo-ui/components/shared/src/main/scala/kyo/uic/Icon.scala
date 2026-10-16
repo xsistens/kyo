@@ -29,7 +29,7 @@ final case class Icon private (
     accNameV: Maybe[TextValue] = Absent,
     showTooltipFlag: Boolean = false,
     modeV: Maybe[IconMode] = Absent,
-    onClickEff: Maybe[Any < Async] = Absent
+    onClickEff: Maybe[UI.Action] = Absent
 ) extends Node, HasAccessibleName:
     type Self = Icon
 
@@ -46,8 +46,8 @@ final case class Icon private (
     def mode(v: IconMode): Icon = copy(modeV = Present(v))
 
     /** Runs `action` when the icon is activated; makes the icon focusable with a button role. */
-    def onClick(action: => Any < Async)(using Frame): Icon =
-        copy(onClickEff = Present(Sync.defer(action)))
+    def onClick(action: => UI.Action)(using Frame): Icon =
+        copy(onClickEff = Present(Callback(action)))
 
     private[uic] def render(using Frame): UI =
         val svgIcon = Svg.svg
@@ -105,7 +105,7 @@ final case class Icon private (
       * A span is not a button, so the browser gives it neither: without this the icon was a tab
       * stop that answered nothing at all.
       */
-    private def operable(el: Ast.SpanElement, action: Any < Async)(using Frame): Ast.SpanElement =
+    private def operable(el: Ast.SpanElement, action: UI.Action)(using Frame): Ast.SpanElement =
         el.onClick(action).onKeyDown { evt =>
             evt.key match
                 case Keyboard.Enter | Keyboard.Space => action
