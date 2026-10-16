@@ -150,27 +150,6 @@ object QueryState:
     def of[D](response: ApolloResponse[D])(using Frame): QueryState[D] = ApolloSignal.project(response)
 end QueryState
 
-/** Where the failure of a live operation's UPDATE goes: a `QueryState.Failure` that arrives after
-  * [[dataSignal]] already seeded and the enclosing mount effect already returned, so no effect row is left
-  * to abort into. The load succeeded; something that was keeping it current did not. The choice is what
-  * the user should see, not how it is delivered.
-  */
-enum UpdateFailure derives CanEqual:
-
-    /** The content is no longer valid: fail the follow fiber. It is forked with `UI.fork`, so kyo-ui's
-      * node-scope supervision flips the enclosing mounted node into the same error rendering a failed mount
-      * takes (its `.onError`, then the enclosing `UI.boundary` chain, then the default error node). The
-      * default, and the right choice when the live feed IS the page.
-      */
-    case Escalate
-
-    /** The content is stale but still worth showing: keep it and report the failure to the app's
-      * `UI.notices` sink (a toast, a banner, a log). The node, its region and the follow observer stay
-      * alive, so a later emission repaints as usual.
-      */
-    case Notify
-end UpdateFailure
-
 /** How a reactive watcher / subscription reacts while its `skip` signal is `true`
   * — the kyo-ui form of react-apollo's `skip` (and urql's `pause`), driven by a
   * live `Signal[Boolean]` so a button can toggle it.
@@ -222,11 +201,11 @@ extension [D](sig: Signal[QueryState[D]])
       * consumes plain data with no `QueryState` arm left.
       *
       * A live stream can still fail AFTER the enclosing mount completed. Its effect row is gone by then, so
-      * such a failure cannot abort, and `onUpdateFailure` decides where it goes instead:
-      * [[UpdateFailure.Escalate]] fails the follow fiber (forked with `UI.fork`, so node-scope supervision
-      * flips the enclosing mounted node into the same error rendering a failed mount takes),
-      * [[UpdateFailure.Notify]] hands it to the app's `UI.notices` sink and leaves the node alone. The
-      * signal keeps the last delivered data either way.
+      * such a failure cannot abort. It goes to the `onFailure` rules around the call instead (`UI.report`),
+      * and `otherwise` is what it does when no rule matches: `UI.Reaction.Escalate` fails the enclosing
+      * mounted node into its error view, `UI.Reaction.Notify` hands the failure to the nearest `onNotice`
+      * sink and leaves the content alone. Unless the node fails, the follow goes on, so a later emission
+      * repaints as usual. The signal keeps the last delivered data either way.
       * Later `Idle`/`Loading` emissions (a gated re-subscribe, a refetch) also keep the last data: the
       * suspense shape has no reified loading state to fall back to.
       *
@@ -234,7 +213,7 @@ extension [D](sig: Signal[QueryState[D]])
       * the follow observer lives in the CALLER's `Scope`, so releasing it stops the following (the same
       * lifetime contract as [[watchSignal]]/[[subscribeSignal]]).
       */
-    def dataSignal(onUpdateFailure: UpdateFailure)(using
+    def dataSignal(otherwise: UI.Reaction)(using
         Frame,
         CanEqual[D, D]
     ): Signal[D] < (Async & Abort[ApolloException] & Scope) =
@@ -253,19 +232,19 @@ extension [D](sig: Signal[QueryState[D]])
             _ <- UI.fork(sig.observe {
                 case QueryState.Success(d, _, _)  => ref.set(d)
                 case QueryState.PartialData(d, _) => ref.set(d)
-                case QueryState.Failure(ex, _)    => ApolloSignal.routeUpdateFailure(onUpdateFailure, ex)
+                case QueryState.Failure(ex, _)    => ApolloSignal.reportUpdateFailure(ex, otherwise)
                 case _                            => (): Unit
             })
         yield ref
 
-    /** [[dataSignal]] with the default policy, [[UpdateFailure.Escalate]]: kept as its own overload so
-      * the common point-free form stays `signal.dataSignal`.
+    /** [[dataSignal]] that escalates a failed update no rule matches: kept as its own overload so the
+      * common point-free form stays `signal.dataSignal`.
       */
     def dataSignal(using
         Frame,
         CanEqual[D, D]
     ): Signal[D] < (Async & Abort[ApolloException] & Scope) =
-        dataSignal(UpdateFailure.Escalate)
+        dataSignal(UI.Reaction.Escalate)
 end extension
 
 /** Helpers backing the reactive-form extension methods, kept off the extension
@@ -274,17 +253,21 @@ end extension
   */
 object ApolloSignal:
 
-    /** Deliver a failed update per [[UpdateFailure]]: escalate by failing the calling (supervised) follow
-      * fiber, or hand it to the app's notice sink. Logged either way, so an app with no sink installed
-      * still sees it.
+    /** Hands a failed update to the `onFailure` rules around the follow, with `otherwise` where none matches.
+      * Logged either way, so an app with no sink installed still sees it.
       */
-    private[apollo] def routeUpdateFailure(policy: UpdateFailure, ex: ApolloException)(using
-        Frame
-    ): Unit < (Async & Abort[ApolloException]) =
-        Log.error("apollo live operation failed after first data", ex).andThen {
-            policy match
-                case UpdateFailure.Escalate => Abort.fail(ex)
-                case UpdateFailure.Notify   => UI.notify(ex)
+    private[apollo] def reportUpdateFailure(ex: ApolloException, otherwise: UI.Reaction)(using Frame): Unit < Async =
+        Log.error("apollo live operation failed after first data", ex).andThen(UI.report(ex, otherwise))
+
+    /** One poll tick: a failed or panicking fetch goes to the `onFailure` rules around the poll as a notice
+      * where none matches, and the tick returns, so the loop polls again.
+      */
+    private[apollo] def pollTick(fetch: Any < (Async & Abort[ApolloException]))(using Frame): Unit < Async =
+        Abort.run[ApolloException](fetch).map {
+            case Result.Failure(ex)           => UI.report(ex, UI.Reaction.Notify)
+            case Result.Panic(_: Interrupted) => Kyo.unit
+            case Result.Panic(ex)             => UI.report(ex, UI.Reaction.Notify)
+            case _                            => Kyo.unit
         }
 
     /** Complete `p` once the state settles: data succeeds it, a failure fails it;
