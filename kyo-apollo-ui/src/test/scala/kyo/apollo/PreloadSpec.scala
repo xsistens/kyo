@@ -45,7 +45,7 @@ class PreloadSpec extends kyo.test.Test[Any]:
                 pending <- preloaded.state.current
                 _ = assert(pending == QueryState.Loading)
                 _    <- engine.release
-                sig  <- preloaded.read(UpdateFailure.Notify)
+                sig  <- preloaded.read(UI.Reaction.Notify)
                 data <- sig.current
             yield assert(data == userData("Alice"))
             end for
@@ -62,8 +62,8 @@ class PreloadSpec extends kyo.test.Test[Any]:
                 // not that both finish inside a fixed budget.
                 _  <- assertEventually(engine.started.map(_ == 2))
                 _  <- engine.release
-                s1 <- first.read(UpdateFailure.Notify)
-                s2 <- second.read(UpdateFailure.Notify)
+                s1 <- first.read(UI.Reaction.Notify)
+                s2 <- second.read(UI.Reaction.Notify)
                 d1 <- s1.current
                 d2 <- s2.current
             yield
@@ -78,7 +78,7 @@ class PreloadSpec extends kyo.test.Test[Any]:
                 client    <- cached(engine)
                 preloaded <- Apollo.preload(client.query(CurrentUserQuery()))
                 _         <- engine.release
-                outcome   <- Abort.run[ApolloException](preloaded.read(UpdateFailure.Notify))
+                outcome   <- Abort.run[ApolloException](preloaded.read(UI.Reaction.Notify))
             yield outcome match
                 case Result.Failure(ex) => assert(ex.message == "boom")
                 case other              => fail(s"expected the first-settle failure, got $other")

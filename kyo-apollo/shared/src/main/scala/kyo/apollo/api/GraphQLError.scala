@@ -1,7 +1,10 @@
 package kyo.apollo.api
 
+import kyo.Absent
 import kyo.Chunk
 import kyo.Frame
+import kyo.Maybe
+import kyo.Present
 import kyo.Result
 import kyo.apollo.exception.ApolloParseException
 import kyo.apollo.json.Json
@@ -27,7 +30,15 @@ final case class GraphQLError(
     path: Chunk[String | Int] = Chunk.empty,
     extensions: Map[String, Json] = Map.empty,
     locations: Chunk[GraphQLError.Location] = Chunk.empty
-)
+):
+    /** `extensions.code`, where servers put a machine-readable error class (`UNAUTHENTICATED`, `FORBIDDEN`), when it is a
+      * string.
+      */
+    def code: Maybe[String] =
+        extensions.get("code") match
+            case Some(Json.JStr(c)) => Present(c)
+            case _                  => Absent
+end GraphQLError
 
 object GraphQLError:
 
