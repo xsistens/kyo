@@ -263,7 +263,9 @@ private[kyo] object HtmlRenderer:
                             elem match
                                 case ta: Textarea =>
                                     sb.delete(sb.length - 3, sb.length)
-                                    w(sb, ">")
+                                    // The HTML parser drops one line break right after `<textarea>`. Writing one
+                                    // ourselves gives it that one, so a value that starts with a line break keeps it.
+                                    w(sb, ">\n")
                                     renderTextareaValue(sb, ta).andThen(w(sb, "</textarea>"))
                                 case _: Iframe =>
                                     // iframe is not a void element: it needs an explicit closing tag.
